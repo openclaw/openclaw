@@ -1,5 +1,4 @@
 import type { Result } from "@openclaw/normalization-core/result";
-import { normalizeOptionalString as readTtsResultString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig, ResolvedTtsPersona, TtsProvider } from "../config/types.js";
 import { logVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -10,6 +9,7 @@ import {
 } from "../plugins/capability-provider-acquisition.js";
 import { buildCapabilityProviderIndex } from "../plugins/provider-registry-shared.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
+import { readTrimmedStringAlias } from "../utils/string-readers.js";
 import {
   createSpeechProviderRegistry,
   normalizeSpeechProviderId,
@@ -485,11 +485,9 @@ function resolveTtsResultDetail(
   keys: readonly string[],
 ): string | undefined {
   for (const config of [prepared.providerOverrides, prepared.providerConfig]) {
-    for (const key of keys) {
-      const value = readTtsResultString(config?.[key]);
-      if (value !== undefined) {
-        return value;
-      }
+    const value = config ? readTrimmedStringAlias(config, keys) : undefined;
+    if (value !== undefined) {
+      return value;
     }
   }
   return undefined;

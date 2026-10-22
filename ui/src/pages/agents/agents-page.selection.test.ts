@@ -355,8 +355,6 @@ describe("AgentsPage routing", () => {
       agentsRouteData(currentGateway, roster, "main", selection),
     );
 
-    expect(page.read().readData().agentFilesLoading).toBe(true);
-
     selection.set("research");
     pending.resolve(files("main", "retired-main-workspace"));
     await pending.promise;

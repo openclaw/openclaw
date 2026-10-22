@@ -205,6 +205,34 @@ function recoveryLogMessages(logs: string): string[] {
   });
 }
 
+const CHAT_INPUT_RECOVERY_REFUSAL_LABELS = new Map([
+  [
+    "accepted chat turn recovery ownership changed; automatic retry stopped to avoid duplicate execution | UNAVAILABLE",
+    "accepted-recovery-ownership-changed",
+  ],
+  [
+    "Chat admission ended or was cancelled; submit a new turn. | UNAVAILABLE",
+    "chat-admission-ended",
+  ],
+  [
+    "Chat input was not durably admitted; refresh and retry. | UNAVAILABLE",
+    "input-not-durably-admitted",
+  ],
+]);
+
+function projectChatInputRecoveryBlocked(line: string) {
+  const match = line.match(
+    /Chat input recovery blocked: (.+) (\{"sessionKeyHash":"[a-f0-9]{16}","inputId":"[a-f0-9-]{36}","ageMs":\d+\})$/u,
+  );
+  if (!match) {
+    return undefined;
+  }
+  return {
+    facts: match[2]!,
+    refusal: CHAT_INPUT_RECOVERY_REFUSAL_LABELS.get(match[1]!),
+  };
+}
+
 function recoveryLogTail(logs: string): string[] {
   // Do not emit raw log lines: even a recovery error may contain request text,
   // paths, or credentials. Preserve only fixed event labels and numeric timings.
@@ -216,11 +244,21 @@ function recoveryLogTail(logs: string): string[] {
       if (!event) {
         return [];
       }
-      const time = line.match(/\b\d{4}-\d{2}-\d{2}T[\d:.+-]+/u)?.[0] ?? "";
-      const facts = line.match(
+      const blocked =
+        event === "Chat input recovery blocked:"
+          ? projectChatInputRecoveryBlocked(line)
+          : undefined;
+      const timeSource =
+        event === "Chat input recovery blocked:" ? line.slice(0, line.indexOf(event)) : line;
+      const time = timeSource.match(/\b\d{4}-\d{2}-\d{2}T[\d:.+-]+/u)?.[0] ?? "";
+      const facts = (event === "Chat input recovery blocked:" ? blocked?.facts : line)?.match(
         /"(?:kind|outcome|waitReason|decision|reason|nextOwner)":"(?:peer|chat|accepted|stale|cancelled|blocked|aborted|none|endpoint-replaced|requester-unavailable|permission-denied|transient-admission|store-unavailable|unknown|started|settled|deferred|stopped|not_main_session|archived|work_start_blocked|work_start_pending|dispatch_target_unavailable|live_owner|already_handled|state_changed|inactive|tombstoned|exhausted|message_action_authority_unavailable|observation_only|pending_delivery|invalid_harness_completion|delegated_authority_unavailable|dispatch_skipped|terminal-residue|terminal-evidence|pending_delivery_notice|operator|session-preparation|outbound-delivery|session-owner|next-startup|main-session-recovery)"|"(?:runId|inputId|sourceRunId|recoveryRunId)":"[a-f0-9-]{36}"|"(?:attempts|[a-zA-Z]+Ms)":\d+(?:\.\d+)?|\b(?:stage=(?:request|startup|steer|queued)|[a-zA-Z.]+=\d+(?:\.\d+)?ms|(?:started|settled|failed|skipped)=\d+|\d+(?:\.\d+)?ms)\b|\b(?:restart|rpc|cancelled|interrupted|stop|SIGTERM|SIGKILL)\b/gu,
       );
-      return [`${time} ${event} ${(facts ?? []).join(" ")}`.trim().slice(0, 500)];
+      const projected = [
+        ...(blocked?.refusal ? [`"refusal":"${blocked.refusal}"`] : []),
+        ...(facts ?? []),
+      ];
+      return [`${time} ${event} ${projected.join(" ")}`.trim().slice(0, 500)];
     })
     .slice(-40);
 }

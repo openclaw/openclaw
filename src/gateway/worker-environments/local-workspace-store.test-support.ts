@@ -61,6 +61,7 @@ export function localWorkspaceProjectionFixture(
     source_paths_json: "[]",
     baseline_json: null,
     baseline_ref: null,
+    checkpoint_json: null,
     pending_ref: null,
     pending_target: null,
     journal_json: null,

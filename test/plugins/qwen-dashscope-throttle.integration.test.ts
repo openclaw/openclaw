@@ -236,9 +236,10 @@ function expectFailureState(
 ): void {
   const billing = reason === "billing";
   const managedThrottle = openRouter && !billing;
+  // These throttles carry no provider retry timing, so a rate limit blocks no model.
   expect.soft(result).toMatchObject({
     failureReason: reason,
-    affectedModelBlocked: !managedThrottle,
+    affectedModelBlocked: billing,
     otherModelBlocked: billing,
   });
   if (openRouter) {
@@ -254,13 +255,11 @@ function expectFailureState(
           disabledReason: "billing",
           disabledUntil: expect.any(Number),
         }
-      : {
-          cooldownReason: "rate_limit",
-          cooldownModel: MODEL_ID,
-          cooldownUntil: expect.any(Number),
-        },
+      : { lastRateLimitAt: expect.any(Number) },
   );
-  for (const key of billing ? ["cooldownReason"] : ["disabledReason", "disabledUntil"]) {
+  for (const key of billing
+    ? ["cooldownReason"]
+    : ["cooldownReason", "cooldownUntil", "disabledReason", "disabledUntil"]) {
     expect.soft(result.usage).not.toHaveProperty(key);
   }
 }

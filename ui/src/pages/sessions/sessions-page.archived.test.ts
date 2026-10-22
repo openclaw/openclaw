@@ -85,10 +85,11 @@ describe("sessions page archived deletion", () => {
       ),
     );
     expect(page.result?.sessions).toEqual([]);
-    response.reject(new Error("cloud cleanup failed"));
+    const failure = new Error("cloud cleanup failed");
+    response.reject(failure);
     await operation;
     expect(page.result?.sessions.map(({ key }) => key)).toContain(target.key);
-    expect(page.error).toContain("cloud cleanup failed");
+    expect(page.error).toBe(failure);
     await page.updateComplete;
     expect(checkbox()?.checked).toBe(true);
     expect(request.mock.calls.map(([method]) => method)).not.toContain("sessions.patch");
@@ -149,18 +150,18 @@ describe("sessions page archived deletion", () => {
       hasMore: !options?.offset,
       nextOffset: options?.offset ? null : 1,
     }));
-    const sessions = createSessions(incomplete ? { list } : {});
-    if (!incomplete) {
-      sessions.state.error = "list failed";
-    }
+    const failure = new Error("list failed");
+    const sessions = createSessions({
+      list: incomplete ? list : vi.fn<SessionCapability["list"]>().mockRejectedValue(failure),
+    });
     const page = await mount(sessions, [target]);
     await page.deleteAllArchived();
     expect(showConfirmDialog).not.toHaveBeenCalled();
     expect(sessions.deleteMany).not.toHaveBeenCalled();
-    expect(page.error).toEqual(
-      incomplete
-        ? expect.stringContaining("archived session enumeration was incomplete")
-        : "list failed",
-    );
+    if (incomplete) {
+      expect(page.error).toEqual(new Error("archived session enumeration was incomplete"));
+    } else {
+      expect(page.error).toBe(failure);
+    }
   });
 });

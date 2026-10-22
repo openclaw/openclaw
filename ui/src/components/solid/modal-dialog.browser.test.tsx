@@ -5,7 +5,7 @@ import { afterEach, expect, it } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import "../../styles.css";
 import { afterModalHidden } from "../../test-helpers/modal-dialog.ts";
-import { ModalDialog, type OpenClawModalDialog } from "../modal-dialog.ts";
+import { ModalDialog, type OpenClawModalDialog } from "../modal-dialog.tsx";
 import { LazyViewError } from "./lazy-view-error.tsx";
 import { keyFocus } from "./menu-contract.test-support.tsx";
 

@@ -18,6 +18,10 @@ type PrewarmedSnapshot = {
 
 let pending: PrewarmedSnapshot | undefined;
 
+export function peekPrewarmedChatSnapshot(): PrewarmedSnapshot | undefined {
+  return pending;
+}
+
 export function discardPrewarmedChatSnapshot(cacheKey?: string): void {
   if (pending && (cacheKey === undefined || pending.cacheKey === cacheKey)) {
     pending.cancelled = true;
@@ -41,9 +45,7 @@ export function prewarmChatSnapshot(cacheKey: string): void {
   pending = entry;
 }
 
-export function consumePrewarmedChatSnapshot(
-  cacheKey: string,
-): Pick<PrewarmedSnapshot, "promise"> | undefined {
+export function consumePrewarmedChatSnapshot(cacheKey: string): PrewarmedSnapshot | undefined {
   if (pending?.cacheKey !== cacheKey) {
     return undefined;
   }

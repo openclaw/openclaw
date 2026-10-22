@@ -48,8 +48,13 @@ describe("PaletteSessionDraft", () => {
     host.draft.setMessage("Carry my cold Send into the required worker");
     host.draft.adoptImageFiles([new File(["cold attachment"], "cold.txt", { type: "text/plain" })]);
     await host.updateComplete;
-    await waitForSolid(() =>
-      expect(host.querySelector('.chat-attachment-loading[data-state="reading"]')).not.toBeNull(),
+    await waitForSolid(
+      () =>
+        expect(
+          host.querySelector('.chat-attachment-loading[data-state="reading"]'),
+          "cold attachment preview has mounted in its reading state",
+        ).not.toBeNull(),
+      { timeout: 5_000 },
     );
     const pendingReader = expectDefined(readers[0], "pending cold attachment reader");
     Object.defineProperty(pendingReader, "result", {
@@ -544,6 +549,11 @@ async function mountPreferences(initial: Record<string, unknown> = {}) {
       fixture.host.querySelector<HTMLInputElement>(".palette-session-settings__remember input"),
       "palette remember checkbox",
     );
+  const footer = () =>
+    expectDefined(
+      fixture.host.querySelector<HTMLElement>(".palette-session-settings__footer"),
+      "palette preference status",
+    );
   const select = () =>
     expectDefined(
       fixture.host.querySelector<AgentSelectElement>("openclaw-agent-select"),
@@ -565,6 +575,7 @@ async function mountPreferences(initial: Record<string, unknown> = {}) {
     entries,
     writes,
     remember,
+    footer,
     select,
     worktree,
     setReject: (value: boolean) => {
@@ -658,6 +669,8 @@ describe("palette-only remembered settings", () => {
       let replacement: PaletteDraftHost | undefined;
       try {
         await saving;
+        await vi.waitFor(() => expect(fixture.footer().getAttribute("aria-busy")).toBe("true"));
+        expect(fixture.remember().disabled).toBe(false);
         fixture.select().onSelect("other");
         await fixture.host.updateComplete;
         fixture.host.remove();
@@ -670,6 +683,9 @@ describe("palette-only remembered settings", () => {
               ?.disabled,
           ).toBe(false),
         );
+        expect(
+          current.querySelector(".palette-session-settings__footer")?.getAttribute("aria-busy"),
+        ).toBe("false");
         if (edited) {
           const select = expectDefined(
             current.querySelector<AgentSelectElement>("openclaw-agent-select"),
@@ -716,7 +732,8 @@ describe("palette-only remembered settings", () => {
       fixture.remember().click();
       try {
         await saving;
-        await fixture.host.updateComplete;
+        await vi.waitFor(() => expect(fixture.footer().getAttribute("aria-busy")).toBe("true"));
+        expect(fixture.remember().disabled).toBe(false);
         if (intent === "selection") {
           fixture.select().onSelect("main");
         } else {
@@ -731,7 +748,10 @@ describe("palette-only remembered settings", () => {
           ...expectDefined(fixture.context.gateway.snapshot.hello, "Gateway hello"),
         };
         fixture.publish();
-        await vi.waitFor(() => expect(fixture.remember().disabled).toBe(false));
+        await vi.waitFor(() => {
+          expect(fixture.remember().disabled).toBe(false);
+          expect(fixture.footer().getAttribute("aria-busy")).toBe("false");
+        });
         expect(
           fixture.host.querySelector('.palette-session-settings__error[role="alert"]'),
         ).not.toBeNull();
@@ -743,10 +763,18 @@ describe("palette-only remembered settings", () => {
         await vi.waitFor(() =>
           expect(fixture.entries[PALETTE_PREFERENCE_KEY]).toMatchObject({ agentId: "other" }),
         );
+        const retry = holdPaletteSave(fixture);
         expectDefined(
           fixture.host.querySelector<HTMLButtonElement>(".palette-session-settings__error button"),
           "retry remembered settings",
         ).click();
+        try {
+          await retry.saving;
+          await vi.waitFor(() => expect(fixture.footer().getAttribute("aria-busy")).toBe("true"));
+          expect(fixture.remember().disabled).toBe(false);
+        } finally {
+          retry.release();
+        }
         await vi.waitFor(() => {
           if (intent === "selection") {
             expect(fixture.entries[PALETTE_PREFERENCE_KEY]).toMatchObject({ agentId: "main" });
@@ -758,6 +786,7 @@ describe("palette-only remembered settings", () => {
           ).toBeNull();
         });
         expect(fixture.remember().checked).toBe(intent === "selection");
+        expect(fixture.footer().getAttribute("aria-busy")).toBe("false");
       } finally {
         release();
       }
@@ -821,9 +850,8 @@ describe("palette-only remembered settings", () => {
 
   it.each([false, true])("retries failed preference writes (deletion=%s)", async (deleting) => {
     const saved = { agentId: "other", selection: { folder: "/other", worktree: false } };
-    const { host, entries, remember, select, setReject } = await mountPreferences(
-      deleting ? { [PALETTE_PREFERENCE_KEY]: saved } : {},
-    );
+    const fixture = await mountPreferences(deleting ? { [PALETTE_PREFERENCE_KEY]: saved } : {});
+    const { host, entries, remember, footer, select, setReject } = fixture;
     if (deleting) {
       await vi.waitFor(() => expect(select().value).toBe("other"));
       host.draft.setMessage("Keep this task");
@@ -854,10 +882,23 @@ describe("palette-only remembered settings", () => {
       expect(host.querySelector('.palette-session-settings__error[role="alert"]')).not.toBeNull();
     }
     setReject(false);
+    const retry = holdPaletteSave(fixture);
     expectDefined(
       host.querySelector<HTMLButtonElement>(".palette-session-settings__error button"),
       "retry settings save",
     ).click();
+    try {
+      await retry.saving;
+      await vi.waitFor(() => expect(footer().getAttribute("aria-busy")).toBe("true"));
+      expect(remember().disabled).toBe(false);
+      host.draft.close();
+      host.draft.open();
+      await vi.waitFor(() => expect(footer().getAttribute("aria-busy")).toBe("false"));
+      expect(select().value).toBe(deleting ? "main" : "other");
+      expect(host.draft.message).toBe("");
+    } finally {
+      retry.release();
+    }
     await vi.waitFor(() => {
       if (deleting) {
         expect(entries[PALETTE_PREFERENCE_KEY]).toBeUndefined();

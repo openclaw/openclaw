@@ -74,7 +74,7 @@ const probeResult = (text: boolean): SpawnSyncReturns<string> => ({
   signal: null,
   output: [],
   stderr: "",
-  stdout: JSON.stringify({ version: "24.19.0", probe: sqlite(text) }),
+  stdout: JSON.stringify({ version: "24.22.1", probe: sqlite(text) }),
 });
 
 const originalArgv = process.argv;
@@ -83,6 +83,7 @@ const stdinTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY
 const stdoutTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
 // Exercise the Node-only recovery branch when Bun owns Vitest; process-boundary cases still launch Node.
 const bunVersionDescriptor = Object.getOwnPropertyDescriptor(process.versions, "bun");
+const nodeVersionDescriptor = Object.getOwnPropertyDescriptor(process.versions, "node")!;
 const execPathDescriptor = Object.getOwnPropertyDescriptor(process, "execPath")!;
 const testNodeExecPath = resolveTestNodeExecPath();
 const hostPlatform = process.platform;
@@ -103,6 +104,7 @@ beforeEach(async () => {
   home = "";
   if (bunVersionDescriptor) {
     Object.defineProperty(process.versions, "bun", { value: undefined, configurable: true });
+    Object.defineProperty(process.versions, "node", { value: "26.12.1", configurable: true });
     Object.defineProperty(process, "execPath", { value: testNodeExecPath, configurable: true });
   }
   mockProcessPlatform("linux");
@@ -171,6 +173,7 @@ afterEach(async () => {
   }
   if (bunVersionDescriptor) {
     Object.defineProperty(process.versions, "bun", bunVersionDescriptor);
+    Object.defineProperty(process.versions, "node", nodeVersionDescriptor);
     Object.defineProperty(process, "execPath", execPathDescriptor);
   }
   vi.unstubAllEnvs();
@@ -225,7 +228,7 @@ describe("runtime recovery discovery", () => {
       vi.stubEnv("PATH", ".");
       vi.spyOn(process, "cwd").mockReturnValue(home);
       const workspaceNode = await writeFixture("node");
-      const managerNode = await writeFixture(".nvm/versions/node/v24.19.0/bin/node");
+      const managerNode = await writeFixture(".nvm/versions/node/v24.22.1/bin/node");
       const plantedNodes = [workspaceNode, managerNode, await fs.realpath(process.execPath)];
       await writeFixture(".nvm/alias/default", "24");
       if (privateEscape !== "none") {
@@ -331,7 +334,7 @@ describe("runtime recovery discovery", () => {
         childProcess.spawnSync = (command) => {
           result.probes.push(command);
           return { status: [${JSON.stringify(installedNode)}, ${JSON.stringify(workspaceNode)}].includes(command) ? 0 : 1,
-            stdout: JSON.stringify({ version: "24.19.0", probe: { available: true, version: "3.53.4", text: true, blob: true, json: true } }) };
+            stdout: JSON.stringify({ version: "24.22.1", probe: { available: true, version: "3.53.4", text: true, blob: true, json: true } }) };
         };
         childProcess.spawn = (command) => {
           result.selected = command;
@@ -401,7 +404,7 @@ describe("runtime recovery discovery", () => {
       let alias = candidate;
       if (source === "nvm link") {
         const root = path.join(cwd, ".nvm");
-        alias = path.join(root, "versions/node/v24.19.0/bin/node");
+        alias = path.join(root, "versions/node/v24.22.1/bin/node");
         await writeFixture(path.join(root, "alias/default"), "24");
         await fs.mkdir(path.dirname(alias), { recursive: true });
         await fs.symlink(candidate, alias);
@@ -449,13 +452,13 @@ describe("runtime recovery discovery", () => {
   });
 
   it.each([
-    ["NVM_DIR", "versions/node/v24.19.0/bin/node", "alias/default", "24"],
+    ["NVM_DIR", "versions/node/v24.22.1/bin/node", "alias/default", "24"],
     ["FNM_DIR", "aliases/default/bin/node", "", ""],
     [
       "VOLTA_HOME",
-      "tools/image/node/24.19.0/bin/node",
+      "tools/image/node/24.22.1/bin/node",
       "tools/user/platform.json",
-      '{"node":{"runtime":"24.19.0"}}',
+      '{"node":{"runtime":"24.22.1"}}',
     ],
   ])("expands the %s manager root against home", async (key, binary, metadata, contents) => {
     const root = path.join(home, "custom-manager");
@@ -628,9 +631,9 @@ describe("runtime recovery discovery", () => {
         ".openclaw/tools/cli-node/tools/node/bin/node",
         "service/bin/node",
         "bin/node",
-        ".nvm/versions/node/v24.19.0/bin/node",
+        ".nvm/versions/node/v24.22.1/bin/node",
         ".fnm/aliases/default/bin/node",
-        ".volta/tools/image/node/24.19.0/bin/node",
+        ".volta/tools/image/node/24.22.1/bin/node",
         "brew26/bin/node",
         "brew24/bin/node",
       ].map((relative) => writeFixture(relative)),
@@ -643,7 +646,7 @@ describe("runtime recovery discovery", () => {
     await writeFixture(".nvm/alias/lts/test", "24\n");
     await writeFixture(
       ".volta/tools/user/platform.json",
-      JSON.stringify({ node: { runtime: "24.19.0" } }),
+      JSON.stringify({ node: { runtime: "24.22.1" } }),
     );
     for (const prefix of ["/opt/homebrew", "/usr/local"]) {
       mocks.virtualPaths.set(
@@ -893,7 +896,7 @@ it("selects a target-compatible inherited runtime even when the current CLI is s
   mocks.probe.mockImplementation((filename, args, options) => {
     const result = probe(filename, args, options);
     const payload = JSON.parse(result.stdout);
-    payload.version = filename === newNode ? "26.8.1" : "24.19.0";
+    payload.version = filename === newNode ? "26.12.1" : "24.22.1";
     return { ...result, stdout: JSON.stringify(payload) };
   });
   const selected = await findUsableNodeRuntime({

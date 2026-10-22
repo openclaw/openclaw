@@ -48,20 +48,22 @@ function mountMenu() {
 it.each(["keyboard", "last", "pointer", "external", "closed", "reopened"] as const)(
   "keeps the trigger and respects %s focus while menu content loads",
   async (mode) => {
+    const entered = createDeferred();
+    const imported = createDeferred();
     const ready = createDeferred();
-    const importStarted = createDeferred();
-    const importFinished = createDeferred();
     onTestFinished(() => ready.resolve());
     let loads = 0;
     vi.doMock("./chat-composer-plus-menu-content.tsx", async () => {
       loads++;
-      importStarted.resolve();
+      entered.resolve();
       await ready.promise;
-      const content = await vi.importActual<typeof import("./chat-composer-plus-menu-content.tsx")>(
-        "./chat-composer-plus-menu-content.tsx",
-      );
-      importFinished.resolve();
-      return content;
+      try {
+        return await vi.importActual<typeof import("./chat-composer-plus-menu-content.tsx")>(
+          "./chat-composer-plus-menu-content.tsx",
+        );
+      } finally {
+        imported.resolve();
+      }
     });
     const view = mountMenu();
     view.trigger.focus();
@@ -76,7 +78,8 @@ it.each(["keyboard", "last", "pointer", "external", "closed", "reopened"] as con
         }),
       );
     }
-    await importStarted.promise;
+    // Cold module work precedes Solid's DOM settlement window.
+    await entered.promise;
     await waitForSolid(() => {
       expect(view.panel.matches(":popover-open")).toBe(true);
       expect(loads).toBe(1);
@@ -110,7 +113,7 @@ it.each(["keyboard", "last", "pointer", "external", "closed", "reopened"] as con
       }
     }
     ready.resolve();
-    await importFinished.promise;
+    await imported.promise;
     await waitForSolid(() =>
       expect(
         view.getByRole("menuitemcheckbox", { name: "Updated toggle", hidden: true }),

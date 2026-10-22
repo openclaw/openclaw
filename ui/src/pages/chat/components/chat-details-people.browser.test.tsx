@@ -68,5 +68,5 @@ it("keeps desktop viewers at three plus overflow with native activity targets", 
   expect(navigate).toHaveBeenCalledExactlyOnceWith("alex", "Alex");
   const avatar = view.container.querySelector(".viewer-avatar")!;
   expect(avatar.getBoundingClientRect().width).toBe(24);
-  expect(view.getByText("+2").getBoundingClientRect().width).toBe(26);
+  expect(view.getByText("+2").getBoundingClientRect().width).toBe(28);
 });

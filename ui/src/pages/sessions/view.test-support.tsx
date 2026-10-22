@@ -71,7 +71,7 @@ export function buildProps(result: SessionsListResult): SessionsProps {
     onNavigateToChat: () => undefined,
     onSortChange: () => undefined,
     onGroupByChange: () => undefined,
-    onAssignCategory: () => undefined,
+    onAssignCategory: async () => undefined,
     onRequestNewCategory: () => undefined,
     onLoadMore: () => undefined,
     onPageChange: () => undefined,
