@@ -1,7 +1,7 @@
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { CallRecordSchema, type CallRecord } from "../types.js";
+import { CallRecordSchema, type CallRecord, type InitiateCallInput } from "../types.js";
 
 const {
   clearMaxDurationTimerMock,
@@ -115,12 +115,33 @@ function createDialContext<T extends object>(config: T) {
 }
 
 function dial<T extends object>(config: T, name = "twilio", providerCallId = "provider-1") {
-  const initiateProviderCall = vi.fn(async () => ({ providerCallId }));
+  const initiateProviderCall = vi.fn(async (_input: InitiateCallInput) => ({ providerCallId }));
   const ctx = {
     ...createDialContext(config),
     provider: { name, initiateCall: initiateProviderCall },
   };
   return { ctx, initiateProviderCall };
+}
+
+const openaiVoice = (voice: string) => ({
+  tts: { provider: "openai", providers: { openai: { voice } } },
+});
+
+function speechContext(
+  config: object = openaiVoice("alloy"),
+  overrides: Partial<CallRecord> = {},
+  name = "twilio",
+) {
+  const call = createCall(overrides);
+  const playTts = vi.fn(async () => {});
+  const ctx = {
+    ...createContext(call),
+    providerCallIdMap: new Map([["provider-1", "call-1"]]),
+    provider: { name, playTts },
+    initialMessageInFlight: new Set<string>(),
+    config,
+  };
+  return { call, playTts, ctx };
 }
 
 describe("voice-call outbound helpers", () => {
@@ -164,14 +185,11 @@ describe("voice-call outbound helpers", () => {
   });
 
   it("holds Twilio notify calls silently until AMD classification", async () => {
-    const initiate = vi.fn(async (_input: unknown) => ({
-      providerCallId: "CA-notify",
-      status: "initiated",
-    }));
-    const ctx = {
-      ...createDialContext({ voicemail: { detection: "twilio", onMachine: "leave-message" } }),
-      provider: { name: "twilio", initiateCall: initiate },
-    };
+    const { ctx, initiateProviderCall: initiate } = dial(
+      { voicemail: { detection: "twilio", onMachine: "leave-message" } },
+      "twilio",
+      "CA-notify",
+    );
     await initiateCall(ctx as never, "+14155550123", undefined, {
       mode: "notify",
       message: "Your parcel is ready.",
@@ -191,7 +209,7 @@ describe("voice-call outbound helpers", () => {
   });
 
   it("initiates notify-mode calls with inline TwiML and records provider ids", async () => {
-    const setup = dial({ tts: { provider: "openai", providers: { openai: { voice: "nova" } } } });
+    const setup = dial(openaiVoice("nova"));
     const { initiateProviderCall } = setup;
     const ctx = { ...setup.ctx, coreSession: { mainKey: "work" } };
 
@@ -344,13 +362,7 @@ describe("voice-call outbound helpers", () => {
   });
 
   it("speaks through connected calls and rolls back to listening on provider errors", async () => {
-    const call = createCall();
-    const playTts = vi.fn(async () => {});
-    const ctx = {
-      ...createContext(call),
-      provider: { name: "twilio", playTts },
-      config: { tts: { provider: "openai", providers: { openai: { voice: "alloy" } } } },
-    };
+    const { call, playTts, ctx } = speechContext();
 
     await expect(
       speak(ctx as never, "call-1", "hello", { listenAfterPlayback: true }),
@@ -410,22 +422,12 @@ describe("voice-call outbound helpers", () => {
   });
 
   it("passes configured voice ids through to Telnyx speak", async () => {
-    const call = createCall();
-    const playTts = vi.fn(async () => {});
-    const ctx = {
-      ...createContext(call),
-      provider: { name: "telnyx", playTts },
-      config: {
-        tts: {
-          provider: "telnyx",
-          providers: {
-            telnyx: {
-              voiceId: "Telnyx.Qwen3TTS.12345678-1234-1234-1234-123456789abc",
-            },
-          },
-        },
-      },
-    };
+    const voice = "Telnyx.Qwen3TTS.12345678-1234-1234-1234-123456789abc";
+    const { ctx, playTts } = speechContext(
+      { tts: { provider: "telnyx", providers: { telnyx: { voiceId: voice } } } },
+      {},
+      "telnyx",
+    );
 
     await expect(speak(ctx as never, "call-1", "hello")).resolves.toEqual({ success: true });
 
@@ -433,27 +435,19 @@ describe("voice-call outbound helpers", () => {
       callId: "call-1",
       providerCallId: "provider-1",
       text: "hello",
-      voice: "Telnyx.Qwen3TTS.12345678-1234-1234-1234-123456789abc",
+      voice,
     });
   });
 
   it("caps notify-mode auto-hangup delay before scheduling", async () => {
-    const call = createCall({ metadata: { initialMessage: "hello", mode: "notify" } });
-    const playTts = vi.fn(async () => {});
+    const { call, ctx } = speechContext(
+      { ...openaiVoice("alloy"), outbound: { notifyHangupDelaySec: Number.MAX_SAFE_INTEGER } },
+      { metadata: { initialMessage: "hello", mode: "notify" } },
+    );
     const timeoutSpy = vi
       .spyOn(globalThis, "setTimeout")
       .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
     getCallByProviderCallIdMock.mockReturnValue(call);
-    const ctx = {
-      ...createContext(call),
-      providerCallIdMap: new Map([["provider-1", "call-1"]]),
-      provider: { name: "twilio", playTts },
-      initialMessageInFlight: new Set(),
-      config: {
-        outbound: { notifyHangupDelaySec: Number.MAX_SAFE_INTEGER },
-        tts: { provider: "openai", providers: { openai: { voice: "alloy" } } },
-      },
-    };
 
     try {
       await speakInitialMessage(ctx as never, "provider-1");
@@ -469,20 +463,17 @@ describe("voice-call outbound helpers", () => {
   ] as const)(
     "uses the correct TTS voice for a routed number on %s calls",
     async (direction, voice) => {
-      const call = createCall({
-        direction,
-        to: "+15550002222",
-        ...(direction === "inbound" ? { metadata: { numberRouteKey: "+15550002222" } } : {}),
-      });
-      const playTts = vi.fn(async () => {});
-      const ctx = {
-        ...createContext(call),
-        provider: { name: "twilio", playTts },
-        config: {
-          tts: { provider: "openai", providers: { openai: { voice: "coral" } } },
+      const { ctx, playTts } = speechContext(
+        {
+          ...openaiVoice("coral"),
           numbers: { "+15550002222": { tts: { providers: { openai: { voice: "alloy" } } } } },
         },
-      };
+        {
+          direction,
+          to: "+15550002222",
+          ...(direction === "inbound" ? { metadata: { numberRouteKey: "+15550002222" } } : {}),
+        },
+      );
       await expect(speak(ctx as never, "call-1", "hello")).resolves.toEqual({ success: true });
       expect(playTts).toHaveBeenCalledWith({
         callId: "call-1",
@@ -578,79 +569,34 @@ describe("voice-call outbound helpers", () => {
     await expect(endCall(ctx as never, "call-1")).resolves.toEqual({ success: true });
   });
 
-  it("issues a stream session and threads streamUrl + streamAuthToken through for Telnyx realtime", async () => {
-    const initiateProviderCall = vi.fn(async () => ({ providerCallId: "call-control-1" }));
-    const streamSessionIssuer = vi.fn(() => ({
-      token: "token-xyz",
-      streamUrl: "wss://example.test/voice/stream/realtime/token-xyz",
-    }));
-    const ctx = {
-      ...createDialContext({
-        realtime: { enabled: true },
-      }),
-      provider: { name: "telnyx", initiateCall: initiateProviderCall },
-      streamSessionIssuer,
-    };
-
-    const result = await initiateCall(ctx as never, "+14155550123");
-
-    expect(result.success).toBe(true);
-    expect(streamSessionIssuer).toHaveBeenCalledTimes(1);
-    expect(streamSessionIssuer).toHaveBeenCalledWith(
-      expect.objectContaining({
-        providerName: "telnyx",
-        direction: "outbound",
-        to: "+14155550123",
-      }),
-    );
-    expect(initiateProviderCall).toHaveBeenCalledWith(
-      expect.objectContaining({
+  it.each([
+    ["telnyx", true, true],
+    ["twilio", true, false],
+    ["telnyx", false, false],
+  ] as const)(
+    "issues realtime stream credentials for %s enabled=%s",
+    async (name, enabled, issued) => {
+      const { ctx, initiateProviderCall } = dial({ realtime: { enabled } }, name);
+      const credentials = {
+        token: "token-xyz",
         streamUrl: "wss://example.test/voice/stream/realtime/token-xyz",
-        streamAuthToken: "token-xyz",
-      }),
-    );
-  });
-
-  it("skips the stream session for Twilio realtime (Twilio learns the URL from TwiML)", async () => {
-    const initiateProviderCall = vi.fn(
-      async (_input: { streamUrl?: string; streamAuthToken?: string }) => ({
-        providerCallId: "provider-1",
-      }),
-    );
-    const streamSessionIssuer = vi.fn(() => ({
-      token: "should-not-be-used",
-      streamUrl: "wss://example.test/should-not-be-used",
-    }));
-    const ctx = {
-      ...createDialContext({
-        realtime: { enabled: true },
-      }),
-      provider: { name: "twilio", initiateCall: initiateProviderCall },
-      streamSessionIssuer,
-    };
-
-    const result = await initiateCall(ctx as never, "+14155550123");
-
-    expect(result.success).toBe(true);
-    expect(streamSessionIssuer).not.toHaveBeenCalled();
-    const [providerCall] = initiateProviderCall.mock.calls[0] ?? [];
-    expect(providerCall?.streamUrl).toBeUndefined();
-    expect(providerCall?.streamAuthToken).toBeUndefined();
-  });
-
-  it("does not issue a stream session when realtime is disabled", async () => {
-    const initiateProviderCall = vi.fn(async () => ({ providerCallId: "call-control-1" }));
-    const streamSessionIssuer = vi.fn();
-    const ctx = {
-      ...createDialContext({
-        realtime: { enabled: false },
-      }),
-      provider: { name: "telnyx", initiateCall: initiateProviderCall },
-      streamSessionIssuer,
-    };
-
-    await initiateCall(ctx as never, "+14155550123");
-
-    expect(streamSessionIssuer).not.toHaveBeenCalled();
-  });
+      };
+      const streamSessionIssuer = vi.fn(() => credentials);
+      const result = await initiateCall({ ...ctx, streamSessionIssuer } as never, "+14155550123");
+      expect(result.success).toBe(true);
+      expect(streamSessionIssuer).toHaveBeenCalledTimes(issued ? 1 : 0);
+      if (issued) {
+        expect(streamSessionIssuer).toHaveBeenCalledWith(
+          expect.objectContaining({
+            providerName: "telnyx",
+            direction: "outbound",
+            to: "+14155550123",
+          }),
+        );
+      }
+      const input = initiateProviderCall.mock.calls[0]?.[0];
+      expect(input?.streamUrl).toBe(issued ? credentials.streamUrl : undefined);
+      expect(input?.streamAuthToken).toBe(issued ? credentials.token : undefined);
+    },
+  );
 });
