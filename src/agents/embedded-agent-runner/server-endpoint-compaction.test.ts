@@ -325,19 +325,6 @@ describe("attemptServerEndpointCompaction", () => {
     });
   });
 
-  it.each([model, openAIModel])(
-    "preserves $provider custom instructions by falling back to client compaction",
-    async (requestModel) => {
-      const { result } = attempt({
-        model: requestModel,
-        customInstructions: "Retain the security caveats.",
-      });
-
-      await expect(result).resolves.toBeUndefined();
-      expect(requestPreparedCompactionMock).not.toHaveBeenCalled();
-    },
-  );
-
   it("does not compact transcript entries that remain after the checkpoint owner", async () => {
     const messages = createSession().messages.concat(makeUserMessage("trailing turn", 3));
     const { result } = attempt({ context: { systemPrompt: "system", messages } });

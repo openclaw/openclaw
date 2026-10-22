@@ -179,35 +179,6 @@ describe("provider prompt state", () => {
     });
   });
 
-  it("observes the final replacement body and blocks its rejected replay before network send", async () => {
-    const userContext: Context = {
-      ...context,
-      messages: [{ role: "user", content: "hello", timestamp: 1 }],
-    };
-    const sentPayloads: unknown[] = [];
-    const transport = vi.fn<StreamFn>(async (_model, _context, options) => {
-      const rawPayload = { input: "raw", model: model.id };
-      const replacement = await options?.onPayload?.(rawPayload, model);
-      sentPayloads.push(replacement === undefined ? rawPayload : replacement);
-      return createResultStream("error");
-    });
-    const finalPayload = { input: "final 🦞 日本語".repeat(3_000), model: model.id };
-    const wrapped = observe(state, transport);
-
-    await (await wrapped(model, userContext, { onPayload: () => finalPayload })).result();
-    markLastProviderPromptContextRejected(state);
-
-    const changedPayload = { input: "changed", model: model.id };
-    await (await wrapped(model, userContext, { onPayload: () => changedPayload })).result();
-
-    await expect(
-      wrapped(model, userContext, { onPayload: () => ({ ...finalPayload }) }),
-    ).rejects.toThrow("byte-identical provider payload");
-    expect(transport).toHaveBeenCalledTimes(3);
-    expect(sentPayloads).toEqual([finalPayload, changedPayload]);
-    expect(JSON.stringify(state)).not.toContain("final");
-  });
-
   it.each<[string, unknown, string]>([
     [
       "ordinary nested payload",

@@ -15,10 +15,34 @@ let stateDir: string;
 
 async function freshCapabilities(scope: string) {
   // Import fresh per scope so module-level caches cannot mask persistence bugs.
-  return await importFreshModule<typeof import("./openrouter-model-capabilities.js")>(
+  const module = await importFreshModule<typeof import("./openrouter-model-capabilities.js")>(
     import.meta.url,
     `./openrouter-model-capabilities.js?scope=${scope}`,
   );
+  return {
+    load: module.loadOpenRouterModelCapabilities,
+    get: module.getOpenRouterModelCapabilities,
+    loaded: module.getLoadedOpenRouterModelCapabilities,
+  };
+}
+
+async function expectNoSyncSql(run: () => Promise<void>) {
+  const sql = observeHostDataSql();
+  try {
+    await run();
+    expect(sql.queries).toEqual([]);
+  } finally {
+    sql.restore();
+  }
+}
+
+function mockResponses(...responses: Response[]) {
+  const fetchSpy = vi.fn();
+  for (const response of responses) {
+    fetchSpy.mockResolvedValueOnce(response);
+  }
+  vi.stubGlobal("fetch", fetchSpy);
+  return fetchSpy;
 }
 
 function mockCatalog(data: unknown[], chunked = false) {
@@ -100,15 +124,9 @@ describe("openrouter-model-capabilities", () => {
     ]);
 
     const module = await freshCapabilities("top-level-max-tokens");
-    const sql = observeHostDataSql();
-    try {
-      await module.loadOpenRouterModelCapabilities("acme/top-level-max-completion");
-      expect(sql.queries).toEqual([]);
-    } finally {
-      sql.restore();
-    }
+    await expectNoSyncSql(() => module.load("acme/top-level-max-completion"));
 
-    const maxCompletion = module.getOpenRouterModelCapabilities("acme/top-level-max-completion");
+    const maxCompletion = module.get("acme/top-level-max-completion");
     expect(maxCompletion).toMatchObject({
       input: ["text", "image"],
       reasoning: true,
@@ -117,7 +135,7 @@ describe("openrouter-model-capabilities", () => {
       maxTokens: 12345,
     });
 
-    const maxOutput = module.getOpenRouterModelCapabilities("acme/top-level-max-output");
+    const maxOutput = module.get("acme/top-level-max-output");
     expect(maxOutput).toMatchObject({
       input: ["text", "image"],
       reasoning: false,
@@ -125,9 +143,7 @@ describe("openrouter-model-capabilities", () => {
       maxTokens: 23456,
     });
     expect(maxOutput?.supportsTools).toBeUndefined();
-    expect(
-      module.getOpenRouterModelCapabilities("perplexity/sonar-deep-research")?.supportsTools,
-    ).toBe(false);
+    expect(module.get("perplexity/sonar-deep-research")?.supportsTools).toBe(false);
   });
 
   it("persists a fetched catalog to the store selected before the network wait", async () => {
@@ -141,7 +157,7 @@ describe("openrouter-model-capabilities", () => {
       }),
     );
     const module = await freshCapabilities("captured-store");
-    const loading = module.loadOpenRouterModelCapabilities("acme/captured-model");
+    const loading = module.load("acme/captured-model");
     await requested.promise;
     const stored = () =>
       createCorePluginStateSyncKeyedStore({
@@ -195,10 +211,10 @@ describe("openrouter-model-capabilities", () => {
     ]);
 
     const module = await freshCapabilities("old-context-window-cache");
-    await module.loadOpenRouterModelCapabilities(modelId);
+    await module.load(modelId);
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(module.getOpenRouterModelCapabilities(modelId)).toMatchObject({
+    expect(module.get(modelId)).toMatchObject({
       contextWindow: 262_144,
       maxTokens: 262_144,
     });
@@ -258,22 +274,16 @@ describe("openrouter-model-capabilities", () => {
     );
 
     const writer = await freshCapabilities("sqlite-cache-writer");
-    await writer.loadOpenRouterModelCapabilities(modelId);
-    expect(writer.getOpenRouterModelCapabilities(modelId)?.cost).toEqual(cost);
-    expect(writer.getLoadedOpenRouterModelCapabilities(modelId)).toMatchObject(expected);
+    await writer.load(modelId);
+    expect(writer.get(modelId)?.cost).toEqual(cost);
+    expect(writer.loaded(modelId)).toMatchObject(expected);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
 
     const reader = await freshCapabilities("sqlite-cache-reader");
-    const sql = observeHostDataSql();
-    try {
-      await reader.loadOpenRouterModelCapabilities(modelId);
-      expect(sql.queries).toEqual([]);
-    } finally {
-      sql.restore();
-    }
-    expect(reader.getLoadedOpenRouterModelCapabilities(modelId)).toMatchObject(expected);
+    await expectNoSyncSql(() => reader.load(modelId));
+    expect(reader.loaded(modelId)).toMatchObject(expected);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(reader.getOpenRouterModelCapabilities("minimax/minimax-m2.7")).toMatchObject({
+    expect(reader.get("minimax/minimax-m2.7")).toMatchObject({
       reasoning: true,
       compat: { supportsReasoningEffort: false },
       thinkingLevelMap: { off: null },
@@ -296,31 +306,26 @@ describe("openrouter-model-capabilities", () => {
     });
     const failedResponse = new Response("temporarily unavailable", { status: 503 });
     const cancel = vi.spyOn(failedResponse.body!, "cancel").mockResolvedValue(undefined);
-    const fetchSpy = vi
-      .fn()
-      .mockResolvedValueOnce(failedResponse)
-      .mockResolvedValueOnce(
-        Response.json({
-          data: [{ id: modelId, reasoning: { mandatory: true } }],
-        }),
-      );
-    vi.stubGlobal("fetch", fetchSpy);
+    const fetchSpy = mockResponses(
+      failedResponse,
+      Response.json({ data: [{ id: modelId, reasoning: { mandatory: true } }] }),
+    );
     const cache = await freshCapabilities("mandatory-metadata-cache-upgrade");
-    await cache.loadOpenRouterModelCapabilities(modelId);
+    await cache.load(modelId);
     expect(fetchSpy).toHaveBeenCalledOnce();
     expect(cancel).toHaveBeenCalledOnce();
-    expect(cache.getOpenRouterModelCapabilities(modelId)).toBeUndefined();
+    expect(cache.get(modelId)).toBeUndefined();
     expect(fetchSpy).toHaveBeenCalledOnce();
 
-    await cache.loadOpenRouterModelCapabilities(modelId);
-    expect(cache.getOpenRouterModelCapabilities(modelId)).toMatchObject({
+    await cache.load(modelId);
+    expect(cache.get(modelId)).toMatchObject({
       compat: { supportsReasoningEffort: false },
       thinkingLevelMap: { off: null },
     });
     expect(fetchSpy).toHaveBeenCalledTimes(2);
 
     const reader = await freshCapabilities("mandatory-metadata-cache-recovered");
-    expect(reader.getOpenRouterModelCapabilities(modelId)).toMatchObject({
+    expect(reader.get(modelId)).toMatchObject({
       compat: { supportsReasoningEffort: false },
       thinkingLevelMap: { off: null },
     });
@@ -332,23 +337,18 @@ describe("openrouter-model-capabilities", () => {
     ["non-array data", { data: {} }],
   ])("preserves cached capabilities when a refresh has %s", async (_label, malformedPayload) => {
     const modelId = "acme/healthy-model";
-    const fetchSpy = vi
-      .fn()
-      .mockResolvedValueOnce(
-        Response.json({
-          data: [{ id: modelId, name: "Healthy Model", context_length: 8192 }],
-        }),
-      )
-      .mockResolvedValueOnce(Response.json(malformedPayload));
-    vi.stubGlobal("fetch", fetchSpy);
+    const fetchSpy = mockResponses(
+      Response.json({ data: [{ id: modelId, name: "Healthy Model", context_length: 8192 }] }),
+      Response.json(malformedPayload),
+    );
 
     const writer = await freshCapabilities(`malformed-writer-${_label}`);
-    await writer.loadOpenRouterModelCapabilities(modelId);
-    await writer.loadOpenRouterModelCapabilities("acme/new-model");
+    await writer.load(modelId);
+    await writer.load("acme/new-model");
 
-    expect(writer.getOpenRouterModelCapabilities(modelId)?.name).toBe("Healthy Model");
+    expect(writer.get(modelId)?.name).toBe("Healthy Model");
     const reader = await freshCapabilities(`malformed-reader-${_label}`);
-    expect(reader.getOpenRouterModelCapabilities(modelId)?.name).toBe("Healthy Model");
+    expect(reader.get(modelId)?.name).toBe("Healthy Model");
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
@@ -374,18 +374,18 @@ describe("openrouter-model-capabilities", () => {
     vi.stubGlobal("fetch", fetchSpy);
 
     const module = await freshCapabilities("oversized-stream");
-    await module.loadOpenRouterModelCapabilities("acme/anything");
+    await module.load("acme/anything");
 
     // The body was cancelled after the first oversized chunk rather than read
     // to completion, and the overflow left no poisoned cache entry behind.
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(pullCount).toBeLessThanOrEqual(2);
     expect(cancel).toHaveBeenCalledOnce();
-    expect(module.getOpenRouterModelCapabilities("acme/anything")).toBeUndefined();
+    expect(module.get("acme/anything")).toBeUndefined();
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["getOpenRouterModelCapabilities", "getLoadedOpenRouterModelCapabilities"] as const)(
+  it.each(["get", "loaded"] as const)(
     "does not refetch immediately after an awaited miss through %s",
     async (firstLookup) => {
       const fetchSpy = mockCatalog([
@@ -398,11 +398,11 @@ describe("openrouter-model-capabilities", () => {
       ]);
 
       const module = await freshCapabilities(`awaited-miss-${firstLookup}`);
-      await module.loadOpenRouterModelCapabilities("acme/missing-model");
+      await module.load("acme/missing-model");
       expect(module[firstLookup]("acme/missing-model")).toBeUndefined();
       expect(fetchSpy).toHaveBeenCalledTimes(1);
 
-      expect(module.getOpenRouterModelCapabilities("acme/missing-model")).toBeUndefined();
+      expect(module.get("acme/missing-model")).toBeUndefined();
       expect(fetchSpy).toHaveBeenCalledTimes(2);
     },
   );
@@ -413,28 +413,20 @@ describe("openrouter-model-capabilities", () => {
       Response.json({
         data: [{ id: modelId, reasoning: { supported_efforts: efforts, mandatory: true } }],
       });
-    const fetchSpy = vi
-      .fn()
-      .mockResolvedValueOnce(catalog(["xhigh", "high"]))
-      .mockResolvedValueOnce(catalog(["high"]));
-    vi.stubGlobal("fetch", fetchSpy);
+    const fetchSpy = mockResponses(catalog(["xhigh", "high"]), catalog(["high"]));
     const writer = await freshCapabilities("loaded-writer");
-    await writer.loadOpenRouterModelCapabilities(modelId);
+    await writer.load(modelId);
 
     // A cold process has SQLite rows available but must not read them or fetch.
     const reader = await freshCapabilities("loaded-reader");
-    expect(reader.getLoadedOpenRouterModelCapabilities(modelId)).toBeUndefined();
+    expect(reader.loaded(modelId)).toBeUndefined();
     expect(fetchSpy).toHaveBeenCalledOnce();
 
-    await reader.loadOpenRouterModelCapabilities(modelId);
-    expect(
-      reader.getLoadedOpenRouterModelCapabilities(modelId)?.compat?.supportedReasoningEfforts,
-    ).toEqual(["xhigh", "high"]);
+    await reader.load(modelId);
+    expect(reader.loaded(modelId)?.compat?.supportedReasoningEfforts).toEqual(["xhigh", "high"]);
 
-    await reader.loadOpenRouterModelCapabilities("acme/new-model");
+    await reader.load("acme/new-model");
     expect(fetchSpy).toHaveBeenCalledTimes(2);
-    expect(
-      reader.getLoadedOpenRouterModelCapabilities(modelId)?.compat?.supportedReasoningEfforts,
-    ).toEqual(["high"]);
+    expect(reader.loaded(modelId)?.compat?.supportedReasoningEfforts).toEqual(["high"]);
   });
 });

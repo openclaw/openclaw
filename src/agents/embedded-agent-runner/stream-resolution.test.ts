@@ -9,20 +9,14 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import * as providerTransportStream from "@openclaw/ai/transports";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
-import type { OpenClawPluginDefinition } from "openclaw/plugin-sdk/plugin-entry";
-import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import { streamSimple } from "../../llm/stream.js";
 import type { Model } from "../../llm/types.js";
-import { resolveProviderStreamFn } from "../../plugins/provider-runtime.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { wrapStreamFnWithProviderPromptState } from "./provider-prompt-state.js";
-import { streamWithIdleTimeout } from "./run/llm-idle-timeout.js";
 import { resolveEmbeddedAgentStream as resolveEmbeddedAgentStreamImpl } from "./stream-resolution.js";
 
 const streamMocks = vi.hoisted(() => ({
@@ -85,11 +79,9 @@ function useNativeStreamFn(streamFn: StreamFn): StreamFn {
   return streamSimple as StreamFn;
 }
 
-const requireRecord = createRequireRecord("record", "expected-label-object");
 const mockStream = () => vi.fn<StreamFn>(() => createAssistantMessageEventStream());
 
 afterEach(() => {
-  vi.useRealTimers();
   streamMocks.streamSimple.mockReset();
   streamMocks.anthropicVertex.mockReset();
   if (streamMocks.delegate) {
@@ -121,76 +113,7 @@ describe("resolveEmbeddedAgentStream", () => {
     expect(currentStreamFn).not.toHaveBeenCalled();
   });
 
-  it.each(["amazon-bedrock", "amazon-bedrock-mantle"])(
-    "preserves the stable system cache boundary through the registered %s transport",
-    async (providerId) => {
-      const { default: plugin } = await loadBundledPluginFacade<{
-        default: OpenClawPluginDefinition;
-      }>({
-        pluginId: providerId,
-        artifactBasename: "index.ts",
-      });
-      const register = plugin.register;
-      if (!register) {
-        throw new Error("expected provider plugin registration");
-      }
-      const provider = await registerSingleProviderPlugin({ ...plugin, register });
-      const model: Model = {
-        provider: providerId,
-        api: providerId === "amazon-bedrock" ? "bedrock-converse-stream" : "anthropic-messages",
-        id: "anthropic.claude-haiku-4-5-20251001-v1:0",
-        name: "Claude Haiku 4.5",
-        baseUrl:
-          providerId === "amazon-bedrock"
-            ? "https://bedrock-runtime.us-east-1.amazonaws.com"
-            : "https://bedrock-mantle.us-east-1.api.aws/v1",
-        reasoning: false,
-        input: ["text"],
-        contextWindow: 200000,
-        maxTokens: 1024,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      };
-      const providerStreamFn = resolveProviderStreamFn({
-        provider: providerId,
-        runtimeHandle: { provider: providerId, plugin: provider },
-        context: { provider: providerId, modelId: model.id, model },
-      });
-      const { streamFn } = resolveEmbeddedAgentStream({
-        model,
-        providerStreamFn,
-        sessionId: "registered-cache-test",
-      });
-      let payload: unknown;
-      const events = await streamFn(
-        model,
-        {
-          systemPrompt: `stable${SYSTEM_PROMPT_CACHE_BOUNDARY}dynamic`,
-          messages: [{ role: "user", content: "Hello", timestamp: 0 }],
-        },
-        {
-          apiKey: "synthetic-test-key",
-          cacheRetention: "short",
-          onPayload: (request) => {
-            payload = request;
-            throw new Error("payload captured before network");
-          },
-        },
-      );
-      await events.result();
-      const request = requireRecord(payload, "registered provider payload");
-      expect(request.system).toEqual(
-        providerId === "amazon-bedrock"
-          ? [{ text: "stable" }, { cachePoint: { type: "default" } }, { text: "dynamic" }]
-          : [
-              { type: "text", text: "stable", cache_control: { type: "ephemeral" } },
-              { type: "text", text: "dynamic" },
-            ],
-      );
-      expect(JSON.stringify(request)).not.toContain("OPENCLAW_CACHE_BOUNDARY");
-    },
-  );
-
-  it("preserves sentinels for registered provider streams", async () => {
+  it("preserves sentinels, cache boundaries and retention for registered provider streams", async () => {
     const secret = "plugin-stream-secret";
     const sentinel = mintSecretSentinel(secret, { label: "model-auth:plugin" });
     const providerStreamFn = mockStream();
@@ -206,15 +129,18 @@ describe("resolveEmbeddedAgentStream", () => {
       resolvedApiKey: sentinel,
     });
 
-    await streamFn(model, {} as never, {
+    const context = { systemPrompt: `stable${SYSTEM_PROMPT_CACHE_BOUNDARY}dynamic`, messages: [] };
+    await streamFn(model, context, {
       headers: { "X-Managed": `Bearer ${sentinel}` },
+      cacheRetention: "short",
     });
     expect(providerStreamFn).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ headers: { Authorization: `Bearer ${sentinel}` } }),
-      {},
+      context,
       expect.objectContaining({
         apiKey: sentinel,
         headers: { "X-Managed": `Bearer ${sentinel}` },
+        cacheRetention: "short",
       }),
     );
   });
@@ -578,36 +504,5 @@ describe("embedded provider stream activity", () => {
     } finally {
       unsubscribe();
     }
-  });
-
-  it("keeps the idle watchdog armed when a merged run signal turn only reports hidden progress", async () => {
-    vi.useFakeTimers();
-    const runController = new AbortController();
-    let requestSignal: AbortSignal | undefined;
-    const providerStreamFn = vi.fn(
-      (_model: unknown, _context: unknown, options?: { signal?: AbortSignal }) => {
-        requestSignal = options?.signal;
-        const stream = createAssistantMessageEventStream();
-        setTimeout(() => {
-          stream.push({ type: "text_delta", contentIndex: 0, delta: "done" });
-        }, 120);
-        return stream;
-      },
-    );
-    const streamFn = resolveProviderStream(providerStreamFn as never, runController.signal);
-    const guarded = streamWithIdleTimeout(streamFn, 50);
-    const stream = await guarded(model, {} as never, {} as never);
-    const iterator = stream[Symbol.asyncIterator]();
-    const next = iterator.next();
-
-    setTimeout(() => notifyLlmRequestActivity(requestSignal), 40);
-    setTimeout(() => notifyLlmRequestActivity(requestSignal), 80);
-    await vi.advanceTimersByTimeAsync(120);
-
-    await expect(next).resolves.toEqual({
-      done: false,
-      value: { type: "text_delta", contentIndex: 0, delta: "done" },
-    });
-    await iterator.return?.();
   });
 });

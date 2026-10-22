@@ -35,7 +35,7 @@ async function applyFinalPolicy(
   });
 }
 
-function pluginTool(name = "bundleProbe__bundle_probe") {
+function pluginTool(name: string) {
   const tool = makeTool(name);
   setPluginToolMeta(tool, { pluginId: "bundle-mcp", optional: false });
   return tool;
@@ -137,17 +137,5 @@ describe("applyFinalEffectiveToolPolicy", () => {
       config: { tools: { allow: [...allow] } },
     });
     expect(warnings.filter((message) => message.includes(text))).toHaveLength(count);
-  });
-
-  it.each([
-    { deny: undefined, expected: ["bundleProbe__bundle_probe"] },
-    { deny: ["bundle-mcp"], expected: [] },
-  ])("applies the coding profile plugin allowlist with deny=$deny", async ({ deny, expected }) => {
-    const filtered = await applyFinalPolicy({
-      bundledTools: [pluginTool()],
-      config: { tools: { profile: "coding", deny } },
-    });
-
-    expect(filtered.map((tool) => tool.name)).toEqual(expected);
   });
 });

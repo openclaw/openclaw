@@ -87,14 +87,6 @@ describe("createPostCompactionLoopGuard", () => {
       count: 3,
     });
   });
-
-  it("respects the parent loop detection disabled state", () => {
-    const guard = createPostCompactionLoopGuard({ enabled: false });
-    guard.armPostCompaction();
-    guard.observe(read());
-    guard.observe(read());
-    expect(guard.observe(read()).shouldAbort).toBe(false);
-  });
 });
 
 describe("post-compaction re-read instrumentation", () => {

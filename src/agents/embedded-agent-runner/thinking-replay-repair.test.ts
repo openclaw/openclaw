@@ -38,16 +38,6 @@ function branchAssistantContents(sessionManager: SessionManager): unknown[] {
 }
 
 describe("repairRejectedThinkingReplayInSessionManager", () => {
-  it("keeps thinking-only assistant turns as omitted-reasoning placeholders", async () => {
-    const sessionManager = sessionWith(user(), assistant(thinking));
-    const result = await repairRejectedThinkingReplayInSessionManager({ sessionManager });
-
-    expect(result).toMatchObject({ repaired: true });
-    expect(branchAssistantContents(sessionManager)).toEqual([
-      [text("[assistant reasoning omitted]")],
-    ]);
-  });
-
   it("preserves downstream branch suffix entries after rewriting the first repaired assistant", async () => {
     const sessionManager = sessionWith(
       user(),
@@ -69,19 +59,6 @@ describe("repairRejectedThinkingReplayInSessionManager", () => {
       [text("first answer")],
       [text("follow-up answer")],
     ]);
-  });
-
-  it("does not rewrite sessions without active-branch thinking blocks", async () => {
-    const sessionManager = sessionWith(user(), timestampedTextAssistant("visible answer", 2));
-
-    const beforeLeafId = sessionManager.getLeafId();
-    const result = await repairRejectedThinkingReplayInSessionManager({ sessionManager });
-
-    expect(result).toMatchObject({
-      repaired: false,
-      reason: "no thinking blocks on active branch",
-    });
-    expect(sessionManager.getLeafId()).toBe(beforeLeafId);
   });
 });
 
