@@ -305,7 +305,7 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
         promptBuildPrependContext: hookPrepend,
       }),
     });
-    const result = await prepareEmbeddedAttemptPromptContext({
+    const result = await prepareContext({
       ...fixture.input,
       appendOnlyRuntimeContext: true,
     });
@@ -329,7 +329,7 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
         promptBuildAppendContext: "append part",
       }),
     });
-    const result = await prepareEmbeddedAttemptPromptContext({
+    const result = await prepareContext({
       ...fixture.input,
       appendOnlyRuntimeContext: true,
     });
@@ -352,7 +352,7 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
         promptBuildPrependContext: hookPrepend,
       }),
     });
-    const result = await prepareEmbeddedAttemptPromptContext({
+    const result = await prepareContext({
       ...fixture.input,
       appendOnlyRuntimeContext: true,
     });
@@ -378,7 +378,7 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
         promptBuildPrependContext: hookPrepend,
       }),
     });
-    const result = await prepareEmbeddedAttemptPromptContext({
+    const result = await prepareContext({
       ...fixture.input,
       appendOnlyRuntimeContext: true,
     });
@@ -403,7 +403,7 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
         promptBuildPrependContext: "Plugin context",
       }),
     });
-    const result = await prepareEmbeddedAttemptPromptContext(fixture.input);
+    const result = await prepareContext(fixture.input);
     expect(result.promptForModel).toBe("Plugin context\n\nVisible request");
     expect(result.promptForSession).toBe("Visible request");
     expect(result.runtimeContextMessageForCurrentTurn?.content ?? "").not.toContain(
