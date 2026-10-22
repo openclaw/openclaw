@@ -37,6 +37,12 @@ const telegramAuthFailure = {
   channelLabels: { telegram: "Telegram" },
   channels: { telegram: { configured: true, tokenStatus: "configured_unavailable" } },
 };
+const channelHealth = (channel: string, fields: Record<string, unknown>) => ({
+  channelLabels: { [channel]: channel.charAt(0).toUpperCase() + channel.slice(1) },
+  channels: { [channel]: { configured: true, ...fields } },
+});
+const telegramDisconnected = channelHealth("telegram", { running: true, connected: false });
+const telegramStale = channelHealth("telegram", { healthState: "stale-socket" });
 const questionReply = (isOther = false) =>
   chatReply("Choose one.", { question: { ...closedQuestion, isOther } });
 const rejectedRequest = () =>
@@ -235,72 +241,53 @@ describe("custodian page nudges", () => {
     expect(question(page)).toBeNull();
   });
 
-  it("keeps nudges blocked after an uncertain question reply and rejected retry", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce(questionReply())
-      .mockImplementationOnce(rejectAfterSend)
-      .mockRejectedValueOnce(rejectedRequest());
-    const { page, emitHealth } = await mountCaretaker(request);
-
-    await emitHealth(discordAuthFailure);
-    skipQuestion(page);
-
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
-    await waitForFast(() => expect(alert(page)).not.toBeNull());
-    expect(page.querySelector('[role="alert"] button')).toBeNull();
-    expect(question(page)).toBeNull();
-    const action = nudgeAction(page);
-    expect(action.disabled).toBe(true);
-    action.click();
-    await page.updateComplete;
-
-    expect(request).toHaveBeenCalledTimes(2);
-
-    await send(page, "Try again");
-
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(3));
-    await page.updateComplete;
-    expect(nudgeAction(page).disabled).toBe(true);
-  });
-
-  it("restores a closed question after its reply is explicitly rejected", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce(questionReply())
-      .mockRejectedValueOnce(rejectedRequest());
-    const { page, emitHealth } = await mountCaretaker(request);
-
-    await emitHealth(discordAuthFailure);
-    skipQuestion(page);
-
-    await waitForFast(() => expect(alert(page)).not.toBeNull());
-    await page.updateComplete;
-    expect(question(page)).not.toBeNull();
-    expect(nudgeAction(page).disabled).toBe(true);
-  });
-
-  it("keeps event nudges blocked after a typed question reply has an uncertain failure", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce(questionReply(true))
-      .mockImplementationOnce(rejectAfterSend);
-    const { page, emitHealth } = await mountCaretaker(request);
-
-    await emitHealth(discordAuthFailure);
-    await send(page, "**Something** else");
-
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
-    await waitForFast(() => expect(page.querySelector('[role="alert"]')).not.toBeNull());
-    expect(page.querySelector(".chat-group.user strong")?.textContent).toBe("Something");
-    expect(page.querySelector<HTMLButtonElement>(".option-card__skip")?.disabled).toBe(true);
-    const action = nudgeAction(page);
-    expect(action.disabled).toBe(true);
-    action.click();
-    await page.updateComplete;
-
-    expect(request).toHaveBeenCalledTimes(2);
-  });
+  it.each(["skip-uncertain", "skip-rejected", "typed-uncertain"] as const)(
+    "handles %s question replies without admitting a nudge",
+    async (mode) => {
+      const typed = mode === "typed-uncertain";
+      const rejected = mode === "skip-rejected";
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce(questionReply(typed))
+        .mockImplementationOnce(
+          rejected ? () => Promise.reject(rejectedRequest()) : rejectAfterSend,
+        );
+      if (mode === "skip-uncertain") {
+        request.mockRejectedValueOnce(rejectedRequest());
+      }
+      const { page, emitHealth } = await mountCaretaker(request);
+      await emitHealth(discordAuthFailure);
+      if (typed) {
+        await send(page, "**Something** else");
+      } else {
+        skipQuestion(page);
+      }
+      await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+      await waitForFast(() => expect(alert(page)).not.toBeNull());
+      await page.updateComplete;
+      expect(nudgeAction(page).disabled).toBe(true);
+      if (rejected) {
+        expect(question(page)).not.toBeNull();
+        return;
+      }
+      if (typed) {
+        expect(page.querySelector(".chat-group.user strong")?.textContent).toBe("Something");
+        expect(page.querySelector<HTMLButtonElement>(".option-card__skip")?.disabled).toBe(true);
+      } else {
+        expect(page.querySelector('[role="alert"] button')).toBeNull();
+        expect(question(page)).toBeNull();
+      }
+      nudgeAction(page).click();
+      await page.updateComplete;
+      expect(request).toHaveBeenCalledTimes(2);
+      if (!typed) {
+        await send(page, "Try again");
+        await waitForFast(() => expect(request).toHaveBeenCalledTimes(3));
+        await page.updateComplete;
+        expect(nudgeAction(page).disabled).toBe(true);
+      }
+    },
+  );
 
   it("ignores a stale question reply outcome after a same-owner reconnect", async () => {
     const pendingQuestion = createDeferred<SystemAgentChatResult>();
@@ -337,100 +324,70 @@ describe("custodian page nudges", () => {
     expect(action.disabled).toBe(false);
   });
 
-  it("restores an event nudge after its request fails", async () => {
-    const request = createHealthyRequest().mockRejectedValueOnce(rejectedRequest());
-    const { page, emitHealth } = await mountCaretaker(request);
-
-    await emitHealth(telegramAuthFailure);
-    nudgeAction(page).click();
-
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
-    await waitForFast(() => expect(page.querySelector('[role="alert"]')).not.toBeNull());
-    await page.updateComplete;
-    expect(page.querySelector(".custodian__nudge")?.textContent).toContain(
-      "Telegram authentication degraded",
+  it.each(["rejected", "unknown"] as const)("settles a nudge with %s delivery", async (outcome) => {
+    const rejected = outcome === "rejected";
+    const request = createHealthyRequest().mockImplementationOnce(
+      rejected ? () => Promise.reject(rejectedRequest()) : rejectAfterSend,
     );
-  });
-
-  it("consumes a delivered nudge whose reply becomes stale during reconnect", async () => {
-    const health = { channels: { telegram: { configured: true, healthState: "stale-socket" } } };
-    const { page, pending, emitHealth, setGatewaySnapshot } = await mountPendingNudge(health);
-    setGatewaySnapshot({ phase: "reconnecting" });
-    await page.updateComplete;
-    setGatewaySnapshot({ phase: "connected" });
-    await page.updateComplete;
-    pending.resolve(chatReply("Telegram checked."));
-    await waitForFast(() => expect(nudge(page)).toBeNull());
+    const { page, emitHealth } = await mountCaretaker(request);
+    const health = rejected ? telegramAuthFailure : telegramStale;
     await emitHealth(health);
-    expect(nudge(page)).toBeNull();
-  });
-
-  it("consumes a transmitted nudge when its delivery outcome is unknown", async () => {
-    const request = createHealthyRequest().mockImplementationOnce(rejectAfterSend);
-    const { page, emitGatewayEvent } = await mountCaretaker(request);
-    const degradedHealth = {
-      channels: { telegram: { configured: true, healthState: "stale-socket" } },
-    };
-
-    emitGatewayEvent({ event: "health", payload: degradedHealth });
-    await page.updateComplete;
-    nudgeAction(page).click();
-
-    await waitForFast(() => expect(page.querySelector('[role="alert"]')).not.toBeNull());
-    expect(page.querySelector(".custodian__nudge")).toBeNull();
-    emitGatewayEvent({ event: "health", payload: degradedHealth });
-    await page.updateComplete;
-    expect(page.querySelector(".custodian__nudge")).toBeNull();
-  });
-
-  it("keeps a newer lower-severity failure when an earlier nudge send succeeds", async () => {
-    const { page, health, pending: pendingNudge } = await mountPendingNudge(telegramAuthFailure);
-
-    health({
-      channelLabels: { discord: "Discord" },
-      channels: { discord: { configured: true, healthState: "stale-socket" } },
-    });
-    pendingNudge.resolve(chatReply("Telegram checked."));
-
-    await waitForFast(() => expect(page.textContent).toContain("Telegram checked."));
-    await page.updateComplete;
-    expect(nudge(page)?.textContent).toContain("Discord is degraded");
-  });
-
-  it("consumes an in-flight incident that becomes current again before completion", async () => {
-    const telegramFailure = {
-      channelLabels: { telegram: "Telegram" },
-      channels: { telegram: { configured: true, running: true, connected: false } },
-    };
-
-    const { page, health, pending: pendingNudge } = await mountPendingNudge(telegramFailure);
-
-    health(discordAuthFailure);
-    health(telegramFailure);
-    pendingNudge.resolve(chatReply("Telegram checked."));
-
-    await waitForFast(() => expect(nudge(page)).toBeNull());
-    health(telegramFailure);
-    await page.updateComplete;
-    expect(nudge(page)).toBeNull();
-  });
-
-  it("does not restore a failed nudge after health recovers while sending", async () => {
-    const {
-      page,
-      health,
-      pending: pendingNudge,
-    } = await mountPendingNudge<never>({
-      channels: { telegram: { configured: true, running: true, connected: false } },
-    });
-
-    health({ channels: { telegram: { configured: true, running: true, connected: true } } });
-    pendingNudge.reject(new Error("Request failed"));
-
+    await startNudge(page, request);
     await waitForFast(() => expect(alert(page)).not.toBeNull());
     await page.updateComplete;
-    expect(nudge(page)).toBeNull();
+    if (rejected) {
+      expect(nudge(page)?.textContent).toContain("Telegram authentication degraded");
+    } else {
+      expect(nudge(page)).toBeNull();
+      await emitHealth(health);
+      expect(nudge(page)).toBeNull();
+    }
   });
+
+  it.each(["reconnect", "superseded", "recurring", "recovered"] as const)(
+    "settles an in-flight nudge after the incident is %s",
+    async (change) => {
+      const initial = {
+        superseded: telegramAuthFailure,
+        reconnect: telegramStale,
+        recurring: telegramDisconnected,
+        recovered: telegramDisconnected,
+      }[change];
+      const { page, health, pending, emitHealth, setGatewaySnapshot } =
+        await mountPendingNudge(initial);
+      if (change === "reconnect") {
+        setGatewaySnapshot({ phase: "reconnecting" });
+        await page.updateComplete;
+        setGatewaySnapshot({ phase: "connected" });
+        await page.updateComplete;
+      } else if (change === "superseded") {
+        health(channelHealth("discord", { healthState: "stale-socket" }));
+      } else if (change === "recurring") {
+        health(discordAuthFailure);
+        health(initial);
+      } else {
+        health(channelHealth("telegram", { running: true, connected: true }));
+      }
+      if (change === "recovered") {
+        pending.reject(new Error("Request failed"));
+        await waitForFast(() => expect(alert(page)).not.toBeNull());
+        await page.updateComplete;
+        expect(nudge(page)).toBeNull();
+      } else {
+        pending.resolve(chatReply("Telegram checked."));
+        if (change === "superseded") {
+          await waitForFast(() => expect(page.textContent).toContain("Telegram checked."));
+          await page.updateComplete;
+          expect(nudge(page)?.textContent).toContain("Discord is degraded");
+        } else {
+          await waitForFast(() => expect(nudge(page)).toBeNull());
+          await emitHealth(initial);
+          expect(nudge(page)).toBeNull();
+        }
+      }
+    },
+  );
+
   describe("transcript recovery", () => {
     const initialCalls = ["openclaw.chat.history", "openclaw.chat"];
     function historyRequest(
@@ -519,7 +476,7 @@ describe("custodian page nudges", () => {
       pending.reject(unavailable("Gateway was suspending"));
       await refresh;
       await waitForFast(() => expect(page.textContent).toContain("Recovered history"));
-      expect(page.querySelector(".custodian__transcript-status")).toBeNull();
+      expectNoStatus(page);
       expect(historyCalls()).toBe(3);
     });
 

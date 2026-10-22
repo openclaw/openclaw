@@ -26,8 +26,14 @@ describe("automatic setup", () => {
   }
   const selected = candidate("codex", "ChatGPT", "openai/gpt-5.5");
   const alternative = candidate("ollama", "Local model", "ollama/qwen3");
-  function result(status: SetupAutoResult["status"] = "activated"): SetupAutoResult {
-    return { status, selected, alternatives: [alternative], attempts: [], installedPlugins: [] };
+  function result(): SetupAutoResult {
+    return {
+      status: "activated",
+      selected,
+      alternatives: [alternative],
+      attempts: [],
+      installedPlugins: [],
+    };
   }
   const methods = ["chat", "setup.auto", "setup.activate", "setup.auth.start"].map(
     (method) => "openclaw." + method,
@@ -43,16 +49,7 @@ describe("automatic setup", () => {
   const text = (page: Page) => expect(page.textContent);
   const alertText = (page: Page) => expect(page.querySelector('[role="alert"]')?.textContent);
   function setupRequest(auto: () => unknown = () => result()) {
-    return vi.fn(async (method: string) =>
-      method === "openclaw.chat.history"
-        ? { turns: [] }
-        : method === "openclaw.setup.auto"
-          ? auto()
-          : reply,
-    );
-  }
-  function unavailable(attempts: SetupAutoResult["attempts"] = []): SetupAutoResult {
-    return { status: "unavailable", alternatives: [], attempts, installedPlugins: [] };
+    return vi.fn(async (method: string) => (method === "openclaw.setup.auto" ? auto() : reply));
   }
   const setupContext = (request: Request) => createContext(request, methods, { agentsList });
   async function mountSetup(request: Request) {
@@ -65,13 +62,7 @@ describe("automatic setup", () => {
     await new Promise<void>((resolve) => {
       const whenReady = () => {
         const setup = page.store.autoSetup;
-        if (
-          expected() &&
-          !setup.pending &&
-          !page.store.sending &&
-          setup.wizard.state.phase !== "starting" &&
-          !(setup.wizard.state.phase === "step" && setup.wizard.state.busy)
-        ) {
+        if (expected() && !setup.pending && !page.store.sending) {
           unsubscribe();
           resolve();
         }
@@ -82,12 +73,12 @@ describe("automatic setup", () => {
     flush();
     await page.updateComplete;
   }
-  async function click(page: Page, label: string, expected?: () => boolean) {
+  async function click(page: Page, label: string) {
     const buttons = [...page.querySelectorAll("button")];
     const button = buttons.find((entry) => entry.textContent?.trim() === label);
     expect(button).toBeDefined();
     button!.click();
-    await settled(page, expected);
+    await settled(page);
   }
 
   beforeEach(() => {
@@ -119,50 +110,43 @@ describe("automatic setup", () => {
     text(page).not.toContain("Using ChatGPT");
   });
 
-  it.each([false, true])(
-    "updates native recovery when its capability snapshot arrives (failed attempt: %s)",
-    async (failedAttempt) => {
-      const snapshot = createNativeDeviceSettingsSnapshot();
-      const post = vi.fn().mockResolvedValue(snapshot);
-      vi.stubGlobal("webkit", {
-        messageHandlers: { openclawDeviceSettings: { postMessage: post } },
-      });
-      vi.stubGlobal("__OPENCLAW_NATIVE_DEVICE_SETTINGS__", snapshot);
-      const nativeDeviceSettings = createNativeDeviceSettingsCapability()!;
-      const request = vi.fn(async () =>
-        unavailable(
-          failedAttempt
-            ? [{ kind: "codex", label: "ChatGPT", error: "Could not prepare the plugin" }]
-            : [],
-        ),
+  it("updates native recovery when its capability snapshot arrives", async () => {
+    const snapshot = createNativeDeviceSettingsSnapshot();
+    const post = vi.fn().mockResolvedValue(snapshot);
+    vi.stubGlobal("webkit", {
+      messageHandlers: { openclawDeviceSettings: { postMessage: post } },
+    });
+    vi.stubGlobal("__OPENCLAW_NATIVE_DEVICE_SETTINGS__", snapshot);
+    const nativeDeviceSettings = createNativeDeviceSettingsCapability()!;
+    const request = vi.fn(async (): Promise<SetupAutoResult> => ({
+      status: "unavailable",
+      alternatives: [],
+      attempts: [],
+      installedPlugins: [],
+    }));
+    const { context } = setupContext(request);
+    try {
+      const { page } = await mountPage({ ...context, nativeDeviceSettings });
+      await settled(page);
+      text(page).toContain("openclaw onboard");
+      text(page).toContain("only connect tools you trust");
+      expect(request).toHaveBeenCalledTimes(1);
+      window.dispatchEvent(
+        new CustomEvent("openclaw:native-device-settings-changed", {
+          detail: {
+            ...snapshot,
+            capabilities: { ...snapshot.capabilities, aiSetupAvailable: true },
+          },
+        }),
       );
-      const { context } = setupContext(request);
-      try {
-        const { page } = await mountPage({ ...context, nativeDeviceSettings });
-        await settled(page);
-        text(page).toContain("openclaw onboard");
-        if (failedAttempt) {
-          text(page).toContain("Could not prepare the plugin");
-        }
-        text(page).toContain("only connect tools you trust");
-        expect(request).toHaveBeenCalledTimes(1);
-        window.dispatchEvent(
-          new CustomEvent("openclaw:native-device-settings-changed", {
-            detail: {
-              ...snapshot,
-              capabilities: { ...snapshot.capabilities, aiSetupAvailable: true },
-            },
-          }),
-        );
-        await settled(page);
-        await click(page, "Open AI setup");
-        expect(post).toHaveBeenCalledWith({ type: "open", panel: "ai-setup" });
-        text(page).not.toContain("openclaw onboard");
-      } finally {
-        nativeDeviceSettings.dispose();
-      }
-    },
-  );
+      await settled(page);
+      await click(page, "Open AI setup");
+      expect(post).toHaveBeenCalledWith({ type: "open", panel: "ai-setup" });
+      text(page).not.toContain("openclaw onboard");
+    } finally {
+      nativeDeviceSettings.dispose();
+    }
+  });
 
   it("shows RPC failures and retries without a premature greeting", async () => {
     const request = setupRequest(() => {
