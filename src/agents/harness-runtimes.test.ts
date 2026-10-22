@@ -27,7 +27,7 @@ describe("collectConfiguredAgentHarnessRuntimes", () => {
     const model = "openai/gpt-5.6-sol";
     const config = makeConfig(
       {
-        model: "openai/gpt-5.6-sol",
+        model,
         models: {
           [model]: {
             agentRuntime: { id: "openclaw" },
@@ -60,39 +60,31 @@ describe("collectConfiguredAgentHarnessRuntimes", () => {
   });
 
   it("does not infer Codex for custom OpenAI-compatible base URLs", () => {
-    const config = {
-      ...makeConfig({ models: { "openai/gpt-5.5": {} } }),
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://openai-compatible.example.test/v1",
-            models: [],
-          },
-        },
+    const config = makeConfig({ models: { "openai/gpt-5.5": {} } });
+    config.models = {
+      providers: {
+        openai: { baseUrl: "https://openai-compatible.example.test/v1", models: [] },
       },
     };
-
     expect(collect(config)).toEqual([]);
   });
 
   it("bounds roster reads per collection batch on large fleets (#135743)", () => {
     // The collector must not multiply full-roster reads by model-reference count.
-    const agentCount = 300;
-    const modelsPerAgent = 40;
-    const entries: Record<string, { models: Record<string, Record<string, never>> }> = {};
-    for (let i = 0; i < agentCount; i++) {
-      const models: Record<string, Record<string, never>> = {};
-      for (let m = 0; m < modelsPerAgent; m++) {
-        models[`openai/proof-model-${m}`] = {};
-      }
-      entries[`agent-${i}`] = { models };
-    }
+    const entries = Object.fromEntries(
+      Array.from({ length: 300 }, (_, i) => [
+        `agent-${i}`,
+        {
+          models: Object.fromEntries(
+            Array.from({ length: 40 }, (_model, m) => [`openai/proof-model-${m}`, {}]),
+          ),
+        },
+      ]),
+    );
     const migrated = makeConfig({ models: { "anthropic/claude-opus-4-7": {} } }, entries);
     const rosterReads = countRosterReads(migrated);
 
-    const runtimes = collect(migrated);
-
-    expect(runtimes).toEqual(["codex"]);
+    expect(collect(migrated)).toEqual(["codex"]);
     expect(rosterReads()).toBeLessThanOrEqual(16);
   });
 
