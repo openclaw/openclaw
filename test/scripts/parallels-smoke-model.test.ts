@@ -48,6 +48,7 @@ import {
   MacosGuest,
   WindowsGuest,
   runPosixBackgroundShell,
+  runWindowsBackgroundPowerShell,
 } from "../../scripts/e2e/parallels/guest-transports.ts";
 import { resolveHostCommandInvocation } from "../../scripts/e2e/parallels/host-command.ts";
 import { testing as hostServerTesting } from "../../scripts/e2e/parallels/host-server.ts";
@@ -345,6 +346,18 @@ function runMacosSmoke(
       },
     },
   );
+}
+
+function runWindowsBackground(
+  options: Pick<Parameters<typeof runWindowsBackgroundPowerShell>[0], "runCommand" | "label"> &
+    Partial<Parameters<typeof runWindowsBackgroundPowerShell>[0]>,
+) {
+  return runWindowsBackgroundPowerShell({
+    script: "Write-Output ok",
+    timeoutMs: 720_000,
+    vmName: "Windows 11",
+    ...options,
+  });
 }
 
 type FakeCommandResult = { status: number; stderr: string; stdout: string };
@@ -1953,6 +1966,96 @@ if (commandArgs[0] === "list") {
       "Set-Item -LiteralPath 'Env:NPM_CONFIG_REGISTRY' -Value 'http://192.0.2.2:48123/first'\nWrite-Output $env:NPM_CONFIG_REGISTRY",
       "Set-Item -LiteralPath 'Env:NPM_CONFIG_REGISTRY' -Value 'http://192.0.2.2:48123/second''s'\nWrite-Output $env:NPM_CONFIG_REGISTRY",
     ]);
+  });
+
+  it("carries Windows background environment before the detached command", async () => {
+    let uploadedScript = "";
+    const runCommand = (_command: string, _args: string[], options?: { input?: string }) => {
+      uploadedScript = options?.input ?? "";
+      return fakeResult(1, "", "fixture upload failure");
+    };
+    await expect(
+      runWindowsBackground({
+        env: { NPM_CONFIG_REGISTRY: "http://192.0.2.2:48123/candidate's" },
+        label: "environment proof",
+        runCommand,
+        script: "Write-Output $env:NPM_CONFIG_REGISTRY",
+        vmName: "Windows VM",
+      }),
+    ).rejects.toThrow("background script write failed");
+    expect(uploadedScript).toContain(
+      "Set-Item -LiteralPath 'Env:NPM_CONFIG_REGISTRY' -Value 'http://192.0.2.2:48123/candidate''s'\nWrite-Output $env:NPM_CONFIG_REGISTRY",
+    );
+  });
+
+  it("paces ambiguous Windows background launch materialization probes", async () => {
+    let calls = 0;
+    const runCommand = vi.fn(() => {
+      calls++;
+      return fakeResult();
+    });
+
+    await expect(
+      runWindowsBackground({
+        label: "ambiguous launch",
+        pollIntervalMs: 20,
+        runCommand,
+        timeoutMs: 90,
+      }),
+    ).rejects.toThrow("ambiguous launch background launch failed");
+
+    expect(calls).toBeLessThan(20);
+  });
+
+  it("fails fast when a Windows Parallels VM stops during background work", async () => {
+    const runCommand = vi.fn(() =>
+      fakeResult(
+        1,
+        "",
+        'Unable to perform the operation because "Windows 11" is not started. This operation can be performed for running virtual machines only.',
+      ),
+    );
+
+    await expect(
+      runWindowsBackground({
+        label: "ref-onboard",
+        runCommand,
+      }),
+    ).rejects.toThrow("ref-onboard failed: Parallels VM stopped");
+
+    expect(runCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails boundedly when Windows background polling loses guest transport", async () => {
+    const retries: string[] = [];
+    let donePolls = 0;
+    const runCommand = vi.fn((_command: string, args: string[], options?: { input?: string }) => {
+      const command = args.at(-1) ?? "";
+      if (options?.input) {
+        return fakeResult();
+      }
+      if (args.includes("--current-user")) {
+        return fakeResult(0, "started\n");
+      }
+      if (args.includes("cmd.exe") && command.includes("echo wait")) {
+        donePolls++;
+        return fakeResult(124);
+      }
+      return fakeResult();
+    });
+
+    await expect(
+      runWindowsBackground({
+        label: "ref-onboard",
+        onLaunchRetry: (message) => retries.push(message),
+        pollIntervalMs: 1,
+        runCommand,
+      }),
+    ).rejects.toThrow("ref-onboard done poll failed after 3 consecutive guest transport errors");
+
+    expect(donePolls).toBe(3);
+    expect(retries).toHaveLength(3);
+    expect(retries.at(-1)).toContain("transport failure 3/3");
   });
 
   it("returns timed-out host command status when check is disabled", () => {
