@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -25,13 +24,9 @@ afterEach(() => {
   }
 });
 
-function domain(
-  sourceIdentity?: (db: DatabaseSync) => string | symbol,
-  name = `receipt-test-${randomUUID()}`,
-) {
+function domain(name = `receipt-test-${randomUUID()}`) {
   return createStateDomainPublication<Row>({
     domain: name,
-    sourceIdentity,
     keyOf: (row) => row.id,
     isValue: (value): value is Row =>
       isRecord(value) && typeof value.id === "string" && typeof value.version === "number",
@@ -80,24 +75,6 @@ function fixture(publishPending = true) {
   return { db, publication, transaction, capture, write, begin };
 }
 
-it("publishes committed facts under the domain's admitted source identity", () => {
-  const { capture, write } = fixture();
-  const identity = "admitted-agent-database";
-  const publication = domain(() => identity);
-  const credential = { id: "credential", version: 2 };
-  const captured = capture(() => write(credential, publication), publication);
-  const changes = observe(publication);
-  const pending = publication.begin({ identity, assertCurrent() {} });
-  pending.committed(captured.receipt);
-  pending.finish(true);
-  const receipt = { source: { identity }, facts: postimages(credential) };
-  expect(changes).toMatchObject([
-    { kind: "pending", identity },
-    { kind: "committed", receipt },
-    { kind: "settled", identity },
-  ]);
-});
-
 it("captures only committed postimages across nested rollback and waits for the outer commit", () => {
   const { db, publication, transaction, capture, write } = fixture();
   const changes = observe(publication);
@@ -123,8 +100,8 @@ it("captures only committed postimages across nested rollback and waits for the 
 it("shares nested captures across facades for the same domain and database", () => {
   const { db, capture, write } = fixture();
   const name = `shared-receipt-test-${randomUUID()}`;
-  const first = domain(undefined, name);
-  const second = domain(undefined, name);
+  const first = domain(name);
+  const second = domain(name);
   const captured = capture(() => {
     write({ id: "before", version: 1 }, first);
     const nested = second.capture(db, () => write({ id: "nested", version: 2 }, second));

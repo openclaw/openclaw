@@ -120,15 +120,20 @@ test("rejects an unrepresentable team coordinator before creating a receipt", as
   assert.equal(read(), undefined);
 });
 
-test("prevents an interrupted pre-reset run from completing its replacement", async (context) => {
-  const { begin, complete, read, replace } = context;
-  begin({ runId: "stale-run" });
-  const replacement = replace("new-run", "stale-run");
-
-  assert.equal(await complete("stale-run"), false);
-  assert.deepEqual(read(), replacement);
-  assert.equal(await complete("new-run"), true);
-});
+for (const status of ["pending", "completed"] as const) {
+  test(`resets the observed ${status} owner and rejects stale completion`, async (context) => {
+    const { begin, complete, read, replace } = context;
+    const first = begin({ runId: "original-run" });
+    if (status === "completed") {
+      assert.equal(await complete(first.runId), true);
+    }
+    const replacement = replace("replacement-run", first.runId);
+    assert.partialDeepStrictEqual(replacement, { status: "pending", runId: "replacement-run" });
+    assert.equal(await complete(first.runId), false);
+    assert.deepEqual(read(), replacement);
+    assert.equal(await complete(replacement.runId), true);
+  });
+}
 
 test("completes the same run idempotently without changing its original timestamp", async (context) => {
   const { begin, complete, read } = context;
@@ -245,17 +250,6 @@ test("does not let a delayed concurrent run reopen a completed owner", async (co
     assert.deepEqual(concurrent, completed);
     assert.deepEqual(read(), completed);
   }
-});
-
-test("replaces a completed owner only when reset observed its exact run", async (context) => {
-  const { begin, complete, read, replace } = context;
-  const first = begin({ runId: "observed-completed-run" });
-  assert.equal(await complete(first.runId), true);
-
-  const replacement = replace("replacement-run", first.runId);
-
-  assert.partialDeepStrictEqual(replacement, { status: "pending", runId: "replacement-run" });
-  assert.deepEqual(read(), replacement);
 });
 
 test("binds receipts to the acknowledged configuration identity", async (context) => {
