@@ -77,6 +77,8 @@ export type OpenClawCodingToolsOptions = {
   modelApi?: string;
   /** Resolved endpoint for provider-native tool eligibility. */
   modelBaseUrl?: string;
+  /** Secret-free capability facts from the selected runtime model route. */
+  modelParams?: Record<string, unknown>;
   /** Resolved runtime model compatibility hints. */
   modelCompat?: ModelCompatConfig;
   /** If false, keep OpenClaw web_search even when a provider-native search tool is active. */

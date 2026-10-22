@@ -3,8 +3,10 @@ import {
   SESSION_ROW_DETAIL_FIELDS,
   SESSION_SIDEBAR_ROW_FIELDS,
 } from "../../../packages/gateway-protocol/src/session-row-fields.ts";
-import { compareSessionEntries } from "../../../src/gateway/session-list-order.ts";
-import { readSessionListSelectionFacts } from "../../../src/gateway/session-list-target.ts";
+import {
+  compareSessionEntryPairs,
+  type SessionEntryPair,
+} from "../../../src/gateway/session-list-order.ts";
 import {
   SESSIONS_LIST_OWNER_LIMIT,
   SESSIONS_LIST_TRANSCRIPT_LIMIT,
@@ -41,28 +43,27 @@ export type TeamScaleSidebarListInventory = {
 type TeamScaleSidebarRow = GatewaySessionRow & { updatedAt: number | null };
 type TeamScaleSidebarListResult = SessionsListResult & { sessions: TeamScaleSidebarRow[] };
 
-function selectionFacts(row: GatewaySessionRow) {
-  return readSessionListSelectionFacts(row.key, {
-    sessionId: row.sessionId ?? row.key,
-    updatedAt: row.updatedAt ?? 0,
-    createdAt: row.createdAt,
-    lastActivityAt: row.lastActivityAt,
-    lastInteractionAt: row.lastInteractionAt,
-    pinnedAt: row.pinned ? row.pinnedAt : undefined,
-    spawnedBy: row.spawnedBy,
-    parentSessionKey: row.parentSessionKey,
-    sidebarRoot: row.sidebarRoot,
-  });
+function sessionEntryPair(row: GatewaySessionRow): SessionEntryPair {
+  return [
+    row.key,
+    {
+      sessionId: row.sessionId ?? row.key,
+      updatedAt: row.updatedAt ?? 0,
+      createdAt: row.createdAt,
+      lastActivityAt: row.lastActivityAt,
+      lastInteractionAt: row.lastInteractionAt,
+      pinnedAt: row.pinned ? row.pinnedAt : undefined,
+      spawnedBy: row.spawnedBy,
+      parentSessionKey: row.parentSessionKey,
+      sidebarRoot: row.sidebarRoot,
+    },
+  ];
 }
 
 /** Owns the synthetic Gateway's changing membership; production code packs its wire rows. */
 export function createTeamScaleSidebarListOwner(input: TeamScaleSidebarListInventory) {
-  const selections = new WeakMap<TeamScaleSidebarRow, ReturnType<typeof selectionFacts>>();
-  const admit = (row: GatewaySessionRow): TeamScaleSidebarRow => {
-    const admitted = Object.freeze({ ...row, updatedAt: row.updatedAt ?? null });
-    selections.set(admitted, selectionFacts(admitted));
-    return admitted;
-  };
+  const admit = (row: GatewaySessionRow): TeamScaleSidebarRow =>
+    Object.freeze({ ...row, updatedAt: row.updatedAt ?? null });
   const rows = new Map(input.rows.map((row) => [row.key, admit(row)]));
   const previous = new Map<string, { rows: TeamScaleSidebarRow[]; revision: string }>();
   const projections = new WeakMap<TeamScaleSidebarRow, Map<string, TeamScaleSidebarRow>>();
@@ -131,7 +132,7 @@ export function createTeamScaleSidebarListOwner(input: TeamScaleSidebarListInven
           );
         })
         .toSorted((a, b) =>
-          compareSessionEntries(a.key, selections.get(a)!, b.key, selections.get(b)!, sortBy),
+          compareSessionEntryPairs(sessionEntryPair(a), sessionEntryPair(b), sortBy),
         );
       const offset = typeof query.offset === "number" ? query.offset : 0;
       const limit = typeof query.limit === "number" ? query.limit : 200;

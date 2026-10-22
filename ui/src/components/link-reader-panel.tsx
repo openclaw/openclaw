@@ -25,6 +25,7 @@ import {
   type ReaderTab,
   type ReaderSection,
 } from "./link-reader-panel-view.ts";
+import { LINK_READER_METADATA_REQUEST_EVENT } from "./link-reader-response.ts";
 import { EMPTY_LINK_READERS } from "./link-reader-target.ts";
 import type { PanelHostedTabsElement } from "./panel-hosted-tabs.ts";
 import { PanelTabStrip } from "./panel-tab-strip-solid.tsx";
@@ -228,6 +229,9 @@ function PanelView(
         owner.handleToggleRequest(event);
       }
     }),
+  );
+  onSettled(() =>
+    listen(window, LINK_READER_METADATA_REQUEST_EVENT, () => owner.publishMetadata()),
   );
   const tab = () => view().activeTab();
   const target = () => view().target();

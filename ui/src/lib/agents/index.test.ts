@@ -12,9 +12,9 @@ import {
   loadToolsCatalog,
   loadToolsEffective,
   refreshVisibleToolsEffectiveForCurrentSession,
-  setDefaultAgent,
 } from "./index.ts";
 import type { AgentsState } from "./index.ts";
+import { setDefaultAgent } from "./mutations.ts";
 
 type AgentsConfigCapability = Parameters<typeof setDefaultAgent>[0];
 
@@ -260,7 +260,11 @@ describe("createAgentCapability lifecycle", () => {
     const agents = createAgentCapability(harness.gateway);
 
     const staleLoad = agents.refreshList();
+    const staleRead = agents.listRead;
     harness.publish(false);
+    // Retiring a transport must release a native async frame before its reply.
+    await expect(staleRead).resolves.toBeNull();
+    await expect(staleLoad).resolves.toBeNull();
     harness.publish(true);
     const currentLoad = agents.refreshList();
 
@@ -289,7 +293,11 @@ describe("createAgentCapability lifecycle", () => {
     const agents = createAgentCapability(harness.gateway);
 
     const staleLoad = agents.refreshFiles("main");
+    const staleRead = agents.files("main").read;
     harness.publish(false);
+    expect(agents.files("main").read).toBeNull();
+    await expect(staleRead).resolves.toBeNull();
+    await expect(staleLoad).resolves.toBeNull();
     harness.publish(true);
     const currentLoad = agents.refreshFiles("main");
 
@@ -374,6 +382,20 @@ describe("createAgentCapability lifecycle", () => {
 
     expect(agents.files("main").list).toBeNull();
     expect(agents.files("main").loading).toBe(false);
+    agents.dispose();
+  });
+
+  it("exposes current failures without rejecting legacy roster and file callers", async () => {
+    const request = vi.fn<TestRequest>().mockRejectedValue(new Error("Read unavailable"));
+    const harness = createGatewayHarness(createTestGatewayClient(request));
+    const agents = createAgentCapability(harness.gateway);
+    const roster = agents.refreshList();
+    const files = agents.refreshFiles("main");
+
+    await expect(agents.listRead).resolves.toEqual({ error: "Read unavailable" });
+    await expect(agents.files("main").read).resolves.toEqual({ error: "Read unavailable" });
+    await expect(Promise.all([roster, files])).resolves.toEqual([null, null]);
+    expect(agents.state.agentsError).toBe("Read unavailable");
     agents.dispose();
   });
 

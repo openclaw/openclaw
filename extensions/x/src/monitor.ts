@@ -22,8 +22,8 @@ import { createXPublicationPreparation, resolveXIngress, xMentionFacts } from ".
 import { readXReplyOutcome, type XReplyOutcome } from "./outcome.js";
 import { verifyPublicXThread } from "./public-thread.js";
 import { resolveXRecipient } from "./recipient.js";
-import type { XVisibleWorkSession } from "./reply.js";
 import { getXRuntime } from "./runtime.js";
+import type { XVisibleWorkSession } from "./send.js";
 import { sendXDelivery } from "./send.js";
 import { XBudgetExceededError } from "./spend.js";
 import { assembleXThread } from "./thread.js";

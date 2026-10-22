@@ -180,17 +180,17 @@ describe("maybeRepairGatewayServiceConfig", () => {
     expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
     expect(mocks.install).not.toHaveBeenCalled();
   });
-  it("reports a passing vendor runtime note without rewriting the service", async () => {
+  it("reports pending runtime pin migration without rewriting the service", async () => {
     const command = createGatewayCommand("/opt/openclaw/dist/index.js");
     mocks.readCommand.mockResolvedValue(command);
     mocks.buildGatewayInstallPlan.mockResolvedValue(command);
     mocks.auditGatewayServiceConfig.mockResolvedValue({
       ok: true,
       issues: [],
-      runtimeNote: "Node 24.15.0: unsupported version, capability check passed.",
+      runtimeNote: "Runtime pin migration pending; run openclaw doctor.",
     });
     await runRepair();
-    expectNoteContaining("unsupported version, capability check passed", "Gateway runtime");
+    expectNoteContaining("Runtime pin migration pending", "Gateway runtime");
     expect(mocks.resolveSystemNodeInfo).not.toHaveBeenCalled();
     expect(mocks.install).not.toHaveBeenCalled();
   });
@@ -245,11 +245,11 @@ describe("maybeRepairGatewayServiceConfig", () => {
   });
 
   it("does not duplicate gateway runtime warnings already emitted by the node install plan", async () => {
-    const nvmNode = "/home/test/.nvm/versions/node/v24.16.0/bin/node";
+    const nvmNode = "/home/test/.nvm/versions/node/v24.22.1/bin/node";
     mocks.readCommand.mockResolvedValue(createGatewayCommand(undefined, nvmNode));
     mocks.buildGatewayInstallPlan.mockImplementation(async ({ warn }) => {
       warn?.(
-        "System Node 20.20.2 at /usr/bin/node is outside the supported range. Using /home/test/.nvm/versions/node/v24.16.0/bin/node for the daemon.",
+        "System Node 20.20.2 at /usr/bin/node is outside the supported range. Using /home/test/.nvm/versions/node/v24.22.1/bin/node for the daemon.",
         "Gateway runtime",
       );
       return {
@@ -275,7 +275,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     expect(runtimeMessages).not.toContain("duplicate doctor runtime warning");
     expect(runtimeMessages.map((message) => String(message)).join("\n")).not.toContain("not found");
     expect(runtimeMessages.map((message) => String(message)).join("\n")).toContain(
-      "Using /home/test/.nvm/versions/node/v24.16.0/bin/node",
+      "Using /home/test/.nvm/versions/node/v24.22.1/bin/node",
     );
   });
 
@@ -321,7 +321,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     mocks.needsNodeRuntimeMigration.mockReturnValue(true);
     mocks.resolveSystemNodeInfo.mockResolvedValue({
       path: systemNodePath,
-      version: "24.16.0",
+      version: "24.22.1",
       status: "supported",
     });
     await runRepair();

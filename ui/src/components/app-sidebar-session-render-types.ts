@@ -93,7 +93,6 @@ export interface SessionListHost {
     | "archiveSessionWithUndo"
     | "patchSession"
     | "isPersonalSessionPin"
-    | "reorderSidebarSection"
     | "sectionHeaders"
   >;
   readonly sidebarMenus: Pick<

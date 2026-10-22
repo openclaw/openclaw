@@ -343,18 +343,6 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
       function RepositoryActions(props: { status: RepositoryStatus; onRetry?: () => void }) {
         return (
           <>
-            <button
-              type="submit"
-              class="btn primary"
-              disabled={
-                saving() ||
-                props.status === "checking" ||
-                props.status === "unavailable" ||
-                props.status === "restricted"
-              }
-            >
-              {t("common.save")}
-            </button>
             {props.status === "unavailable" || props.status === "restricted" ? (
               <button
                 type="button"
@@ -368,6 +356,18 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
                 {t("common.retry")}
               </button>
             ) : undefined}
+            <button
+              type="submit"
+              class="btn primary"
+              disabled={
+                saving() ||
+                props.status === "checking" ||
+                props.status === "unavailable" ||
+                props.status === "restricted"
+              }
+            >
+              {t("common.save")}
+            </button>
           </>
         );
       }
@@ -472,12 +472,12 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
                   </div>
                 ) : undefined}
                 <openclaw-modal-actions class="exec-approval-actions">
-                  <Loading fallback={<RepositoryActions status="checking" />}>
-                    <RepositoryActions status={repository()} />
-                  </Loading>
                   <button type="button" class="btn" disabled={saving()} onClick={() => finish()}>
                     {t("common.cancel")}
                   </button>
+                  <Loading fallback={<RepositoryActions status="checking" />}>
+                    <RepositoryActions status={repository()} />
+                  </Loading>
                 </openclaw-modal-actions>
               </Reveal>
             </Errored>

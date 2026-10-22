@@ -8,17 +8,28 @@ import {
 } from "../../config/control-ui-chunking.ts";
 
 describe("Control UI build chunking", () => {
-  it("keeps the optional JSON5 parser outside the eager validation graph", async () => {
+  it("keeps optional parsing and device signing outside the eager graph", async () => {
     const zod = new URL("../../node_modules/zod/index.js", import.meta.url).pathname;
     const json5 = new URL("../../node_modules/json5/dist/index.mjs", import.meta.url).pathname;
+    const gatewayMethods = new URL("../lib/gateway-methods.ts", import.meta.url).pathname;
+    const solid = new URL("../../node_modules/solid-js/dist/solid.js", import.meta.url).pathname;
+    const verdict = new URL(
+      "../../node_modules/@solidjs/signals/dist/prod/core/verdict.js",
+      import.meta.url,
+    ).pathname;
+    const signer = new URL("../../node_modules/@noble/ed25519/index.js", import.meta.url).pathname;
     const entry = "\0config-parser-fixture";
     const sources = new Map([
       [
         entry,
-        `export { validate } from ${JSON.stringify(zod)}; export const warm = () => import(${JSON.stringify(json5)});`,
+        `export { validate } from ${JSON.stringify(zod)}; export { canCall } from ${JSON.stringify(gatewayMethods)}; export { signal } from ${JSON.stringify(solid)}; export { pending } from ${JSON.stringify(verdict)}; export const warm = () => import(${JSON.stringify(json5)}); export const sign = () => import(${JSON.stringify(signer)});`,
       ],
       [zod, "export const validate = () => true;"],
       [json5, "export const parse = () => ({});"],
+      [gatewayMethods, "export const canCall = () => true;"],
+      [solid, "export const signal = () => 1;"],
+      [verdict, "export const pending = () => false;"],
+      [signer, "export const sign = () => 'signature';"],
     ]);
     const result = await build({
       configFile: false,
@@ -59,6 +70,12 @@ describe("Control UI build chunking", () => {
     visit(entryChunk.fileName);
     expect(dependencies.has(parserChunk.fileName)).toBe(false);
     expect(entryChunk.dynamicImports).toContain(parserChunk.fileName);
+    const signerChunk = chunks.find((chunk) => signer in chunk.modules)!;
+    expect(dependencies.has(signerChunk.fileName)).toBe(false);
+    expect(entryChunk.dynamicImports).toContain(signerChunk.fileName);
+    expect(chunks.find((chunk) => solid in chunk.modules)?.fileName).toBe(
+      chunks.find((chunk) => verdict in chunk.modules)?.fileName,
+    );
   });
 
   it("keeps routes and optional code lazy with one shared stylesheet", async () => {
@@ -70,7 +87,7 @@ describe("Control UI build chunking", () => {
     const sharedUi = modulePath("../components/select-picker-view.tsx");
     const pluginActions = modulePath("../plugins/control-ui-actions.ts");
     const pluginLoader = modulePath("../plugins/control-ui-loader.ts");
-    const sharedStyle = modulePath("../styles/mcp-app-extensions.css");
+    const sharedStyle = modulePath("../styles/select-picker.css");
     const sidebarStyle = modulePath("../styles/sidebar-reorder.css");
     const entry = "\0cold-load-fixture";
     const sources = new Map([
@@ -187,8 +204,8 @@ describe("Control UI build chunking", () => {
         "/tmp/openclaw-pnpm-node-modules/libphonenumber-js/max/exports/parsePhoneNumber.js",
         "phone-runtime",
       ],
-      ["/tmp/openclaw-pnpm-node-modules/@noble/ed25519/index.js", "gateway-runtime"],
-      ["/repo/ui/src/lib/gateway-methods.ts", "gateway-runtime"],
+      ["/tmp/openclaw-pnpm-node-modules/@noble/ed25519/index.js", "device-signing-runtime"],
+      ["/repo/ui/src/lib/gateway-methods.ts", undefined],
       [
         new URL("../components/sidebar-update-card.tsx", import.meta.url).pathname,
         "sidebar-update-runtime",

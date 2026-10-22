@@ -580,7 +580,7 @@ export {
   acknowledgeReplySessionTransition,
 } from "./session-controller.session-reader.js";
 
-/** Await only this exact startup; neither a successor nor a new backend can satisfy it. */
+/** Await this exact owner's current backend generation, including recovery startup. */
 export async function waitForReplyOperationBackend(
   operation: ReplyOperation,
   signal?: AbortSignal,

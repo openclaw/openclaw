@@ -294,7 +294,7 @@ export function admitClientCredentialStore(
     readOnly: boolean;
     stored?: ClientCredentialReceiptState | null;
   },
-): void {
+): ClientCredentialReceipt {
   const stored = prepareClientCredentialReceipt(
     database,
     env,
@@ -303,4 +303,5 @@ export function admitClientCredentialStore(
     options.stored,
   );
   assertClientCredentialLegacyReady(database, env, !options.readOnly, stored.receipt);
+  return stored.receipt;
 }

@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { theme } from "../../packages/terminal-core/src/theme.js";
+import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
 import type { runWithLocalStateOwner } from "./local-state-owner.js";
 import { registerPairingCli } from "./pairing-cli.js";
 
@@ -42,20 +43,17 @@ const pairingRequest = {
 
 function configSnapshot(ownerAllowFrom?: string[]) {
   const config = ownerAllowFrom ? { commands: { ownerAllowFrom } } : {};
-  return {
-    snapshot: {
-      path: "/tmp/openclaw.json",
-      exists: true,
-      raw: "{}",
-      parsed: {},
-      valid: true,
-      issues: [],
-      legacyIssues: [],
-      sourceConfig: config,
-      runtimeConfig: config,
-    },
-    writeOptions: {},
-  };
+  return { snapshot: createTestConfigSnapshot(config), writeOptions: {} };
+}
+
+function expectApproval(channel = "telegram", account = {}) {
+  expect(approveChannelPairingCode).toHaveBeenCalledWith({
+    channel,
+    code: "ABCDEFGH",
+    ...account,
+    env: process.env,
+    assertCurrent: expect.any(Function),
+  });
 }
 
 vi.mock("../pairing/pairing-store.js", () => ({
@@ -111,16 +109,22 @@ async function runPairing(command: "list" | "approve", ...args: string[]) {
   await program.parseAsync(["pairing", command, ...args], { from: "user" });
 }
 
-it("labels sender ids using the channel's pairing adapter", async () => {
+it("lists account-scoped requests with the channel's sender label", async () => {
   const log = vi.spyOn(console, "log").mockImplementation(() => {});
   listChannelPairingRequests.mockResolvedValueOnce([
     { ...pairingRequest, code: "ABC123", meta: { username: "peter" } },
   ]);
 
-  await runPairing("list", "--channel", "telegram");
+  await runPairing("list", "--channel", "telegram", "--account", "yy");
   const output = log.mock.calls.map((call) => call.join(" ")).join("\n");
   expect(output).toContain("telegramUserId");
   expect(output).toContain("123");
+  expect(listChannelPairingRequests).toHaveBeenCalledWith(
+    "telegram",
+    process.env,
+    "yy",
+    expect.any(Function),
+  );
 });
 
 it("rejects conflicting positional and option channels for list", async () => {
@@ -129,17 +133,6 @@ it("rejects conflicting positional and option channels for list", async () => {
   );
 
   expect(listChannelPairingRequests).not.toHaveBeenCalled();
-});
-
-it("forwards --account for list", async () => {
-  await runPairing("list", "--channel", "telegram", "--account", "yy");
-
-  expect(listChannelPairingRequests).toHaveBeenCalledWith(
-    "telegram",
-    process.env,
-    "yy",
-    expect.any(Function),
-  );
 });
 
 it("defaults list to the sole available channel", async () => {
@@ -157,16 +150,9 @@ it("defaults list to the sole available channel", async () => {
 it("redirects to openclaw devices when no pairing channels are configured", async () => {
   listPairingChannels.mockReturnValueOnce([]);
 
-  const error = await runPairing("list").then(
-    () => null,
-    (err: unknown) => err,
-  );
-
-  expect(error).toBeInstanceOf(Error);
-  const message = (error as Error).message;
-  expect(message).toContain("openclaw devices");
-  expect(message).not.toContain("expected one of: )");
-  expect(message).not.toContain("()");
+  const listing = runPairing("list");
+  await expect(listing).rejects.toThrow("openclaw devices");
+  await expect(listing).rejects.not.toThrow(/expected one of: \)|\(\)/);
   expect(listChannelPairingRequests).not.toHaveBeenCalled();
 });
 
@@ -178,12 +164,7 @@ it("accepts channel as positional for approve (npm-run compatible)", async () =>
   const log = vi.spyOn(console, "log").mockImplementation(() => {});
   await runPairing("approve", "telegram", "ABCDEFGH");
 
-  expect(approveChannelPairingCode).toHaveBeenCalledWith({
-    channel: "telegram",
-    code: "ABCDEFGH",
-    env: process.env,
-    assertCurrent: expect.any(Function),
-  });
+  expectApproval();
   expect(replaceConfigFile.mock.calls[0]?.[0]).toMatchObject({
     sourceConfig: { commands: { ownerAllowFrom: ["telegram:123"] } },
   });
@@ -216,13 +197,7 @@ it.each([
     listPairingChannels.mockReturnValueOnce([channel]);
   }
   await runPairing("approve", ...args);
-  expect(approveChannelPairingCode).toHaveBeenCalledWith({
-    channel,
-    code: "ABCDEFGH",
-    ...account,
-    env: process.env,
-    assertCurrent: expect.any(Function),
-  });
+  expectApproval(channel, account);
 });
 
 it("rejects a whitespace-only --account for approve", async () => {

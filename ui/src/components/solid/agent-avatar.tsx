@@ -1,4 +1,4 @@
-import { createMemo, onCleanup, Show } from "solid-js";
+import { createMemo, onSettled, Show } from "solid-js";
 import type { AgentIdentityResult } from "../../api/types.ts";
 import { resolveAgentTextAvatar } from "../../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
@@ -16,7 +16,7 @@ export type AgentAvatarProps = {
 
 export function AgentAvatarContent(props: AgentAvatarProps) {
   const loader = createIdentityAvatars();
-  onCleanup(loader.connect());
+  onSettled(() => loader.connect());
   const avatarSource = projectOwner(loader, (owner) => owner);
   const avatar = createMemo(() => {
     const option = props.option;

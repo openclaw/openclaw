@@ -3,7 +3,8 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { agentListHandler } from "./agents-list.js";
-import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
+import { callAgentHandler } from "./agents-mutate.test-support.js";
+import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const roster = vi.hoisted(() => ({
   defaultId: "ops",
@@ -65,18 +66,18 @@ async function listAgents(
   client = readerClient(),
   catalog: GatewayRequestContext["readPreparedGatewayModelCatalog"] = async () => ({ entries: [] }),
 ) {
-  const respond = vi.fn<RespondFn>();
-  await agentListHandler({
-    req: { type: "req", id: "agent-list-test", method: "agents.list", params: {} },
-    params: {},
-    client,
-    context: {
-      getRuntimeConfig: cfg,
-      readPreparedGatewayModelCatalog: catalog,
-    } as GatewayRequestContext,
-    respond,
-    isWebchatConnect: () => false,
-  });
+  const respond = await callAgentHandler(
+    agentListHandler,
+    "agents.list",
+    {},
+    {
+      client,
+      context: {
+        getRuntimeConfig: cfg,
+        readPreparedGatewayModelCatalog: catalog,
+      } as GatewayRequestContext,
+    },
+  );
   // Routing metadata describes Gateway ownership, independently of the reader's roster.
   expect(respond).toHaveBeenCalledExactlyOnceWith(
     true,

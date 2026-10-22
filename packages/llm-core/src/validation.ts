@@ -1,5 +1,6 @@
 import { parseLocalSchemaRefPointer } from "@openclaw/normalization-core/json-schema";
 import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { Compile } from "typebox/compile";
 import type { TLocalizedValidationError } from "typebox/error";
 import { Pointer } from "typebox/schema";
@@ -71,10 +72,7 @@ function getSchemaTypes(initialSchema: JsonSchemaObject, root?: JsonSchemaObject
   if (typeof schema.type === "string") {
     return [schema.type];
   }
-  if (Array.isArray(schema.type)) {
-    return schema.type.filter((type): type is string => typeof type === "string");
-  }
-  return [];
+  return filterStringEntries(schema.type);
 }
 
 function matchesJsonType(value: unknown, type: string): boolean {

@@ -20,8 +20,8 @@ import { createSandbox } from "../../agents/sandbox/fs-bridge.test-helpers.js";
 import { createRemoteShellSandboxFsBridge } from "../../agents/sandbox/remote-fs-bridge.js";
 import { createLocalRemoteShellScriptRunner } from "../../agents/sandbox/remote-fs-bridge.test-helpers.js";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
+import { callAgentHandler } from "./agents-mutate.test-support.js";
 import { agentsHandlers } from "./agents.js";
-import type { RespondFn } from "./types.js";
 
 function hashContent(content: string): string {
   return createHash("sha256").update(content, "utf8").digest("hex");
@@ -72,13 +72,7 @@ function registerFileTests(storage: "local" | "remote") {
     method: "agents.files.list" | "agents.files.get" | "agents.files.set",
     params: Record<string, unknown>,
   ) {
-    const respond = vi.fn<RespondFn>();
-    await agentsHandlers[method]?.({
-      req: { type: "req", id: method, method, params: {} },
-      params,
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
+    const respond = await callAgentHandler(agentsHandlers[method]!, method, params, {
       context: {
         getRuntimeConfig: () => ({ agents: { defaults: { workspace } } }),
         broadcast,

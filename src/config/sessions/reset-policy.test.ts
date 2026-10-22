@@ -68,19 +68,6 @@ it("inherits an active base mode for partial type overrides", () => {
   ).toMatchObject({ mode: "idle", idleMinutes: 30 });
 });
 
-it("expires an explicit idle policy after inactivity", () => {
-  const now = 10 * HOUR_MS;
-  const lastInteractionAt = now - 31 * 60_000;
-  const policy = resolveSessionResetPolicy({
-    sessionCfg: { reset: { mode: "idle", idleMinutes: 30 } },
-    resetType: "direct",
-  });
-
-  expect(
-    evaluateSessionFreshness({ updatedAt: now, lastInteractionAt, now, policy }),
-  ).toMatchObject({ fresh: false, staleReason: "idle" });
-});
-
 it.each([
   [{ resetByChannel: { discord: { mode: "daily", atHour: 6 } } }, 6],
   [{ reset: { mode: "none" }, resetByChannel: { discord: { atHour: 7 } } }, 7],

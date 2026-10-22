@@ -51,21 +51,32 @@ function normalizeRuntimeId(value: unknown): string | undefined {
   return normalized || undefined;
 }
 
-function collectExplicitRuntimeRefs(
-  cfg: OpenClawConfig,
-): Array<{ runtimeId: string; path: string }> {
-  const refs: Array<{ runtimeId: string; path: string }> = [];
-  const push = (runtime: unknown, path: string) => {
+/** Collect effective agent-run host candidates from provider/model runtime policy. */
+function collectConfiguredContextEngineAgentRunHosts(cfg: OpenClawConfig): HostCandidate[] {
+  const runtimePaths = new Map<string, string[]>();
+  const push = (runtimeId: string | undefined, path: string) => {
+    if (!runtimeId) {
+      return;
+    }
+    const normalized = normalizeRuntimeId(runtimeId) ?? runtimeId;
+    const paths = runtimePaths.get(normalized) ?? [];
+    paths.push(path);
+    runtimePaths.set(normalized, paths);
+  };
+  const pushExplicit = (runtime: unknown, path: string) => {
     const runtimeId = normalizeRuntimeId(runtime);
     if (runtimeId && runtimeId !== "default") {
-      refs.push({ runtimeId, path });
+      push(runtimeId, path);
     }
   };
 
   for (const [providerId, providerConfig] of Object.entries(cfg.models?.providers ?? {})) {
-    push(providerConfig?.agentRuntime?.id, `models.providers.${providerId}.agentRuntime.id`);
+    pushExplicit(
+      providerConfig?.agentRuntime?.id,
+      `models.providers.${providerId}.agentRuntime.id`,
+    );
     providerConfig?.models?.forEach((modelConfig, index) => {
-      push(
+      pushExplicit(
         modelConfig?.agentRuntime?.id,
         `models.providers.${providerId}.models[${index}].agentRuntime.id`,
       );
@@ -73,29 +84,38 @@ function collectExplicitRuntimeRefs(
   }
 
   for (const [modelRef, modelConfig] of Object.entries(cfg.agents?.defaults?.models ?? {})) {
-    push(modelConfig?.agentRuntime?.id, `agents.defaults.models.${modelRef}.agentRuntime.id`);
+    pushExplicit(
+      modelConfig?.agentRuntime?.id,
+      `agents.defaults.models.${modelRef}.agentRuntime.id`,
+    );
   }
 
   for (const { entry: agent, source } of listAgentEntriesWithSource(cfg)) {
     const path =
       source.kind === "entries" ? `agents.entries.${source.key}` : `agents.list.${source.index}`;
     for (const [modelRef, modelConfig] of Object.entries(agent.models ?? {})) {
-      push(modelConfig?.agentRuntime?.id, `${path}.models.${modelRef}.agentRuntime.id`);
+      pushExplicit(modelConfig?.agentRuntime?.id, `${path}.models.${modelRef}.agentRuntime.id`);
     }
   }
 
-  return refs;
-}
-
-function collectSelectedModelRefs(
-  cfg: OpenClawConfig,
-): Array<{ modelRef: string; path: string; agentId?: string }> {
-  const refs: Array<{ modelRef: string; path: string; agentId?: string }> = [];
+  const pushModelRef = (modelRef: string, path: string, agentId?: string) => {
+    const parsed = parseModelCatalogRef(modelRef);
+    if (!parsed) {
+      return;
+    }
+    const policy = resolveAgentHarnessPolicy({
+      config: cfg,
+      provider: parsed.provider,
+      modelId: parsed.modelId,
+      agentId,
+    });
+    push(policy.runtime, path);
+  };
   const pushModel = (value: unknown, path: string, agentId?: string) => {
     for (const ref of listModelRefsFromConfigValue(value)) {
       const modelRef = ref.trim();
       if (modelRef) {
-        refs.push({ modelRef, path, ...(agentId ? { agentId } : {}) });
+        pushModelRef(modelRef, path, agentId || undefined);
       }
     }
   };
@@ -104,17 +124,14 @@ function collectSelectedModelRefs(
       return;
     }
     for (const modelRef of Object.keys(models)) {
-      refs.push({ modelRef, path: `${path}.${modelRef}`, ...(agentId ? { agentId } : {}) });
+      pushModelRef(modelRef, `${path}.${modelRef}`, agentId || undefined);
     }
   };
 
   if (cfg.agents?.defaults?.model !== undefined) {
     pushModel(cfg.agents.defaults.model, "agents.defaults.model");
   } else {
-    refs.push({
-      modelRef: `${DEFAULT_PROVIDER}/${DEFAULT_MODEL}`,
-      path: "agents.defaults.model (default)",
-    });
+    pushModelRef(`${DEFAULT_PROVIDER}/${DEFAULT_MODEL}`, "agents.defaults.model (default)");
   }
   pushModelMap(cfg.agents?.defaults?.models, "agents.defaults.models");
 
@@ -126,7 +143,10 @@ function collectSelectedModelRefs(
     pushModelMap(agent.models, `${path}.models`, agentId);
   }
 
-  return refs;
+  return [...runtimePaths.entries()].map(([runtimeId, paths]) => ({
+    host: resolveRuntimeHost(cfg, runtimeId),
+    paths,
+  }));
 }
 
 function resolveRuntimeHost(cfg: OpenClawConfig, runtimeId: string): ContextEngineHostSupport {
@@ -149,42 +169,6 @@ function resolveRuntimeHost(cfg: OpenClawConfig, runtimeId: string): ContextEngi
     backendId: cliBackend?.id ?? runtimeId,
     capabilities: cliBackend?.contextEngineHostCapabilities,
   });
-}
-
-/** Collect effective agent-run host candidates from provider/model runtime policy. */
-function collectConfiguredContextEngineAgentRunHosts(cfg: OpenClawConfig): HostCandidate[] {
-  const runtimePaths = new Map<string, string[]>();
-  const push = (runtimeId: string | undefined, path: string) => {
-    if (!runtimeId) {
-      return;
-    }
-    const normalized = normalizeRuntimeId(runtimeId) ?? runtimeId;
-    const paths = runtimePaths.get(normalized) ?? [];
-    paths.push(path);
-    runtimePaths.set(normalized, paths);
-  };
-
-  for (const ref of collectExplicitRuntimeRefs(cfg)) {
-    push(ref.runtimeId, ref.path);
-  }
-  for (const model of collectSelectedModelRefs(cfg)) {
-    const parsed = parseModelCatalogRef(model.modelRef);
-    if (!parsed) {
-      continue;
-    }
-    const policy = resolveAgentHarnessPolicy({
-      config: cfg,
-      provider: parsed.provider,
-      modelId: parsed.modelId,
-      agentId: model.agentId,
-    });
-    push(policy.runtime, model.path);
-  }
-
-  return [...runtimePaths.entries()].map(([runtimeId, paths]) => ({
-    host: resolveRuntimeHost(cfg, runtimeId),
-    paths,
-  }));
 }
 
 function selectedContextEngineSlotId(cfg: OpenClawConfig): string {

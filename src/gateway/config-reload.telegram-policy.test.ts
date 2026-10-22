@@ -44,7 +44,6 @@ it.each([
       reloadPlugins,
       refreshHooksPolicy: true,
       reloadInternalHooks: true,
-      restartHeartbeat: true,
     });
   },
 );

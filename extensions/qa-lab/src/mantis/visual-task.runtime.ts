@@ -25,7 +25,6 @@ type MantisVisualTaskVisionMode = "image-describe" | "metadata";
 export type MantisVisualTaskOptions = MantisVisualDriverOptions &
   MantisCrabboxLeaseOptions & {
     duration?: string;
-    now?: () => Date;
   };
 
 export type MantisVisualDriverOptions = {
@@ -447,7 +446,7 @@ export async function runMantisVisualTask(
   opts: MantisVisualTaskOptions = {},
 ): Promise<MantisCrabboxRunResult> {
   const env = opts.env ?? process.env;
-  const startedAt = (opts.now ?? (() => new Date()))();
+  const startedAt = new Date();
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const outputDir = await ensureRepoBoundDirectory(
     repoRoot,

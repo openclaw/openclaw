@@ -60,7 +60,6 @@ function serviceDeps(storePath: string, overrides: Partial<CronServiceDeps> = {}
     defaultAgentId: "main",
     log: logger,
     enqueueSystemEvent() {},
-    requestHeartbeat() {},
     runIsolatedAgentJob: async () => ({ status: "ok" }),
     ...overrides,
   });

@@ -152,6 +152,20 @@ function expectLength(value: string, max: number) {
   expect(value.length).toBeGreaterThan(0);
   expect(value.length).toBeLessThanOrEqual(max);
 }
+function commandArg(
+  name: string,
+  fields: Partial<NonNullable<ChatCommandDefinition["args"]>[number]> = {},
+) {
+  return { name, description: name, type: "string" as const, ...fields };
+}
+const restrictedConfig = (enabled: boolean, native?: boolean) => ({
+  commands: {
+    config: enabled,
+    plugins: enabled,
+    debug: enabled,
+    ...(native === undefined ? {} : { native }),
+  },
+});
 
 describe("commands registry", () => {
   it("registers /login natively for Discord, Slack, and Telegram", () => {
@@ -200,17 +214,11 @@ describe("commands registry", () => {
   );
 
   it("filters commands based on config flags", () => {
-    const disabled = listChatCommandsForConfig({
-      commands: { config: false, plugins: false, debug: false },
-    });
+    const disabled = listChatCommandsForConfig(restrictedConfig(false));
     expectSetMembers(commandKeySet(disabled), ["config", "plugins", "debug"], false);
-    const enabled = listChatCommandsForConfig({
-      commands: { config: true, plugins: true, debug: true },
-    });
+    const enabled = listChatCommandsForConfig(restrictedConfig(true));
     expectSetMembers(commandKeySet(enabled), ["config", "plugins", "debug"], true);
-    const nativeDisabled = listNativeCommandSpecsForConfig({
-      commands: { config: false, plugins: false, debug: false, native: true },
-    });
+    const nativeDisabled = listNativeCommandSpecsForConfig(restrictedConfig(false, true));
     expectSetMembers(nativeNameSet(nativeDisabled), ["config", "plugins", "debug"], false);
   });
 
@@ -234,16 +242,12 @@ describe("commands registry", () => {
         descriptionLocalizations: { ko: "데모 스킬" },
       },
     ];
-    const commands = listChatCommandsForConfig(
-      { commands: { config: false, plugins: false, debug: false } },
-      { skillCommands },
-    );
+    const commands = listChatCommandsForConfig(restrictedConfig(false), { skillCommands });
     const command = commands.find((spec) => spec.nativeName === "demo_skill");
     expect(command?.category).toBe("tools");
-    const native = listNativeCommandSpecsForConfig(
-      { commands: { config: false, plugins: false, debug: false, native: true } },
-      { skillCommands },
-    );
+    const native = listNativeCommandSpecsForConfig(restrictedConfig(false, true), {
+      skillCommands,
+    });
     expect(native.find((spec) => spec.name === "demo_skill")?.descriptionLocalizations).toEqual({
       ko: "데모 스킬",
     });
@@ -260,7 +264,7 @@ describe("commands registry", () => {
       description: "secondary",
       descriptionLocalizations: { de: "Sekundär" },
       acceptsArgs: true,
-      args: [{ name: "value", description: "value", type: "string" }],
+      args: [commandArg("value")],
       isAlias: true,
     };
     const secondary: readonly NativeCommandSpec[] = [
@@ -421,17 +425,15 @@ describe("commands registry", () => {
 describe("commands registry args", () => {
   it("parses positional args and captureRemaining", () => {
     const command = commandFixture("debug", [
-      { name: "action", description: "action", type: "string" },
-      { name: "path", description: "path", type: "string" },
-      { name: "value", description: "value", type: "string", captureRemaining: true },
+      commandArg("action"),
+      commandArg("path"),
+      commandArg("value", { captureRemaining: true }),
     ]);
     const args = expectDefined(parseCommandArgs(command, "set foo bar baz"), "parsed args");
     expect(args.values).toEqual({ action: "set", path: "foo", value: "bar baz" });
   });
   it("serializes args via raw first, then values", () => {
-    const command = commandFixture("model", [
-      { name: "model", description: "model", type: "string", captureRemaining: true },
-    ]);
+    const command = commandFixture("model", [commandArg("model", { captureRemaining: true })]);
     expect(serializeCommandArgs(command, { raw: "gpt-5.4" })).toBe("gpt-5.4");
     expect(buildCommandTextFromArgs(command)).toBe("/model");
     expect(buildCommandTextFromArgs(command, { raw: "gpt-5.4" })).toBe("/model gpt-5.4");
@@ -459,15 +461,12 @@ describe("commands registry args", () => {
     const command = commandFixture(
       "think",
       [
-        {
-          name: "level",
-          description: "level",
-          type: "string",
+        commandArg("level", {
           choices: (context) => {
             seen.push(context);
             return ["low", "high"];
           },
-        },
+        }),
       ],
       { argsMenu: "auto" },
     );
@@ -560,12 +559,10 @@ describe("commands registry args", () => {
     const command = commandFixture(
       "usage",
       [
-        {
-          name: "mode",
+        commandArg("mode", {
           description: "on or off",
-          type: "string",
           choices: ["off", "tokens", "full", "cost"],
-        },
+        }),
       ],
       { argsMenu: "auto", argsParsing: "none" },
     );

@@ -22,6 +22,7 @@ import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import {
   buildRequesterSettleWakeIdentity,
   hasRequesterCompletionCohort,
+  isSubagentObligationRetired,
 } from "../registry/subagent-requester-settle-identity.js";
 import { loadRequesterSessionEntry } from "./subagent-announce-delivery.runtime.js";
 
@@ -165,8 +166,18 @@ export async function reserveRestoredSubagentControllerSources(
   };
   const reservations: Array<[number, () => Promise<SessionControllerInput | undefined>]> = [];
   const entriesById = new Map(entries.map((entry) => [entry.runId, entry]));
+  // Matches live dispatch: a yielded cohort still reports its retired members, while
+  // an ordinary wave owes nothing once all of them retire.
+  const selectWakeOwner = (
+    batch: readonly SubagentRunRecord[],
+    wake: NonNullable<SubagentRunRecord["requesterSettleWake"]>,
+  ) =>
+    batch.find((member) => !isSubagentObligationRetired(member)) ??
+    (wake.requesterYieldBatch === true ? batch[0] : undefined);
   for (const entry of entries) {
+    // A retired child no longer owns its own completion delivery.
     if (
+      !isSubagentObligationRetired(entry) &&
       entry.expectsCompletionMessage === true &&
       !hasRequesterCompletionCohort(entry) &&
       (entry.delivery?.status === "pending" || entry.delivery?.status === "in_progress") &&
@@ -186,6 +197,7 @@ export async function reserveRestoredSubagentControllerSources(
           const current = getCurrentSubagentRunOwner(subagentRuns, entry);
           if (
             !current ||
+            isSubagentObligationRetired(current) ||
             hasRequesterCompletionCohort(current) ||
             (current.delivery?.status !== "pending" &&
               current.delivery?.status !== "in_progress") ||
@@ -218,7 +230,7 @@ export async function reserveRestoredSubagentControllerSources(
         ? [member]
         : [];
     });
-    if (entry !== batch[0]) {
+    if (entry !== selectWakeOwner(batch, wake)) {
       continue;
     }
     const identity = buildRequesterSettleWakeIdentity({
@@ -229,10 +241,6 @@ export async function reserveRestoredSubagentControllerSources(
       pause,
       retainedWake: wake,
       hasPrivateCompletion: batch.some((member) => member.completionTarget === "parent"),
-    });
-    const caller = Object.freeze({
-      deliveryRoute: entry.requesterOrigin && Object.freeze(structuredClone(entry.requesterOrigin)),
-      run: <T>(run: () => Promise<T>) => run(),
     });
     reservations.push([
       Math.max(...batch.map((member) => member.execution.endedAt ?? member.createdAt)),
@@ -250,7 +258,25 @@ export async function reserveRestoredSubagentControllerSources(
         if (!(await prepareRestoredRequester(requester))) {
           return undefined;
         }
-        return reserveSubagentControllerSource(entry, identity.batchKey, undefined, caller, {
+        // Recheck after requester recovery preparation; the same frozen cohort still owns FIFO.
+        const currentBatch = batch
+          .map((member) => getCurrentSubagentRunOwner(subagentRuns, member))
+          .filter(
+            (owner): owner is SubagentRunRecord =>
+              owner?.requesterSettleWake !== undefined &&
+              owner.requesterSettleWake.rearmGeneration === wake.rearmGeneration,
+          );
+        const current =
+          currentBatch.length === batch.length ? selectWakeOwner(currentBatch, wake) : undefined;
+        if (!current) {
+          return undefined;
+        }
+        const caller = Object.freeze({
+          deliveryRoute:
+            current.requesterOrigin && Object.freeze(structuredClone(current.requesterOrigin)),
+          run: <T>(run: () => Promise<T>) => run(),
+        });
+        return reserveSubagentControllerSource(current, identity.batchKey, undefined, caller, {
           replaceInactiveTarget: true,
           requester,
         });

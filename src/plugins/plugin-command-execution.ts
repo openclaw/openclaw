@@ -19,6 +19,7 @@ import {
 } from "./conversation-binding.js";
 import { pluginCommandSupportsChannel } from "./plugin-command-metadata.js";
 import type { PluginCommandDispatchContext } from "./plugin-command-runtime.js";
+import { capturePluginLifecycleAuthority } from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
 import type { PluginCommandContext, PluginCommandResult } from "./types.js";
 
@@ -45,12 +46,13 @@ function sanitizeArgs(args: string | undefined): string | undefined {
   return sanitized;
 }
 
-function buildRuntimeContext(
+async function buildRuntimeContext(
+  registry: PluginRegistry,
   command: RegisteredPluginCommand,
   params: PluginCommandDispatchContext,
   invocationSignal: AbortSignal,
   assertOwnerCurrent?: () => void,
-): PluginCommandContext["runtimeContext"] {
+): Promise<PluginCommandContext["runtimeContext"]> {
   const sessionKey = params.sessionKey?.trim();
   const agentId = resolveBoundAgentIdForSession({
     config: params.config,
@@ -61,7 +63,45 @@ function buildRuntimeContext(
   if (!sessionKey && !agentId) {
     return undefined;
   }
+  const pluginAuthority = capturePluginLifecycleAuthority(
+    registry,
+    registry.plugins.find((record) => record.id === command.pluginId),
+    { scopedRuntime: true },
+  );
+  const assertInvocationCurrent = () => {
+    invocationSignal.throwIfAborted();
+    if (!pluginAuthority?.()) {
+      throw new Error("Plugin command runtime is no longer active.");
+    }
+    params.assertOwnerCurrent?.();
+  };
+  const subagents =
+    command.runtimeCapabilities?.includes("subagents") &&
+    command.requireAuth === true &&
+    params.isAuthorizedSender
+      ? await params.runtimeContext?.createSubagents?.({
+          pluginId: command.pluginId,
+          command: {
+            requireAuth: command.requireAuth,
+            runtimeCapabilities: command.runtimeCapabilities,
+          },
+          signal: invocationSignal,
+          assertCurrent: assertInvocationCurrent,
+        })
+      : undefined;
+  if (subagents) {
+    assertInvocationCurrent();
+  }
   return {
+    ...(subagents ? { subagents } : {}),
+    ...(command.runtimeCapabilities?.includes("models") && params.isAuthorizedSender
+      ? {
+          models: params.runtimeContext?.createModels?.({
+            signal: invocationSignal,
+            assertCurrent: assertInvocationCurrent,
+          }),
+        }
+      : {}),
     llm: {
       complete: async (request) => {
         const { createRuntimeLlm } = await import("./runtime/runtime-llm.runtime.js");
@@ -194,12 +234,6 @@ export async function executeRegisteredPluginCommand(
     messageThreadId: params.messageThreadId,
     threadParentId: params.threadParentId,
     diagnosticsSessions: params.diagnosticsSessions,
-    runtimeContext: buildRuntimeContext(
-      command,
-      params,
-      commandInvocationAbort.signal,
-      assertOwnerCurrent,
-    ),
     ...(trustedReservedOwner && params.diagnosticsUploadApproved !== undefined
       ? { diagnosticsUploadApproved: params.diagnosticsUploadApproved }
       : {}),
@@ -240,10 +274,19 @@ export async function executeRegisteredPluginCommand(
   };
 
   try {
-    if (requiredScopes.length > 0 && !Array.isArray(params.gatewayClientScopes)) {
-      assertOwnerCurrent?.();
-    }
-    const execution = await withPluginCommandExecution(registry, () => command.handler(ctx));
+    const execution = await withPluginCommandExecution(registry, async () => {
+      ctx.runtimeContext = await buildRuntimeContext(
+        registry,
+        command,
+        params,
+        commandInvocationAbort.signal,
+        assertOwnerCurrent,
+      );
+      if (requiredScopes.length > 0 && !Array.isArray(params.gatewayClientScopes)) {
+        assertOwnerCurrent?.();
+      }
+      return await command.handler(ctx);
+    });
     if (!execution.admitted) {
       return {
         text: "⚠️ This command is no longer available after the plugin registry changed. Please try again.",
