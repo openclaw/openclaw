@@ -1,5 +1,4 @@
 import { definePage } from "@openclaw/uirouter";
-import { createComponent } from "solid-js";
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
@@ -9,12 +8,12 @@ export const page = definePage({
   loader: (context: ApplicationContext) => context.runtimeConfig.ensureLoaded(),
   component: () =>
     import("./cloud-workers-page.tsx").then((module) => ({
-      renderSolid: () =>
-        createComponent(ShellLayoutBoundary, {
-          traits: { toolbarHeader: true, settingsPage: true, settingsWorkspace: true },
-          get children() {
-            return createComponent(module.CloudWorkersPage, {});
-          },
-        }),
+      renderSolid: () => (
+        <ShellLayoutBoundary
+          traits={{ toolbarHeader: true, settingsPage: true, settingsWorkspace: true }}
+        >
+          <module.CloudWorkersPage />
+        </ShellLayoutBoundary>
+      ),
     })),
 });

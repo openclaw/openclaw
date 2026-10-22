@@ -1,5 +1,4 @@
 import { definePage } from "@openclaw/uirouter";
-import { createComponent } from "solid-js";
 import {
   INTERNAL_PLUGIN_PATH_PARAM,
   pluginTabSlugFromPath,
@@ -51,17 +50,12 @@ export const page = definePage({
     import("./plugin-page.tsx").then((module) => ({
       renderSolid: (
         props: SolidRouteProps<PluginTabRef & { params: Readonly<Record<string, string>> }>,
-      ) =>
-        createComponent(module.PluginPage, {
-          get pluginId() {
-            return props.data?.pluginId ?? "";
-          },
-          get tabId() {
-            return props.data?.id ?? "";
-          },
-          get params() {
-            return props.data?.params ?? {};
-          },
-        }),
+      ) => (
+        <module.PluginPage
+          pluginId={props.data?.pluginId ?? ""}
+          tabId={props.data?.id ?? ""}
+          params={props.data?.params ?? {}}
+        />
+      ),
     })),
 });

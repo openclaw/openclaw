@@ -10,7 +10,7 @@ import { createApplicationGateway } from "../../test-helpers/application-context
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import { page as usageRoute } from "./route.ts";
+import { page as usageRoute } from "./route.tsx";
 import type { UsageRouteData, UsageSessionEntry } from "./types.ts";
 import { createUsagePage } from "./usage-page-state.ts";
 import { buildAggregatesFromSessions } from "./view.test-support.ts";
