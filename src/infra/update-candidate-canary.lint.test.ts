@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { registerPolicyDoctorChecks } from "../../extensions/policy/api.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { noteCommittedSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import { SHARED_AUTH_STORE_STATE_KEY } from "../agents/auth-profiles/sqlite-json.js";
@@ -14,8 +14,9 @@ import {
 } from "../agents/auth-profiles/sqlite.js";
 import { collectSecurityWarnings } from "../commands/doctor-security.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { runDoctorLintChecks } from "../flows/doctor-lint-flow.js";
 import { securityAuditFindingToHealthFinding } from "../flows/health-check-adapter.js";
-import { runDoctorLintChecks, type HealthCheck } from "../plugin-sdk/health.js";
+import type { HealthCheck } from "../flows/health-checks.js";
 import { runSecretsAudit } from "../secrets/audit.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -345,11 +346,6 @@ it("preserves bounded Doctor findings before the diagnostic log tail", async () 
 it.each([false, true])(
   "attests deployment settings before runtime isolation (drift=%s)",
   async (drift) => {
-    const policyPath = path.join(root, "policy.jsonc");
-    await fs.writeFile(
-      policyPath,
-      JSON.stringify({ gateway: { controlUi: { allowInsecure: false } } }),
-    );
     const config: OpenClawConfig = {
       gateway: {
         mode: "local",
@@ -358,26 +354,27 @@ it.each([false, true])(
         controlUi: { enabled: true },
         tailscale: { mode: "serve" },
       },
-      plugins: {
-        entries: {
-          policy: {
-            enabled: true,
-            config: {
-              path: policyPath,
-              // Accepted from policy check with the deployment settings above.
-              expectedAttestationHash:
-                "sha256:15f00a0d11be2aaa2239c94243b6fd62ac816308073103275bf712652a3402a0",
-            },
-          },
+    };
+    // A plugin may attest deployment settings without knowing rehearsal overrides.
+    const checks: HealthCheck[] = [
+      {
+        id: "fixture/deployment-attestation",
+        kind: "plugin",
+        description: "Attest the deployment Gateway settings.",
+        async detect({ cfg }) {
+          const hash = createHash("sha256").update(JSON.stringify(cfg.gateway)).digest("hex");
+          return hash === "f3bc45b8486e61c4f59c84aff204f14b5f9ba203de8f23e428860b2193d5061e"
+            ? []
+            : [
+                {
+                  checkId: "fixture/attestation-hash-mismatch",
+                  severity: "error",
+                  message: "Deployment Gateway settings do not match the accepted attestation.",
+                },
+              ];
         },
       },
-    };
-    const checks: HealthCheck[] = [];
-    registerPolicyDoctorChecks({
-      registerHealthCheck(check) {
-        checks.push(check);
-      },
-    });
+    ];
     const check = (cfg: OpenClawConfig, configPath: string) =>
       runDoctorLintChecks(
         {
@@ -389,12 +386,12 @@ it.each([false, true])(
         },
         { checks },
       );
-    expect((await check(config, policyPath)).findings).toEqual([]);
+    const configPath = path.join(root, "openclaw.json");
+    expect((await check(config, configPath)).findings).toEqual([]);
     if (drift) {
       config.gateway!.controlUi!.enabled = false;
     }
     const authored = JSON.stringify(config);
-    const configPath = path.join(root, "openclaw.json");
     await fs.writeFile(configPath, authored);
     harness.overrideSpawn("--lint", (_args, options) => {
       const child = harness.child(true);
@@ -421,7 +418,7 @@ it.each([false, true])(
     const lint = result.steps.find((step) => step.name === "candidate-doctor-lint");
     expect(result.status).toBe(drift ? "error" : "ok");
     expect(lint?.doctorLintFindings?.map((finding) => finding.checkId) ?? []).toEqual(
-      drift ? ["policy/attestation-hash-mismatch"] : [],
+      drift ? ["fixture/attestation-hash-mismatch"] : [],
     );
     if (!drift) {
       expect(runtimeConfig?.gateway).toMatchObject({
