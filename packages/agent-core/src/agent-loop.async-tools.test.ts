@@ -9,6 +9,9 @@ import { createSessionsYieldTool } from "../../../src/agents/tools/sessions-yiel
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import {
   captureToolLoop,
+  expectedToolResult,
+  finishMessageStream,
+  startToolCalls,
   makeAssistantMessage,
   model as baseModel,
 } from "./agent-loop.test-support.js";
@@ -59,8 +62,7 @@ function finish(
   message: AssistantMessage,
   reason: "stop" | "toolUse" | "length" = "stop",
 ) {
-  stream.push({ type: "done", reason, message });
-  stream.end();
+  finishMessageStream(stream, message, reason);
 }
 
 function fail(
@@ -68,8 +70,7 @@ function fail(
   error: AssistantMessage,
   reason: "error" | "aborted" = "error",
 ) {
-  stream.push({ type: "error", reason, error });
-  stream.end();
+  finishMessageStream(stream, error, reason);
 }
 
 function completedResponse() {
@@ -91,10 +92,7 @@ function startCalls(
   calls: ToolCall[],
   message = assistant,
 ) {
-  stream.push({ type: "start", partial: message([]) });
-  calls.forEach((toolCall, index) =>
-    pushCall(stream, toolCall, index, message(calls.slice(0, index + 1))),
-  );
+  startToolCalls(stream, calls, message);
 }
 
 const runFixture = (options: Parameters<typeof captureToolLoop>[0]) =>
@@ -288,7 +286,7 @@ it("persists an execution identity for a done-only async length response", async
   const result = await run;
   expect(execute).toHaveBeenCalledTimes(1);
   expect(result).toEqual(persisted);
-  expect(result.at(-1)).toMatchObject({ role: "toolResult", toolCallId: "lookup", isError: false });
+  expect(result.at(-1)).toMatchObject(expectedToolResult("lookup", false));
 });
 
 it("persists async calls before admission, streams the remaining answer, and executes each call once", async () => {

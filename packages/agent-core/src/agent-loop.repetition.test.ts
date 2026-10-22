@@ -5,6 +5,7 @@ import {
   config,
   captureAgentLoop,
   captureToolLoop,
+  startToolCalls,
   createTurnSequenceStream,
   makeAssistantMessage,
   makeCall,
@@ -238,13 +239,7 @@ describe("repetition stop at the stream owner", () => {
         },
         streamFn,
       });
-      response.push({ type: "start", partial: makeAssistantMessage([]) });
-      response.push({
-        type: "toolcall_end",
-        contentIndex: 0,
-        toolCall: kept,
-        partial: makeAssistantMessage([kept]),
-      });
+      startToolCalls(response, [kept]);
       await started.promise;
       const bad = makeAssistantMessage([kept, { type: "text", text: loop }, discarded]);
       if (source === "delta") {
