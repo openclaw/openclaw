@@ -196,6 +196,26 @@ it("follows a replacement store without accepting the old store's dismissal", as
   text(page).not.toContain("Using ChatGPT");
 });
 
+it("activates an alternative from the standalone compact onboarding surface", async () => {
+  const request = setupRequest(() => result(), {
+    "openclaw.setup.activate": () => ({ ok: true, modelRef: alternative.modelRef }),
+  });
+  const { page, provider } = await mountSetup(request);
+  const surface = document.createElement("openclaw-custodian-surface");
+  surface.store = page.store;
+  surface.onboarding = true;
+  surface.compact = true;
+  page.remove();
+  provider.append(surface);
+  await surface.updateComplete;
+  await waitForFast(() => expect(surface.textContent).toContain("Using ChatGPT"));
+  [...surface.querySelectorAll("button")]
+    .find((entry) => entry.textContent?.trim() === "Local model")!
+    .click();
+  await waitForFast(() => expect(surface.textContent).toContain("Using Local model"));
+  expectRpc(request, "activate", { kind: "ollama" });
+});
+
 it.each(["needs-sign-in", "configured"] as const)("refreshes sign-in from %s", async (status) => {
   let autoCalls = 0;
   const shared = status === "configured";

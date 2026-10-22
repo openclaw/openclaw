@@ -172,7 +172,7 @@ export type CustodianSurfaceProps = {
   newAgentIntent: boolean;
   channelOnboardingContent: JSX.Element;
   activating: boolean;
-  onActivate: (candidate: SetupAutoCandidate) => void;
+  onActivate?: (candidate: SetupAutoCandidate) => void;
   compact: boolean;
   historyContent: JSX.Element;
 };
@@ -340,7 +340,13 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
       <CustodianSetupCard
         store={store()}
         activating={props.activating}
-        onActivate={(candidate) => props.onActivate(candidate)}
+        onActivate={(candidate) => {
+          if (props.onActivate) {
+            props.onActivate(candidate);
+          } else {
+            void store().autoSetup.activate(candidate);
+          }
+        }}
       />
     </Show>
   );
@@ -589,7 +595,7 @@ export const CustodianSurface = defineSolidBridge<CustodianSurfaceProps>(
       newAgentIntent: { default: false, attribute: false },
       channelOnboardingContent: { default: undefined, attribute: false },
       activating: { default: false, attribute: false },
-      onActivate: { default: () => undefined, attribute: false },
+      onActivate: { default: undefined, attribute: false },
       compact: { default: false, attribute: false },
       historyContent: { default: undefined, attribute: false },
     },
