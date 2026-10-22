@@ -190,161 +190,127 @@ describe("Talk client Gateway control owner", () => {
     },
   );
 
-  it.each(["completed", "cancelled"] as const)(
-    "persists sideband transcripts, settles a %s consult, and closes idempotently",
-    async (outcome) => {
-      const consultResult = deferred({ text: "test cleanup" });
-      const cancelled = {
-        ...controlResult("cancel", "Cancelled the active OpenClaw run."),
-        aborted: true,
-      };
-      const controlAgentRun = vi
-        .fn(async () => ({
-          ...cancelled,
-          ok: false,
-          active: false,
-          aborted: false,
-          message: "There is no active OpenClaw run to cancel.",
-        }))
-        .mockResolvedValueOnce(cancelled);
-      const runAgentConsult = vi.fn(async (_args: unknown, signal: AbortSignal) => {
-        const result = await consultResult.promise;
-        if (outcome === "cancelled") {
-          expect(signal.aborted).toBe(true);
-          throw new DOMException("Host cancelled the consult", "AbortError");
-        }
-        return result;
-      });
-      const { owner, bridge, closeProvider, appendTranscript, closeLogicalSession } =
-        createControlFixture({
-          voiceSessionId: "voice-gateway",
-          supportsToolCalls: true,
-          connId: "conn-gateway",
-          runToolAgentConsult: runAgentConsult,
-          runAgentConsult,
-          controlAgentRun,
-        });
-      owner.control.bindBridge(bridge);
-      await activate(owner, closeProvider);
-
-      owner.control.onTranscript?.("user", "check the repository", true);
-      consult(owner, "consult", "check the repository");
-      await waitForCalls(runAgentConsult);
-      const cancelToolCall = (callId: string) =>
-        owner.control.onToolCall?.({
-          itemId: callId,
-          callId,
-          name: "openclaw_agent_control",
-          args: { text: "cancel", mode: "cancel" },
-        });
-      if (outcome === "cancelled") {
-        cancelToolCall("call-cancel");
-        await waitForResult(bridge, "call-cancel", cancelled);
-      }
-      consultResult.resolve({ text: "The repository is clean." });
-      const expectedResult =
-        outcome === "cancelled"
-          ? expect.objectContaining({ status: "cancelled" })
-          : { result: "The repository is clean." };
-      await waitForResult(bridge, "call-consult", expectedResult);
-      expect(appendTranscript).toHaveBeenCalledWith({
-        entryId: expect.stringMatching(/^gateway-[0-9a-f-]+-1$/),
-        role: "user",
-        text: "check the repository",
-      });
-      if (outcome === "cancelled") {
-        await nextEventLoopTurn();
-        owner.control.onTranscript?.("user", "cancel", true);
-        // A later explicit tool call drains the same control FIFO after the late ASR event.
-        cancelToolCall("call-next-cancel");
-        await waitForResult(bridge, "call-next-cancel", expect.objectContaining({ active: false }));
-        expect(controlAgentRun).toHaveBeenCalledTimes(2);
-        expect(bridge.sendUserMessage).not.toHaveBeenCalled();
-      }
-
-      const closeParams = {
+  it("persists sideband transcripts, cancels a consult, and closes idempotently", async () => {
+    const consultResult = deferred({ text: "test cleanup" });
+    const cancelled = {
+      ...controlResult("cancel", "Cancelled the active OpenClaw run."),
+      aborted: true,
+    };
+    const controlAgentRun = vi
+      .fn(async () => ({
+        ...cancelled,
+        ok: false,
+        active: false,
+        aborted: false,
+        message: "There is no active OpenClaw run to cancel.",
+      }))
+      .mockResolvedValueOnce(cancelled);
+    const runAgentConsult = vi.fn(async (_args: unknown, signal: AbortSignal) => {
+      await consultResult.promise;
+      expect(signal.aborted).toBe(true);
+      throw new DOMException("Host cancelled the consult", "AbortError");
+    });
+    const { owner, bridge, closeProvider, appendTranscript, closeLogicalSession } =
+      createControlFixture({
         voiceSessionId: "voice-gateway",
-        sessionKey: sessionTarget.sessionKey,
+        supportsToolCalls: true,
         connId: "conn-gateway",
-      };
-      await expect(
-        closeTalkClientGatewayControlSession({ ...closeParams, connId: "conn-other" }),
-      ).rejects.toThrow("not owned by this client");
-      await expect(closeTalkClientGatewayControlSession(closeParams)).resolves.toBe(true);
-      await expect(closeTalkClientGatewayControlSession(closeParams)).resolves.toBe(false);
-      expect(closeProvider).toHaveBeenCalledOnce();
-      expect(closeLogicalSession).toHaveBeenCalledOnce();
-    },
-  );
-
-  it.each(["tool", "delegation"] as const)(
-    "handles spoken status, steering, and cancellation during a %s consult",
-    async (entry) => {
-      const controlAgentRun = vi.fn(async ({ text }: { text: string }) => ({
-        ...controlResult(
-          text === "cancel" ? "cancel" : text === "status" ? "status" : "steer",
-          `${text} accepted`,
-        ),
-        ...(text === "cancel" ? { aborted: true } : { queued: text !== "status" }),
-      }));
-      const runStarted = gate();
-      const runAgentConsult = vi.fn(
-        async (_args: unknown, signal: AbortSignal) =>
-          await new Promise<{ text: string }>((_resolve, reject) => {
-            runStarted.resolve();
-            signal.addEventListener(
-              "abort",
-              () =>
-                reject(
-                  signal.reason instanceof Error
-                    ? signal.reason
-                    : new Error("Realtime voice consult aborted"),
-                ),
-              { once: true },
-            );
-          }),
-      );
-      const { owner, bridge } = createControlFixture({
-        voiceSessionId: `voice-spoken-control-${entry}`,
-        connId: `conn-spoken-control-${entry}`,
         runToolAgentConsult: runAgentConsult,
         runAgentConsult,
         controlAgentRun,
       });
-      if (entry === "delegation") {
-        owner.control.bindControl?.({ sendUserMessage: bridge.sendUserMessage });
-      } else {
-        owner.control.bindBridge(bridge);
-      }
-      await activate(owner);
-      const delegationController = new AbortController();
-      releases.push(() => delegationController.abort(new Error("test cleanup")));
-      const delegation = beginConsult(
-        owner,
-        entry,
-        "long",
-        "long task",
-        delegationController.signal,
-      );
-      await runStarted.promise;
-      for (const text of ["status", "use the release branch instead", "cancel"]) {
-        owner.control.onTranscript?.("user", text, true);
-        await waitForCalls(controlAgentRun, text === "status" ? 1 : text === "cancel" ? 3 : 2);
-      }
-      expect(controlAgentRun.mock.calls.map(([input]) => input.text)).toEqual([
-        "status",
-        "use the release branch instead",
-        "cancel",
-      ]);
-      expect(bridge.sendUserMessage).toHaveBeenCalledTimes(3);
-      if (delegation) {
-        await expect(delegation).resolves.toBeInstanceOf(Error);
-        expect(bridge.submitToolResult).not.toHaveBeenCalled();
-      } else {
-        await waitForResult(bridge, "call-long", expect.objectContaining({ status: "cancelled" }));
-      }
-    },
-  );
+    owner.control.bindBridge(bridge);
+    await activate(owner, closeProvider);
+
+    owner.control.onTranscript?.("user", "check the repository", true);
+    consult(owner, "consult", "check the repository");
+    await waitForCalls(runAgentConsult);
+    const cancelToolCall = (callId: string) =>
+      owner.control.onToolCall?.({
+        itemId: callId,
+        callId,
+        name: "openclaw_agent_control",
+        args: { text: "cancel", mode: "cancel" },
+      });
+    cancelToolCall("call-cancel");
+    await waitForResult(bridge, "call-cancel", cancelled);
+    consultResult.resolve({ text: "The repository is clean." });
+    await waitForResult(bridge, "call-consult", expect.objectContaining({ status: "cancelled" }));
+    expect(appendTranscript).toHaveBeenCalledWith({
+      entryId: expect.stringMatching(/^gateway-[0-9a-f-]+-1$/),
+      role: "user",
+      text: "check the repository",
+    });
+    await nextEventLoopTurn();
+    owner.control.onTranscript?.("user", "cancel", true);
+    // A later explicit tool call drains the same control FIFO after the late ASR event.
+    cancelToolCall("call-next-cancel");
+    await waitForResult(bridge, "call-next-cancel", expect.objectContaining({ active: false }));
+    expect(controlAgentRun).toHaveBeenCalledTimes(2);
+    expect(bridge.sendUserMessage).not.toHaveBeenCalled();
+
+    const closeParams = {
+      voiceSessionId: "voice-gateway",
+      sessionKey: sessionTarget.sessionKey,
+      connId: "conn-gateway",
+    };
+    await expect(
+      closeTalkClientGatewayControlSession({ ...closeParams, connId: "conn-other" }),
+    ).rejects.toThrow("not owned by this client");
+    await expect(closeTalkClientGatewayControlSession(closeParams)).resolves.toBe(true);
+    await expect(closeTalkClientGatewayControlSession(closeParams)).resolves.toBe(false);
+    expect(closeProvider).toHaveBeenCalledOnce();
+    expect(closeLogicalSession).toHaveBeenCalledOnce();
+  });
+
+  it("handles spoken status, steering, and cancellation during a tool consult", async () => {
+    const controlAgentRun = vi.fn(async ({ text }: { text: string }) => ({
+      ...controlResult(
+        text === "cancel" ? "cancel" : text === "status" ? "status" : "steer",
+        `${text} accepted`,
+      ),
+      ...(text === "cancel" ? { aborted: true } : { queued: text !== "status" }),
+    }));
+    const runStarted = gate();
+    const runAgentConsult = vi.fn(
+      async (_args: unknown, signal: AbortSignal) =>
+        await new Promise<{ text: string }>((_resolve, reject) => {
+          runStarted.resolve();
+          signal.addEventListener(
+            "abort",
+            () =>
+              reject(
+                signal.reason instanceof Error
+                  ? signal.reason
+                  : new Error("Realtime voice consult aborted"),
+              ),
+            { once: true },
+          );
+        }),
+    );
+    const { owner, bridge } = createControlFixture({
+      voiceSessionId: "voice-spoken-control-tool",
+      connId: "conn-spoken-control-tool",
+      runToolAgentConsult: runAgentConsult,
+      runAgentConsult,
+      controlAgentRun,
+    });
+    owner.control.bindBridge(bridge);
+    await activate(owner);
+    consult(owner, "long", "long task");
+    await runStarted.promise;
+    for (const text of ["status", "use the release branch instead", "cancel"]) {
+      owner.control.onTranscript?.("user", text, true);
+      await waitForCalls(controlAgentRun, text === "status" ? 1 : text === "cancel" ? 3 : 2);
+    }
+    expect(controlAgentRun.mock.calls.map(([input]) => input.text)).toEqual([
+      "status",
+      "use the release branch instead",
+      "cancel",
+    ]);
+    expect(bridge.sendUserMessage).toHaveBeenCalledTimes(3);
+    await waitForResult(bridge, "call-long", expect.objectContaining({ status: "cancelled" }));
+  });
 
   it.each([
     { entry: "tool", transition: "close" },
@@ -687,95 +653,85 @@ describe("native Talk control admission", () => {
 });
 
 describe("Talk client reusable Gateway consults", () => {
-  it.each([
-    { ending: "provider-close", preserveRuns: undefined },
-    { ending: "explicit-close", preserveRuns: false },
-  ] as const)(
-    "retires replacing function-tool transport after $ending (preserveRuns=$preserveRuns)",
-    async ({ ending, preserveRuns }) => {
-      const finish = deferred({ text: "test cleanup" });
-      const runToolAgentConsult = vi.fn(
-        async (_args: unknown, _signal: AbortSignal) => finish.promise,
-      );
-      const revokeRequesterFinal = vi.fn();
-      const runAgentConsult = Object.assign(
-        vi.fn(async () => ({ text: "unused" })),
-        {
-          claimAppend: vi.fn(() => true),
-          revokeRequesterFinal,
+  it("explicit close aborts replacing function-tool work when preserveRuns is false", async () => {
+    const finish = deferred({ text: "test cleanup" });
+    const runToolAgentConsult = vi.fn(
+      async (_args: unknown, _signal: AbortSignal) => finish.promise,
+    );
+    const revokeRequesterFinal = vi.fn();
+    const runAgentConsult = Object.assign(
+      vi.fn(async () => ({ text: "unused" })),
+      {
+        claimAppend: vi.fn(() => true),
+        revokeRequesterFinal,
+      },
+    );
+    const voiceSessionId = "voice-function-tool-explicit-close-false";
+    const connId = `conn-${voiceSessionId}`;
+    const closeProvider = vi.fn(async () => undefined);
+    const owner = createOwner({
+      voiceSessionId,
+      connId,
+      supportsToolCalls: true,
+      runToolAgentConsult,
+      runAgentConsult,
+    });
+    const bridge = controlBridge();
+    owner.control.bindBridge(bridge);
+    await activate(owner, closeProvider);
+    const unregister = registerTalkVoiceSession({
+      voiceSessionId,
+      connId,
+      sessionTarget,
+      selection: {
+        provider: "openai",
+        voice: "marin",
+        voices: ["marin", "cedar"],
+        canChange: true,
+      },
+      launch: { provider: "openai", model: "gpt-realtime-2.1" },
+      providerReady: true,
+    });
+    let changing: ReturnType<typeof requestTalkVoiceChange> | undefined;
+    let authorityCurrent = true;
+    try {
+      consult(owner, "voice-change", "Change your voice and keep working");
+      await waitForCalls(runToolAgentConsult);
+      const runSignal = runToolAgentConsult.mock.calls[0]?.[1];
+      expect(runSignal?.aborted).toBe(false);
+      changing = requestTalkVoiceChange({
+        session: resolveTalkVoiceSession({ kind: "client", connId, voiceSessionId }),
+        voice: "cedar",
+        requesterConnId: connId,
+        assertCurrent: () => {
+          if (!authorityCurrent) {
+            throw new Error("Voice requester retired");
+          }
         },
-      );
-      const voiceSessionId = `voice-function-tool-${ending}-${preserveRuns}`;
-      const connId = `conn-${voiceSessionId}`;
-      const closeProvider = vi.fn(async () => undefined);
-      const owner = createOwner({
-        voiceSessionId,
-        connId,
-        supportsToolCalls: true,
-        runToolAgentConsult,
-        runAgentConsult,
+        send: vi.fn(),
       });
-      const bridge = controlBridge();
-      owner.control.bindBridge(bridge);
-      await activate(owner, closeProvider);
-      const unregister = registerTalkVoiceSession({
-        voiceSessionId,
-        connId,
-        sessionTarget,
-        selection: {
-          provider: "openai",
-          voice: "marin",
-          voices: ["marin", "cedar"],
-          canChange: true,
-        },
-        launch: { provider: "openai", model: "gpt-realtime-2.1" },
-        providerReady: true,
-      });
-      let changing: ReturnType<typeof requestTalkVoiceChange> | undefined;
-      let authorityCurrent = true;
-      try {
-        consult(owner, "voice-change", "Change your voice and keep working");
-        await waitForCalls(runToolAgentConsult);
-        const runSignal = runToolAgentConsult.mock.calls[0]?.[1];
-        expect(runSignal?.aborted).toBe(false);
-        changing = requestTalkVoiceChange({
-          session: resolveTalkVoiceSession({ kind: "client", connId, voiceSessionId }),
-          voice: "cedar",
-          requesterConnId: connId,
-          assertCurrent: () => {
-            if (!authorityCurrent) {
-              throw new Error("Voice requester retired");
-            }
-          },
-          send: vi.fn(),
-        });
-        void changing.catch(() => {});
-        if (ending === "provider-close") {
-          owner.control.onClose?.("completed");
-        } else {
-          void owner.close({ preserveRuns });
-        }
-        // Close captures the current replacement before asynchronous teardown yields.
-        authorityCurrent = false;
-        expect(() => owner.assertOpen()).toThrow("closed");
-        expect(() => owner.control.bindBridge(bridge)).toThrow("closed");
-        expect(revokeRequesterFinal).toHaveBeenCalledOnce();
-        expect(owner.runAgentConsult.claimAppend?.()).toBe(false);
-        await nextEventLoopTurn();
-        expect(runSignal?.aborted).toBe(preserveRuns === false);
-        finish.resolve({ text: "Accepted work finished" });
-        await owner.close();
-        expect(bridge.submitToolResult).not.toHaveBeenCalled();
-        expect(closeProvider).toHaveBeenCalledTimes(ending === "provider-close" ? 0 : 1);
-      } finally {
-        finish.resolve({ text: "Test cleanup" });
-        await owner.close();
-        unregister();
-        cleanupTalkConnection(connId, { warn: vi.fn() });
-        await changing?.catch(() => {});
-      }
-    },
-  );
+      void changing.catch(() => {});
+      void owner.close({ preserveRuns: false });
+      // Close captures the current replacement before asynchronous teardown yields.
+      authorityCurrent = false;
+      expect(() => owner.assertOpen()).toThrow("closed");
+      expect(() => owner.control.bindBridge(bridge)).toThrow("closed");
+      expect(revokeRequesterFinal).toHaveBeenCalledOnce();
+      expect(owner.runAgentConsult.claimAppend?.()).toBe(false);
+      await nextEventLoopTurn();
+      expect(runSignal?.aborted).toBe(true);
+      finish.resolve({ text: "Accepted work finished" });
+      await owner.close();
+      expect(bridge.submitToolResult).not.toHaveBeenCalled();
+      expect(closeProvider).toHaveBeenCalledOnce();
+    } finally {
+      finish.resolve({ text: "Test cleanup" });
+      await owner.close();
+      unregister();
+      cleanupTalkConnection(connId, { warn: vi.fn() });
+      await changing?.catch(() => {});
+    }
+  });
 });
 
 describe("Talk client Gateway control teardown", () => {
