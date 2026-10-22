@@ -49,6 +49,7 @@ import {
   resolveGatewayChatCronCreatorAuthorityAdmission,
   resolveGatewayCronCreatorAuthorityAdmission,
 } from "./cron-creator-authority-admission.js";
+import { expectCronReply } from "./cron.validation.test-support.js";
 import { deviceHandlers } from "./devices.js";
 import {
   SESSION,
@@ -326,11 +327,7 @@ it.for([
                   context: fixture.context,
                   respond,
                 });
-                expect(respond).toHaveBeenCalledWith(
-                  true,
-                  expect.objectContaining(params),
-                  undefined,
-                );
+                expectCronReply(respond, expect.objectContaining(params));
               } else if (revocation === "role downgrade") {
                 setUserProfileRole(profile.id, "revoked-role");
               } else if (revocation === "access grant revocation") {
@@ -424,7 +421,7 @@ it.each([
     let transportTools: CreatorTransportTools | undefined;
     try {
       if (transport === "cli") {
-        await ensureMcpLoopbackServer(0);
+        await ensureMcpLoopbackServer();
       }
       await inRun(
         runId,

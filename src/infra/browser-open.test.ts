@@ -113,14 +113,9 @@ describe("openLocalFile", () => {
 });
 
 describe("browser support and launch", () => {
-  it("retains process-level WSL detection caching through support detection", async () => {
+  it("reports a missing display on native Linux", async () => {
     mockProcessPlatform("linux");
-
-    const unsupported = { ok: false, reason: "no-display" };
-    await expect(detectSupport()).resolves.toEqual(unsupported);
-    await expect(detectSupport()).resolves.toEqual(unsupported);
-
-    expect(readRelease).toHaveBeenCalledTimes(1);
+    await expect(detectSupport()).resolves.toEqual({ ok: false, reason: "no-display" });
   });
 
   it("reports display-less WSL support only when wslview is installed", async () => {

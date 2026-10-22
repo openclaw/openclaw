@@ -32,6 +32,7 @@ import {
 import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
+import { readParsedField } from "../utils/string-readers.js";
 import { recordLiveServingContextLimit } from "./provider-catalog-expiry.js";
 import type { ProviderCatalogContext } from "./types.js";
 
@@ -71,16 +72,8 @@ const OPENAI_COMPAT_CONTEXT_WINDOW_FIELDS = [
   "max_model_len",
 ] as const;
 
-function readOpenAICompatibleContextWindow(
-  model: Record<string, unknown> | undefined,
-): number | undefined {
-  for (const field of OPENAI_COMPAT_CONTEXT_WINDOW_FIELDS) {
-    const contextWindow = readPositiveInteger(model?.[field]);
-    if (contextWindow !== undefined) {
-      return contextWindow;
-    }
-  }
-  return undefined;
+function readOpenAICompatibleContextWindow(model: Record<string, unknown>): number | undefined {
+  return readParsedField(model, OPENAI_COMPAT_CONTEXT_WINDOW_FIELDS, readPositiveInteger);
 }
 
 function buildSelfHostedDiscoveryHeaders(params: {

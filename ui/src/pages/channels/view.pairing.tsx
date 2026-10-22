@@ -3,7 +3,7 @@ import { createMemo, Errored, For, Loading, Show } from "solid-js";
 // DM sender access request queue shared by the Channels hub and detail panels.
 import type { ChannelsPairingAccount, ChannelsPairingRequest } from "../../api/types.ts";
 import { Picker } from "../../components/select-picker.ts";
-import "../../components/modal-dialog.ts";
+import "../../components/modal-dialog.tsx";
 import { ChannelPicker } from "../../components/solid/channel-picker.tsx";
 import {
   SettingsEmpty,
@@ -353,7 +353,9 @@ function PairingPromptContent(params: {
   props: ChannelsProps;
 }) {
   const request = () => params.prompt.request;
-  const busy = () => params.props.channels.pairingBusyRequestId === request().requestId;
+  const busy = () =>
+    params.props.mutationBusy?.pairing ||
+    params.props.channels.pairingBusyRequestId === request().requestId;
   const approving = () => params.prompt.kind === "approve";
   const ownerMissing = () =>
     params.props.channels.pairingSnapshot?.commandOwnerConfigured === false;

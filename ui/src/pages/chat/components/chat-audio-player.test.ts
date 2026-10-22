@@ -442,6 +442,63 @@ describe("ChatAudioPlayer", () => {
     resolveFetch?.(new Response(null, { status: 500 }));
   });
 
+  it.each(["unmount", "attachment replacement"])(
+    "retires the waveform and stops playback on %s",
+    async (change) => {
+      const intersect = observeIntersections();
+      mockAudioContext();
+      const observe = vi.fn();
+      const disconnect = vi.fn();
+      vi.stubGlobal(
+        "ResizeObserver",
+        class {
+          observe = observe;
+          disconnect = disconnect;
+        },
+      );
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn<typeof fetch>()
+          .mockResolvedValueOnce(
+            new Response(new Uint8Array([1, 2, 3, 4]), {
+              headers: { "Content-Type": "audio/mpeg", "Content-Length": "4" },
+            }),
+          )
+          .mockResolvedValue(new Response(null, { status: 500 })),
+      );
+      vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:waveform-disposal");
+      const label = change === "unmount" ? "waveform-unmount" : "waveform-replacement";
+      const player = await createPlayer(label, { serverDurationMs: 4_000 });
+      intersect();
+      await waitForSolid(() =>
+        expect(player.querySelector(".chat-audio-player__waveform")).not.toBeNull(),
+      );
+      const waveform = player.querySelector(".chat-audio-player__waveform")!;
+      const media = player.querySelector("audio")!;
+      expect(observe).toHaveBeenCalledExactlyOnceWith(waveform);
+      expect(disconnect).not.toHaveBeenCalled();
+      expect(media.getAttribute("src")).toBe("blob:waveform-disposal");
+      const { pause } = mockActivePlayback(media);
+
+      if (change === "unmount") {
+        player.remove();
+        await Promise.resolve();
+        flush();
+        expect(media.hasAttribute("src")).toBe(false);
+      } else {
+        player.src = "https://example.com/replacement.mp3";
+        player.sourceIdentity = "media://replacement";
+        await waitForSolid(() =>
+          expect(media.getAttribute("src")).toBe("https://example.com/replacement.mp3"),
+        );
+      }
+      expect(waveform.isConnected).toBe(false);
+      expect(disconnect).toHaveBeenCalledOnce();
+      expect(pause).toHaveBeenCalledOnce();
+    },
+  );
+
   it("recovers a waveform-backed source after a renewed media ticket", async () => {
     const intersect = observeIntersections();
     mockAudioContext();

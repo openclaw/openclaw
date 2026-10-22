@@ -16,23 +16,20 @@ const suite = createControlUiE2eSuite({
 
 suite.define(() => {
   it("shows row owners only for live presence under person headers", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
-    const page = await context.newPage();
-    await routeAvatarFixtures(page, [
-      { id: "profile-ada", background: "#3f6f76", label: "A" },
-      { id: "profile-bob", background: "#985b42", label: "B" },
-      { id: "profile-morgan", background: "#66508c", label: "M" },
-    ]);
-    const gateway = await installMockGateway(page, {
-      sessionKey: "agent:main:ada",
-      presenceUsers: [{ self: true, id: "profile-self", name: "Self" }],
-      historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
-      methodResponses: {
-        "sessions.list": sessionsList(undefined, true, { categories: false, actorAvatars: true }),
-      },
-    });
-
-    try {
+    await suite.withPage({ viewport: { height: 800, width: 1200 } }, async ({ page }) => {
+      await routeAvatarFixtures(page, [
+        { id: "profile-ada", background: "#3f6f76", label: "A" },
+        { id: "profile-bob", background: "#985b42", label: "B" },
+        { id: "profile-morgan", background: "#66508c", label: "M" },
+      ]);
+      const gateway = await installMockGateway(page, {
+        sessionKey: "agent:main:ada",
+        presenceUsers: [{ self: true, id: "profile-self", name: "Self" }],
+        historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
+        methodResponses: {
+          "sessions.list": sessionsList(undefined, true, { categories: false, actorAvatars: true }),
+        },
+      });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
       await selectAllSidebarSessions(page);
       await page.getByText("Ada research", { exact: true }).first().waitFor();
@@ -43,7 +40,6 @@ suite.define(() => {
       const bobSection = page.locator('[data-session-section="person:profile:profile-bob"]');
       await expectBrowser(adaSection).toContainText("Ada research");
       await expectBrowser(bobSection).toContainText("Bob operations");
-
       await gateway.emitGatewayEvent("presence", {
         presence: [
           ["ada", "Ada", "ada"],
@@ -66,13 +62,10 @@ suite.define(() => {
         adaSection.locator(".session-owner-chip:not(.session-owner-chip--away)"),
       ).toHaveCount(1);
       await expectBrowser(bobSection.locator('[data-viewer-id="profile-morgan"]')).toHaveCount(1);
-
       await expectBrowser(bobSection.locator("openclaw-session-owner-chip")).toHaveCount(0);
       const adaHeader = adaSection.locator(".sidebar-recent-sessions__head");
       await adaHeader.hover();
-
       await page.mouse.move(0, 0);
-
       const textColor = await page.locator(".sidebar-sessions").evaluate((sidebar) => {
         const probe = document.createElement("span");
         probe.style.color = getComputedStyle(sidebar).getPropertyValue("--text");
@@ -91,11 +84,9 @@ suite.define(() => {
         .toBe(textColor);
       await expectBrowser(adaSection.locator(".sidebar-session-group-presence")).toHaveCount(1);
       await expectBrowser(bobSection.locator(".sidebar-session-group-presence")).toHaveCount(0);
-
       await adaSection.locator("[data-person-card]").hover();
       const adaCard = page.getByRole("dialog", { name: "Activity for Ada" });
       await expectBrowser(adaCard).toBeVisible();
-
       await page.mouse.move(0, 0);
       await adaCard.waitFor({ state: "detached" });
       await bobSection.locator("[data-person-card]").hover();
@@ -103,8 +94,6 @@ suite.define(() => {
       await expectBrowser(bobCard).toBeVisible();
       await expectBrowser(bobCard).toContainText("Offline");
       await expectBrowser(bobCard.locator("dl")).toHaveCount(0);
-    } finally {
-      await context.close();
-    }
+    });
   });
 });

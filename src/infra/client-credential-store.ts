@@ -77,6 +77,7 @@ export type ClientCredentialCustody = {
   database: DatabaseSync;
   path: string;
   created: boolean;
+  needsMetadataUpgrade: boolean;
   transaction<T>(operation: () => T): T;
   run(operation: ClientCredentialOperation, beforeCommit?: () => void): ClientCredentialResult;
   close(): void;
@@ -191,6 +192,7 @@ export function openClientCredentialCustody(
     };
     const cached = admittedFiles.get(custodyKey);
     let initialized = false;
+    let needsMetadataUpgrade = false;
     transaction(() => {
       // Acquire custody before retaining locks so competing openers can release their shared locks.
       database.exec("PRAGMA locking_mode=EXCLUSIVE"); // sqlite-allow-raw -- Retain owner custody across operation commits.
@@ -223,11 +225,12 @@ export function openClientCredentialCustody(
       }
       if (!options.migration) {
         const admission = readClientCredentialAdmission(database);
-        admitClientCredentialStore(database, env, {
+        const receipt = admitClientCredentialStore(database, env, {
           initialize: initialized,
           readOnly: options.readOnly ?? false,
           stored: admission.stored,
         });
+        needsMetadataUpgrade = receipt.sharedFile !== null && receipt.source === null;
       }
       // Bounded callers join admission and row work in this same exclusive transaction.
       if (!initialized) {
@@ -245,6 +248,7 @@ export function openClientCredentialCustody(
       database,
       path: pathname,
       created,
+      needsMetadataUpgrade,
       transaction,
       run(operation, beforeCommit) {
         if (closed) {

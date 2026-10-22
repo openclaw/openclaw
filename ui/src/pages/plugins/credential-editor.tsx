@@ -3,13 +3,17 @@ import {
   For,
   Loading,
   Show,
+  action,
+  affects,
   createEffect,
   createMemo,
+  createOptimistic,
   createSignal,
   createStore,
   isPending,
   latest,
   onSettled,
+  refresh,
 } from "solid-js";
 import type {
   PluginCredentialDescriptor,
@@ -23,7 +27,7 @@ import {
 } from "../../../../src/secrets/ref-contract.ts";
 import type { ConfigNodeRenderParams } from "../../components/config-form.node.shared.ts";
 import { Icon } from "../../components/solid/icon.tsx";
-import "../../components/modal-dialog.ts";
+import "../../components/modal-dialog.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { REDACTED_SENTINEL } from "../../lib/config-form-utils.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -42,6 +46,7 @@ export type PluginCredentialEditorContext = {
   baseHash: string | null;
   gateway: Pick<GatewayPageBinding, "capture" | "isCurrent" | "epoch" | "connected" | "client">;
   canInspect: boolean;
+  getPresentationLifetime: () => Promise<void>;
   saveError?: string | null;
   /** Adapter stages through field.onPatch and awaits that exact config-owner write. */
   onCommit: (path: Array<string | number>, value: unknown) => Promise<boolean>;
@@ -86,7 +91,7 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
   });
   const [literal, setLiteral] = createSignal("");
   const [revealed, setRevealed] = createSignal(false);
-  const [operation, setOperation] = createSignal<CredentialOperation>();
+  const [operation, setOperation] = createOptimistic<CredentialOperation | undefined>(undefined);
   const operationKind = () => {
     const value = operation();
     return value?.current() ? value.kind : undefined;
@@ -148,7 +153,6 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
       }
       if (sourceChanged || next.epoch !== previous?.epoch) {
         pending = undefined;
-        setOperation(undefined);
       }
       setInspectionRequest(undefined);
       setInspection((current) =>
@@ -268,11 +272,13 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
 
   async function commitOrDiscardReference(value: string | SecretRef | undefined) {
     const gateway = props.context.gateway;
+    const retired = props.context.getPresentationLifetime();
     const capturedConnection = connection;
     const owner = JSON.stringify([props.context.pluginId, props.field.path]);
     const current = () =>
       pending === admitted &&
       active &&
+      props.context.getPresentationLifetime() === retired &&
       props.context.gateway === gateway &&
       capturedConnection !== null &&
       gateway.isCurrent(capturedConnection) &&
@@ -283,7 +289,6 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
     };
     // Admission is synchronous; Solid publishes the pending presentation after this task.
     pending = admitted;
-    setOperation(admitted);
     if (value !== undefined) {
       referenceSubmitted ||= dialogOpen();
     }
@@ -317,15 +322,36 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
         if (current()) {
           setError(formatUiError(cause));
         }
-      } finally {
-        if (current()) {
-          pending = undefined;
-          setOperation(undefined);
-        }
       }
     })();
-    return completed;
+    await Promise.resolve();
+    return presentOperation(admitted, completed, retired);
   }
+
+  const presentOperation = action(function* (
+    admitted: CredentialOperation,
+    completed: Promise<void>,
+    retired: Promise<void>,
+  ) {
+    try {
+      if (admitted.current()) {
+        setOperation(admitted);
+        affects(inspectionComplete);
+      }
+      yield Promise.race([completed, retired]);
+      if (admitted.current()) {
+        yield refresh(inspectionComplete);
+      }
+    } catch (cause) {
+      if (admitted.current()) {
+        setError(formatUiError(cause));
+      }
+    } finally {
+      if (pending === admitted) {
+        pending = undefined;
+      }
+    }
+  });
 
   const environment = () => {
     const credential = inspection();

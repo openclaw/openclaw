@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { inspectOpenDictionaryToolSchemas } from "../plugins/tool-schema-diagnostics.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
@@ -56,6 +57,18 @@ beforeEach(() => {
 });
 afterEach(() => clearRuntimeConfigSnapshot());
 
+it("produces no raw dictionary findings for the default core tools", () => {
+  const tools = createOpenClawCodingTools({
+    config: {},
+    modelProvider: "openai",
+    modelId: "gpt-5.4",
+  });
+  expect(tools.map((tool) => tool.name)).toEqual(
+    expect.arrayContaining(["exec", "dashboard", "automations", "sessions_spawn"]),
+  );
+  expect(inspectOpenDictionaryToolSchemas(tools)).toEqual([]);
+});
+
 it.each<[string, ToolOptions]>([
   [
     "subagent completion",
@@ -63,13 +76,11 @@ it.each<[string, ToolOptions]>([
   ],
   ["media completion", completionTurn("image_generate")],
   [
-    "heartbeat",
+    "scheduled",
     {
       ...session,
-      runId: "run-heartbeat",
-      trigger: "heartbeat",
-      enableHeartbeatTool: true,
-      forceHeartbeatTool: true,
+      runId: "run-scheduled",
+      trigger: "cron",
       sourceReplyDeliveryMode: "message_tool_only",
     },
   ],

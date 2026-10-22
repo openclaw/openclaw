@@ -853,8 +853,10 @@ flowchart LR
 ```
 ````
 
-Open the **Diagram options** menu in the top-right corner to switch between the
-diagram and source or choose **Expand diagram** for the image viewer with zoom.
+Click or tap the diagram to open the image viewer with zoom. With keyboard
+focus on the diagram, press **Enter** or **Space**. The **Diagram options** menu
+in the top-right corner still lets you switch between the diagram and source
+or choose **Expand diagram**.
 The copy button appears on hover or keyboard focus and stays visible on touch
 screens. It copies the original Mermaid text.
 Diagram colors and fonts follow the current UI theme.

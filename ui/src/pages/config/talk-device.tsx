@@ -1,18 +1,15 @@
-import { createMemo, Errored, For, Loading } from "solid-js";
+import { createMemo, Errored, For, Loading, Show } from "solid-js";
 import { deviceSettingsGroupLabelKey } from "../../app-navigation.ts";
 import type {
   NativeDeviceSettingsCapability,
   NativeDeviceSettingsSnapshot,
 } from "../../app/native-device-settings.ts";
-import {
-  SettingsRow,
-  SettingsSection,
-  SettingsToggleRow,
-} from "../../components/solid/settings-ui.tsx";
+import { SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { SettingsSelectRow } from "./settings-select-row.tsx";
+import { NativeVoiceControls } from "./talk-device-controls.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
 
@@ -68,16 +65,61 @@ function changeDeviceLocales(
 
 export type VoiceWakeEditorState =
   | { kind: "unavailable" }
-  | { kind: "ready"; text: string; phase: "saved" | "pending" | "saving"; error: string | null };
+  | { kind: "ready"; text: string; phase: "saved" | "pending" | "saving" };
+
+function VoiceWakeWriteStatus(props: {
+  saving: boolean;
+  readWriteResult: () => void;
+  onRetry: () => void;
+}) {
+  const savedLabel = () => {
+    props.readWriteResult();
+    return t("configPage.deviceTalk.saved");
+  };
+  return (
+    <Errored
+      fallback={(error, reset) => (
+        <div class="callout danger" role="alert">
+          {formatUiError(error())}
+          <button
+            class="btn btn--sm"
+            type="button"
+            onClick={() => {
+              props.onRetry();
+              reset();
+            }}
+          >
+            {t("common.retry")}
+          </button>
+        </div>
+      )}
+    >
+      <Loading
+        fallback={
+          <span class="muted" role="status">
+            {t("common.saving")}
+          </span>
+        }
+      >
+        <span class="muted" role="status">
+          {props.saving ? t("common.saving") : savedLabel()}
+        </span>
+      </Loading>
+    </Errored>
+  );
+}
 
 function VoiceWakeControls(props: {
   state: VoiceWakeEditorState;
+  saving: boolean;
+  readWriteResult: () => void;
   onInput: (text: string) => void;
   onRetry: () => void;
 }) {
   const ready = () => props.state.kind === "ready";
-  const text = () => (props.state.kind === "ready" ? props.state.text : "");
-  const error = () => (props.state.kind === "ready" ? props.state.error : null);
+  const text = createMemo(() => (props.state.kind === "ready" ? props.state.text : ""));
+  // An empty draft still resets only the status boundary, preserving the editor.
+  const statusDraft = createMemo(() => ({ text: text() }));
   return (
     <>
       {ready() && (
@@ -89,19 +131,18 @@ function VoiceWakeControls(props: {
           onInput={(event) => props.onInput(event.currentTarget.value)}
         />
       )}
-      {error() ? (
-        <div class="callout danger" role="alert">
-          {error()}
-          <button class="btn btn--sm" type="button" onClick={() => props.onRetry()}>
-            {t("common.retry")}
-          </button>
-        </div>
-      ) : props.state.kind === "unavailable" ? (
+      {props.state.kind === "unavailable" ? (
         <span class="muted">{t("configPage.deviceTalk.triggerWordsUnavailable")}</span>
       ) : (
-        <span class="muted" role="status">
-          {props.state.phase !== "saved" ? t("common.saving") : t("configPage.deviceTalk.saved")}
-        </span>
+        <Show when={statusDraft()} keyed>
+          {(_draft) => (
+            <VoiceWakeWriteStatus
+              saving={props.saving}
+              readWriteResult={props.readWriteResult}
+              onRetry={props.onRetry}
+            />
+          )}
+        </Show>
       )}
     </>
   );
@@ -110,9 +151,13 @@ function VoiceWakeControls(props: {
 export function VoiceWakeEditor(props: {
   readState: () => VoiceWakeEditorState;
   scope?: object | null;
+  saving: boolean;
+  readWriteResult: () => void;
   onInput: (text: string) => void;
   onRetry: () => void;
 }) {
+  // Only an admitted read re-arms loading; reconnecting a retained draft keeps the editor.
+  const scope = createMemo(() => props.scope);
   return (
     <SettingsSection title={t("configPage.deviceTalk.triggerWords")}>
       <SettingsRow
@@ -138,7 +183,7 @@ export function VoiceWakeEditor(props: {
             )}
           >
             <Loading
-              on={props.scope}
+              on={scope()}
               fallback={
                 <span class="muted" role="status">
                   {t("common.loading")}
@@ -147,6 +192,8 @@ export function VoiceWakeEditor(props: {
             >
               <VoiceWakeControls
                 state={props.readState()}
+                saving={props.saving}
+                readWriteResult={props.readWriteResult}
                 onInput={props.onInput}
                 onRetry={props.onRetry}
               />
@@ -158,41 +205,13 @@ export function VoiceWakeEditor(props: {
   );
 }
 
-const voiceToggles = [
-  "wakeEnabled",
-  "wakeTriggersTalkMode",
-  "pushToTalkEnabled",
-  "talkShiftToStopEnabled",
-  "talkPhaseSoundsEnabled",
-  "realtimeRelayEnabled",
-  "triggerChime",
-  "sendChime",
-  "talkEnabled",
-  "talkButtonEnabled",
-  "talkBackgroundEnabled",
-  "speakerphoneEnabled",
-] as const;
-
 function DeviceVoiceSettings(props: {
+  presentationRetired: () => Promise<void>;
   capability: NativeDeviceSettingsCapability;
   snapshot: NativeDeviceSettingsSnapshot;
 }) {
   const voice = () => props.snapshot.voice;
   const microphone = () => voice().microphone;
-  const microphoneOptions = createMemo(() => {
-    const current = microphone();
-    const options = [
-      { value: "", label: t("configPage.deviceTalk.systemDefault") },
-      ...(current?.devices.map(({ id, name }) => ({ value: id, label: name })) ?? []),
-    ];
-    if (current?.selectedId && !current.devices.some(({ id }) => id === current.selectedId)) {
-      options.push({
-        value: current.selectedId,
-        label: t("configPage.deviceTalk.disconnectedMicrophone", { id: current.selectedId }),
-      });
-    }
-    return options;
-  });
   const languageOptions = createMemo(() =>
     (voice().locale?.available ?? []).map(({ id, name }) => ({ value: id, label: name })),
   );
@@ -203,39 +222,11 @@ function DeviceVoiceSettings(props: {
   });
   return (
     <>
-      <For each={voiceToggles} keyed={(key) => key}>
-        {(key) => (
-          <>
-            {voice()[key()] !== undefined && (
-              <SettingsToggleRow
-                title={t(`configPage.deviceTalk.${key()}`)}
-                checked={voice()[key()] ?? false}
-                disabled={key() === "wakeEnabled" && !voice().supported && !voice().wakeEnabled}
-                description={
-                  key() === "wakeEnabled" && !voice().supported
-                    ? t(
-                        props.snapshot.device.platform === "macos"
-                          ? "configPage.deviceTalk.unsupported"
-                          : "configPage.deviceTalk.unsupportedDevice",
-                      )
-                    : key() === "realtimeRelayEnabled"
-                      ? t("configPage.deviceTalk.realtimeRelayHint")
-                      : undefined
-                }
-                onChange={(value) => props.capability.set(`voice.${key()}`, value)}
-              />
-            )}
-          </>
-        )}
-      </For>
-      {microphone() && (
-        <SettingsSelectRow
-          title={t("configPage.deviceTalk.microphone")}
-          value={microphone()?.selectedId ?? ""}
-          options={microphoneOptions()}
-          onChange={(value) => props.capability.set("voice.microphone", value || null)}
-        />
-      )}
+      <NativeVoiceControls
+        capability={props.capability}
+        snapshot={props.snapshot}
+        presentationRetired={props.presentationRetired}
+      />
       {locale() && (
         <SettingsSelectRow
           title={t("configPage.deviceTalk.primaryLanguage")}
@@ -339,18 +330,25 @@ function DeviceVoiceSettings(props: {
 }
 
 export function DeviceTalk(props: {
+  presentationRetired: () => Promise<void>;
   capability?: NativeDeviceSettingsCapability | null;
   snapshot?: NativeDeviceSettingsSnapshot | null;
 }) {
+  // The receipt only gates readiness; live owner publications stay outside this memo.
+  const initialSnapshot = createMemo(() => props.capability?.initialSnapshot ?? null);
   return (
     <>
       {props.capability && (
         <SettingsSection title={t(deviceSettingsGroupLabelKey(props.snapshot))}>
-          {props.snapshot?.voice ? (
-            <DeviceVoiceSettings capability={props.capability} snapshot={props.snapshot} />
-          ) : (
-            <SettingsRow title={t("common.loading")} />
-          )}
+          <Loading on={props.capability} fallback={<SettingsRow title={t("common.loading")} />}>
+            {(props.snapshot ?? initialSnapshot()) && (
+              <DeviceVoiceSettings
+                presentationRetired={props.presentationRetired}
+                capability={props.capability}
+                snapshot={(props.snapshot ?? initialSnapshot())!}
+              />
+            )}
+          </Loading>
         </SettingsSection>
       )}
     </>

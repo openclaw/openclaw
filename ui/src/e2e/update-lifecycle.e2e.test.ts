@@ -46,7 +46,7 @@ function createDevRun() {
 async function openUpdateConfirmation(page: Page): Promise<void> {
   await page.locator(".sidebar-identity-card").click();
   await page.locator('.sidebar-identity-menu [data-value="command:updates"]').click();
-  await page.getByRole("button", { name: "Update now", exact: true }).click();
+  await page.getByRole("button", { name: "Update Gateway…", exact: true }).click();
 }
 
 async function withDevUpdate(

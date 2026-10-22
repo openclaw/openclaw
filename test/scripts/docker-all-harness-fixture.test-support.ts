@@ -103,9 +103,7 @@ fs.appendFileSync(${JSON.stringify(fixture.marker)}, JSON.stringify({
     writeJson(path.join(dir, "package.json"), {
       name: "openclaw",
       version,
-      ...(corepack && {
-        packageManager: dir === selectedHarness ? "pnpm@11.22.0" : "pnpm@12.0.0",
-      }),
+      ...(corepack && { packageManager: dir === selectedHarness ? "pnpm@11.22.0" : "pnpm@12.0.0" }),
       scripts:
         dir === fixture.target && missingTargetScript
           ? {}

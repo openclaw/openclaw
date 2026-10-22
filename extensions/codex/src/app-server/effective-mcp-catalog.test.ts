@@ -12,41 +12,44 @@ vi.mock("./shared-client.js", () => ({
 
 beforeEach(vi.clearAllMocks);
 
-function loadCatalog(
-  bindingStore: { readAsync: ReturnType<typeof vi.fn> },
-  overrides: Partial<Parameters<typeof loadCodexEffectiveMcpCatalog>[0]> = {},
-) {
-  return loadCodexEffectiveMcpCatalog(
-    {
-      config: {},
-      agentId: "main",
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      workspaceDir: "/workspace",
-      mcpServerNames: [],
-      ...overrides,
-    },
-    { bindingStore: bindingStore as never },
-  );
-}
-const binding = { threadId: "thread-1", clientId: "client-1" };
-function bindClient(request: ReturnType<typeof vi.fn>, release = vi.fn()) {
-  sharedClientMocks.retainById.mockReturnValueOnce({ client: { request }, release });
-  return { readAsync: vi.fn().mockResolvedValue(binding) };
+function fixture(live = true) {
+  const request = vi.fn();
+  const release = vi.fn();
+  const bindingStore = {
+    readAsync: vi
+      .fn()
+      .mockResolvedValue({ threadId: "thread-1", clientId: live ? "client-1" : undefined }),
+  };
+  if (live) {
+    sharedClientMocks.retainById.mockReturnValueOnce({ client: { request }, release });
+  }
+  const load = (overrides: Partial<Parameters<typeof loadCodexEffectiveMcpCatalog>[0]> = {}) =>
+    loadCodexEffectiveMcpCatalog(
+      {
+        config: {},
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        workspaceDir: "/workspace",
+        mcpServerNames: [],
+        ...overrides,
+      },
+      { bindingStore: bindingStore as never },
+    );
+  return { request, release, bindingStore, load };
 }
 
 const server = (name: string, tools: Record<string, unknown> = {}) => ({ name, tools });
 const page = (data: unknown[] = [], nextCursor: string | null = null) => ({ data, nextCursor });
 
 it("reads every page from the exact bound client and thread, then releases the lease", async () => {
-  const release = vi.fn();
+  const { request, release, load } = fixture();
   const inputSchema = { type: "object" };
   const search = {
     description: "Search docs",
     inputSchema: { ...inputSchema, properties: { query: { type: "string" } } },
   };
-  const request = vi
-    .fn()
+  request
     .mockResolvedValueOnce(page([server("docs!", { search })], "page-2"))
     .mockResolvedValueOnce(
       page([
@@ -56,9 +59,7 @@ it("reads every page from the exact bound client and thread, then releases the l
         server("native-only", { mutate: { inputSchema } }),
       ]),
     );
-  const bindingStore = bindClient(request, release);
-
-  const catalog = await loadCatalog(bindingStore, {
+  const catalog = await load({
     mcpServerNames: ["docs!", "docs?", "__proto__", "constructor"],
     toolOverrides: { mcpToolsDeny: { "docs!": ["delete", "search"] } },
   });
@@ -90,14 +91,11 @@ it.each(["success", "failure"] as const)(
   "retains the bound client until its final catalog page settles with %s",
   async (outcome) => {
     const finalPage = createDeferred<void>();
-    const release = vi.fn();
-    const request = vi
-      .fn()
+    const { request, release, load } = fixture();
+    request
       .mockResolvedValueOnce(page([], "page-2"))
       .mockImplementationOnce(() => finalPage.promise.then(() => page()));
-    const bindingStore = bindClient(request, release);
-
-    const catalog = loadCatalog(bindingStore);
+    const catalog = load();
 
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
     expect(release).not.toHaveBeenCalled();
@@ -115,10 +113,7 @@ it.each(["success", "failure"] as const)(
 );
 
 it("does not start a new Codex process when the binding has no live client", async () => {
-  const bindingStore = {
-    readAsync: vi.fn().mockResolvedValue({ ...binding, clientId: undefined }),
-  };
-
-  await expect(loadCatalog(bindingStore)).resolves.toBeUndefined();
+  const { load } = fixture(false);
+  await expect(load()).resolves.toBeUndefined();
   expect(sharedClientMocks.retainById).not.toHaveBeenCalled();
 });

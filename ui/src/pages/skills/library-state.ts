@@ -24,6 +24,7 @@ type LibraryListOutcome = {
   list: SkillsLibraryListResult | null;
   error: string | null;
 };
+export type LibraryDetailOutcome = { error: unknown } | null;
 export type LibraryDraft = {
   importedFiles?: boolean;
   entry: SkillLibraryEntry | null;
@@ -63,6 +64,7 @@ export function createSkillLibrary(
   const observation = observeState<{
     list: SkillsLibraryListResult | null;
     listRead: { completion: Promise<LibraryListOutcome> } | null;
+    detailRead: { completion: Promise<LibraryDetailOutcome> } | null;
     view: LibraryView | null;
     loading: boolean;
     busy: boolean;
@@ -75,6 +77,7 @@ export function createSkillLibrary(
   }>({
     list: null,
     listRead: null,
+    detailRead: null,
     view: null,
     loading: false,
     busy: false,
@@ -171,6 +174,7 @@ export function createSkillLibrary(
       return;
     }
     data.draft = libraryDraft();
+    data.detailRead = null;
     clearFeedback();
     setLocal((state) => {
       state.newFilePath = "";
@@ -243,11 +247,13 @@ export function createSkillLibrary(
     create,
     invalidateRequests() {
       data.listRead = null;
+      data.detailRead = null;
       data.loading = false;
       data.busy = false;
     },
     reset() {
       data.listRead = null;
+      data.detailRead = null;
       clearFeedback();
       data.list = null;
       data.view = null;
@@ -265,6 +271,7 @@ export function createSkillLibrary(
         return;
       }
       data.draft = null;
+      data.detailRead = null;
       setImportOpen(false);
       setLocal((state) => {
         state.newFilePath = "";
@@ -279,16 +286,21 @@ export function createSkillLibrary(
         return;
       }
       await perform(async () => {
-        const read = await connection.client.request<SkillsLibraryReadResult>(
-          "skills.library.read",
-          {
-            skillId,
-          },
-        );
-        if (!gateway.isCurrent(connection)) {
-          return;
-        }
-        data.draft = libraryDraft(read);
+        const pending = connection.client
+          .request<SkillsLibraryReadResult>("skills.library.read", { skillId })
+          .then((read) => {
+            if (gateway.isCurrent(connection)) {
+              data.draft = libraryDraft(read);
+            }
+          });
+        // Only admitted reads publish a receipt; the mutable draft stays authoritative.
+        data.detailRead = {
+          completion: pending.then(
+            () => null,
+            (error: unknown) => (gateway.isCurrent(connection) ? { error } : null),
+          ),
+        };
+        await pending;
       });
     },
     async save() {

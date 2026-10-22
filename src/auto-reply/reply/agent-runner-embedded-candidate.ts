@@ -172,8 +172,6 @@ export async function runEmbeddedFallbackCandidate(
         toolProgressDetail: turn.toolProgressDetail,
         // Marks reply-owned policy; final attempt preparation binds its concrete route.
         toolAuthorityFingerprint: turn.replyOperation?.toolAuthorityFingerprint,
-        enableHeartbeatTool: turn.opts?.enableHeartbeatTool,
-        forceHeartbeatTool: turn.opts?.forceHeartbeatTool,
         deferTerminalLifecycle: true,
         onAttemptStart: lifecycleBackstop.beginAttempt,
         onAttemptTerminalReplaced: lifecycleBackstop.replaceAttemptTerminal,

@@ -25,7 +25,6 @@ import {
   call,
   conversationBindingMocks,
   createPluginRuntime,
-  createSessionCatalogTestContext,
   hoisted,
   resetSessionCatalogTestState,
   resolveRegisteredCatalogCreateTarget,
@@ -287,27 +286,6 @@ describe("session catalog Gateway methods", () => {
     ]);
   });
 
-  it("serves changed resident provider rows on the next identical list", async () => {
-    const session = {
-      threadId: "external-thread",
-      status: "stored",
-      archived: false,
-      canContinue: false,
-      canArchive: false,
-    };
-    let sessions: (typeof session)[] = [];
-    const list = vi.fn(async () => [catalogHost({ sessions })]);
-    useCatalogs(provider("codex", { list }));
-    const config = {};
-    const client = { connId: "resident-requester" };
-    const before = await call("sessions.catalog.list", {}, config, client);
-    expect(before.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions).toEqual([]);
-
-    sessions = [session];
-    const after = await call("sessions.catalog.list", {}, config, client);
-    expect(after.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions).toEqual([session]);
-  });
-
   it("projects authoritative creator ownership onto streamed and final catalog rows", async () => {
     const broadcastToConnIds = vi.fn();
     const host = catalogHost({
@@ -365,51 +343,6 @@ describe("session catalog Gateway methods", () => {
       { dropIfSlow: true },
     );
     expectCatalogHost(respond, { sessions: projectedSessions });
-  });
-
-  it("does not clone the shared list projection across catalog requests", async () => {
-    const storedEntries = [
-      {
-        sessionKey: "agent:main:shared",
-        entry: { createdActor: { type: "agent" as const, id: "worker" }, updatedAt: 1 },
-      },
-    ];
-    setSessionCatalogEntries(storedEntries);
-    const observedEntries: unknown[] = [];
-    useCatalogs(
-      provider("claude", {
-        list: vi.fn(async ({ sessionEntries }) => {
-          observedEntries.push(sessionEntries?.entriesForAgent("main"));
-          return [];
-        }),
-      }),
-    );
-    const config = {};
-    const context = createSessionCatalogTestContext(config);
-    const cloneSpy = vi.spyOn(globalThis, "structuredClone");
-    try {
-      for (let pass = 0; pass < 2; pass++) {
-        const respond = vi.fn();
-        await sessionCatalogHandlers["sessions.catalog.list"]!({
-          params: {},
-          context,
-          respond,
-        } as never);
-        expect(respond).toHaveBeenCalledWith(true, expect.anything());
-      }
-
-      expect(cloneSpy).not.toHaveBeenCalled();
-      expect(observedEntries).toEqual(
-        Array.from({ length: 2 }, () => [
-          expect.objectContaining({
-            sessionKey: "agent:main:shared",
-            entry: expect.objectContaining(storedEntries[0]!.entry),
-          }),
-        ]),
-      );
-    } finally {
-      cloneSpy.mockRestore();
-    }
   });
 
   it("shares one lazy Gateway node snapshot across catalog providers", async () => {

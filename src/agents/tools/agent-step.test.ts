@@ -42,7 +42,8 @@ vi.mock("../../gateway/session-utils-store-worker.js", async (importOriginal) =>
 }));
 
 const recordParticipant = vi.hoisted(() => vi.fn());
-vi.mock("../../sessions/session-participant-recording.js", () => ({
+vi.mock("../../sessions/session-participant-recording.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../sessions/session-participant-recording.js")>()),
   recordSessionParticipantBestEffort: recordParticipant,
 }));
 
@@ -62,6 +63,122 @@ afterEach(() => {
   peer.load.mockReset();
   vi.clearAllMocks();
   clearRuntimeConfigSnapshot();
+});
+
+it("surfaces a failed accepted requester continuation without redispatching the peer result", async () => {
+  const failure = "Codex thread synthetic-thread is claimed by active work; stop it first.";
+  const config: OpenClawConfig = {
+    tools: { sessions: { visibility: "all" } },
+    session: { communication: { send: "always", receive: "always" } },
+  };
+  peer.config = config;
+  setRuntimeConfigSnapshot(config);
+  const requesterKey = "agent:main:requester";
+  const peerKey = "agent:main:peer";
+  const requester = {
+    sessionId: "requester-id",
+    lifecycleRevision: "requester-v1",
+    updatedAt: 1,
+  };
+  const recipient = { sessionId: "peer-id", lifecycleRevision: "peer-v1", updatedAt: 1 };
+  const rows = { [requesterKey]: requester, [peerKey]: recipient };
+  peer.load.mockImplementation(async ({ key }: { key: string }) => ({
+    agentId: "main",
+    canonicalKey: key,
+    storePath: "/fixture/sessions",
+    store: rows,
+  }));
+  const provenance = {
+    kind: "inter_session" as const,
+    sourceTool: "sessions_send",
+    sourceSessionKey: requesterKey,
+  };
+  const original = await prepareSessionsSendCommunication({
+    config,
+    source: {
+      agentId: "main",
+      sessionKey: requesterKey,
+      storePath: "/fixture/sessions",
+      entry: requester,
+    },
+    target: {
+      agentId: "main",
+      sessionKey: peerKey,
+      storePath: "/fixture/sessions",
+      entry: recipient,
+    },
+    message: "original request",
+    inputProvenance: provenance,
+    callGateway: async <T>(request: Parameters<AgentToolGatewayRequestCaller>[0]) => {
+      request.sessionMutationCommitGuard?.();
+      return { runId: "completed-peer-run" } as T;
+    },
+  });
+  let replyAdmission: ReturnType<typeof original.captureReplyAdmission>;
+  try {
+    expect(() => original.captureReplyAdmission("completed-peer-run")).toThrow(
+      "no accepted source request",
+    );
+    await original.callGateway({
+      method: "agent",
+      params: {
+        agentId: "main",
+        sessionKey: peerKey,
+        message: "original request",
+        inputProvenance: provenance,
+        idempotencyKey: "completed-peer-run",
+      },
+    });
+    replyAdmission = original.captureReplyAdmission("completed-peer-run");
+  } finally {
+    original.close();
+  }
+  const gatewayCalls: CallGatewayOptions[] = [];
+  const callGateway = async <T = unknown>(opts: CallGatewayOptions): Promise<T> => {
+    gatewayCalls.push(opts);
+    if (opts.method === "agent") {
+      return { runId: "accepted-requester-run" } as T;
+    }
+    if (opts.method === "agent.wait") {
+      return { status: "error", error: failure, endedAt: 1234 } as T;
+    }
+    throw new Error(`Unexpected Gateway request: ${opts.method}`);
+  };
+
+  await expect(
+    runSessionsSendA2AFlow({
+      callGateway,
+      targetSessionKey: "agent:main:peer",
+      targetAgentId: "main",
+      displayKey: "peer",
+      runId: "completed-peer-run",
+      replyTimeoutMs: 10_000,
+      requesterSessionKey: requesterKey,
+      requesterAgentId: "main",
+      requesterSession: requester,
+      targetSession: recipient,
+      replyAdmission,
+      reply: {
+        status: "ok",
+        replyText: "Synthetic peer result",
+        terminalReply: { disposition: "visible", text: "Synthetic peer result" },
+      },
+      deliverRequesterReply: (reply) =>
+        runAgentStep({
+          ...reply,
+          agentId: "main",
+          sessionKey: requesterKey,
+          sourceAgentId: "main",
+          sourceSessionKey: peerKey,
+          expectedSession: requester,
+          expectedSourceSession: recipient,
+          replyAdmission,
+          timeoutMs: 10_000,
+          callGateway,
+        }),
+    }),
+  ).rejects.toThrow(failure);
+  expect(gatewayCalls.map((call) => call.method)).toEqual(["agent", "agent.wait"]);
 });
 
 it.each([false, true])(

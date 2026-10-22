@@ -2,6 +2,7 @@ import { createSignal, onCleanup } from "solid-js";
 import { t } from "../../../i18n/index.ts";
 import { downloadBlobFile } from "../../../lib/download.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
+import { createDetailOperationPresentation } from "./chat-detail-panel-operation-lifetime.ts";
 import type {
   AttachmentSidebarRuntime,
   ChatDetailPanelContent,
@@ -12,22 +13,25 @@ export function createAttachmentDownload(
   runtime: () => AttachmentSidebarRuntime,
   isConnected: () => boolean,
 ) {
-  let request: AbortController | null = null;
-  const [pending, setPending] = createSignal(false, { ownedWrite: true });
+  let request: { controller: AbortController } | null = null;
+  const presentation = createDetailOperationPresentation();
   const [error, setError] = createSignal<string | null>(null, { ownedWrite: true });
-  onCleanup(() => request?.abort());
+  const retire = () => {
+    request?.controller.abort();
+    presentation.retire();
+    request = null;
+  };
+  onCleanup(retire);
 
   return {
     get pending() {
-      return pending();
+      return presentation.pending();
     },
     get error() {
       return error();
     },
     cancel() {
-      request?.abort();
-      request = null;
-      setPending(false);
+      retire();
       setError(null);
     },
     onDownload: async () => {
@@ -35,11 +39,11 @@ export function createAttachmentDownload(
       if (attachment?.kind !== "attachment" || !attachment.download || request) {
         return;
       }
-      const currentRequest = new AbortController();
+      const read = attachment.download;
+      const currentRequest = { controller: new AbortController() };
       const { connectionEpoch, sessionKey, agentId } = runtime();
       request = currentRequest;
       setError(null);
-      setPending(true);
       const current = () => {
         const scope = runtime();
         return (
@@ -49,28 +53,31 @@ export function createAttachmentDownload(
           scope.connectionEpoch === connectionEpoch &&
           scope.sessionKey === sessionKey &&
           scope.agentId === agentId &&
-          !currentRequest.signal.aborted
+          !currentRequest.controller.signal.aborted
         );
       };
-      try {
-        const blob = await attachment.download(currentRequest.signal);
-        if (!current()) {
-          return;
+      const download = async () => {
+        try {
+          const blob = await read(currentRequest.controller.signal);
+          if (!current()) {
+            return;
+          }
+          if (!blob) {
+            throw new Error(t("chat.attachments.unavailable"));
+          }
+          downloadBlobFile(attachment.title, blob);
+        } catch (cause) {
+          if (current()) {
+            setError(formatUiError(cause));
+          }
+        } finally {
+          if (request === currentRequest) {
+            request = null;
+          }
         }
-        if (!blob) {
-          throw new Error(t("chat.attachments.unavailable"));
-        }
-        downloadBlobFile(attachment.title, blob);
-      } catch (cause) {
-        if (current()) {
-          setError(formatUiError(cause));
-        }
-      } finally {
-        if (request === currentRequest) {
-          request = null;
-          setPending(false);
-        }
-      }
+      };
+      const completion = download();
+      return presentation.observe(completion, () => request === currentRequest);
     },
   };
 }

@@ -121,6 +121,65 @@ afterEach(() => {
 });
 
 describe("Skills discovery lifecycle", () => {
+  it("keeps installed selection responsive while verdict enrichment refreshes", async () => {
+    const report = {
+      workspaceDir: "/workspace",
+      managedSkillsDir: "/managed",
+      skills: [
+        createSkill({
+          skillKey: "linked",
+          name: "Linked Skill",
+          clawhub: {
+            status: "linked",
+            valid: true,
+            registry: "https://clawhub.ai",
+            slug: "linked",
+            installedVersion: "1.0.0",
+            installedAt: 1,
+            originPath: "/workspace/.clawhub/origin.json",
+            lockPath: "/workspace/.clawhub/lock.json",
+          },
+        }),
+        createSkill(),
+      ],
+    };
+    const pending = deferred<{ items: [] }>();
+    let verdictRequests = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "skills.library.list") {
+        return personalLibrary;
+      }
+      if (method === "skills.status") {
+        return report;
+      }
+      if (method === "skills.securityVerdicts") {
+        return ++verdictRequests === 1 ? { items: [] } : pending.promise;
+      }
+      throw new Error(`Unexpected method: ${method}`);
+    });
+    const { page, publishRouteData } = mountSkills(request, "settings");
+    publishRouteData({ report });
+    await waitForFast(() => expect(page.querySelector('input[value="workspace"]')).not.toBeNull());
+    page.querySelector<HTMLInputElement>('input[value="workspace"]')!.click();
+    await waitForFast(() => expect(page.textContent).toContain("Unavailable"));
+    page.querySelector<HTMLButtonElement>('[aria-label="Open Linked Skill details"]')!.click();
+    await waitForFast(() =>
+      expect(page.querySelector(".exec-approval-title")?.textContent).toBe("Linked Skill"),
+    );
+    const dialog = page.querySelector(".skill-reader-dialog");
+    [...page.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.trim() === "Refresh")!
+      .click();
+    await waitForFast(() => expect(verdictRequests).toBe(2));
+    await waitForFast(() => expect(dialog?.textContent).toContain("Refreshing"));
+    page.querySelector<HTMLButtonElement>('[aria-label="Open Repo Skill details"]')!.click();
+    await waitForFast(() =>
+      expect(page.querySelector(".exec-approval-title")?.textContent).toBe("Repo Skill"),
+    );
+    expect(page.querySelector(".skill-reader-dialog")).toBe(dialog);
+    pending.resolve({ items: [] });
+  });
+
   it("keeps detail chrome usable while one admitted read is pending", async () => {
     const warnings = vi.spyOn(console, "warn");
     const pending = deferred<ClawHubSkillDetail>();
@@ -171,6 +230,7 @@ describe("Skills discovery lifecycle", () => {
     expect(page.querySelector(".skill-reader-dialog__actions")?.textContent).toContain("Import");
     expect(request.mock.calls.filter(([method]) => method === "skills.detail")).toHaveLength(1);
     expect(warnings.mock.calls.flat().join("\n")).not.toContain("STRICT_READ_UNTRACKED");
+    expect(warnings.mock.calls.flat().join("\n")).not.toContain("ASYNC_OUTSIDE_LOADING_BOUNDARY");
   });
 
   it.each(["error", "missing"])(
@@ -250,6 +310,9 @@ describe("Skills discovery lifecycle", () => {
       publishRouteData({ clawhubRef: "new", gatewaySnapshot: connection.gateway.snapshot });
       await waitForFast(() =>
         expect(request).toHaveBeenCalledWith("skills.detail", { slug: "new" }),
+      );
+      await waitForFast(() =>
+        expect(page.querySelector(".skill-reader-dialog")?.textContent).toContain("new"),
       );
       oldRead.resolve({
         skill: { slug: "old", displayName: "Obsolete", createdAt: 1, updatedAt: 1 },
@@ -346,7 +409,9 @@ describe("Skills discovery lifecycle", () => {
     );
     connection.publish({ ...snapshot, client: { request } as unknown as GatewayBrowserClient });
     flush();
-    expect(page.querySelector('textarea[name="library-content"]')).toBeNull();
+    await waitForFast(() =>
+      expect(page.querySelector('textarea[name="library-content"]')).toBeNull(),
+    );
     await waitForFast(() => expect(page.textContent).toContain("retained-library-skill"));
     [...page.querySelectorAll<HTMLButtonElement>("button")]
       .find((button) => button.textContent?.trim() === "Create skill")!
@@ -358,10 +423,12 @@ describe("Skills discovery lifecycle", () => {
       hello: gatewayHelloForMethods([], ["operator.read"]),
     });
     flush();
-    expect(page.querySelector('textarea[name="library-content"]')).toBeNull();
+    await waitForFast(() =>
+      expect(page.querySelector('textarea[name="library-content"]')).toBeNull(),
+    );
     connection.publish({ ...connection.gateway.snapshot, hello: gatewayHelloForMethods([], []) });
     flush();
-    expect(page.textContent).not.toContain("retained-library-skill");
+    await waitForFast(() => expect(page.textContent).not.toContain("retained-library-skill"));
   });
 
   it("shows a settings heading with its four actions in one row below it", async () => {
@@ -395,18 +462,116 @@ describe("Skills discovery lifecycle", () => {
     }
   });
 
-  it("keeps the discovery input and focus when a query publishes a new view revision", () => {
-    const { page } = mountSkills(async (method) =>
-      method === "skills.library.list" ? personalLibrary : { results: [] },
+  it("keeps typing and local matches responsive through debounce, search failure, and retry", async () => {
+    const initial = deferred<unknown>();
+    const pending = deferred<unknown>();
+    const search = vi
+      .fn<(query?: string) => Promise<unknown>>()
+      .mockReturnValueOnce(initial.promise)
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValue({ results: [remoteSkill] });
+    const { page, publishRouteData } = mountSkills(async (method, params) => {
+      if (method === "skills.search") {
+        return search((params as { query?: string }).query);
+      }
+      return method === "skills.library.list" ? personalLibrary : { results: [] };
+    });
+    const report = {
+      workspaceDir: "/workspace",
+      managedSkillsDir: "/managed",
+      skills: [createSkill({ name: "Calendar local", skillKey: "calendar-local" })],
+    };
+    publishRouteData({ report });
+    await waitForFast(() => expect(page.textContent).toContain("Calendar local"));
+    expect(page.querySelector(".plugin-catalog-grid")?.getAttribute("aria-busy")).toBe("true");
+    const localCard = page.querySelector('[data-skill-id="local:calendar-local"]');
+    const localOpen = localCard!.querySelector<HTMLButtonElement>("button")!;
+    localOpen.focus();
+    initial.resolve({ results: [] });
+    await waitForFast(() =>
+      expect(page.querySelector(".plugin-catalog-grid")?.getAttribute("aria-busy")).toBe("false"),
     );
+    expect(page.querySelector('[data-skill-id="local:calendar-local"]')).toBe(localCard);
+    expect(document.activeElement).toBe(localOpen);
     const input = page.querySelector<HTMLInputElement>('input[name="skills-search"]')!;
     input.focus();
-    input.value = "calendar";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
+    vi.useFakeTimers();
+    try {
+      input.value = "calendar";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      flush();
+      expect(page.querySelector('input[name="skills-search"]')).toBe(input);
+      expect(document.activeElement).toBe(input);
+      expect(input.value).toBe("calendar");
+      expect(page.textContent).toContain("Calendar local");
+      expect(page.querySelector('[data-skill-id="local:calendar-local"]')).toBe(localCard);
+      expect(page.querySelector(".plugin-catalog-grid")?.getAttribute("aria-busy")).toBe("true");
+      await vi.advanceTimersByTimeAsync(299);
+      expect(search.mock.calls.filter(([query]) => query === "calendar")).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(search.mock.calls.filter(([query]) => query === "calendar")).toHaveLength(1);
+      publishRouteData({ report, error: "Unrelated report refresh" });
+      expect(search.mock.calls.filter(([query]) => query === "calendar")).toHaveLength(1);
+      expect(document.activeElement).toBe(input);
+    } finally {
+      vi.useRealTimers();
+    }
+    pending.reject(new Error("Registry unavailable"));
+    await waitForFast(() => expect(page.textContent).toContain("Registry unavailable"));
+    expect(page.textContent).toContain("Calendar local");
+    expect(page.querySelector('[data-skill-id="local:calendar-local"]')).toBe(localCard);
+    expect(page.querySelector(".plugin-catalog-grid")?.getAttribute("aria-busy")).toBe("false");
+    const retry = Array.from(page.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.trim() === "Retry",
+    )!;
+    retry.click();
     flush();
+    expect(page.textContent).not.toContain("Registry unavailable");
+    expect(page.textContent).toContain("Calendar local");
+    await waitForFast(() =>
+      expect(search.mock.calls.filter(([query]) => query === "calendar")).toHaveLength(2),
+    );
+    await waitForFast(() =>
+      expect(page.querySelector(".plugin-catalog-grid")?.getAttribute("aria-busy")).toBe("false"),
+    );
+    expect(page.querySelector('[data-skill-id="remote:@alice/calendar"]')).not.toBeNull();
+    expect(page.querySelector('[data-skill-id="local:calendar-local"]')).toBe(localCard);
     expect(page.querySelector('input[name="skills-search"]')).toBe(input);
-    expect(document.activeElement).toBe(input);
-    expect(input.value).toBe("calendar");
+  });
+
+  it("keeps a debounced search receipt across discovery surface replacement", async () => {
+    const pending = deferred<unknown>();
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "skills.search" && (params as { query?: string }).query === "calendar") {
+        return pending.promise;
+      }
+      return method === "skills.library.list" ? personalLibrary : { results: [] };
+    });
+    const { page, changeSurface } = mountSkills(request);
+    await waitForFast(() =>
+      expect(page.querySelector('input[name="skills-search"]')).not.toBeNull(),
+    );
+    vi.useFakeTimers();
+    try {
+      const input = page.querySelector<HTMLInputElement>('input[name="skills-search"]')!;
+      input.value = "calendar";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      flush();
+      changeSurface("settings");
+      changeSurface("discovery");
+      await vi.advanceTimersByTimeAsync(300);
+      expect(
+        request.mock.calls.filter(
+          ([method, params]) =>
+            method === "skills.search" && (params as { query?: string }).query === "calendar",
+        ),
+      ).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+    pending.reject(new Error("Replacement search unavailable"));
+    await waitForFast(() => expect(page.textContent).toContain("Replacement search unavailable"));
+    expect(page.querySelector(".plugin-catalog-grid")?.getAttribute("aria-busy")).toBe("false");
   });
 
   it("cancels the debounced discovery search when the page unmounts", async () => {

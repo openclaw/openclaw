@@ -87,6 +87,7 @@ afterEach(async () => {
 });
 
 type ReviewParams = Parameters<typeof runSkillWorkshopReview>[0];
+const completedReview = { meta: { durationMs: 1 } };
 async function useRealReview() {
   const review = await vi.importActual<{ runSkillWorkshopReview: typeof runSkillWorkshopReview }>(
     "./review-run.js",
@@ -100,7 +101,7 @@ function withAdmission(run: (assertCurrent: ReturnType<typeof activeAssertion>) 
       const assertCurrent = activeAssertion(admitted, params.abortSignal);
       expect(assertCurrent).toBeDefined();
       await run(assertCurrent);
-      return { meta: { durationMs: 1 } };
+      return completedReview;
     } finally {
       params.preparedRunAdmission.close();
     }
@@ -124,7 +125,7 @@ it.each(["success", "failure"])(
       if (outcome === "failure") {
         throw new Error("review provider failed");
       }
-      return { meta: { durationMs: 1 } };
+      return completedReview;
     });
 
     const review = runSkillExperienceReview(candidate);
@@ -163,7 +164,7 @@ it("yields an in-flight review when interactive work starts", async () => {
 
 it("does not dispatch user reply hooks for a detached experience review", async () => {
   const handler = vi.fn(() => ({ handled: true }));
-  const reviewModel = vi.fn(() => ({ meta: { durationMs: 1 } }));
+  const reviewModel = vi.fn(() => completedReview);
   initializeGlobalHookRunner(
     createMockPluginRegistry([
       { hookName: "before_agent_reply", handler, eligibleTriggers: ["user"] },
@@ -190,7 +191,7 @@ it("does not dispatch user reply hooks for a detached experience review", async 
       context: { sessionKey: params.sessionKey, sessionId: params.sessionId },
       assertCurrent: activeAssertion(admitted, params.abortSignal),
     });
-    return hookResult?.handled ? { meta: { durationMs: 1 } } : reviewModel();
+    return hookResult?.handled ? completedReview : reviewModel();
   });
 
   await runSkillExperienceReview(candidate);
@@ -274,41 +275,36 @@ it.each(["permission", "reset", "replacement", "deletion", "rewrite", "membershi
       "---\nname: procedure\ndescription: Follow the verified procedure\n---\n\nOriginal steps.\n";
     await createWorkshopSkill(context, { name: "procedure", content: original });
     const skillDir = path.join(resolveWorkshopSkillsDir(config, "main"), "procedure");
+    const mutations = {
+      permission: () => upsertSessionEntryCore(source, { permissionMode: "read-only" }),
+      reset: () => upsertSessionEntryCore(source, { lifecycleRevision: "reset-revision" }),
+      replacement: () =>
+        upsertSessionEntryCore(source, { sessionId: `${source.sessionId}:replacement` }),
+      rewrite: async () => {
+        const session = await SessionManager.openAsync(source, state.workspaceDir);
+        await session.removeTrailingEntriesAsync((entry) => entry.type === "message");
+      },
+      membership: () =>
+        addSessionMember(source, {
+          identityId: "new-member",
+          addedBy: "owner",
+          expectedSessionId: source.sessionId,
+        }),
+      deletion: () =>
+        deleteSessionEntryLifecycle({
+          agentId: "main",
+          storePath: source.storePath,
+          target: { canonicalKey: source.sessionKey, storeKeys: [source.sessionKey] },
+          archiveTranscript: false,
+        }),
+    };
     let changed = false;
     const mkdir = fs.mkdir.bind(fs);
     vi.spyOn(fs, "mkdir").mockImplementation(async (...args) => {
       const result = await mkdir(...args);
       if (args[0] === skillDir && !changed) {
         changed = true;
-        if (change === "rewrite") {
-          const session = await SessionManager.openAsync(source, state.workspaceDir);
-          await session.removeTrailingEntriesAsync((entry) => entry.type === "message");
-        } else if (change === "membership") {
-          await addSessionMember(source, {
-            identityId: "new-member",
-            addedBy: "owner",
-            expectedSessionId: source.sessionId,
-          });
-        } else if (change === "deletion") {
-          await deleteSessionEntryLifecycle({
-            agentId: "main",
-            storePath: source.storePath,
-            target: {
-              canonicalKey: source.sessionKey,
-              storeKeys: [source.sessionKey],
-            },
-            archiveTranscript: false,
-          });
-        } else {
-          await upsertSessionEntryCore(
-            source,
-            change === "permission"
-              ? { permissionMode: "read-only" }
-              : change === "reset"
-                ? { lifecycleRevision: "reset-revision" }
-                : { sessionId: `${source.sessionId}:replacement` },
-          );
-        }
+        await mutations[change]();
       }
       return result;
     });

@@ -41,6 +41,14 @@ const initSessionState = (
   },
 ) => initSessionStateRaw({ ...params, ctx: finalizeInboundContext(params.ctx) });
 
+function startSession(storePath: string, sessionKey: string, Body = "hello") {
+  return initSessionState({
+    ctx: { Body, SessionKey: sessionKey },
+    cfg: { session: { store: storePath } },
+    commandAuthorized: true,
+  });
+}
+
 const hookRunnerMocks = vi.hoisted(() => ({
   hasHooks: vi.fn<HookRunner["hasHooks"]>(),
   runSessionStart: vi.fn<HookRunner["runSessionStart"]>(),
@@ -183,6 +191,25 @@ function requireHookCall(
     throw new Error(`expected ${label} hook context`);
   }
   return [event as Record<string, unknown>, context as Record<string, unknown> | undefined];
+}
+
+function holdRolloverHooks(onRelease?: (name: string) => Promise<void>) {
+  const releases: Array<() => void> = [];
+  const held = (name: string) => async () => {
+    await new Promise<void>((resolve) => {
+      releases.push(resolve);
+    });
+    await onRelease?.(name);
+  };
+  hookRunnerMocks.runSessionEnd.mockImplementationOnce(held("end"));
+  hookRunnerMocks.runSessionStart.mockImplementationOnce(held("start"));
+  sessionCleanupMocks.closeTrackedBrowserTabsForSessions.mockImplementationOnce(
+    () =>
+      new Promise<number>((resolve) => {
+        releases.push(() => resolve(0));
+      }),
+  );
+  return releases;
 }
 
 describe("session hook context wiring", () => {
@@ -371,13 +398,7 @@ describe("session hook context wiring", () => {
     const sessionKey = "agent:main:telegram:direct:123";
     const storePath = await createStorePath("openclaw-session-hook-start");
     await writeStore(storePath, {});
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
-
-    await initSessionState({
-      ctx: { Body: "hello", SessionKey: sessionKey },
-      cfg,
-      commandAuthorized: true,
-    });
+    await startSession(storePath, sessionKey);
 
     expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1);
     const [event, context] = requireHookCall(hookRunnerMocks.runSessionStart, "session_start");
@@ -474,11 +495,7 @@ describe("session hook context wiring", () => {
         completed.reject(error);
       }
     });
-    const initialized = initSessionState({
-      ctx: { Body: "First turn", SessionKey: sessionKey },
-      cfg: { session: { store: storePath } },
-      commandAuthorized: true,
-    });
+    const initialized = startSession(storePath, sessionKey, "First turn");
     await withinTest(Promise.all([initialized, completed.promise]), signal);
     expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledOnce();
   });
@@ -488,7 +505,6 @@ describe("session hook context wiring", () => {
     const sessionKey = "agent:main:hook-after-turn";
     const storePath = await createStorePath("openclaw-session-hook-after-turn");
     await writeStore(storePath, {});
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
     const turnSettled = createDeferred();
     const hookAdmission = createDeferred<unknown>();
     hookRunnerMocks.runSessionStart.mockImplementation(async (event) => {
@@ -505,13 +521,7 @@ describe("session hook context wiring", () => {
       }
     });
 
-    await withSessionTurn({ storePath, sessionKey }, () =>
-      initSessionState({
-        ctx: { Body: "hello", SessionKey: sessionKey },
-        cfg,
-        commandAuthorized: true,
-      }),
-    );
+    await withSessionTurn({ storePath, sessionKey }, () => startSession(storePath, sessionKey));
     turnSettled.resolve();
 
     await expect(hookAdmission.promise).resolves.toBe(sessionKey);
@@ -592,13 +602,7 @@ describe("session hook context wiring", () => {
       sessionKey,
       sessionId: "old-session",
     });
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
-
-    await initSessionState({
-      ctx: { Body: "/new", SessionKey: sessionKey },
-      cfg,
-      commandAuthorized: true,
-    });
+    await startSession(storePath, sessionKey, "/new");
 
     expect(hookRunnerMocks.runSessionEnd).toHaveBeenCalledTimes(1);
     expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1);
@@ -620,23 +624,11 @@ describe("session hook context wiring", () => {
   });
 
   it("keeps rollover hooks alive after their requester closes", async ({ signal }) => {
-    const releases: Array<() => void> = [];
     const completedHooks: string[] = [];
-    const held = (name: string) => async () => {
-      await new Promise<void>((resolve) => {
-        releases.push(resolve);
-      });
-      await trackAsyncWork(() => {
+    const releases = holdRolloverHooks((name) =>
+      trackAsyncWork(() => {
         completedHooks.push(name);
-      });
-    };
-    hookRunnerMocks.runSessionEnd.mockImplementationOnce(held("end"));
-    hookRunnerMocks.runSessionStart.mockImplementationOnce(held("start"));
-    sessionCleanupMocks.closeTrackedBrowserTabsForSessions.mockImplementationOnce(
-      () =>
-        new Promise<number>((resolve) => {
-          releases.push(() => resolve(0));
-        }),
+      }),
     );
     const sessionKey = "agent:main:telegram:direct:held-rollover";
     const { storePath } = await createStoredSession({
@@ -663,15 +655,7 @@ describe("session hook context wiring", () => {
       throw new Error("Expected parent root admission");
     }
     try {
-      await admission.run(() =>
-        parent.run(() =>
-          initSessionState({
-            ctx: { Body: "/reset", SessionKey: sessionKey },
-            cfg: { session: { store: storePath } } as OpenClawConfig,
-            commandAuthorized: true,
-          }),
-        ),
-      );
+      await admission.run(() => parent.run(() => startSession(storePath, sessionKey, "/reset")));
       expect(releases).toHaveLength(3);
       expect(hookRunnerMocks.runSessionEnd.mock.calls[0]?.[0]).toMatchObject({ reason: "reset" });
       admission.release();
@@ -698,19 +682,7 @@ describe("session hook context wiring", () => {
   });
 
   it("hands rollover hooks off after restart drain closes admission", async () => {
-    const releases: Array<() => void> = [];
-    const held = () =>
-      new Promise<void>((resolve) => {
-        releases.push(resolve);
-      });
-    hookRunnerMocks.runSessionEnd.mockImplementationOnce(held);
-    hookRunnerMocks.runSessionStart.mockImplementationOnce(held);
-    sessionCleanupMocks.closeTrackedBrowserTabsForSessions.mockImplementationOnce(
-      () =>
-        new Promise<number>((resolve) => {
-          releases.push(() => resolve(0));
-        }),
-    );
+    const releases = holdRolloverHooks();
     const sessionKey = "agent:main:telegram:direct:restart-handoff";
     const { storePath } = await createStoredSession({
       prefix: "openclaw-session-hook-restart-handoff",
@@ -722,11 +694,7 @@ describe("session hook context wiring", () => {
 
     await admission?.run(async () => {
       markGatewayRestartDraining();
-      await initSessionState({
-        ctx: { Body: "/new", SessionKey: sessionKey },
-        cfg: { session: { store: storePath } } as OpenClawConfig,
-        commandAuthorized: true,
-      });
+      await startSession(storePath, sessionKey, "/new");
       await vi.waitFor(() => expect(releases).toHaveLength(3));
       expect(getActiveGatewayRootWorkCount()).toBe(4);
     });
@@ -742,119 +710,47 @@ describe("session hook context wiring", () => {
     expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1);
   });
 
-  it("marks daily stale rollovers and exposes the archived transcript path", async () => {
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
-      const sessionKey = "agent:main:telegram:direct:daily";
-      await initStoredSessionState({
-        prefix: "openclaw-session-hook-daily",
-        sessionKey,
-        sessionId: "daily-session",
-        text: "daily",
-        updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
-        reset: { mode: "daily" },
-      });
-
-      const [event] = requireHookCall(hookRunnerMocks.runSessionEnd, "session_end");
-      const [startEvent] = requireHookCall(hookRunnerMocks.runSessionStart, "session_start");
-      expectFields(event, {
-        reason: "daily",
-      });
-      expect(event?.nextSessionId).toBe(startEvent?.sessionId);
-      expect(startEvent?.sessionId).toBe("daily-session");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("marks idle stale rollovers with reason idle", async () => {
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
-      const sessionKey = "agent:main:telegram:direct:idle";
-      await initStoredSessionState({
-        prefix: "openclaw-session-hook-idle",
-        sessionKey,
-        sessionId: "idle-session",
-        text: "idle",
-        updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
-        reset: {
-          mode: "idle",
-          idleMinutes: 30,
-        },
-      });
-
-      const [event] = requireHookCall(hookRunnerMocks.runSessionEnd, "session_end");
-      expectFields(event, { reason: "idle" });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it.each([
-    {
-      reason: "daily",
-      reset: { mode: "daily", atHour: 4 } as SessionResetConfig,
+    { reason: "daily", reset: { mode: "daily" }, overlap: false },
+    { reason: "daily", reset: { mode: "daily", atHour: 4 }, overlap: false },
+    { reason: "idle", reset: { mode: "idle", idleMinutes: 30 }, overlap: false },
+    { reason: "idle", reset: { mode: "daily", atHour: 4, idleMinutes: 30 }, overlap: true },
+  ] satisfies Array<{ reason: string; reset: SessionResetConfig; overlap?: boolean }>)(
+    "emits rollover hooks and one auto-reset event: $reset",
+    async ({ reason, reset, overlap }) => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date(2026, 0, 18, 5, overlap ? 30 : 0, 0));
+        const listener = vi.fn();
+        registerInternalHook("session:auto-reset", listener);
+        const sessionKey = `agent:main:telegram:direct:auto-${reason}`;
+        const sessionId = `auto-${reason}-session`;
+        await initStoredSessionState({
+          prefix: `openclaw-session-auto-${reason}`,
+          sessionKey,
+          sessionId,
+          text: reason,
+          updatedAt: new Date(2026, 0, 18, overlap ? 4 : 3, overlap ? 45 : 0, 0).getTime(),
+          reset,
+        });
+        const [ended] = requireHookCall(hookRunnerMocks.runSessionEnd, "session_end");
+        const [started] = requireHookCall(hookRunnerMocks.runSessionStart, "session_start");
+        expectFields(ended, { reason, nextSessionId: sessionId });
+        expectFields(started, { sessionId });
+        await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(1));
+        const [event] = listener.mock.calls[0] ?? [];
+        expectFields(event, {
+          type: "session",
+          action: "auto-reset",
+          sessionKey,
+        });
+        expectFields((event as { context?: Record<string, unknown> }).context, {
+          reason,
+          nextSessionKey: sessionKey,
+        });
+      } finally {
+        vi.useRealTimers();
+      }
     },
-    {
-      reason: "idle",
-      reset: { mode: "idle", idleMinutes: 30 } as SessionResetConfig,
-    },
-  ])("emits one session:auto-reset event for $reason rollover", async ({ reason, reset }) => {
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
-      const listener = vi.fn();
-      registerInternalHook("session:auto-reset", listener);
-      const sessionKey = `agent:main:telegram:direct:auto-${reason}`;
-      await initStoredSessionState({
-        prefix: `openclaw-session-auto-${reason}`,
-        sessionKey,
-        sessionId: `auto-${reason}-session`,
-        text: reason,
-        updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
-        reset,
-      });
-
-      await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(1));
-      const [event] = listener.mock.calls[0] ?? [];
-      expectFields(event, {
-        type: "session",
-        action: "auto-reset",
-        sessionKey,
-      });
-      expectFields((event as { context?: Record<string, unknown> }).context, {
-        reason,
-        nextSessionKey: sessionKey,
-      });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("prefers idle over daily when both rollover conditions are true", async () => {
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
-      const sessionKey = "agent:main:telegram:direct:overlap";
-      await initStoredSessionState({
-        prefix: "openclaw-session-hook-overlap",
-        sessionKey,
-        sessionId: "overlap-session",
-        text: "overlap",
-        updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
-        reset: {
-          mode: "daily",
-          atHour: 4,
-          idleMinutes: 30,
-        },
-      });
-
-      const [event] = requireHookCall(hookRunnerMocks.runSessionEnd, "session_end");
-      expectFields(event, { reason: "idle" });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+  );
 });

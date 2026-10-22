@@ -38,8 +38,8 @@ vi.mock("../../daemon/launchd.js", async (importOriginal) => ({
   restartLaunchAgent: async (args: GatewayServiceControlArgs) =>
     (await import("../../daemon/systemd-lifecycle.js")).restartSystemdService(args),
 }));
-vi.mock("../../daemon/schtasks.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../daemon/schtasks.js")>()),
+vi.mock("../../daemon/schtasks-control.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/schtasks-control.js")>()),
   restartScheduledTask: async (args: GatewayServiceControlArgs) =>
     (await import("../../daemon/systemd-lifecycle.js")).restartSystemdService(args),
 }));

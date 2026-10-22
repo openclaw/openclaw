@@ -22,6 +22,47 @@ import { loadSkillStatusReport } from "./status-report.ts";
 export type ClawHubSkillDetail = SkillsDetailResult;
 export type ClawHubSkillSecurityVerdict = SkillsSecurityVerdictsResult["items"][number];
 
+type SkillsReadResult<T> = { value: T; error: string | null };
+type SkillsRead<T> = { completion: Promise<SkillsReadResult<T>> };
+const readRetirements = new WeakMap<object, () => void>();
+
+function createSkillsRead<T>(retiredValue: T) {
+  const { promise, resolve } = Promise.withResolvers<SkillsReadResult<T>>();
+  const read: SkillsRead<T> = { completion: promise };
+  const finish = (result: SkillsReadResult<T>) => {
+    readRetirements.delete(read);
+    resolve(result);
+  };
+  readRetirements.set(read, () => finish({ value: retiredValue, error: null }));
+  return { read, finish };
+}
+
+function retireSkillsRead(read: SkillsRead<unknown> | null | undefined) {
+  if (read) {
+    readRetirements.get(read)?.();
+  }
+}
+
+export function retireSkillsReads(state: SkillsState) {
+  // Release presentation before publishing a new scope, even if transport stays pending.
+  retireSkillsRead(state.skillsRead);
+  retireSkillsRead(state.clawhubVerdictsRead);
+  Object.values(state.skillCardReads).forEach(retireSkillsRead);
+  state.skillsRead = null;
+  state.clawhubVerdictsRead = null;
+  state.skillCardReads = {};
+  activeSkillCardReads.get(state)?.clear();
+  activeSkillCardReads.delete(state);
+}
+
+type SkillCardRead = SkillsRead<string | undefined> & { cacheKey: string };
+type ActiveSkillCardRead = SkillCardRead & {
+  client: GatewayBrowserClient;
+  agentId: string | null;
+  agentRevision: number;
+};
+const activeSkillCardReads = new WeakMap<SkillsState, Map<string, ActiveSkillCardRead>>();
+
 const runSkillConfigMutation = createConfigMutationRunner(
   "Connection changed before the skill update started.",
 );
@@ -34,13 +75,12 @@ export type SkillsState = {
   skillsAgentRevision: number;
   skillsLoading: boolean;
   skillsReport: SkillStatusReport | null;
+  skillsRead: SkillsRead<SkillStatusReport | null> | null;
   skillsError: string | null;
   skillOperation: SkillOperation;
   skillEdits: Record<string, string>;
   skillMessages: Record<string, SkillMessage>;
   clawhubSearchResults: ClawHubSearchResult[] | null;
-  clawhubSearchLoading: boolean;
-  clawhubSearchError: string | null;
   clawhubIconUrls: Record<string, string>;
   clawhubDetail: ClawHubSkillDetail | null;
   clawhubDetailRef: string | null;
@@ -50,12 +90,12 @@ export type SkillsState = {
     text: string;
   } | null;
   clawhubVerdicts: Record<string, ClawHubSkillSecurityVerdict>;
-  clawhubVerdictsLoading: boolean;
+  clawhubVerdictsRead: SkillsRead<Record<string, ClawHubSkillSecurityVerdict>> | null;
   clawhubVerdictsError: string | null;
   skillCardContents: Record<string, string>;
   skillCardContentKeys: Record<string, string>;
-  skillCardLoadingKey: string | null;
   skillCardErrors: Record<string, string>;
+  skillCardReads: Record<string, SkillCardRead>;
 };
 
 export type SkillOperation =
@@ -150,6 +190,7 @@ export function setSkillsAgentId(state: SkillsState, agentId: string | null) {
   if (state.skillsAgentId === nextAgentId) {
     return;
   }
+  retireSkillsReads(state);
   state.skillsAgentId = nextAgentId;
   state.skillsAgentRevision++;
   state.skillsLoading = false;
@@ -159,11 +200,9 @@ export function setSkillsAgentId(state: SkillsState, agentId: string | null) {
   state.skillMessages = {};
   state.clawhubInstallMessage = null;
   state.clawhubVerdicts = {};
-  state.clawhubVerdictsLoading = false;
   state.clawhubVerdictsError = null;
   state.skillCardContents = {};
   state.skillCardContentKeys = {};
-  state.skillCardLoadingKey = null;
   state.skillCardErrors = {};
 }
 
@@ -207,8 +246,12 @@ export async function loadSkills(
   const ownsLoad = () =>
     state.client === client &&
     isCurrentAgent() &&
+    state.skillsRead === read &&
     (!options?.operation || state.skillOperation === options.operation);
   const isCurrent = () => state.connected && ownsLoad();
+  retireSkillsRead(state.skillsRead);
+  const { read, finish } = createSkillsRead(state.skillsReport);
+  state.skillsRead = read;
   state.skillsLoading = true;
   state.skillsError = null;
   try {
@@ -232,6 +275,10 @@ export async function loadSkills(
     if (ownsLoad()) {
       state.skillsLoading = false;
     }
+    finish({
+      value: isCurrent() ? state.skillsReport : null,
+      error: isCurrent() ? state.skillsError : null,
+    });
   }
 }
 
@@ -278,16 +325,22 @@ function pruneSkillCardState(state: SkillsState, report: SkillStatusReport) {
   state.skillCardErrors = Object.fromEntries(
     Object.entries(state.skillCardErrors).filter(([key]) => cacheKeys.has(key)),
   );
-  if (state.skillCardLoadingKey && !cacheKeys.has(state.skillCardLoadingKey)) {
-    state.skillCardLoadingKey = null;
-  }
+  state.skillCardReads = Object.fromEntries(
+    Object.entries(state.skillCardReads).filter(([key, read]) => {
+      if (read.cacheKey === cacheKeys.get(key)) {
+        return true;
+      }
+      retireSkillsRead(read);
+      return false;
+    }),
+  );
 }
 
 export async function loadSkillCard(state: SkillsState, skillKey: string) {
+  const client = state.client;
   if (
-    !state.client ||
+    !client ||
     !state.connected ||
-    state.skillCardLoadingKey === skillKey ||
     (state.skillCardContents[skillKey] !== undefined &&
       state.skillCardContentKeys[skillKey] === currentSkillCardCacheKey(state, skillKey))
   ) {
@@ -297,35 +350,61 @@ export async function loadSkillCard(state: SkillsState, skillKey: string) {
   if (!cacheKey) {
     return;
   }
+  let active = activeSkillCardReads.get(state);
+  if (!active) {
+    active = new Map();
+    activeSkillCardReads.set(state, active);
+  }
+  const previous = active.get(skillKey);
+  if (
+    previous?.client === client &&
+    previous.agentId === state.skillsAgentId &&
+    previous.agentRevision === state.skillsAgentRevision &&
+    previous.cacheKey === cacheKey
+  ) {
+    await previous.completion;
+    return;
+  }
+  retireSkillsRead(previous);
+  const receipt = createSkillsRead(state.skillCardContents[skillKey]);
+  const read = Object.assign(receipt.read, {
+    client,
+    agentId: state.skillsAgentId,
+    agentRevision: state.skillsAgentRevision,
+    cacheKey,
+  });
+  active.set(skillKey, read);
+  state.skillCardReads = { ...state.skillCardReads, [skillKey]: read };
   const isCurrentAgent = captureSkillsAgentScope(state);
+  const isCurrent = () =>
+    state.connected &&
+    state.client === client &&
+    isCurrentAgent() &&
+    active.get(skillKey) === read &&
+    currentSkillCardCacheKey(state, skillKey) === cacheKey;
   const requestParams = { ...stateSkillsAgentParams(state), skillKey };
-  state.skillCardLoadingKey = skillKey;
   const { [skillKey]: _previousError, ...nextErrors } = state.skillCardErrors;
   state.skillCardErrors = nextErrors;
   try {
-    const response = await state.client.request<SkillsSkillCardResult>(
-      "skills.skillCard",
-      requestParams,
-    );
-    if (
-      isCurrentAgent() &&
-      response?.skillKey === skillKey &&
-      typeof response.content === "string" &&
-      currentSkillCardCacheKey(state, skillKey) === cacheKey
-    ) {
+    const response = await client.request<SkillsSkillCardResult>("skills.skillCard", requestParams);
+    if (isCurrent() && response?.skillKey === skillKey && typeof response.content === "string") {
       state.skillCardContents = { ...state.skillCardContents, [skillKey]: response.content };
       state.skillCardContentKeys = { ...state.skillCardContentKeys, [skillKey]: cacheKey };
     }
   } catch (err) {
-    if (isCurrentAgent()) {
+    if (isCurrent()) {
       state.skillCardErrors = {
         ...state.skillCardErrors,
         [skillKey]: formatUiError(err),
       };
     }
   } finally {
-    if (isCurrentAgent() && state.skillCardLoadingKey === skillKey) {
-      state.skillCardLoadingKey = null;
+    receipt.finish({
+      value: isCurrent() ? state.skillCardContents[skillKey] : undefined,
+      error: isCurrent() ? (state.skillCardErrors[skillKey] ?? null) : null,
+    });
+    if (active.get(skillKey) === read) {
+      active.delete(skillKey);
     }
   }
 }
@@ -333,24 +412,31 @@ export async function loadSkillCard(state: SkillsState, skillKey: string) {
 export async function loadClawHubSecurityVerdicts(state: SkillsState, report: SkillStatusReport) {
   const client = state.client;
   const isCurrentAgent = captureSkillsAgentScope(state);
+  retireSkillsRead(state.clawhubVerdictsRead);
   if (
     !client ||
     !state.connected ||
     !report.skills.some((skill) => isValidClawHubLink(skill.clawhub))
   ) {
     state.clawhubVerdicts = {};
-    state.clawhubVerdictsLoading = false;
+    state.clawhubVerdictsRead = null;
     state.clawhubVerdictsError = null;
     return;
   }
-  state.clawhubVerdictsLoading = true;
+  const { read, finish } = createSkillsRead(state.clawhubVerdicts);
+  state.clawhubVerdictsRead = read;
+  const isCurrent = () =>
+    state.connected &&
+    state.client === client &&
+    isCurrentAgent() &&
+    state.clawhubVerdictsRead === read;
   state.clawhubVerdictsError = null;
   try {
     const response = await client.request<SkillsSecurityVerdictsResult>(
       "skills.securityVerdicts",
       stateSkillsAgentParams(state),
     );
-    if (!isCurrentAgent()) {
+    if (!isCurrent()) {
       return;
     }
     state.clawhubVerdicts = Object.fromEntries(
@@ -365,15 +451,16 @@ export async function loadClawHubSecurityVerdicts(state: SkillsState, report: Sk
       ]),
     );
   } catch (err) {
-    if (!isCurrentAgent()) {
+    if (!isCurrent()) {
       return;
     }
     state.clawhubVerdicts = {};
     state.clawhubVerdictsError = formatUiError(err);
   } finally {
-    if (isCurrentAgent()) {
-      state.clawhubVerdictsLoading = false;
-    }
+    finish({
+      value: isCurrent() ? state.clawhubVerdicts : {},
+      error: isCurrent() ? state.clawhubVerdictsError : null,
+    });
   }
 }
 

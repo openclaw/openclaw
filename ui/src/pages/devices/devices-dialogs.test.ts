@@ -20,6 +20,10 @@ function createHost(request = vi.fn(), canManagePairing = () => true): DevicesDi
     gatewayClient: () => null,
     gatewayUrl: () => "http://gateway.test",
     runPageTask: async (task) => task(state),
+    runInventoryTask: async (task) => {
+      await task(state);
+    },
+    rotateDevice: vi.fn(),
     setDevicesError: vi.fn(),
   };
 }

@@ -55,6 +55,7 @@ type CatalogProvider = {
   nativeBaseUrl: string;
   routes: CatalogRoute[];
   models: unknown[];
+  hostedWebSearchModels: Set<string>;
 };
 
 type RouteMetadata = {
@@ -62,6 +63,7 @@ type RouteMetadata = {
   baseUrl: string;
   upstreamModel?: string;
   serviceTiers?: string[];
+  hostedWebSearch?: true;
 };
 
 export function normalizeClawRouterReasoningEfforts(
@@ -131,6 +133,22 @@ function parseCatalogProvider(value: unknown): CatalogProvider | undefined {
       ? row.routes.map(parseCatalogRoute).filter((route): route is CatalogRoute => Boolean(route))
       : [],
     models: Array.isArray(row?.models) ? row.models : [],
+    hostedWebSearchModels: new Set(
+      (Array.isArray(row?.offers) ? row.offers : []).flatMap((offerValue) => {
+        const offer = asOptionalRecord(offerValue);
+        const admission = asOptionalRecord(offer?.hostedToolAdmission);
+        return offer?.endpoint === "responses" &&
+          offer.transport === "http" &&
+          offer.routeKind === "unified" &&
+          offer.route === "/v1/responses" &&
+          offer.eligible === true &&
+          typeof offer.modelId === "string" &&
+          admission?.version === "clawrouter.hosted-tool-admission.v1" &&
+          admission.web_search === "admitted"
+          ? [offer.modelId]
+          : [];
+      }),
+    ),
   };
 }
 
@@ -172,6 +190,13 @@ function buildRoutedModel(
     row?.supportedReasoningEfforts,
   );
   const pricing = asOptionalRecord(row?.pricing);
+  const native = asOptionalRecord(row?.nativeCapabilities);
+  const responses = asOptionalRecord(asOptionalRecord(native?.endpoints)?.responses);
+  const supportsHostedWebSearch =
+    native?.version === "clawrouter.native-capabilities.v1" &&
+    Array.isArray(responses?.hostedTools) &&
+    responses.hostedTools.every((tool) => typeof tool === "string") &&
+    responses.hostedTools.includes("web_search");
   let api: NonNullable<ModelDefinitionConfig["api"]>;
   let baseUrl: string;
   let upstreamModel: string | undefined;
@@ -277,6 +302,13 @@ function buildRoutedModel(
         api,
         baseUrl,
         ...(upstreamModel ? { upstreamModel } : {}),
+        // Support is not a grant: require this key's exact matching route admission.
+        ...(provider.id === "openai" &&
+        api === "openai-responses" &&
+        supportsHostedWebSearch &&
+        provider.hostedWebSearchModels.has(id)
+          ? { hostedWebSearch: true }
+          : {}),
         // Only this catalog provider/transport owns OpenAI scheduling tiers.
         ...(provider.id === "openai" && api === "openai-responses" && serviceTiers?.length
           ? { serviceTiers }

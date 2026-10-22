@@ -166,17 +166,48 @@ describe("Systems workspace", () => {
     expect(page.querySelectorAll(".systems-backups")).toHaveLength(1);
     expect(text(page, ".systems-backups")).toContain("Loading backups…");
     pending.reject(new Error("Backup history unavailable"));
-    await pending.promise.catch(() => {});
-    flush();
-    expect(text(page, '.systems-backups [role="alert"]')).toContain("Backup history unavailable");
+    await waitForSolid(() =>
+      expect(text(page, '.systems-backups [role="alert"]')).toContain("Backup history unavailable"),
+    );
     await controller.refreshBackups();
-    flush();
-    expect(text(page, ".systems-backups")).toContain("No backups recorded —");
+    await waitForSolid(() =>
+      expect(text(page, ".systems-backups")).toContain("No backups recorded —"),
+    );
     expect(text(page, ".systems-backups code")).toBe("openclaw backup enable --to <location>");
     const backupReads = () => calls(request, "backup.status");
     expect(backupReads()).toHaveLength(2);
     await vi.advanceTimersByTimeAsync(15_000);
     expect(backupReads()).toHaveLength(3);
+  });
+
+  it("retains inventory while a failed refresh is retried through its visible error", async () => {
+    let read: () => Promise<EnvironmentSummary[]> = async () => [host, worker];
+    const { controller, request } = harness(() => read());
+    const { page, sidebar } = await mount(controller);
+    const original = controller.state.inventory;
+    const pending = createDeferred<EnvironmentSummary[]>();
+    read = () => pending.promise;
+    const refresh = controller.refresh("manual");
+    await waitForSolid(() =>
+      expect(sidebar.querySelector<HTMLButtonElement>(".systems-filter__refresh")?.disabled).toBe(
+        true,
+      ),
+    );
+    expect(controller.state.inventory).toBe(original);
+    pending.reject(new Error("Inventory unavailable"));
+    await refresh;
+    await waitForSolid(() =>
+      expect(text(page, '[role="alert"]')).toContain("Inventory unavailable"),
+    );
+    expect(controller.state.inventory).toBe(original);
+    expect(sidebar.querySelectorAll(".systems-machine")).toHaveLength(2);
+    expect(calls(request, "environments.list")).toHaveLength(2);
+    read = async () => [host, worker, offline];
+    page.querySelector<HTMLButtonElement>('[role="alert"] button')!.click();
+    await waitForSolid(() => expect(sidebar.querySelectorAll(".systems-machine")).toHaveLength(3));
+    expect(page.querySelector('[role="alert"]')).toBeNull();
+    expect(calls(request, "environments.list")).toHaveLength(3);
+    expect(controller.state.selectedId).toBe(host.id);
   });
 
   it("renders backup outcomes and namespace-owned schedules, probing storage only on request", async () => {
@@ -322,6 +353,30 @@ describe("Systems workspace", () => {
     flush();
     expect(controller.state.backups).toBeNull();
     expect(text(page, ".systems-backups")).not.toContain("old-host");
+  });
+
+  it("retires a pending storage probe when the connection leaves", async () => {
+    const { controller, gateway, request } = harness(undefined, undefined, async () => ({
+      targets: [],
+      schedules: [],
+      locations: [{ name: "offsite", provider: "filesystem", encrypted: false }],
+    }));
+    const { page } = await mount(controller);
+    await waitForSolid(() =>
+      expect(page.querySelector('[aria-label="Check offsite"]')).not.toBeNull(),
+    );
+    const pending = createDeferred<{ state: "ok"; freeBytes: number }>();
+    request.mockReturnValueOnce(pending.promise);
+    page.querySelector<HTMLButtonElement>('[aria-label="Check offsite"]')!.click();
+    await waitForSolid(() => expect(page.textContent).toContain("Checking"));
+    gateway.publish({ phase: "offline" });
+    await waitForSolid(() => expect(page.textContent).not.toContain("Checking"));
+    pending.resolve({ state: "ok", freeBytes: 1024 ** 3 });
+    await pending.promise;
+    flush();
+    expect(controller.storageProbes.size).toBe(0);
+    expect(calls(request, "storage.locations.probe")).toHaveLength(1);
+    expect(text(page, ".systems-backups")).not.toContain("1 GB free");
   });
 
   it("defers hidden initial and event reads, preserving inventory until visible recovery", async () => {

@@ -107,7 +107,6 @@ export const forcedUnitFastTestFiles = [
   "src/plugin-activation-boundary.test.ts",
   "src/proxy-capture/runtime.test.ts",
   "src/proxy-capture/store.sqlite.test.ts",
-  "src/security/audit-config-basics.test.ts",
   "src/security/audit-exec-surface.test.ts",
   "src/security/audit-extra.sync.test.ts",
   "src/security/audit-sandbox-docker-config.test.ts",
@@ -126,7 +125,6 @@ export const forcedUnitFastTestFiles = [
   "src/trajectory/metadata.test.ts",
   "src/tts/openai-compatible-speech-provider.test.ts",
   "src/tts/tts.test.ts",
-  "src/tts/status-config.test.ts",
   "src/tts/tts-config.test.ts",
   "packages/terminal-core/src/restore.test.ts",
   "packages/terminal-core/src/table.test.ts",
@@ -144,8 +142,6 @@ const broadUnitFastCandidatePatterns = prepareGlobPatterns(
   directoryPrefixForGlob,
 );
 const ownerRoutedUnitTestPatterns = [
-  // Real heartbeat admission needs the infra runner's agent-database host owner.
-  "src/infra/heartbeat-runner.exact-session-busy.test.ts",
   // This family proof belongs to the PostgreSQL conformance owner.
   "src/infra/database-engine/port-provider.postgres.test.ts",
   ...gatewayPluginTestFiles,

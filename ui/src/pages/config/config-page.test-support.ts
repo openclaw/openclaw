@@ -1,3 +1,4 @@
+import { createRouter } from "@openclaw/uirouter";
 import { createComponent, createSignal } from "solid-js";
 import { resolveThemeBranding } from "../../../../packages/gateway-protocol/src/theme.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -40,7 +41,7 @@ export function completeConfigContext(context: ApplicationContext): ApplicationC
   const subscribe = () => () => undefined;
   Object.assign(context, {
     basePath: context.basePath ?? "",
-    router: context.router ?? { subscribe },
+    router: context.router ?? createRouter({ routes: [] }),
     config: context.config ?? { current: { assistantIdentity: { name: "OpenClaw" } }, subscribe },
     settingsAgentSelection: context.settingsAgentSelection ?? {
       state: { selectedId: "main" },
@@ -79,6 +80,10 @@ export function completeConfigContext(context: ApplicationContext): ApplicationC
   ]) {
     observeFixture(source);
   }
+  Object.assign(context.router, {
+    getState:
+      context.router.getState ?? (() => ({ location: { pathname: "/", search: "", hash: "" } })),
+  });
   if (!context.agentIdentity.get) {
     Object.assign(context.agentIdentity, { get: () => null });
   }

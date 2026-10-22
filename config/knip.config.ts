@@ -46,6 +46,8 @@ const repositoryScriptEntries = [
   "scripts/annotate-proof-image.mts!",
   "scripts/render-proof-video.mts!",
   "scripts/ci-shard-timings-refresh.mts!",
+  // The scheduled-run execution context design invokes this development replay by path.
+  "scripts/dev/cron-context-replay.mts!",
   // db:postgres:gen/check invoke this generator through the source loader.
   "scripts/generate-postgres-schema.mts!",
   // CI preflight executes the manifest from its trusted harness checkout.
@@ -94,7 +96,6 @@ const repositoryScriptEntries = [
   "scripts/perf/async-store-measure.mjs!",
   "scripts/perf/code-mode-store-measure.ts!",
   "scripts/perf/gateway-agent-event-measure.ts!",
-  "scripts/perf/session-list-order-measure.ts!",
   "scripts/perf/transcript-hydration-counts-preload.ts!",
   // The performance guide and retained package-integrity rerun invoke these benchmarks by path.
   "scripts/bench-package-integrity.ts!",

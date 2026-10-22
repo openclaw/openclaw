@@ -122,11 +122,18 @@ describe("isCliBindingFlushed", () => {
     vi.mocked(cliTranscript.claudeCliSessionTranscriptHasContent).mockRestore();
   });
 
-  it("returns false when no sessionId is provided", async () => {
-    probe.mockResolvedValue(true);
-    expect(await isCliBindingFlushed(undefined, "claude-cli")).toBe(false);
-    expect(probe).not.toHaveBeenCalled();
-  });
+  it.each([
+    ["missing session", undefined, "claude-cli", undefined, false],
+    ["other backend", "sid-codex", "codex-cli", undefined, true],
+    ["managed continuity", "sid-warm", "claude-cli", { skipTranscriptProbe: true }, true],
+  ] as const)(
+    "skips transcript probing for %s",
+    async (_name, sessionId, provider, options, expected) => {
+      probe.mockResolvedValue(true);
+      expect(await isCliBindingFlushed(sessionId, provider, workspaceDir, options)).toBe(expected);
+      expect(probe).not.toHaveBeenCalled();
+    },
+  );
 
   it("succeeds when the transcript becomes visible on a later retry", async () => {
     vi.useFakeTimers();
@@ -143,31 +150,12 @@ describe("isCliBindingFlushed", () => {
 
   it("schedules at most 0 + 50 + 150ms of delay across the bounded retry", async () => {
     vi.useFakeTimers();
-    const settled = vi.fn();
-    const errored = vi.fn();
-    isCliBindingFlushed("sid-bounded", "claude-cli", workspaceDir).then(settled, errored);
+    const result = isCliBindingFlushed("sid-bounded", "claude-cli", workspaceDir);
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(50);
     await vi.advanceTimersByTimeAsync(150);
-    expect(settled.mock.calls).toEqual([[false]]);
-    expect(errored).not.toHaveBeenCalled();
+    expect(await result).toBe(false);
     expect(probe).toHaveBeenCalledTimes(3);
-  });
-
-  it("returns true without probing for non-claude-cli providers", async () => {
-    expect(await isCliBindingFlushed("sid-codex", "codex-cli")).toBe(true);
-    expect(await isCliBindingFlushed("sid-anthropic", "anthropic")).toBe(true);
-    expect(await isCliBindingFlushed("sid-openai", "openai")).toBe(true);
-    expect(probe).not.toHaveBeenCalled();
-  });
-
-  it("returns true without probing when the caller owns continuity outside native transcripts", async () => {
-    expect(
-      await isCliBindingFlushed("sid-warm", "claude-cli", workspaceDir, {
-        skipTranscriptProbe: true,
-      }),
-    ).toBe(true);
-    expect(probe).not.toHaveBeenCalled();
   });
 });
 
@@ -215,13 +203,6 @@ it.each([
     terminalReplyExpectation: "result-required" as const,
     output: { text: "HEARTBEAT_OK", toolMediaUrls: ["https://example.invalid/chart.png"] },
     trigger: "user" as const,
-    expectedError: false,
-  },
-  {
-    name: "a real heartbeat acknowledgement",
-    terminalReplyExpectation: "result-required" as const,
-    output: { text: "HEARTBEAT_OK" },
-    trigger: "heartbeat" as const,
     expectedError: false,
   },
 ])("settles $name at the message-presentation boundary", (testCase) => {

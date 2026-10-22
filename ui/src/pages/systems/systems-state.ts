@@ -11,6 +11,7 @@ import { t } from "../../i18n/index.ts";
 import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
+import { createPageRequest } from "../../lib/page-request.ts";
 import { readSystemInfo } from "../../lib/system-info.ts";
 import {
   loadSystemsInventory,
@@ -39,7 +40,6 @@ type SystemsState = {
   statusFilter: SystemsStatusFilter;
   showStats: boolean;
   showDetails: boolean;
-  error: string | null;
   desktopSetupError: string | null;
   backups: BackupStatusResult | null;
   backupsError: string | null;
@@ -58,7 +58,6 @@ export function createSystems(context: ApplicationContext) {
     statusFilter: "all",
     showStats: true,
     showDetails: false,
-    error: null,
     desktopSetupError: null,
     backups: null,
     backupsError: null,
@@ -66,13 +65,18 @@ export function createSystems(context: ApplicationContext) {
   const storageProbes = new Map<string, StorageLocationsProbeResult>();
   const presentationScope = gatewayPresentationScope(context.gateway);
   const lifecycle = createGatewayConnectionLifecycle(context.gateway.snapshot);
-  const storageProbeRequests = new Map<string, AbortController>();
+  type Scope = NonNullable<ReturnType<typeof lifecycle.capture>>;
+  const storageProbeRequests = new Map<
+    string,
+    ReturnType<typeof createPageRequest<Scope, StorageLocationsProbeResult>>
+  >();
   const telemetry = new Map<string, readonly SystemsTelemetrySample[]>();
   const listeners = createChangeListeners();
-  let backupsRequest: AbortController | undefined;
+  const notify = listeners.publish;
+
   let desktopSetupRequest: symbol | undefined;
   let subscriptions: Array<() => void> = [];
-  let inventoryRequest: AbortController | undefined;
+
   let telemetryRequest: AbortController | undefined;
   let active = false;
   let refreshQueued: "automatic" | "manual" | undefined;
@@ -84,9 +88,7 @@ export function createSystems(context: ApplicationContext) {
 
   const sampledAtMs = () => state.inventory?.gatewaySampledAtMs ?? null;
 
-  const loading = () => inventoryRequest !== undefined;
-
-  const backupsLoading = () => backupsRequest !== undefined;
+  const loading = () => inventoryRequest.pending;
 
   const desktopAvailable = () => current() && isDesktopPanelAvailable(context.gateway.snapshot);
 
@@ -101,13 +103,21 @@ export function createSystems(context: ApplicationContext) {
 
   const desktopSetupBusy = () => desktopSetupRequest !== undefined;
 
-  const storageProbeBusy = (name: string) => storageProbeRequests.has(name);
+  const storageProbeBusy = (name: string) => storageProbeRequests.get(name)?.pending === true;
+
+  const backupsRequest = createPageRequest<Scope, BackupStatusResult>(notify, {
+    task: (scope, { signal }) => scope.client.request("backup.status", {}, { signal }),
+    onComplete: (result) => {
+      state.backups = result;
+    },
+    // The completion receipt carries failures to the native error boundary.
+    onError: () => {},
+  });
 
   function cancelBackups(): void {
-    backupsRequest?.abort();
-    backupsRequest = undefined;
+    backupsRequest.cancel();
     for (const request of storageProbeRequests.values()) {
-      request.abort();
+      request.cancel();
     }
     storageProbeRequests.clear();
   }
@@ -125,68 +135,29 @@ export function createSystems(context: ApplicationContext) {
       !active ||
       !current() ||
       !scope ||
-      (name === undefined ? backupsRequest : storageProbeBusy(name)) ||
+      (name === undefined ? backupsRequest.pending : storageProbeBusy(name)) ||
       (name === undefined && document.visibilityState === "hidden") ||
       !hasOperatorReadAccess(context.gateway.snapshot.hello?.auth ?? null)
     ) {
       return;
     }
-    const request = new AbortController();
     if (name === undefined) {
-      backupsRequest = request;
       state.backupsError = null;
-    } else {
-      storageProbeRequests.set(name, request);
-      storageProbes.delete(name);
+      return backupsRequest.run(scope);
     }
-    const isCurrent = () =>
-      active &&
-      current() &&
-      (name === undefined
-        ? backupsRequest === request
-        : storageProbeRequests.get(name) === request) &&
-      lifecycle.isCurrent(scope) &&
-      hasOperatorReadAccess(context.gateway.snapshot.hello?.auth ?? null);
-    notify();
-    try {
-      if (name === undefined) {
-        const result = await scope.client.request<BackupStatusResult>(
-          "backup.status",
-          {},
-          { signal: request.signal },
-        );
-        if (isCurrent()) {
-          state.backups = result;
-        }
-      } else {
-        const result = await scope.client.request<StorageLocationsProbeResult>(
-          "storage.locations.probe",
-          { name },
-          { signal: request.signal },
-        );
-        if (isCurrent()) {
-          storageProbes.set(name, result);
-        }
-      }
-    } catch (error) {
-      if (isCurrent()) {
-        const message = formatUiError(error);
-        if (name === undefined) {
-          state.backupsError = message;
-        } else {
-          storageProbes.set(name, { state: "error", message });
-        }
-      }
-    } finally {
-      if (isCurrent()) {
-        if (name === undefined) {
-          backupsRequest = undefined;
-        } else {
-          storageProbeRequests.delete(name);
-        }
-        notify();
-      }
-    }
+    const request = createPageRequest<Scope, StorageLocationsProbeResult>(notify, {
+      task: (target, { signal }) =>
+        target.client.request("storage.locations.probe", { name }, { signal }),
+      onComplete: (result) => {
+        storageProbes.set(name, result);
+      },
+      onError: (error) => {
+        storageProbes.set(name, { state: "error", message: formatUiError(error) });
+      },
+    });
+    storageProbeRequests.set(name, request);
+    storageProbes.delete(name);
+    return request.run(scope);
   }
 
   function resetDesktopSetup(): void {
@@ -246,8 +217,6 @@ export function createSystems(context: ApplicationContext) {
   }
 
   const telemetryHistory = (id: string) => (current() ? (telemetry.get(id) ?? []) : []);
-
-  const notify = listeners.publish;
 
   function projectRows(): void {
     state.rows =
@@ -383,9 +352,8 @@ export function createSystems(context: ApplicationContext) {
   }
 
   function cancelRefresh(): void {
-    inventoryRequest?.abort();
+    inventoryRequest.cancel();
     telemetryRequest?.abort();
-    inventoryRequest = undefined;
     telemetryRequest = undefined;
     refreshQueued = undefined;
   }
@@ -396,11 +364,45 @@ export function createSystems(context: ApplicationContext) {
     state.inventory = null;
     state.rows = [];
     state.selectedId = null;
-    state.error = null;
     telemetry.clear();
     resetDesktopSetup();
     state.query = "";
   }
+
+  const inventoryRequest = createPageRequest<
+    "automatic" | "manual",
+    { inventory: SystemsInventory | undefined; intent: "automatic" | "manual" }
+  >(notify, {
+    task: async (intent, { signal }) => ({
+      inventory: await loadSystemsInventory(context.gateway, {
+        signal,
+        fresh: intent === "manual",
+      }),
+      intent,
+    }),
+    onComplete: ({ inventory, intent }) => {
+      if (!inventory) {
+        refreshQueued = refreshQueued === "manual" ? "manual" : intent;
+        return;
+      }
+      const initial = state.inventory === null;
+      state.inventory = inventory;
+      projectRows();
+      recordTelemetry(true);
+      // Only initial entry picks a default. Later updates preserve explicit or missing selection.
+      if (initial && state.selectedId === null) {
+        const currentSession = context.gateway.snapshot.sessionKey;
+        state.selectedId =
+          state.rows.find((row) =>
+            row.sessions.some((relation) => relation.session.key === currentSession),
+          )?.environment.id ??
+          state.rows.find((row) => row.environment.id === "gateway")?.environment.id ??
+          state.rows[0]?.environment.id ??
+          null;
+      }
+    },
+    onError: () => {},
+  });
 
   async function refresh(intent: "automatic" | "manual" = "automatic"): Promise<void> {
     const snapshot = context.gateway.snapshot;
@@ -418,51 +420,12 @@ export function createSystems(context: ApplicationContext) {
       return;
     }
     cancelRefresh();
-    const request = new AbortController();
-    inventoryRequest = request;
-    const isCurrent = () =>
-      active && current() && inventoryRequest === request && lifecycle.isCurrent(scope);
-    state.error = null;
     void readBackupState();
-    notify();
-    try {
-      const inventory = await loadSystemsInventory(context.gateway, {
-        signal: request.signal,
-        fresh: refreshIntent === "manual",
-      });
-      if (!inventory && isCurrent()) {
-        refreshQueued = refreshQueued === "manual" ? "manual" : refreshIntent;
-      }
-      if (!inventory || !isCurrent()) {
-        return;
-      }
-      const initial = state.inventory === null;
-      state.inventory = inventory;
-      projectRows();
-      recordTelemetry(true);
-      // Only initial entry picks a default. Later updates never replace an explicit or missing selection.
-      if (initial && state.selectedId === null) {
-        const currentSession = context.gateway.snapshot.sessionKey;
-        state.selectedId =
-          state.rows.find((row) =>
-            row.sessions.some((relation) => relation.session.key === currentSession),
-          )?.environment.id ??
-          state.rows.find((row) => row.environment.id === "gateway")?.environment.id ??
-          state.rows[0]?.environment.id ??
-          null;
-      }
-    } catch (error) {
-      if (isCurrent()) {
-        state.error = formatUiError(error);
-      }
-    } finally {
-      if (isCurrent()) {
-        inventoryRequest = undefined;
-        notify();
-        if (refreshQueued) {
-          void refresh();
-        }
-      }
+    const pending = inventoryRequest.run(refreshIntent);
+    const receipt = inventoryRequest.read;
+    await pending;
+    if (inventoryRequest.read === receipt && refreshQueued) {
+      void refresh();
     }
   }
 
@@ -546,13 +509,18 @@ export function createSystems(context: ApplicationContext) {
     connected,
     needsInventoryRefresh,
     loading,
-    backupsLoading,
+    get inventoryRead() {
+      return inventoryRequest.read;
+    },
+    get backupsRead() {
+      return backupsRequest.read;
+    },
+    storageProbeRead: (name: string) => storageProbeRequests.get(name)?.read ?? null,
     desktopAvailable,
     selected,
     hostDesktopEnabled,
     desktopSetupBusy,
     canEnableHostDesktop,
-    storageProbeBusy,
     telemetryHistory,
     select,
     updatePresentation,

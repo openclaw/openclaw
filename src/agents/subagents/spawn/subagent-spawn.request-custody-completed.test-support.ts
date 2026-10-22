@@ -9,10 +9,7 @@ import {
 import { tryFastAbortFromMessage } from "../../../auto-reply/reply/abort.js";
 import { handleStopCommand } from "../../../auto-reply/reply/commands-session-abort.js";
 import { buildCommandTestParams } from "../../../auto-reply/reply/commands.test-harness.js";
-import {
-  recordReplyOperationAgentTurn,
-  type ReplyOperationRunState,
-} from "../../../auto-reply/reply/reply-operation-run-state.js";
+import { drainFormattedSystemEvents } from "../../../auto-reply/reply/session-system-events.js";
 import { buildTestCtx } from "../../../auto-reply/reply/test-ctx.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import {
@@ -29,12 +26,6 @@ import {
   withExecRequestOwners,
   withExecRequestTurn,
 } from "../../../infra/exec-request-context.js";
-import { createHeartbeatDispatch } from "../../../infra/heartbeat-dispatch.js";
-import {
-  prepareHeartbeatRunStage,
-  resolveHeartbeatWakeStage,
-  type HeartbeatRunOptions,
-} from "../../../infra/heartbeat-runner-execution.js";
 import {
   consumeSelectedSystemEventEntries,
   enqueueSystemEventEntry,
@@ -338,37 +329,23 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
         expect(captureExecRequestCancellation(original).owners).toEqual(owners);
         const stop = createCustodyStop(bound, original);
         if (mode !== "retained-exact") {
-          // The bound native-parent fixture replaces model admission. Use the real
-          // heartbeat preparation and acknowledgement owner to retire its event.
-          const heartbeatOptions: HeartbeatRunOptions = {
+          // The bound native-parent fixture replaces model admission. Retire the
+          // selected occurrence through the ordinary prompt-adoption boundary.
+          const admittedEvents: string[] = [];
+          const admittedContext = await drainFormattedSystemEvents({
             cfg: bound.cfg,
             agentId: original.agentId,
             sessionKey: original.sessionKey,
-            source: "exec-event",
-            intent: "event",
-            reason: "exec-event",
-            heartbeat: { every: "1h", target: "none", isolatedSession: false },
-          };
-          const wake = await resolveHeartbeatWakeStage(heartbeatOptions);
-          if (wake.kind !== "ready") {
-            throw new Error(`Heartbeat acknowledgement preparation skipped: ${wake.reason}`);
-          }
-          const prepared = await prepareHeartbeatRunStage(wake);
-          if (prepared.kind !== "ready") {
-            throw new Error(`Heartbeat acknowledgement routing skipped: ${prepared.reason}`);
-          }
-          expect(prepared.inspectedSystemEventsToConsume.map((selected) => selected.id)).toContain(
-            event.id,
-          );
-          const replyState: ReplyOperationRunState = {};
-          recordReplyOperationAgentTurn([replyState], undefined, {
-            kind: "settled",
-            status: "ok",
-            result: { acceptedSessionSpawns: [accepted] },
+            isMainSession: true,
+            isNewSession: false,
+            events: [event],
+            onEventsAdmitted: (events) =>
+              admittedEvents.push(
+                ...events.map((entry) => expectDefined(entry.id, "admitted occurrence id")),
+              ),
           });
-          const acknowledgement = createHeartbeatDispatch(heartbeatOptions, wake, prepared);
-          await acknowledgement.prepareReply({ text: "HEARTBEAT_OK" }, replyState);
-          expect(acknowledgement.result).toMatchObject({ status: "ran" });
+          expect(admittedEvents).toEqual([event.id]);
+          expect(admittedContext).toContain(event.text);
           expect(
             peekSystemEventEntries(original.sessionKey).map((selected) => selected.id),
           ).not.toContain(event.id);

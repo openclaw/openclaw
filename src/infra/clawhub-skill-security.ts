@@ -105,58 +105,6 @@ function mapVerificationSecurity(
   return { ...security, passed: true };
 }
 
-function mapVerificationToVerdict(params: {
-  verification: ClawHubSkillVerificationResponse;
-  target: ClawHubExactSkillSecurityTarget & { ownerHandle: string };
-}): ClawHubSkillSecurityVerdictItem {
-  const skill = readObject(params.verification.skill);
-  const publisher = readObject(params.verification.publisher);
-  const versionRecord = readObject(params.verification.version);
-  const security = readObject(params.verification.security);
-  const pageUrl = normalizeOptionalString(params.verification.pageUrl);
-  const reasons = params.verification.reasons
-    .map((reason) => normalizeOptionalString(reason))
-    .filter((reason): reason is string => Boolean(reason));
-  const securityStatus = normalizeReason(
-    normalizeOptionalString(security?.status) ?? normalizeOptionalString(security?.rawStatus),
-  );
-  const cardOnlyCleanFailure =
-    !params.verification.ok &&
-    securityStatus === "clean" &&
-    hasOnlyNonSecurityVerifyReasons(reasons);
-  const verifiedVersion =
-    normalizeOptionalString(params.verification.version) ??
-    normalizeOptionalString(versionRecord?.version);
-  return {
-    ok: cardOnlyCleanFailure ? true : params.verification.ok,
-    decision: cardOnlyCleanFailure ? "pass" : params.verification.decision,
-    reasons: cardOnlyCleanFailure ? [] : reasons,
-    requestedSlug: params.target.slug,
-    requestedOwnerHandle: params.target.ownerHandle,
-    requestedVersion: params.target.version,
-    slug: normalizeOptionalString(params.verification.slug) ?? normalizeOptionalString(skill?.slug),
-    version: verifiedVersion ?? (cardOnlyCleanFailure ? params.target.version : null),
-    displayName:
-      normalizeOptionalString(params.verification.displayName) ??
-      normalizeOptionalString(skill?.displayName),
-    publisherHandle:
-      normalizeOptionalString(params.verification.publisherHandle) ??
-      normalizeOptionalString(publisher?.handle),
-    publisherDisplayName:
-      normalizeOptionalString(params.verification.publisherDisplayName) ??
-      normalizeOptionalString(publisher?.displayName),
-    createdAt: params.verification.createdAt ?? asFiniteNumber(versionRecord?.createdAt) ?? null,
-    checkedAt: asFiniteNumber(security?.checkedAt) ?? null,
-    ...(pageUrl ? { skillUrl: pageUrl } : {}),
-    ...(pageUrl
-      ? {
-          securityAuditUrl: `${pageUrl}/security-audit?version=${encodeURIComponent(params.target.version)}`,
-        }
-      : {}),
-    security: mapVerificationSecurity(params.verification, cardOnlyCleanFailure),
-  };
-}
-
 function identityFailure(
   target: ClawHubExactSkillSecurityTarget,
   message: string,
@@ -285,17 +233,64 @@ export async function fetchExactClawHubSkillSecurityVerdicts(
         const ownerHandle = target.ownerHandle;
         const fallbackItem =
           ownerHandle && item.error?.code === "skill_not_found"
-            ? await fallbackLimit(async () =>
-                mapVerificationToVerdict({
-                  verification: await fetchClawHubSkillVerification({
-                    ...fetchOptions,
-                    slug: target.slug,
-                    ownerHandle,
-                    version: target.version,
-                  }),
-                  target: { ...target, ownerHandle },
-                }),
-              )
+            ? await fallbackLimit(async () => {
+                const verification = await fetchClawHubSkillVerification({
+                  ...fetchOptions,
+                  slug: target.slug,
+                  ownerHandle,
+                  version: target.version,
+                });
+                const skill = readObject(verification.skill);
+                const publisher = readObject(verification.publisher);
+                const versionRecord = readObject(verification.version);
+                const security = readObject(verification.security);
+                const pageUrl = normalizeOptionalString(verification.pageUrl);
+                const reasons = verification.reasons
+                  .map((reason) => normalizeOptionalString(reason))
+                  .filter((reason): reason is string => Boolean(reason));
+                const securityStatus = normalizeReason(
+                  normalizeOptionalString(security?.status) ??
+                    normalizeOptionalString(security?.rawStatus),
+                );
+                const cardOnlyCleanFailure =
+                  !verification.ok &&
+                  securityStatus === "clean" &&
+                  hasOnlyNonSecurityVerifyReasons(reasons);
+                const verifiedVersion =
+                  normalizeOptionalString(verification.version) ??
+                  normalizeOptionalString(versionRecord?.version);
+                return {
+                  ok: cardOnlyCleanFailure ? true : verification.ok,
+                  decision: cardOnlyCleanFailure ? "pass" : verification.decision,
+                  reasons: cardOnlyCleanFailure ? [] : reasons,
+                  requestedSlug: target.slug,
+                  requestedOwnerHandle: ownerHandle,
+                  requestedVersion: target.version,
+                  slug:
+                    normalizeOptionalString(verification.slug) ??
+                    normalizeOptionalString(skill?.slug),
+                  version: verifiedVersion ?? (cardOnlyCleanFailure ? target.version : null),
+                  displayName:
+                    normalizeOptionalString(verification.displayName) ??
+                    normalizeOptionalString(skill?.displayName),
+                  publisherHandle:
+                    normalizeOptionalString(verification.publisherHandle) ??
+                    normalizeOptionalString(publisher?.handle),
+                  publisherDisplayName:
+                    normalizeOptionalString(verification.publisherDisplayName) ??
+                    normalizeOptionalString(publisher?.displayName),
+                  createdAt:
+                    verification.createdAt ?? asFiniteNumber(versionRecord?.createdAt) ?? null,
+                  checkedAt: asFiniteNumber(security?.checkedAt) ?? null,
+                  ...(pageUrl ? { skillUrl: pageUrl } : {}),
+                  ...(pageUrl
+                    ? {
+                        securityAuditUrl: `${pageUrl}/security-audit?version=${encodeURIComponent(target.version)}`,
+                      }
+                    : {}),
+                  security: mapVerificationSecurity(verification, cardOnlyCleanFailure),
+                };
+              })
             : item;
         return [key, validateVerdictIdentity(target, fallbackItem)] as const;
       }),

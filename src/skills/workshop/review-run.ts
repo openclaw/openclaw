@@ -77,7 +77,6 @@ export async function runSkillWorkshopReview(
       conversationRecall: undefined,
       gitCoauthorPrompt: undefined,
       forceMessageTool: false,
-      forceHeartbeatTool: false,
       contextTokenBudget: 16_384,
       streamParams: { maxTokens: 2_048 },
       thinkLevel: "low",

@@ -285,7 +285,7 @@ plugins, and installed skills.
       <Accordion title="verbose / trace / fast / reasoning safety">
         - `/verbose` is for debugging — keep it **off** in normal use.
         - `/trace` reveals only plugin-owned trace/debug lines. Normal verbose chatter stays off.
-        - `/fast auto|on|off|ultrafast` persists a session override. Use `/fast default` or the Sessions UI `inherit` option to clear it.
+        - `/fast auto|on|off|ultrafast` persists a session override. `/fast ultra` is shorthand for `/fast ultrafast` and stores the same value. Use `/fast default` or the Sessions UI `inherit` option to clear it.
         - `/fast` is provider-specific: ordinary Fast starts from priority on OpenAI/Codex. Codex requests Ultrafast only for an explicit `"ultrafast"` selection and an authenticated app-server catalog that advertises it for the selected native model. Fast, Auto, and unspecified selections never automatically upgrade. Set `appServer.enableUltrafast: false` to disable Ultrafast: explicit `/fast ultrafast` then sends ordinary Fast (`priority`) without an Ultrafast catalog check. Saving the preference does not guarantee provider fulfillment. Standard and inactive Auto remain off. Direct Anthropic Fast requests map to `service_tier=auto` or `standard_only`.
         - `/reasoning`, `/verbose`, and `/trace` are risky in group settings — they may reveal internal reasoning or plugin diagnostics. Keep them off in group chats.
 

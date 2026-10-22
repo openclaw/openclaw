@@ -17,6 +17,7 @@ import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-mod
 import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import {
   createAnthropicThinkingPrefillPayloadWrapper,
+  createOpenAIHostedWebSearchWrapper,
   wrapProviderPayloadHook,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
@@ -53,6 +54,7 @@ import {
 import {
   resolveClawRouterServiceTiers,
   resolveFastModeSupport,
+  resolveNativeWebSearch,
   resolveServiceTiers,
 } from "./provider-policy-api.js";
 import { buildClawRouterSpeechProvider } from "./speech-provider.js";
@@ -173,7 +175,7 @@ function wrapClawRouterProviderStream(ctx: ProviderWrapStreamFnContext): StreamF
       `removed ${stripped} trailing assistant prefill message${stripped === 1 ? "" : "s"} because Anthropic extended thinking requires conversations to end with a user turn`,
     );
   });
-  return (model, context, options) => {
+  const routedStream: StreamFn = (model, context, options) => {
     const underlying = model.api === "anthropic-messages" ? claudeStream : streamFn;
     const apiKey = options?.apiKey?.trim();
     const dispatchKey = apiKey && apiKey !== ENV_API_KEY_MARKER ? apiKey : undefined;
@@ -240,6 +242,20 @@ function wrapClawRouterProviderStream(ctx: ProviderWrapStreamFnContext): StreamF
       : underlying;
     return stream({ ...preparedModel, headers }, context, options);
   };
+  // Evaluate catalog facts before dispatch removes private route metadata.
+  return createOpenAIHostedWebSearchWrapper(
+    routedStream,
+    ({ model }) =>
+      ctx.nativeWebSearchAllowedByToolPolicy !== false &&
+      resolveNativeWebSearch({
+        config: ctx.config,
+        provider: model.provider,
+        modelId: model.id,
+        api: model.api,
+        baseUrl: model.baseUrl,
+        modelParams: model.params,
+      }),
+  );
 }
 
 // JSON Schema allows `type` to be an array; a union containing "object" still
@@ -632,7 +648,10 @@ export default defineSingleProviderPluginEntry({
       normalizeResolvedModel: ({ model }) => normalizeClawRouterResolvedModel(model),
       resolveFastModeSupport,
       resolveServiceTiers,
-      wrapSimpleCompletionStreamFn: wrapClawRouterProviderStream,
+      resolveNativeWebSearch,
+      wrapSimpleCompletionStreamFn: (ctx) =>
+        // Isolated completions share routing/auth but must remain tool-free.
+        wrapClawRouterProviderStream({ ...ctx, nativeWebSearchAllowedByToolPolicy: false }),
       wrapStreamFn: wrapClawRouterProviderStream,
       buildReplayPolicy: (ctx) => {
         if (ctx.modelApi === "anthropic-messages") {

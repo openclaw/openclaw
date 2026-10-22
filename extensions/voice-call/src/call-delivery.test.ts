@@ -99,24 +99,15 @@ describe("requester call delivery", () => {
     text: string,
     id = text,
   ) {
-    await manager.processEvent(
-      speaker === "bot"
-        ? {
-            id,
-            callId: call.callId,
-            timestamp: Date.now(),
-            type: "call.assistant-speech",
-            transcript: text,
-          }
-        : {
-            id,
-            callId: call.callId,
-            timestamp: Date.now(),
-            type: "call.speech",
-            transcript: text,
-            isFinal: true,
-          },
-    );
+    await manager.processEvent({
+      id,
+      callId: call.callId,
+      timestamp: Date.now(),
+      transcript: text,
+      ...(speaker === "bot"
+        ? { type: "call.assistant-speech" as const }
+        : { type: "call.speech" as const, isFinal: true }),
+    });
   }
 
   async function end(manager: Awaited<ReturnType<typeof setup>>["manager"], call: CallRecord) {
@@ -155,28 +146,19 @@ describe("requester call delivery", () => {
         sessionKey: "agent:owner:telegram:direct:42",
         idempotencyKey: `voice-call:${call.callId}:report:0`,
       });
-      expect(expectDefined(messages[0], "first delivery message").text).toContain("Achieved:");
-      expect(expectDefined(messages[0], "first delivery message").text).toContain(
+      const { text } = expectDefined(messages[0], "first delivery message");
+      for (const line of [
+        "Achieved:",
         "End reason: hangup-user",
-      );
-      expect(expectDefined(messages[0], "first delivery message").text).toContain(
         "Callback to call: original-call",
-      );
-      expect(expectDefined(messages[0], "first delivery message").text).toContain(
         "Voicemail: failed",
-      );
-      expect(expectDefined(messages[0], "first delivery message").text).toContain(
         "Voicemail error: playback failed",
-      );
-      expect(expectDefined(messages[0], "first delivery message").text).toContain(
         "Notification: failed",
-      );
-      expect(expectDefined(messages[0], "first delivery message").text).toContain(
         "Notification error: notification playback failed",
-      );
-      expect(
-        expectDefined(messages[0], "first delivery message").text.includes("reference P123"),
-      ).toBe(includeTranscript);
+      ]) {
+        expect(text).toContain(line);
+      }
+      expect(text.includes("reference P123")).toBe(includeTranscript);
       expect(summarize).toHaveBeenCalledOnce();
       expect(expectDefined(summarize.mock.calls[0], "call summary request")[0].message).toContain(
         JSON.stringify({ task: "Book a plumber", approvals: "No deposit" }),
@@ -206,11 +188,10 @@ describe("requester call delivery", () => {
     await vi.advanceTimersByTimeAsync(1000);
     // The batch position is persisted before sending, so the send follows a store write.
     await vi.waitFor(() => expect(messages).toHaveLength(1));
-    expect(expectDefined(messages[0], "first delivery message").text).toContain("Callee: Hello");
-    expect(expectDefined(messages[0], "first delivery message").text).toContain(
-      "Assistant: Can you visit Friday?",
-    );
-    expect(expectDefined(messages[0], "first delivery message").text).not.toContain("partial");
+    const { text } = expectDefined(messages[0], "first delivery message");
+    expect(text).toContain("Callee: Hello");
+    expect(text).toContain("Assistant: Can you visit Friday?");
+    expect(text).not.toContain("partial");
     await speech(manager, call, "user", "Friday at 09:00");
     await end(manager, call);
     await delivery.observe(call);

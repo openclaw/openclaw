@@ -1,4 +1,5 @@
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonEmptyStringPreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   getTerminalTableWidth,
@@ -16,6 +17,7 @@ import {
   type MessageActionResult,
 } from "../infra/outbound/message-action-contracts.js";
 import { formatTargetDisplay } from "../infra/outbound/target-resolver.js";
+import { readParsedField } from "../utils/string-readers.js";
 import { shortenText } from "./text-format.js";
 
 const resolveChannelLabel = (channel: ChannelId) =>
@@ -25,13 +27,7 @@ function firstNonemptyString(
   record: Record<string, unknown> | undefined,
   ...keys: string[]
 ): string {
-  for (const key of keys) {
-    const value = record?.[key];
-    if (typeof value === "string" && value) {
-      return value;
-    }
-  }
-  return "";
+  return (record && readParsedField(record, keys, readNonEmptyStringPreservingWhitespace)) ?? "";
 }
 
 type FormatOpts = {
@@ -133,26 +129,6 @@ function renderMessageList(
     ],
     rows,
   }).trimEnd();
-}
-
-function extractDiscordSearchResultsMessages(results: unknown): unknown[] | null {
-  if (!results || typeof results !== "object") {
-    return null;
-  }
-  const raw = (results as { messages?: unknown }).messages;
-  if (!Array.isArray(raw)) {
-    return null;
-  }
-  // Discord search returns messages as array-of-array; first element is the message.
-  const flattened: unknown[] = [];
-  for (const entry of raw) {
-    if (Array.isArray(entry) && entry.length > 0) {
-      flattened.push(entry[0]);
-    } else if (entry && typeof entry === "object") {
-      flattened.push(entry);
-    }
-  }
-  return flattened;
 }
 
 function renderReactions(payload: unknown, opts: FormatOpts): string | null {
@@ -364,7 +340,21 @@ export function formatMessageCliText(
 
   if (result.action === "search") {
     const results = (payload as { results?: unknown }).results;
-    let list = extractDiscordSearchResultsMessages(results);
+    let list: unknown[] | null = null;
+    if (results && typeof results === "object") {
+      const raw = (results as { messages?: unknown }).messages;
+      if (Array.isArray(raw)) {
+        list = [];
+        // Discord search returns messages as array-of-array; first element is the message.
+        for (const entry of raw) {
+          if (Array.isArray(entry) && entry.length > 0) {
+            list.push(entry[0]);
+          } else if (entry && typeof entry === "object") {
+            list.push(entry);
+          }
+        }
+      }
+    }
     if (list === null) {
       const messages = asOptionalObjectRecord(payload)?.messages;
       if (Array.isArray(messages)) {

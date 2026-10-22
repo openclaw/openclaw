@@ -553,17 +553,43 @@ describe("opencode-go provider plugin", () => {
       reasoning_effort: "high",
       reasoning: { effort: "high" },
       reasoningEffort: "high",
-      messages: [{ role: "assistant", content: "done", reasoning_content: "earlier reasoning" }],
+      messages: [
+        { role: "assistant", content: "done", reasoning_content: "earlier reasoning" },
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "done" },
+            { type: "thinking", reasoning_details: [{ text: "private thought" }] },
+            { type: "redacted_thinking", data: "opaque" },
+          ],
+          reasoning_details: [{ text: "private thought" }],
+          reasoning_content: "private thought",
+          reasoning_text: "private thought",
+        },
+      ],
       input: [
         { type: "reasoning", summary: [] },
         { role: "assistant", content: "done", reasoning_details: [] },
+        {
+          role: "assistant",
+          content: [{ type: "thinking", reasoning_details: [{ text: "private thought" }] }],
+        },
       ],
     });
 
     expect(payload).toEqual({
       model: "kimi-k2.6",
-      messages: [{ role: "assistant", content: "done" }],
-      input: [{ role: "assistant", content: "done" }],
+      messages: [
+        { role: "assistant", content: "done" },
+        { role: "assistant", content: [{ type: "text", text: "done" }] },
+      ],
+      input: [
+        { role: "assistant", content: "done" },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "[assistant reasoning omitted]" }],
+        },
+      ],
     });
   });
 
@@ -580,6 +606,36 @@ describe("opencode-go provider plugin", () => {
     ["kimi-k3", "off", "openai-completions", { reasoning_effort: "max" }],
   ] as const)("strips unsupported %s reasoning controls", async (model, level, api, controls) => {
     expect(await captureGoWirePayload(level, { model, ...controls }, api)).toEqual({ model });
+  });
+
+  it.each([
+    "https://opencode.ai/inference/go/openai/v1",
+    "https://proxy.example.test/v1",
+    undefined,
+  ])("retains Kimi policy when URL %s needs no patch", (baseUrl) => {
+    const model = makeRuntimeModel("kimi-k2.7-code", { baseUrl });
+    expect(
+      provider.normalizeResolvedModel?.({ provider: "opencode-go", modelId: model.id, model }),
+    ).toEqual({ ...model, reasoning: false, compat: { supportsReasoningEffort: false } });
+    const unchanged = makeRuntimeModel("synthetic-model", { baseUrl });
+    expect(
+      provider.normalizeResolvedModel?.({
+        provider: "opencode-go",
+        modelId: unchanged.id,
+        model: unchanged,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("projects URL transport patches without leaking model context", () => {
+    const model = makeRuntimeModel("synthetic-model", {
+      headers: { "x-synthetic": "retained" },
+    });
+    expect(provider.normalizeTransport?.({ ...model, config: {} })).toEqual({
+      api: "openai-completions",
+      baseUrl: "https://opencode.ai/inference/go/openai/v1",
+    });
+    expect(model.baseUrl).toBe("https://opencode.ai/zen/go/v1");
   });
 
   it("canonicalizes stale OpenCode Go base URLs", async () => {

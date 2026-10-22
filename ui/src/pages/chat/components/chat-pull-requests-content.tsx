@@ -265,7 +265,7 @@ function PullRequestRow(props: {
   const disabled = () => props.published && props.owner.publication?.activity !== null;
   const dismiss = () => {
     if (props.published) {
-      props.owner.publication?.onNewAction?.();
+      void props.owner.publication?.onNewAction?.();
     }
     props.owner.onDismiss(props.pullRequest);
   };

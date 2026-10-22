@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, For, Loading, Show } from "solid-js";
 import type { SkillsLibraryMutateParams } from "../../../../packages/gateway-protocol/src/index.ts";
-import "../../components/modal-dialog.ts";
+import "../../components/modal-dialog.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
   SettingsEmpty,
@@ -11,7 +11,7 @@ import {
 import { t } from "../../lib/reactive/i18n.ts";
 import { uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { libraryFileText } from "./library-file-text.ts";
-import type { SkillLibraryModel } from "./library-state.ts";
+import type { LibraryDetailOutcome, SkillLibraryModel } from "./library-state.ts";
 import { SkillLibraryToolbar } from "./library-toolbar.tsx";
 
 export function SkillLibrary(props: {
@@ -22,13 +22,12 @@ export function SkillLibrary(props: {
   // List receipts replace the snapshot; mutable editor drafts and feedback do not.
   const acceptedList = createMemo(() => current().list);
   const completion = createMemo(() => current().listRead);
-  const read = createMemo(() => completion()?.completion ?? { list: acceptedList(), error: null });
+  const read = createMemo(
+    () => completion()?.completion ?? Promise.resolve({ list: acceptedList(), error: null }),
+  );
   // Accepted rows stay live; the shared feedback also owns refresh errors.
   const readError = () => {
-    if (acceptedList()) {
-      return null;
-    }
-    const error = read().error;
+    const error = acceptedList() ? null : read().error;
     if (error) {
       throw new Error(error);
     }
@@ -126,13 +125,16 @@ export function SkillLibrary(props: {
             }
           />
         </label>
-        <Loading
-          on={acceptedList() ? null : completion()}
-          fallback={<p role="status">{t("common.loading")}</p>}
-        >
-          <Errored fallback={() => null}>{readError()}</Errored>
-          <Entries />
-        </Loading>
+        {/* A stable list host keeps async replacement from reparenting the focused search field. */}
+        <div>
+          <Loading
+            on={acceptedList() ? null : completion()}
+            fallback={<p role="status">{t("common.loading")}</p>}
+          >
+            <Errored fallback={() => null}>{readError()}</Errored>
+            <Entries />
+          </Loading>
+        </div>
       </Show>
       <SkillLibraryDialogs library={props.library} />
     </>
@@ -169,16 +171,35 @@ export function SkillLibraryFeedback(props: {
 }
 
 export function SkillLibraryDialogs(props: { library: SkillLibraryModel }) {
-  const current = () => props.library.state;
   return (
     <>
-      <Show when={current().draft}>
+      <Show when={props.library.state.detailRead} keyed>
+        {(receipt) => <LibraryDetailRead completion={receipt.completion} />}
+      </Show>
+      <Show when={props.library.state.draft}>
         <LibraryEditor library={props.library} />
       </Show>
       <Show when={props.library.local.importOpen}>
         <LibraryImport library={props.library} />
       </Show>
     </>
+  );
+}
+
+function LibraryDetailRead(props: { completion: Promise<LibraryDetailOutcome> }) {
+  const outcome = createMemo(() => props.completion);
+  const readError = () => {
+    const result = outcome();
+    if (result) {
+      throw result.error;
+    }
+    return null;
+  };
+  // The existing owner feedback displays errors without replacing an accepted draft.
+  return (
+    <Loading>
+      <Errored fallback={() => null}>{readError()}</Errored>
+    </Loading>
   );
 }
 

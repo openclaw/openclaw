@@ -1,31 +1,24 @@
 // @vitest-environment node
 // Store-bound questions never retain submitted credentials in terminal UI state.
-import {
-  DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
-  type GatewayProtocolRequestOptions,
-} from "@openclaw/gateway-client/browser";
+import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import type { Question, QuestionRecord, QuestionResolveResult } from "@openclaw/gateway-protocol";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../api/gateway.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import {
-  createQuestionPromptState,
-  disposeQuestionPromptState,
+  createQuestionHarness,
+  questionNotFoundError,
+  type RequestFn,
+} from "./question-prompt.test-support.ts";
+import {
   handleQuestionPromptEvent,
   refreshPendingQuestionsWithRetry,
   setQuestionPromptClient,
   submitQuestionPrompt,
 } from "./question-prompt.ts";
 
-type RequestFn = (
-  method: string,
-  params?: unknown,
-  options?: GatewayProtocolRequestOptions,
-) => Promise<unknown>;
 type SecretBinding = NonNullable<Question["secretStore"]>;
-type PromptState = ReturnType<typeof createQuestionPromptState>;
-
-const states: PromptState[] = [];
+const { createState } = createQuestionHarness();
 const storedAnswer = {
   status: "answered",
   answers: { answers: { secret_value: ["stored"] } },
@@ -57,8 +50,7 @@ function requestedSecret(
 }
 
 function createSecretPrompt(request?: RequestFn, record = requestedSecret()) {
-  const state = createQuestionPromptState(vi.fn());
-  states.push(state);
+  const state = createState();
   const client = request ? { request } : null;
   if (client) {
     setQuestionPromptClient(state, client);
@@ -70,14 +62,6 @@ function createSecretPrompt(request?: RequestFn, record = requestedSecret()) {
   }
   return { state, prompt, client };
 }
-
-afterEach(() => {
-  for (const state of states.splice(0)) {
-    disposeQuestionPromptState(state);
-  }
-  vi.restoreAllMocks();
-  vi.useRealTimers();
-});
 
 describe("store-bound question normalization", () => {
   it("preserves protocol-derived binding and replacement metadata", () => {
@@ -115,8 +99,7 @@ describe("store-bound question normalization", () => {
       secretStoreExisting: { updatedAtMs: 1_234, updatedBy: " " },
     },
   ])("rejects $label", ({ secretStoreExisting }) => {
-    const state = createQuestionPromptState(vi.fn());
-    states.push(state);
+    const state = createState();
     const record = requestedSecret();
 
     expect(
@@ -129,43 +112,26 @@ describe("store-bound question normalization", () => {
 });
 
 describe("store-bound question submission", () => {
-  it.each([
-    {
-      label: "untouched proposed hosts",
-      binding: { name: "TEST_API_KEY", kind: "secret", allowedHosts: ["proposed.example.test"] },
-      draft: undefined,
-      expectedHosts: ["proposed.example.test"],
-    },
-    {
-      label: "edited comma-and-whitespace-separated hosts",
-      binding: { name: "TEST_API_KEY", kind: "secret" },
-      draft: " first.example.test, second.example.test\nthird.example.test ",
-      expectedHosts: ["first.example.test", "second.example.test", "third.example.test"],
-    },
-    {
-      label: "an explicitly cleared host proposal",
-      binding: { name: "TEST_API_KEY", kind: "secret", allowedHosts: ["proposed.example.test"] },
-      draft: "  ",
-      expectedHosts: [],
-    },
-    {
-      label: "an untouched secret without proposed hosts",
-      binding: { name: "TEST_API_KEY", kind: "secret" },
-      draft: undefined,
-      expectedHosts: undefined,
-    },
-    {
-      label: "an environment entry despite stale host input",
-      binding: { name: "TEST_ENV_VALUE", kind: "env" },
-      draft: "ignored.example.test",
-      expectedHosts: undefined,
-    },
-  ] satisfies Array<{
-    label: string;
-    binding: SecretBinding;
-    draft: string | undefined;
-    expectedHosts: string[] | undefined;
-  }>)("submits $label", async ({ binding, draft, expectedHosts }) => {
+  const secretBinding: SecretBinding = { name: "TEST_API_KEY", kind: "secret" };
+  const proposedHosts = ["proposed.example.test"];
+  const proposed = { ...secretBinding, allowedHosts: proposedHosts };
+  it.each<[string, SecretBinding, string | undefined, string[] | undefined]>([
+    ["proposed hosts", proposed, undefined, proposedHosts],
+    [
+      "edited hosts",
+      secretBinding,
+      " first.example.test, second.example.test\nthird.example.test ",
+      ["first.example.test", "second.example.test", "third.example.test"],
+    ],
+    ["cleared hosts", proposed, "  ", []],
+    ["no proposed hosts", secretBinding, undefined, undefined],
+    [
+      "environment ignores hosts",
+      { name: "TEST_ENV_VALUE", kind: "env" },
+      "ignored.example.test",
+      undefined,
+    ],
+  ])("submits %s", async (_label, binding, draft, expectedHosts) => {
     const request = vi.fn<RequestFn>(async () => storedAnswer);
     const { state, prompt } = createSecretPrompt(request, requestedSecret(binding));
     if (draft !== undefined) {
@@ -241,11 +207,7 @@ describe("store-bound question terminal cleanup", () => {
       if (method === "question.list") {
         return { questions: [] };
       }
-      throw new GatewayRequestError({
-        code: "INVALID_REQUEST",
-        message: "question was not found",
-        details: { reason: "QUESTION_NOT_FOUND" },
-      });
+      throw questionNotFoundError();
     });
     const { state, prompt, client } = createSecretPrompt(request);
     prompt.drafts.set("secret_value", {

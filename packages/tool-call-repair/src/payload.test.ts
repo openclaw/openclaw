@@ -59,16 +59,26 @@ describe("scanPlainTextJsonToolCall", () => {
   });
 
   it.each([
-    (name: string) => `[${name}]\n{}[/${name}]`,
-    (name: string) => `analysis to=${name} code {}`,
-  ])("accepts 120-character names and rejects the 121st character", (build) => {
-    expect(scanPlainTextJsonToolCall(build("x".repeat(120))).kind).toBe("complete");
-    const oversized = scanPlainTextJsonToolCall(build("x".repeat(121)));
-    expect(oversized.kind).toBe("invalid");
-    if (oversized.kind === "invalid") {
-      expect(oversized.at).toBeGreaterThan(0);
-    }
-  });
+    [1, (name: string) => `[${name}]\n{}[/${name}]`],
+    [6, (name: string) => `[tool:${name}] {}`],
+    [12, (name: string) => `analysis to=${name} code {}`],
+  ] as const)(
+    "accepts 120-character names and rejects the 121st character at offset %s",
+    (nameStart, build) => {
+      const prefix = "Visible\n";
+      expect(scanPlainTextJsonToolCall(prefix + build("x".repeat(120)), prefix.length).kind).toBe(
+        "complete",
+      );
+      for (const length of [121, 1024]) {
+        expect(
+          scanPlainTextJsonToolCall(prefix + build("x".repeat(length)), prefix.length),
+        ).toEqual({
+          kind: "invalid",
+          at: prefix.length + nameStart + 120,
+        });
+      }
+    },
+  );
 });
 
 describe("stripPlainTextToolCallBlocks", () => {
