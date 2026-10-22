@@ -68,6 +68,9 @@ describe("core/doctor/bootstrap-size", () => {
       message: expect.stringContaining("AGENTS.md"),
       path: join(root, "packages", "core", "AGENTS.md"),
     });
+    expectFinding(findings, {
+      message: expect.stringContaining("No content from this file reaches the model."),
+    });
   });
 
   it("honors the per-agent bootstrapMaxChars override in health findings", async () => {
@@ -81,7 +84,9 @@ describe("core/doctor/bootstrap-size", () => {
 
     expectFinding(findings, {
       severity: "warning",
-      message: expect.stringContaining("AGENTS.md"),
+      message: expect.stringContaining(
+        "The model receives start/end excerpts as space permits, plus a bounded policy digest when available; other middle text is omitted.",
+      ),
       fixHint: expect.stringContaining("agents.entries.*.bootstrapMaxChars"),
     });
     await expect(
