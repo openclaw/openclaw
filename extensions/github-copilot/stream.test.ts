@@ -60,11 +60,7 @@ it("preserves a single configured integration identity through completions strea
       streamFn: baseStreamFn,
       config: {
         models: {
-          providers: {
-            "github-copilot": {
-              headers: { "copilot-integration-id": "vscode-chat" },
-            },
-          },
+          providers: { "github-copilot": { headers: { "copilot-integration-id": "vscode-chat" } } },
         },
       },
     } as never),
@@ -144,10 +140,7 @@ describe("wrapCopilotAnthropicStream", () => {
           role: "assistant",
           content: [{ type: "thinking", thinking: "private" }, ...ids.map(toolUse)],
         },
-        {
-          role: "user",
-          content: ids.map(toolResult),
-        },
+        { role: "user", content: ids.map(toolResult) },
       ],
     };
 
