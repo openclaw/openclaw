@@ -202,6 +202,20 @@ describe.skipIf(!connection)("PostgreSQL committed session publications", () => 
       withoutSql(() => {
         expect(isSessionEntryPublicationAdmissionCurrent(published.source)).toBe(true);
         expect(isSessionEntryPublicationSourceCurrent(published.source)).toBe(true);
+        const source = published.source;
+        assert(source.admission);
+        const admission = source.admission;
+        const invalid: SessionEntryPublicationSource[] = [{ ...source, admission: undefined }];
+        for (const field of ["namespace", "storeId", "admissionId"] as const) {
+          invalid.push({ ...source, admission: { ...admission, [field]: `different-${field}` } });
+        }
+        for (const candidate of invalid) {
+          expect(isSessionEntryPublicationAdmissionCurrent(candidate)).toBe(false);
+          expect(isSessionEntryPublicationSourceCurrent(candidate)).toBe(false);
+        }
+        expect(isSessionEntryPublicationSourceCurrent({ ...source, writeToken: undefined })).toBe(
+          false,
+        );
         expect(readSessionActorEntryFacts(target)?.entry?.label).toBe("after");
         expect(
           readSessionActorRowFacts({ path: database.path, sessionKey: scope.sessionKey })?.entry
@@ -278,36 +292,4 @@ describe.skipIf(!connection)("PostgreSQL committed session publications", () => 
       });
     },
   );
-
-  it("rejects incomplete or mismatched PG admission without querying the database", async () => {
-    const scope = scopeFor("identity");
-    using observed = observeEntries(scope.sessionKey);
-    await owners.upsertSessionEntryCore(scope, {
-      sessionId: "publication-identity",
-      updatedAt: 1,
-      label: "committed",
-    });
-    const published = observed.entries.findLast((entry) => entry.fullEntry?.label === "committed");
-    assert(published?.source.admission);
-    const source = published.source;
-    assert(source.admission);
-    const admission = source.admission;
-    const invalid: SessionEntryPublicationSource[] = [{ ...source, admission: undefined }];
-    for (const field of ["namespace", "storeId", "admissionId"] as const) {
-      invalid.push({
-        ...source,
-        admission: { ...admission, [field]: `different-${field}` },
-      });
-    }
-    withoutSql(() => {
-      expect(isSessionEntryPublicationSourceCurrent(source)).toBe(true);
-      for (const candidate of invalid) {
-        expect(isSessionEntryPublicationAdmissionCurrent(candidate)).toBe(false);
-        expect(isSessionEntryPublicationSourceCurrent(candidate)).toBe(false);
-      }
-      expect(isSessionEntryPublicationSourceCurrent({ ...source, writeToken: undefined })).toBe(
-        false,
-      );
-    });
-  });
 });

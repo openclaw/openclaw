@@ -154,12 +154,18 @@ describe.skipIf(!connection)("PostgreSQL admitted read facts", () => {
       seedAcp(state.writer, "published", "initial");
       const { reader, read, snapshot, published } = acpReader(state, "published", "absent");
       using query = vi.spyOn(reader, "query");
+      using exec = vi.spyOn(reader, "exec");
       const metadataReads = () =>
         query.mock.calls.filter(([sql]) => /\b(?:from|join)\s+"?acp_sessions\b/iu.test(sql));
       snapshot(() => {
-        expectRows(read(), "initial", null);
+        expectRows(snapshot(read), "initial", null);
         expect(published()).toBeUndefined();
       });
+      expect(exec.mock.calls).toEqual([
+        ["BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY"],
+        ["ROLLBACK"],
+      ]);
+      expect(reader.isTransaction).toBe(false);
       expect(metadataReads()).toHaveLength(1);
       expectRows(published(), "initial", null);
       query.mockClear();

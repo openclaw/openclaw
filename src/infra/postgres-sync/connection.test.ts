@@ -4,16 +4,40 @@ import { expect, it, vi } from "vitest";
 import { withEngineStoreAdmission } from "../database-engine/admission-scope.js";
 import { readSqliteDatabaseScopedWriteToken as readToken } from "../sqlite-database-admission.js";
 import { readSqliteNativeMutationRevision as readRevision } from "../sqlite-schema-facts.js";
+import {
+  runSqliteImmediateTransaction as prepared,
+  runSqliteImmediateTransactionSync as immediate,
+  runSqliteReservedTransactionSync as reserved,
+  runSqliteWorkerTransactionSync as worker,
+} from "../sqlite-transaction.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../sqlite-worker-contract.js";
 import {
+  assertSqliteWorkerCommitReceiptPending as assertPending,
+  deferSqliteWorkerCommitReceipt as deferReceipt,
   observeSqliteWorkerCommittedFacts,
   withSqliteWorkerOperationAdmission as withAdmission,
 } from "../sqlite-worker-operation-admission.js";
+import type { SqliteWorkerOperationContext } from "../sqlite-worker-operation-settlement.js";
 import { PostgresSyncConnection } from "./connection.js";
 import { usePostgresFixture } from "./fixture.test-support.js";
 import type { BridgeReply, BridgeRequest, PostgresErrorData } from "./protocol.js";
 
 const harness = usePostgresFixture();
+const writeBegin = "BEGIN ISOLATION LEVEL READ COMMITTED; SELECT pg_advisory_xact_lock(-42)";
+
+function transactionFixture() {
+  const db = harness.connection();
+  const statements: string[] = [];
+  db.exec = (sql) => {
+    statements.push(sql);
+    if (sql.startsWith("BEGIN")) {
+      db.isTransaction = true;
+    } else if (sql === "COMMIT" || sql === "ROLLBACK") {
+      db.isTransaction = false;
+    }
+  };
+  return { db, statements };
+}
 
 function observeStatements() {
   const statements = channel("openclaw.database.statement");
@@ -281,3 +305,90 @@ it.each(["mismatched", "missing", "timeout"] as const)(
     expect(readToken(db.anchor, "entry")).toBe(after);
   },
 );
+
+it.each([false, true])("settles anchored receipts (rollback=%s)", (rollback) => {
+  const { db } = transactionFixture();
+  const admission = harness.admission((_request, grant) => grant());
+  const owner: SqliteWorkerOperationContext = { port: admission.port };
+  const receipts: unknown[] = [];
+  observeSqliteWorkerCommittedFacts(admission, ({ facts }) => receipts.push(facts));
+  const write = () =>
+    withAdmission(owner, () =>
+      immediate(db, () => {
+        deferReceipt(db, { value: 7 });
+        assertPending(db);
+        assertPending(db.anchor);
+        expect(owner.committed).toBeUndefined();
+        if (rollback) {
+          throw new Error("cancel receipt");
+        }
+      }),
+    );
+  if (rollback) {
+    expect(write).toThrow("cancel receipt");
+  } else {
+    write();
+  }
+  admission.service();
+  expect(receipts).toEqual(rollback ? [] : [{ value: 7 }]);
+  expect(owner.pendingReceipts?.size).toBe(0);
+});
+
+it.each(["reserved", "worker"] as const)(
+  "uses a locked read-committed transaction for %s writes",
+  (mode) => {
+    const { db, statements } = transactionFixture();
+    const operation = () => {
+      statements.push("body");
+      return 7;
+    };
+    const admit = (stage: string) => statements.push(`admit:${stage}`);
+    expect(
+      mode === "reserved"
+        ? reserved(db, operation, {})
+        : worker({ database: db, databasePath: "", admit }, operation),
+    ).toBe(7);
+    expect(statements).toEqual(
+      mode === "worker"
+        ? ["admit:transaction", writeBegin, "body", "admit:commit", "COMMIT"]
+        : [writeBegin, "body", "COMMIT"],
+    );
+  },
+);
+
+it("runs the commit authority guard and rolls back when it refuses", () => {
+  const { db, statements } = transactionFixture();
+  const refusal = new Error("authority revoked");
+  expect(() =>
+    immediate(db, () => 1, {
+      withCommit() {
+        throw refusal;
+      },
+    }),
+  ).toThrow(refusal);
+  expect(statements).toEqual([writeBegin, "ROLLBACK"]);
+  expect(db.isTransaction).toBe(false);
+});
+
+it("prepares before asynchronous admission and commits only inside its guard", async () => {
+  const { db, statements } = transactionFixture();
+  const result = await prepared(
+    db,
+    async () => {
+      statements.push("prepare");
+      return () => "result";
+    },
+    {
+      withCommit(commit) {
+        statements.push("guard");
+        commit();
+      },
+    },
+    (write) => {
+      statements.push("admit");
+      return write();
+    },
+  );
+  expect(result).toBe("result");
+  expect(statements).toEqual(["prepare", "admit", writeBegin, "guard", "COMMIT"]);
+});
