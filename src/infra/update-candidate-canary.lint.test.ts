@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -12,7 +14,9 @@ import {
 } from "../agents/auth-profiles/sqlite.js";
 import { collectSecurityWarnings } from "../commands/doctor-security.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { runDoctorLintChecks } from "../flows/doctor-lint-flow.js";
 import { securityAuditFindingToHealthFinding } from "../flows/health-check-adapter.js";
+import type { HealthCheck } from "../flows/health-checks.js";
 import { runSecretsAudit } from "../secrets/audit.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -338,3 +342,155 @@ it("preserves bounded Doctor findings before the diagnostic log tail", async () 
   expect(JSON.stringify(result)).not.toContain("/Users/synthetic");
   expect(result.logTail.join("\n")).not.toContain("config.invalid.0");
 });
+
+it.each([false, true])(
+  "attests deployment settings before runtime isolation (drift=%s)",
+  async (drift) => {
+    const config: OpenClawConfig = {
+      gateway: {
+        mode: "local",
+        bind: "loopback",
+        auth: { mode: "password", password: "synthetic-password" },
+        controlUi: { enabled: true },
+        tailscale: { mode: "serve" },
+      },
+    };
+    // A plugin may attest deployment settings without knowing rehearsal overrides.
+    const checks: HealthCheck[] = [
+      {
+        id: "fixture/deployment-attestation",
+        kind: "plugin",
+        description: "Attest the deployment Gateway settings.",
+        async detect({ cfg }) {
+          const hash = createHash("sha256")
+            .update(JSON.stringify({ ...cfg.gateway, auth: { mode: cfg.gateway?.auth?.mode } }))
+            .digest("hex");
+          return hash === "96145a3f866d78a4ff00e0b188cd75d89ec6b2ecd59555e8475811b4f2257af6"
+            ? []
+            : [
+                {
+                  checkId: "fixture/attestation-hash-mismatch",
+                  severity: "error",
+                  message: "Deployment Gateway settings do not match the accepted attestation.",
+                },
+              ];
+        },
+      },
+    ];
+    const check = (cfg: OpenClawConfig, configPath: string) =>
+      runDoctorLintChecks(
+        {
+          mode: "lint",
+          cfg,
+          configPath,
+          cwd: root,
+          runtime: { log() {}, error() {}, exit() {} },
+        },
+        { checks },
+      );
+    const configPath = path.join(root, "openclaw.json");
+    expect((await check(config, configPath)).findings).toEqual([]);
+    if (drift) {
+      config.gateway!.controlUi!.enabled = false;
+    }
+    const authored = JSON.stringify(config);
+    await fs.writeFile(configPath, authored);
+    harness.overrideSpawn("--lint", (_args, options) => {
+      const child = harness.child(true);
+      void (async () => {
+        const copied: OpenClawConfig = JSON.parse(
+          await fs.readFile(options.env.OPENCLAW_CONFIG_PATH!, "utf8"),
+        );
+        const result = await check(copied, options.env.OPENCLAW_CONFIG_PATH!);
+        child.stdout.write(JSON.stringify(report([...result.findings], result.checksRun)));
+        child.emit("close", result.findings.length ? 1 : 0);
+      })().catch((error: unknown) => {
+        child.stderr.write(String(error));
+        child.emit("close", 2);
+      });
+      return child;
+    });
+    let runtimeConfig: OpenClawConfig | undefined;
+    harness.overrideSpawn("gateway", (_args, options) => {
+      runtimeConfig = JSON.parse(readFileSync(options.env.OPENCLAW_CONFIG_PATH!, "utf8"));
+      return harness.child(true);
+    });
+    stubHealthyGateway();
+    const result = await validateUpdateCandidateCanary({ ...canaryStateOptions(), config });
+    const lint = result.steps.find((step) => step.name === "candidate-doctor-lint");
+    expect(result.status).toBe(drift ? "error" : "ok");
+    expect(lint?.doctorLintFindings?.map((finding) => finding.checkId) ?? []).toEqual(
+      drift ? ["fixture/attestation-hash-mismatch"] : [],
+    );
+    if (!drift) {
+      expect(runtimeConfig?.gateway).toMatchObject({
+        bind: "loopback",
+        auth: { mode: "token" },
+        tailscale: { mode: "off" },
+        controlUi: { enabled: false },
+      });
+      expect((await check(config, configPath)).findings).toEqual([]);
+    }
+    expect(await fs.readFile(configPath, "utf8")).toBe(authored);
+  },
+);
+
+it.each([false, true])(
+  "does not persist resolved credentials when lint fails=%s",
+  async (fails) => {
+    const secrets = ["synthetic-token", "synthetic-password", "Bearer synthetic-otel"];
+    const config: OpenClawConfig = {
+      gateway: { auth: { mode: "password", token: secrets[0], password: secrets[1] } },
+      diagnostics: {
+        enabled: true,
+        otel: { enabled: true, captureContent: true, headers: { Authorization: secrets[2]! } },
+      },
+    };
+    lintReport = report(
+      fails ? [{ checkId: "fixture/refused", severity: "error", message: "Refused" }] : [],
+    );
+    let serialized = "";
+    let retainedState: string | undefined;
+    const remove = fs.rm.bind(fs);
+    const cleanup = vi
+      .spyOn(fs, "rm")
+      .mockImplementation((target, options) =>
+        target === retainedState ? Promise.resolve() : remove(target, options),
+      );
+    harness.overrideSpawn("--lint", (_args, options) => {
+      serialized = readFileSync(options.env.OPENCLAW_CONFIG_PATH!, "utf8");
+      retainedState = options.env.OPENCLAW_STATE_DIR;
+      const child = harness.child(true);
+      queueMicrotask(() => {
+        child.stdout.write(JSON.stringify(lintReport));
+        child.emit("close", fails ? 1 : 0);
+      });
+      return child;
+    });
+    stubHealthyGateway();
+    try {
+      const result = await validateUpdateCandidateCanary({ ...canaryStateOptions(), config });
+      expect(result.status).toBe(fails ? "error" : "ok");
+      if (fails) {
+        expect(result.phase).toBe("lint");
+      }
+      expect(serialized).not.toBe("");
+      const retained = await fs.readFile(path.join(retainedState!, "openclaw.json"), "utf8");
+      for (const value of secrets) {
+        expect(serialized).not.toContain(value);
+        expect(retained).not.toContain(value);
+      }
+      expect(JSON.parse(serialized)).toMatchObject({
+        gateway: { auth: { mode: "password" } },
+        diagnostics: { enabled: true, otel: { enabled: true, captureContent: true } },
+      });
+      expect(config.gateway?.auth?.password).toBe(secrets[1]);
+      expect(config.diagnostics?.otel?.headers?.Authorization).toBe(secrets[2]);
+    } finally {
+      cleanup.mockRestore();
+      if (retainedState) {
+        await remove(retainedState, { recursive: true, force: true });
+      }
+    }
+  },
+);

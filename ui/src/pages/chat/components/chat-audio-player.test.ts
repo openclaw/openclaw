@@ -154,6 +154,7 @@ describe("ChatAudioPlayer", () => {
     audio(player).dispatchEvent(new Event("error"));
     await player.updateComplete;
     expect(player.querySelector("audio, .chat-audio-player__toggle")).toBeNull();
+    expect(player.querySelectorAll("[role=status]")).toHaveLength(1);
     expect(player.querySelector("[role=status]")?.textContent).toContain("Preview unavailable");
     expect(player.querySelector("a[download]")).toMatchObject({
       href: "https://example.com/voice-note.mp3",
@@ -250,8 +251,10 @@ describe("ChatAudioPlayer", () => {
     expect(player.onExpand).not.toHaveBeenCalled();
   });
 
-  it("releases playback and shows a normal attachment card after an unrecovered media error", async () => {
+  it("announces unavailable audio while preserving its download and recovery", async () => {
     const first = await createPlayer("broken");
+    const status = first.querySelector('[role="status"]');
+    expect(status?.textContent).toBe("");
     const firstMedia = audio(first);
     let paused = true;
     Object.defineProperty(firstMedia, "paused", { configurable: true, get: () => paused });
@@ -274,6 +277,10 @@ describe("ChatAudioPlayer", () => {
     expect(card(first, "--compact")).not.toBeNull();
     expect(card(first, "__reason")).toBeNull();
     expect(first.querySelector(".chat-audio-player")).toBeNull();
+    expect(first.querySelector('[role="status"]')).toBe(status);
+    expect(status?.textContent).toBe("broken.mp3: Preview unavailable");
+    expect(status?.getAttribute("aria-live")).toBe("polite");
+    expect(status?.getAttribute("aria-atomic")).toBe("true");
     expect(
       first
         .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__download")
@@ -285,6 +292,23 @@ describe("ChatAudioPlayer", () => {
     const second = await createPlayer("working");
     audio(second).dispatchEvent(new Event("play"));
     expect(pauseFirst).not.toHaveBeenCalled();
+
+    first.src = "https://example.com/broken.mp3?renewed";
+    await waitForSolid(() => expect(control(first, "toggle")).not.toBeNull());
+    expect(first.querySelector('[role="status"]')).toBe(status);
+    expect(status?.textContent).toBe("");
+    audio(first).dispatchEvent(new Event("error"));
+    await first.updateComplete;
+    expect(status?.textContent).toBe("broken.mp3: Preview unavailable");
+
+    first.src = "https://example.com/replacement.mp3";
+    first.sourceIdentity = "media://replacement";
+    first.label = "replacement.mp3";
+    await waitForSolid(() => expect(control(first, "toggle")).not.toBeNull());
+    expect(status?.textContent).toBe("");
+    audio(first).dispatchEvent(new Event("error"));
+    await first.updateComplete;
+    expect(status?.textContent).toBe("replacement.mp3: Preview unavailable");
   });
 
   it("shows preparing, retries a 202 rendition, and then plays", async () => {
@@ -305,6 +329,7 @@ describe("ChatAudioPlayer", () => {
     await player.updateComplete;
 
     expect(player.textContent).toContain("Preparing playback…");
+    expect(player.querySelector("[role=status]")?.textContent).toBe("");
     await vi.advanceTimersByTimeAsync(2_000);
     await player.updateComplete;
 

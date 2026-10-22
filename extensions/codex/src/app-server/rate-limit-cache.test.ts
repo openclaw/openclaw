@@ -36,12 +36,12 @@ describe("Codex rate-limit cache", () => {
     expect(readCodexRateLimitsRevision(first)).toBe(1);
     expect(readCodexRateLimitsRevision(second)).toBe(0);
 
-    now.mockReturnValue(600_100);
+    now.mockReturnValue(600_099);
     expect([first, second].map((client) => readRecentCodexRateLimits(client))).toEqual([
       { rateLimits: { limitId: "codex" } },
       { rateLimits: { limitId: "codex_other" } },
     ]);
-    now.mockReturnValue(600_101);
+    now.mockReturnValue(600_100);
     expect(readRecentCodexRateLimits(first)).toBeUndefined();
     expect(readRecentCodexRateLimits(second)).toEqual({
       rateLimits: { limitId: "codex_other" },

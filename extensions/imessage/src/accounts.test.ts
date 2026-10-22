@@ -28,15 +28,6 @@ function remote(remoteHost: string): IMessageAccountConfig {
 }
 
 describe("resolveIMessageAccount", () => {
-  it("resolves independent enabled and configured state for explicitly enabled named account", () => {
-    expect(
-      resolveIMessageAccount({
-        cfg: config({ work: { enabled: true } }),
-        accountId: "work",
-      }),
-    ).toMatchObject({ accountId: "work", enabled: true, configured: true });
-  });
-
   it("preserves top-level default account when named accounts are configured", () => {
     const cfg = config({ work: { enabled: false } }, "/usr/local/bin/imsg");
 
@@ -58,18 +49,10 @@ describe("iMessage duplicate-source watcher ownership", () => {
   });
 
   it.each([
-    {
-      name: "different remote hosts behind the same wrapper",
-      first: remote("bot@primary.example"),
-      second: remote("bot@secondary.example"),
-    },
-    {
-      name: "an explicitly remote and a local default binary",
-      first: { cliPath: "imsg" },
-      second: { cliPath: "imsg", remoteHost: "bot@remote.example" },
-    },
-  ])("preserves independent watchers for $name", ({ first, second }) => {
-    const cfg = config({ primary: first, secondary: second });
+    [remote("bot@primary.example"), remote("bot@secondary.example")],
+    [{ cliPath: "imsg" }, { cliPath: "imsg", remoteHost: "bot@remote.example" }],
+  ])("preserves independent watchers for %j / %j", (primary, secondary) => {
+    const cfg = config({ primary, secondary });
     expect({
       owners: [sourceOwner(cfg, "primary"), sourceOwner(cfg, "secondary")],
       warnings: collectIMessageDuplicateAccountSourceWarnings({ cfg }),
@@ -77,12 +60,12 @@ describe("iMessage duplicate-source watcher ownership", () => {
   });
 
   it("never lets an unconfigured account own or warn for the only startable watcher", () => {
-    const cfg = config({ primary: {}, secondary: { enabled: true, cliPath: "imsg" } });
+    const cfg = config({ primary: {}, secondary: { enabled: true } });
     const unconfigured = resolveIMessageAccount({ cfg, accountId: "primary" });
     const configured = resolveIMessageAccount({ cfg, accountId: "secondary" });
 
     expect(unconfigured).toMatchObject({ enabled: true, configured: false });
-    expect(configured).toMatchObject({ enabled: true, configured: true });
+    expect(configured).toMatchObject({ accountId: "secondary", enabled: true, configured: true });
     expect(resolveIMessageDuplicateSourceOwner({ cfg, account: unconfigured })).toBeUndefined();
     expect(resolveIMessageDuplicateSourceOwner({ cfg, account: configured })).toBeUndefined();
     expect(collectIMessageDuplicateAccountSourceWarnings({ cfg })).toEqual([]);

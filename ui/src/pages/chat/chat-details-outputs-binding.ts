@@ -31,6 +31,7 @@ export function createDetailsOutputsBinding(
   state: ChatPageHost,
   workspace: SessionWorkspaceState,
   provider: ResolvedBoardView["provider"],
+  boardReady: boolean,
 ) {
   const client = state.client;
   const connected = state.connected;
@@ -48,21 +49,49 @@ export function createDetailsOutputsBinding(
     gatewayPresentationScope(gateway) === scope &&
     isCurrentSessionWorkspace(state, workspace);
   let release: (() => void) | undefined;
-  const stop = () => {
+  let releaseBoard: (() => void) | undefined;
+  const { promise: dashboardRead, resolve: completeDashboard } = Promise.withResolvers<void>();
+  const settleDashboard = () => {
+    releaseBoard?.();
+    releaseBoard = undefined;
+    completeDashboard();
+  };
+  if (boardReady) {
+    const settleIfReady = () => {
+      if (provider.hasLoadedSnapshot || provider.loadError$.value) {
+        settleDashboard();
+      }
+    };
+    const releaseSnapshot = provider.snapshot$.subscribe(settleIfReady);
+    const releaseError = provider.loadError$.subscribe(settleIfReady);
+    releaseBoard = () => {
+      releaseSnapshot();
+      releaseError();
+    };
+    settleIfReady();
+  }
+  const releaseArtifacts = () => {
     release?.();
     release = undefined;
+  };
+  const stop = () => {
+    releaseArtifacts();
+    // Retired presentation reads cannot hold a Solid loading boundary open.
+    settleDashboard();
   };
   return {
     state,
     workspace,
     provider,
+    boardReady,
+    dashboardRead,
     client,
     connected,
     sessionId,
     scope,
     stop,
     retain: () => {
-      stop();
+      releaseArtifacts();
       if (!current()) {
         return undefined;
       }
@@ -70,7 +99,7 @@ export function createDetailsOutputsBinding(
       release = releaseDemand;
       return () => {
         if (release === releaseDemand) {
-          stop();
+          releaseArtifacts();
         }
       };
     },
@@ -115,7 +144,6 @@ export function projectDetailsOutputs(
   binding: DetailsOutputsBinding,
   workspace: SessionWorkspaceState,
   board: ResolvedBoardView,
-  boardReady: boolean,
   icons: ChatDetailsOutputsIcons,
 ): Pick<ChatDetailsProps, "outputs" | "retainOutputs"> {
   const artifacts = workspace.assistantArtifacts;
@@ -128,7 +156,7 @@ export function projectDetailsOutputs(
       artifactsError: artifacts?.error ?? null,
       dashboard: !board.available
         ? null
-        : boardReady && board.provider.hasLoadedSnapshot
+        : binding.boardReady && board.provider.hasLoadedSnapshot
           ? board.hasBoard
             ? {
                 title:
@@ -138,6 +166,7 @@ export function projectDetailsOutputs(
               }
             : null
           : undefined,
+      dashboardRead: binding.dashboardRead,
       dashboardError: board.provider.loadError$.value,
       onOpenArtifact: binding.onOpenArtifact,
       onRetryArtifacts: binding.onRetryArtifacts,

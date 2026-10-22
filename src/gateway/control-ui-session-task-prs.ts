@@ -1,5 +1,6 @@
 import { createRetainedCache } from "../infra/retained-cache.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
+import { getOrCreateWeakOwnerMap } from "../shared/weak-owner-map.js";
 import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
 import type { TaskPublicationRead } from "../state/github-publication-task-reads.worker.js";
 import { registerOpenClawStateDatabaseLifecycleListener } from "../state/openclaw-state-db-cache.js";
@@ -40,11 +41,7 @@ export function selectTaskPublicationSessions(
       lifecycleRevision: row.entry.lifecycleRevision ?? null,
     });
     const revision = projection.sharingRevision;
-    let children = revision && childrenByRevision.get(revision);
-    if (!children && revision) {
-      children = new Map();
-      childrenByRevision.set(revision, children);
-    }
+    const children = revision ? getOrCreateWeakOwnerMap(childrenByRevision, revision) : undefined;
     let selected = children?.get(row.key);
     if (!selected) {
       selected = projection.selectEntries({ parentSessionKey: row.key });

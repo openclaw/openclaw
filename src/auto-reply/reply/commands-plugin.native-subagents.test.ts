@@ -302,7 +302,7 @@ describe("command-scoped native subagent boundary", () => {
     },
     {
       name: "unknown runtime capability",
-      command: { ...declaredCommand, runtimeCapabilities: ["models"] },
+      command: { ...declaredCommand, runtimeCapabilities: ["unknown-capability"] },
       reason: "runtimeCapabilities",
     },
     {
@@ -628,7 +628,7 @@ describe("command-scoped native subagent boundary", () => {
           expect(result?.reply?.text).toMatch(
             change === "owner"
               ? /authority.*changed|authority.*revoked/i
-              : /registry.*no longer active/i,
+              : /^Error: Plugin command runtime is no longer active\.$/,
           );
           expect(result?.shouldContinue).toBe(false);
           expect([...subagentRuns.keys()]).toEqual(acceptedBefore);

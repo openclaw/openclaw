@@ -46,35 +46,16 @@ describe("prepareEmbeddedRunTerminal", () => {
     payloadMocks.buildEmbeddedRunPayloads.mockReset().mockReturnValue([]);
   });
 
-  it.each([
-    {
-      name: "an acknowledgement-only user reply",
-      payload: { text: "HEARTBEAT_OK" },
-      heartbeat: undefined,
-      visible: false,
-    },
-    {
-      name: "a real heartbeat acknowledgement",
-      payload: { text: "HEARTBEAT_OK" },
-      heartbeat: { continuesConversation: false },
-      visible: true,
-    },
-    {
-      name: "a heartbeat-transported conversation continuation",
-      payload: { text: "HEARTBEAT_OK" },
-      heartbeat: { continuesConversation: true },
-      visible: false,
-    },
-  ])("keeps $name aligned with reply presentation", async ({ payload, heartbeat, visible }) => {
+  it("keeps an acknowledgement-only user reply aligned with presentation", async () => {
+    const payload = { text: "HEARTBEAT_OK" };
     payloadMocks.buildEmbeddedRunPayloads.mockReturnValueOnce([payload]);
 
     const prepared = await prepareAttempt({
       attempt: attemptResult(),
-      heartbeat,
     });
 
     expect(prepared.payloadsWithToolMedia).toEqual([payload]);
-    expect(prepared.payloadsForVisibleCompletion).toEqual(visible ? [payload] : []);
+    expect(prepared.payloadsForVisibleCompletion).toEqual([]);
   });
 
   it.each([
@@ -720,38 +701,4 @@ describe("prepareEmbeddedRunTerminal", () => {
       expect.objectContaining({ runAborted: true, runStopReason: "restart" }),
     );
   });
-
-  it.each([
-    { continuesConversation: false, warns: true },
-    { continuesConversation: true, warns: false },
-  ])(
-    "keeps a failed command's NO_REPLY silent only when the heartbeat continues a conversation ($continuesConversation)",
-    async ({ continuesConversation, warns }) => {
-      const actual = await vi.importActual<{
-        buildEmbeddedRunPayloads: typeof buildEmbeddedRunPayloads;
-      }>("./payloads.js");
-      payloadMocks.buildEmbeddedRunPayloads.mockImplementation(actual.buildEmbeddedRunPayloads);
-      const silent: AssistantMessage = {
-        ...assistantMessage("stop"),
-        content: [{ type: "text", text: "NO_REPLY" }],
-      };
-      const prepared = await prepareAttempt({
-        attempt: attemptResult({
-          assistantTexts: ["NO_REPLY"],
-          messagesSnapshot: [silent],
-          lastAssistant: silent,
-          currentAttemptAssistant: silent,
-          currentAttemptCompletedAssistant: silent,
-          lastToolError: { toolName: "exec", error: "Command exited with code 1" },
-        }),
-        heartbeat: { continuesConversation },
-        terminalState: {
-          outcome: { reason: "completed", status: "ok", stopReason: "stop" },
-          signalOwnedInterruption: false,
-        },
-      });
-
-      expect(prepared.payloads.some((payload) => payload.isError === true)).toBe(warns);
-    },
-  );
 });

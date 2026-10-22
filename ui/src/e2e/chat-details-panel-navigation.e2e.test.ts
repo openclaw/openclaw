@@ -1,8 +1,10 @@
+import { withTimeout } from "@openclaw/fs-safe/advanced";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openChatDetails } from "./chat-details.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
@@ -140,7 +142,42 @@ suite.define(() => {
         const details = await openChatDetails(page);
         await openOutputs(details);
         await details.getByRole("button", { name: "View all", exact: true }).click();
-        await page.locator('[data-panel-slot="workspace"][data-region="side"]').waitFor();
+        try {
+          await page.locator('[data-panel-slot="workspace"][data-region="side"]').waitFor();
+        } catch (error) {
+          recordControlUiE2eFailureFacts(page, {
+            detailsViewAllDashboardCase: main === "Dashboard",
+          });
+          await withTimeout(
+            page.evaluate(() => {
+              const nodes = document.querySelectorAll<HTMLElement>(
+                "[data-panel-slot][data-region]",
+              );
+              const panels = [...nodes]
+                .slice(0, 32)
+                .filter((panel) => panel.checkVisibility({ visibilityProperty: true }));
+              const facts: Record<string, boolean | number | null> = {
+                detailsViewAllPanelsTruncated: nodes.length > 32,
+                detailsViewAllVisiblePanels: panels.length,
+                detailsViewAllDetailsVisible: [...document.querySelectorAll(".chat-details")].some(
+                  (detailsPanel) => detailsPanel.checkVisibility({ visibilityProperty: true }),
+                ),
+              };
+              for (const slot of ["conversation", "dashboard", "workspace"]) {
+                for (const region of ["main", "side"]) {
+                  facts[`detailsViewAll_${slot}_${region}`] = panels.filter(
+                    (panel) => panel.dataset.panelSlot === slot && panel.dataset.region === region,
+                  ).length;
+                }
+              }
+              return facts;
+            }),
+            1_000,
+          )
+            .then((facts) => recordControlUiE2eFailureFacts(page, facts))
+            .catch(() => undefined);
+          throw error;
+        }
         await expect.poll(() => details.isVisible()).toBe(false);
         await expect
           .poll(() =>

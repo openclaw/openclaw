@@ -19,7 +19,7 @@ import type {
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { registerMcpAppEnglish } from "../../i18n/locales/en-mcp-app.ts";
-import { formatUiError } from "../../lib/format-error.ts";
+import { formatUiError, UserFacingError } from "../../lib/format-error.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -42,7 +42,10 @@ export function McpAppPanel(props: McpAppPanelProps) {
   const gateway = projectGateway(context.gateway);
   const [viewId, setViewId] = createSignal("");
   const [busy, setBusy] = createOptimistic(false);
-  const [error, setError] = createSignal<string | null>(null);
+  const [operationReceipt, setOperationReceipt] = createSignal<{
+    identity: string;
+    result: Promise<null>;
+  } | null>(null);
   const [notice, setNotice] = createSignal("");
   const [receipt, setReceipt] = createSignal<{
     identity: string;
@@ -50,6 +53,12 @@ export function McpAppPanel(props: McpAppPanelProps) {
   } | null>(null);
   let generation = 0;
   let mounted = true;
+  function recordOutcome(identity: string, pending: Promise<unknown>) {
+    const result = pending.then(() => null);
+    // A retired panel may never render its outcome; consume late failures too.
+    void result.catch(() => {});
+    setOperationReceipt({ identity, result });
+  }
   const launchIdentity = () => {
     const launch = props.launch;
     return JSON.stringify([
@@ -76,7 +85,7 @@ export function McpAppPanel(props: McpAppPanelProps) {
       client !== launch.owner ||
       context.gateway.snapshot.phase !== "connected"
     ) {
-      setError(t("mcpApp.disconnected"));
+      recordOutcome(openIdentity(), Promise.reject(new UserFacingError(t("mcpApp.disconnected"))));
       return null;
     }
     const currentGeneration = ++generation;
@@ -93,7 +102,7 @@ export function McpAppPanel(props: McpAppPanelProps) {
         gatewayPresentationScope(context.gateway).key === scope
       );
     };
-    setError(null);
+    setOperationReceipt(null);
     setNotice("");
     return { client, launch, current, identity: JSON.stringify([identity, scope]) };
   }
@@ -142,20 +151,18 @@ export function McpAppPanel(props: McpAppPanelProps) {
         }
       } catch (failure) {
         if (current()) {
-          setError(formatUiError(failure));
+          throw failure;
         }
       }
     })();
+    recordOutcome(admitted.identity, complete);
     try {
       await Promise.resolve();
       if (!current()) {
         return;
       }
-      await presentOperation(current, complete, retirement.promise);
-    } catch (failure) {
-      if (current()) {
-        setError(formatUiError(failure));
-      }
+      // The narrow outcome boundary consumes the operation's rejection.
+      await presentOperation(current, complete, retirement.promise).catch(() => {});
     } finally {
       stopRetirement();
     }
@@ -208,7 +215,7 @@ export function McpAppPanel(props: McpAppPanelProps) {
         }),
       (result) => {
         if (result.toolResult?.isError || (!result.viewId && !result.toolResult)) {
-          throw new Error(t("mcpApp.errors.requestFailed"));
+          throw new UserFacingError(t("mcpApp.errors.requestFailed"));
         }
         if (result.viewId) {
           setViewId(result.viewId);
@@ -230,7 +237,7 @@ export function McpAppPanel(props: McpAppPanelProps) {
           },
         );
         if (result.toolResult?.isError) {
-          throw new Error(t("mcpApp.errors.requestFailed"));
+          throw new UserFacingError(t("mcpApp.errors.requestFailed"));
         }
         return client.request<McpAppSettings>("mcp.app.settings", params(launch, "read"));
       },
@@ -249,8 +256,7 @@ export function McpAppPanel(props: McpAppPanelProps) {
         ),
       (result) => {
         if (result.toolResult?.isError) {
-          setError(t("mcpApp.errors.requestFailed"));
-          return;
+          throw new UserFacingError(t("mcpApp.errors.requestFailed"));
         }
         if (result.viewId) {
           setReceipt(null);
@@ -271,6 +277,10 @@ export function McpAppPanel(props: McpAppPanelProps) {
     const admitted = receipt();
     return admitted?.identity === identity ? admitted.result : Promise.resolve(null);
   });
+  const currentOperation = () => {
+    const admitted = operationReceipt();
+    return admitted?.identity === openIdentity() ? admitted : null;
+  };
   const SettingsContent = (content: { settings: McpAppSettings | null; pending: boolean }) => (
     <>
       <div class="mcp-app-panel__toolbar">
@@ -292,11 +302,24 @@ export function McpAppPanel(props: McpAppPanelProps) {
       <Show when={content.pending}>
         <p role="status">{t("mcpApp.loading")}</p>
       </Show>
-      <Show when={error()}>
-        <p role="alert">{error()}</p>
-        <button class="btn" onClick={() => void open()}>
-          {t("mcpApp.retry")}
-        </button>
+      <Show when={currentOperation()} keyed>
+        {(admitted) => {
+          const outcome = createMemo(() => admitted.result, { loadingValue: null });
+          return (
+            <Errored
+              fallback={(error) => (
+                <>
+                  <p role="alert">{formatUiError(error())}</p>
+                  <button class="btn" onClick={() => void open()}>
+                    {t("mcpApp.retry")}
+                  </button>
+                </>
+              )}
+            >
+              {outcome()}
+            </Errored>
+          );
+        }}
       </Show>
       <Show when={notice()}>
         <p role="status">{notice()}</p>
@@ -318,7 +341,7 @@ export function McpAppPanel(props: McpAppPanelProps) {
     generation++;
     setViewId("");
     setReceipt(null);
-    setError(null);
+    setOperationReceipt(null);
     if (props.launch && props.launch.owner === context.gateway.snapshot.client) {
       void open();
     }

@@ -690,6 +690,43 @@ describe("Models account recovery", () => {
     }
   });
 
+  it("cancels account recovery while config admission is queued without dispatching activation", async () => {
+    const restoreDialog = installDialogPolyfill();
+    const { context, request, runtimeConfig, modelRef } = accountRecoveryHarness("replacement");
+    const waiting = deferred();
+    const release = deferred();
+    const page = appendPage(context);
+    try {
+      await openAccountRecovery(page);
+      runtimeConfig.beforeExternalDispatch.mockImplementation(async () => {
+        waiting.resolve();
+        await release.promise;
+      });
+      page.querySelector<HTMLButtonElement>("[data-models-use-account]")!.click();
+      await waiting.promise;
+      await waitForSolid(() =>
+        expect(page.querySelector("openclaw-modal-dialog")?.textContent).toContain(
+          "Checking your model setup",
+        ),
+      );
+      page.querySelector<HTMLButtonElement>(".model-setup-wizard__footer button")!.click();
+      await waitForSolid(() => expect(page.querySelector("openclaw-modal-dialog")).toBeNull());
+      release.resolve();
+      await drainPageUpdates(page);
+      expect(
+        request.mock.calls.some(([method]) => method === "openclaw.setup.activate.start"),
+      ).toBe(false);
+      expect(currentConfigObject(runtimeConfig.state)).toMatchObject({
+        agents: { entries: { writer: { model: `${modelRef}@example:original` } } },
+      });
+      expect(runtimeConfig.patch).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      unmountPage(page);
+      restoreDialog();
+    }
+  });
+
   it.each(["cancel", "missing receipt"] as const)(
     "keeps the unavailable selection visible after account activation %s",
     async (outcome) => {
@@ -698,6 +735,10 @@ describe("Models account recovery", () => {
       const page = appendPage(context);
       await useReplacementAccount(page);
       if (outcome === "cancel") {
+        await waitForSolid(() => {
+          expect(requestCount(request, "wizard.next")).toBe(1);
+          expect(page.querySelector(".model-setup-wizard__footer button")).not.toBeNull();
+        });
         page.querySelector<HTMLButtonElement>(".model-setup-wizard__footer button")!.click();
         await waitForSolid(() => expect(page.querySelector("openclaw-modal-dialog")).toBeNull());
         expect(request.mock.calls.some(([method]) => method === "wizard.cancel")).toBe(true);

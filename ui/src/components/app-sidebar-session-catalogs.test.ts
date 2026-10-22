@@ -126,14 +126,12 @@ it.each([
   const local = host([session("native"), session("adopted", { sessionKey: row.key })]);
   const visibility = projectSidebarArchiveVisibility({
     sessionData: {
-      sessionsAgentId: "main",
-      sessionsResult: null,
-      sessionResultsByAgent: {},
       childSessionRowsByParent: {},
       loadedChildSessionKeys: new Set(),
       loadingChildSessionKeys: new Set(),
       childSessionErrorsByParent: new Map(),
     },
+    sourceRows: [],
     selectedAgentId: "main",
     statusFilter,
     now: 100,

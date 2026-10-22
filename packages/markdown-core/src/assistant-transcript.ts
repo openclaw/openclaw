@@ -192,66 +192,6 @@ function splitVisibleToken(
   return result;
 }
 
-function annotateInlineChildren(
-  TokenType: StateCore["Token"],
-  children: Token[],
-  preserveLinks: boolean,
-  options: AssistantTranscriptRoleMarkdownOptions,
-): Token[] {
-  const tokenProjections = children.map((token) => visibleTokenProjection(token, options));
-  const projection = combineVisibleTokenProjections(tokenProjections);
-  const spans = findAssistantTranscriptRoleHeaderSpans(projection.text, projection.excludedRanges);
-  if (spans.length === 0) {
-    return children;
-  }
-
-  const result: Token[] = [];
-  let visibleCursor = 0;
-  let spanCursor = 0;
-  for (const [index, token] of children.entries()) {
-    const tokenProjection = tokenProjections[index];
-    if (!tokenProjection) {
-      result.push(token);
-      continue;
-    }
-    const content = tokenProjection.text;
-    for (;;) {
-      const span = spans[spanCursor];
-      if (!span || span.end > visibleCursor) {
-        break;
-      }
-      spanCursor += 1;
-    }
-    if (token.type === "text" || token.type === "html_inline") {
-      result.push(
-        ...splitVisibleToken(
-          TokenType,
-          token,
-          sliceRoleHeaderSpans(spans, spanCursor, visibleCursor, visibleCursor + content.length),
-        ),
-      );
-    } else if (token.type === "image") {
-      const imageSpans = sliceRoleHeaderSpans(
-        spans,
-        spanCursor,
-        visibleCursor,
-        visibleCursor + content.length,
-      );
-      if (imageSpans.length > 0) {
-        token.meta = {
-          ...(token.meta && typeof token.meta === "object" ? token.meta : {}),
-          assistantTranscriptRoleImage: { text: content, spans: imageSpans },
-        } satisfies AssistantTranscriptRoleImageMeta;
-      }
-      result.push(token);
-    } else {
-      result.push(token);
-    }
-    visibleCursor += content.length;
-  }
-  return preserveLinks ? result : removeLinksContainingAssistantTranscriptRoles(result);
-}
-
 function removeLinksContainingAssistantTranscriptRoles(tokens: Token[]): Token[] {
   const openLinks: Array<{ token: Token; containsRole: boolean }> = [];
   const suppressedLinks = new Set<Token>();
@@ -311,12 +251,63 @@ export function markdownItAssistantTranscriptRoles(
     const preserveLinks = state.env?.assistantTranscriptRolePreserveLinks === true;
     for (const token of state.tokens) {
       if (token.type === "inline" && token.children) {
-        token.children = annotateInlineChildren(
-          state.Token,
-          token.children,
-          preserveLinks,
-          options,
+        const TokenType = state.Token;
+        const children = token.children;
+        const tokenProjections = children.map((child) => visibleTokenProjection(child, options));
+        const projection = combineVisibleTokenProjections(tokenProjections);
+        const spans = findAssistantTranscriptRoleHeaderSpans(
+          projection.text,
+          projection.excludedRanges,
         );
+        if (spans.length === 0) {
+          token.children = children;
+          tokens.push(token);
+          continue;
+        }
+
+        const result: Token[] = [];
+        let visibleCursor = 0;
+        let spanCursor = 0;
+        for (const [index, child] of children.entries()) {
+          const tokenProjection = tokenProjections[index];
+          if (!tokenProjection) {
+            result.push(child);
+            continue;
+          }
+          const content = tokenProjection.text;
+          for (;;) {
+            const span = spans[spanCursor];
+            if (!span || span.end > visibleCursor) {
+              break;
+            }
+            spanCursor += 1;
+          }
+          const tokenEnd = visibleCursor + content.length;
+          if (child.type === "text" || child.type === "html_inline") {
+            result.push(
+              ...splitVisibleToken(
+                TokenType,
+                child,
+                sliceRoleHeaderSpans(spans, spanCursor, visibleCursor, tokenEnd),
+              ),
+            );
+          } else if (child.type === "image") {
+            const imageSpans = sliceRoleHeaderSpans(spans, spanCursor, visibleCursor, tokenEnd);
+            if (imageSpans.length > 0) {
+              child.meta = {
+                ...(child.meta && typeof child.meta === "object" ? child.meta : {}),
+                assistantTranscriptRoleImage: { text: content, spans: imageSpans },
+              } satisfies AssistantTranscriptRoleImageMeta;
+            }
+            result.push(child);
+          } else {
+            result.push(child);
+          }
+          visibleCursor += content.length;
+        }
+        token.children = preserveLinks
+          ? result
+          : removeLinksContainingAssistantTranscriptRoles(result);
         tokens.push(token);
         continue;
       }

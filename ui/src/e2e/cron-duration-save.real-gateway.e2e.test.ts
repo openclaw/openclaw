@@ -589,12 +589,16 @@ suite.define(() => {
             loadedStagger: "1.001",
             submitted: {
               id: jobId,
-              patch: { enabled: false, schedule: { expr: "*/5 * * * *", staggerMs: 1_001 } },
+              expectedConfigRevision: job.configRevision,
+              patch: {
+                enabled: false,
+                schedule: { kind: "cron", expr: "*/5 * * * *", tz: "UTC", staggerMs: 1_001 },
+              },
             },
             stored: {
               id: jobId,
               enabled: false,
-              schedule: { expr: "*/5 * * * *", staggerMs: 1_001 },
+              schedule: { kind: "cron", expr: "*/5 * * * *", tz: "UTC", staggerMs: 1_001 },
             },
             reloadedStagger: "1.001",
           },

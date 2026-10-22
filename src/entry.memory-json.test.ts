@@ -22,6 +22,7 @@ import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../test/helpers/openclaw-test-instance.js";
+import { awaitGateBeforeSettlement } from "../test/helpers/promise.js";
 import { runQaGatewayTestFixture } from "../test/helpers/qa-gateway-test-lifetime.js";
 import { createTempDirTracker } from "../test/helpers/temp-dir.js";
 import { withConsoleLogsRoutedToStderrForJson } from "./cli/json-output-mode.js";
@@ -91,8 +92,7 @@ async function withMemoryRoot(run: (fixture: MemoryRootFixture) => Promise<void>
   const root = tempDirs.make("openclaw-entry-memory-json-");
   const workspaceDir = path.join(root, "workspace");
   const previousExitCode = process.exitCode;
-  const stdout: string[] = [];
-  const stderr: string[] = [];
+  const output = { stdout: "", stderr: "" };
   const cache = createPluginCache();
   try {
     await fs.mkdir(workspaceDir, { recursive: true });
@@ -106,12 +106,9 @@ async function withMemoryRoot(run: (fixture: MemoryRootFixture) => Promise<void>
     }
     // The real early-diagnostic dotenv loader must see only this empty fixture.
     vi.spyOn(process, "cwd").mockReturnValue(root);
-    for (const [stream, captured] of [
-      [process.stdout, stdout],
-      [process.stderr, stderr],
-    ] as const) {
-      vi.spyOn(stream, "write").mockImplementation((chunk) => {
-        captured.push(String(chunk));
+    for (const stream of ["stdout", "stderr"] as const) {
+      vi.spyOn(process[stream], "write").mockImplementation((chunk) => {
+        output[stream] += String(chunk);
         return true;
       });
     }
@@ -123,8 +120,7 @@ async function withMemoryRoot(run: (fixture: MemoryRootFixture) => Promise<void>
     const fixtureEnv = { ...process.env };
     const invoke = async (args: string[]) => {
       const argv = ["node", "openclaw", "memory", ...args];
-      stdout.length = 0;
-      stderr.length = 0;
+      output.stdout = output.stderr = "";
       process.exitCode = 0;
       // mock-isolation: Run the real memory command, retaining runCli's root JSON routing.
       vi.doMock("./cli/run-main.js", async () => ({
@@ -153,15 +149,14 @@ async function withMemoryRoot(run: (fixture: MemoryRootFixture) => Promise<void>
     };
     await run({
       workspaceDir,
-      stdout: () => stdout.join(""),
-      stderr: () => stderr.join(""),
+      stdout: () => output.stdout,
+      stderr: () => output.stderr,
       invoke,
     });
   } finally {
     try {
       try {
-        const retirement = await retirePluginCache(cache);
-        expect(retirement.failures).toEqual([]);
+        expect((await retirePluginCache(cache)).failures).toEqual([]);
       } finally {
         await closeOpenClawAgentDatabasesAsync();
         closeOpenClawAgentDatabasesForTest();
@@ -255,11 +250,11 @@ describe("memory command failures at the root JSON boundary", () => {
         const settled = invoke(args);
         void settled.catch(() => {});
         try {
-          const first = await Promise.race([
-            cleanupStarted.promise.then(() => "cleanup" as const),
-            settled.then(() => "settled" as const),
-          ]);
-          expect(first).toBe("cleanup");
+          await awaitGateBeforeSettlement(
+            cleanupStarted.promise,
+            settled,
+            "memory command settled before scratch cleanup",
+          );
           const beforeRemovalSettled = stdout();
           cleanupRelease.resolve();
           await expect(settled).resolves.toBeUndefined();

@@ -8,7 +8,7 @@ import { GatewayUrlConfirmation } from "./solid/gateway-url-confirmation.tsx";
 const modalModule = vi.hoisted(() => ({ load: vi.fn() }));
 
 // mock-isolation: Observe the native modal registration boundary without its renderer.
-vi.mock("./modal-dialog.ts", () => {
+vi.mock("./modal-dialog.tsx", () => {
   modalModule.load();
   customElements.define("openclaw-modal-dialog", class extends HTMLElement {});
   return {};

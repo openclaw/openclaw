@@ -5,12 +5,17 @@ import type { GatewaySessionRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
 import type { SessionRefreshOptions } from "../lib/sessions/session-capability.ts";
+import { showToast } from "../lib/toast.ts";
 import {
   answerConfirmDialog,
   createModalDialogTestFixture,
   waitForConfirmDialogActions,
 } from "../test-helpers/modal-dialog.ts";
-import { archiveSessionWithUndo } from "./session-organizer-archive.runtime.ts";
+import { waitForFast } from "../test-helpers/wait-for.ts";
+import {
+  archiveConfirmedSessionsWithUndo,
+  archiveSessionWithUndo,
+} from "./session-organizer-archive.runtime.ts";
 import {
   createHarness,
   sessionRow,
@@ -53,6 +58,38 @@ function guardedTarget(index: number) {
 }
 
 describe("session organizer nested archive choice", () => {
+  it("returns a partial archive failure while retaining successful-only Undo after navigation", async () => {
+    const rows = [sessionRow(1), sessionRow(2), sessionRow(3)];
+    const undoError = new Error("Undo denied after navigation");
+    const harness = createHarness({
+      failedKeys: [rows[1]!.key],
+      requestFailure: { at: 2, error: undoError },
+    });
+    vi.mocked(showToast).mockClear();
+
+    const outcome = await archiveConfirmedSessionsWithUndo(harness.host, rows, harness.scope);
+    expect(outcome).toEqual({ status: "failed", error: expect.stringContaining(rows[1]!.key) });
+    expect(harness.publishSessionMutationError).toHaveBeenCalledExactlyOnceWith(
+      harness.scope,
+      expect.stringContaining(rows[1]!.key),
+    );
+    const archived = vi.mocked(showToast).mock.calls.at(-1)![0];
+    expect(archived.message).toBe(t("sessionsView.sessionsArchived", { count: "2" }));
+    expect(archived.onAction).toBeTypeOf("function");
+    expect(harness.finishArchive).toHaveBeenCalledTimes(3);
+
+    // The page retires, but the same connection still owns the captured Undo.
+    vi.mocked(harness.host.sessionData.isSessionMutationScopeCurrent).mockReturnValue(false);
+    archived.onAction!();
+    await waitForFast(() => expect(showToast).toHaveBeenCalledWith({ message: undoError.message }));
+    expect(harness.request.mock.calls[1]?.[1]).toEqual({
+      targets: [rows[0]!, rows[2]!].map(sessionTarget),
+      patch: { archived: false },
+    });
+    expect(harness.publishSessionMutationError).toHaveBeenCalledTimes(1);
+    expect(outcome).toEqual({ status: "failed", error: expect.stringContaining(rows[1]!.key) });
+  });
+
   it.each([
     ["confirm", 3, 0],
     ["alternative", 3, 0],

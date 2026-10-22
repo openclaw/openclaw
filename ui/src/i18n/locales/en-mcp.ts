@@ -36,6 +36,9 @@ const enMcp = {
     enable: "Enable",
     disable: "Disable",
     removeNamed: "Remove {name}",
+    removeConfirmTitle: "Remove {name}?",
+    removeConfirmMessage:
+      "This deletes the server's saved configuration, such as its command or URL, arguments, headers, and environment. This cannot be undone.",
     working: "Working…",
   },
   mcpPage: {

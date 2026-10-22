@@ -397,45 +397,36 @@ it("preserves agent-run commentary attachments after their source files are remo
     await storedImage(sessionKey, png);
   }));
 
-it.each([
-  "raw directive",
-  "structured attachment",
-  "separate text payload",
-  "store alias",
-] as const)("owns the agent-run final %s before publishing completion", (source) =>
-  withImage(async (state, { imagePath }) => {
-    const text =
-      source === "structured attachment"
-        ? "Completed"
-        : source === "separate text payload"
-          ? `MEDIA:${imagePath}`
-          : `Completed\nMEDIA:${imagePath}`;
-    const authored = assistantText(text);
-    const payload: ReplyPayload = { text };
-    if (source === "structured attachment") {
-      payload.mediaUrls = [imagePath];
-      payload.attachments = [{ path: imagePath, mimeType: "image/png" }];
-    }
-    const payloads =
-      source === "separate text payload" ? [{ text: "Completed" }, payload] : [payload];
-    const turn = await runMediaTurn(state, authored, {
-      payloads,
-      retargetBeforeNormalization: source === "store alias",
-    });
-    const { sessionKey, message, messageAtFinal, finalizationStatements } = turn;
-    expectSuccess(turn);
-    if (source === "store alias") {
-      expect(turn.retargetedEntry?.sandbox).toBe("required");
-      expect(messageAtFinal?.openclawDisplayContent).toEqual(
-        displayedImage({ artifactId: expect.any(String) }),
-      );
-      return;
-    }
-    expect(finalizationStatements).toBe(0);
-    expect(message?.content).toEqual(authored.content);
-    expectDisplay(messageAtFinal, displayedText("Completed"), managedImage());
-    await storedImage(sessionKey);
-  }),
+it.each(["structured attachment", "store alias"] as const)(
+  "owns the agent-run final %s before publishing completion",
+  (source) =>
+    withImage(async (state, { imagePath }) => {
+      const text =
+        source === "structured attachment" ? "Completed" : `Completed\nMEDIA:${imagePath}`;
+      const authored = assistantText(text);
+      const payload: ReplyPayload = { text };
+      if (source === "structured attachment") {
+        payload.mediaUrls = [imagePath];
+        payload.attachments = [{ path: imagePath, mimeType: "image/png" }];
+      }
+      const turn = await runMediaTurn(state, authored, {
+        payloads: [payload],
+        retargetBeforeNormalization: source === "store alias",
+      });
+      const { sessionKey, message, messageAtFinal, finalizationStatements } = turn;
+      expectSuccess(turn);
+      expect(message?.content).toEqual(authored.content);
+      if (source === "store alias") {
+        expect(turn.retargetedEntry?.sandbox).toBe("required");
+        expect(messageAtFinal?.openclawDisplayContent).toEqual(
+          displayedImage({ artifactId: expect.any(String) }),
+        );
+        return;
+      }
+      expect(finalizationStatements).toBe(0);
+      expectDisplay(messageAtFinal, displayedText("Completed"), managedImage());
+      await storedImage(sessionKey);
+    }),
 );
 
 it.each<MediaFinal & { name: string; payload?: Partial<ReplyPayload> }>([

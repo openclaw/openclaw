@@ -24,6 +24,7 @@ import { createCronMutationCompletion } from "./mutation-completion.js";
 import { CRON_JOB_SCRATCH_MAX_BYTES } from "./scratch-contract.js";
 import { readCronScratchSnapshot } from "./scratch-read.js";
 import { hashCronScratchSource, readCronJobScratchState } from "./scratch-store.js";
+import { cronTestJob } from "./service.fixture-builders.test-support.js";
 import { CronService } from "./service.js";
 import * as runtimeMutation from "./service/runtime-mutation.js";
 import * as cronStore from "./store.js";
@@ -299,18 +300,15 @@ async function createFixture(jobIds = ["job-1"]) {
     storePath: path.join(root, "cron", "jobs.json"),
     options: { env },
   };
-  const job: CronJob = {
+  const job = cronTestJob({
     id: "job-1",
     name: "scratch-owner",
-    enabled: true,
     createdAtMs: 1,
     updatedAtMs: 1,
     schedule: { kind: "every", everyMs: 60_000, anchorMs: 0 },
     sessionTarget: "main",
-    wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text: "test" },
-    state: {},
-  };
+  });
   runOpenClawStateWriteTransaction(({ db }) => {
     for (const [index, id] of jobIds.entries()) {
       upsertCronJobRow(db, cronStoreKey(fixture.storePath), { ...job, id }, index);

@@ -1,6 +1,7 @@
-import { Show, Switch, Match, createMemo } from "solid-js";
+import { action, createMemo, createOptimistic, Match, onSettled, Show, Switch } from "solid-js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
+import { ConfigError } from "../../components/config-error.tsx";
 import { handleCopyButton } from "../../components/copy-button-state.ts";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import {
@@ -47,6 +48,7 @@ export type AgentsProps = Omit<
   >;
   overview: Omit<AgentsPageView["overview"], "modelSelectionPolicy" | "modelCatalogRetired"> &
     Partial<Pick<AgentsPageView["overview"], "modelSelectionPolicy" | "modelCatalogRetired">>;
+  identitySavePending?: boolean;
   onOpenMemoryImport?: AgentsPageView["onOpenMemoryImport"];
   onOpenMemorySettings?: AgentsPageView["onOpenMemorySettings"];
 };
@@ -67,6 +69,21 @@ export function AgentsPageHeader() {
 }
 
 export function Agents(props: AgentsProps) {
+  const [defaultPending, setSettingDefault] = createOptimistic(false);
+  const settingDefault = () => defaultPending() || props.config.configSaving;
+  const defaultAction = action(function* (completion: Promise<void>, retired: Promise<void>) {
+    if (retired === props.presentationRetired()) {
+      setSettingDefault(true);
+    }
+    yield Promise.race([completion, retired]);
+  });
+  const setDefault = (agentId: string) => {
+    const retired = props.presentationRetired();
+    const completion = props.onSetDefault(agentId);
+    onSettled(() => {
+      void defaultAction(completion, retired);
+    });
+  };
   const rosterPending = createAgentReadPending(() => props.listRead);
   const config = () => currentConfigObject(props.config);
   const defaultId = () =>
@@ -75,8 +92,11 @@ export function Agents(props: AgentsProps) {
       : (props.readData().agentsList?.defaultId ?? null);
   const selectedAgent = createMemo(
     () =>
-      props.readData().agentsList?.agents.find((agent) => agent.id === props.selectedAgentId) ??
-      null,
+      props
+        .readData()
+        .agentsList?.agents.find(
+          (agent) => agent.kind !== "system" && agent.id === props.selectedAgentId,
+        ) ?? null,
   );
   const configActions = () => ({
     configForm: config(),
@@ -84,6 +104,7 @@ export function Agents(props: AgentsProps) {
     configSaving: props.config.configSaving,
     configDirty: props.config.configFormDirty,
     canUpdateConfig: props.access.canUpdateConfig,
+    presentationRetired: props.presentationRetired(),
     onConfigReload: props.onConfigReload,
     onConfigSave: props.onConfigSave,
   });
@@ -147,10 +168,18 @@ export function Agents(props: AgentsProps) {
                   <button
                     type="button"
                     class="btn btn--sm btn--ghost"
-                    disabled={!props.access.canUpdateConfig || agent().id === defaultId()}
-                    onClick={() => props.onSetDefault(agent().id)}
+                    disabled={
+                      !props.access.canUpdateConfig ||
+                      settingDefault() ||
+                      agent().id === defaultId()
+                    }
+                    onClick={() => setDefault(agent().id)}
                   >
-                    {agent().id === defaultId() ? t("agents.default") : t("agents.setDefault")}
+                    {settingDefault()
+                      ? t("common.saving")
+                      : agent().id === defaultId()
+                        ? t("agents.default")
+                        : t("agents.setDefault")}
                   </button>
                   <button
                     type="button"
@@ -221,10 +250,14 @@ export function Agents(props: AgentsProps) {
                 role="tabpanel"
                 aria-labelledby={`agents-tab-${props.readData().agentsPanel}`}
               >
-                <Show when={props.config.lastError}>
-                  <div class="callout danger" role="alert">
-                    {props.config.lastError}
-                  </div>
+                <Show when={!props.config.configSaving}>
+                  <ConfigError message={props.config.lastError}>
+                    {(message) => (
+                      <div class="callout danger" role="alert">
+                        {message}
+                      </div>
+                    )}
+                  </ConfigError>
                 </Show>
                 <Switch>
                   <Match when={props.readData().agentsPanel === "overview"}>
@@ -232,6 +265,7 @@ export function Agents(props: AgentsProps) {
                       {(agentId) => (
                         <AgentOverview
                           {...props.overview}
+                          identitySavePending={props.identitySavePending ?? false}
                           readData={props.readData}
                           {...configActions()}
                           agent={agent()}
@@ -248,6 +282,7 @@ export function Agents(props: AgentsProps) {
                     <AgentFiles
                       {...props.agentFiles}
                       readData={props.readData}
+                      presentationRetired={props.presentationRetired}
                       agentId={agent().id}
                       canWrite={props.access.canWriteFiles}
                     />

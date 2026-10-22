@@ -244,7 +244,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     if (action.kind === "new-group") {
       const signal = this.headerSessionDraftAbortController.signal;
       const gateway = this.context.gateway;
-      const { showInputDialog } = await import("../../components/input-dialog.ts");
+      const { showInputDialog } = await import("../../components/input-dialog.tsx");
       await showInputDialog({
         signal,
         gateway,

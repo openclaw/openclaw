@@ -24,7 +24,7 @@ function renderConfirmation(props: () => ConfirmationProps) {
     get label() {
       return t("connection.switchGateway.title");
     },
-    loadModule: () => import("../modal-dialog.ts"),
+    loadModule: () => import("../modal-dialog.tsx"),
   };
   const loader = createLazyCustomElementRequests({}, () => props().onCancel());
   const loadingState = projectOwner(loader, (owner) => owner.visibleState);

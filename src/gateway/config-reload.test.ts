@@ -9,6 +9,7 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/pr
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import {
+  applyConfigEnvVars,
   initializePublishedConfigRuntimeEnv,
   prepareConfigRuntimeEnv,
 } from "../config/config-env-vars.js";
@@ -122,15 +123,14 @@ const commitPluginRuntime =
 
 function prepareOwnedEnv(
   env: NodeJS.ProcessEnv,
-  key: string,
   previousConfig: OpenClawConfig,
   nextConfig: OpenClawConfig,
 ) {
+  applyConfigEnvVars(previousConfig, env, { lowerPrecedenceEnv: previousConfig.env?.vars });
   return prepareConfigRuntimeEnv({
     env,
     previousConfig,
     nextConfig,
-    previousOwnedEnv: { [key]: previousConfig.env?.vars?.[key] ?? "" },
   });
 }
 
@@ -2019,7 +2019,7 @@ describe("startGatewayConfigReloader", () => {
       prepareConfigCandidate: async ({ runtimeConfig, sourceConfig, previousSourceConfig }) => ({
         runtimeConfig,
         compareConfig: { ...sourceConfig, env: initialConfig.env },
-        runtimeEnv: prepareOwnedEnv(targetEnv, envKey, previousSourceConfig, sourceConfig),
+        runtimeEnv: prepareOwnedEnv(targetEnv, previousSourceConfig, sourceConfig),
       }),
       onHotReload: async (plan, nextConfig, ownership) => {
         preparedEnvValues.push(ownership.runtimeEnv?.env[envKey]);
@@ -2449,7 +2449,7 @@ describe("startGatewayConfigReloader", () => {
       ...nextConfig,
       env: initialConfig.env,
     } satisfies OpenClawConfig;
-    const runtimeEnv = prepareOwnedEnv(targetEnv, envKey, initialConfig, nextConfig);
+    const runtimeEnv = prepareOwnedEnv(targetEnv, initialConfig, nextConfig);
     const harness = await createReadyWriteReloader({
       initialConfig,
       onHotReload: async (plan, runtimeConfig, ownership) => {
@@ -2482,14 +2482,14 @@ describe("startGatewayConfigReloader", () => {
     const configA = makeConfig("a", 18_789);
     const configB = makeConfig("b", 19_001);
     const configC = makeConfig("c", 19_002);
-    const staleRuntimeEnv = prepareOwnedEnv(targetEnv, envKey, configA, configB);
+    const staleRuntimeEnv = prepareOwnedEnv(targetEnv, configA, configB);
     const readSnapshot = vi.fn(async () => snapshotOf(configC, "env-c"));
     const harness = await createReadyReloader(readSnapshot, {
       initialConfig: configA,
       prepareConfigCandidate: async ({ runtimeConfig, sourceConfig, previousSourceConfig }) => ({
         runtimeConfig,
         compareConfig: sourceConfig,
-        runtimeEnv: prepareOwnedEnv(targetEnv, envKey, previousSourceConfig, sourceConfig),
+        runtimeEnv: prepareOwnedEnv(targetEnv, previousSourceConfig, sourceConfig),
       }),
     });
 

@@ -216,13 +216,18 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
           id: "session-group-defaults-browser",
           label: t("newSession.gateway"),
           registerProjectPath: null,
-          registeringProject: false,
           onBack: showPickerRoot,
           onClose: showPickerRoot,
           onApplyFolder: applyFolder,
           onRegisterProject: () => {},
         }));
-        return <PlaceBrowser params={content()} pathRef={(node) => (pathInput = node)} />;
+        return (
+          <PlaceBrowser
+            params={content()}
+            registeringProject={false}
+            pathRef={(node) => (pathInput = node)}
+          />
+        );
       }
       function PickerRoot() {
         onSettled(() => {

@@ -92,6 +92,10 @@ export const STATE_SCHEMA_MIGRATION_READ_TABLES: Record<StateMigrationKind, read
     "delivery_queue_entries",
   ],
   "automation-policy-fence-v30": ["cron_jobs"],
+  "local-workspace-manifests-v31": [
+    "local_workspace_projections",
+    "local_workspace_manifest_nodes",
+  ],
   "operator-approvals-system-agent": ["operator_approvals"],
   "session-watch-cursor-provenance-v4": ["session_watch_cursors"],
   // STRICT migration can rebuild every ordinary table in the canonical schema.
@@ -476,6 +480,9 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
   }
   if (userVersion < 30) {
     migrations.push({ kind: "automation-policy-fence-v30", path: pathname });
+  }
+  if (userVersion < 31) {
+    migrations.push({ kind: "local-workspace-manifests-v31", path: pathname });
   }
   if (!hasCanonicalAuditEventsSchema(db)) {
     migrations.push({ kind: "audit-events-v2", path: pathname });

@@ -164,12 +164,8 @@ describe("imessage message actions", () => {
       { chatGuid },
       { senderIsOwner: false, gatewayClientScopes: ["operator.admin"] },
     );
-    expect(runtimeMock.renameGroup).toHaveBeenCalledWith({
-      chatGuid,
-      displayName: "Renamed group",
-      options,
-    });
-    expect(runtimeMock.leaveGroup).toHaveBeenCalledWith({ chatGuid, options });
+    expectCall(runtimeMock.renameGroup, { chatGuid, displayName: "Renamed group" });
+    expectCall(runtimeMock.leaveGroup, { chatGuid });
   });
 
   it("refreshes stale capabilities and sends a normalized current-conversation poll", async () => {
@@ -324,9 +320,8 @@ describe("imessage message actions", () => {
     );
     expect(loggerMock.warn).toHaveBeenCalledTimes(1);
     expect(String(loggerMock.warn.mock.calls[0]?.[0])).toMatch(
-      /iMessage react blocked: private API bridge unavailable/,
+      /iMessage react blocked: private API bridge unavailable.*imsg launch/s,
     );
-    expect(String(loggerMock.warn.mock.calls[0]?.[0])).toMatch(/imsg launch/);
     expect(runtimeMock.sendReaction).not.toHaveBeenCalled();
   });
 

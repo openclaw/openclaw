@@ -154,7 +154,10 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   const service = resolveGatewayService();
   let existingServiceCommand: GatewayServiceCommandConfig | null;
   try {
-    existingServiceCommand = await service.readCommand(process.env, { requireEffective: true });
+    existingServiceCommand = await service.readCommand(process.env, {
+      requireEffective: true,
+      allowMissingDefinition: true,
+    });
   } catch (error) {
     const message = sanitizeServiceInspectionError(error).message;
     // No installer writes precede this read; the updater can retain the unchanged definition.
@@ -426,7 +429,9 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       try {
         const currentCommand = resolveManagedGatewayServiceCommand(existingServiceCommand);
         if (!currentCommand) {
-          return undefined;
+          return existingServiceCommand
+            ? undefined
+            : "Gateway service definition is missing; refreshing the install.";
         }
         if (pinChanged) {
           return "Gateway runtime selection changed; refreshing the install.";

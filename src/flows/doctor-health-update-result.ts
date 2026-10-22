@@ -3,12 +3,12 @@ import type { beginDoctorMaintenance } from "../commands/doctor-maintenance.js";
 import { retainCurrentDeferredPluginMigrationWarnings } from "../infra/deferred-plugin-migration-warnings.js";
 import { formatUpdateDoctorConfigChange } from "../infra/update-doctor-config.js";
 import {
-  normalizeUpdatePostInstallDoctorWarnings,
   writeUpdatePostInstallDoctorResult,
   type DoctorConfigCapture,
   type UpdatePostInstallDoctorResult,
 } from "../infra/update-doctor-result.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { collectDoctorHealthResultWarnings } from "./doctor-health-contribution.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contributions.js";
 
 export async function publishDoctorUpdateResult(params: {
@@ -16,24 +16,19 @@ export async function publishDoctorUpdateResult(params: {
   doctorResult: UpdatePostInstallDoctorResult;
   healthContext: DoctorHealthFlowContext | undefined;
   maintenance: Awaited<ReturnType<typeof beginDoctorMaintenance>>;
+  startupWarnings?: readonly string[];
 }): Promise<void> {
   const { updateResult, doctorResult, healthContext, maintenance } = params;
   for (const change of updateResult.capture.configChanges) {
     createSubsystemLogger("update").warn(formatUpdateDoctorConfigChange(change));
   }
-  const contributionWarnings = healthContext?.updateWarnings ?? [];
-  const deferredCount = healthContext?.updateBudget?.deferred.size ?? 0;
-  // Contributions put deferrals first; retain migration advisories before other diagnostics.
-  // The updater persists these, so drop plugin migration warnings this pass already settled.
   const warnings = await retainCurrentDeferredPluginMigrationWarnings(
-    normalizeUpdatePostInstallDoctorWarnings([
-      ...contributionWarnings.slice(0, deferredCount),
-      ...(doctorResult.warnings ?? []),
-      ...(maintenance?.warnings ?? []).filter(
-        (warning) => !doctorResult.warnings?.includes(warning),
-      ),
-      ...contributionWarnings.slice(deferredCount),
-    ]),
+    collectDoctorHealthResultWarnings({
+      healthContext,
+      startupWarnings: params.startupWarnings,
+      resultWarnings: doctorResult.warnings,
+      maintenanceWarnings: maintenance?.warnings,
+    }),
   );
   const outcome = { ...doctorResult };
   delete outcome.warnings;
@@ -62,4 +57,17 @@ export async function publishDoctorUpdateResult(params: {
         : { configInputHash: updateResult.capture.inputHash }),
     },
   });
+}
+
+/** Publish only after maintenance custody has settled successfully. */
+export async function finishDoctorMaintenance(
+  params: Omit<Parameters<typeof publishDoctorUpdateResult>[0], "updateResult"> & {
+    release: () => Promise<void>;
+    updateResult?: Parameters<typeof publishDoctorUpdateResult>[0]["updateResult"];
+  },
+): Promise<void> {
+  await params.release();
+  if (params.updateResult) {
+    await publishDoctorUpdateResult({ ...params, updateResult: params.updateResult });
+  }
 }

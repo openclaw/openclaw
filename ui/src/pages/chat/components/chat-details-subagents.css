@@ -87,7 +87,7 @@
   border: 1.5px solid currentColor;
   border-right-color: transparent;
   border-radius: 50%;
-  animation: details-subagents-spin 1.5s linear infinite;
+  animation: btn-spinner-spin 1.5s linear infinite;
 }
 
 .chat-details-subagents__check {
@@ -262,12 +262,6 @@
 @media (prefers-reduced-motion: reduce) {
   .chat-details-subagents__spinner {
     animation: none;
-  }
-}
-
-@keyframes details-subagents-spin {
-  to {
-    transform: rotate(360deg);
   }
 }
 

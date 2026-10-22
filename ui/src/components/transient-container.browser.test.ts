@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { copyToClipboard } from "../lib/clipboard.ts";
-import "./modal-dialog.ts";
+import "./modal-dialog.tsx";
 import { mountNativeLinkMenu } from "./native-link-menu.runtime.ts";
 import { controlsForHovercard } from "./portaled-hovercard-focus.ts";
 import { createPortaledHovercard, createPortaledHovercardOwner } from "./portaled-hovercard.ts";

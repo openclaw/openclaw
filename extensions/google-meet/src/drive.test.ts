@@ -47,16 +47,12 @@ describe.each(googleApiRequests)("%s guarded response cleanup", (_name, run) => 
 
 function makeStreamResponse(sizeBytes: number): Response {
   const chunk = new Uint8Array(Math.min(sizeBytes, 65536)).fill(0x78);
-  let sent = 0;
   const stream = new ReadableStream<Uint8Array>({
-    pull(controller) {
-      if (sent >= sizeBytes) {
-        controller.close();
-        return;
+    start(controller) {
+      for (let sent = 0; sent < sizeBytes; sent += chunk.length) {
+        controller.enqueue(chunk.subarray(0, sizeBytes - sent));
       }
-      const toSend = Math.min(chunk.length, sizeBytes - sent);
-      controller.enqueue(chunk.subarray(0, toSend));
-      sent += toSend;
+      controller.close();
     },
   });
   return new Response(stream, { headers: { "Content-Type": "text/plain" } });

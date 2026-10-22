@@ -1,6 +1,6 @@
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createXApiClient, type XFetch } from "./api.js";
+import { createXTestApi as createXApiClient, type XFetch } from "./test-support/api-client.js";
 import { createXTestSpend } from "./test-support/spend.js";
 
 afterEach(() => {
@@ -13,12 +13,7 @@ describe("X API authentication", () => {
     const requests: string[] = [];
     let subscribed = false;
     const api = createXApiClient({
-      spend: createXTestSpend(),
-      clientId: "client",
-      clientSecret: "secret",
-      refreshToken: "refresh",
       bearerToken: "app-bearer",
-      saveRefreshToken: async () => {},
       fetch: async (url, init) => {
         const path = new URL(url).pathname;
         const authorization = new Headers(init?.headers).get("authorization");
@@ -89,8 +84,6 @@ describe("X API authentication", () => {
     });
     const options = {
       spend: createXTestSpend(),
-      clientId: "client",
-      clientSecret: "secret",
       refreshToken: "initial",
       fetch: fetcher,
       loadRefreshToken: async () => stored,
@@ -128,12 +121,9 @@ describe("X API authentication", () => {
   ])("retains safe Activity diagnostics for $label", async ({ body, detail }) => {
     vi.useFakeTimers();
     const api = createXApiClient({
-      spend: createXTestSpend(),
-      clientId: "client",
       clientSecret: "test-secret",
       refreshToken: "test-seed",
       bearerToken: "test-app-bearer",
-      saveRefreshToken: async () => {},
       fetch: async (url, init) => {
         if (url.endsWith("/oauth2/token")) {
           return Response.json({ access_token: "test-user-access", refresh_token: "test-rotated" });
@@ -160,12 +150,7 @@ describe("X API authentication", () => {
         throw new Error("unexpected paid request");
       });
       const api = createXApiClient({
-        spend: createXTestSpend(),
-        clientId: "client",
-        clientSecret: "secret",
-        refreshToken: "refresh",
         fetch: fetcher,
-        saveRefreshToken: async () => {},
       });
       const assertActive = () => {
         if (!active) {
@@ -188,10 +173,6 @@ describe("X API authentication", () => {
   it("keeps provider and persistence errors out of token status and diagnostics", async () => {
     const states: string[] = [];
     const api = createXApiClient({
-      spend: createXTestSpend(),
-      clientId: "client",
-      clientSecret: "secret",
-      refreshToken: "refresh",
       fetch: async () => Response.json({ access_token: "access", refresh_token: "rotated" }),
       saveRefreshToken: async () => {
         throw new Error("private persistence details");
@@ -216,11 +197,7 @@ describe("X API authentication", () => {
     let posts = 0;
     let refreshes = 0;
     const api = createXApiClient({
-      spend: createXTestSpend(),
-      clientId: "client",
-      clientSecret: "secret",
       refreshToken: "seed",
-      saveRefreshToken: async () => {},
       fetch: async (url) => {
         if (url.endsWith("/oauth2/token")) {
           refreshes++;
@@ -274,11 +251,7 @@ describe("X API authentication", () => {
       retryable: false,
     });
     const api = createXApiClient({
-      spend: createXTestSpend(),
-      clientId: "client",
-      clientSecret: "secret",
       refreshToken: "seed",
-      saveRefreshToken: async () => {},
       fetch: async () => Response.json({ access_token: "access" }),
     });
     await expect(
@@ -304,11 +277,7 @@ describe("X API authentication", () => {
       ),
     );
     const api = createXApiClient({
-      spend: createXTestSpend(),
-      clientId: "client",
-      clientSecret: "secret",
       refreshToken: "seed",
-      saveRefreshToken: async () => {},
       fetch: fetcher,
     });
     await expect(

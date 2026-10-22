@@ -49,6 +49,7 @@ import {
   type WidgetRawDetailsLabel,
 } from "./widget-card-menu.tsx";
 import { exportWidget } from "./widget-export.ts";
+import { WidgetPinButton, type WidgetPinTarget } from "./widget-pin-button.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -71,44 +72,6 @@ type WidgetCardOptions = {
 };
 
 type WidgetExportSource = HTMLIFrameElement | OpenClawCanvasWidgetView | undefined;
-
-async function pinWidget(
-  event: Event,
-  preview: CanvasToolPreview,
-  provider: BoardProvider,
-  name: string,
-  mcpAppViewId?: string,
-): Promise<void> {
-  const viewId = mcpAppViewId || preview.viewId?.trim();
-  if (!viewId) {
-    return;
-  }
-  const button = event.currentTarget;
-  if (!(button instanceof HTMLButtonElement)) {
-    return;
-  }
-  button.disabled = true;
-  const pendingLabel = t("chat.toolCards.pinToDashboardPending");
-  button.title = button.ariaLabel = pendingLabel;
-  try {
-    const identity = {
-      name,
-      ...(preview.title?.trim() ? { title: preview.title.trim() } : {}),
-    };
-    await (mcpAppViewId
-      ? provider.pinMcpApp({ ...identity, viewId })
-      : provider.pinWidget({ ...identity, docId: viewId }));
-    const pinnedLabel = t("chat.toolCards.pinnedToDashboard");
-    button.title = button.ariaLabel = pinnedLabel;
-    button.dataset.pinned = "true";
-  } catch {
-    button.disabled = false;
-    button.ariaLabel = t("chat.toolCards.pinToDashboard");
-    const failureLabel = t("chat.toolCards.pinToDashboardFailed");
-    button.title = failureLabel;
-    showToast({ message: failureLabel });
-  }
-}
 
 function isManagedCanvasDocumentPreview(preview: CanvasToolPreview): boolean {
   const viewId = preview.viewId?.trim();
@@ -574,10 +537,6 @@ function CanvasPreview(props: {
         (props.preview.viewId?.trim()
           ? canvasWidgetNameForDocument(props.preview.viewId.trim())
           : undefined);
-  const pinned = () =>
-    Boolean(
-      pinName() && provider()?.snapshot$.value.widgets.find((widget) => widget.name === pinName()),
-    );
   const canPin = () => {
     const board = provider();
     return (
@@ -593,8 +552,24 @@ function CanvasPreview(props: {
   const canExportImage = () => !props.preview.mcpApp && isInternalCanvasEntryUrl(props.preview.url);
   const hasMenu = () => canExportImage() || Boolean(props.options?.rawText);
   const hasActions = () => Boolean(canPin() || hasMenu());
-  const pinLabel = () =>
-    t(pinned() ? "chat.toolCards.pinnedToDashboard" : "chat.toolCards.pinToDashboard");
+  const pinTarget = createMemo(
+    (): WidgetPinTarget | undefined =>
+      canPin()
+        ? {
+            board: provider()!,
+            name: pinName()!,
+            viewId: mcpAppViewId() || props.preview.viewId!.trim(),
+            mcpApp: Boolean(props.preview.mcpApp),
+          }
+        : undefined,
+    {
+      equals: (previous, next) =>
+        previous?.board === next?.board &&
+        previous?.name === next?.name &&
+        previous?.viewId === next?.viewId &&
+        previous?.mcpApp === next?.mcpApp,
+    },
+  );
   return (
     <div
       ref={widgetActionsPlacementRef(hasActions)}
@@ -606,21 +581,8 @@ function CanvasPreview(props: {
     >
       <Show when={hasActions()}>
         <div class="chat-tool-card__preview-actions" data-widget-actions>
-          <Show when={canPin()}>
-            <button
-              class="btn btn--ghost btn--icon chat-tool-card__widget-action"
-              type="button"
-              data-pin-widget
-              disabled={pinned()}
-              data-pinned={pinned() ? "" : undefined}
-              title={pinLabel()}
-              aria-label={pinLabel()}
-              onClick={(event) =>
-                void pinWidget(event, props.preview, provider()!, pinName()!, mcpAppViewId())
-              }
-            >
-              <Icon name="pin" />
-            </button>
+          <Show when={pinTarget()} keyed>
+            {(target) => <WidgetPinButton target={target} title={props.preview.title} />}
           </Show>
           <Show when={hasMenu()}>
             <WidgetCardMenu

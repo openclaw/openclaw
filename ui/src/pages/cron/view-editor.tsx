@@ -130,7 +130,11 @@ export function Editor(
         </Show>
       </fieldset>
       {props.editingJob && props.canManage ? (
-        <CronScratchEditor jobId={props.editingJob.id} gateway={props.gateway} />
+        <CronScratchEditor
+          jobId={props.editingJob.id}
+          gateway={props.gateway}
+          getRetired={props.getActionRetired}
+        />
       ) : undefined}
     </>
   );

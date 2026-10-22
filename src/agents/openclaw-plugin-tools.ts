@@ -1,3 +1,5 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { getAgentToolAssistantTurnId } from "../../packages/agent-core/src/tool-execution-context.js";
 import { getRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -5,6 +7,14 @@ import {
   resolveMessageActionTurnCapability,
   selectMessageActionRequesterIdentity,
 } from "../gateway/message-action-turn-capability.js";
+import { listConnectedNodePluginTools } from "../gateway/node-plugin-tool-snapshot.js";
+import {
+  NODE_MCP_TOOL_CALL_GATEWAY_TIMEOUT_MS,
+  NODE_MCP_TOOL_CALL_TIMEOUT_MS,
+  NODE_MCP_TOOLS_CALL_COMMAND,
+  NODE_PLUGIN_TOOL_CALL_GATEWAY_TIMEOUT_MS,
+  NODE_PLUGIN_TOOL_CALL_TIMEOUT_MS,
+} from "../infra/node-commands.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../media/read-capability.js";
 import { resolveProviderAuthScope } from "../plugins/provider-auth-scope.js";
 import { getActivePluginRegistry, getActivePluginRegistryVersion } from "../plugins/runtime.js";
@@ -13,30 +23,53 @@ import {
   withPluginRuntimeRegistryScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
+import { createPluginToolAllowlist } from "../plugins/tool-grant-allowlist.js";
+import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import type { OpenClawPluginToolDelivery } from "../plugins/tool-types.js";
 import { resolvePluginTools, resolvePluginToolsSteps } from "../plugins/tools.js";
 import type { OpenClawPluginToolContext } from "../plugins/types.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { sanitizeNodeIdFragment, sanitizeServerName } from "./agent-bundle-mcp-names.js";
 import { resolveApiKeyForProfile, resolveAuthProfileOrder } from "./auth-profiles.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { bindRequesterOwnerIdentity } from "./cron-creator-authority-context.js";
+import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
+import {
+  projectMcpCallToolResult,
+  setMcpCodeModeGuestResultFromAgentResult,
+} from "./mcp-content.js";
 import {
   createRuntimeProviderAuthLookup,
   hasRuntimeAvailableProviderAuth,
   resolveApiKeyForProviderCore as resolveProviderAuth,
 } from "./model-auth.js";
-import { createNodePluginTools } from "./node-plugin-tools.js";
 import {
   resolveOpenClawPluginToolInputs,
   type OpenClawPluginToolOptions,
 } from "./openclaw-tools.plugin-context.js";
 import { preparePluginToolExecutionCapabilities } from "./plugin-tool-execution.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
+import type { AgentToolResult } from "./runtime/index.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
 import { resolveAgentRuntimeToolConfig } from "./tool-runtime-config.js";
-import type { AnyAgentTool } from "./tools/common.js";
+import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 import { captureGatewayToolCallerAssertion } from "./tools/gateway-caller-context.js";
+import { callGatewayTool } from "./tools/gateway.js";
 import { hasProviderAuthForTool } from "./tools/model-config.helpers.js";
 import { captureAgentWorkspaceReadiness } from "./workspace-readiness.js";
+
+const NODE_PLUGIN_TOOL_NAME_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
+const NODE_PLUGIN_TOOL_NAME_MAX_LENGTH = 64;
+const NODE_MCP_PLUGIN_ID = "node-mcp";
+
+type MaterializedNodeToolEntry = ReturnType<typeof listConnectedNodePluginTools>[number] & {
+  command: string;
+  normalizedName: string;
+};
+
+function isAgentToolResult(value: unknown): value is AgentToolResult<unknown> {
+  return isRecord(value) && Array.isArray(value.content);
+}
 
 type ResolveOpenClawPluginToolsOptions = OpenClawPluginToolOptions & {
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
@@ -352,6 +385,8 @@ function* resolveOpenClawPluginToolSteps(
       preparedModelRuntime,
       config: availabilityConfig,
       agentId: pluginToolInputs.context.agentId,
+      sessionKey: pluginToolInputs.context.sessionKey,
+      sessionId: pluginToolInputs.context.sessionId,
     }),
     context: {
       ...pluginToolInputs.context,
@@ -389,14 +424,154 @@ function* resolveOpenClawPluginToolSteps(
   for (const tool of pluginTools) {
     existingToolNames.add(tool.name);
   }
-  pluginTools.push(
-    ...createNodePluginTools({
-      existingToolNames,
-      toolAllowlist: params.options?.pluginToolAllowlist,
-      toolDenylist: params.options?.pluginToolDenylist,
-      agentSessionKey: pluginToolInputs.context.sessionKey,
-    }),
-  );
+  const nodeAgentSessionKey = pluginToolInputs.context.sessionKey;
+  const existingNormalized = new Set([...existingToolNames].map(normalizeToolPolicyName));
+  const allowlist = createPluginToolAllowlist(params.options?.pluginToolAllowlist);
+  const denylist = compileGlobPatterns({
+    raw: params.options?.pluginToolDenylist,
+    normalize: normalizeToolPolicyName,
+  });
+  const entries: MaterializedNodeToolEntry[] = [];
+  const nameCounts = new Map<string, number>();
+  for (const entry of listConnectedNodePluginTools()) {
+    const descriptor = entry.descriptor;
+    const command = descriptor.command?.trim();
+    const normalizedName = normalizeToolPolicyName(descriptor.name);
+    if (!command || !normalizedName) {
+      continue;
+    }
+    entries.push({ ...entry, command, normalizedName });
+    nameCounts.set(normalizedName, (nameCounts.get(normalizedName) ?? 0) + 1);
+  }
+
+  for (const entry of entries) {
+    const descriptor = entry.descriptor;
+    let toolName: string | undefined = descriptor.name;
+    if (
+      (nameCounts.get(entry.normalizedName) ?? 1) !== 1 ||
+      existingNormalized.has(entry.normalizedName)
+    ) {
+      toolName = undefined;
+      const prefix = `${sanitizeNodeIdFragment(entry.nodeId)}_`;
+      for (let index = 0; index < 100; index += 1) {
+        const suffix = index === 0 ? "" : `_${index + 1}`;
+        const maxBaseLength = Math.max(
+          1,
+          NODE_PLUGIN_TOOL_NAME_MAX_LENGTH - prefix.length - suffix.length,
+        );
+        const candidate = `${prefix}${descriptor.name.slice(0, maxBaseLength)}${suffix}`;
+        const normalized = normalizeToolPolicyName(candidate);
+        if (
+          NODE_PLUGIN_TOOL_NAME_RE.test(candidate) &&
+          normalized &&
+          !existingNormalized.has(normalized)
+        ) {
+          toolName = candidate;
+          break;
+        }
+      }
+    }
+    if (!toolName) {
+      continue;
+    }
+    const pluginId = normalizeToolPolicyName(descriptor.pluginId);
+    const exposedToolName = normalizeToolPolicyName(toolName);
+    if (
+      matchesAnyGlobPattern(pluginId, denylist) ||
+      matchesAnyGlobPattern(entry.normalizedName, denylist) ||
+      matchesAnyGlobPattern(exposedToolName, denylist) ||
+      matchesAnyGlobPattern("group:plugins", denylist)
+    ) {
+      continue;
+    }
+    // Unregistered nodes cannot grant themselves plugin-scoped access by
+    // claiming another plugin's ID. Only the reserved node-mcp ID is trusted.
+    const pluginIdTrusted = entry.registered || pluginId === NODE_MCP_PLUGIN_ID;
+    if (
+      !allowlist.includesDefaults &&
+      !(
+        (pluginIdTrusted && allowlist.allowsPlugin(pluginId)) ||
+        allowlist.allowsToolName(entry.normalizedName) ||
+        allowlist.allowsToolName(exposedToolName)
+      )
+    ) {
+      continue;
+    }
+    existingNormalized.add(exposedToolName);
+    const mcpTool = descriptor.command === NODE_MCP_TOOLS_CALL_COMMAND ? descriptor.mcp : undefined;
+    const tool: AnyAgentTool = {
+      name: toolName,
+      label: toolName,
+      description: `${descriptor.description} (node: ${entry.displayName?.trim() || entry.nodeId})`,
+      // SAFETY: normalized paired-node JSON schemas need no TypeBox-only metadata when forwarded.
+      parameters: descriptor.parameters as never,
+      ...(mcpTool
+        ? { executionMode: "sequential" as const, resultContentSource: "network" as const }
+        : {}),
+      execute: async (toolCallId, toolParams, signal) => {
+        const assistantTurnId = getAgentToolAssistantTurnId();
+        const raw = await callGatewayTool(
+          "node.invoke",
+          {
+            timeoutMs: mcpTool
+              ? NODE_MCP_TOOL_CALL_GATEWAY_TIMEOUT_MS
+              : NODE_PLUGIN_TOOL_CALL_GATEWAY_TIMEOUT_MS,
+          },
+          {
+            nodeId: entry.nodeId,
+            command: entry.command,
+            params: mcpTool
+              ? {
+                  server: mcpTool.server,
+                  tool: mcpTool.tool,
+                  arguments: toolParams,
+                }
+              : toolParams,
+            timeoutMs: mcpTool ? NODE_MCP_TOOL_CALL_TIMEOUT_MS : NODE_PLUGIN_TOOL_CALL_TIMEOUT_MS,
+            idempotencyKey: assistantTurnId ? `${assistantTurnId}:${toolCallId}` : toolCallId,
+            ...(nodeAgentSessionKey ? { sessionKey: nodeAgentSessionKey } : {}),
+          },
+          { scopes: ["operator.write"], ...(signal ? { signal } : {}) },
+        );
+        const payload = isRecord(raw) && "payload" in raw ? raw.payload : raw;
+        if (mcpTool) {
+          return isRecord(payload)
+            ? projectMcpCallToolResult(payload, {
+                mcpServer: mcpTool.server,
+                mcpTool: mcpTool.tool,
+              })
+            : jsonResult(payload);
+        }
+        const result = isAgentToolResult(payload) ? payload : jsonResult(payload);
+        return descriptor.mcp ? setMcpCodeModeGuestResultFromAgentResult(result) : result;
+      },
+    };
+    setPluginToolMeta(tool, {
+      pluginId: descriptor.pluginId,
+      optional: false,
+      ...(descriptor.mcp
+        ? {
+            mcp: {
+              serverName: descriptor.mcp.server,
+              safeServerName: sanitizeServerName(descriptor.mcp.server, new Set<string>()),
+              toolName: descriptor.mcp.tool,
+              operation: "tool",
+              ...(descriptor.pluginId === NODE_MCP_PLUGIN_ID && mcpTool
+                ? {
+                    node: {
+                      id: entry.nodeId,
+                      ...(entry.displayName?.trim()
+                        ? { displayName: entry.displayName.trim() }
+                        : {}),
+                    },
+                  }
+                : {}),
+            },
+          }
+        : {}),
+    });
+    pluginTools.push(tool);
+  }
 
   return pluginTools;
 }

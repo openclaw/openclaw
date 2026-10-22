@@ -3,7 +3,6 @@ import {
   buildChannelInboundEventContext,
   buildMentionRegexes,
   formatMediaPlaceholderText,
-  type EnvelopeFormatOptions,
   filterChannelInboundQuoteContext,
   formatInboundEnvelope,
   formatInboundFromLabel,
@@ -791,7 +790,6 @@ export async function buildIMessageInboundContext(params: {
   accountService: IMessageService | undefined;
   decision: IMessageInboundDispatchDecision;
   message: IMessagePayload;
-  envelopeOptions?: EnvelopeFormatOptions;
   previousTimestamp?: number;
   remoteHost?: string;
   media?: {
@@ -804,7 +802,7 @@ export async function buildIMessageInboundContext(params: {
     params: BuildChannelInboundEventContextParams,
   ) => BuiltChannelInboundEventContext | Promise<BuiltChannelInboundEventContext>;
 }) {
-  const envelopeOptions = params.envelopeOptions ?? resolveEnvelopeFormatOptions(params.cfg);
+  const envelopeOptions = resolveEnvelopeFormatOptions(params.cfg);
   const { decision } = params;
   const chatId = decision.chatId;
   const chatTarget =

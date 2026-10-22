@@ -1,4 +1,3 @@
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { onSettled } from "solid-js";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
@@ -12,7 +11,6 @@ import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { createSessionDetails } from "../../components/session-details.ts";
 import { hasSessionArchiveDescendants } from "../../components/session-menu-descendants.ts";
 import { fetchSessionMenuWork } from "../../components/session-menu-work.ts";
-import "../../components/session-menu-solid.tsx";
 import { moveSessionFromMenu } from "../../components/session-placement-action.ts";
 import {
   formatBatchSessionRemovalError,
@@ -34,7 +32,6 @@ import {
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   sessionPullRequestsForGateway,
 } from "../../lib/session-pull-requests.ts";
-import { resolveSessionRenamePatch, resolveSessionRenameValue } from "../../lib/session-rename.ts";
 import {
   SESSIONS_PAGE_DEFAULT_LIMIT,
   filterSessionRows,
@@ -56,7 +53,6 @@ import {
   scopedSessionArtifactKey,
 } from "../../lib/sessions/session-key.ts";
 import { requestSessionInvolvement } from "../../lib/sessions/session-requests.ts";
-import { searchVisibleSessionTranscripts } from "../../lib/sessions/transcript-search.ts";
 import { formatPreservedWorktreesNotice } from "../../lib/sessions/worktree-preservation.ts";
 import { runControlUiPluginAction } from "../../plugins/control-ui-actions.ts";
 import {
@@ -69,9 +65,14 @@ import { createSessionsArchive } from "./archive-actions.ts";
 import { rememberSessionCustomGroup, sessionCategoryNames } from "./custom-groups.ts";
 import { resolveSessionDeleteOutcome } from "./delete-outcome.ts";
 import { buildSessionsListQuery } from "./list-query.ts";
+import {
+  createSessionsMutationRunner,
+  type SessionsPageMutationResult,
+} from "./mutation-runner.ts";
 import { createSessionsDialog } from "./page-dialog.ts";
 import { loadStoredGroupBy, saveStoredGroupBy } from "./page-state.ts";
 import type { SessionsPageRequestScope } from "./request-scope.ts";
+import { createSessionsRosterReadiness } from "./roster-readiness.ts";
 import type { SessionsRouteData } from "./route.ts";
 import {
   reconcileSelectedSessions,
@@ -85,12 +86,11 @@ import {
 } from "./session-menu.tsx";
 import type { SessionsAdvancedFiltersProps } from "./sessions-filters.tsx";
 import type { SessionsPageListBinding, SessionsPageState } from "./sessions-page-state.types.ts";
+import { createTranscriptSearch } from "./transcript-search.ts";
 
 registerSessionOrganizationEnglish();
 
 const SESSION_SEARCH_DEBOUNCE_MS = 200;
-
-type SessionsPageMutationResult = "completed" | "failed" | "stale";
 
 export type SessionsPageOwner = ReturnType<typeof createSessionsPage>;
 
@@ -119,6 +119,7 @@ export function createSessionsPage(
     page: 0,
     pageSize: 25,
     result: null,
+    roster: null,
     loading: false,
     refreshing: false,
     error: null,
@@ -137,6 +138,12 @@ export function createSessionsPage(
   });
   const state = observation.state;
   const publish = observation.invalidate;
+  const transcriptSearch = createTranscriptSearch({
+    state,
+    captureScope: captureRequestScope,
+    isCurrent: isRequestScopeCurrent,
+    listOptions: (scope) => sessionListOptions(scope.context, ""),
+  });
   // Route deep-link target (?session=...); unlike expandedSessionKey it also
   // narrows sessionListOptions so the linked session is guaranteed to load.
   let deepLinkSessionKey: string | null = null;
@@ -146,13 +153,13 @@ export function createSessionsPage(
   let pageEpoch = 0;
   let pluginActionLifetime = new AbortController();
   let commandRetirement = Promise.withResolvers<void>();
-  let sessionMutationPending = false;
   let sessionMenuTrigger: HTMLElement | null = null;
   let listBinding: SessionsPageListBinding | undefined;
   let unsubscribeList: (() => void) | undefined;
   let listRequest: Promise<void> | undefined;
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
   let appliedListResult: SessionsListResult | null | undefined;
+  const rosterReadiness = createSessionsRosterReadiness(state);
   const details = createSessionDetails({
     captureScope: captureRequestScope,
     isCurrent: isRequestScopeCurrent,
@@ -162,10 +169,25 @@ export function createSessionsPage(
   const inputDialog = createSessionsDialog((message) => {
     state.error = message;
   });
+  const sessionMutations = createSessionsMutationRunner({
+    isCurrent: isRequestScopeCurrent,
+    started: () => {
+      state.error = null;
+    },
+    settled: (outcome) => {
+      const binding = listBinding;
+      if (binding) {
+        applyListSnapshot(binding, binding.sessions.listSnapshot(binding.query));
+      }
+      if (outcome && typeof outcome === "object") {
+        state.error = outcome.error;
+      }
+    },
+  });
   const observeAgentScope = watchAgentScope(() => {
     // Keep same-connection list serialization.
     retirePageOperations();
-    resetTranscriptSearchState(state.transcriptSearchQuery);
+    transcriptSearch.reset();
     if (!deepLinkSessionKey) {
       state.page = 0;
       state.selectedSessions = new Map();
@@ -198,36 +220,6 @@ export function createSessionsPage(
     },
   );
 
-  let transcriptSearchAbort: AbortController | undefined;
-  async function searchTranscripts(query: string) {
-    transcriptSearchAbort?.abort();
-    const lifetime = new AbortController();
-    transcriptSearchAbort = lifetime;
-    const scope = captureRequestScope();
-    if (!scope) {
-      state.transcriptSearch = null;
-      return;
-    }
-    const isCurrent = () => !lifetime.signal.aborted && isRequestScopeCurrent(scope);
-    const result = searchVisibleSessionTranscripts({
-      client: scope.client,
-      query,
-      listOptions: sessionListOptions(scope.context, ""),
-      isCurrent,
-    }).then(
-      (searchResult) => (isCurrent() ? searchResult : null),
-      (error: unknown) => {
-        if (isCurrent()) {
-          throw error;
-        }
-        return null;
-      },
-    );
-    state.transcriptSearch = result;
-    // Rendering owns errors; command callers still await the admitted request.
-    await result.catch(() => undefined);
-  }
-
   function synchronize() {
     bindSessionList();
     details.synchronize();
@@ -238,9 +230,9 @@ export function createSessionsPage(
     pluginActionLifetime.abort();
     pluginActionLifetime = new AbortController();
     pageEpoch += 1;
+    sessionMutations.retire();
     commandRetirement.resolve();
     commandRetirement = Promise.withResolvers<void>();
-    sessionMutationPending = false;
     closeSessionMenu();
   }
 
@@ -248,7 +240,8 @@ export function createSessionsPage(
     retirePageOperations();
     clearSearchTimer();
     listRequest = undefined;
-    resetTranscriptSearchState(state.transcriptSearchQuery);
+    rosterReadiness.retire();
+    transcriptSearch.reset();
     state.loading = false;
     state.refreshing = false;
   }
@@ -258,7 +251,7 @@ export function createSessionsPage(
     state.error = null;
     state.loading = false;
     state.refreshing = false;
-    resetTranscriptSearchState("");
+    transcriptSearch.reset("");
     state.selectedSessions = new Map();
     state.expandedSessionKey = null;
     deepLinkSessionKey = null;
@@ -267,6 +260,9 @@ export function createSessionsPage(
 
   const archiveActions = createSessionsArchive({
     captureScope: captureRequestScope,
+    clearError: () => {
+      state.error = null;
+    },
     isCurrent: isRequestScopeCurrent,
     publishError: publishRequestError,
     refresh: refreshSessionList,
@@ -309,12 +305,12 @@ export function createSessionsPage(
   function publishRequestError(
     scope: SessionsPageRequestScope,
     error: unknown,
-  ): "failed" | "stale" {
+  ): SessionsPageMutationResult {
     if (!isRequestScopeCurrent(scope)) {
       return "stale";
     }
-    state.error = formatUiError(error);
-    return "failed";
+    state.error = error;
+    return { status: "failed", error };
   }
 
   function mutationDisabledReason(request: SessionMethodAccessRequest): string | undefined {
@@ -322,16 +318,16 @@ export function createSessionsPage(
     return access.allowed ? undefined : access.reason;
   }
 
-  function requireMutationAccess(
+  function mutationAccessError(
     scope: SessionsPageRequestScope,
     request: SessionMethodAccessRequest,
-  ): boolean {
+  ): string | null {
     const access = readSessionMethodAccess(scope.gateway.snapshot, request);
     if (access.allowed) {
-      return true;
+      return null;
     }
     state.error = access.reason;
-    return false;
+    return access.reason;
   }
 
   function selectedDeleteDisabledReason(): string | undefined {
@@ -372,17 +368,12 @@ export function createSessionsPage(
   }
 
   function sessionListOptions(context: ApplicationContext, search = state.searchQuery) {
-    return buildSessionsListQuery(context, {
-      activeMinutes: parseStrictPositiveInteger(state.activeMinutes),
-      // The Limit box is an explicit page size, so an unparseable entry falls
-      // back to the page default rather than to the shared roster page size.
-      limit: parseStrictPositiveInteger(state.limit) ?? SESSIONS_PAGE_DEFAULT_LIMIT,
-      includeGlobal: state.includeGlobal,
-      includeUnknown: state.includeUnknown,
-      statusFilter: state.statusFilter,
+    return buildSessionsListQuery(
+      context.agentSelection.state.scopeId,
+      state,
       deepLinkSessionKey,
       search,
-    });
+    );
   }
 
   function bindSessionList(refreshMissing = true): SessionsPageListBinding | undefined {
@@ -402,7 +393,7 @@ export function createSessionsPage(
       unsubscribeList?.();
       unsubscribeList = undefined;
       if (current?.sessions !== sessions || current.transcriptKey !== transcriptKey) {
-        resetTranscriptSearchState(state.transcriptSearchQuery);
+        transcriptSearch.reset();
       }
       // Retired rows cannot be selected under replacement text, even during debounce.
       state.result = null;
@@ -412,6 +403,7 @@ export function createSessionsPage(
       state.page = 0;
       listBinding = { sessions, query, key, transcriptKey };
       appliedListResult = undefined;
+      rosterReadiness.restart(captureRequestScope() !== null);
     }
     const binding = listBinding!;
     if (unsubscribeList) {
@@ -437,8 +429,7 @@ export function createSessionsPage(
     if (listBinding !== binding || application.sessions !== binding.sessions) {
       return;
     }
-    state.loading = snapshot.loading;
-    state.error = snapshot.error;
+    rosterReadiness.update(snapshot.loading, snapshot.error);
     const result = snapshot.result;
     if (!result) {
       return;
@@ -472,6 +463,7 @@ export function createSessionsPage(
     if (!binding || binding.sessions !== scope.sessions || !isRequestScopeCurrent(scope)) {
       return;
     }
+    state.error = null;
     await loadSessionList(binding, { force: true });
     if (isRequestScopeCurrent(scope) && listBinding === binding) {
       applyListSnapshot(binding, binding.sessions.listSnapshot(binding.query));
@@ -512,35 +504,6 @@ export function createSessionsPage(
   function clearSearchTimer() {
     clearTimeout(searchTimer);
     searchTimer = undefined;
-  }
-
-  function resetTranscriptSearchState(query: string) {
-    state.transcriptSearchQuery = query;
-    transcriptSearchAbort?.abort();
-    state.transcriptSearch = null;
-  }
-
-  function updateTranscriptSearchQuery(query: string) {
-    if (query === state.transcriptSearchQuery) {
-      return;
-    }
-    // Editing invalidates the visible results and the in-flight query so a
-    // late response cannot appear under different search text.
-    resetTranscriptSearchState(query);
-  }
-
-  async function runTranscriptSearch() {
-    const query = state.transcriptSearchQuery.trim();
-    if (!query) {
-      resetTranscriptSearchState("");
-      return;
-    }
-    const scope = captureRequestScope();
-    if (!scope) {
-      return;
-    }
-    state.transcriptSearchQuery = query;
-    await searchTranscripts(query);
   }
 
   function updateFilters(next: Parameters<SessionsAdvancedFiltersProps["onFiltersChange"]>[0]) {
@@ -586,7 +549,7 @@ export function createSessionsPage(
 
   async function deleteSelected() {
     const rows = [...state.selectedSessions.values()];
-    if (rows.length === 0 || state.loading || sessionMutationPending) {
+    if (rows.length === 0 || state.loading || sessionMutations.pending) {
       return;
     }
     const scope = captureRequestScope();
@@ -602,7 +565,7 @@ export function createSessionsPage(
     if (!(await confirmMutation(message)) || !isRequestScopeCurrent(scope)) {
       return;
     }
-    await deleteSessions(rows.filter((row) => state.selectedSessions.get(row.key) === row));
+    return deleteSessions(rows.filter((row) => state.selectedSessions.get(row.key) === row));
   }
 
   function confirmMutation(
@@ -622,7 +585,7 @@ export function createSessionsPage(
     rows: SessionDeleteRow[],
     options: { deleteTranscript?: boolean } = {},
   ) {
-    if (rows.length === 0 || state.loading || sessionMutationPending) {
+    if (rows.length === 0 || state.loading || sessionMutations.pending) {
       return;
     }
     const scope = captureRequestScope();
@@ -637,11 +600,11 @@ export function createSessionsPage(
       ...(row.archived === true ? { archivedOnly: true } : {}),
     }));
     for (const params of requests) {
-      if (!requireMutationAccess(scope, { method: "sessions.delete", params })) {
+      if (mutationAccessError(scope, { method: "sessions.delete", params })) {
         return;
       }
     }
-    await runSessionMutation(scope, async () => {
+    return sessionMutations.run(scope, async () => {
       const request = async () => {
         const result = await scope.sessions.deleteMany(requests);
         if (rows.length === 1 && result.errors.length > 0) {
@@ -689,14 +652,19 @@ export function createSessionsPage(
       }
       await refreshSessionList(scope);
       return result.errors.length > 0
-        ? result.errors.map(({ error }) => formatBatchSessionRemovalError(error)).join("; ")
-        : undefined;
+        ? {
+            status: "failed",
+            error: result.errors
+              .map(({ error }) => formatBatchSessionRemovalError(error))
+              .join("; "),
+          }
+        : "completed";
     });
   }
 
   async function deleteAllArchived() {
     const scope = captureRequestScope();
-    if (!scope || state.loading || sessionMutationPending) {
+    if (!scope || state.loading || sessionMutations.pending) {
       return;
     }
     // The rendered list is bounded by the page's limit filter; re-enumerate the
@@ -717,8 +685,7 @@ export function createSessionsPage(
       const listed = await fetchPagedSessionRows({
         list: (offset) => scope.sessions.list({ ...listOptions, limit: 1000, offset }),
         isCurrent: () => isRequestScopeCurrent(scope),
-        missingResultError:
-          scope.sessions.state.error ?? "archived session enumeration returned no result",
+        missingResultError: "archived session enumeration returned no result",
         stalledPaginationError: "archived session enumeration did not advance",
         incompletePaginationError: "archived session enumeration was incomplete",
       });
@@ -727,8 +694,7 @@ export function createSessionsPage(
       }
       rows = listed;
     } catch (error) {
-      publishRequestError(scope, error);
-      return;
+      return publishRequestError(scope, error);
     }
     const archivedRows = rows.filter((row) => row.archived === true);
     if (archivedRows.length === 0) {
@@ -745,7 +711,7 @@ export function createSessionsPage(
     ) {
       return;
     }
-    await deleteSessions(archivedRows, { deleteTranscript: true });
+    return deleteSessions(archivedRows, { deleteTranscript: true });
   }
 
   async function deleteSessionFromMenu(row: GatewaySessionRow) {
@@ -758,7 +724,7 @@ export function createSessionsPage(
     ) {
       return;
     }
-    await deleteSessions([row]);
+    return deleteSessions([row]);
   }
 
   async function stopCloudWorker(row: GatewaySessionRow) {
@@ -774,11 +740,11 @@ export function createSessionsPage(
         confirmLabel: t("sessionsView.stopCloudWorkerConfirmAction"),
       })) ||
       !isRequestScopeCurrent(scope) ||
-      !requireMutationAccess(scope, stopAction)
+      mutationAccessError(scope, stopAction)
     ) {
       return;
     }
-    await runSessionMutation(scope, async () => {
+    return sessionMutations.run(scope, async () => {
       const agentId = resolveUiSessionRowAgentId(row, sessionPathAgentId(row.key, scope.context));
       await requestCloudWorkerStop(
         scope.client,
@@ -791,33 +757,8 @@ export function createSessionsPage(
       if (isRequestScopeCurrent(scope)) {
         await refreshSessionList(scope);
       }
+      return "completed";
     });
-  }
-
-  async function runSessionMutation(
-    scope: SessionsPageRequestScope,
-    mutate: () => Promise<string | void>,
-  ) {
-    sessionMutationPending = true;
-    let mutationError: string | void = undefined;
-    try {
-      mutationError = await mutate();
-    } catch (error) {
-      if (isRequestScopeCurrent(scope)) {
-        mutationError = formatUiError(error);
-      }
-    } finally {
-      if (isRequestScopeCurrent(scope)) {
-        sessionMutationPending = false;
-        const binding = listBinding;
-        if (binding) {
-          applyListSnapshot(binding, binding.sessions.listSnapshot(binding.query));
-        }
-        if (mutationError) {
-          state.error = mutationError;
-        }
-      }
-    }
   }
 
   function knownCategories(): string[] {
@@ -831,14 +772,14 @@ export function createSessionsPage(
     if (!scope) {
       return "stale";
     }
-    if (
-      !requireMutationAccess(scope, {
-        method: "sessions.groups.put",
-        requiredScope: "operator.write",
-      })
-    ) {
-      return "failed";
+    const accessError = mutationAccessError(scope, {
+      method: "sessions.groups.put",
+      requiredScope: "operator.write",
+    });
+    if (accessError) {
+      return { status: "failed", error: accessError };
     }
+    state.error = null;
     return rememberSessionCustomGroup({
       name,
       knownCategories: knownCategories(),
@@ -855,19 +796,25 @@ export function createSessionsPage(
     // otherwise create a store entry for arbitrary dropped text.
     const session = state.result?.sessions.find((row) => row.key === key);
     if (!session) {
-      return;
+      return undefined;
     }
     // Dropping a row onto its own section is a no-op; skip the patch round-trip.
     const current = session.category?.trim() || null;
     const promote = !isSubagentSessionKey(session.key) && !isPinnableUiSessionRow(session);
     if (current === category && !promote) {
-      return;
+      return undefined;
     }
     const scope = captureRequestScope();
-    if (!scope || (category && (await rememberCustomGroup(category, scope)) !== "completed")) {
-      return;
+    if (!scope) {
+      return undefined;
     }
-    await patchSession(
+    if (category) {
+      const remembered = await rememberCustomGroup(category, scope);
+      if (remembered !== "completed") {
+        return remembered;
+      }
+    }
+    return patchSession(
       key,
       { category, ...(promote ? { sidebarRoot: true } : {}) },
       scope,
@@ -908,8 +855,8 @@ export function createSessionsPage(
     }
     const remembered = await rememberCustomGroup(name, scope);
     if (remembered !== "completed") {
-      return remembered === "failed"
-        ? (state.error ?? t("sessionsView.newGroupFailed"))
+      return typeof remembered === "object"
+        ? formatUiError(remembered.error)
         : t("sessionsView.newGroupStale");
     }
     if (!session) {
@@ -926,39 +873,16 @@ export function createSessionsPage(
       scope,
       session.sessionId,
     );
-    if (assigned === "failed") {
-      return state.error ?? t("sessionsView.newGroupFailed");
+    if (typeof assigned === "object") {
+      return formatUiError(assigned.error);
     }
     return assigned === "stale" ? t("sessionsView.newGroupStale") : null;
   }
 
   async function renameSession(row: GatewaySessionRow) {
-    const scope = captureRequestScope();
-    if (!scope) {
-      state.error = t("sessionsView.actionRequiresConnection");
-      return;
-    }
-    const initialValue = resolveSessionRenameValue(row);
-    await inputDialog.open(() => ({
-      signal: scope.signal,
-      title: t("sessionsView.renameSessionPrompt"),
-      defaultValue: initialValue,
-      submit: async (value) => {
-        if (!isRequestScopeCurrent(scope)) {
-          return t("sessionsView.actionRequiresConnection");
-        }
-        const patch = resolveSessionRenamePatch(value, initialValue, row.label);
-        if (!patch) {
-          return null;
-        }
-        const result = await patchSession(row.key, patch, scope, row.sessionId, {
-          sessionScope: true,
-        });
-        return result === "completed"
-          ? null
-          : (state.error ?? t("sessionsView.actionRequiresConnection"));
-      },
-    }));
+    await inputDialog.rename(row, captureRequestScope(), isRequestScopeCurrent, (scope, patch) =>
+      patchSession(row.key, patch, scope, row.sessionId, { sessionScope: true }),
+    );
   }
 
   async function patchSession(
@@ -972,28 +896,31 @@ export function createSessionsPage(
       // Nothing was attempted (e.g. rename dialog submitted after the gateway
       // dropped); say so instead of silently swallowing the edit.
       state.error = t("sessionsView.actionRequiresConnection");
-      return "failed";
+      return { status: "failed", error: t("sessionsView.actionRequiresConnection") };
     }
     if (typeof patch.archived === "boolean" && !expectedSessionId?.trim()) {
       state.error = "Session lifecycle action requires a durable session identity.";
-      return "failed";
+      return {
+        status: "failed",
+        error: "Session lifecycle action requires a durable session identity.",
+      };
     }
     const agentId = sessionAgentId(key, scope.context);
     const row = state.result?.sessions.find((entry) => entry.key === key);
-    if (
-      !requireMutationAccess(scope, {
-        method: "sessions.patch",
-        sessionScope: options.sessionScope,
-        session: row,
-        params: {
-          key,
-          ...patch,
-          ...(agentId ? { agentId } : {}),
-        },
-      })
-    ) {
-      return "failed";
+    const accessError = mutationAccessError(scope, {
+      method: "sessions.patch",
+      sessionScope: options.sessionScope,
+      session: row,
+      params: {
+        key,
+        ...patch,
+        ...(agentId ? { agentId } : {}),
+      },
+    });
+    if (accessError) {
+      return { status: "failed", error: accessError };
     }
+    state.error = null;
     try {
       const request = () =>
         scope.sessions.patch(key, patch, {
@@ -1021,9 +948,11 @@ export function createSessionsPage(
       if (!isRequestScopeCurrent(scope)) {
         return "stale";
       }
-      if (!patched || "queued" in patched) {
-        state.error = patched ? null : scope.sessions.state.error;
-        return patched ? "completed" : "failed";
+      if (!patched) {
+        return "stale";
+      }
+      if ("queued" in patched) {
+        return "completed";
       }
       await refreshSessionList(scope);
       if (!isRequestScopeCurrent(scope)) {
@@ -1037,7 +966,10 @@ export function createSessionsPage(
     }
   }
 
-  async function forkSession(key: string, fromLastCompleted = false) {
+  async function forkSession(
+    key: string,
+    fromLastCompleted = false,
+  ): Promise<SessionsPageMutationResult | void> {
     const scope = captureRequestScope();
     if (!scope) {
       return;
@@ -1049,15 +981,17 @@ export function createSessionsPage(
       ...(fromLastCompleted ? { forkFrom: "last-completed" as const } : {}),
       ...(agentId ? { agentId } : {}),
     };
-    if (!requireMutationAccess(scope, { method: "sessions.create", params: createParams })) {
+    if (mutationAccessError(scope, { method: "sessions.create", params: createParams })) {
       return;
     }
+    state.error = null;
     try {
-      const forkedKey = await scope.sessions.create(createParams, { signal: scope.signal });
+      const forked = await scope.sessions.createResult(createParams, { signal: scope.signal });
       if (!isRequestScopeCurrent(scope)) {
-        return;
+        return "stale";
       }
-      if (forkedKey) {
+      if (forked) {
+        const forkedKey = forked.key;
         scope.context.navigate("chat", {
           ...sessionNavigationTarget({
             context: scope.context,
@@ -1067,11 +1001,10 @@ export function createSessionsPage(
           }).options,
           hash: "",
         });
-      } else if (scope.sessions.state.error) {
-        state.error = scope.sessions.state.error;
       }
+      return forked ? "completed" : "stale";
     } catch (error) {
-      publishRequestError(scope, error);
+      return publishRequestError(scope, error);
     }
   }
 
@@ -1148,7 +1081,10 @@ export function createSessionsPage(
       groups: knownCategories(),
       work: state.sessionMenuWork,
       onClose: () => closeSessionMenu(),
-      onAction: (requestedAction): Promise<unknown> | void => {
+      onAction: (
+        requestedAction,
+        onAdmittedCommand,
+      ): Promise<SessionsPageMutationResult | void> | void => {
         const action = handleSessionManagementNavigationAction(requestedAction, {
           context: application,
           row,
@@ -1212,11 +1148,12 @@ export function createSessionsPage(
               state.error = t("sessionsView.actionRequiresConnection");
               break;
             }
-            void moveSessionFromMenu({
+            return moveSessionFromMenu({
               context: scope.context,
               row,
               fallbackAgentId: sessionPathAgentId(row.key, scope.context),
               isCurrent: () => isRequestScopeCurrent(scope),
+              onAdmittedCommand,
               currentRow: () =>
                 state.result?.sessions.find(
                   (candidate) => candidate.key === row.key && candidate.sessionId === row.sessionId,
@@ -1224,8 +1161,7 @@ export function createSessionsPage(
               publishError: (error) => {
                 publishRequestError(scope, error);
               },
-            });
-            break;
+            }).catch((error: unknown) => publishRequestError(scope, error));
           }
           case "fork":
             return actions.forkSession(row.key, row.hasActiveRun === true);
@@ -1256,7 +1192,7 @@ export function createSessionsPage(
               break;
             }
             if (
-              !requireMutationAccess(scope, {
+              mutationAccessError(scope, {
                 method: "sessions.assignOwner",
                 params: { key: row.key, owner: action.owner },
                 requiredScope: "operator.write",
@@ -1264,11 +1200,9 @@ export function createSessionsPage(
             ) {
               break;
             }
-            return runSessionMutation(scope, async () => {
+            return sessionMutations.run(scope, async () => {
               const assigned = await scope.sessions.assignOwner(row.key, action.owner);
-              return assigned || !isRequestScopeCurrent(scope)
-                ? undefined
-                : (scope.sessions.state.error ?? undefined);
+              return assigned ? "completed" : "stale";
             });
           }
           case "stop-cloud-worker":
@@ -1356,7 +1290,7 @@ export function createSessionsPage(
       },
       onTranscriptSearchChange: actions.updateTranscriptSearchQuery,
       onTranscriptSearch: (): void => void actions.runTranscriptSearch(),
-      onClearTranscriptSearch: () => resetTranscriptSearchState(""),
+      onClearTranscriptSearch: () => transcriptSearch.reset(""),
       onSortChange: (
         column: SessionsPageState["sortColumn"],
         direction: SessionsPageState["sortDir"],
@@ -1423,11 +1357,15 @@ export function createSessionsPage(
     };
   }
 
-  async function runPluginAction(id: string, target: Pick<GatewaySessionRow, "key" | "sessionId">) {
+  async function runPluginAction(
+    id: string,
+    target: Pick<GatewaySessionRow, "key" | "sessionId">,
+  ): Promise<SessionsPageMutationResult | void> {
     const scope = captureRequestScope();
     if (!scope) {
       return;
     }
+    state.error = null;
     try {
       await runControlUiPluginAction({
         runtime: scope.context.plugins,
@@ -1438,9 +1376,11 @@ export function createSessionsPage(
           (row) => row.key === target.key && row.sessionId === target.sessionId,
         ),
         signal: pluginActionLifetime.signal,
+        isCurrent: () => isRequestScopeCurrent(scope),
       });
+      return isRequestScopeCurrent(scope) ? "completed" : "stale";
     } catch (error) {
-      publishRequestError(scope, error);
+      return publishRequestError(scope, error);
     }
   }
   const actions = {
@@ -1453,8 +1393,8 @@ export function createSessionsPage(
     patchSession,
     forkSession,
     runPluginAction,
-    updateTranscriptSearchQuery,
-    runTranscriptSearch,
+    updateTranscriptSearchQuery: transcriptSearch.update,
+    runTranscriptSearch: transcriptSearch.run,
     openSessionMenu,
     archive: archiveActions.archive,
   };
@@ -1473,12 +1413,12 @@ export function createSessionsPage(
     gatewayLifecycle.connect();
     return () => {
       active = false;
+      rosterReadiness.dispose();
       commandRetirement.resolve();
       observation.dispose();
       stopScope();
       unsubscribeList?.();
       pluginActionLifetime.abort();
-      transcriptSearchAbort?.abort();
       clearSearchTimer();
       inputDialog.abort();
       sessionPullRequestsForGateway(application.gateway).unwatch(menuOwner);
@@ -1488,7 +1428,7 @@ export function createSessionsPage(
   return {
     actions,
     // Retire presentation waits without changing an issued mutation's settlement.
-    observeCommandCompletion: (completion: Promise<unknown>) =>
+    observeCommandCompletion: <T>(completion: Promise<T>): Promise<T | void> =>
       Promise.race([completion, commandRetirement.promise]),
     setRouteData,
     revision,

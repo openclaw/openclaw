@@ -5,13 +5,11 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
-import { showInputDialog } from "../../components/input-dialog.ts";
+import { showInputDialog } from "../../components/input-dialog.tsx";
 import * as sessionMenuWork from "../../components/session-menu-work.ts";
+import * as uiErrors from "../../lib/format-error.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import {
-  createTestSessionCapability,
-  sessionsResult,
-} from "../../lib/sessions/session-capability.test-support.ts";
+import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import type {
   SessionDeleteOutcome,
   SessionDeleteTarget,
@@ -44,33 +42,18 @@ import {
   createPage,
   createRenderedPage,
   createSessions,
-  type TestSessionsPage,
+  liveSessions,
+  mountMutation,
+  openRowMenu,
+  selectRows,
+  sessionRow,
 } from "./sessions-page.test-support.ts";
 
 vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
-vi.mock("../../components/input-dialog.ts", () => ({ showInputDialog: vi.fn() }));
-type TestSessionMenu = HTMLElementTagNameMap["openclaw-session-menu"];
-const sessionRow = (key: string, extra: Partial<GatewaySessionRow> = {}): GatewaySessionRow => ({
-  key: `agent:main:${key}`,
-  sessionId: `${key}-id`,
-  kind: "direct",
-  updatedAt: 1,
-  ...extra,
-});
-async function mountMutation(overrides: Partial<SessionCapability> = {}) {
-  const sessions = createSessions(overrides);
-  const connection = createGateway();
-  const context = createContext(connection.gateway, sessions);
-  return {
-    page: await createRenderedPage(context, sessionsResult([], 1), "all"),
-    connection,
-    context,
-    sessions,
-  };
-}
-function selectRows(page: TestSessionsPage, ...rows: GatewaySessionRow[]) {
-  page.selectedSessions = new Map(rows.map((row) => [row.key, row]));
-}
+vi.mock("../../components/input-dialog.tsx", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../components/input-dialog.tsx")>()),
+  showInputDialog: vi.fn(),
+}));
 function capturedTarget(row: GatewaySessionRow) {
   return {
     key: row.key,
@@ -86,32 +69,6 @@ function publishRows(managed: ReturnType<typeof createManagedSessions>, rows: Ga
     loading: false,
     error: null,
   });
-}
-function liveSessions<Params = unknown>(
-  handlers: Record<string, (params?: Params) => unknown>,
-  agentId?: string,
-  phase?: "connecting",
-) {
-  const request = vi.fn(async (method: string, params?: Params) => {
-    if (!Object.hasOwn(handlers, method)) {
-      throw new Error(`Unexpected request: ${method}`);
-    }
-    return handlers[method]!(params);
-  });
-  const connection = createGateway({ request } as unknown as GatewayBrowserClient);
-  if (phase) {
-    connection.emit({ phase });
-  }
-  const sessions = createTestSessionCapability(connection.gateway, agentId);
-  return { request, connection, sessions, context: createContext(connection.gateway, sessions) };
-}
-async function openRowMenu(page: TestSessionsPage, target: GatewaySessionRow) {
-  page.openSessionMenu(target, { x: 10, y: 20 }, document.createElement("button"));
-  await page.updateComplete;
-  const menu = page.querySelector<TestSessionMenu>("openclaw-session-menu")!;
-  expect(menu).not.toBeNull();
-  await settleSessionMenu(menu);
-  return menu;
 }
 async function createDeletionPage(rows: GatewaySessionRow[], agentId = "main") {
   let serverRows = rows;
@@ -154,8 +111,8 @@ afterEach(() => {
 });
 describe("sessions page lifecycle", () => {
   it("keeps a failed rename editable until a confirmed retry succeeds", async () => {
-    const actual = await vi.importActual<typeof import("../../components/input-dialog.ts")>(
-      "../../components/input-dialog.ts",
+    const actual = await vi.importActual<typeof import("../../components/input-dialog.tsx")>(
+      "../../components/input-dialog.tsx",
     );
     vi.mocked(showInputDialog).mockImplementation(actual.showInputDialog);
     const fixture = createModalDialogTestFixture();
@@ -324,7 +281,8 @@ describe("sessions page lifecycle", () => {
         sessionId: "assignment-session",
         label: "Assignment fixture",
       });
-      const failure = "Assignment unavailable. Try again.";
+      const failure = new Error("Assignment unavailable. Try again.");
+      const formatError = vi.spyOn(uiErrors, "formatUiError");
       const assignment = createDeferred<unknown>();
       const { request, connection, sessions, context } = liveSessions(
         {
@@ -358,13 +316,15 @@ describe("sessions page lifecycle", () => {
       if (retired) {
         connection.emit({ phase: "reconnecting", client: null });
       }
-      assignment.reject(new Error(failure));
-      await assignOwner.mock.results[0]!.value;
+      assignment.reject(failure);
       if (retired) {
+        await assignOwner.mock.results[0]!.value;
         await page.updateComplete;
-        expect(page.textContent).not.toContain(failure);
+        expect(page.textContent).not.toContain(failure.message);
       } else {
-        await waitForFast(() => expect(page.textContent).toContain(failure));
+        await expect(assignOwner.mock.results[0]!.value).rejects.toBe(failure);
+        await waitForFast(() => expect(page.textContent).toContain(failure.message));
+        expect(formatError.mock.calls.at(-1)?.[0]).toBe(failure);
         expect(page.textContent).toContain("Assignment fixture");
       }
     },
@@ -437,7 +397,10 @@ describe("sessions page lifecycle", () => {
   it("reports a connection error instead of silently dropping a patch", async () => {
     const { page, connection, sessions } = await mountMutation({ patch: vi.fn() });
     connection.emit({ phase: "reconnecting", client: null });
-    expect(await page.patchSession("agent:main:main", { label: "renamed" })).toBe("failed");
+    expect(await page.patchSession("agent:main:main", { label: "renamed" })).toEqual({
+      status: "failed",
+      error: "Connect to the Gateway to change sessions.",
+    });
     expect(sessions.patch).not.toHaveBeenCalled();
     expect(page.error).toBe("Connect to the Gateway to change sessions.");
   });
@@ -675,12 +638,12 @@ describe("sessions page lifecycle", () => {
   it("drops stale mutation state, errors, menus, and navigation after disconnect", async () => {
     const deleted = createDeferred<Awaited<ReturnType<SessionCapability["deleteMany"]>>>();
     const patched = createDeferred<Awaited<ReturnType<SessionCapability["patch"]>>>();
-    const forked = createDeferred<string | null>();
+    const forked = createDeferred<Awaited<ReturnType<SessionCapability["createResult"]>>>();
     const groups = createDeferred<Awaited<ReturnType<SessionCapability["groupsPut"]>>>();
     const { page, sessions, connection, context } = await mountMutation({
       deleteMany: vi.fn(() => deleted.promise),
       patch: vi.fn(() => patched.promise),
-      create: vi.fn(() => forked.promise),
+      createResult: vi.fn(() => forked.promise),
       groupsPut: vi.fn(() => groups.promise),
     });
     const target = sessionRow("main", { key: "main" });
@@ -702,9 +665,13 @@ describe("sessions page lifecycle", () => {
       preservedWorktrees: [],
     });
     patched.resolve({ ok: true, key: "main", path: "", entry: { sessionId: target.sessionId! } });
-    forked.resolve("forked");
+    forked.resolve({
+      key: "forked",
+      entry: { sessionId: "forked-id" },
+      initialRun: { status: "idle" },
+    });
     groups.reject(new Error("stale group error"));
-    await Promise.all(requests);
+    expect(await Promise.all(requests)).toEqual(["stale", "stale", "stale", "stale"]);
     expect(page.result?.sessions.map(({ key }) => key)).toEqual(["main"]);
     expect([...page.selectedSessions.keys()]).toEqual(["main"]);
     expect([page.error, page.sessionMenu]).toEqual([null, null]);
@@ -713,9 +680,15 @@ describe("sessions page lifecycle", () => {
   });
 
   it("forks an active session from its last completed message", async () => {
-    const { page, sessions } = await mountMutation({ create: vi.fn(async () => "active-fork") });
+    const { page, sessions } = await mountMutation({
+      createResult: vi.fn<SessionCapability["createResult"]>(async () => ({
+        key: "active-fork",
+        entry: { sessionId: "active-fork-id" },
+        initialRun: { status: "idle" },
+      })),
+    });
     await page.forkSession("main", true);
-    expect(sessions.create).toHaveBeenCalledWith(
+    expect(sessions.createResult).toHaveBeenCalledWith(
       {
         parentSessionKey: "main",
         fork: true,

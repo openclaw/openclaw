@@ -58,6 +58,7 @@ export function AgentMemoryView(props: { state: AgentMemoryState }) {
       </section>
       <Dreaming
         {...model().dreaming}
+        configOpening={props.state.configOpening()}
         dreamDiaryActionLoading={props.state.diaryActionBusy()}
         dreamDiaryActionMessage={diaryOutcome().message}
         dreamDiaryActionArchivePath={diaryOutcome().archivePath}

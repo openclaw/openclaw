@@ -504,6 +504,7 @@ export class ChatComposerPersistence {
   stop() {
     this.persistNow();
     this.ready = false;
+    this.durablePersistence.resetRestoreScope();
     this.pending = null;
     this.clearTimer();
   }

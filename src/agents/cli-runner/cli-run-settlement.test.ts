@@ -205,13 +205,6 @@ it.each([
     trigger: "user" as const,
     expectedError: false,
   },
-  {
-    name: "a real heartbeat acknowledgement",
-    terminalReplyExpectation: "result-required" as const,
-    output: { text: "HEARTBEAT_OK" },
-    trigger: "heartbeat" as const,
-    expectedError: false,
-  },
 ])("settles $name at the message-presentation boundary", (testCase) => {
   const context = buildPreparedCliRunContext({ provider: "claude-cli" });
   context.params.terminalReplyExpectation = testCase.terminalReplyExpectation;

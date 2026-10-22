@@ -79,7 +79,7 @@ function statusCase(
     props,
     status,
     tone,
-    button: { disabled: false, title: "", label: "Update now", ...button },
+    button: { disabled: false, title: "", label: "Update Gateway…", ...button },
   };
 }
 
@@ -133,7 +133,29 @@ function waitingUpdate(campaign: Pick<Campaign, "forceAtMs"> & Partial<Campaign>
 }
 
 describe("renderUpdates", () => {
-  it.each(["Update now", "Retry update"])(
+  it.each([
+    ["available", {}, "Install the available update and restart the Gateway."],
+    [
+      "current",
+      {
+        updateSchedule: { channel: "stable", autoEnabled: false, install: { kind: "package" } },
+        updateAvailable: null,
+      },
+      "Run the Gateway updater and restart. The current version may be reinstalled.",
+    ],
+    [
+      "unknown",
+      { updateSchedule: null, updateAvailable: null },
+      "Run the Gateway updater and restart. The current version may be reinstalled.",
+    ],
+  ] as const)("identifies the Gateway action with %s status", (_status, update, description) => {
+    renderUpdates({ update });
+    const action = row("Update Gateway…");
+    expect(action.textContent).toContain(description);
+    expect(action.querySelector("button")?.classList.contains("primary")).toBe(false);
+  });
+
+  it.each(["Update Gateway…", "Retry update"])(
     "dispatches %s to the latest handler without replacing the button",
     (label) => {
       const initial = vi.fn(async () => undefined);
@@ -233,7 +255,7 @@ describe("renderUpdates", () => {
       status,
       tone === "muted" ? "settings-status" : `settings-status settings-status--${tone}`,
     ]);
-    const button = row("Update now").querySelector<HTMLButtonElement>("button")!;
+    const button = row("Update Gateway…").querySelector<HTMLButtonElement>("button")!;
     expect(button.textContent?.trim()).toBe(expected.label);
     expect(button).toMatchObject({ disabled: expected.disabled, title: expected.title });
     if (props.update?.updateStatusCheckBanner) {
@@ -276,7 +298,7 @@ describe("renderUpdates", () => {
         /This Mac|This iPhone|This device|App version|Check for updates automatically/,
       );
       expect(text("Gateway version")).toContain("2026.8.1");
-      rowButton("Update now").click();
+      rowButton("Update Gateway…").click();
       expect(props.onUpdateNow).toHaveBeenCalledOnce();
       expect(nativeDeviceSettings.checkForUpdates).not.toHaveBeenCalled();
     },
@@ -306,7 +328,9 @@ describe("renderUpdates", () => {
       false,
       expect.any(Function),
     );
-    rowButton("Check for Updates…").click();
+    const appUpdateButton = rowButton("Check for Updates…");
+    expect(appUpdateButton.classList.contains("primary")).toBe(true);
+    appUpdateButton.click();
     expect(nativeDeviceSettings.checkForUpdates).toHaveBeenCalledOnce();
     nativeDeviceSettings.snapshot = {
       ...nativeDeviceSettings.snapshot,

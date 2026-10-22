@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { setCanonicalUserPreferences } from "../../state/user-preferences.js";
+import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { pushHandlers } from "./push.js";
 import { pushSubscription } from "./push.test-support.js";
 
@@ -119,14 +120,14 @@ type PushOptions = Parameters<(typeof pushHandlers)["push.test"]>[0];
 async function request(
   method: keyof typeof pushHandlers,
   params: Record<string, unknown>,
-  context: PushOptions["context"],
+  context: Partial<PushOptions["context"]>,
   client: PushOptions["client"] = null,
 ) {
   const respond = vi.fn();
   await pushHandlers[method]({
     params,
     respond,
-    context,
+    context: createDirectChatContext(context),
     client,
     req: { type: "req", id: "req-1", method },
     isWebchatConnect: () => false,
@@ -137,7 +138,7 @@ async function request(
 function apnsRequest(params: Record<string, unknown> = { nodeId: "ios-node-1" }) {
   return request("push.test", params, {
     getRuntimeConfig: () => mocks.getRuntimeConfig(),
-  } as never);
+  });
 }
 
 function webClient(options: { deviceId?: string; userProfileId?: string }) {
@@ -163,7 +164,7 @@ function subscribe(
   return request(
     "push.web.subscribe",
     { endpoint, keys },
-    { getRuntimeConfig: () => options.config ?? {} } as never,
+    { getRuntimeConfig: () => options.config ?? {} },
     webClient({ ...options, deviceId: options.deviceId || undefined }),
   );
 }
@@ -176,7 +177,7 @@ function boundRequest(
   return request(
     method,
     { endpoint, ...params },
-    { broadcastToConnIds: vi.fn() } as never,
+    { broadcastToConnIds: vi.fn() },
     webClient({ ...options, deviceId: options.deviceId ?? "browser-device" }),
   );
 }
@@ -324,7 +325,7 @@ describe("push.web.test handler", () => {
       { ok: false, subscriptionId: "expired-subscription", statusCode: 410, error: "Gone" },
     ];
     vi.mocked(broadcastWebPush).mockResolvedValue(results);
-    const respond = await request("push.web.test", {}, {} as never);
+    const respond = await request("push.web.test", {}, {});
     expect(respond).toHaveBeenCalledTimes(1);
     expect(firstRespondCall(respond)).toEqual(
       success
@@ -340,7 +341,7 @@ describe("push.web.test handler", () => {
   it("returns invalid request when no subscriptions are registered", async () => {
     vi.mocked(broadcastWebPush).mockResolvedValue([]);
 
-    const respond = await request("push.web.test", {}, {} as never);
+    const respond = await request("push.web.test", {}, {});
     expectErrorResponse(respond, "no web push subscriptions registered");
   });
 });

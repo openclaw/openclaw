@@ -4,11 +4,8 @@ import { createMemo, For, onSettled } from "solid-js";
 import { icons } from "../../components/icons.tsx";
 import { t } from "../../i18n/index.ts";
 import { isActiveWorkboardCard } from "../../lib/workboard/card-state.ts";
-import {
-  moveWorkboardCard,
-  type WorkboardCard,
-  type WorkboardStatus,
-} from "../../lib/workboard/index.ts";
+import { moveWorkboardCard } from "../../lib/workboard/mutations.ts";
+import type { WorkboardCard, WorkboardStatus } from "../../lib/workboard/types.ts";
 import { matchesAgentScope } from "./agent-filter.ts";
 import { matchesBoardFilter } from "./board-filter.ts";
 import { openCreateModal, workboardCardModalId } from "./view-card-modal.tsx";

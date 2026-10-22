@@ -491,13 +491,26 @@ suite.define(() => {
         await detail.getByRole("button", { name: "Close Review", exact: true }).click();
         await detail.getByRole("button", { name: "Back to Subagents", exact: true }).click();
         await row.waitFor();
-        await otherRow.getByRole("button", { name: `Stop ${other.label}`, exact: true }).click();
-        await expectRequestCount(gateway, "sessions.abort", 1);
-        expect((await gateway.getRequests("sessions.abort"))[0]?.params).toMatchObject({
-          key: other.key,
-          agentId: "main",
-          runId: "keyboard-run",
-        });
+        await gateway.deferNext("sessions.abort");
+        const stop = otherRow.locator(".subagents-desktop__stop");
+        await stop.click();
+        try {
+          await expectRequestCount(gateway, "sessions.abort", 1);
+          expect((await gateway.getRequests("sessions.abort"))[0]?.params).toMatchObject({
+            key: other.key,
+            agentId: "main",
+            runId: "keyboard-run",
+          });
+          await expect.poll(() => stop.isDisabled()).toBe(true);
+          await otherRow.locator(".subagents-desktop__open").click();
+          const childPane = panel.locator("openclaw-chat-pane");
+          await childPane.getByRole("button", { name: "Back to Subagents", exact: true }).waitFor();
+          expect(await draft.inputValue()).toBe("Keep this parent draft");
+        } finally {
+          await gateway.resolveDeferred("sessions.abort", { aborted: true });
+        }
+        await panel.getByRole("button", { name: "Back to Subagents", exact: true }).click();
+        await row.waitFor();
         await expectNoRequests(gateway, ["chat.send", "chat.abort"]);
         expect(await draft.inputValue()).toBe("Keep this parent draft");
         await page.reload();

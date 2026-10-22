@@ -100,12 +100,15 @@ it("shows a held settings read, reports its failure, and retries the current app
 
 it("retains the edited form while saving, reconciles accepted values, and keeps rejected edits retryable", async () => {
   const save = createDeferred<{ toolResult?: { isError?: boolean } }>();
+  const retry = createDeferred<{ toolResult?: { isError?: boolean } }>();
   const request = vi
     .fn()
     .mockResolvedValueOnce(settings("Library"))
     .mockReturnValueOnce(save.promise)
     .mockResolvedValueOnce(settings("Parts"))
-    .mockRejectedValueOnce(new Error("Save unavailable"));
+    .mockRejectedValueOnce(new Error("Save unavailable"))
+    .mockReturnValueOnce(retry.promise)
+    .mockResolvedValue(settings("Shelves"));
   const view = panel(request);
   try {
     await waitForSolid(() => expect(view.container.querySelector("input")).not.toBeNull());
@@ -139,8 +142,21 @@ it("retains the edited form while saving, reconciles accepted values, and keeps 
     expect(view.container.querySelector("form")).toBe(form);
     expect(input.value).toBe("Shelves");
     await waitForSolid(() => expect(submit.disabled).toBe(false));
+    form.dispatchEvent(new Event("submit", { cancelable: true, bubbles: true }));
+    await waitForSolid(() => {
+      expect(submit.disabled).toBe(true);
+      expect(view.container.querySelector('[role="alert"]')).toBeNull();
+    });
+    expect(view.container.querySelector("form")).toBe(form);
+    expect(input.value).toBe("Shelves");
+    retry.resolve({});
+    await waitForSolid(() =>
+      expect(view.container.querySelector<HTMLInputElement>("input")?.disabled).toBe(false),
+    );
+    expect(view.container.querySelector("form")).toBe(form);
   } finally {
     save.resolve({});
+    retry.resolve({});
     view.unmount();
   }
 });

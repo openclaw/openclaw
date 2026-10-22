@@ -107,6 +107,9 @@ function createUsageDetailRequest<T>(
     get loading() {
       return pending !== null;
     },
+    get read() {
+      return task.read;
+    },
     async recover(sessionKey: string, loadInitial = false): Promise<void> {
       const target = resolveTarget(sessionKey);
       await pending;

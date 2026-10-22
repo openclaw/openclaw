@@ -3,6 +3,7 @@ import {
   parseConcreteConfigPath,
   parseConcreteConfigPathTokens,
   parseConcreteConfigPathWithProvenance,
+  readObjectPath,
   tokenizeConcreteConfigPath,
 } from "../shared/dot-path.js";
 import {
@@ -166,4 +167,45 @@ describe("config path own-property traversal", () => {
       expectOwnProperty(parent, "leaf", "own");
     });
   }
+});
+
+describe("raw diagnostic path traversal", () => {
+  it.each([
+    ["raw", ["first", "named", 1, "inherited"]],
+    ["canonical", ["first", undefined, undefined, "inherited"]],
+    ["bounded", ["first", undefined, undefined, undefined]],
+  ] as const)("retains the %s array-key policy", (mode, expected) => {
+    const values = Object.assign(["first"], { named: "named" });
+    Object.setPrototypeOf(
+      values,
+      Object.assign(Object.create(Array.prototype), { 2: "inherited" }),
+    );
+    expect(["0", "named", "length", "2"].map((key) => readObjectPath(values, [key], mode))).toEqual(
+      expected,
+    );
+  });
+
+  it.each([
+    [{ values: [{ leaf: "array" }] }, ["values", "0", "leaf"], "array"],
+    [Object.create({ inherited: { leaf: "prototype" } }), ["inherited", "leaf"], "prototype"],
+    [{ missing: null }, ["missing", "leaf"], undefined],
+    [{ value: "text" }, ["value", "length"], undefined],
+  ] as const)("reads %j at %j", (root, path, expected) => {
+    expect(readObjectPath(root, path)).toBe(expected);
+  });
+
+  it("retains root identity for an empty path", () => {
+    const root = { leaf: "value" };
+    expect(readObjectPath(root, [])).toBe(root);
+  });
+
+  it("propagates the original property getter failure", () => {
+    const failure = new Error("getter failed");
+    const root = Object.defineProperty({}, "value", {
+      get() {
+        throw failure;
+      },
+    });
+    expect(() => readObjectPath(root, ["value"])).toThrow(failure);
+  });
 });

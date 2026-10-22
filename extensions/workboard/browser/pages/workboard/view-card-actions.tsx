@@ -9,21 +9,25 @@ import {
   nextWorkboardCardPosition,
   workboardCardSessionKey,
 } from "../../lib/workboard/card-state.ts";
-import { canStartWorkboardCard } from "../../lib/workboard/execution.ts";
+import {
+  canStartWorkboardCard,
+  startWorkboardCard,
+  stopWorkboardCard,
+} from "../../lib/workboard/execution.ts";
+import { findWorkboardSession } from "../../lib/workboard/lifecycle.ts";
 import {
   archiveWorkboardCard,
   deleteWorkboardCard,
-  findWorkboardSession,
-  getWorkboardState,
   moveWorkboardCard,
-  startWorkboardCard,
-  stopWorkboardCard,
-  type WorkboardCard,
-  type WorkboardExecutionEngine,
-  type WorkboardExecutionMode,
-  type WorkboardStatus,
-} from "../../lib/workboard/index.ts";
+} from "../../lib/workboard/mutations.ts";
+import { getWorkboardState } from "../../lib/workboard/runtime.ts";
 import { workboardCardSessionTarget } from "../../lib/workboard/session-resolution.ts";
+import type {
+  WorkboardCard,
+  WorkboardExecutionEngine,
+  WorkboardExecutionMode,
+  WorkboardStatus,
+} from "../../lib/workboard/types.ts";
 import { openEditModal } from "./view-card-modal.tsx";
 import {
   canMutate,

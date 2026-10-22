@@ -22,7 +22,7 @@ import {
 import { isTerminalFailureChatSendAck, normalizeChatSendAck } from "./chat-send-ack.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 
-const ProviderReviewModal = lazy(() => import("../../components/modal-dialog.ts"), {
+const ProviderReviewModal = lazy(() => import("../../components/modal-dialog.tsx"), {
   export: "ModalDialog",
 });
 

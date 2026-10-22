@@ -7,6 +7,7 @@ import { isRecord } from "../utils.js";
 import { normalizeAgentPromptSurfaceKind } from "./agent-prompt-surface-kind.js";
 import { getPluginCommandExecutionCount } from "./command-execution-lock.js";
 import { clearPluginCommands } from "./command-registry-state.js";
+import type { PluginCommandRuntimeCapability } from "./plugin-command.types.js";
 import { wrapCurrentPluginInstance } from "./plugin-instance-scope.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { getPluginRegistrationContext, requireActivePluginRegistry } from "./runtime.js";
@@ -114,6 +115,18 @@ function validateCommandName(
   return null;
 }
 
+const commandCapabilityRules = {
+  subagents: { requireAuth: true, manifestContract: true },
+  models: { requireAuth: false, manifestContract: false },
+  scheduledTurns: { requireAuth: true, manifestContract: true },
+} satisfies Record<
+  PluginCommandRuntimeCapability,
+  {
+    requireAuth: boolean;
+    manifestContract: boolean;
+  }
+>;
+
 function validatePluginCommandDefinition(
   command: OpenClawPluginCommandDefinition,
   opts?: { allowReservedCommandNames?: boolean },
@@ -140,12 +153,27 @@ function validatePluginCommandDefinition(
   if (command.runtimeCapabilities !== undefined) {
     if (
       !Array.isArray(command.runtimeCapabilities) ||
-      command.runtimeCapabilities.some((capability: unknown) => capability !== "subagents")
+      command.runtimeCapabilities.some(
+        (capability: unknown) =>
+          typeof capability !== "string" || !Object.hasOwn(commandCapabilityRules, capability),
+      )
     ) {
       return "Command runtimeCapabilities must contain supported capability names";
     }
-    if (command.runtimeCapabilities.length > 0 && command.requireAuth !== true) {
+    if (
+      command.runtimeCapabilities.some(
+        (capability: PluginCommandRuntimeCapability) =>
+          commandCapabilityRules[capability].requireAuth,
+      ) &&
+      command.requireAuth !== true
+    ) {
       return "Command runtime capabilities require requireAuth: true";
+    }
+    if (
+      command.runtimeCapabilities.includes("scheduledTurns") &&
+      !command.runtimeCapabilities.includes("subagents")
+    ) {
+      return "Scheduled command turns require the subagents runtime capability";
     }
   }
   if (command.requiredScopes !== undefined) {
@@ -311,13 +339,26 @@ export function registerPluginCommand(
   );
 }
 
+/**
+ * Read caller-owned runtime capabilities once into a plain array, so validation, manifest
+ * contract checks and the stored registration all observe the same values.
+ */
+export function snapshotPluginCommandRuntimeCapabilities<
+  T extends Pick<OpenClawPluginCommandDefinition, "runtimeCapabilities">,
+>(command: T): T {
+  return Array.isArray(command.runtimeCapabilities)
+    ? { ...command, runtimeCapabilities: Array.from(command.runtimeCapabilities) }
+    : command;
+}
+
 export function registerPluginCommandInRegistry(
   registry: PluginRegistry,
   pluginId: string,
-  command: OpenClawPluginCommandDefinition,
+  callerCommand: OpenClawPluginCommandDefinition,
   opts?: Parameters<typeof registerPluginCommand>[2],
   commandRuntimeCapabilities?: readonly string[],
 ): CommandRegistrationResult {
+  const command = snapshotPluginCommandRuntimeCapabilities(callerCommand);
   if (getPluginCommandExecutionCount(registry) > 0) {
     return { ok: false, error: "Cannot register commands while processing is in progress" };
   }
@@ -338,7 +379,9 @@ export function registerPluginCommandInRegistry(
   const declaredCapabilities = commandRuntimeCapabilities ?? [];
   const undeclared =
     command.runtimeCapabilities?.filter(
-      (capability) => !declaredCapabilities.includes(capability),
+      (capability) =>
+        commandCapabilityRules[capability].manifestContract &&
+        !declaredCapabilities.some((declared) => declared === capability),
     ) ?? [];
   if (undeclared.length > 0) {
     return {
@@ -352,7 +395,7 @@ export function registerPluginCommandInRegistry(
   const normalizedCommand = {
     ...command,
     ...(command.runtimeCapabilities
-      ? { runtimeCapabilities: [...command.runtimeCapabilities] }
+      ? { runtimeCapabilities: Object.freeze([...new Set(command.runtimeCapabilities)]) }
       : {}),
     // The direct SDK registrar also supports host callers outside a managed instance.
     handler: wrapCurrentPluginInstance(

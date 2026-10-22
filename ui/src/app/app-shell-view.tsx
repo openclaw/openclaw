@@ -49,7 +49,9 @@ declare module "@solidjs/web" {
   }
 }
 
-export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
+export function ApplicationShell(props: {
+  host: ShellViewHost & { commitRenderedPresentation(): void };
+}): SolidJSX.Element {
   let content!: HTMLElement;
   let releaseNavDrawer: (() => void) | undefined;
   onSettled(() => {
@@ -421,7 +423,7 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
             lifecycle: view().overlaySnapshot.devicePairSetupLifecycle,
             nowMs: view().nowMs,
             pendingCount: view().overlaySnapshot.devicePairPendingCount,
-            onRefresh: () => void view().context.overlays.refreshDevicePairSetup(),
+            onRefresh: () => view().context.overlays.refreshDevicePairSetup(),
             onAccessChange: (access) =>
               void view().context.overlays.setDevicePairSetupAccess(access),
             onClose: () => view().context.overlays.closeDevicePairSetup(),
@@ -449,26 +451,34 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
     </div>
   );
   return (
-    <Show when={view().routeReady} fallback={<ConnectingSplash />}>
-      <PluginSurface
-        surface="workspace"
-        enabled={view().workspacePluginsEnabled}
-        props={{
-          sessionKey: (props.host.shellRevision(), props.host.activeSessionKey),
-          agentId: resolveUiSelectedSessionAgentId(
-            {
-              assistantAgentId:
-                view().context.agentSelection.state.selectedId ??
-                view().gatewaySnapshot.assistantAgentId,
-              agentsList: view().context.agents.state.agentsList,
-              hello: view().gatewaySnapshot.hello,
-            },
-            props.host.activeSessionKey,
-          ),
-          routeId: view().activeRoute,
+    <>
+      <Show when={view()} keyed>
+        {(_view) => {
+          onSettled(() => props.host.commitRenderedPresentation());
+          return null;
         }}
-        renderDefault={() => workspace}
-      />
-    </Show>
+      </Show>
+      <Show when={view().routeReady} fallback={<ConnectingSplash />}>
+        <PluginSurface
+          surface="workspace"
+          enabled={view().workspacePluginsEnabled}
+          props={{
+            sessionKey: (props.host.shellRevision(), props.host.activeSessionKey),
+            agentId: resolveUiSelectedSessionAgentId(
+              {
+                assistantAgentId:
+                  view().context.agentSelection.state.selectedId ??
+                  view().gatewaySnapshot.assistantAgentId,
+                agentsList: view().context.agents.state.agentsList,
+                hello: view().gatewaySnapshot.hello,
+              },
+              props.host.activeSessionKey,
+            ),
+            routeId: view().activeRoute,
+          }}
+          renderDefault={() => workspace}
+        />
+      </Show>
+    </>
   );
 }

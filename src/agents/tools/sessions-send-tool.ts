@@ -512,7 +512,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
                 visibleSession.missing ||
                 (allowMissingKey && (sessionKey === "main" || sessionKey === mainKey))
                   ? async (assertCurrent) => {
-                      const created = await createConfiguredAgentMainSession({
+                      await createConfiguredAgentMainSession({
                         mode,
                         inheritedToolPolicySource: opts?.inheritedToolPolicySource,
                         callGateway: sendGatewayCall,
@@ -522,9 +522,6 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
                         useTrustedInProcessCreation: opts?.callGateway === undefined,
                         assertCurrent,
                       });
-                      if (!created.ok) {
-                        throw new Error(created.error);
-                      }
                       targetSession = await readSession(resolvedKey, targetAgentId);
                       targetSessionEntry = targetSession.store[targetSession.canonicalKey];
                       targetAcpMeta = await readAcpSessionMetaForEntryAsync({

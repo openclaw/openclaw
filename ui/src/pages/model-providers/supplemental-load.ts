@@ -18,10 +18,15 @@ type SupplementalOptions = {
 };
 
 type SupplementalKind = "usage" | "cost";
+type SupplementalRequest = {
+  controller: AbortController;
+  completion: Promise<ModelProvidersData | null>;
+  resolve: (data: ModelProvidersData | null) => void;
+};
 
 /** Loads usage and cost after the provider controls have their required data. */
 export class ModelProviderSupplementalLoader {
-  private readonly requests = new Map<SupplementalKind, AbortController>();
+  private readonly requests = new Map<SupplementalKind, SupplementalRequest>();
   private forceReload = false;
 
   constructor(
@@ -35,6 +40,20 @@ export class ModelProviderSupplementalLoader {
 
   get usageLoading(): boolean {
     return this.requests.has("usage");
+  }
+
+  usageRead() {
+    return {
+      pending: this.requests.get("usage")?.completion ?? null,
+      value: this.options.getData()?.providerUsage ?? null,
+    };
+  }
+
+  costRead() {
+    return {
+      pending: this.requests.get("cost")?.completion ?? null,
+      value: this.options.getData()?.costByProvider ?? null,
+    };
   }
 
   adoptCoreData(client: GatewayBrowserClient | null, data: ModelProvidersData): void {
@@ -94,7 +113,8 @@ export class ModelProviderSupplementalLoader {
     const retired = [...this.requests.values()];
     this.requests.clear();
     for (const request of retired) {
-      request.abort();
+      request.resolve(null);
+      request.controller.abort();
     }
     this.notify();
   }
@@ -127,8 +147,15 @@ export class ModelProviderSupplementalLoader {
     client: GatewayBrowserClient,
     epoch: number,
   ): Promise<void> {
-    this.requests.get(kind)?.abort();
-    const request = new AbortController();
+    const retired = this.requests.get(kind);
+    retired?.resolve(null);
+    retired?.controller.abort();
+    const completion = Promise.withResolvers<ModelProvidersData | null>();
+    const request: SupplementalRequest = {
+      controller: new AbortController(),
+      completion: completion.promise,
+      resolve: completion.resolve,
+    };
     this.requests.set(kind, request);
     this.notify();
     try {
@@ -136,8 +163,12 @@ export class ModelProviderSupplementalLoader {
         | { providerUsage: ProviderUsageRequestResult }
         | { costByProvider: Awaited<ReturnType<typeof loadModelProviderCost>> } =
         kind === "usage"
-          ? { providerUsage: await requestProviderUsage(client, { signal: request.signal }) }
-          : { costByProvider: await loadModelProviderCost(client, request.signal) };
+          ? {
+              providerUsage: await requestProviderUsage(client, {
+                signal: request.controller.signal,
+              }),
+            }
+          : { costByProvider: await loadModelProviderCost(client, request.controller.signal) };
       if (this.requests.get(kind) !== request) {
         return;
       }
@@ -157,6 +188,9 @@ export class ModelProviderSupplementalLoader {
     } finally {
       if (this.requests.get(kind) === request) {
         this.requests.delete(kind);
+        request.resolve(
+          this.options.getGateway().isCurrent({ client, epoch }) ? this.options.getData() : null,
+        );
         this.options.refreshPolicy.flushPending();
         this.notify();
       }

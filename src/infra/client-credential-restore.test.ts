@@ -301,7 +301,11 @@ describe("whole-archive credential relocation", () => {
             root: process.cwd(),
             options: { repair: true, nonInteractive: true },
             runtime,
-            beforeStateMutation: createDoctorOriginalCaptureHook({ root: process.cwd(), runtime }),
+            beforeStateMutation: createDoctorOriginalCaptureHook({
+              root: process.cwd(),
+              runtime,
+              reportFindings: () => {},
+            }),
           });
           try {
             await maintenance!.run(() =>

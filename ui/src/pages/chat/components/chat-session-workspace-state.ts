@@ -224,7 +224,6 @@ export function retainSessionWorkspaceArtifacts(
 export function loadSessionWorkspaceDirectory(
   state: SessionWorkspaceHost,
   path: string,
-  force = false,
 ): Promise<void> {
   const workspace = getSessionWorkspace(state);
   const directories = (workspace.directories ??= Object.create(null));
@@ -237,7 +236,7 @@ export function loadSessionWorkspaceDirectory(
   if (pending) {
     return pending;
   }
-  if (!state.connected || !state.client || (directories[path]?.browser && !force)) {
+  if (!state.connected || !state.client || directories[path]?.browser) {
     return Promise.resolve();
   }
   const directory = (directories[path] ??= { loading: false, error: null });

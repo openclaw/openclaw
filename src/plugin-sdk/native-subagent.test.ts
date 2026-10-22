@@ -30,6 +30,26 @@ it("exports the optional native contract through the public plugin API", () => {
     completionMode: "collect";
     selection?: Selection;
   }>();
+  type List = NonNullable<Native["list"]>;
+  type Child = Awaited<ReturnType<List>>[number];
+  expectTypeOf<Native["list"]>().toEqualTypeOf<List | undefined>();
+  expectTypeOf<ThisParameterType<List>>().toEqualTypeOf<void>();
+  expectTypeOf<Parameters<List>[0]>().toEqualTypeOf<{ status?: Child["status"] } | undefined>();
+  expectTypeOf<Child>().toEqualTypeOf<{
+    runId: string;
+    childSessionKey: string;
+    requestId: string;
+    label?: string;
+    status:
+      | "queued"
+      | "running"
+      | "interrupted"
+      | "terminal"
+      | "done"
+      | "failed"
+      | "killed"
+      | "timeout";
+  }>();
   expectTypeOf<Parameters<Native["collect"]>[0]>().toEqualTypeOf<{
     ids: string[];
     timeoutSeconds?: number;
@@ -45,6 +65,12 @@ it("exports the optional native contract through the public plugin API", () => {
     Native | undefined
   >();
   expectTypeOf<Command["runtimeCapabilities"]>().toEqualTypeOf<
-    readonly "subagents"[] | undefined
+    readonly ("subagents" | "models" | "scheduledTurns")[] | undefined
+  >();
+  type ScheduledTurns = NonNullable<
+    NonNullable<CommandContext["runtimeContext"]>["scheduledTurns"]
+  >;
+  expectTypeOf<Parameters<ScheduledTurns["schedule"]>[0]["schedule"]>().toEqualTypeOf<
+    { kind: "at"; at: string } | { kind: "every"; everyMs: number }
   >();
 });
