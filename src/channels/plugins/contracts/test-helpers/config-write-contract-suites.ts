@@ -8,10 +8,8 @@ import {
   resolveConfigWriteTargetFromPath,
 } from "../../config-writes.js";
 
-const demoOriginChannelId = "demo-origin";
-const demoTargetChannelId = "demo-target";
-const origin = { channelId: demoOriginChannelId, accountId: "default" };
-const target = { channelId: demoTargetChannelId, accountId: "work" };
+const origin = { channelId: "demo-origin", accountId: "default" };
+const target = { channelId: "demo-target", accountId: "work" };
 
 function makeDemoConfigWritesCfg(accountIdKey: string) {
   const channel = () => ({
@@ -20,53 +18,47 @@ function makeDemoConfigWritesCfg(accountIdKey: string) {
   });
   return {
     channels: {
-      [demoOriginChannelId]: channel(),
-      [demoTargetChannelId]: channel(),
+      [origin.channelId]: channel(),
+      [target.channelId]: channel(),
     },
   };
 }
 
-function expectConfigWriteBlocked(kind: "target" | "origin") {
-  const scope = kind === "target" ? target : origin;
-  expect(
-    authorizeConfigWrite({
-      cfg: makeDemoConfigWritesCfg(scope.accountId),
-      origin,
-      target: resolveExplicitConfigWriteTarget({ ...scope, accountId: "work" }),
-    }),
-  ).toEqual({
-    allowed: false,
-    reason: `${kind}-disabled`,
-    blockedScope: { kind, scope },
-  });
-}
-
-/** Installs policy tests for allowed, denied, and bypassed config writes. */
 export function describeChannelConfigWritePolicyContract() {
   describe("authorizeConfigWrite policy contract", () => {
-    it.each(["target", "origin"] as const)(
-      "blocks when the %s account disables writes",
-      expectConfigWriteBlocked,
-    );
+    it.each(["target", "origin"] as const)("blocks when the %s account disables writes", (kind) => {
+      const scope = kind === "target" ? target : origin;
+      expect(
+        authorizeConfigWrite({
+          cfg: makeDemoConfigWritesCfg(scope.accountId),
+          origin,
+          target: resolveExplicitConfigWriteTarget({ ...scope, accountId: "work" }),
+        }),
+      ).toEqual({
+        allowed: false,
+        reason: `${kind}-disabled`,
+        blockedScope: { kind, scope },
+      });
+    });
 
     it.each([
-      {
-        name: "allows bypass for internal operator.admin writes",
-        input: {
+      [
+        "allows bypass for internal operator.admin writes",
+        {
           target: resolveExplicitConfigWriteTarget(target),
           allowBypass: canBypassConfigWritePolicy({
             channel: INTERNAL_MESSAGE_CHANNEL,
             gatewayClientScopes: ["operator.admin"],
           }),
         },
-      },
-      {
-        name: "treats non-channel config paths as global writes",
-        input: {
+      ],
+      [
+        "treats non-channel config paths as global writes",
+        {
           target: resolveConfigWriteTargetFromPath(["messages", "ackReaction"]),
         },
-      },
-    ] as const)("$name", ({ input }) => {
+      ],
+    ] as const)("%s", (_name, input) => {
       expect(
         authorizeConfigWrite({ cfg: makeDemoConfigWritesCfg("work"), origin, ...input }),
       ).toEqual({ allowed: true });
@@ -74,7 +66,6 @@ export function describeChannelConfigWritePolicyContract() {
   });
 }
 
-/** Installs target-resolution tests for path-derived and explicit writes. */
 export function describeChannelConfigWriteTargetContract() {
   describe("authorizeConfigWrite target contract", () => {
     it.each([
@@ -88,7 +79,7 @@ export function describeChannelConfigWriteTargetContract() {
     });
 
     it.each([
-      ["channel", { channelId: demoOriginChannelId }],
+      ["channel", { channelId: origin.channelId }],
       ["account", target],
     ] as const)("resolves explicit %s target", (kind, scope) => {
       expect(resolveExplicitConfigWriteTarget(scope)).toEqual({ kind, scope });
@@ -103,7 +94,7 @@ export function describeChannelConfigWriteTargetContract() {
             blockedScope: { kind: "target", scope: target },
           },
         }),
-      ).toContain(`channels.${demoTargetChannelId}.accounts.work.configWrites=true`);
+      ).toContain(`channels.${target.channelId}.accounts.work.configWrites=true`);
     });
   });
 }
