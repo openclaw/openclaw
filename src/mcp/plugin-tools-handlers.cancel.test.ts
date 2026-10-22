@@ -4,6 +4,7 @@ import type { Client } from "@modelcontextprotocol/client";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { consumeTrackedToolExecutionStarted } from "../agents/agent-tools.before-tool-call.state.js";
+import type { AnyAgentTool } from "../agents/tools/common.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
 import {
@@ -17,6 +18,85 @@ import {
 import { createToolsMcpServer } from "./tools-stdio-server.js";
 
 describe("plugin tools MCP cancellation", () => {
+  it.each([false, true])(
+    "joins native handler work before close and reconnect (SDK host: %s)",
+    async (hosted) => {
+      let database = new DatabaseSync(":memory:");
+      const started = createDeferred();
+      const finish = createDeferred();
+      const reads: unknown[] = [];
+      let signal: AbortSignal | undefined;
+      let pendingWork: ReturnType<AnyAgentTool["execute"]> | undefined;
+      const runNativeWork = async (): ReturnType<AnyAgentTool["execute"]> => {
+        started.resolve();
+        await finish.promise;
+        reads.push(database.prepare("SELECT 42 AS value").get());
+        return toolResult("done");
+      };
+      const tool = createTool("native_cleanup", async (_id, _params, requestSignal) => {
+        signal = requestSignal;
+        pendingWork = runNativeWork();
+        return await pendingWork;
+      });
+      const sdkResourceHost = hosted ? new LegacyPluginSdkResourceHost() : undefined;
+      const server = createToolsMcpServer({ name: "native-drain", tools: [tool], sdkResourceHost });
+      const clients: Client[] = [];
+      const connect = async () => {
+        const connection = createMcpConnection(server);
+        clients.push(connection.client);
+        await connection.connect();
+        const { client } = connection;
+        return client;
+      };
+      let closing: Promise<void> | undefined;
+      let siblingClose: Promise<void> | undefined;
+      try {
+        const client = await connect();
+        const call = client.callTool({ name: tool.name, arguments: {} });
+        const callResult = outcome(call);
+        await waitForStart(started.promise, call);
+        let siblingSettled = false;
+        closing = server.close().then(() => database.close());
+        siblingClose = server.close().then(() => {
+          siblingSettled = true;
+        });
+        await nextTurn();
+        expect(server.transport).toBeUndefined();
+        expect(signal?.aborted).toBe(true);
+        expect(await callResult).toHaveProperty("error");
+        expect.soft(siblingSettled).toBe(false);
+        expect.soft(database.isOpen).toBe(true);
+        finish.resolve();
+        await pendingWork?.catch(() => {});
+        await Promise.all([closing, siblingClose]);
+        expect.soft(reads).toEqual([{ value: 42 }]);
+        expect(database.isOpen).toBe(false);
+
+        // The SDK Server supports a new connection after its preceding close settles.
+        database = new DatabaseSync(":memory:");
+        const nextClient = await connect();
+        await expect(
+          nextClient.callTool({ name: tool.name, arguments: {} }),
+        ).resolves.toMatchObject({
+          content: [{ type: "text", text: "done" }],
+        });
+        await pendingWork;
+        expect(reads).toEqual([{ value: 42 }, { value: 42 }]);
+      } finally {
+        finish.resolve();
+        await pendingWork?.catch(() => {});
+        await closing;
+        await siblingClose;
+        await Promise.all(clients.map((client) => client.close()));
+        await server.close();
+        await sdkResourceHost?.close();
+        if (database.isOpen) {
+          database.close();
+        }
+      }
+    },
+  );
+
   it.each(
     [false, true].flatMap((hosted) =>
       ["send-pending", "response-completed"].map((phase) => ({ hosted, phase })),

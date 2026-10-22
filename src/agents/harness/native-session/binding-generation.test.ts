@@ -7,6 +7,7 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import { useSessionStoreTempDirs } from "../../../test-utils/session-state-cleanup.js";
 import {
+  captureNativeSessionGenerationAuthority,
   reclaimNativeSessionGeneration,
   resolveNativeSessionBinding,
   type NativeSessionGenerationOperations,
@@ -28,6 +29,22 @@ describe("native session binding generation", () => {
 
   beforeEach(() => {
     storePath = path.join(tempDirs.make(), "sessions.json");
+  });
+
+  it("preserves synchronous authority capture for released harness plugins", async () => {
+    await upsertSessionEntryCore(scope(), { sessionId: target.sessionId, updatedAt: 1 });
+    const captured = captureNativeSessionGenerationAuthority({
+      target,
+      storePath,
+      createSupersededError,
+    });
+    expect(captured.state).toBe("current");
+    expect(captured.assertCurrent).not.toThrow();
+    expect(captured.assertHostCurrent).not.toThrow();
+
+    await patchSessionEntryCore(scope(), () => ({ sessionId: "session-successor" }));
+    expect(captured.assertCurrent).toThrow("Session generation is no longer current");
+    expect(captured.assertHostCurrent).toThrow("Session generation is no longer current");
   });
 
   it.each(

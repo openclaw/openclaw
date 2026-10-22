@@ -65,7 +65,6 @@ function createGateway(
     hello,
     sessionKey: "main",
   });
-  gateway.connectionRevision = 1;
   return {
     hello,
     snapshot,
