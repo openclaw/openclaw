@@ -37,20 +37,6 @@ function windowsSystemRoot(env: NodeJS.ProcessEnv): string {
     : DEFAULT_WINDOWS_SYSTEM_ROOT;
 }
 
-function windowsPowerShellPath(env: NodeJS.ProcessEnv): string {
-  return path.win32.join(
-    windowsSystemRoot(env),
-    "System32",
-    "WindowsPowerShell",
-    "v1.0",
-    "powershell.exe",
-  );
-}
-
-function windowsWmicPath(env: NodeJS.ProcessEnv): string {
-  return path.win32.join(windowsSystemRoot(env), "System32", "wbem", "wmic.exe");
-}
-
 export function decodeWindowsProcessOutput(output: Buffer | string): string {
   if (!Buffer.isBuffer(output)) {
     return output;
@@ -115,7 +101,13 @@ export function readWindowsProcessStartTimeSync(
     return null;
   }
   const powershell = spawnSync(
-    windowsPowerShellPath(env),
+    path.win32.join(
+      windowsSystemRoot(env),
+      "System32",
+      "WindowsPowerShell",
+      "v1.0",
+      "powershell.exe",
+    ),
     [
       "-NoProfile",
       "-NonInteractive",
@@ -142,7 +134,7 @@ export function readWindowsProcessStartTimeSync(
     return null;
   }
   const wmic = spawnSync(
-    windowsWmicPath(env),
+    path.win32.join(windowsSystemRoot(env), "System32", "wbem", "wmic.exe"),
     ["process", "where", `ProcessId=${pid}`, "get", "CreationDate", "/value"],
     {
       env: resolveDiagnosticProcessEnv(env, "win32"),
