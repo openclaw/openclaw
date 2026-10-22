@@ -75,6 +75,12 @@ function SharingModeContent(props: { visibility: SessionVisibility }) {
 function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControls) {
   const presentation = createChatSessionSharingPresentation(() => props);
   const busy = () => presentation.busy() || props.state?.loading === true;
+  const completion = presentation.completion;
+  // Preserve the empty-roster status shown after a command failure.
+  const commandFailed = createMemo(
+    () => completion()?.then(() => false).catch(() => true) ?? false,
+    { loadingValue: false },
+  );
   const readPermissions = () => {
     latest(presentation.read);
     return null;
@@ -313,7 +319,11 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
   );
   const showPermissions = () =>
     props.membersAvailable !== false &&
-    (!result() || Boolean(props.state?.read) || Boolean(props.state?.error) || people().length > 0);
+    (!result() ||
+      Boolean(props.state?.read) ||
+      Boolean(props.state?.error) ||
+      (!presentation.busy() && latest(commandFailed)) ||
+      people().length > 0);
   const permissionItems = () => (showPermissions() ? rosterItems()().map((item) => item()) : []);
   // The observer and its ref share the mounted permissions subtree's lifetime.
   const SharingPermissions = (view: { children: JSX.Element }) => {
@@ -431,7 +441,7 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
     content: (
       <ChatSessionSharingError
         error={props.state?.error}
-        completion={presentation.completion()}
+        completion={completion()}
         pending={presentation.busy()}
       >
         {(error) => (

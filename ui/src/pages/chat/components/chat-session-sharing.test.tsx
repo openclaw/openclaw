@@ -266,6 +266,31 @@ describe("chat session sharing menu", () => {
     expect(part(root, "sharing-panel")?.matches(":popover-open")).toBe(true);
   });
 
+  it("keeps the empty permissions status on command failure and clears it during retry", async () => {
+    const retry = createDeferred<{ status: "success" }>();
+    const onPublicShareChange = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Sharing command failed"))
+      .mockReturnValueOnce(retry.promise);
+    const root = await mount({ state: sharingState(), onPublicShareChange });
+    const toggle = root.querySelector<HTMLButtonElement>(".chat-pane__sharing-public-toggle")!;
+    expect(part(root, "sharing-permissions")).toBeNull();
+    toggle.click();
+    await waitForSolid(() => {
+      expect(root.querySelector('[role="alert"]')?.textContent).toContain("Sharing command failed");
+      expect(part(root, "sharing-permissions")).not.toBeNull();
+      expect(part(root, "sharing-empty")).not.toBeNull();
+    });
+    toggle.click();
+    await waitForSolid(() => {
+      expect(root.querySelector('[role="alert"]')).toBeNull();
+      expect(part(root, "sharing-permissions")).toBeNull();
+      expect(toggle.disabled).toBe(true);
+    });
+    retry.resolve({ status: "success" });
+    await waitForSolid(() => expect(toggle.disabled).toBe(false));
+  });
+
   it("retains the copy control and clears its failure while a retry is pending", async () => {
     const retry = createDeferred<{ status: "success" }>();
     const onCopyPublicLink = vi
