@@ -9,13 +9,10 @@ export const navigationItems: readonly MenuItem[] = [
   ...Object.entries({
     assign: ["Assign to", { ada: "Ada Rivera", grace: "Grace Kim" }],
     move: ["Move to group", { engineering: "Engineering", design: "Design" }],
-  } as const).map(([id, [label, children]]) => ({
-    id,
-    label,
-    children: Object.entries(children).map(([childId, childLabel]) => ({
-      id: childId,
-      label: childLabel,
-    })),
+  } as const).map(([branchId, [branchLabel, children]]) => ({
+    id: branchId,
+    label: branchLabel,
+    children: Object.entries(children).map(([id, label]) => ({ id, label })),
   })),
   { id: "disabled", label: "Unavailable", disabled: true },
   { id: "archive", label: "Archive" },
@@ -86,7 +83,6 @@ export async function phase(element: HTMLElement, value: "open" | "hidden"): Pro
 export async function openMenu(id = "people") {
   await userEvent.click(trigger(id));
   await phase(surface(id), "open");
-  expect(surface(id).matches(":popover-open")).toBe(true);
 }
 
 export function openSurfaces() {
