@@ -282,19 +282,15 @@ export function summarizeGatewayProbeCapability(
   );
 }
 
-function renderProbeCapabilityLine(probe: GatewayProbeResult, rich: boolean) {
+export function renderProbeSummaryLine(probe: GatewayProbeResult, rich: boolean) {
   const display = gatewayProbeCapabilities.find(
     ({ capability }) => capability === probe.auth.capability,
   );
-  return colorize(
+  const capability = colorize(
     rich,
     theme[display?.color ?? "muted"],
     `Capability: ${display?.label ?? "unknown"}`,
   );
-}
-
-export function renderProbeSummaryLine(probe: GatewayProbeResult, rich: boolean) {
-  const capability = renderProbeCapabilityLine(probe, rich);
   const detail = !probe.ok && probe.error ? ` - ${probe.error}` : "";
   if (probe.ok || (probe.gatewayReached && probe.connectLatencyMs != null)) {
     const latency =
