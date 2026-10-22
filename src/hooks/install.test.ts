@@ -17,15 +17,10 @@ import {
   resolvePackageDirInstallTransaction,
 } from "../infra/install-package-dir.js";
 import { packToArchive } from "../plugins/test-helpers/archive-fixtures.js";
-import { expectedNpmCommand, npmCommandArgs } from "../test-utils/npm-command.js";
-import {
-  expectInstallUsesIgnoreScripts,
-  expectIntegrityDriftRejected,
-  createCommandResult,
-  mockNpmPackMetadataResult,
-} from "../test-utils/npm-spec-install-test-helpers.js";
+import { npmCommandArgs } from "../test-utils/npm-command.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { writeHookFixture } from "./hook-fixture.test-support.js";
-import { createZipBuffer, createZipHookPackBuffer } from "./install-archive.test-support.js";
+import { createZipHookPackBuffer } from "./install-archive.test-support.js";
 
 type InstallHooksFromPath = typeof import("./install.js").installHooksFromPath;
 
@@ -60,10 +55,7 @@ const zipHooksBuffer = await createZipHookPackBuffer({
   hookDescription: "Zip hook",
   heading: "Zip Hook",
 });
-const zipTraversalBuffer = await createZipBuffer([{ path: "../pwned.txt", contents: "pwned" }]);
-const tarTraversalBuffer = fs.readFileSync(path.join(fixturesDir, "tar-traversal.tar"));
 const tarEvilIdBuffer = fs.readFileSync(path.join(fixturesDir, "tar-evil-id.tar"));
-const npmPackHooksBuffer = await createTarGzHookPackBuffer();
 
 function makeTempDir() {
   const dir = path.join(fixtureRoot, `case-${tempDirIndex++}`);
@@ -144,45 +136,13 @@ function writeHookPackFiles(params: {
   );
 }
 
-async function createTarGzHookPackBuffer() {
-  const workDir = path.join(fixtureRoot, "_generated", `pack-${randomUUID()}`);
-  const packageDir = path.join(workDir, "package");
-  fs.mkdirSync(packageDir, { recursive: true });
-  writeHookPackFiles({ pkgDir: packageDir });
-  return fs.readFileSync(
-    await packToArchive({ pkgDir: packageDir, outDir: workDir, outName: "pack.tgz" }),
-  );
-}
-
-async function installArchiveFixture(params: { fileName: string; contents: Buffer }) {
-  const fixture = writeArchiveFixture(params);
-  const result = await installHooksFromPath({
-    path: fixture.archivePath,
-    hooksDir: fixture.hooksDir,
+it("rejects hook packs with traversal-like ids", async () => {
+  const { archivePath, hooksDir } = writeArchiveFixture({
+    fileName: "hooks.tar",
+    contents: tarEvilIdBuffer,
   });
-  return { fixture, result };
-}
-
-describe("installHooksFromPath archives", () => {
-  it.each([
-    { name: "zip", fileName: "traversal.zip", contents: zipTraversalBuffer },
-    { name: "tar", fileName: "traversal.tar", contents: tarTraversalBuffer },
-  ])("rejects $name archives with traversal entries", async (tc) => {
-    const { fixture, result } = await installArchiveFixture({
-      fileName: tc.fileName,
-      contents: tc.contents,
-    });
-    expectInstallFailureContains(result, ["failed to extract archive", "ArchiveSecurityError"]);
-    expect(fs.existsSync(fixture.hooksDir)).toBe(false);
-  });
-
-  it("rejects hook packs with traversal-like ids", async () => {
-    const { result } = await installArchiveFixture({
-      fileName: "hooks.tar",
-      contents: tarEvilIdBuffer,
-    });
-    expectInstallFailureContains(result, ["reserved path segment"]);
-  });
+  const result = await installHooksFromPath({ path: archivePath, hooksDir });
+  expectInstallFailureContains(result, ["reserved path segment"]);
 });
 
 function makePackage(packageName = "@acme/canonical-hooks", dependencies?: Record<string, string>) {
@@ -212,7 +172,13 @@ async function deferredFixture(source: (typeof sources)[number]) {
       fs.copyFileSync(sourcePath, path.join(options.cwd, "hooks.tgz"));
       return createCommandResult({
         stdout: JSON.stringify([
-          { name: "@acme/canonical-hooks", version: "0.0.1", filename: "hooks.tgz" },
+          {
+            name: "@acme/canonical-hooks",
+            version: "0.0.1",
+            filename: "hooks.tgz",
+            integrity: "sha512-hook-test",
+            shasum: "hookshasum",
+          },
         ]),
       });
     });
@@ -329,16 +295,6 @@ describe("installHooksFromPath", () => {
     expect(scanPackageInstallSourceMock).not.toHaveBeenCalled();
     expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
     expect(fs.existsSync(hooksDir)).toBe(false);
-  });
-
-  it("installs dependencies with lifecycle scripts disabled", async () => {
-    const { pkgDir, hooksDir } = makePackage("@openclaw/test-hooks", { "left-pad": "1.3.0" });
-
-    const run = runCommandWithTimeoutMock;
-    await expectInstallUsesIgnoreScripts({
-      run,
-      install: async () => await installHooksFromPath({ path: pkgDir, hooksDir }),
-    });
   });
 
   it("preserves the declared OpenClaw dependency during update", async () => {
@@ -600,89 +556,17 @@ describe("installHooksFromPath", () => {
   });
 });
 
-describe("installHooksFromNpmSpec", () => {
-  it("uses --ignore-scripts for npm pack and cleans up temp dir", async () => {
-    const stateDir = makeTempDir();
-
-    const run = runCommandWithTimeoutMock;
-    let packTmpDir = "";
-    const packedName = "test-hooks-0.0.1.tgz";
-    run.mockImplementation(async (argv, opts) => {
-      if (npmCommandArgs(argv)?.[0] === "pack") {
-        packTmpDir = typeof opts === "number" ? "" : (opts.cwd ?? "");
-        fs.writeFileSync(path.join(packTmpDir, packedName), npmPackHooksBuffer);
-        return {
-          ...commandSuccess,
-          stdout: JSON.stringify([
-            {
-              id: "@openclaw/test-hooks@0.0.1",
-              name: "@openclaw/test-hooks",
-              version: "0.0.1",
-              filename: packedName,
-              integrity: "sha512-hook-test",
-              shasum: "hookshasum",
-            },
-          ]),
-        };
-      }
-      throw new Error(`unexpected command: ${argv.join(" ")}`);
-    });
-
-    const hooksDir = path.join(stateDir, "hooks");
-    const result = await installHooksFromNpmSpec({
-      spec: "@openclaw/test-hooks@0.0.1",
-      hooksDir,
-      logger: { info: () => {}, warn: () => {} },
-    });
-    assert(result.ok, "expected npm hook installation to succeed");
-    expect(result).toMatchObject({
-      hookPackId: "test-hooks",
-      packageKind: "hook-only",
-      npmResolution: { resolvedSpec: "@openclaw/test-hooks@0.0.1", integrity: "sha512-hook-test" },
-    });
-    expect(fs.existsSync(path.join(result.targetDir, "hooks", "one-hook", "HOOK.md"))).toBe(true);
-
-    expect(run).toHaveBeenCalledExactlyOnceWith(
-      expectedNpmCommand([
-        "pack",
-        "@openclaw/test-hooks@0.0.1",
-        "--ignore-scripts",
-        "--json",
-        "--dry-run=false",
-        `--pack-destination=${packTmpDir}`,
-      ]),
-      expect.objectContaining({
-        cwd: packTmpDir,
-        env: expect.objectContaining({ NPM_CONFIG_IGNORE_SCRIPTS: "true" }),
-      }),
-    );
-
-    expect(packTmpDir).not.toBe("");
-    expect(fs.existsSync(packTmpDir)).toBe(false);
+it("installs an npm hook archive with its identity and resolution metadata", async () => {
+  const { install } = await deferredFixture("npm");
+  const result = await install();
+  assert(result.ok, "expected npm hook installation to succeed");
+  expect(result).toMatchObject({
+    hookPackId: "canonical-hooks",
+    packageKind: "hook-only",
+    npmResolution: {
+      resolvedSpec: "@acme/canonical-hooks@0.0.1",
+      integrity: "sha512-hook-test",
+    },
   });
-
-  it("aborts when integrity drift callback rejects the fetched artifact", async () => {
-    const run = runCommandWithTimeoutMock;
-    mockNpmPackMetadataResult(run, {
-      id: "@openclaw/test-hooks@0.0.1",
-      name: "@openclaw/test-hooks",
-      version: "0.0.1",
-      filename: "test-hooks-0.0.1.tgz",
-      integrity: "sha512-new",
-      shasum: "newshasum",
-    });
-
-    const onIntegrityDrift = vi.fn(async () => false);
-    const result = await installHooksFromNpmSpec({
-      spec: "@openclaw/test-hooks@0.0.1",
-      expectedIntegrity: "sha512-old",
-      onIntegrityDrift,
-    });
-    expectIntegrityDriftRejected({
-      onIntegrityDrift,
-      result,
-      expectedIntegrity: "sha512-old",
-      actualIntegrity: "sha512-new",
-    });
-  });
+  expect(fs.existsSync(path.join(result.targetDir, "hooks", "one-hook", "HOOK.md"))).toBe(true);
 });

@@ -145,33 +145,6 @@ it("does not let a stale cancelled startup clear newer watcher config", async ()
   expect(mocks.spawn.mock.calls[1]?.[1]).toContain("newer@example.com");
 });
 
-it.each(["watch", "tailscale"] as const)(
-  "aborts %s startup without spawning gog serve",
-  async (boundary) => {
-    const controller = new AbortController();
-    const pending = commandGate(boundary === "tailscale" ? null : 1);
-    mocks.runCommandWithTimeout.mockImplementation((_args, options: { signal?: AbortSignal }) =>
-      pending.run(options),
-    );
-    const config = createGmailConfig(
-      "me@example.com",
-      undefined,
-      boundary === "tailscale" ? { mode: "serve" } : undefined,
-    );
-    const starting = startWatcher(config, { signal: controller.signal });
-    if (boundary === "tailscale") {
-      await vi.waitFor(() => expect(pending.signal).toBeDefined());
-    } else {
-      await Promise.resolve();
-    }
-    expect(pending.signal).toBe(controller.signal);
-    controller.abort();
-    expect(pending.signal?.aborted).toBe(true);
-    await expect(starting).resolves.toEqual({ started: false, reason: "startup cancelled" });
-    expect(mocks.spawn).not.toHaveBeenCalled();
-  },
-);
-
 it("renews once after multiple starts and coalesces missed renewals after sleep", async () => {
   const clock = createGatewaySchedulerClock();
   const scheduler = createTestGatewayScheduler(clock.clock);

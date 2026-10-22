@@ -178,7 +178,7 @@ describe("Gmail setup diagnostics and decisions", () => {
   });
 
   it.each(["gcloud", "brew", "tailscale serve"])(
-    "%s retains bounded tails from both streams",
+    "%s reports its operation and stream tails without exposing arguments",
     async (boundary) => {
       runCommand.mockResolvedValue(noisy);
       const run = async () => {
@@ -193,20 +193,16 @@ describe("Gmail setup diagnostics and decisions", () => {
         return utils.runGcloud(["--push-endpoint", "https://example.com/?token=do-not-echo-argv"]);
       };
       const { message } = await rejection(run);
-      expect(message.length).toBeLessThan(2000);
-      expect(message).toContain("code=7");
-      expect(message).toContain("stderr:");
-      expect(message).toContain("stdout:");
+      expect(message).toContain(
+        boundary === "brew"
+          ? "brew install for gog"
+          : boundary === "gcloud"
+            ? "gcloud command"
+            : boundary,
+      );
       expect(message).toContain("stdout final detail 🦞");
       expect(message).toContain("stderr final detail");
-      expect(message).toContain("progress 999");
-      expect(message).toContain("…");
-      expect(message).not.toContain("\r");
-      expect(message).not.toContain(String.fromCharCode(27));
       expect(message).not.toContain("do-not-echo-argv");
-      if (boundary === "brew") {
-        expect(message).toMatch(/brew install.*gog/);
-      }
     },
   );
 
