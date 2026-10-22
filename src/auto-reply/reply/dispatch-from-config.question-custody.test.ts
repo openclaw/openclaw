@@ -278,6 +278,14 @@ describe("dispatch input custody after a question response", () => {
           sourceReplyDeliveryMode: "message_tool_only",
           turnAdoptionLifecycle: { onAdopted: async () => {} },
         },
+        replyResolver: (ctx, opts) => {
+          const state = resolveReplyOperationRunState(opts);
+          if (!state) {
+            throw new Error("missing dispatch run state");
+          }
+          state.preRunRejection = "session-directive-rejected";
+          return fixture.resolveAnswer(ctx, opts);
+        },
       });
       fixture.expectError("The answer was not sent", "question-response-refused");
       expect(fixture.cancel).not.toHaveBeenCalled();

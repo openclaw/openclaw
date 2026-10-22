@@ -243,25 +243,21 @@ describe("dispatchReplyFromConfig pre-run directive rejection", () => {
     );
   });
 
-  const skipped = (reason: "queue-cap" | "question-response-refused"): ReplyOperationRunState => ({
-    admission: { status: "skipped", reason },
-  });
   it.each<[string, ReplyOperationRunState, boolean, string, string?]>([
     ["agent failure", {}, true, "error"],
-    ["queue cap", skipped("queue-cap"), false, "skipped", "queue-cap"],
+    [
+      "queue cap",
+      { admission: { status: "skipped", reason: "queue-cap" } },
+      false,
+      "skipped",
+      "queue-cap",
+    ],
     [
       "injection abort",
       { messageInjectionAborted: true },
       false,
       "skipped",
       "reply_operation_aborted",
-    ],
-    [
-      "question refusal",
-      skipped("question-response-refused"),
-      false,
-      "error",
-      "question-response-refused",
     ],
   ])(
     "preserves the terminal %s over a rejection fact",

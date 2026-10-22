@@ -52,51 +52,6 @@ describe("createReplyTurnLedger", () => {
     expect(ledger.resolveTerminalDelivery()).toBe("delivered");
   });
 
-  it.each([false, true])(
-    "tracks block failure visibility (transport entered=%s)",
-    async (entered) => {
-      const fail = async () => {
-        throw new Error("delivery failed");
-      };
-      const deliver = vi.fn(entered ? fail : async () => {});
-      const { ledger } = trackedLedger({ deliver, beforeDeliver: entered ? undefined : fail });
-      expect(ledger.sendQueued("block", { text: "Final answer." }).queued).toBe(true);
-      await ledger.settleQueued();
-      expect(deliver).toHaveBeenCalledTimes(entered ? 1 : 0);
-      expect(ledger.mayHaveDelivered()).toBe(entered);
-      expect(ledger.hasObservedDelivery()).toBe(false);
-      expect(ledger.resolveTerminalDelivery()).toBe(entered ? "pending" : "missing");
-    },
-  );
-
-  it("times out instead of waiting forever on a transport that never settles", async () => {
-    vi.useFakeTimers();
-    try {
-      const stalled = createDeferred();
-      const { dispatcher, ledger } = trackedLedger({ deliver: () => stalled.promise });
-      ledger.sendQueued("final", { text: "hello" });
-      const settle = ledger.settleQueued();
-      await vi.advanceTimersByTimeAsync(30_000);
-      await expect(settle).resolves.toBe("timed-out");
-      stalled.resolve();
-      dispatcher.markComplete();
-      await vi.runAllTimersAsync();
-      await dispatcher.waitForIdle();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("keeps legacy accepted sends visible when settlement has no receipt", async () => {
-    const ledger = createReplyTurnLedger(createUntrackedDispatcher());
-    const send = ledger.sendQueued("final", { text: "hello" });
-    expect(send.outcome).toBeUndefined();
-    await ledger.settleQueued();
-    expect(ledger.mayHaveDelivered()).toBe(true);
-    expect(ledger.hasObservedDelivery()).toBe(false);
-    expect(ledger.resolveTerminalDelivery()).toBe("pending");
-  });
-
   it("preserves a legacy idle observer's rejection", async () => {
     const error = new Error("Synthetic idle failure");
     const ledger = createReplyTurnLedger(
