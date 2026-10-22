@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
+import { buildChildEnv } from "../../scripts/ci-run-node-test-shard.mts";
 import {
   createChangedNodeTestShards,
   hasControlUiPerformanceAffectingChange,
@@ -17,13 +18,11 @@ import {
   PR_PROTECTED_RUNTIME_TEST_FILES,
 } from "../../scripts/lib/ci-proof-test-inventory.mts";
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
-import {
-  fallbackGroups,
-  isSerialNodeTestProjection,
-  selectedFiles,
-} from "./ci-changed-node-test-plan.test-support.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { fallbackGroups, selectedFiles } from "./ci-changed-node-test-plan.test-support.js";
 
 afterEach(() => vi.unstubAllEnvs());
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 // Real-checkout compositions share the planner's process-scoped import-graph cache.
 // Small synthetic graphs and canonical process selection remain in the unit file.
@@ -286,6 +285,7 @@ it.each(["node", "bun-all"])("keeps exact UI and core owners with %s timings", (
     }),
     "canonical selected tooling owners",
   );
+  const envScratch = tempDirs.make("changed-node-plan-env-");
   for (const job of shards ?? []) {
     for (const group of job.groups ?? []) {
       const owners = group.configs.includes("test/vitest/vitest.tooling.config.ts")
@@ -314,28 +314,43 @@ it.each(["node", "bun-all"])("keeps exact UI and core owners with %s timings", (
       ] as const) {
         expect(group[key], `${group.shard_name} group ${key}`).toEqual(selectedGroup[key]);
       }
-      const serialProjection = isSerialNodeTestProjection(job.groups, selectedJob);
-      // Serial projections retain the same two-worker ceiling when they share setup.
-      const expectedJobEnv =
-        serialProjection &&
-        selectedGroup.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined &&
-        selectedJob.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined
-          ? { ...selectedJob.env, OPENCLAW_VITEST_MAX_WORKERS: "2" }
-          : selectedJob.env;
-      for (const key of [
-        "env",
-        "runner",
-        "pretestBuildMode",
-        "requiresDist",
-        "timeoutMinutes",
-      ] as const) {
-        expect(job[key], `${group.shard_name} job ${key}`).toEqual(
-          key === "env" ? expectedJobEnv : selectedJob[key],
-        );
+      for (const key of ["runner", "pretestBuildMode", "requiresDist", "timeoutMinutes"] as const) {
+        expect(job[key], `${group.shard_name} job ${key}`).toEqual(selectedJob[key]);
       }
-      expect(job.planConcurrency, `${group.shard_name} job planConcurrency`).toBe(
-        serialProjection ? 1 : selectedJob.planConcurrency,
+      expect(
+        Object.fromEntries(
+          Object.entries(job.env ?? {}).filter(([key]) => key !== "OPENCLAW_VITEST_MAX_WORKERS"),
+        ),
+        `${group.shard_name} job environment`,
+      ).toEqual(
+        Object.fromEntries(
+          Object.entries(selectedJob.env ?? {}).filter(
+            ([key]) => key !== "OPENCLAW_VITEST_MAX_WORKERS",
+          ),
+        ),
       );
+      // Bounding can coalesce compatible settled serial rows after canonical selection.
+      // Compare the child budget the executor receives instead of projecting raw job concurrency
+      // backward across that phase boundary.
+      const childWorkers = buildChildEnv(
+        { kind: "group", name: group.shard_name, plan: group },
+        {
+          OPENCLAW_VITEST_MAX_WORKERS: job.planConcurrency === 1 ? "8" : "2",
+          ...job.env,
+        },
+        envScratch,
+        0,
+      ).OPENCLAW_VITEST_MAX_WORKERS;
+      const selectedChildWorkers = buildChildEnv(
+        { kind: "group", name: selectedGroup.shard_name, plan: selectedGroup },
+        {
+          OPENCLAW_VITEST_MAX_WORKERS: selectedJob.planConcurrency === 1 ? "8" : "2",
+          ...selectedJob.env,
+        },
+        envScratch,
+        0,
+      ).OPENCLAW_VITEST_MAX_WORKERS;
+      expect(childWorkers, `${group.shard_name} child worker ceiling`).toBe(selectedChildWorkers);
     }
   }
   expect(createChangedNodeTestShards([paths[1]!, "ui/src/AGENTS.md"], options)).toEqual(
