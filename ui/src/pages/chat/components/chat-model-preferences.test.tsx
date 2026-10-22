@@ -162,3 +162,44 @@ it("retires and restores an unavailable context-window control with its access g
     view.container.querySelector<HTMLButtonElement>("[data-chat-context-window-toggle]")?.disabled,
   ).toBe(true);
 });
+
+it("updates model selection against a retained and replaced catalog", async () => {
+  const view = await controls({});
+  const option = (id: string) =>
+    view.container.querySelector<HTMLButtonElement>(`[data-chat-model-option="example/${id}"]`);
+  const selectSession = (model: string) => {
+    const sessions = createSessionsListResult({
+      model,
+      modelProvider: "example",
+      modelOverrideSource: "user",
+    });
+    view.update({ selectedSession: sessions.sessions[0], sessionsResult: sessions });
+  };
+
+  selectSession("other");
+  await waitForSolid(() => {
+    expect(option("other")?.getAttribute("aria-selected")).toBe("true");
+    expect(option("primary")?.getAttribute("aria-selected")).toBe("false");
+  });
+
+  view.update({
+    modelCatalog: [
+      { id: "other", name: "Other refreshed", provider: "example", supportsFastMode: true },
+      { id: "replacement", name: "Replacement", provider: "example", supportsFastMode: true },
+    ],
+  });
+  await waitForSolid(() => {
+    expect(option("other")?.textContent).toContain("Other refreshed");
+    expect(option("replacement")).not.toBeNull();
+    expect(option("primary")).toBeNull();
+  });
+
+  selectSession("replacement");
+  await waitForSolid(() => {
+    expect(option("replacement")?.getAttribute("aria-selected")).toBe("true");
+    expect(option("other")?.getAttribute("aria-selected")).toBe("false");
+    expect(view.model.textContent).toContain("Replacement");
+  });
+  expectDefined(option("other"), "refreshed model option").click();
+  expect(view.onModelSelect).toHaveBeenCalledWith("example/other", "main", undefined);
+});

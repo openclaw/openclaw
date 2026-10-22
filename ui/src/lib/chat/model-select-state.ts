@@ -249,8 +249,7 @@ export function chatModelUnavailableMessage(
     : undefined;
 }
 
-export function resolveChatModelSelectState(state: ChatModelSelectStateInput) {
-  const catalog = state.chatModelCatalog;
+export function prepareChatModelSelectCatalog(catalog: ModelCatalogEntry[]) {
   const availableKeys = new Set(
     catalog.filter((entry) => entry.available !== false).map(catalogModelAvailabilityKey),
   );
@@ -260,7 +259,14 @@ export function resolveChatModelSelectState(state: ChatModelSelectStateInput) {
     (entry) => entry.available !== false || !availableKeys.has(catalogModelAvailabilityKey(entry)),
   );
   const displayLookup = buildCatalogDisplayLookup(pickerCatalog);
-  const options = buildChatModelOptions(pickerCatalog, displayLookup);
+  return { displayLookup, options: buildChatModelOptions(pickerCatalog, displayLookup) };
+}
+
+export function resolveChatModelSelectState(
+  state: ChatModelSelectStateInput,
+  prepared = prepareChatModelSelectCatalog(state.chatModelCatalog),
+) {
+  const { displayLookup, options } = prepared;
   const currentOverride = resolveCatalogChatModelValue(
     resolveChatModelOverrideValue(state),
     options,

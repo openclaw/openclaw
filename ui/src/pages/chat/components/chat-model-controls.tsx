@@ -12,6 +12,7 @@ import {
   resolvePreferredServerChatModelValue,
 } from "../../../lib/chat/model-ref.ts";
 import {
+  prepareChatModelSelectCatalog,
   resolveChatFastModeSelectState,
   resolveChatModelSelectState,
   type ChatFastModeSelectValue,
@@ -227,8 +228,11 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
   model: ChatModelPickerParams;
   effort: ChatEffortPickerParams;
 }> {
+  const catalogEntries = createMemo(() => props.modelCatalog);
+  const catalogIndex = createMemo(() => prepareChatModelCatalog(catalogEntries()));
+  const selectCatalog = createMemo(() => prepareChatModelSelectCatalog(catalogEntries()));
   return createMemo(() => {
-    const catalog = prepareChatModelCatalog(props.modelCatalog);
+    const catalog = catalogIndex();
     const catalogState = props.modelCatalogState;
     const policy = catalogState.modelSelectionPolicy;
     const retired = catalogState.retired === true;
@@ -264,17 +268,20 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
       defaultLabel,
       modelOverrideSource,
       options: selectOptions,
-    } = resolveChatModelSelectState({
-      activeSession: props.selectedSession,
-      agentDefaultModel: props.agentDefaultModel,
-      chatModelCatalog: props.modelCatalog,
-      modelOverrides: props.modelOverrides ?? {},
-      sessionKey: props.sessionKey,
-      sessionsResult: props.sessionsResult,
-      modelSelectionPolicy: policy,
-      catalogRetired: retired,
-      catalogInitialized: catalogState.initialized,
-    });
+    } = resolveChatModelSelectState(
+      {
+        activeSession: props.selectedSession,
+        agentDefaultModel: props.agentDefaultModel,
+        chatModelCatalog: props.modelCatalog,
+        modelOverrides: props.modelOverrides ?? {},
+        sessionKey: props.sessionKey,
+        sessionsResult: props.sessionsResult,
+        modelSelectionPolicy: policy,
+        catalogRetired: retired,
+        catalogInitialized: catalogState.initialized,
+      },
+      selectCatalog(),
+    );
     const currentOverride = catalogModelValue(rawCurrentOverride);
     const thinking = resolveChatThinkingSelectState({
       catalog: props.modelCatalog,
