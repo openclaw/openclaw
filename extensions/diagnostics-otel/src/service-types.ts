@@ -38,5 +38,4 @@ export type SessionRecoveryDiagnosticEvent = Extract<
   DiagnosticEventPayload,
   { type: "session.recovery.requested" | "session.recovery.completed" }
 >;
-export type TalkDiagnosticEvent = Extract<DiagnosticEventPayload, { type: "talk.event" }>;
 export type SecuritySeverityText = "FATAL" | "ERROR" | "WARN" | "INFO";

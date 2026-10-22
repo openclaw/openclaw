@@ -538,7 +538,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       };
       const recorders = {
         ...createUsageRecorders(recorderRuntime),
-        ...createOperationsRecorders(recorderRuntime),
+        operations: createOperationsRecorders(recorderRuntime),
         ...createHarnessRecorders(recorderRuntime),
         ...createModelRecorders(recorderRuntime),
         ...createToolAndSystemRecorders(recorderRuntime),
