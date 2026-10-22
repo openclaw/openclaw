@@ -232,11 +232,12 @@ it("parks history recovery until welcome and wizard settle", async () => {
 
   const wizardMessage = page.store.messages.find((message) => message.step);
   expect(wizardMessage).toBeDefined();
-  page.store.answerWizardStep(wizardMessage!, "Continue");
+  const answering = page.store.answerWizardStep(wizardMessage!, "Continue");
   await page.updateComplete;
   expect(page.store.sending).toBe(true);
   expect(historyCalls()).toBe(1);
   answer.resolve(chatReply("Wizard complete", { wizardInputPending: false }));
+  await answering;
   await waitForFast(() => expect(page.textContent).toContain("Recovered after wizard"));
   expect(historyCalls()).toBe(2);
   expectNoStatus(page);

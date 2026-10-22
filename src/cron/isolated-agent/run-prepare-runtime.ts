@@ -19,6 +19,8 @@ import { logWarn } from "./run.runtime.js";
 import type { CronLaneWaitCallback, RunCronAgentTurnResult } from "./run.types.js";
 
 export type RunCronAgentTurnParams = {
+  /** The occurrence admitted by the cron service, or by a hook or join-intro caller. */
+  occurrence: import("../scheduled-occurrence.js").ScheduledOccurrence;
   waitForIdle?: CronIdleAdmissionWait;
   assertCurrent?: () => void;
   admissionSource?: import("../../agents/admitted-run-context.js").AdmittedRunContext["admissionSource"];

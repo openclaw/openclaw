@@ -18,7 +18,7 @@ vi.mock("../config/sessions/session-delivery-generation.js", async (importOrigin
   prepareSessionGenerationFacts: (input: unknown) => prepareSessionGenerationFacts(input),
 }));
 
-const { mintCronPromptExecutionContext } = await import("./execution-context-admission.js");
+const { admitScheduledOccurrence } = await import("./execution-context-admission.js");
 const { prepareCronRunAdmission } = await import("./run-admission.js");
 
 const PARENT_KEY = "agent:main:dashboard:parent";
@@ -41,18 +41,22 @@ function job(overrides: Partial<CronStoredJob> = {}): CronStoredJob {
   } as CronStoredJob;
 }
 
-function mint(stored: CronStoredJob) {
-  return mintCronPromptExecutionContext(
-    {
-      cfgWithAgentDefaults: {},
-      job: stored,
-      agentId: "main",
-      runSessionKey: "agent:main:cron:job-1:run:s1",
-      cronSession: { storePath: "/tmp/store.json" },
-      agentPayload: { toolsAllow: ["*"] },
-    },
-    { runId: "run-1", trigger: "cron" },
-  );
+const RUN = {
+  cfg: {},
+  agentId: "main",
+  runId: "run-1",
+  runSessionKey: "agent:main:cron:job-1:run:s1",
+  toolsAllow: ["*"],
+  operatorAuthorityRestored: false,
+};
+
+function admit(stored: CronStoredJob) {
+  return admitScheduledOccurrence({ cfg: {}, job: stored, agentId: "main", trigger: "cron" });
+}
+
+async function mint(stored: CronStoredJob) {
+  const occurrence = await admit(stored);
+  return { occurrence, minted: occurrence.mint(RUN) };
 }
 
 beforeEach(() => {
@@ -62,9 +66,56 @@ beforeEach(() => {
   generationAssert.mockReset();
 });
 
-describe("mintCronPromptExecutionContext", () => {
+function operatorSource() {
+  return {
+    executionRevision: "exec-1",
+    source: {
+      version: 1,
+      agentId: "main",
+      sessionKey: PARENT_KEY,
+      sessionId: "parent-session",
+      lifecycleRevision: "rev-1",
+      sourceRunId: "source-run",
+      snapshot: {
+        profileId: "profile-1",
+        scopes: ["operator.admin"],
+        assignedRole: null,
+        githubLogin: null,
+        grant: null,
+        aliasBindingIds: [],
+        authPolicy: {
+          generation: "",
+          grantGeneration: "grant-gen",
+          role: "operator",
+          authMethod: "device-token",
+        },
+        device: { deviceId: "device-1", key: "a".repeat(64) },
+        controlUiAdmin: true,
+        localOperator: false,
+        sourceIngress: "control-ui",
+      },
+    },
+  } as unknown as NonNullable<CronStoredJob["operatorSource"]>;
+}
+
+const LINKED_JOB = {
+  owner: { agentId: "main", sessionKey: PARENT_KEY, accountId: "default" },
+  scheduledToolPolicy: {
+    version: 1 as const,
+    mode: "account" as const,
+    ownerSessionKey: PARENT_KEY,
+    ownerAccountId: "default",
+  },
+  sourceConversation: {
+    sessionKey: PARENT_KEY,
+    sessionId: "parent-session",
+    lifecycleRevision: "rev-1",
+  },
+};
+
+describe("admitScheduledOccurrence", () => {
   it("binds the context to the admitted run and releases it on close", async () => {
-    const minted = await mint(job({ scheduledToolPolicy: { version: 1, mode: "trusted" } }));
+    const { minted } = await mint(job({ scheduledToolPolicy: { version: 1, mode: "trusted" } }));
     expect(minted.result.status).toBe("ready");
     const admission = prepareCronRunAdmission({
       cfg: {},
@@ -91,27 +142,15 @@ describe("mintCronPromptExecutionContext", () => {
       sessionId: "parent-session",
       lifecycleRevision: "rev-1",
     });
-    const minted = await mint(
-      job({
-        owner: { agentId: "main", sessionKey: PARENT_KEY, accountId: "default" },
-        scheduledToolPolicy: {
-          version: 1,
-          mode: "account",
-          ownerSessionKey: PARENT_KEY,
-          ownerAccountId: "default",
-        },
-        sourceConversation: {
-          sessionKey: PARENT_KEY,
-          sessionId: "parent-session",
-          lifecycleRevision: "rev-1",
-        },
-      }),
-    );
+    const { occurrence, minted } = await mint(job(LINKED_JOB));
     expect(minted.result).toMatchObject({ status: "ready", facts: { placement: "child" } });
     expect(prepareSessionGenerationFacts).toHaveBeenCalledWith(
       expect.objectContaining({ sessionKey: PARENT_KEY, sessionId: "parent-session" }),
     );
+    // A run's release ends its context; the occurrence owns the parent generation.
     minted.release();
+    expect(generationRelease).not.toHaveBeenCalled();
+    occurrence.release();
     expect(generationRelease).toHaveBeenCalledOnce();
   });
 
@@ -120,15 +159,9 @@ describe("mintCronPromptExecutionContext", () => {
       sessionId: "parent-session",
       lifecycleRevision: "rev-1",
     });
-    const minted = await mint(
+    const { minted } = await mint(
       job({
-        owner: { agentId: "main", sessionKey: PARENT_KEY, accountId: "default" },
-        scheduledToolPolicy: {
-          version: 1,
-          mode: "account",
-          ownerSessionKey: PARENT_KEY,
-          ownerAccountId: "default",
-        },
+        ...LINKED_JOB,
         sourceConversation: { sessionKey: PARENT_KEY, sessionId: "parent-session" },
       }),
     );
@@ -140,7 +173,7 @@ describe("mintCronPromptExecutionContext", () => {
 
   it("reports a removed parent as a pause without throwing", async () => {
     readSessionEntryInWorker.mockResolvedValue(undefined);
-    const minted = await mint(
+    const { minted } = await mint(
       job({ sourceConversation: { sessionKey: PARENT_KEY, sessionId: "parent-session" } }),
     );
     expect(minted.result).toEqual({
@@ -153,10 +186,84 @@ describe("mintCronPromptExecutionContext", () => {
 
   it("turns a failed parent read into a fail result", async () => {
     readSessionEntryInWorker.mockRejectedValue(new Error("worker unavailable"));
-    const minted = await mint(
+    const { occurrence, minted } = await mint(
       job({ sourceConversation: { sessionKey: PARENT_KEY, sessionId: "parent-session" } }),
     );
     expect(minted.result).toEqual({ status: "fail", error: "worker unavailable" });
     expect(() => minted.release()).not.toThrow();
+    expect(() => occurrence.release()).not.toThrow();
+  });
+
+  it("reads the parent once for every run the occurrence admits", async () => {
+    readSessionEntryInWorker.mockResolvedValue({
+      sessionId: "parent-session",
+      lifecycleRevision: "rev-1",
+    });
+    const occurrence = await admit(job(LINKED_JOB));
+    const first = occurrence.mint(RUN);
+    const retry = occurrence.mint({ ...RUN, runId: "run-2" });
+    expect(readSessionEntryInWorker).toHaveBeenCalledOnce();
+    expect(prepareSessionGenerationFacts).toHaveBeenCalledOnce();
+    expect(first.result).toMatchObject({
+      status: "ready",
+      facts: { occurrence: { runId: "run-1" } },
+    });
+    expect(retry.result).toMatchObject({
+      status: "ready",
+      facts: { occurrence: { runId: "run-2" } },
+    });
+    occurrence.release();
+  });
+
+  it("checks a restored operator source per run", async () => {
+    readSessionEntryInWorker.mockResolvedValue({
+      sessionId: "parent-session",
+      lifecycleRevision: "rev-1",
+    });
+    const occurrence = await admit(
+      job({ sessionTarget: `session:${PARENT_KEY}`, operatorSource: operatorSource() }),
+    );
+    const runSessionKey = PARENT_KEY;
+    expect(occurrence.mint({ ...RUN, runSessionKey }).result).toMatchObject({
+      status: "ready",
+      facts: { authority: { owner: false, basis: "none" } },
+    });
+    expect(
+      occurrence.mint({ ...RUN, runSessionKey, operatorAuthorityRestored: true }).result,
+    ).toMatchObject({
+      status: "ready",
+      facts: { authority: { owner: true, basis: "operator-source" } },
+    });
+    occurrence.release();
+  });
+
+  it("gives main-session jobs an in-session context on the main session", async () => {
+    const { minted } = await mint(
+      job({
+        sessionTarget: "main",
+        payload: { kind: "systemEvent", text: "check in" },
+        owner: { agentId: "main", sessionKey: "agent:main:main" },
+      }),
+    );
+    expect(readSessionEntryInWorker).not.toHaveBeenCalled();
+    expect(minted.result).toMatchObject({
+      status: "ready",
+      facts: { placement: "in-session", principal: { kind: "unbound-parent" } },
+    });
+  });
+});
+
+describe("prepareCronRunAdmission", () => {
+  it("refuses a scheduled run that carries no admitted occurrence", () => {
+    expect(() =>
+      prepareCronRunAdmission({
+        cfg: {},
+        agentId: "main",
+        runId: "run-1",
+        sessionKey: "agent:main:cron:job-1:run:s1",
+        jobId: "job-1",
+        deliveryAttemptFence: null,
+      } as unknown as Parameters<typeof prepareCronRunAdmission>[0]),
+    ).toThrow("a scheduled run requires its admitted occurrence");
   });
 });

@@ -287,6 +287,8 @@ Keep the flag out of aggregate props memos. Cron passes it as a separate JSX
 prop: `<CronView {...viewProps()} busy={page.saving() || viewProps().busy} />`.
 Only consumers of `busy` should join its optimistic presentation lane;
 unrelated form and route props follow the ordinary owner snapshot.
+The same applies to object-valued JSX props: pass busy flags and completion
+readers separately so a busy update cannot hold the feedback slot behind its own work.
 
 `refresh` takes the actual Solid accessor or derived-store root. A wrapper
 such as `refresh(() => jobsRead())` is not refreshable. A bare refresh asks
@@ -308,6 +310,55 @@ route unexpected rejections into that same error operation or a split effect's
 that memo under `Errored`. Do not silently discard rejections. Boundary reset
 retries a read, not a mutation; an explicit retry-save button must invoke the
 save action. Keep the user's draft on failure.
+
+### Local action errors beside retained controls
+
+When a component owns only a local operation's feedback, keep its rejected
+promise as the outcome instead of copying the error into a signal. A narrow
+`Errored` slot can show the failure without replacing the usable control:
+
+```tsx
+const [attempt, setAttempt] = createSignal<{ result: Promise<void> }>();
+const outcome = createMemo(() => attempt()?.result.then(() => null), { loadingValue: undefined });
+// The event handler records the action promise and consumes its rejection even
+// if this component retires before the error slot observes it.
+
+<Show when={!saving()}>
+  <Errored fallback={(error) => <p role="alert">{formatUiError(error())}</p>}>{outcome()}</Errored>
+</Show>;
+```
+
+Here the co-written optimistic flag already presents progress. The explicit
+`loadingValue` lets the error observer read pending work without holding that
+affordance. Hiding the error slot while saving also clears the old failure on
+retry. Keep controls outside the slot, preserve the owner's admission and
+retirement checks, and consume the action promise in the handler; the memo is
+not a substitute for handling an event action's rejection. Chat speech and
+skill-review Undo use this pattern. Clear the recorded attempt when its target
+changes so a successor cannot inherit the previous operation's failure.
+
+### Command errors without optimistic state
+
+Some plugin commands already expose their busy state through a shared owner.
+They need no presentation action merely to show an error. WhatsApp Settings
+stores the admitted command's completion promise and reads it under `Errored`:
+
+```tsx
+const [completion, setCompletion] = createSignal<Promise<void>>();
+const completed = createMemo(() => completion()?.then(() => null) ?? null);
+
+<Loading on={completion()}>
+  <Errored fallback={(error) => <CommandError error={error()} />}>{completed()}</Errored>
+</Loading>;
+```
+
+Start the owner command in the event handler, publish its completion, and attach
+a rejection consumer for work whose view is replaced or disposed. Preserve the
+owner's cancellation and error-precedence contract. Each new completion replaces
+the previous read, so an older failed refresh cannot overwrite a newer success.
+Re-arm this narrow error slot on retry to clear the previous error immediately;
+keep the controls outside it. A local error string written by each completion
+would lose that ordering and require a second request-generation guard.
 
 ## Key a projection over an owner snapshot
 

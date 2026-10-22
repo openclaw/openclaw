@@ -27,6 +27,7 @@ import {
   resetCronActiveJobs,
 } from "./active-jobs.js";
 import { prepareCronRunAdmission } from "./run-admission.js";
+import { TEST_SCHEDULED_EXECUTION } from "./scheduled-occurrence.test-support.js";
 
 const admissions: ReturnType<typeof prepareAgentRunAdmission>[] = [];
 function prepareAdmission(
@@ -80,6 +81,7 @@ describe("cron message action authority", () => {
         sessionKey: "cron:long-message-read",
       };
       const owner = prepareCronRunAdmission({
+        scheduledExecution: TEST_SCHEDULED_EXECUTION,
         deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
         cfg: { agents: { defaults: { timeoutSeconds: 40 } } },
         ...identity,

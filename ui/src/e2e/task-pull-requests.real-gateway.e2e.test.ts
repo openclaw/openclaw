@@ -400,7 +400,14 @@ suite.define(() => {
                 }
                 await row.locator(".sidebar-recent-session__link").focus();
                 await card.waitFor();
-                await expect.poll(() => snapshots.at(-1)?.status).toBeTruthy();
+                // The earlier passive receipt snapshot is already ready.
+                await expect
+                  .poll(() => latestSubscription)
+                  .toMatchObject({
+                    foreground: true,
+                    passive: false,
+                    acknowledged: true,
+                  });
                 activated = true;
               };
               try {

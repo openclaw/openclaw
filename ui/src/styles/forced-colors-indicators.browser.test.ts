@@ -42,6 +42,9 @@ const css = readStyles(
     "components",
     "settings-controls",
     "settings",
+    "channels",
+    "plugins",
+    "usage",
     "chat/startup-layout",
     "chat/layout",
     "chat/text",
@@ -66,6 +69,46 @@ function fixtureDocument(direction: "ltr" | "rtl"): string {
 }
 
 fixture.describe("Control UI forced-colors indicators", () => {
+  it("keeps row-button keyboard focus visible when forced colors suppress shadows", async () => {
+    const artifactDir = createControlUiE2eArtifactDir("forced-colors-row-focus");
+    const classes = [
+      "channels-item__detail",
+      "plugins-item__detail-button",
+      "session-bar-selection",
+    ];
+    await withBrowserPage(
+      fixture.page({ forcedColors: "active", viewport: { width: 900, height: 500 } }),
+      async (page) => {
+        await page.setContent(
+          `<!doctype html><html data-theme="light"><head><style>${css}</style></head><body><main style="margin:40px;padding:24px"><h1>Keyboard focus in forced colors</h1>${classes.map((name) => `<p><button type="button" class="${name}">${name}</button></p>`).join("")}</main></body></html>`,
+        );
+        const indicators = [];
+        for (const name of classes) {
+          const button = page.locator(`.${name}`);
+          await page.keyboard.press("Tab");
+          expect(await button.evaluate((element) => element.matches(":focus-visible"))).toBe(true);
+          indicators.push(
+            await button.evaluate((element) => {
+              const style = getComputedStyle(element);
+              return {
+                style: style.outlineStyle,
+                width: style.outlineWidth,
+                shadow: style.boxShadow,
+              };
+            }),
+          );
+          await page.screenshot({
+            animations: "disabled",
+            path: path.join(artifactDir, `${name}.png`),
+          });
+        }
+        expect(indicators).toEqual(
+          classes.map(() => ({ style: "solid", width: "2px", shadow: "none" })),
+        );
+      },
+    );
+  });
+
   it("restores indicators for native selects, Markdown disclosures, and task checkboxes", async () => {
     const artifactDir = createControlUiE2eArtifactDir("forced-colors-indicators");
     for (const direction of ["ltr", "rtl"] as const) {

@@ -144,7 +144,7 @@ beforeEach(async () => {
   vi.stubEnv("OPENCLAW_SERVICE_REPAIR_POLICY", undefined);
   vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", undefined);
   vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", undefined);
-  mocks.offerUpdate.mockReset().mockResolvedValue({ updated: false });
+  mocks.offerUpdate.mockReset().mockResolvedValue(false);
   mocks.confirmCustody.mockReset().mockResolvedValue(true);
   mocks.updateCommand.mockReset();
   mocks.triageCommand.mockReset().mockResolvedValue(undefined);

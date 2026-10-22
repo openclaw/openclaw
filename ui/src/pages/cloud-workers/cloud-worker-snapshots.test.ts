@@ -33,6 +33,51 @@ function input(page: Element, label: string) {
 }
 
 describe("Cloud environments", () => {
+  it("retains a pool draft after a rejected save and permits retry", async () => {
+    const pending = createDeferred<unknown>();
+    let hold = true;
+    const { page, request } = mountTestPage(methods, {
+      response: (method) => (method === "config.patch" && hold ? pending.promise : undefined),
+    });
+    await waitForSolid(() => expect(input(page, "Pool cap").disabled).toBe(false));
+    change(input(page, "Pool cap"), "6");
+    click(page, "Save pool");
+    await configPatch(request);
+    await waitForSolid(() => expect(button(page, "Save pool").disabled).toBe(true));
+    expect(input(page, "Pool cap").value).toBe("6");
+    hold = false;
+    pending.reject(new Error("Synthetic save failure"));
+    await waitText(() => page, "Synthetic save failure");
+    await waitForSolid(() => expect(button(page, "Save pool").disabled).toBe(false));
+    expect(input(page, "Pool cap").value).toBe("6");
+    click(page, "Save pool");
+    await waitForSolid(() =>
+      expect(request.mock.calls.filter(([method]) => method === "config.patch")).toHaveLength(2),
+    );
+    await waitForSolid(() => expect(button(page, "Save pool").disabled).toBe(false));
+    expect(page.textContent).not.toContain("Synthetic save failure");
+  });
+
+  it("releases a pending pool save presentation when the same client reconnects", async () => {
+    const pending = createDeferred<unknown>();
+    const { page, request, harness, client } = mountTestPage(methods, {
+      response: (method) => (method === "config.patch" ? pending.promise : undefined),
+    });
+    try {
+      await waitForSolid(() => expect(input(page, "Pool cap").disabled).toBe(false));
+      change(input(page, "Pool cap"), "6");
+      click(page, "Save pool");
+      await configPatch(request);
+      await waitForSolid(() => expect(button(page, "Save pool").disabled).toBe(true));
+      harness.publish(false, client, null);
+      harness.publish(true, client, gatewayHelloForMethods(methods));
+      await waitForSolid(() => expect(button(page, "Save pool").disabled).toBe(false));
+    } finally {
+      pending.reject(new Error("Retired synthetic save"));
+    }
+    await waitForSolid(() => expect(page.textContent).not.toContain("Retired synthetic save"));
+  });
+
   it("shows accepted inventory before images settle and retains details through a refresh", async () => {
     const inventory = createDeferred<unknown>();
     const images = createDeferred<unknown>();

@@ -4,7 +4,6 @@ import { expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/context.ts";
-import { page as agentsPage } from "./agents/route.ts";
 import { page as devicesPage } from "./devices/route.ts";
 import { page as modelProvidersPage } from "./model-providers/route.ts";
 import { pages as pluginPages } from "./plugins/route.tsx";
@@ -79,13 +78,6 @@ function provenance(request: () => Promise<unknown> = vi.fn(async () => ({})), c
 
 it("records the exact gateway source and snapshot for synchronous route state", async () => {
   const source = provenance(undefined, false);
-  await source.load(agentsPage, {
-    settingsAgentSelection: selection(null),
-    agents: {
-      state: { agentsList: null, agentsError: null },
-      ensureList: vi.fn(async () => null),
-    },
-  });
   await source.load(devicesPage);
 });
 

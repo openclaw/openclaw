@@ -2,7 +2,6 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
 import { CHAT_MESSAGE_MAX_CHARS } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { currentThemeBranding } from "../../../app/theme-branding.ts";
-import { markdownGitHubAliasSignature } from "../../../components/markdown-github-repositories.ts";
 import { i18n } from "../../../i18n/index.ts";
 import { channelSenderAvatarMemoKey } from "../../../lib/chat/channel-sender-avatar.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
@@ -324,8 +323,6 @@ export function projectChatTranscript(
     allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
     fetchLinkFavicon: props.fetchLinkFavicon,
     pluginToolIcons: props.pluginToolIcons,
-    githubRepo: props.githubRepo,
-    githubRepositories: props.githubRepositories,
     showAssistantAvatar: avatarPlacement === "gutter",
     bubbleMode: props.chatBubbleMode === true && !searchFiltering,
   } satisfies StreamGroupOptions;
@@ -632,9 +629,6 @@ export function projectChatTranscript(
     props.allowExternalEmbedUrls ?? false,
     Boolean(props.fetchLinkFavicon),
     props.pluginToolIcons,
-    props.githubRepo?.owner,
-    props.githubRepo?.repo,
-    markdownGitHubAliasSignature(props.githubRepositories, props.githubRepo),
     threadContextWindow,
     Boolean(props.onSetReply),
     props.messageReactions,

@@ -117,7 +117,10 @@ export function SessionHovercardAutomations(props: { automation: SessionHovercar
   });
   const state = () => source().read();
   const load = (append = false) => source().load(append);
-  const readScope = createMemo(state);
+  const readScope = createMemo(
+    () => [state(), !state().cronJobsSnapshotRevision && state().cronJobsError] as const,
+    { equals: (before, after) => before.every((value, index) => value === after[index]) },
+  );
   // This read outlives the source it observes, so a retired request cannot hold scope replacement.
   const jobsRead = createMemo(() => {
     const owner = source();
@@ -130,7 +133,11 @@ export function SessionHovercardAutomations(props: { automation: SessionHovercar
     });
   });
   const readJobs = () => {
-    latest(jobsRead);
+    if (state().cronJobsSnapshotRevision) {
+      latest(jobsRead);
+    } else {
+      jobsRead();
+    }
     return null;
   };
   const selected = createMemo(
@@ -233,38 +240,38 @@ export function SessionHovercardAutomations(props: { automation: SessionHovercar
           <Icon name="chevronRight" />
         </span>
       </a>
-      <Errored
-        fallback={(_error, reset) => (
-          <Panel pending={false}>
+      <Loading
+        on={readScope()}
+        fallback={
+          <Panel pending={true}>
             <div class="session-hovercard__automation-message" role="status">
-              {t("chat.sessionDetails.automationError")}
+              {t("chat.sessionDetails.automationLoading")}
             </div>
-            <button
-              ref={createHovercardControlRef()}
-              type="button"
-              class="chip"
-              disabled={!state().connected}
-              onClick={() => {
-                void load();
-                reset();
-              }}
-            >
-              {t("common.retry")}
-            </button>
             <OpenLink />
           </Panel>
-        )}
+        }
       >
-        <Loading
-          on={readScope()}
-          fallback={
-            <Panel pending={true}>
+        <Errored
+          fallback={(_error, reset) => (
+            <Panel pending={false}>
               <div class="session-hovercard__automation-message" role="status">
-                {t("chat.sessionDetails.automationLoading")}
+                {t("chat.sessionDetails.automationError")}
               </div>
+              <button
+                ref={createHovercardControlRef()}
+                type="button"
+                class="chip"
+                disabled={!state().connected}
+                onClick={() => {
+                  void load();
+                  reset();
+                }}
+              >
+                {t("common.retry")}
+              </button>
               <OpenLink />
             </Panel>
-          }
+          )}
         >
           <Panel pending={loading()}>
             {readJobs()}
@@ -375,8 +382,8 @@ export function SessionHovercardAutomations(props: { automation: SessionHovercar
               <OpenLink />
             </Show>
           </Panel>
-        </Loading>
-      </Errored>
+        </Errored>
+      </Loading>
     </openclaw-tooltip>
   );
 }

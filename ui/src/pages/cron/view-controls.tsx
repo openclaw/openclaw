@@ -16,6 +16,17 @@ export function ErrorBanner(props: { error: string | null }) {
     </>
   );
 }
+export function NoticeBanner(props: { notice: string | null }) {
+  return (
+    <>
+      {props.notice ? (
+        <div class="callout" role="status">
+          {props.notice}
+        </div>
+      ) : undefined}
+    </>
+  );
+}
 export function AdminRequired(props: CronProps) {
   return (
     <>
