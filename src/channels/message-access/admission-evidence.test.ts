@@ -1,8 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import type {
-  GatewayContextResolver,
-  GatewayRequestContext,
-} from "../../gateway/server-methods/types.js";
+import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import {
   buildChannelInboundEventContext,
   buildHostChannelInboundEventContext,
@@ -19,7 +16,11 @@ import {
   readChannelContextGatewayContextResolver,
   type ChannelAdmissionEvidence,
 } from "./admission-evidence.js";
-import { ingressInput as hostIngressInput, ingressMessage } from "./host-ingress.test-support.js";
+import {
+  createHostIngressFixture,
+  ingressInput as hostIngressInput,
+  ingressMessage,
+} from "./host-ingress.test-support.js";
 import type { ResolveStableChannelMessageIngressParams } from "./runtime-types.js";
 import { createHostChannelIngressRuntime, resolveStableChannelIngressPolicy } from "./runtime.js";
 
@@ -74,15 +75,8 @@ function ingressInput(
 }
 
 function createOwner(audit: ChannelAdmissionAudit, resolveGatewayContext?: GatewayContextResolver) {
-  const gateway = {
-    channelAdmissionAudit: audit,
-    getRuntimeConfig: () => ({}),
-  } as GatewayRequestContext;
-  return {
-    channelId: "test",
-    isLive: () => true,
-    resolveGatewayContext: resolveGatewayContext ?? (() => gateway),
-  };
+  const { owner } = createHostIngressFixture("test", {}, { channelAdmissionAudit: audit });
+  return resolveGatewayContext ? { ...owner, resolveGatewayContext } : owner;
 }
 
 async function buildAdmittedContext(
@@ -90,20 +84,14 @@ async function buildAdmittedContext(
   participantId: string,
   allowFrom = [participantId],
   resolveGatewayContext?: GatewayContextResolver,
-  authentication?: "verified" | "asserted" | "unverified" | "mutable",
 ) {
   const owner = createOwner(audit, resolveGatewayContext);
   const params = makeContext(participantId, "msg-1");
   const channelIngress = await createHostChannelIngressRuntime(owner).resolveStable(
     ingressInput(params, {
-      identity: authentication ? { authentication: "verified" } : undefined,
-      subject: {
-        stableId: participantId,
-        ...(authentication ? { authentication: { stableId: authentication } } : {}),
-      },
+      subject: { stableId: participantId },
       dmPolicy: "allowlist",
       groupPolicy: "allowlist",
-      ...(authentication ? { policy: { minIdentifierAuthentication: "unverified" } } : {}),
       allowFrom,
     }),
   );
@@ -170,23 +158,6 @@ it("rejects implicit context custody transfer and forged private carriers", asyn
   }
   expect(forgedResolver).not.toHaveBeenCalled();
   expect(inspectChannelContext(source)).toMatchObject({ ingressState: "present" });
-});
-
-it("carries only the redacted identifier-policy explanation through host-owned evidence", async () => {
-  const audit = createAudit();
-  const context = await buildAdmittedContext(
-    audit,
-    "private-person",
-    ["private-person"],
-    undefined,
-    "unverified",
-  );
-  const consumed = inspectChannelContext(context);
-
-  expect(consumed).toMatchObject({
-    ingressState: "present",
-    identifierAuthentication: "evaluated",
-  });
 });
 
 it("cannot bootstrap evidence through the public copy helper", () => {

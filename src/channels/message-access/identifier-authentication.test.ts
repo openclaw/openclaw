@@ -1,7 +1,10 @@
 import { expect, it } from "vitest";
+import { decideChannelIngress } from "./decision.js";
 import type { IdentifierAuthentication } from "./identifier-authentication.js";
 import type { ResolveStableChannelMessageIngressParams } from "./runtime-types.js";
 import { resolveStableChannelIngressPolicy } from "./runtime.js";
+import { resolveChannelIngressState } from "./state.js";
+import type { InternalChannelIngressAdapter } from "./types.js";
 
 type Input = Partial<ResolveStableChannelMessageIngressParams>;
 
@@ -69,6 +72,49 @@ function expectThresholdDenied(result: Result, reasonCode = "dm_policy_not_allow
     gate: { identifierAuthentication: { evaluated: true, affectedMatch: true } },
   });
 }
+
+it.each(["inbound", "origin-subject"] as const)(
+  "preserves static authentication for legacy %s adapters without matched pairs",
+  async (authMode) => {
+    const adapter: InternalChannelIngressAdapter = {
+      normalizeEntries: ({ entries }) => ({
+        matchable: entries.map((value, index) => ({
+          opaqueEntryId: `entry-${index}`,
+          kind: "stable-id",
+          value: value.toLowerCase(),
+        })),
+        invalid: [],
+        disabled: [],
+      }),
+      matchSubject: ({ subject, entries }) => {
+        const values = new Set(subject.identifiers.map(({ value }) => value.toLowerCase()));
+        const matchedEntryIds = entries
+          .filter(({ value }) => values.has(value))
+          .map(({ opaqueEntryId }) => opaqueEntryId);
+        return { matched: matchedEntryIds.length > 0, matchedEntryIds };
+      },
+    };
+    const state = await resolveChannelIngressState({
+      channelId: "test",
+      accountId: "default",
+      adapter,
+      subject: { identifiers: [{ opaqueId: "sender", kind: "stable-id", value: "SENDER" }] },
+      conversation: { kind: "direct", id: "dm-1" },
+      allowlists: { dm: ["sender"] },
+      event: {
+        kind: "message",
+        authMode,
+        mayPair: false,
+        originSubject: {
+          identifiers: [{ opaqueId: "sender", kind: "stable-id", value: "sender" }],
+        },
+      },
+    });
+    const policy = { dmPolicy: "allowlist", groupPolicy: "allowlist" } as const;
+    expect(decideChannelIngress(state, policy).admission).toBe("dispatch");
+    expect(decideChannelIngress(state, { ...policy, ...verifiedPolicy }).admission).toBe("drop");
+  },
+);
 
 it("combines each matched entry with the exact same-kind subject identifier", async () => {
   const identity = emailIdentity("verified", "secondary-email", "verified");
@@ -320,4 +366,103 @@ it.each<[string, Input]>([
   });
 
   expectThresholdDenied(result);
+});
+
+it.each<[string, Input, Input, string]>([
+  [
+    "pairing-store entries stay DM-policy scoped",
+    { allowFrom: [], readStoreAllowFrom: async () => ["sender-1"], dmPolicy: "open" },
+    { dmPolicy: "pairing" },
+    "dm_policy_not_allowlisted",
+  ],
+  [
+    "group fallback requires opt-in",
+    { conversation: groupConversation },
+    { policy: { groupAllowFromFallbackToAllowFrom: true } },
+    "group_policy_empty_allowlist",
+  ],
+])("%s", async (_name, input, enabled, reasonCode) => {
+  expect((await resolve(input)).ingress).toMatchObject({ admission: "drop", reasonCode });
+  expect((await resolve({ ...input, ...enabled })).ingress).toMatchObject({
+    admission: "dispatch",
+    decision: "allow",
+  });
+});
+
+it("applies route sender overrides without retaining raw identities", async () => {
+  const rawSender = "route-sender@example.test";
+  const { state, ingress } = await resolve({
+    conversation: groupConversation,
+    subject: { stableId: rawSender },
+    groupAllowFrom: ["group-sender"],
+    route: { id: "space-1", senderPolicy: "replace", senderAllowFrom: [rawSender] },
+  });
+  expect(state.routeFacts[0]?.senderAllowlist).toMatchObject({
+    hasConfiguredEntries: true,
+    match: { matched: true },
+  });
+  expect(ingress).toMatchObject({ admission: "dispatch", decision: "allow" });
+  expect(JSON.stringify(state)).not.toContain(rawSender);
+  expect(JSON.stringify(ingress)).not.toContain(rawSender);
+});
+
+it("blocks matched routes with deny-when-empty sender policy", async () => {
+  const { state, ingress } = await resolve({
+    route: { id: "space-1", senderPolicy: "deny-when-empty", senderAllowFrom: [] },
+  });
+  expect(ingress).toMatchObject({ admission: "drop", reasonCode: "route_sender_empty" });
+  expect(state.routeFacts[0]).not.toHaveProperty("senderAllowFrom");
+});
+
+it("translates implicit mention config before shared activation evaluation", async () => {
+  const { ingress } = await resolve({
+    conversation: groupConversation,
+    groupAllowFrom: ["sender-1"],
+    mentionFacts: {
+      canDetectMention: true,
+      wasMentioned: false,
+      implicitMentionKinds: ["reply_to_bot", "bot_thread_participant"],
+    },
+    policy: {
+      activation: {
+        requireMention: true,
+        allowTextCommands: false,
+        implicitMentions: { replyToBot: false, quotedBot: true, threadParticipation: true },
+      },
+    },
+  });
+  expect(ingress).toMatchObject({ admission: "dispatch", decision: "allow" });
+  expect(ingress.graph.gates.find((gate) => gate.phase === "activation")?.activation).toMatchObject(
+    {
+      allowedImplicitMentionKinds: ["quoted_bot", "bot_thread_participant", "native"],
+      effectiveWasMentioned: true,
+    },
+  );
+});
+
+it.each([
+  ["same", "sender-1", "sender-1", false, true],
+  ["different", "sender-1", "different-sender", false, false],
+  ["normalized", "Sender-1", "sender-1", true, true],
+] as const)("matches %s origin actors", async (_name, current, origin, foldCase, matched) => {
+  const { state, ingress } = await resolve({
+    allowFrom: [],
+    subject: { stableId: current },
+    identity: foldCase ? { normalize: (value) => value.toLowerCase() } : undefined,
+    event: originEvent("stableId", "stable-id", origin),
+  });
+  expect(state.event.originSubjectMatched).toBe(matched);
+  expect(ingress).toMatchObject(
+    matched
+      ? { admission: "dispatch", decision: "allow" }
+      : { admission: "drop", decision: "block", reasonCode: "origin_subject_not_matched" },
+  );
+  if (matched) {
+    expect(
+      ingress.graph.gates.find((gate) => gate.phase === "sender" && gate.kind === "dmSender"),
+    ).toMatchObject({
+      effect: "ignore",
+      reasonCode: "sender_not_required",
+    });
+  }
 });

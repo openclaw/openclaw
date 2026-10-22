@@ -50,10 +50,10 @@ export function configureNativeAcp(
 
 export function createNativeAcpRuntime(
   backendId: string,
-  record: (effect: string) => void | Promise<void>,
   pauseAt: "capability" | "control" | undefined,
   extendedHandle = false,
 ) {
+  const effects: string[] = [];
   const preparing = createDeferredCore();
   const finish = createDeferredCore();
   const acceptedOptions = new Map<string, string>();
@@ -67,7 +67,7 @@ export function createNativeAcpRuntime(
   const runtime: AcpRuntime = {
     ownerAwareSessions: 1,
     async ensureSession(input) {
-      await record("initialize");
+      effects.push("initialize");
       acceptedOptions.clear();
       for (const [key, value] of [
         ["model", input.model],
@@ -92,7 +92,7 @@ export function createNativeAcpRuntime(
       return { controls: ["session/set_config_option"] };
     },
     async setConfigOption({ key, value }) {
-      await record(`configure:${key}`);
+      effects.push(`configure:${key}`);
       acceptedOptions.set(key, value);
       if (key === "model") {
         await wait("control");
@@ -103,7 +103,7 @@ export function createNativeAcpRuntime(
     },
     async close() {
       if (extendedHandle) {
-        await record("close");
+        effects.push("close");
       }
     },
     async cancel() {},
@@ -113,6 +113,7 @@ export function createNativeAcpRuntime(
   };
   return {
     runtime,
+    effects,
     preparing,
     finish,
     pause: () => {
