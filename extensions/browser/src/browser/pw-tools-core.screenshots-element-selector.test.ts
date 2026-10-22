@@ -186,6 +186,7 @@ describe("screenshot annotations", () => {
     captureLabels({ ...target, refs: refs(1), ...options });
   beforeEach(() => {
     imageSize.active = true;
+    imageSize.width = 1280;
     view.y = 0;
     screenshot.mockReset().mockResolvedValue(Buffer.from("PNG"));
     boundingBox.mockReset().mockResolvedValue(box([0, 0, 1, 1]));
@@ -230,6 +231,26 @@ describe("screenshot annotations", () => {
       }
     },
   );
+
+  it("captures the resolved element and projects annotations relative to it", async () => {
+    imageSize.width = 200;
+    boundingBox
+      .mockResolvedValueOnce(box([50, 100, 200, 300]))
+      .mockResolvedValueOnce(box([60, 110, 30, 20]));
+    const elementScreenshot = vi.fn(async () => Buffer.from("ELEM"));
+    setPwToolsCoreCurrentRefLocator({
+      boundingBox,
+      elementHandle: async () => ({
+        screenshot: elementScreenshot,
+        scrollIntoViewIfNeeded: async () => {},
+        dispose: async () => {},
+      }),
+    });
+    const result = await captureAnnotations({ ref: "container" });
+    expect(elementScreenshot).toHaveBeenCalledOnce();
+    expect(result.annotations).toHaveLength(1);
+    expect(result.annotations[0]?.box).toEqual(box([10, 10, 30, 20]));
+  });
 
   it("rejects unresolved elements", async () => {
     boundingBox.mockResolvedValueOnce(null);

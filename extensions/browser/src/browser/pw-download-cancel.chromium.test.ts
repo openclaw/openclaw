@@ -9,7 +9,7 @@ import { useAutoCleanupTempDirTracker } from "../../test-support.js";
 import * as outputFiles from "./output-files.js";
 import { observeOutputWriteSettlement } from "./output-files.test-support.js";
 import { DEFAULT_UPLOAD_DIR } from "./paths.js";
-import { launchChromium, readTargetId } from "./pw-chromium.test-support.js";
+import { getPlaywrightCore } from "./playwright-core.runtime.js";
 import { ensurePageState } from "./pw-session-state.js";
 import * as pwSession from "./pw-session.js";
 import { closePlaywrightBrowserConnection, getPageForTargetId } from "./pw-session.js";
@@ -23,6 +23,7 @@ import { clickViaPlaywright, typeViaPlaywright } from "./pw-tools-core.interacti
 import { setInputFilesViaPlaywright } from "./pw-tools-core.interactions.content.js";
 import { executeActViaPlaywright } from "./pw-tools-core.interactions.execution.js";
 import { snapshotRoleViaPlaywright } from "./pw-tools-core.snapshot.js";
+import { getFreePort } from "./test-port.js";
 
 const runChromiumProof = process.env.OPENCLAW_BROWSER_DOWNLOAD_E2E === "1";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -38,6 +39,15 @@ function closeServer(server: Server): Promise<void> {
   return new Promise((resolve, reject) => {
     server.close((error) => (error ? reject(error) : resolve()));
   });
+}
+
+async function readTargetId(page: import("playwright-core").Page): Promise<string> {
+  const session = await page.context().newCDPSession(page);
+  try {
+    return (await session.send("Target.getTargetInfo")).targetInfo.targetId;
+  } finally {
+    await session.detach();
+  }
 }
 
 function sendDownload(response: ServerResponse, payload: Buffer, filename: string) {
@@ -99,8 +109,15 @@ describe.runIf(runChromiumProof)("managed Chromium action and download cancellat
   }
 
   async function launchBrowser(rootDir: string, url?: string) {
-    const { context, cdpUrl } = await launchChromium(rootDir);
+    const cdpPort = await getFreePort();
+    const profileDir = path.join(rootDir, "profile");
+    const context = await getPlaywrightCore().chromium.launchPersistentContext(profileDir, {
+      headless: true,
+      executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
+      args: [`--remote-debugging-port=${cdpPort}`],
+    });
     cleanup.push(async () => await context.close());
+    const cdpUrl = `http://127.0.0.1:${cdpPort}`;
     cleanup.push(async () => await closePlaywrightBrowserConnection({ cdpUrl }));
     const page = context.pages()[0] ?? (await context.newPage());
     if (url) {
@@ -492,10 +509,8 @@ describe.runIf(runChromiumProof)("managed Chromium action and download cancellat
     const downloadPort = await listen(downloadServer);
     cleanup.push(async () => await closeServer(downloadServer));
 
-    const { page, cdpUrl, targetId } = await createDownloadPage(
-      rootDir,
-      `http://127.0.0.1:${downloadPort}/`,
-    );
+    const url = `http://127.0.0.1:${downloadPort}/`;
+    const { context, page, cdpUrl, targetId } = await createDownloadPage(rootDir, url);
     const target = { cdpUrl, targetId };
     const outputRoot = path.join(rootDir, "downloads");
     const waitForDownload = (file?: string, signal?: AbortSignal) =>
@@ -559,5 +574,32 @@ describe.runIf(runChromiumProof)("managed Chromium action and download cancellat
     await page.locator("#download").click();
     const clickSuccessorResult = await clickSuccessor;
     await expect(fs.readFile(clickSuccessorResult.path)).resolves.toEqual(successorPayload);
+
+    await closePlaywrightBrowserConnection({ cdpUrl });
+    await context.close();
+
+    const restarted = await createDownloadPage(rootDir, url);
+
+    const downloadAfterRestart = async () => {
+      const pending = waitForDownloadViaPlaywright(captureOptions(restarted, outputRoot));
+      const connected = await getPageForTargetId(restarted);
+      await expect.poll(() => ensurePageState(connected).downloadWaiterDepth).toBe(1);
+      await restarted.page.locator("#download").click();
+      return await pending;
+    };
+    const firstDuplicate = await downloadAfterRestart();
+    const secondDuplicate = await downloadAfterRestart();
+
+    expect(firstDuplicate.suggestedFilename).toBe("duplicate.txt");
+    expect(secondDuplicate.suggestedFilename).toBe("duplicate.txt");
+    expect(firstDuplicate.path).not.toBe(secondDuplicate.path);
+    await expect(fs.readFile(firstDuplicate.path)).resolves.toEqual(successorPayload);
+    await expect(fs.readFile(secondDuplicate.path)).resolves.toEqual(successorPayload);
+    expect((await fs.readdir(outputRoot)).some((name) => name.endsWith(".part"))).toBe(false);
+
+    await closePlaywrightBrowserConnection({ cdpUrl: restarted.cdpUrl });
+    await restarted.context.close();
+    await fs.rm(rootDir, { recursive: true, force: true });
+    await expect(fs.access(rootDir)).rejects.toMatchObject({ code: "ENOENT" });
   }, 30_000);
 });

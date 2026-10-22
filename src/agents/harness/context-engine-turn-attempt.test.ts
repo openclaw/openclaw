@@ -13,6 +13,7 @@ import {
   readActiveTranscriptEntryAnchor,
 } from "../../config/sessions/session-accessor.js";
 import { readClosedTranscriptTurnInDatabase } from "../../config/sessions/session-accessor.transcript-range.worker.js";
+import type { ContextEngine } from "../../context-engine/types.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -30,12 +31,10 @@ import {
 } from "./context-engine-turn-outbox.kernel.worker.js";
 import {
   appendTurnMessage,
-  createCommitTurn,
   createTurnBoundary,
   createTurnFacts,
   createTurnEngine,
   createTurnLease,
-  createTurnTarget,
 } from "./context-engine-turn.test-support.js";
 
 const acceptedMessages = [
@@ -65,7 +64,9 @@ async function seedTurnSession(
 }
 
 function createDurableLease() {
-  const commitTurn = createCommitTurn();
+  const commitTurn = vi.fn<NonNullable<ContextEngine["commitTurn"]>>(async () => ({
+    status: "committed",
+  }));
   const lease = createTurnLease(createTurnEngine(commitTurn));
   return { commitTurn, lease, warn: vi.fn() };
 }
@@ -93,7 +94,12 @@ async function createAcceptedTurnFixture(
 ) {
   const sessionId = "accepted-turn";
   const tempDir = sessionDirs.make();
-  const target = createTurnTarget(path.join(tempDir, "sessions.json"), sessionId);
+  const target = {
+    agentId: "main",
+    sessionId,
+    sessionKey: `agent:main:${sessionId}`,
+    storePath: path.join(tempDir, "sessions.json"),
+  };
   await seedTurnSession(target);
   let parentId: string | undefined;
   for (const [index, content] of (params.prefix ?? []).entries()) {
@@ -183,7 +189,13 @@ async function createAcceptedTurnFixture(
 describe("accepted context-engine turn finalization", () => {
   it("commits a running turn once after confirming a persisted steer", async () => {
     setRuntimeConfigSnapshot({});
-    const target = createTurnTarget(path.join(sessionDirs.make(), "sessions.json"), "steered-turn");
+    const target = {
+      agentId: "main",
+      sessionId: "steered-turn",
+      sessionKey: "agent:main:steered-turn",
+      storePath: path.join(sessionDirs.make(), "sessions.json"),
+      sessionEntry: undefined,
+    };
     await seedTurnSession(target);
     const recorder = createUserTurnTranscriptRecorder({
       target,

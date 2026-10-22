@@ -146,30 +146,34 @@ let resolveSandboxConfigForAgent: typeof import("./sandbox/config.js").resolveSa
 let resolvePreparedSandboxRuntimeStatus: typeof import("./sandbox/runtime-status.js").resolvePreparedSandboxRuntimeStatus;
 
 async function resolveContext(config: OpenClawConfig, sessionKey: string, workspaceDir: string) {
-  const context = expectDefined(
-    await resolveSandboxContext({ config, sessionKey, workspaceDir }),
-    "sandbox context",
-  );
-  const { containerId } = inspectCreatedDockerMounts(context.containerName);
-  expect(
-    spawnCalls
-      .filter(
-        ({ command, args }) =>
-          command === "docker" &&
-          (args[2] === "{{.Id}}" ||
-            args[2] === mountInspectFormat ||
-            args[3] === "/proc/self/mountinfo"),
-      )
-      .map(({ command, args }) => [command].concat(args)),
-  ).toEqual([
-    ["docker", "inspect", "--format", mountInspectFormat, containerId],
-    ["docker", "exec", containerId, "cat", "/proc/self/mountinfo"],
-  ]);
-  expect(spawnCalls).toContainEqual({ command: "docker", args: ["start", containerId] });
-  expect(context.fsBridge?.resolvePath({ filePath: "marker.txt" }).hostPath).toBe(
-    path.join(context.workspaceDir, "marker.txt"),
-  );
-  return context;
+  const context = await resolveSandboxContext({
+    config,
+    sessionKey,
+    workspaceDir,
+  });
+  if (context) {
+    const { containerId } = inspectCreatedDockerMounts(context.containerName);
+    expect(
+      spawnCalls.filter(
+        (call) =>
+          call.command === "docker" &&
+          (call.args[2] === "{{.Id}}" ||
+            call.args[2] === mountInspectFormat ||
+            call.args[3] === "/proc/self/mountinfo"),
+      ),
+    ).toEqual([
+      {
+        command: "docker",
+        args: ["inspect", "--format", mountInspectFormat, containerId],
+      },
+      { command: "docker", args: ["exec", containerId, "cat", "/proc/self/mountinfo"] },
+    ]);
+    expect(spawnCalls).toContainEqual({ command: "docker", args: ["start", containerId] });
+    expect(context.fsBridge?.resolvePath({ filePath: "marker.txt" }).hostPath).toBe(
+      path.join(context.workspaceDir, "marker.txt"),
+    );
+  }
+  return expectDefined(context, "sandbox context");
 }
 
 function expectDockerSetupCommand(command: string) {
@@ -193,6 +197,18 @@ function sandboxConfig(
       entries,
     },
   };
+}
+
+function createWorkSetupCommandConfig(scope: "agent" | "shared"): OpenClawConfig {
+  return sandboxConfig(
+    { scope, docker: { setupCommand: "echo global" } },
+    {
+      work: {
+        workspace: "~/openclaw-work",
+        sandbox: { mode: "all", scope, docker: { setupCommand: "echo work" } },
+      },
+    },
+  );
 }
 
 describe("Agent-specific sandbox config", () => {
@@ -232,9 +248,14 @@ describe("Agent-specific sandbox config", () => {
   it("should prefer agent-specific sandbox tool policy", () => {
     const cfg = createRestrictedAgentSandboxConfig({
       agentTools: { sandbox: { tools: { allow: ["read", "write"], deny: ["edit"] } } },
-      globalSandboxTools: { allow: ["read"], deny: ["exec"] },
+      globalSandboxTools: {
+        allow: ["read"],
+        deny: ["exec"],
+      },
     });
-    expect(resolveSandboxConfigForAgent(cfg, "restricted").tools).toEqual({
+
+    const sandbox = resolveSandboxConfigForAgent(cfg, "restricted");
+    expect(sandbox.tools).toEqual({
       allow: ["read", "write", "view_image"],
       deny: ["edit"],
     });
@@ -244,15 +265,7 @@ describe("Agent-specific sandbox config", () => {
     { scope: "agent" as const, expectedSetup: "echo work" },
     { scope: "shared" as const, expectedSetup: "echo global" },
   ])("should resolve $scope setupCommand overrides", async ({ scope, expectedSetup }) => {
-    const cfg = sandboxConfig(
-      { scope, docker: { setupCommand: "echo global" } },
-      {
-        work: {
-          workspace: "~/openclaw-work",
-          sandbox: { mode: "all", scope, docker: { setupCommand: "echo work" } },
-        },
-      },
-    );
+    const cfg = createWorkSetupCommandConfig(scope);
     const context = await resolveContext(cfg, "agent:work:main", "/tmp/test-work");
 
     expect(context.docker?.setupCommand).toBe(expectedSetup);

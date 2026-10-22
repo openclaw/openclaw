@@ -1208,24 +1208,24 @@ describe("runPreparedReply media-only handling", () => {
   ] as const)(
     "%s preserves the command interpretation boundary",
     async (_name, channel, kind, enabled, allowed) => {
-      const suppressed = kind === "normal";
       const source = kind === "text-slash" ? "text" : kind === "native" ? "native" : undefined;
-      const body = suppressed ? "/new" : "/model openai/gpt-5.5";
+      const body = kind === "normal" ? "/new" : "/model openai/gpt-5.5";
       const onDeliberateSilentTerminalReply = vi.fn();
       vi.mocked(hasControlCommand).mockReturnValue(true);
       const params = baseParams({
         ctx: {
           ...createInboundTurn(body, channel, "direct"),
           CommandAuthorized: false,
-          ...(suppressed ? { CommandInterpretationSuppressed: true } : {}),
+          ...(kind === "normal" ? { CommandInterpretationSuppressed: true } : {}),
           ...(source === "native" || source === "text" ? { CommandSource: source } : {}),
           ...(kind === "normal"
             ? { CommandTurn: { kind, source: "message", authorized: false, body } }
             : source
               ? {
                   CommandTurn: {
-                    kind: source === "native" ? "native" : "text-slash",
-                    source,
+                    ...(source === "native"
+                      ? { kind: "native" as const, source }
+                      : { kind: "text-slash" as const, source }),
                     authorized: false,
                     commandName: "model",
                     body,
@@ -1244,7 +1244,7 @@ describe("runPreparedReply media-only handling", () => {
           commandBodyNormalized: body,
         },
         allowTextCommands: enabled,
-        isNewSession: suppressed,
+        isNewSession: kind === "normal",
         opts: { onDeliberateSilentTerminalReply },
       });
       const result = await runPreparedReply(params);
@@ -2497,11 +2497,10 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   it("keeps cross-channel cron reply policy independent of remembered chat type", async () => {
-    const source = "cron" as const;
     for (const liveChatType of [undefined, "direct"] as const) {
       vi.mocked(runReplyAgent).mockClear();
       const route = {
-        InternalTurnSource: source,
+        InternalTurnSource: "cron" as const,
         OriginatingChannel: "slack" as const,
         OriginatingTo: "user:U1",
         ChatType: liveChatType,
