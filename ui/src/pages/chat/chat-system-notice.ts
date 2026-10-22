@@ -3,13 +3,23 @@ import { readRunFailureNotice } from "../../../../src/shared/run-failure-notice.
 import { readSkillWorkshopChangeNotice } from "../../../../src/shared/skill-workshop-change-notice.js";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../../../../src/shared/transcript-only-openclaw-assistant.js";
 import { t } from "../../i18n/index.ts";
-import type { ChatItem, NormalizedMessage } from "../../lib/chat/chat-types.ts";
+import type { ChatItem, MessageGroup, NormalizedMessage } from "../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { userTurnRunId } from "./chat-thread-items.ts";
 import { optionalBoundaryIdentity } from "./chat-thread-run-identity.ts";
 import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
 import { resolveSystemNoticeKind, type PendingInputStatus } from "./system-notice-kinds.ts";
+
+export function isRunlessChannelFinalMirror(item: MessageGroup): boolean {
+  return (
+    item.runId === undefined &&
+    item.messages.every(({ message }) => {
+      const mirror = asRecord(asRecord(message)?.openclawDeliveryMirror);
+      return isOpenClawDeliveryMirrorAssistantMessage(message) && mirror?.kind === "channel-final";
+    })
+  );
+}
 
 /** Pending custody and persisted history share the same system-turn presentation. */
 export function projectChatSystemNotice(

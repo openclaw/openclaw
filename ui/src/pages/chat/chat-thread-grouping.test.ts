@@ -309,6 +309,34 @@ it.each<[string, object, boolean, boolean?]>([
   ];
   expectHistory(messages, preserved ? [0, 2, 3] : [0, 3], preserved ? [1] : [1, 2]);
 });
+it.each([
+  { name: "runId-less notice", mirrorRun: {}, shown: [0, 2, 3], folded: [1] },
+  {
+    name: "run-owned delivery",
+    mirrorRun: { __openclaw: { runId: "completed-run" } },
+    shown: [0, 2, 3],
+    folded: [1],
+  },
+])("handles a $name channel-final mirror", ({ mirrorRun, shown, folded }) => {
+  const run = { runId: "completed-run" };
+  const messages = [
+    nativeMessage("user", "Inspect the file", 1, run),
+    tool("read-file", 2, { __openclaw: run }),
+    message("assistant", "File verified", 3, {
+      stopReason: "stop",
+      __openclaw: run,
+    }),
+    message("assistant", "Learned a new workflow", 4, {
+      api: "openclaw-transcript",
+      provider: "openclaw",
+      model: "delivery-mirror",
+      stopReason: "stop",
+      openclawDeliveryMirror: { kind: "channel-final" },
+      ...mirrorRun,
+    }),
+  ];
+  expectHistory(messages, shown, folded);
+});
 it.each<[string, boolean, number[], number[]]>([
   ["final_answer", false, [0, 1, 2], []],
   ["commentary", true, [0, 1], [2, 3]],

@@ -20,6 +20,7 @@ import {
   isProviderVoiceTranscript,
   resolveAssistantReplyPhase,
 } from "./chat-assistant-reply.ts";
+import { isRunlessChannelFinalMirror } from "./chat-system-notice.ts";
 import { prepareMessagesForGrouping } from "./chat-thread-duplicates.ts";
 import {
   createChatItemsGroupingCache,
@@ -450,6 +451,7 @@ function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
   if (
     item.kind !== "group" ||
     item.isStreaming ||
+    isRunlessChannelFinalMirror(item) ||
     groupHasVisibleReplyContent(item, false) ||
     item.messages.some(({ message }) => isProviderVoiceTranscript(message))
   ) {
@@ -497,6 +499,7 @@ function isFinalReplyGroup(item: TurnRenderItem): item is MessageGroup {
   return (
     item.kind === "group" &&
     !item.isStreaming &&
+    !isRunlessChannelFinalMirror(item) &&
     assistantGroupCanOwnActiveRunStatus(item) &&
     assistantMessageKind(item.messages[0]?.message, item.visibleContent) !== "commentary"
   );
