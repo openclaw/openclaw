@@ -205,6 +205,38 @@ it("merges authoritative SQLite rows and keeps unreadable sources", async () => 
   });
 });
 
+it("keeps legacy sources whose JSON is not valid UTF-8 out of shared state", async () => {
+  const pairingName = "telegram-pairing.json";
+  const allowFromName = "telegram-default-allowFrom.json";
+  const state = await fixture({ [pairingName]: "", [allowFromName]: "" });
+  // A truncated multibyte sequence inside a string still parses as JSON with U+FFFD.
+  const pairingSource = Buffer.concat([
+    Buffer.from('{"version":1,"requests":[{"id":"pending-'),
+    Buffer.from([0xc3]),
+    Buffer.from('","code":"PAIRME12","createdAt":"2026-01-01T00:00:00.000Z"}]}'),
+  ]);
+  const allowFromSource = Buffer.concat([
+    Buffer.from('{"version":1,"allowFrom":["100'),
+    Buffer.from([0xc3]),
+    Buffer.from('"]}'),
+  ]);
+  fs.writeFileSync(path.join(state.sourceDir, pairingName), pairingSource);
+  fs.writeFileSync(path.join(state.sourceDir, allowFromName), allowFromSource);
+
+  const result = state.migrate();
+
+  expect(readPairing("telegram", state.env)).toMatchObject({ requests: [], allowFrom: {} });
+  expect(result.changes).toEqual([]);
+  expect(result.warnings).toEqual([
+    expect.stringContaining(`left in place at ${path.join(state.sourceDir, allowFromName)}`),
+    expect.stringContaining(`left in place at ${path.join(state.sourceDir, pairingName)}`),
+  ]);
+  expect(fs.readFileSync(path.join(state.sourceDir, pairingName))).toEqual(pairingSource);
+  expect(fs.readFileSync(path.join(state.sourceDir, allowFromName))).toEqual(allowFromSource);
+  expect(state.exists(`${pairingName}.migrated`)).toBe(false);
+  expect(state.exists(`${allowFromName}.migrated`)).toBe(false);
+});
+
 it("leaves case-folded filename collision sets in place", async () => {
   const names = ["Ab", "AB", "xy", "Xy"].map((account) => `telegram-${account}-allowFrom.json`);
   const state = await fixture(

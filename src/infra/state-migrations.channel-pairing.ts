@@ -15,6 +15,7 @@ import type { PairingRequest } from "../pairing/pairing-store.js";
 import type { PairingChannel } from "../pairing/pairing-store.types.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { archiveLegacyImportSource } from "./state-migrations.storage.js";
+import { decodeUtf8Input } from "./utf8-input.js";
 
 const PAIRING_SUFFIX = "-pairing.json";
 const ALLOW_FROM_SUFFIX = "-allowFrom.json";
@@ -223,7 +224,10 @@ function normalizeLegacyPairingRequest(value: unknown): PairingRequest | null {
 
 function readLegacyPairingRequests(filePath: string): PairingRequest[] | null {
   try {
-    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
+    // Malformed bytes must not become replacement characters in shared SQLite state.
+    const parsed = JSON.parse(
+      decodeUtf8Input(fs.readFileSync(filePath), `Legacy channel pairing file ${filePath}`),
+    ) as unknown;
     if (!isRecord(parsed) || !Array.isArray(parsed.requests)) {
       return null;
     }
@@ -255,7 +259,10 @@ function normalizeAllowEntry(channel: PairingChannel, value: unknown): string {
 
 function readLegacyAllowFrom(filePath: string, channel: PairingChannel): string[] | null {
   try {
-    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
+    // Malformed bytes must not become replacement characters in shared SQLite state.
+    const parsed = JSON.parse(
+      decodeUtf8Input(fs.readFileSync(filePath), `Legacy channel allowFrom file ${filePath}`),
+    ) as unknown;
     const values = Array.isArray(parsed)
       ? parsed
       : isRecord(parsed) && Array.isArray(parsed.allowFrom)
