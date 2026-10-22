@@ -3927,7 +3927,6 @@
 ["src/commands/dashboard/json.test.ts","../../infra/clipboard.js","6c674d8c63d4306d99433fc80c22ab9d9a9662f0febfc197c7057e7743452c9c",1]
 ["src/commands/dashboard/json.test.ts","../../infra/device-bootstrap.js","b444289c367e945f2ab3a7586879446ae05a078c9ba217247ec74ade8878d4b7",1]
 ["src/commands/dashboard/json.test.ts","../../infra/ports-inspect.js","80a05d42f0dacd990d58f5e9f43080aa503c5b996d74bd07aca92a59ff3b9f9a",1]
-["src/commands/dashboard/json.test.ts","../gateway-readiness.js","8bc529c0dd43a3a1c2b569a1a71877a076c42976937c5d6aba9db3488a766f3d",1]
 ["src/commands/dashboard/json.test.ts","../onboard-helpers.js","368ffd75ab3a427049bcee2c4a6fa2608467cba08acf9b4cc14fffceb6b30a20",1]
 ["src/commands/docs.test.ts","../../packages/terminal-core/src/links.js","807dd59cb68e534d6ac8822c704a68665a6d5495b9afd645a11dfa41e65e9d03",1]
 ["src/commands/doctor-auth.deprecated-cli-profiles.test.ts","../../packages/terminal-core/src/note.js","f002841802d1ee2655ffa1b3145d4fbec62431c78fa5938fe324a94ad1514abb",1]
