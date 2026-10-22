@@ -210,6 +210,8 @@ function openAgentDatabaseBackend(
       expectDefined(shared, "Agent execution shared-state owner").db,
       input.agentId,
     ) !== "absent";
+  const readStartupDeletionJournal = () =>
+    startupJournalRequested ? readDeletionJournal() : undefined;
   const openClaimedWriter = (refreshSchema = false) => {
     let validation: OpenClawAgentDatabaseValidation | undefined;
     if (!database) {
@@ -391,7 +393,7 @@ function openAgentDatabaseBackend(
     RegisteredAgentWorkerOperations,
     AgentWorkerOperationContext,
     keyof RegisteredAgentWorkerOperations
-  >(createAgentWorkerOperationLoaders(maintenance.operations));
+  >(createAgentWorkerOperationLoaders(maintenance.operations, readStartupDeletionJournal));
   const context: AgentWorkerOperationContext = {
     open: openWriter,
     options,

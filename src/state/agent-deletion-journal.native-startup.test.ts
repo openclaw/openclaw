@@ -1,3 +1,4 @@
+import { MessagePort } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
@@ -58,7 +59,13 @@ vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
   } satisfies typeof actual;
 });
 
-it.each(["normal-startup-normal", "deletion-before-commit"] as const)(
+it.each([
+  "normal-startup-normal",
+  "cold-startup-normal",
+  "deletion-before-commit",
+  "auth-read",
+  "deletion-before-auth-read",
+] as const)(
   "reuses the native actor with request-scoped startup journal checks (%s)",
   async (scenario) => {
     await withState({ scenario: "minimal" }, async (state) => {
@@ -89,12 +96,16 @@ it.each(["normal-startup-normal", "deletion-before-commit"] as const)(
       };
       const incarnations = new Set<string>();
       const startupStages = new Set<string>();
+      const authJournalFacts: unknown[] = [];
       let afterAuthorize: ((request: SqliteWorkerAdmissionRequest) => void) | undefined;
       const source: AgentDatabaseRequestExecutionSource = {
         assertCurrent: () => execution.assertCurrent(),
         createAdmission: (binding) => () => ({
           nativeLocations: binding.nativeLocations,
           admission: createSqliteWorkerOperationAdmission((request, grant) => {
+            if (isRecord(request.facts) && request.facts.kind === "auth-store-read") {
+              authJournalFacts.push(request.facts.agentDeletionJournalPresent);
+            }
             binding.authorize(request);
             execution.assertCurrent();
             if (isRecord(request.facts) && isRecord(request.facts.identity)) {
@@ -107,6 +118,12 @@ it.each(["normal-startup-normal", "deletion-before-commit"] as const)(
               startupStages.add(request.stage);
             }
             afterAuthorize?.(request);
+            if (isRecord(request.facts) && request.facts.kind === "auth-store-read") {
+              const port = request.facts.port;
+              if (port instanceof MessagePort) {
+                port.close();
+              }
+            }
             if (!grant()) {
               throw new Error("Startup journal fixture lost native admission");
             }
@@ -135,10 +152,12 @@ it.each(["normal-startup-normal", "deletion-before-commit"] as const)(
         expect({ reads: Atomics.load(reads, 0), label: readLabel() }).toEqual({ reads: 0, label });
       };
       try {
-        await execution.runExisting(source, (scope) =>
-          scope.execute({ type: "database.prepareWrite", input: undefined }),
-        );
-        await replaceNormally("normal-before");
+        if (scenario !== "cold-startup-normal") {
+          await execution.runExisting(source, (scope) =>
+            scope.execute({ type: "database.prepareWrite", input: undefined }),
+          );
+          await replaceNormally("normal-before");
+        }
         const refusal = inspectionRefusal({
           agentId: "worker",
           paths: [database.path],
@@ -146,6 +165,38 @@ it.each(["normal-startup-normal", "deletion-before-commit"] as const)(
           reason: "native startup preparation",
         });
         recordAdmissions([refusal], { env: state.env, source: "startup" });
+        const authRead = () =>
+          execution.runExisting(source, (scope) =>
+            scope.execute({ type: "authProfiles.read", input: undefined }),
+          );
+        if (scenario === "auth-read" || scenario === "deletion-before-auth-read") {
+          let inserted = false;
+          if (scenario === "deletion-before-auth-read") {
+            afterAuthorize = (request) => {
+              if (
+                request.stage === "prepare" &&
+                isRecord(request.facts) &&
+                request.facts.agentDeletionJournalPresent === false &&
+                !inserted
+              ) {
+                inserted = true;
+                insertDeletion();
+              }
+            };
+          }
+          const reading = preparePending(refusal, { env: state.env, assertCurrent() {} }, authRead);
+          if (scenario === "deletion-before-auth-read") {
+            await expect(reading).rejects.toThrow("deleted during startup inspection");
+            expect(inserted).toBe(true);
+            expect(authJournalFacts).toEqual([true]);
+            expect(readRefusal("worker", options)).toBe(refusal);
+          } else {
+            await reading;
+            expect(authJournalFacts).toEqual([false]);
+            expect(readRefusal("worker", options)).toBeUndefined();
+          }
+          return;
+        }
         const replaceDuringStartup = (label: string) =>
           preparePending(refusal, { env: state.env, assertCurrent() {} }, async () => {
             await replace(label);

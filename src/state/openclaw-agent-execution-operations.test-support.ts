@@ -10,5 +10,5 @@ export function createAgentWorkerTestLoaders(
     openWriter: context.open,
     admit: context.admit,
   });
-  return createAgentWorkerOperationLoaders(maintenance.operations);
+  return createAgentWorkerOperationLoaders(maintenance.operations, () => undefined);
 }

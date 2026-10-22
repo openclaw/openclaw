@@ -3,7 +3,9 @@ import { requestSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import type { WorkerOperationHandlers } from "../../state/worker-operation-registry.js";
 
-export async function loadAgentAuthProfileOperations() {
+export async function loadAgentAuthProfileOperations(
+  readStartupDeletionJournal: () => boolean | undefined,
+) {
   const [
     { readAuthProfileRows },
     { sendAuthProfileUpdateValue },
@@ -21,11 +23,13 @@ export async function loadAgentAuthProfileOperations() {
       const { port1, port2 } = new MessageChannel();
       try {
         sendAuthProfileUpdateValue(port1, rows);
+        const agentDeletionJournalPresent = readStartupDeletionJournal();
         requestSqliteWorkerOperationAdmission(
           {
             stage: "prepare",
             facts: {
               kind: "auth-store-read",
+              ...(agentDeletionJournalPresent === undefined ? {} : { agentDeletionJournalPresent }),
               port: port2,
               identity: {
                 kind: "file",

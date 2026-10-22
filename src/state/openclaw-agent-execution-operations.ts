@@ -514,10 +514,11 @@ async function loadSessionRowBackfillOperations() {
 
 export function createAgentWorkerOperationLoaders(
   maintenance: ReturnType<typeof createAgentDatabaseMaintenanceOwner>["operations"],
+  readStartupDeletionJournal: () => boolean | undefined,
 ) {
   const loadMaintenanceOperations = async () => maintenance;
   return {
-    "authProfiles.read": loadAgentAuthProfileOperations,
+    "authProfiles.read": () => loadAgentAuthProfileOperations(readStartupDeletionJournal),
     "session.entry.read": loadAgentEntryReadOperations,
     "session.entry.readResult": loadAgentEntryReadOperations,
     "voice.session.read": loadAgentVoiceSessionOperations,
