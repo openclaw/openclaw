@@ -92,6 +92,7 @@ interface CopilotToolBridgeInput {
 
 interface CopilotToolBridge {
   cleanup?: () => void;
+  settle?: () => Promise<void>;
   codeModeEngaged?: boolean;
   promptToolPolicy: {
     requireExplicitMessageTarget?: boolean;
@@ -221,7 +222,11 @@ export async function createCopilotToolBridge(
   const runInAttemptContext = AsyncLocalStorage.snapshot();
   let sequentialBarrier = Promise.resolve();
   const pendingCalls = new Set<Promise<void>>();
+  let acceptingCalls = true;
   const scheduleToolExecution: ScheduleToolExecution = (executionMode, execute) => {
+    if (!acceptingCalls) {
+      return Promise.reject(new Error("[copilot-tool-bridge] attempt is closing"));
+    }
     // SDK handlers arrive independently. An exclusive call waits for earlier
     // work across the attempt and blocks later calls, regardless of tool name.
     const ready = executionMode === "sequential" ? Promise.all(pendingCalls) : sequentialBarrier;
@@ -242,6 +247,10 @@ export async function createCopilotToolBridge(
   );
   return {
     cleanup: toolSurfaceRuntime.cleanup,
+    settle: async () => {
+      acceptingCalls = false;
+      await Promise.all(pendingCalls);
+    },
     // Report the resolved auto mode, which only the tool-surface owner knows.
     codeModeEngaged: toolSurfaceRuntime.codeModeControlsEnabled,
     promptToolPolicy: {

@@ -748,6 +748,12 @@ export function createCopilotAgentHarness(
     label: options?.label ?? "GitHub Copilot agent runtime",
     autoSelection: { providerIds: [] },
     conversationToolPolicySupport: "exact",
+    runtimeArtifact: {
+      async validate(binding) {
+        const { validateCopilotRuntimeArtifact } = await import("./src/runtime-artifact.js");
+        return await validateCopilotRuntimeArtifact(binding);
+      },
+    },
 
     supports(ctx) {
       const requestedRuntime = String(ctx.requestedRuntime ?? "")

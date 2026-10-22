@@ -1,5 +1,10 @@
-import type { CopilotClient } from "@github/copilot-sdk";
-import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { Tool as SdkTool, CopilotClient } from "@github/copilot-sdk";
+import type {
+  AgentHarnessAttemptParamsV2,
+  AnyAgentTool,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -16,8 +21,126 @@ import type { AttemptResultWithSdkSessionId } from "./attempt-types.js";
 import { runCopilotAttempt } from "./attempt.js";
 import { createCopilotTestHostCapabilities } from "./host-capability.test-support.js";
 import type { CopilotClientPool } from "./runtime.js";
+import { createCopilotToolBridge } from "./tool-bridge.js";
 
 describe("Copilot canonical session identity", () => {
+  it("joins detached admitted tools after rejecting an incomplete SDK journal group", async () => {
+    const { attempt, tempDir, bridge } = await createFixture();
+    bridge.detach();
+    const manager = SessionManager.inMemory(tempDir);
+    const entered = createDeferred<void>();
+    const closing = createDeferred<void>();
+    const finish = createDeferred<void>();
+    let nativeTool: SdkTool | undefined;
+    let toolRun: Promise<unknown> | undefined;
+    let toolCompleted = false;
+    const session = createFakeSession();
+    const assistant = event("assistant.message", "tool-request", {
+      content: "checking",
+      messageId: "tool-request",
+      toolRequests: [{ arguments: {}, name: "pending", toolCallId: "pending-call" }],
+    });
+    const tool: AnyAgentTool = {
+      name: "pending",
+      label: "Pending",
+      description: "Synthetic admitted operation",
+      parameters: { type: "object", properties: {} },
+      execute: async () => {
+        entered.resolve();
+        await finish.promise;
+        toolCompleted = true;
+        return { content: [{ type: "text", text: "settled" }], details: {} };
+      },
+    };
+    session.sendAndWait = vi.fn(async () => {
+      session.emit(event("user.message", "initial-user", { content: attempt.prompt }));
+      session.emit(assistant);
+      if (!nativeTool?.handler) {
+        throw new Error("Missing real bridge handler");
+      }
+      toolRun = Promise.resolve(
+        nativeTool.handler(
+          {},
+          {
+            arguments: {},
+            sessionId: "sdk-session",
+            toolCallId: "pending-call",
+            toolName: "pending",
+          },
+        ),
+      );
+      await entered.promise;
+      return assistant as Awaited<ReturnType<typeof session.sendAndWait>>;
+    });
+    const client = {
+      createSession: vi.fn(async () => session),
+      resumeSession: vi.fn(),
+      deleteSession: vi.fn(async () => {
+        // The SDK returned before its tool result: retain only the valid prefix.
+        expect(toolCompleted).toBe(true);
+        expect(transcriptMessages(manager.getEntries()).map((row) => row.message.role)).toEqual([
+          "user",
+        ]);
+      }),
+    };
+    const pool = {
+      acquire: vi.fn(async (key) => ({ client: client as unknown as CopilotClient, key })),
+      release: vi.fn(async () => undefined),
+      dispose: vi.fn(async () => []),
+      size: () => 0,
+    } satisfies CopilotClientPool;
+    const pending = runCopilotAttempt(
+      {
+        ...attempt,
+        agentDir: tempDir,
+        workspaceDir: tempDir,
+        sessionTarget: undefined,
+        sessionManager: manager,
+        sessionPersistence: "detached",
+        model: { api: "openai-responses", id: "fixture-model", provider: "github-copilot" },
+        hostCapabilities: createCopilotTestHostCapabilities(() => [tool]),
+        disableTools: false,
+        config: { tools: { codeMode: false, toolSearch: false } },
+      } as AgentHarnessAttemptParamsV2,
+      {
+        pool,
+        createToolBridge: async (input) => {
+          const real = await createCopilotToolBridge(input);
+          nativeTool = real.promptToolPolicy
+            .apply()
+            .tools.find((entry) => entry.name === "pending");
+          return {
+            ...real,
+            settle: async () => {
+              closing.resolve();
+              await real.settle?.();
+            },
+          };
+        },
+      },
+    );
+    try {
+      await Promise.race([
+        closing.promise,
+        pending.then(() => {
+          throw new Error("Attempt ended before detached tool settlement");
+        }),
+      ]);
+      expect(client.deleteSession).not.toHaveBeenCalled();
+      expect(pool.release).not.toHaveBeenCalled();
+    } finally {
+      finish.resolve();
+    }
+    const result = await pending;
+    await toolRun;
+    expect(result.terminal).toMatchObject({
+      kind: "failed",
+      error: { code: "transcript_persistence_failed" },
+    });
+    expect(client.deleteSession).toHaveBeenCalledExactlyOnceWith(session.sessionId);
+    expect(pool.release).toHaveBeenCalledOnce();
+  });
+
   beforeEach(() => setRuntimeConfigSnapshot({}));
   afterEach(() => clearRuntimeConfigSnapshot());
 
