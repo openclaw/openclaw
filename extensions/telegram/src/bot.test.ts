@@ -2072,14 +2072,14 @@ describe("createTelegramBot", () => {
             text: refreshed ? "@openclaw_bot explain this" : "explain this",
             date: 1736380800,
             from: { id: 1, is_bot: false, first_name: "Allowed" },
-            reply_to_message: photoReply(chat, {
+            reply_to_message: {
+              chat,
               message_id: 102,
-              text: undefined,
               caption: refreshed ? "allowed image" : "hidden image",
               date: 1736380750,
               from: { id: 2, is_bot: false, first_name: refreshed ? "Also allowed" : "Hidden" },
               photo: [{ file_id: photoId }],
-            }),
+            },
           },
         });
         await replyDelivered;

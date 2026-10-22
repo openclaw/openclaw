@@ -37,7 +37,7 @@ export function inboundMessage(overrides: Record<string, unknown> = {}) {
   };
 }
 
-export function photoReply(chat: Record<string, unknown>, overrides: Record<string, unknown> = {}) {
+export function photoReply(chat: Record<string, unknown>) {
   return inboundMessage({
     chat,
     message_id: 101,
@@ -47,7 +47,6 @@ export function photoReply(chat: Record<string, unknown>, overrides: Record<stri
     photo: [
       { file_id: "generated-photo-1", file_unique_id: "generated-photo-u1", width: 1, height: 1 },
     ],
-    ...overrides,
   });
 }
 
