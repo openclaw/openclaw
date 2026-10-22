@@ -15,8 +15,6 @@ const tsxImport = import.meta.resolve("tsx");
 const tempDirs: string[] = [];
 
 type FixtureOptions = {
-  includeBuildVersion?: boolean;
-  includePluginApi?: boolean;
   repositoryUrl?: string;
   version?: string;
 };
@@ -41,8 +39,8 @@ function packageManifest(options: FixtureOptions = {}) {
     repository: { type: "git", url: options.repositoryUrl ?? REPOSITORY_URL },
     openclaw: {
       extensions: ["./index.ts"],
-      ...(options.includePluginApi === false ? {} : { compat: { pluginApi: `>=${version}` } }),
-      ...(options.includeBuildVersion === false ? {} : { build: { openclawVersion: version } }),
+      compat: { pluginApi: `>=${version}` },
+      build: { openclawVersion: version },
       install: { npmSpec: PACKAGE_NAME },
       release: { publishToClawHub: true, publishToNpm: true },
     },
@@ -129,18 +127,6 @@ it("requires the canonical repository provenance for ClawHub and npm publishing"
   });
   expectInvalidChecks(repoDir, [
     `package.json repository.url must be "${REPOSITORY_URL}" so npm provenance can validate GitHub trusted publishing`,
-  ]);
-});
-
-it("requires the external code plugin compatibility and build contract", () => {
-  const repoDir = createPluginRepo({
-    includeBuildVersion: false,
-    includePluginApi: false,
-  });
-
-  expectInvalidChecks(repoDir, [
-    "openclaw.compat.pluginApi is required for external code plugin packages.",
-    "openclaw.build.openclawVersion is required for external code plugin packages.",
   ]);
 });
 

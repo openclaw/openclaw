@@ -317,16 +317,6 @@ function expectedFile(bytes: Buffer, name: string) {
 
 const fileBlock = { type: "file", file: "attachment://report.pdf" };
 const accent = { accentColor: 0x123456 };
-const textBlock = (content: string) => ({ type: 10, content });
-const sectionBlock = (...contents: string[]) => ({
-  type: 9,
-  components: contents.map(textBlock),
-  accessory: { label: "Read" },
-});
-const linkButton = (url: string) => ({
-  type: "button",
-  button: { label: " Read ", style: "link", url: `https://example.com/${url}` },
-});
 
 async function connectInlineClient(gateway: QaGatewayChild): Promise<GatewayClient> {
   const connected = Promise.withResolvers<void>();
@@ -512,100 +502,17 @@ describe("Discord show_widget contextual presenter process proof", () => {
       const media = path.join(gateway.workspaceDir, "source.pdf");
       const bytes = Buffer.from("%PDF-1.4\nDiscord attachment filename proof\n%%EOF\n");
       await writeFile(media, bytes);
-      const cases: [string, boolean, string, string?, boolean?][] = [
-        ["declared", true, "report.pdf"],
-        ["blank override", true, "report.pdf", "  "],
-        ["explicit override", true, "operator.pdf", " operator.pdf "],
-        ["media-derived", false, "source.pdf"],
-        ["components V2", true, "report.pdf", undefined, true],
-      ];
-      for (const [label, declared, expected, filename, v2 = false] of cases) {
-        const post = await invokeMessage(label, {
-          message: `Attachment proof: ${label}`,
-          media,
-          filename,
-          components: {
-            blocks: declared ? [fileBlock] : [],
-            ...(v2 ? { container: accent } : {}),
-          },
-        });
-        expect(post?.files).toEqual(expectedFile(bytes, expected));
-        expect(post?.body?.attachments).toEqual([{ id: 0, filename: expected }]);
-        expect(Boolean(Number(post?.body?.flags ?? 0) & DISCORD_COMPONENTS_V2_FLAG)).toBe(v2);
-      }
-
-      const textCases: [string, JsonRecord, string][] = [
-        ["canonical body", { message: "    canonical body" }, "    canonical body"],
-        ["raw reasoning tag alias", { text: "<think>private</think>    tag body" }, "    tag body"],
-        [
-          "mixed reasoning preamble alias",
-          { text: "<think>private</think>\nThinking\n_summary_\n    mixed body" },
-          "    mixed body",
-        ],
-        [
-          "fenced literal tag control",
-          { message: "```\n    <think>literal</think>\n```" },
-          "```\n    <think>literal</think>\n```",
-        ],
-      ];
-      for (const [label, args, expected] of textCases) {
-        const post = await invokeMessage(label, args);
-        expect(post?.files, label).toBeUndefined();
-        expect.soft(post?.body?.content, label).toBe(expected);
-      }
-
-      const mediaCases: [string, JsonRecord, string, string][] = [
-        [
-          "caption fallback",
-          { message: " \n ", caption: "    caption body  " },
-          "source.pdf",
-          "    caption body",
-        ],
-        [
-          "classic component file body",
-          { message: "    classic component body  ", components: { blocks: [fileBlock] } },
-          "report.pdf",
-          "    classic component body",
-        ],
-      ];
-      for (const [label, args, filename, content] of mediaCases) {
-        const post = await invokeMessage(label, { ...args, media });
-        expect(post?.files).toEqual(expectedFile(bytes, filename));
-        expect.soft(post?.body?.content).toBe(content);
-      }
-
-      const componentText = await invokeMessage("explicit Components V2 body fields", {
-        message: "fallback",
-        components: {
-          text: "    top-level body  ",
-          container: accent,
-          blocks: [
-            { type: "text", text: "    text-block body  " },
-            {
-              type: "section",
-              text: "    section body  ",
-              accessory: linkButton("section"),
-            },
-            {
-              type: "section",
-              texts: ["    first body  ", "    second body  "],
-              accessory: linkButton("texts"),
-            },
-          ],
-        },
+      // Filename variants and body sanitization live in their owner suites;
+      // this case protects their composition through the real Gateway.
+      const post = await invokeMessage("Components V2 filename override", {
+        message: "Attachment proof: components V2",
+        media,
+        filename: " operator.pdf ",
+        components: { blocks: [fileBlock], container: accent },
       });
-      expect(componentText?.body?.flags).toBe(DISCORD_COMPONENTS_V2_FLAG);
-      expect.soft(componentText?.body?.components).toMatchObject([
-        {
-          type: 17,
-          components: [
-            textBlock("    top-level body  "),
-            textBlock("    text-block body  "),
-            sectionBlock("    section body  "),
-            sectionBlock("    first body  ", "    second body  "),
-          ],
-        },
-      ]);
+      expect(post?.files).toEqual(expectedFile(bytes, "operator.pdf"));
+      expect(post?.body?.attachments).toEqual([{ id: 0, filename: "operator.pdf" }]);
+      expect(post?.body?.flags).toBe(DISCORD_COMPONENTS_V2_FLAG);
 
       const poll = await invokeAction("poll", {
         action: "poll",
