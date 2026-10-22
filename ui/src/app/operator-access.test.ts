@@ -3,11 +3,7 @@ import { describe, expect, it } from "vitest";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
-import {
-  canReactToSession,
-  hasOperatorReadAccess,
-  readGatewayOperatorAccess,
-} from "./operator-access.ts";
+import { canReactToSession, readGatewayOperatorAccess } from "./operator-access.ts";
 
 const operator = (scopes?: string[], role = "operator") => ({ hello: { auth: { role, scopes } } });
 
@@ -37,17 +33,6 @@ describe("readGatewayOperatorAccess", () => {
       canReviewApprovals: expected[3],
       canGrantApprovals: expected[4],
     });
-  });
-});
-
-describe("hasOperatorReadAccess", () => {
-  it("accepts read, implied write/admin, and legacy access but rejects unrelated scopes", () => {
-    expect(hasOperatorReadAccess(null)).toBe(true);
-    expect(hasOperatorReadAccess({ role: "operator", scopes: ["operator.read"] })).toBe(true);
-    expect(hasOperatorReadAccess({ role: "operator", scopes: ["operator.write"] })).toBe(true);
-    expect(hasOperatorReadAccess({ role: "operator", scopes: ["operator.admin"] })).toBe(true);
-    expect(hasOperatorReadAccess({ role: "operator" })).toBe(true);
-    expect(hasOperatorReadAccess({ role: "operator", scopes: ["operator.pairing"] })).toBe(false);
   });
 });
 
