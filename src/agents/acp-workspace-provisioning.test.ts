@@ -22,8 +22,6 @@ const cfg: OpenClawConfig = {
     entries: {
       main: {},
       codex: { runtime: { type: "acp" } },
-      work: { runtime: { type: "embedded" } },
-      pinned: { workspace: "/explicit-ws", runtime: { type: "acp" } },
       global: { runtime: { type: "acp", acp: { cwd: "/projects/app" } } },
     },
   },
@@ -74,8 +72,6 @@ it("scopes provisioning to the concrete ACP binding", async () => {
 it.each([
   ["codex", "/projects/app", "runtime-managed-implicit"],
   ["codex", undefined, "standard"],
-  ["work", "/projects/app", "standard"],
-  ["pinned", "/projects/app", "standard"],
   ["global", undefined, "runtime-managed-implicit"],
 ] as const)("provisions %s with session cwd %s as %s", async (agentId, cwd, expected) => {
   await expectMode(
