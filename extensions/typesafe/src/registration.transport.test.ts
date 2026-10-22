@@ -202,7 +202,7 @@ it.each([
 });
 
 it("binds credentials to the provider API origin", async () => {
-  const fetch = mockBodyResponse(JSON.stringify(response));
+  const fetch = mockBodyResponse(JSON.stringify(localResponse));
   await evaluate(input, {
     ...clientConfig,
     baseUrl: "https://unrelated.example",

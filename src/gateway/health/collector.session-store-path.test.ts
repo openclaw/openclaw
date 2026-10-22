@@ -555,7 +555,7 @@ it.for(["text", "json"] as const)(
             runtime: createTestRuntime(),
             opts: { gatewayProbeDeadlineMs: 0 },
           });
-    const result = await gate.finish(pending, () =>
+    const result = await gate.finish<void | string[]>(pending, () =>
       deleteAgent(state, `status-${format}-publication`),
     );
     if (Array.isArray(result)) {

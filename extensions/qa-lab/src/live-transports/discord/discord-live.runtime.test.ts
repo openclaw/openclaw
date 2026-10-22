@@ -414,19 +414,18 @@ describe("discord live qa runtime", () => {
     "waits for connection and reports readiness timeouts (connects: %s)",
     async (connects) => {
       vi.useFakeTimers();
-      const gateway = {
-        call: vi.fn().mockResolvedValue(
-          discordStatus(false, {
-            lastError: null,
-            lastDisconnect: { error: "runtime-not-ready" },
-          }),
-        ),
-      } as unknown as Parameters<typeof testing.waitForDiscordChannelRunning>[0];
+      const call = vi.fn().mockResolvedValue(
+        discordStatus(false, {
+          lastError: null,
+          lastDisconnect: { error: "runtime-not-ready" },
+        }),
+      );
+      const gateway = { call } as unknown as Parameters<
+        typeof testing.waitForDiscordChannelRunning
+      >[0];
 
       if (connects) {
-        vi.mocked(gateway.call)
-          .mockResolvedValueOnce(discordStatus(false))
-          .mockResolvedValueOnce(discordStatus(true));
+        call.mockResolvedValueOnce(discordStatus(false)).mockResolvedValueOnce(discordStatus(true));
       }
       const ready = testing.waitForDiscordChannelRunning(gateway, "sut");
       const assertion = connects
@@ -437,7 +436,7 @@ describe("discord live qa runtime", () => {
       await vi.advanceTimersByTimeAsync(connects ? 600 : 45_500);
       await assertion;
       if (connects) {
-        expect(gateway.call).toHaveBeenCalledTimes(2);
+        expect(call).toHaveBeenCalledTimes(2);
       }
     },
   );
