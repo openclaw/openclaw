@@ -184,9 +184,6 @@ function createToolbar(): HTMLElement {
         syncAllControllers();
       },
     }),
-  );
-
-  toolbar.append(
     createToolbarButton({
       title: viewerState.wrapEnabled ? "Disable word wrap" : "Enable word wrap",
       active: viewerState.wrapEnabled,
@@ -196,9 +193,6 @@ function createToolbar(): HTMLElement {
         syncAllControllers();
       },
     }),
-  );
-
-  toolbar.append(
     createToolbarButton({
       title: viewerState.backgroundEnabled
         ? "Hide background highlights"
@@ -210,9 +204,6 @@ function createToolbar(): HTMLElement {
         syncAllControllers();
       },
     }),
-  );
-
-  toolbar.append(
     createToolbarButton({
       title: viewerState.theme === "dark" ? "Switch to light theme" : "Switch to dark theme",
       active: viewerState.theme === "dark",
