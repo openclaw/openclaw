@@ -85,88 +85,101 @@ describe("gateway portal service", () => {
   it.each([
     ["owner", "session reset"],
     ["LAN", "authority revoked during LAN discovery"],
-  ])("releases unpublished resources after %s authority loss", async (stage, message) => {
+    ["collision", "Portal listener repeatedly allocated target port"],
+    ["partial bind", "already listening"],
+    ["absent route", "managed Tailscale route is not active"],
+    ["failed route", "HTTPS port occupied"],
+    ["revoked route", "authority revoked"],
+  ])("rolls back unpublished resources after %s", async (stage, message) => {
     const owner = new AbortController();
-    const actualListen = httpListen.listenGatewayHttpServer;
     const guard = authority(message);
-    let listener: Server | undefined;
-    vi.spyOn(httpListen, "listenGatewayHttpServer").mockImplementation(async (params) => {
-      listener = params.httpServer;
-      await actualListen(params);
-      if (stage === "owner") {
-        owner.abort(new Error(message));
-      }
-    });
+    const release = vi.fn();
+    const attempted = new Set<Server>();
+    const originalListen = httpListen.listenGatewayHttpServer;
+    const listen = vi
+      .spyOn(httpListen, "listenGatewayHttpServer")
+      .mockImplementation(async (params) => {
+        attempted.add(params.httpServer);
+        await originalListen(params);
+        if (stage === "owner") {
+          owner.abort(new Error(message));
+        }
+        if (stage === "collision") {
+          reportTargetPortCollision(params.httpServer, target.port);
+        }
+      });
     if (stage === "LAN") {
       vi.spyOn(advertisedLanHost, "resolveAdvertisedLanHostCore").mockImplementation(async () => {
         guard.current = false;
         return "192.168.1.20";
       });
     }
+    const managed = stage.endsWith("route");
+    const { claim } = fakeClaim();
+    if (managed && stage !== "absent route") {
+      publishManaged();
+      vi.mocked(claimTailscaleServePort).mockImplementation(async () => {
+        if (stage === "failed route") {
+          throw new Error(message);
+        }
+        guard.current = false;
+        return claim;
+      });
+    }
     const { service, httpServers } = makeService({
-      httpBindHosts: [stage === "LAN" ? "0.0.0.0" : "127.0.0.1"],
+      managedTailscale: managed,
+      httpBindHosts:
+        stage === "partial bind"
+          ? ["127.0.0.1", "127.0.0.1"]
+          : [stage === "LAN" ? "0.0.0.0" : "127.0.0.1"],
     });
-    const releaseTarget = vi.fn();
     await expect(
       service.open({
-        targetPort: 3000,
-        onClose: releaseTarget,
+        targetPort: target.port,
+        onClose: release,
         ownerSignal: owner.signal,
         assertCurrent: guard.assertCurrent,
       }),
-    ).rejects.toThrow(message);
+    ).rejects.toThrow(stage === "collision" ? `${message} ${target.port}` : message);
     expect(service.list()).toEqual([]);
     expect(httpServers).toEqual([]);
-    expect(listener?.listening).toBe(false);
-    expect(releaseTarget).toHaveBeenCalledOnce();
-  });
-  it.each([false, true])("owns listeners after collision=%s", async (collision) => {
-    const targetPort = target.port;
-    const actualListen = httpListen.listenGatewayHttpServer;
-    const attemptedServers = new Set<Server>();
-    const listen = vi
-      .spyOn(httpListen, "listenGatewayHttpServer")
-      .mockImplementation(async (params) => {
-        attemptedServers.add(params.httpServer);
-        await actualListen(params);
-        if (collision && params.bindHost === "127.0.0.1" && params.port === 0) {
-          reportTargetPortCollision(params.httpServer, targetPort);
-        }
-      });
-    const { service, httpServers } = makeService({
-      httpBindHosts: collision ? ["127.0.0.1"] : ["127.0.0.1", "::1"],
-    });
-
-    if (collision) {
-      await expect(service.open({ targetPort })).rejects.toThrow(
-        `Portal listener repeatedly allocated target port ${targetPort}`,
-      );
-      expect(listen).toHaveBeenCalledOnce();
-      expect(attemptedServers.size).toBe(1);
-      expect(httpServers).toEqual([]);
-      const [primaryServer] = attemptedServers;
-      expect(primaryServer?.listening).toBe(false);
-      expect(primaryServer?.address()).toBeNull();
-      return;
+    expect(release).toHaveBeenCalledOnce();
+    for (const server of attempted) {
+      expect(server.listening).toBe(false);
+      expect(server.address()).toBeNull();
     }
+    if (stage === "collision") {
+      expect(listen).toHaveBeenCalledOnce();
+      expect(attempted.size).toBe(1);
+    }
+    if (stage === "absent route") {
+      expect(claimTailscaleServePort).not.toHaveBeenCalled();
+    }
+    if (stage === "revoked route") {
+      expect(claim.stop).toHaveBeenCalledOnce();
+    }
+  });
 
-    const portal = await service.open({ targetPort, title: "App" });
-    expect(portal).toMatchObject({ id: `p${targetPort}`, port: targetPort, title: "App" });
-    expect(await getStatus("127.0.0.1", portal.listenPort, "/")).toBe(401);
-    expect(await getStatus("::1", portal.listenPort, "/")).toBe(401);
+  it("owns the same port on IPv4 and IPv6 and closes both listeners", async () => {
+    const { service, httpServers } = makeService({ httpBindHosts: ["127.0.0.1", "::1"] });
+    const portal = await service.open({ targetPort: target.port, title: "App" });
+    expect(portal).toMatchObject({ id: `p${target.port}`, port: target.port, title: "App" });
+    for (const host of ["127.0.0.1", "::1"]) {
+      expect(await getStatus(host, portal.listenPort, "/")).toBe(401);
+    }
     expect(httpServers).toHaveLength(2);
-    expect(httpServers.every((server) => server.listening)).toBe(true);
     for (const server of httpServers) {
+      expect(server.listening).toBe(true);
       expect(server.address()).toMatchObject({ port: portal.listenPort });
     }
     expect(await requestText(portal.url)).toMatchObject({ status: 200, body: "target" });
-
     const ownedServers = [...httpServers];
     await service.closeAll();
     expect(httpServers).toEqual([]);
-    expect(ownedServers.every((server) => !server.listening && server.address() === null)).toBe(
-      true,
-    );
+    for (const server of ownedServers) {
+      expect(server.listening).toBe(false);
+      expect(server.address()).toBeNull();
+    }
   });
 
   it("updates an existing target without replacing its listener or token", async () => {
@@ -285,14 +298,6 @@ describe("gateway portal service", () => {
     expect(service.list()).toEqual([]);
     expect(httpServers).toEqual([]);
     expect(release).toHaveBeenCalledOnce();
-  });
-
-  it("removes every registered listener after a partial bind failure", async () => {
-    const { service, httpServers } = makeService({ httpBindHosts: ["127.0.0.1", "127.0.0.1"] });
-
-    await expect(service.open({ targetPort: 3000 })).rejects.toThrow(/already listening/u);
-    expect(service.list()).toEqual([]);
-    expect(httpServers).toEqual([]);
   });
 
   it.each([
@@ -577,42 +582,6 @@ describe("private portal ingress", () => {
     expect(claim.stop).toHaveBeenCalledOnce();
     expect(service.list()).toEqual([]);
     expect(resolveHost).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ["absent", "managed Tailscale route is not active"],
-    ["failed", "HTTPS port occupied"],
-    ["revoked", "authority revoked"],
-  ])("rolls back unpublished resources when the managed route is %s", async (state, message) => {
-    const { claim } = fakeClaim();
-    const guard = authority(message);
-    if (state !== "absent") {
-      publishManaged();
-      vi.mocked(claimTailscaleServePort).mockImplementation(async () => {
-        if (state === "failed") {
-          throw new Error(message);
-        }
-        guard.current = false;
-        return claim;
-      });
-    }
-    const { service, httpServers } = makeService({ managedTailscale: true });
-    const releaseTarget = vi.fn();
-    await expect(
-      service.open({
-        targetPort: 3000,
-        onClose: releaseTarget,
-        assertCurrent: guard.assertCurrent,
-      }),
-    ).rejects.toThrow(message);
-    expect(releaseTarget).toHaveBeenCalledOnce();
-    expect(httpServers).toEqual([]);
-    expect(service.list()).toEqual([]);
-    if (state === "absent") {
-      expect(claimTailscaleServePort).not.toHaveBeenCalled();
-    } else if (state === "revoked") {
-      expect(claim.stop).toHaveBeenCalledOnce();
-    }
   });
 
   it.each(["claim", "gateway"])("retires portals on %s loss", async (loss) => {

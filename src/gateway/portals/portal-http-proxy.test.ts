@@ -532,77 +532,42 @@ describe("portal HTTP proxy", () => {
   });
 
   it.each([
-    ["local", "browser"],
-    ["worker", "browser"],
-    ["local", "app"],
-    ["worker", "app"],
-  ] as const)("closes both sides when the %s portal's %s disconnects", async (kind, disconnect) => {
-    let appResponse: ServerResponse | undefined;
-    let appClosed = false;
-    target.handler = (_req, res) => {
-      appResponse = res;
-      res.once("close", () => {
-        appClosed = true;
-      });
-      res.setHeader("Content-Type", "text/event-stream");
-      res.write("data: ready\n\n");
-    };
-    const portal = await openPortal({ target: kind === "worker" ? workerTarget() : undefined });
-    const browserResponse = await new Promise<IncomingMessage>((resolve, reject) => {
-      const browserRequest = request(portal.url, (res) => {
-        res.on("error", () => undefined);
-        res.once("data", () => resolve(res));
-      });
-      browserRequest.once("error", reject);
-      browserRequest.end();
-    });
-    try {
-      (disconnect === "browser" ? browserResponse : appResponse)?.destroy();
-      await vi.waitFor(() => {
-        expect(browserResponse.destroyed).toBe(true);
-        expect(appClosed).toBe(true);
-      });
-    } finally {
-      browserResponse.destroy();
-      appResponse?.destroy();
-    }
-  });
-
-  it.each([
     ["local", "complete"],
     ["worker", "complete"],
     ["local", "abort"],
     ["worker", "abort"],
-  ] as const)("streams %s headers before body (%s)", async (kind, completion) => {
+    ["local", "browser"],
+    ["worker", "browser"],
+    ["local", "app"],
+    ["worker", "app"],
+  ] as const)("streams %s headers before body and settles %s", async (kind, completion) => {
     let appResponse: ServerResponse | undefined;
+    let appClosed = false;
     target.handler = (req, res) => {
       if (req.url === "/events") {
         appResponse = res;
-        res.setHeader("Content-Type", "text/event-stream");
-        res.setHeader("X-App", "header-first");
+        res.once("close", () => {
+          appClosed = true;
+        });
+        res.writeHead(200, { "Content-Type": "text/event-stream", "X-App": "header-first" });
         res.flushHeaders();
-        return;
-      }
-      if (req.url === "/start" && req.method === "POST" && appResponse) {
+      } else if (req.url === "/start" && req.method === "POST" && appResponse) {
         res.writeHead(204).end();
         if (completion === "complete") {
           appResponse.end("data: started\n\n");
-        } else {
+        } else if (completion === "abort") {
           appResponse.destroy();
+        } else {
+          appResponse.write("data: ready\n\n");
         }
-        return;
+      } else {
+        res.writeHead(404).end();
       }
-      res.writeHead(404).end();
     };
     const portal = await openPortal({ target: kind === "worker" ? workerTarget() : undefined });
-    const connection = {
-      host: "127.0.0.1",
-      port: portal.listenPort,
-      headers: { Cookie: portalAuthCookie(portal) },
-    };
-    const browserRequest = request({
+    const connection = { headers: { Cookie: portalAuthCookie(portal) } };
+    const browserRequest = request(new URL("/events", portal.url), {
       ...connection,
-      path: "/events",
       signal: AbortSignal.timeout(3_000),
     });
     const responseHeaders = new Promise<IncomingMessage>((resolve, reject) => {
@@ -611,25 +576,41 @@ describe("portal HTTP proxy", () => {
     });
     browserRequest.end();
     try {
-      // An idle event stream opens before the client asks the app to produce data.
       const browserResponse = await responseHeaders;
-      expect(browserResponse.statusCode).toBe(200);
-      expect(browserResponse.headers["content-type"]).toBe("text/event-stream");
-      expect(browserResponse.headers["x-app"]).toBe("header-first");
+      expect(browserResponse).toMatchObject({
+        statusCode: 200,
+        headers: { "content-type": "text/event-stream", "x-app": "header-first" },
+      });
       const chunks: Buffer[] = [];
+      const firstChunk = createDeferredCore();
       const responseClosed = new Promise<void>((resolve) => {
-        browserResponse.on("data", (chunk: Buffer) => chunks.push(chunk));
+        browserResponse.on("data", (chunk: Buffer) => {
+          chunks.push(chunk);
+          firstChunk.resolve();
+        });
         browserResponse.on("error", () => undefined);
         browserResponse.once("close", resolve);
       });
       expect(await httpCall(portal, "/start", { ...connection, method: "POST" })).toMatchObject({
         status: 204,
       });
+      if (completion === "browser" || completion === "app") {
+        await firstChunk.promise;
+        (completion === "browser" ? browserResponse : appResponse)?.destroy();
+      }
       await responseClosed;
       expect(browserResponse.complete).toBe(completion === "complete");
       expect(Buffer.concat(chunks).toString("utf8")).toBe(
-        completion === "complete" ? "data: started\n\n" : "",
+        completion === "complete"
+          ? "data: started\n\n"
+          : completion === "abort"
+            ? ""
+            : "data: ready\n\n",
       );
+      await vi.waitFor(() => {
+        expect(browserResponse.destroyed).toBe(true);
+        expect(appClosed).toBe(true);
+      });
     } finally {
       browserRequest.destroy();
       appResponse?.destroy();
