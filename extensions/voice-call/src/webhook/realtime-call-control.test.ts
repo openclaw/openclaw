@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   RealtimeVoiceBridge,
@@ -8,11 +9,9 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { WebSocket } from "ws";
 import type { CallRecord } from "../types.js";
 import { connectWs, startUpgradeWsServer, waitForClose } from "../websocket-test-support.js";
-import { makeCall, makeBridge, makeHandler } from "./realtime-call-control.test-helpers.js";
-import { RealtimeCallHandler } from "./realtime-handler.js";
+import { makeBridge, makeCall, makeHandler } from "./realtime-call-control.test-helpers.js";
+import type { RealtimeCallHandler } from "./realtime-handler.js";
 import { sendCarrierStart } from "./realtime-handler.lifecycle.test-helpers.js";
-
-type RealtimeBridgeRequest = Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0];
 
 async function openCall(params: {
   call: CallRecord;
@@ -55,36 +54,34 @@ async function connectCall(
   } = {},
 ) {
   const call = options.call ?? makeCall(providerCallId);
-  const created = createDeferred<RealtimeBridgeRequest>();
-  const createBridge = vi.fn((request: RealtimeBridgeRequest) => {
-    created.resolve(request);
-    return makeBridge(options.bridge);
-  });
+  const created = createDeferred<Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0]>();
+  const createBridge = vi.fn(
+    (request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0]) => {
+      created.resolve(request);
+      return makeBridge(options.bridge);
+    },
+  );
   const fixture = makeHandler({ ...options, call, createBridge });
   const connection = await openCall({ call, handler: fixture.handler, providerCallId });
   await vi.waitFor(() => expect(createBridge).toHaveBeenCalledOnce());
+  // Admission pauses socket reads; pong also proves its finally block resumed them.
+  await flushCarrier(connection.ws);
   return { ...fixture, ...connection, call, request: await created.promise };
 }
 
-const opening = "Buenas tardes. ¿A qué hora cierran hoy?";
 function sendAudio(ws: WebSocket, audio: Buffer) {
   ws.send(JSON.stringify({ event: "media", media: { payload: audio.toString("base64") } }));
 }
 
-describe("realtime call control over the Twilio stream", () => {
-  it("retires the realtime producer without ending a call before carrier playback", async () => {
-    const close = vi.fn();
-    const { call, handler, processEvent } = await connectCall("CA-carrier-playback", {
-      bridge: { close },
-    });
-    await handler.prepareCarrierPlayback(call.callId);
-    expect(close).toHaveBeenCalledOnce();
-    expect(handler.speak(call.callId, "Too late")).toMatchObject({ success: false });
-    expect(processEvent.mock.calls).not.toContainEqual([
-      expect.objectContaining({ type: "call.ended" }),
-    ]);
-  });
+async function flushCarrier(ws: WebSocket) {
+  // Media handlers are synchronous after admission; the following pong is a FIFO barrier.
+  const pong = once(ws, "pong");
+  ws.ping();
+  await pong;
+}
 
+const opening = "Buenas tardes. ¿A qué hora cierran hoy?";
+describe("realtime call control over the Twilio stream", () => {
   it("abandons a pending realtime admission when carrier voicemail takes ownership", async () => {
     const providerCallId = "CA-pending-playback";
     const call = makeCall(providerCallId);
@@ -255,6 +252,125 @@ describe("realtime call control over the Twilio stream", () => {
           `Be helpful.\n\nStart the call by greeting the caller naturally. Include this greeting in your first spoken reply: "${opening}"`,
         );
       }
+    },
+  );
+});
+
+describe("realtime playback through carrier frames", () => {
+  it("acknowledges sustained speech once during AMD while holding the opening", async () => {
+    const call = makeCall("CA-chatty", {
+      direction: "outbound",
+      metadata: {
+        initialMessage: "The opening",
+        voicemailManagedByHost: true,
+        brief: { language: "Spanish" },
+      },
+    });
+    const triggerGreeting = vi.fn<(instructions?: string) => void>();
+    const forwardAudio = vi.fn();
+    const { ws, request } = await connectCall("CA-chatty", {
+      call,
+      bridge: { triggerGreeting, sendAudio: forwardAudio },
+    });
+    vi.useFakeTimers();
+    request.onReady?.();
+    for (let i = 0; i < 200; i++) {
+      sendAudio(ws, Buffer.alloc(160, 0x00));
+    }
+    await flushCarrier(ws);
+    await vi.advanceTimersByTimeAsync(3100);
+    expect(triggerGreeting).toHaveBeenCalledTimes(1);
+    expect(triggerGreeting.mock.calls[0]?.[0]).toContain("Sí, un momento");
+    expect(forwardAudio).not.toHaveBeenCalled();
+    request.onAudio(Buffer.alloc(160, 0x00));
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(triggerGreeting).toHaveBeenCalledTimes(1);
+    call.metadata = { ...call.metadata, answeredBy: "human" };
+    sendAudio(ws, Buffer.alloc(160, 0xff));
+    await flushCarrier(ws);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(triggerGreeting).toHaveBeenCalledTimes(2);
+    expect(triggerGreeting.mock.calls[1]?.[0]).toContain("The opening");
+  });
+
+  it("retires realtime playback without ending the call and rejects speech during closure", async () => {
+    const call = makeCall("CA-closing");
+    const closed = createDeferred<void>();
+    const close = vi.fn(() => closed.promise);
+    const { handler, processEvent } = await connectCall("CA-closing", {
+      call,
+      bridge: { close },
+    });
+    try {
+      vi.useFakeTimers();
+      const closing = handler.prepareCarrierPlayback(call.callId);
+      const settled = vi.fn();
+      const late = handler.playVoicemail(call.callId, "too late")?.then(
+        () => settled("done"),
+        () => settled("closed"),
+      );
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toHaveBeenCalledWith("closed");
+      await late;
+      closed.resolve();
+      await closing;
+      expect(close).toHaveBeenCalledOnce();
+      expect(handler.speak(call.callId, "Too late")).toMatchObject({ success: false });
+      expect(processEvent.mock.calls).not.toContainEqual([
+        expect.objectContaining({ type: "call.ended" }),
+      ]);
+    } finally {
+      closed.resolve();
+    }
+  });
+
+  it.each(["audible", "silent", "continuous", "closed"] as const)(
+    "settles realtime voicemail after audible silence or bounded failure (%s)",
+    async (mode) => {
+      const call = makeCall("CA-voicemail", {
+        direction: "outbound",
+        metadata: {
+          voicemailManagedByHost: true,
+          answeredBy: "machine_end_beep",
+        },
+      });
+      const triggerGreeting = vi.fn();
+      const { handler, ws, request } = await connectCall("CA-voicemail", {
+        call,
+        bridge: { triggerGreeting },
+      });
+      vi.useFakeTimers();
+      request.onReady?.();
+      const playback = handler.playVoicemail(call.callId, "Speak the voicemail");
+      expect(playback).toBeDefined();
+      const settled = vi.fn();
+      const result = playback?.then(
+        () => settled("done"),
+        () => settled("failed"),
+      );
+      expect(triggerGreeting).toHaveBeenCalledWith("Speak the voicemail");
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(settled).not.toHaveBeenCalled();
+      if (mode === "closed") {
+        await handler.prepareCarrierPlayback(call.callId);
+      } else if (mode === "audible") {
+        request.onAudio(Buffer.alloc(160, 0x00));
+        await vi.advanceTimersByTimeAsync(1400);
+        request.onAudio(Buffer.alloc(160, 0x00));
+        await vi.advanceTimersByTimeAsync(1400);
+        request.onAudio(Buffer.alloc(160, 0xff));
+        expect(settled).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(100);
+      } else {
+        for (let i = 0; i < 43; i++) {
+          sendAudio(ws, Buffer.alloc(160, 0xff));
+          await flushCarrier(ws);
+          request.onAudio(Buffer.alloc(160, mode === "silent" ? 0xff : 0x00));
+          await vi.advanceTimersByTimeAsync(1000);
+        }
+      }
+      await result;
+      expect(settled).toHaveBeenCalledWith(mode === "audible" ? "done" : "failed");
     },
   );
 });
