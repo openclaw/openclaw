@@ -289,9 +289,11 @@ const PUBLISH_PATH = ".github/workflows/openclaw-release-publish.yml";
 const FRV_PATH = ".github/workflows/full-release-validation.yml";
 const endpoint = (path: string) => `repos/${REPOSITORY}/${path}`;
 
-function observeRun<
-  T extends { id: number; workflow_id: number; path: string; run_attempt: number },
->(responses: Record<string, unknown>, run: T, includeAttempt = false) {
+function observeRun(
+  responses: Record<string, unknown>,
+  run: { id: number; workflow_id: number; path: string; run_attempt: number },
+  includeAttempt = false,
+) {
   responses[endpoint(`actions/runs/${run.id}`)] = run;
   responses[endpoint(`actions/workflows/${run.workflow_id}`)] = {
     id: run.workflow_id,
