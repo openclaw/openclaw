@@ -32,23 +32,6 @@ export function consumeGatewayRunOptionToken(args: ReadonlyArray<string>, index:
   return isValueToken(args[index + 1]) ? 2 : 0;
 }
 
-function consumeGatewayRunPreBootstrapOptionToken(
-  args: ReadonlyArray<string>,
-  index: number,
-): number {
-  const consumed =
-    consumeRootCommandOptionToken(args, index) || consumeGatewayRunOptionToken(args, index);
-  if (consumed > 0) {
-    return consumed;
-  }
-  const arg = args[index];
-  if (arg && GATEWAY_RUN_VALUE_FLAGS.has(arg) && args[index + 1] !== undefined) {
-    // Required values can look like flags; consume them before considering destructive options.
-    return 2;
-  }
-  return 0;
-}
-
 export function consumeGatewayFastPathRootOptionToken(
   args: ReadonlyArray<string>,
   index: number,
@@ -81,12 +64,8 @@ export function resolveGatewayCommandPath(argv: string[], depth = 2): string[] |
   return positionals ? ["gateway", ...positionals] : null;
 }
 
-export function resolveGatewayCatalogCommandPath(argv: string[]): string[] | null {
-  return resolveGatewayCommandPath(argv, 2);
-}
-
 export function isGatewayRunInvocationArgv(argv: string[]): boolean {
-  const commandPath = resolveGatewayCatalogCommandPath(argv);
+  const commandPath = resolveGatewayCommandPath(argv);
   return (
     commandPath?.length === 1 ||
     (commandPath?.length === 2 && commandPath[0] === "gateway" && commandPath[1] === "run")
@@ -116,7 +95,11 @@ export function resolveGatewayRunPreBootstrapOptions(
       sawRun = true;
       continue;
     }
-    const consumed = consumeGatewayRunPreBootstrapOptionToken(args, index);
+    const consumed =
+      consumeRootCommandOptionToken(args, index) ||
+      consumeGatewayRunOptionToken(args, index) ||
+      // Required values can look like flags; consume them before considering destructive options.
+      (arg && GATEWAY_RUN_VALUE_FLAGS.has(arg) && args[index + 1] !== undefined ? 2 : 0);
     if (consumed > 0) {
       if (arg === "--force") {
         force = true;

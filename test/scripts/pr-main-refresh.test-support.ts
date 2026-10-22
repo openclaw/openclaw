@@ -584,9 +584,9 @@ if (args[0] === 'pr' && args[1] === 'view') {
       html_url: 'https://github.com/fixture/repo',
       permissions: { admin: true },
     };
-  } else if (endpoint === 'repos/fixture/repo/branches/main/protection') {
-    // Hosted CI fixtures retain GraphQL through explicit classic branch protection.
-    value = {};
+  } else if (endpoint === 'repos/fixture/repo/rules/branches/main?per_page=100') {
+    // Signature rules retain the supported GraphQL fallback for these lifecycle cases.
+    value = [[{ type: 'required_signatures' }]];
   } else if (endpoint === 'repos/fixture/repo/git/ref/heads/main') {
     value = { ref: 'refs/heads/main', object: { type: 'commit',
       sha: runGit(['-C', origin, 'rev-parse', 'refs/heads/main']) } };

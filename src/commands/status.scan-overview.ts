@@ -46,7 +46,9 @@ export type StatusScanOverviewResult = {
         | "degradedSecretOwners"
         | "degradedPlugins"
         | "startupMigrationWarning"
+        | "modelReasoningWarning"
         | "installationReplacementWarning"
+        | "utilityModelWarnings"
         | "childRuntime"
         | "secretEgressProxy"
         | "pluginReload"
@@ -182,15 +184,6 @@ export async function collectStatusScanOverview(params: {
           }
         }
       : undefined,
-    getTailnetHostname: async (runner) => {
-      return await import("./status.scan.deps.runtime.js").then(({ getTailnetHostname }) =>
-        getTailnetHostname(runner),
-      );
-    },
-    getUpdateCheckResult: async (updateParams) =>
-      await import("./status.update.js").then(({ getUpdateCheckResult }) =>
-        getUpdateCheckResult(updateParams),
-      ),
     getAgentLocalStatuses: async (bootstrapCfg) =>
       await measureCliCommandStartup(
         "status.local-agents",
@@ -245,7 +238,9 @@ export async function collectStatusScanOverview(params: {
           degradedSecretOwners: status.degradedSecretOwners ?? [],
           degradedPlugins: status.degradedPlugins ?? [],
           startupMigrationWarning: status.startupMigrationWarning,
+          modelReasoningWarning: status.modelReasoningWarning,
           installationReplacementWarning: status.installationReplacementWarning,
+          utilityModelWarnings: status.utilityModelWarnings,
           ...(params.opts.deep && status.childRuntime ? { childRuntime: status.childRuntime } : {}),
           secretEgressProxy: status.secretEgressProxy,
           pluginReload: status.pluginReload,

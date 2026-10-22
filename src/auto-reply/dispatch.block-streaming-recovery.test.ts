@@ -252,7 +252,6 @@ it.for([
           defaults: {
             workspace: state.workspaceDir,
             skipBootstrap: true,
-            heartbeat: { every: "0m" },
             model: {
               primary: "fixture/answer",
               ...(fallback ? { fallbacks: ["fixture-backup/backup"] } : {}),

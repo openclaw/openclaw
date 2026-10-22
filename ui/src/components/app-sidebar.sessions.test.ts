@@ -16,7 +16,7 @@ import "../test-helpers/app-sidebar-cases/session-ownership-filtering.ts";
 import "../test-helpers/app-sidebar-cases/session-list-sections.ts";
 import "../test-helpers/app-sidebar-cases/sidebar-zone.ts";
 import "../test-helpers/app-sidebar-cases/plugin-session-list.ts";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import {
   createContext,
@@ -31,18 +31,11 @@ import {
   type SidebarSessionOwnerFilter,
 } from "./app-sidebar-session-types.ts";
 
-async function mountOwnerFilter(
-  selfUser: { id: string; name: string } | null | undefined,
-  savedFilter?: SidebarSessionOwnerFilter,
-  singleUser = false,
-) {
+async function mountOwnerFilter(savedFilter?: SidebarSessionOwnerFilter, singleUser = false) {
   const gateway = createGatewayHarness({} as GatewayBrowserClient);
-  gateway.publish({ selfUser });
+  gateway.publish({ selfUser: viewer });
   if (singleUser) {
-    const hello = gateway.gateway.snapshot.hello;
-    if (!hello) {
-      throw new Error("Expected Gateway hello fixture");
-    }
+    const hello = gateway.gateway.snapshot.hello!;
     gateway.publish({
       hello: { ...hello, policy: { ...hello.policy, hasMultipleSessionSharingIdentities: false } },
     });
@@ -53,22 +46,19 @@ async function mountOwnerFilter(
     "agent:main:agent-owned",
   ]);
   const result = harness.sessions.state.result!;
-  result.owners = [
+  const owners = [
     { type: "human", id: "viewer", label: "Viewer" },
     { type: "human", id: "other", label: "Other" },
     { type: "agent", id: "viewer", label: "Agent" },
-  ];
-  result.sessions.forEach((row, index) => {
-    row.owner = { actor: result.owners![index]! };
-  });
-  if (singleUser) {
-    result.owners = [{ type: "human", id: "viewer", label: "Viewer" }];
-    result.sessions.forEach((row) => {
-      delete row.owner;
+  ] satisfies NonNullable<typeof result.owners>;
+  result.owners = singleUser ? [owners[0]!] : owners;
+  if (!singleUser) {
+    result.sessions.forEach((row, index) => {
+      row.owner = { actor: owners[index]! };
     });
   }
-  if (savedFilter && selfUser) {
-    storeSidebarSessionOwnerFilter(gateway.gateway.connection.gatewayUrl, selfUser.id, savedFilter);
+  if (savedFilter) {
+    storeSidebarSessionOwnerFilter(gateway.gateway.connection.gatewayUrl, viewer.id, savedFilter);
   }
   const context = createContext(gateway.gateway, harness.sessions);
   const provider = createApplicationContextProvider(context);
@@ -85,36 +75,34 @@ const viewer = { id: "viewer", name: "Viewer" };
 const ownerTitle = (sidebar: Element) =>
   sidebar.querySelector("#sidebar-session-owner-title .picker-select__label")?.textContent;
 
-describe("Sessions owner filter", () => {
-  it("keeps a single-user title plain and includes sessions without owner metadata", async () => {
-    const { sidebar } = await mountOwnerFilter(viewer, undefined, true);
-    expect(sidebar.querySelector("#sidebar-session-owner-title")).toBeNull();
-    expect(sidebar.querySelector(".sidebar-session-toolbar")?.textContent).toContain("Sessions");
-    expect(sidebar.querySelectorAll(".sidebar-recent-session[data-session-key]")).toHaveLength(3);
-    const query = sidebar.sessionData.sessionListQuery("main");
-    expect(query.ownerId).toBeUndefined();
-    expect(query.involvingMe).toBeUndefined();
-  });
+it("keeps a single-user title plain and includes sessions without owner metadata", async () => {
+  const { sidebar } = await mountOwnerFilter(undefined, true);
+  expect(sidebar.querySelector("#sidebar-session-owner-title")).toBeNull();
+  expect(sidebar.querySelector(".sidebar-session-toolbar")?.textContent).toContain("Sessions");
+  expect(sidebar.querySelectorAll(".sidebar-recent-session[data-session-key]")).toHaveLength(3);
+  const query = sidebar.sessionData.sessionListQuery("main");
+  expect(query.ownerId).toBeUndefined();
+  expect(query.involvingMe).toBeUndefined();
+});
 
-  it("restores each profile's saved owner choice across identity changes and remount", async () => {
-    const filter = { ownerId: "other", involvingMe: false };
-    const { sidebar, gateway, provider } = await mountOwnerFilter(viewer, filter);
-    const url = gateway.gateway.connection.gatewayUrl;
-    storeSidebarSessionOwnerFilter(url, "other", { ownerId: null, involvingMe: true });
-    gateway.publish({ selfUser: { id: "other", name: "Other" } });
+it("restores each profile's saved owner choice across identity changes and remount", async () => {
+  const filter = { ownerId: "other", involvingMe: false };
+  const { sidebar, gateway, provider } = await mountOwnerFilter(filter);
+  const url = gateway.gateway.connection.gatewayUrl;
+  storeSidebarSessionOwnerFilter(url, "other", { ownerId: null, involvingMe: true });
+  for (const [selfUser, title] of [
+    [{ id: "other", name: "Other" }, "Involving me"],
+    [null, "All owners"],
+    [viewer, "Other"],
+  ] as const) {
+    gateway.publish({ selfUser });
     await settleLitElement(sidebar);
-    expect(ownerTitle(sidebar)).toBe("Involving me");
-    gateway.publish({ selfUser: null });
-    await settleLitElement(sidebar);
-    expect(ownerTitle(sidebar)).toBe("All owners");
-    gateway.publish({ selfUser: viewer });
-    await settleLitElement(sidebar);
-    expect(ownerTitle(sidebar)).toBe("Other");
-    sidebar.remove();
-    const reloaded = await createSidebarElement();
-    provider.append(reloaded.hostElement);
-    await settleLitElement(reloaded);
-    expect(reloaded.sidebarSessionOwnerFilter()).toEqual(filter);
-    expect(ownerTitle(reloaded)).toBe("Other");
-  });
+    expect(ownerTitle(sidebar)).toBe(title);
+  }
+  sidebar.remove();
+  const reloaded = await createSidebarElement();
+  provider.append(reloaded.hostElement);
+  await settleLitElement(reloaded);
+  expect(reloaded.sidebarSessionOwnerFilter()).toEqual(filter);
+  expect(ownerTitle(reloaded)).toBe("Other");
 });

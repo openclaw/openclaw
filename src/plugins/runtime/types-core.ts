@@ -294,6 +294,8 @@ export type LlmCompleteErrorCode =
   | "LLM_ISOLATED_INPUT_REJECTED"
   | "LLM_ISOLATED_UNSUPPORTED"
   | "LLM_RUNTIME_UNAVAILABLE"
+  /** The plugin or model runtime is reloading or retired; retry from a fresh plugin operation. */
+  | "LLM_RUNTIME_LIFECYCLE"
   | "LLM_COMPLETION_ABORTED"
   | "LLM_COMPLETION_TIMEOUT"
   | "LLM_COMPLETION_OUTPUT_REJECTED"
@@ -473,6 +475,8 @@ export type PluginRuntimeCore = {
     }) => Promise<{ ok: true; runId: string } | { ok: false; reason: string }>;
   };
   system: {
+    captureSessionEventTarget: typeof import("./runtime-session-events.js").captureSessionEventTarget;
+    enqueueSessionEvent: typeof import("./runtime-session-events.js").enqueueSessionEvent;
     enqueueSystemEvent: typeof import("./system-events.js").enqueueSystemEventFromSdk;
     requestHeartbeat: typeof import("../../infra/heartbeat-wake.js").requestHeartbeat;
     /**

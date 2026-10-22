@@ -60,19 +60,18 @@ function createRegistryRunFixture(entry: SubagentRunRecordOverrides): SubagentRu
   const canonical = createSubagentRunRecord(entry);
   const requesterAgentId =
     entry.requesterAgentId ?? parseAgentSessionKey(canonical.requesterSessionKey)?.agentId;
-  if (!Object.hasOwn(entry, "requesterStorePath") && requesterAgentId) {
-    canonical.requesterStorePath = resolvePhysicalSessionStorePath({
-      sessionKey: canonical.requesterSessionKey,
-      agentId: requesterAgentId,
-    });
-  }
   const controllerKey = canonical.controllerSessionKey ?? canonical.requesterSessionKey;
-  const controllerAgentId = parseAgentSessionKey(controllerKey)?.agentId ?? requesterAgentId;
-  if (!Object.hasOwn(entry, "controllerStorePath") && controllerAgentId) {
-    canonical.controllerStorePath = resolvePhysicalSessionStorePath({
-      sessionKey: controllerKey,
-      agentId: controllerAgentId,
-    });
+  for (const [field, sessionKey, agentId] of [
+    ["requesterStorePath", canonical.requesterSessionKey, requesterAgentId],
+    [
+      "controllerStorePath",
+      controllerKey,
+      parseAgentSessionKey(controllerKey)?.agentId ?? requesterAgentId,
+    ],
+  ] as const) {
+    if (!Object.hasOwn(entry, field) && agentId) {
+      canonical[field] = resolvePhysicalSessionStorePath({ sessionKey, agentId });
+    }
   }
   return canonical;
 }
@@ -94,16 +93,6 @@ export function seedSubagentRunForReadTest(entry: SubagentRunRecordOverrides): v
 
 export function releaseSubagentRun(runId: string) {
   return getRegistryTestApi().releaseSubagentRun(runId);
-}
-
-export async function finalizeInterruptedSubagentRun(params: {
-  runId: string;
-  expectedEntry?: SubagentRunRecord;
-  error: string;
-  endedAt?: number;
-}) {
-  const registry = await import("./subagent-registry.js");
-  return await registry.finalizeInterruptedSubagentRun(params);
 }
 
 export const testing = {

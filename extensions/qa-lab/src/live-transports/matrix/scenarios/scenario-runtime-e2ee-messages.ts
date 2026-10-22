@@ -50,12 +50,6 @@ export async function runMatrixQaE2eeBasicReplyScenario(
 export async function runMatrixQaE2eeStateAfterMissingEncryptionScenario(
   context: MatrixQaScenarioContext,
 ): Promise<MatrixQaScenarioExecution> {
-  if (!context.restartGatewayAfterStateMutation) {
-    throw new Error("Matrix E2EE state_after QA scenario requires hard gateway restart support");
-  }
-  if (!context.installFaultRule) {
-    throw new Error("Matrix E2EE state_after QA scenario requires in-place fault injection");
-  }
   const accountId = context.sutAccountId ?? "sut";
   const faultRule = context.installFaultRule(
     buildSyncStateAfterMissingEncryptionFaultRule(context.sutAccessToken),
@@ -155,9 +149,6 @@ export async function runMatrixQaE2eeThreadFollowUpScenario(
 export async function runMatrixQaE2eeRestartResumeScenario(
   context: MatrixQaScenarioContext,
 ): Promise<MatrixQaScenarioExecution> {
-  if (!context.restartGateway) {
-    throw new Error("Matrix E2EE restart scenario requires gateway restart support");
-  }
   const restartGateway = context.restartGateway;
   return await withMatrixQaIsolatedE2eeDriverRoom(
     context,

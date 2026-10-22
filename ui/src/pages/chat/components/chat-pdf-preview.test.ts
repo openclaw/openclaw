@@ -8,6 +8,7 @@ import "./chat-detail-panel.tsx";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 
 const PDF_PREVIEW_MAX_BYTES = 16 * 1024 * 1024;
+const source = "/__openclaw__/assistant-media?mediaTicket=pdf-preview";
 
 async function mountAttachment(
   overrides: Partial<Extract<SidebarContent, { kind: "attachment" }>> = {},
@@ -20,7 +21,7 @@ async function mountAttachment(
     kind: "attachment",
     attachmentKind: "document",
     title: "brief.pdf",
-    src: "/__openclaw__/assistant-media?mediaTicket=pdf-preview",
+    src: source,
     mimeType: "application/pdf",
     ...overrides,
   };
@@ -85,9 +86,7 @@ it.each(["metadata", "header", "timeout"] as const)(
     if (failure === "metadata") {
       expect(fetchMock).not.toHaveBeenCalled();
       const download = panel.querySelector<HTMLAnchorElement>("a[download]");
-      expect(download?.getAttribute("href")).toBe(
-        "/__openclaw__/assistant-media?mediaTicket=pdf-preview",
-      );
+      expect(download?.getAttribute("href")).toBe(source);
       expect(download?.download).toBe("brief.pdf");
     } else if (failure === "header") {
       expect(cancel).toHaveBeenCalledOnce();
@@ -120,13 +119,12 @@ it("aborts an interrupted PDF load and reloads it after reconnect", async () => 
   expect(objectUrls.createObjectURL).toHaveBeenCalledOnce();
   expect(objectUrls.revokeObjectURL).not.toHaveBeenCalled();
   const frame = panel.querySelector<HTMLIFrameElement>("iframe")!;
-  expect(frame.className).toBe("sidebar-pdf-preview__frame");
+  expect(frame).toMatchObject({ className: "sidebar-pdf-preview__frame", title: "brief.pdf" });
   expect(frame.getAttribute("src")).toBe("blob:pdf-preview");
-  expect(frame.title).toBe("brief.pdf");
   expect(panel.querySelector(".sidebar-file-toolbar")).toBeNull();
   expect(panel.querySelector("object")).toBeNull();
   expect(fetchMock).toHaveBeenCalledWith(
-    "/__openclaw__/assistant-media?mediaTicket=pdf-preview",
+    source,
     expect.objectContaining({ credentials: "same-origin", redirect: "error" }),
   );
 });
@@ -160,7 +158,6 @@ it.each(["unchanged", "changed", "failed", "identity", "oversized"] as const)(
       expect(panel.querySelector("iframe")?.getAttribute("src")).toBe("blob:original"),
     );
     const frame = panel.querySelector("iframe")!;
-    expect(frame?.getAttribute("src")).toBe("blob:original");
 
     panel.content = {
       ...panel.content,

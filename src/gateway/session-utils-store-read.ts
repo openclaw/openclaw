@@ -1,4 +1,3 @@
-import { ok, type Result } from "@openclaw/normalization-core/result";
 import {
   listSessionEntriesCore as listAccessorSessionEntries,
   listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
@@ -33,7 +32,7 @@ export type GatewaySessionStoreRead = {
     readConsistency?: SessionEntryReadScope["readConsistency"];
     readSource?: SessionEntryReadSource;
   };
-  result?: Result<Record<string, SessionEntry>, unknown>;
+  result?: Record<string, SessionEntry>;
   readSource?: SessionEntryReadSource;
   capturedReadSource?: CapturedSessionEntryReadSource;
 };
@@ -72,14 +71,11 @@ export function readGatewaySessionStore(
       loaded = loadGatewaySessionLookupStore(read);
       cache?.set(cacheKey, loaded);
     }
-    read.result = ok(loaded.store);
+    read.result = loaded.store;
     read.readSource = loaded.readSource;
     read.capturedReadSource = loaded.capturedReadSource;
   }
-  if (!read.result.ok) {
-    throw read.result.error;
-  }
-  return read.result.value;
+  return read.result;
 }
 
 function loadGatewaySessionLookupStore({

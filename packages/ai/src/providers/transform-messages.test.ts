@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { transformProviderMessages } from "../provider-transcript-transform.js";
 import type { ProviderMessage, ProviderModel } from "../provider-types.js";
 import type { AssistantMessage, Message, ToolResultMessage } from "../types.js";
@@ -11,6 +11,7 @@ const EXPECTED_FAILURE_MARKER =
 const NO_CONTENT_PLACEHOLDER = "[assistant turn failed before producing content]";
 
 const model = makeProviderModel("openai-completions", "openai", "text-only-model");
+afterEach(() => vi.restoreAllMocks());
 const text = (value: string) => ({ type: "text" as const, text: value });
 function image(data: string, mimeType = "image/png") {
   return { type: "image" as const, data, mimeType };
@@ -41,6 +42,34 @@ function makeAssistant(
     ...overrides,
   };
 }
+
+it("replays missing synchronous and delayed asynchronous results with their original timestamps", () => {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+  const messages: Message[] = [
+    makeAssistant(
+      [
+        { type: "toolCall", id: "sync", name: "lookup", arguments: {} },
+        { type: "toolCall", id: "async", name: "lookup", arguments: {}, async: true },
+      ],
+      "toolUse",
+      { timestamp: 0 },
+    ),
+    makeAssistant([text("later fragment")], "stop", { timestamp: 3 }),
+  ];
+  const first = transformMessages(messages, model);
+  clock.mockReturnValue(2_000);
+  const next = transformMessages(structuredClone(messages), model);
+
+  expect(next).toEqual(first);
+  expect(next.filter((message) => message.role === "toolResult")).toMatchObject([
+    { toolCallId: "sync", timestamp: 0, isError: true },
+    { toolCallId: "async", timestamp: 0, isError: true },
+  ]);
+  const recorded = toolResult([text("recorded result")], "async", 19);
+  const withRecorded = transformMessages([...messages, recorded], model);
+  expect(withRecorded.at(-1)).toEqual(recorded);
+  expect(messages.map(({ role }) => role)).toEqual(["assistant", "assistant"]);
+});
 
 it("keeps host-sanitized repetition history through provider replay", () => {
   const message = makeAssistant(

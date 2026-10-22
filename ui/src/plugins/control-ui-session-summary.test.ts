@@ -20,18 +20,19 @@ function setup(identity?: () => AgentIdentityResult) {
   const { gateway, current } = createGatewayStoreTestStore();
   onTestFinished(() => gateway.stop());
   gateway.start();
-  current().opts.onHello?.({
+  current().testOptions.onHello?.({
     ...GATEWAY_STORE_TEST_HELLO,
     auth: { role: "operator", scopes: ["operator.sessions.read"] },
   });
   const requests: Array<{
     params: unknown;
     resolve: (history: ChatHistoryResponse) => void;
+    reject: (error: unknown) => void;
   }> = [];
   current().request.mockImplementation((method, params) => {
     if (method === "chat.history") {
-      return new Promise<ChatHistoryResponse>((resolve) => {
-        requests.push({ params, resolve });
+      return new Promise<ChatHistoryResponse>((resolve, reject) => {
+        requests.push({ params, resolve, reject });
       });
     }
     if (method === "agent.identity.get" && identity) {
@@ -49,7 +50,7 @@ function setup(identity?: () => AgentIdentityResult) {
   element.presented = true;
   document.body.append(element);
   const emit = (event: string, key = "agent:main:one", agentId = "main") =>
-    current().opts.onEvent?.(createGatewayEvent(event, { sessionKey: key, agentId }));
+    current().testOptions.onEvent?.(createGatewayEvent(event, { sessionKey: key, agentId }));
   const shown = (text: string) => vi.waitFor(() => expect(element.textContent).toContain(text));
   const reply = async (index: number, text: string, data: ChatHistoryResponse = history(text)) => {
     await vi.waitFor(() => expect(requests).toHaveLength(index + 1));
@@ -134,8 +135,8 @@ it.each(["session", "agent", "connection", "gateway"] as const)(
     } else if (change === "agent") {
       element.session = { sessionKey: "agent:main:one", agentId: "other" };
     } else {
-      current().opts.onClose?.({ code: 1006, reason: "socket lost", willRetry: true });
-      current().opts.onHello?.(GATEWAY_STORE_TEST_HELLO);
+      current().testOptions.onClose?.({ code: 1006, reason: "socket lost", willRetry: true });
+      current().testOptions.onHello?.(GATEWAY_STORE_TEST_HELLO);
     }
     await vi.waitFor(() => expect(nextRequests).toHaveLength(2));
     expect(committedText.length).toBeGreaterThan(0);
@@ -174,6 +175,36 @@ it("normalizes visible message text without reviving assistant commentary or too
   expect(messages(element)).toHaveLength(2);
   expect(element.querySelector(".sidebar-markdown strong")?.textContent).toBe("answer");
   expect(element.textContent).not.toMatch(/Hidden|hidden-envelope|openclaw:ctx|MEDIA:|proof\.png/);
+});
+
+it("retains its successful history and cursor when retrying a failed refresh", async () => {
+  useClock();
+  const { element, requests, emit, reply } = setup();
+  await reply(0, "Retained reply", {
+    ...history("Retained reply"),
+    deltaCursor: "last-successful",
+  });
+
+  emit("session.message");
+  await vi.advanceTimersByTimeAsync(5_000);
+  await vi.waitFor(() => expect(requests).toHaveLength(2));
+  requests[1]!.reject(new Error("History read unavailable"));
+  const error = () => element.querySelector(".plugin-session-summary__history [role=alert]");
+  await vi.waitFor(() => expect(error()).not.toBeNull());
+  expect(element.textContent).not.toContain("Retained reply");
+
+  const retry = element.querySelector<HTMLButtonElement>(".plugin-session-summary > button");
+  expect(retry).not.toBeNull();
+  retry!.click();
+  await vi.advanceTimersByTimeAsync(0);
+  await vi.waitFor(() => expect(requests).toHaveLength(3));
+  expect(requests[2]!.params).toMatchObject({ cursor: "last-successful" });
+  await vi.waitFor(() => {
+    expect(element.textContent).toContain("Retained reply");
+    expect(error()).toBeNull();
+  });
+  await reply(2, "Recovered reply");
+  expect(element.textContent).not.toContain("Retained reply");
 });
 
 it("paces durable events and retains one catch-up during a pending load", async () => {
@@ -273,7 +304,7 @@ it("does not resume progress requests after removal with an update queued", asyn
   element.session = { ...element.session! };
   element.remove();
   await element.updateComplete;
-  current().opts.onEvent?.(
+  current().testOptions.onEvent?.(
     createGatewayEvent("progressCard.changed", { sessionKey: "agent:main:one", revision: 2 }),
   );
   await settled(1);
@@ -298,8 +329,8 @@ it("rejects an old session response and reloads after reconnect without a parent
   emit("session.message");
   await settled(2);
 
-  current().opts.onClose?.({ code: 1006, reason: "socket lost", willRetry: true });
+  current().testOptions.onClose?.({ code: 1006, reason: "socket lost", willRetry: true });
   await element.updateComplete;
-  current().opts.onHello?.(GATEWAY_STORE_TEST_HELLO);
+  current().testOptions.onHello?.(GATEWAY_STORE_TEST_HELLO);
   await reply(2, "Reconnected session");
 });

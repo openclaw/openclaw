@@ -141,6 +141,7 @@ export type ToolSearchCatalogApplyResult = {
 };
 
 export type ToolSearchCatalogCompactionParams = {
+  config?: OpenClawConfig;
   tools: AnyAgentTool[];
   enabled: boolean;
   catalogRef?: ToolSearchCatalogRef;

@@ -8,7 +8,7 @@ import type {
   SessionsListResult,
 } from "../../api/types.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
-import type { ApplicationContext } from "../../app/context.ts";
+import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
@@ -23,7 +23,7 @@ import {
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
-import { AgentsHomePage } from "./agents-home-page.tsx";
+import { ClawsPage } from "../claws/page.tsx";
 
 const roster: AgentsListResult = {
   defaultId: "harbor",
@@ -55,6 +55,8 @@ export const workflowOperator = {
 
 type PageOptions = {
   clawsEnabled?: boolean;
+  pathname?: string;
+  clawIconUrl?: string;
   workspaceFileNames?: string[];
   applyResult?: {
     agentId: string;
@@ -166,13 +168,21 @@ export function createPage(options: PageOptions = {}) {
         params && typeof params === "object" && "query" in params
           ? String(params.query).trim().toLowerCase()
           : "";
+      const category =
+        params && typeof params === "object" && "category" in params ? String(params.category) : "";
+      const featured =
+        params && typeof params === "object" && "featured" in params
+          ? Boolean(params.featured)
+          : false;
       return {
         entries:
-          query &&
-          !workflowOperator.displayName.toLowerCase().includes(query) &&
-          !workflowOperator.packageName.toLowerCase().includes(query)
+          featured ||
+          (category && category !== "productivity") ||
+          (query &&
+            !workflowOperator.displayName.toLowerCase().includes(query) &&
+            !workflowOperator.packageName.toLowerCase().includes(query))
             ? []
-            : [workflowOperator],
+            : [{ ...workflowOperator, iconUrl: options.clawIconUrl }],
       };
     }
     if (method === "claws.catalog.detail") {
@@ -182,6 +192,7 @@ export function createPage(options: PageOptions = {}) {
       return {
         detail: {
           ...workflowOperator,
+          iconUrl: options.clawIconUrl,
           version: "1.2.0",
           agentName: "Workflow Operator",
           workspaceFiles: instructions.length,
@@ -338,9 +349,16 @@ export function createPage(options: PageOptions = {}) {
   };
   const baselineEventListeners = eventListeners.size;
   const solidProvider = createSolidApplicationContextProvider(context);
-  const view = mountSolid(() => createComponent(AgentsHomePage, {}), {
-    wrapper: solidProvider.wrapper,
-  });
+  const view = mountSolid(
+    () =>
+      createComponent(ClawsPage, {
+        routeData: {
+          basePath: "",
+          location: { pathname: options.pathname ?? "/claws", search: "", hash: "" },
+        },
+      }),
+    { wrapper: solidProvider.wrapper },
+  );
   const page = view.container;
   disposers.push(() => {
     view.unmount();
@@ -358,6 +376,8 @@ export function createPage(options: PageOptions = {}) {
     ensureConfigLoaded,
     agentSelection,
     gateway: source.gateway,
+    setPhase: (phase: ApplicationGatewaySnapshot["phase"]) =>
+      source.publish({ ...source.gateway.snapshot, phase }),
     setClawsEnabled: (enabled: boolean) => {
       clawsEnabled = enabled;
       runtimeConfig.state.configSnapshot.sourceConfig.gateway.controlUi.experimental.claws =

@@ -20,6 +20,15 @@ function manifestFromDraft(markdown: string) {
   return { manifest: manifest.manifest, body: parsed.body.toString("utf8") };
 }
 
+function titleCaseClawName(value: string) {
+  return value
+    .replace(/[-_]+/gu, " ")
+    .trim()
+    .split(/\s+/u)
+    .map((word) => word.replace(/^(\p{L})/u, (letter) => letter.toUpperCase()))
+    .join(" ");
+}
+
 function profileWithoutExcludedPlugins(content: string, refs: ReadonlySet<string>) {
   if (refs.size === 0) {
     return content;
@@ -43,7 +52,12 @@ function profileWithoutExcludedPlugins(content: string, refs: ReadonlySet<string
 export function applyClawDraftChoices(
   proposal: ClawDraftDocument,
   choices?: ClawDraftReviewChoices,
-): { proposal: ClawDraftDocument; description: string; items: ClawDraftReviewItem[] } {
+): {
+  proposal: ClawDraftDocument;
+  description: string;
+  displayName: string;
+  items: ClawDraftReviewItem[];
+} {
   const { manifest, body } = manifestFromDraft(proposal.manifest);
   const excluded = new Set(choices?.excluded ?? []);
   const items: ClawDraftReviewItem[] = [];
@@ -94,10 +108,11 @@ export function applyClawDraftChoices(
     );
   }
   const name = choices?.name ?? proposal.name;
+  const displayName = choices?.displayName ?? titleCaseClawName(manifest.agent.name ?? name);
   const description =
     choices?.description ?? proposal.description ?? manifest.agent.description ?? "";
   manifest.agent.id = name;
-  manifest.agent.name = name;
+  manifest.agent.name = displayName;
   manifest.agent.description = description || undefined;
   manifest.workspace.files = manifest.workspace.files.filter(
     (entry) => !excluded.has(`file:${entry.source}`),
@@ -140,6 +155,7 @@ export function applyClawDraftChoices(
       files,
     },
     description,
+    displayName,
     items,
   };
 }

@@ -1,4 +1,4 @@
-import { createRoot } from "solid-js";
+import { createRoot, createSignal } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import { createGateway, createSessions, mountSidebar } from "../test-helpers/app-sidebar.ts";
@@ -8,7 +8,12 @@ import {
 } from "../test-helpers/gateway-client.ts";
 import { mountSolid as render } from "../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
-import { SidebarDropdown, renderSidebarNavLink } from "./app-sidebar-nav-menus.tsx";
+import {
+  SidebarDropdown,
+  renderSidebarNavLink,
+  type SidebarDropdownProps,
+} from "./app-sidebar-nav-menus.tsx";
+import { renderSidebarSessionSectionHeader as SectionHeader } from "./app-sidebar-session-section-header.tsx";
 import { getAppSidebarOwner } from "./app-sidebar.tsx";
 import { SessionOrganizer } from "./session-organizer.ts";
 import {
@@ -16,6 +21,21 @@ import {
   renderSidebarSessionMenuForMenus,
 } from "./sidebar-menus-render.tsx";
 import { createSidebarMenus, type SidebarMenus } from "./sidebar-menus.tsx";
+
+const position = { x: 12, y: 30 };
+function dropdown(overrides: Partial<SidebarDropdownProps>) {
+  return render(() => (
+    <SidebarDropdown
+      position={position}
+      class="sidebar-menu-test"
+      label="Sidebar actions"
+      onSelect={vi.fn()}
+      onClose={vi.fn()}
+      items={[{ id: "customize", label: "Customize" }]}
+      {...overrides}
+    />
+  ));
+}
 
 it("keeps modified sidebar links native and handles ordinary navigation", () => {
   const navigate = vi.fn();
@@ -43,30 +63,86 @@ it("keeps modified sidebar links native and handles ordinary navigation", () => 
   expect(navigate).toHaveBeenCalledOnce();
 });
 
-it("delivers an action selected through the shared sidebar menu", async () => {
-  const select = vi.fn();
+it("uses the current preload callbacks without replacing a sidebar link", () => {
+  const SidebarNavLink = renderSidebarNavLink;
+  const preload = vi.fn();
+  const cancel = vi.fn();
+  const [handlers, setHandlers] = createSignal<{
+    onPreload?: (event: Event, immediate?: boolean) => void;
+    onCancelPreload?: (event: Event) => void;
+  }>({});
   const view = render(() => (
-    <SidebarDropdown
-      position={{ x: 12, y: 30 }}
-      class="sidebar-menu-test"
-      label="Sidebar actions"
-      onSelect={select}
-      onClose={vi.fn()}
-      items={[{ id: "customize", label: "Customize" }]}
+    <SidebarNavLink
+      href="/sessions"
+      active={false}
+      icon={<span />}
+      label="Sessions"
+      onNavigate={vi.fn()}
+      {...handlers()}
     />
   ));
-  await waitForSolid(() =>
-    expect(view.container.querySelector("[role=menu]")!.matches(":popover-open")).toBe(true),
-  );
-  view.getByRole("menuitem", { name: "Customize", hidden: true }).click();
-  await waitForSolid(() => expect(select).toHaveBeenCalledExactlyOnceWith("customize"));
+  const link = view.getByRole("link", { name: "Sessions" });
+  setHandlers({ onPreload: preload, onCancelPreload: cancel });
+  flush();
+  for (const type of ["focus", "pointerenter", "touchstart", "blur", "pointerleave"]) {
+    link.dispatchEvent(new Event(type, { bubbles: true }));
+  }
+  expect(preload.mock.calls.map(([event, immediate]) => [event.type, immediate])).toEqual([
+    ["focus", undefined],
+    ["pointerenter", undefined],
+    ["touchstart", true],
+  ]);
+  expect(cancel.mock.calls.map(([event]) => event.type)).toEqual(["blur", "pointerleave"]);
+  setHandlers({});
+  flush();
+  link.dispatchEvent(new Event("touchstart", { bubbles: true }));
+  link.dispatchEvent(new Event("blur", { bubbles: true }));
+  expect(preload).toHaveBeenCalledTimes(3);
+  expect(cancel).toHaveBeenCalledTimes(2);
+  expect(view.getByRole("link", { name: "Sessions" })).toBe(link);
+});
+
+it("uses current section actions while retaining the header", () => {
+  const initialToggle = vi.fn();
+  const currentToggle = vi.fn();
+  const initialContext = vi.fn();
+  const currentContext = vi.fn();
+  const [current, setCurrent] = createSignal(false);
+  const view = render(() => (
+    <SectionHeader
+      sectionId="work"
+      sectionHeaders={new Map()}
+      content="Work"
+      draggable={false}
+      onStartDrag={vi.fn()}
+      onFinishDrag={vi.fn()}
+      onContextMenu={current() ? currentContext : initialContext}
+      status={{
+        content: "Expand",
+        label: "Expand work",
+        expanded: false,
+        onToggle: current() ? currentToggle : initialToggle,
+      }}
+    />
+  ));
+  const button = view.getByRole("button", { name: "Expand work" });
+  const header = button.parentElement!;
+  setCurrent(true);
+  flush();
+  button.click();
+  header.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true }));
+  expect(currentToggle).toHaveBeenCalledOnce();
+  expect(currentContext).toHaveBeenCalledOnce();
+  expect(initialToggle).not.toHaveBeenCalled();
+  expect(initialContext).not.toHaveBeenCalled();
+  expect(view.getByRole("button", { name: "Expand work" })).toBe(button);
 });
 
 it("keeps personal pinning and navigation usable in an offline session menu", async () => {
   const session = { key: "agent:main:review", sessionId: "review-id", label: "Review" };
   const pin = vi.fn();
   const menus = {
-    sessionMenu: { x: 12, y: 30, session },
+    sessionMenu: { ...position, session },
     pluginActionLifetime: new AbortController(),
     closeSessionMenu: vi.fn(),
     triggers: new Map(),
@@ -110,29 +186,17 @@ it("keeps personal pinning and navigation usable in an offline session menu", as
 it("retires sidebar hover callbacks with the mounted menu", async () => {
   const enter = vi.fn();
   const leave = vi.fn();
-  const view = render(() => (
-    <SidebarDropdown
-      position={{ x: 12, y: 30 }}
-      class="sidebar-menu-test"
-      label="Sidebar actions"
-      onSelect={vi.fn()}
-      onClose={vi.fn()}
-      onPointerEnter={enter}
-      onPointerLeave={leave}
-      items={[{ id: "customize", label: "Customize" }]}
-    />
-  ));
+  const view = dropdown({ onPointerEnter: enter, onPointerLeave: leave });
   const menu = view.getByRole("menu", { hidden: true });
-  menu.dispatchEvent(new Event("pointerenter"));
-  menu.dispatchEvent(new Event("pointerleave"));
-  expect(enter).toHaveBeenCalledOnce();
-  expect(leave).toHaveBeenCalledOnce();
-
-  view.unmount();
-  menu.dispatchEvent(new Event("pointerenter"));
-  menu.dispatchEvent(new Event("pointerleave"));
-  expect(enter).toHaveBeenCalledOnce();
-  expect(leave).toHaveBeenCalledOnce();
+  for (const mounted of [true, false]) {
+    if (!mounted) {
+      view.unmount();
+    }
+    menu.dispatchEvent(new Event("pointerenter"));
+    menu.dispatchEvent(new Event("pointerleave"));
+    expect(enter).toHaveBeenCalledOnce();
+    expect(leave).toHaveBeenCalledOnce();
+  }
 });
 
 it("returns to the durable trigger without consuming native Tab", async () => {
@@ -140,17 +204,7 @@ it("returns to the durable trigger without consuming native Tab", async () => {
   document.body.append(anchor);
   onTestFinished(() => anchor.remove());
   const close = vi.fn();
-  const view = render(() => (
-    <SidebarDropdown
-      position={{ x: 12, y: 30 }}
-      class="sidebar-menu-test"
-      label="Sidebar actions"
-      anchor={anchor}
-      onSelect={vi.fn()}
-      onClose={close}
-      items={[{ id: "customize", label: "Customize" }]}
-    />
-  ));
+  const view = dropdown({ anchor, onClose: close });
   const item = view.getByRole("menuitem", { name: "Customize", hidden: true });
   await waitForSolid(() => expect(document.activeElement).toBe(item));
   const tab = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
@@ -171,6 +225,7 @@ describe("sidebar rail pin menu", () => {
   ] as const)(
     "closes the rail pin menu before %s dispatch at position %i",
     async (action, index, target) => {
+      const warnings = vi.spyOn(console, "warn");
       const entries: readonly [string, string, string] = [
         "route:usage",
         "route:sessions",
@@ -205,9 +260,8 @@ describe("sidebar rail pin menu", () => {
       document.body.append(pins);
       onTestFinished(() => pins.remove());
       menus.triggers.set("railPin", trigger);
-      const position: NonNullable<SidebarMenus["railPinMenuPosition"]> = {
-        x: 12,
-        y: 30,
+      const menuPosition: NonNullable<SidebarMenus["railPinMenuPosition"]> = {
+        ...position,
         entry: entries[index],
         label: "Pinned item",
       };
@@ -219,7 +273,7 @@ describe("sidebar rail pin menu", () => {
         .mockImplementation(() => {
           expect(menus.triggers.has("railPin")).toBe(false);
         });
-      const view = render(() => renderSidebarRailPinMenuForMenus(menus, host, position), {
+      const view = render(() => renderSidebarRailPinMenuForMenus(menus, host, menuPosition), {
         container: pins,
       });
       onTestFinished(() => view.unmount());
@@ -234,6 +288,11 @@ describe("sidebar rail pin menu", () => {
       expect(menus.triggers.get("railPin")).toBe(trigger);
       menu.querySelector<HTMLButtonElement>(`[data-value="${action}"]`)!.click();
       await waitForSolid(() => expect(action === "remove" ? remove : move).toHaveBeenCalledOnce());
+      expect(
+        warnings.mock.calls.filter(
+          ([message]) => typeof message === "string" && message.includes("[NO_OWNER_EFFECT]"),
+        ),
+      ).toEqual([]);
       if (action === "remove") {
         expect(remove).toHaveBeenCalledExactlyOnceWith(target);
         expect(move).not.toHaveBeenCalled();

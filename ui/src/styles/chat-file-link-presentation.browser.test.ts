@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { beforeAll, expect, it } from "vitest";
 import { readStyles, styleDocument, styleFixture } from "./style-fixture.test-support.ts";
 
 const fixture = styleFixture("chat-file-link-presentation-");
@@ -232,10 +232,31 @@ async function probe(themeMode: "dark" | "light") {
 }
 
 fixture.describe("chat file link presentation", () => {
+  let presentation: Record<"dark" | "light", Awaited<ReturnType<typeof probe>>>;
+  let wrapping: Record<
+    "dark" | "light",
+    Record<WrapContainer, Awaited<ReturnType<typeof probeWrap>>>
+  >;
+
+  beforeAll(async () => {
+    // The assertion families consume the same read-only observations.
+    presentation = { light: await probe("light"), dark: await probe("dark") };
+    wrapping = {
+      light: {
+        "chat-text": await probeWrap("light", "chat-text"),
+        "sidebar-markdown": await probeWrap("light", "sidebar-markdown"),
+      },
+      dark: {
+        "chat-text": await probeWrap("dark", "chat-text"),
+        "sidebar-markdown": await probeWrap("dark", "sidebar-markdown"),
+      },
+    };
+  });
+
   it.each(["light", "dark"] as const)(
     "renders code-authored and text-authored file links identically in %s",
-    async (themeMode) => {
-      const { fromCode, fromText } = await probe(themeMode);
+    (themeMode) => {
+      const { fromCode, fromText } = presentation[themeMode];
       // The anchor reserves glyph space; its nested code label must not reserve it again.
       expect(fromCode).toEqual({ ...fromText, paddingLeft: "0px" });
     },
@@ -243,8 +264,8 @@ fixture.describe("chat file link presentation", () => {
 
   it.each(["light", "dark"] as const)(
     "leaves the chip on code spans that are not file links in %s",
-    async (themeMode) => {
-      const { fromText, plainCode } = await probe(themeMode);
+    (themeMode) => {
+      const { fromText, plainCode } = presentation[themeMode];
       expect(plainCode.backgroundColor).not.toBe(fromText.backgroundColor);
       expect(plainCode.borderTopWidth).not.toBe("0px");
       expect(fromText).toMatchObject({
@@ -256,8 +277,8 @@ fixture.describe("chat file link presentation", () => {
 
   it.each(["light", "dark"] as const)(
     "gives the Chat Detail Panel the same file-link treatment in %s",
-    async (themeMode) => {
-      const probed = await probe(themeMode);
+    (themeMode) => {
+      const probed = presentation[themeMode];
       expect([probed.panelFromText, probed.panelFromCode, probed.panelGlyph]).toEqual([
         probed.fromText,
         probed.fromCode,
@@ -269,8 +290,8 @@ fixture.describe("chat file link presentation", () => {
 
   it.each(["light", "dark"] as const)(
     "gives every masked file glyph a concrete font-sized paint box in %s",
-    async (themeMode) => {
-      const { chatGlyph, panelGlyph } = await probe(themeMode);
+    (themeMode) => {
+      const { chatGlyph, panelGlyph } = presentation[themeMode];
       for (const glyph of [chatGlyph, panelGlyph]) {
         expect(glyph).toMatchObject({
           position: "absolute",
@@ -284,8 +305,8 @@ fixture.describe("chat file link presentation", () => {
 
   it.each(WRAP_CASES)(
     "wraps a file link as one unit at every column width in $container/$themeMode",
-    async ({ container, themeMode }) => {
-      const { samples } = await probeWrap(themeMode, container);
+    ({ container, themeMode }) => {
+      const { samples } = wrapping[themeMode][container];
       // Prove the sweep actually changes lines.
       expect(new Set(samples.map((sample) => Math.round(sample.chipTop))).size).toBeGreaterThan(1);
       const split = samples.filter((sample) => sample.chipLineCount !== 1);
@@ -295,8 +316,8 @@ fixture.describe("chat file link presentation", () => {
 
   it.each(WRAP_CASES)(
     "keeps an unshortened file label inside the column in $container/$themeMode",
-    async ({ container, themeMode }) => {
-      const { samples, separation } = await probeWrap(themeMode, container);
+    ({ container, themeMode }) => {
+      const { samples, separation } = wrapping[themeMode][container];
       const overflowing = samples.filter(
         (sample) => sample.longChipWidth > sample.columnWidth + 0.5,
       );
@@ -310,8 +331,8 @@ fixture.describe("chat file link presentation", () => {
   // The outer inline-block rect cannot detect an internally stranded glyph.
   it.each(WRAP_CASES)(
     "keeps the glyph attached to the label's first character in $container/$themeMode",
-    async ({ container, themeMode }) => {
-      const { separation } = await probeWrap(themeMode, container);
+    ({ container, themeMode }) => {
+      const { separation } = wrapping[themeMode][container];
       for (const testCase of SEPARATION_CASES) {
         const caseSamples = separation.filter((sample) => sample.caseId === testCase.id);
         expect(caseSamples.length).toBeGreaterThan(0);

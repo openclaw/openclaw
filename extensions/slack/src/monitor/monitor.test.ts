@@ -68,6 +68,7 @@ function createContext(overrides: Partial<Parameters<typeof createSlackMonitorCo
     teamId: "T1",
     apiAppId: "A1",
     historyLimit: 0,
+    dmHistoryLimit: 0,
     sessionScope: "per-sender" as const,
     mainKey: "main",
     dmEnabled: true,
@@ -77,6 +78,7 @@ function createContext(overrides: Partial<Parameters<typeof createSlackMonitorCo
     groupDmEnabled: true,
     groupDmChannels: [],
     defaultRequireMention: true,
+    channelsConfig: undefined,
     groupPolicy: "open" as const,
     useAccessGroups: false,
     reactionMode: "off" as const,
@@ -94,6 +96,7 @@ function createContext(overrides: Partial<Parameters<typeof createSlackMonitorCo
     threadHistoryScope: "thread" as const,
     threadInheritParent: false,
     ...overrides,
+    channelsConfigKeys: overrides.channelsConfigKeys ?? Object.keys(overrides.channelsConfig ?? {}),
   });
 }
 

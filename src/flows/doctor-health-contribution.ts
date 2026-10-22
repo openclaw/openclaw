@@ -41,7 +41,23 @@ export function createDoctorHealthContribution(
 ): DoctorHealthContribution {
   const params: DoctorContributionOptions =
     typeof options === "function" ? { run: options } : options;
-  const healthChecks = normalizeHealthChecks(id, params.healthChecks);
+  const declaredChecks = params.healthChecks;
+  let healthChecks: readonly DoctorHealthCheck[] = [];
+  if (declaredChecks !== undefined) {
+    const checks = Array.isArray(declaredChecks) ? declaredChecks : [declaredChecks];
+    const defaultId = id.startsWith("doctor:")
+      ? `core/doctor/${id.slice("doctor:".length)}`
+      : `core/doctor/${id}`;
+    healthChecks = checks.map((check: DoctorContributionHealthCheck): DoctorHealthCheck => {
+      const checkId = check.id ?? (checks.length === 1 ? defaultId : undefined);
+      if (checkId === undefined) {
+        throw new Error(
+          `doctor contribution ${id} must specify health check ids when it declares multiple healthChecks`,
+        );
+      }
+      return Object.assign({}, check, { id: checkId, kind: "core" as const, source: "doctor" });
+    });
+  }
   const healthCheckIds = params.healthCheckIds ?? healthChecks.map((check) => check.id);
   if (params.run === undefined && healthChecks.length === 0) {
     throw new Error(`doctor contribution ${id} must define run or healthChecks`);
@@ -55,77 +71,50 @@ export function createDoctorHealthContribution(
     ...(params.updateWork ? { updateWork: params.updateWork } : {}),
     run:
       params.run ??
-      ((ctx) =>
-        runStructuredDoctorHealthContribution({
-          ctx,
+      (async (ctx) => {
+        const { runDoctorHealthRepairs } = await import("./doctor-repair-flow.js");
+        const workspaceDir = resolveDoctorWorkspaceDir(ctx.cfg, ctx.env);
+        const dryRun = !ctx.prompter.shouldRepair;
+        const configBeforeRepair = JSON.stringify(ctx.cfg);
+        const context: HealthRepairContext & DoctorHealthCheckContext = {
+          mode: "fix",
+          runtime: ctx.runtime,
+          cfg: ctx.cfg,
+          env: ctx.env,
+          cwd: workspaceDir,
+          configPath: ctx.configPath,
+          dryRun,
+          allowExecSecretRefs: ctx.options.allowExec === true,
+          agentDatabaseRefusals: ctx.agentDatabaseRefusals,
+        };
+        const result = await runDoctorHealthRepairs(context, {
           checks: healthChecks,
-        })),
+          dryRun,
+          progress: ctx.options.json !== true,
+        });
+        ctx.cfg = result.config;
+        renderStructuredHealthFindings(ctx, result.findings);
+        // Display retains original findings; finalization records only unresolved warnings.
+        recordDoctorHealthWarnings(
+          ctx,
+          dryRun ? result.findings : result.remainingFindings,
+          result.warnings,
+        );
+        for (const warning of result.warnings) {
+          ctx.runtime.error(warning);
+        }
+        if (configBeforeRepair !== JSON.stringify(result.config)) {
+          ctx.configResult.pendingChangePanels = [
+            ...(ctx.configResult.pendingChangePanels ?? []),
+            ...result.changes,
+          ];
+        } else {
+          for (const change of result.changes) {
+            ctx.runtime.log(change);
+          }
+        }
+      }),
   };
-}
-
-function normalizeHealthChecks(
-  contributionId: string,
-  healthChecks?: DoctorContributionHealthCheck | readonly DoctorContributionHealthCheck[],
-): readonly DoctorHealthCheck[] {
-  if (healthChecks === undefined) {
-    return [];
-  }
-  const checks = Array.isArray(healthChecks) ? healthChecks : [healthChecks];
-  const defaultId = contributionId.startsWith("doctor:")
-    ? `core/doctor/${contributionId.slice("doctor:".length)}`
-    : `core/doctor/${contributionId}`;
-  return checks.map((check: DoctorContributionHealthCheck): DoctorHealthCheck => {
-    const id = check.id ?? (checks.length === 1 ? defaultId : undefined);
-    if (id === undefined) {
-      throw new Error(
-        `doctor contribution ${contributionId} must specify health check ids when it declares multiple healthChecks`,
-      );
-    }
-    return Object.assign({}, check, { id, kind: "core" as const, source: "doctor" });
-  });
-}
-
-async function runStructuredDoctorHealthContribution(params: {
-  ctx: DoctorHealthFlowContext;
-  checks: readonly DoctorHealthCheck[];
-}): Promise<void> {
-  const { runDoctorHealthRepairs } = await import("./doctor-repair-flow.js");
-  const workspaceDir = resolveDoctorWorkspaceDir(params.ctx.cfg, params.ctx.env);
-  const dryRun = !params.ctx.prompter.shouldRepair;
-  const configBeforeRepair = JSON.stringify(params.ctx.cfg);
-  const context: HealthRepairContext & DoctorHealthCheckContext = {
-    mode: "fix",
-    runtime: params.ctx.runtime,
-    cfg: params.ctx.cfg,
-    env: params.ctx.env,
-    cwd: workspaceDir,
-    configPath: params.ctx.configPath,
-    dryRun,
-    allowExecSecretRefs: params.ctx.options.allowExec === true,
-    agentDatabaseRefusals: params.ctx.agentDatabaseRefusals,
-  };
-  const result = await runDoctorHealthRepairs(context, { checks: params.checks, dryRun });
-  params.ctx.cfg = result.config;
-  renderStructuredHealthFindings(params.ctx, result.findings);
-  // Display retains original findings; finalization records only unresolved warnings.
-  recordDoctorHealthWarnings(
-    params.ctx,
-    dryRun ? result.findings : result.remainingFindings,
-    result.warnings,
-  );
-  for (const warning of result.warnings) {
-    params.ctx.runtime.error(warning);
-  }
-  if (configBeforeRepair !== JSON.stringify(result.config)) {
-    params.ctx.configResult.pendingChangePanels = [
-      ...(params.ctx.configResult.pendingChangePanels ?? []),
-      ...result.changes,
-    ];
-  } else {
-    for (const change of result.changes) {
-      params.ctx.runtime.log(change);
-    }
-  }
 }
 
 export function recordDoctorHealthWarnings(

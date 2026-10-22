@@ -1,10 +1,12 @@
 // OpenClaw TUI backend tests cover rescue status integration with the TUI backend.
 import { beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import * as preparedModelCatalog from "../agents/prepared-model-catalog.js";
+import { channelsAddCommand } from "../commands/channels/add.js";
 import * as configModule from "../config/config.js";
 import { createConfigFileSnapshot } from "../config/io.snapshot-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { runHostedGatewaySetup, runHostedSearchSetup } from "./hosted-setup.runtime.js";
 import { createInferenceConfigFixture } from "./inference-config.test-support.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import type { SystemAgentCommandDeps, SystemAgentOperation } from "./operations.js";
@@ -15,6 +17,17 @@ import { resolveSystemAgentVerifiedInferenceState } from "./verified-inference.j
 
 const verifiedInferenceMocks = vi.hoisted(() => ({
   preparedBindings: new WeakMap<object, OpenClawConfig>(),
+}));
+
+vi.mock("../commands/channels/add.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/channels/add.js")>()),
+  channelsAddCommand: vi.fn(),
+}));
+
+vi.mock("./hosted-setup.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./hosted-setup.runtime.js")>()),
+  runHostedGatewaySetup: vi.fn(),
+  runHostedSearchSetup: vi.fn(),
 }));
 
 vi.mock("../plugins/providers.js", () => ({
@@ -139,13 +152,11 @@ describe("runSystemAgentTui", () => {
   it("rejects a missing inference binding before overview, TUI, or setup", async () => {
     const loadOverview = vi.fn(async () => overview);
     const runTui = vi.fn(async () => ({ exitReason: "exit" as const }));
-    const runChannelsAdd = vi.fn(async () => undefined);
     const fixture = sharedVerifiedFixture;
     const options: SystemAgentTuiOptions = {
       verifiedInference: fixture.binding,
       deps: { loadOverview },
       runTui,
-      runChannelsAdd,
     };
     Reflect.deleteProperty(options, "verifiedInference");
 
@@ -155,7 +166,7 @@ describe("runSystemAgentTui", () => {
 
     expect(loadOverview).not.toHaveBeenCalled();
     expect(runTui).not.toHaveBeenCalled();
-    expect(runChannelsAdd).not.toHaveBeenCalled();
+    expect(channelsAddCommand).not.toHaveBeenCalled();
   });
 
   it("reports a changed verified route without recommending onboarding", async () => {
@@ -542,6 +553,24 @@ describe("runSystemAgentTui", () => {
 
     for (const { handoff, expected } of cases) {
       const events: string[] = [];
+      vi.mocked(channelsAddCommand).mockImplementation(async (opts, _runtime, params) => {
+        events.push(
+          `channels:${opts.channel ?? "all"}:${String(params?.hasFlags)}:${typeof params?.beforePersistentEffect}`,
+        );
+      });
+      vi.mocked(runHostedSearchSetup).mockImplementation(
+        async (_prompter, beforePersistentEffect) => {
+          events.push(`search:${typeof beforePersistentEffect}`);
+          return "applied";
+        },
+      );
+      vi.mocked(runHostedGatewaySetup).mockImplementation(
+        async (_prompter, beforePersistentEffect) => {
+          await beforePersistentEffect(runtime);
+          events.push("gateway:guarded");
+          return "applied";
+        },
+      );
       const runtime = createRuntime();
       runtime.log = (...args) => events.push(`log:${args.join(" ")}`);
       let verified = await createVerifiedTuiOptions({ loadOverview: async () => overview });
@@ -592,18 +621,6 @@ describe("runSystemAgentTui", () => {
             await backend.sendChat({ message: "open setup wizard" });
             await requestedExit;
             return { exitReason: "exit" };
-          },
-          runChannelsAdd: async (opts, _runtime, params) => {
-            events.push(
-              `channels:${opts.channel ?? "all"}:${String(params?.hasFlags)}:${typeof params?.beforePersistentEffect}`,
-            );
-          },
-          runSearchSetupHandoff: async (_runtime, beforePersistentEffect) => {
-            events.push(`search:${typeof beforePersistentEffect}`);
-          },
-          runGatewaySetupHandoff: async (_runtime, beforePersistentEffect) => {
-            await beforePersistentEffect();
-            events.push("gateway:guarded");
           },
         },
         runtime,

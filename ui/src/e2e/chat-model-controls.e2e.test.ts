@@ -317,6 +317,7 @@ suite.define(() => {
         const composer = page.locator(".agent-chat__input").first();
         const model = composer.locator('[data-chat-model-select="true"]');
         await expect.poll(() => model.getAttribute("aria-busy")).toBe("false");
+        await composer.locator("textarea").click();
         await model.click();
         const heading = composer.locator('[data-chat-model-provider="openai"]');
         await expect
@@ -618,9 +619,11 @@ suite.define(() => {
         const model = composer.locator('[data-chat-model-select="true"]');
         const effort = composer.locator('[data-chat-thinking-select="true"]');
         await expect.poll(() => model.getAttribute("aria-label")).toContain(longName);
+        await composer.locator("textarea").click();
         await expect.poll(() => effort.isVisible()).toBe(true);
         for (const width of [320, 375, 393, 430, 560, 768, 1280]) {
           await page.setViewportSize({ width, height: 900 });
+          await composer.locator("textarea").click();
           await expect
             .poll(
               async () => {
@@ -690,6 +693,7 @@ suite.define(() => {
           }
         }
         await page.setViewportSize({ width: 393, height: 852 });
+        await composer.locator("textarea").click();
         await page.emulateMedia({ reducedMotion: "no-preference" });
         const needle = effort.locator(".chat-controls__effort-gauge-needle");
         const needleAngle = () =>
@@ -879,6 +883,7 @@ suite.define(() => {
           return;
         }
         await expect.poll(() => effort.getAttribute("aria-label")).toBe("Speed: Standard");
+        await composer.locator("textarea").click();
         const [modelBox, effortBox, actionsBox] = await Promise.all([
           model.boundingBox(),
           effort.boundingBox(),

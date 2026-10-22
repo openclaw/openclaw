@@ -178,11 +178,10 @@ async function registerOwnedEngine(engineId: string, methods: Partial<ContextEng
   return factory;
 }
 
-function createLease(engineId?: string, warn = vi.fn()) {
+function createLease(engineId?: string) {
   return createContextEngineLogicalTurnLease({
     identity: { runId: "test-run", sessionId: "test-session" },
     config: engineId ? configWithSlot(engineId) : undefined,
-    warn,
   });
 }
 
@@ -374,8 +373,8 @@ describe("Default engine selection", () => {
   beforeEach(registerLegacyContextEngine);
 
   it("keeps repeated baseline transcript-host selection stable after the turn starts", async () => {
-    const warn = vi.fn();
-    const lease = await createLease(undefined, warn);
+    using warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const lease = await createLease();
     const recorder = createUserTurnTranscriptRecorder({ target: () => undefined });
     recorder.markRuntimePersisted();
     const selection = {
@@ -442,7 +441,6 @@ describe("Default engine selection", () => {
     const scope = createAgentCleanupScope();
     const lease = await createContextEngineLogicalTurnLease({
       identity: { runId: "parallel-run", sessionId: "parallel-session" },
-      warn: vi.fn(),
     });
     let settled = false;
     const cleanup = scope
@@ -477,7 +475,8 @@ describe("Default engine selection", () => {
     async (failure) => {
       const engineId = uniqueEngineId(failure);
       if (failure !== "missing") {
-        await registerContextEngineForOwner(
+        registerContextEngineInRegistry(
+          requireActivePluginRegistry(),
           engineId,
           () => {
             if (failure === "factory") {
@@ -489,8 +488,8 @@ describe("Default engine selection", () => {
           { lifecycle: failure === "discovery" ? "readOnlyDiscovery" : "runtime" },
         );
       }
-      const warn = vi.fn();
-      const lease = await createLease(engineId, warn);
+      using warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const lease = await createLease(engineId);
       expect(lease.effectiveEngineId).toBe("legacy");
       expect(lease.degraded).toBe(true);
       expect(lease.degradedReason).toBe(
@@ -512,8 +511,8 @@ describe("Default engine selection", () => {
       .mockRejectedValueOnce(new Error("configured engine unavailable"))
       .mockImplementation(async ({ messages }) => ({ messages, estimatedTokens: 0 }));
     await registerTestContextEngine(engineId, () => createEngine(engineId, { assemble }));
-    const warn = vi.fn();
-    const first = await createLease(engineId, warn);
+    using warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const first = await createLease(engineId);
     const messages = [makeMockMessage()];
 
     first.begin();
@@ -526,7 +525,7 @@ describe("Default engine selection", () => {
     expect(warn).not.toHaveBeenCalled();
     await first.dispose();
 
-    const second = await createLease(engineId, warn);
+    const second = await createLease(engineId);
     await expect(second.engine.assemble({ sessionId: "second", messages })).resolves.toMatchObject({
       messages,
     });
@@ -584,8 +583,8 @@ describe("Default engine selection", () => {
     async (persisted, declaresFence, expectedEngine, expectedReason) => {
       const engineId = uniqueEngineId("logical-turn-recorder-state");
       await registerTestContextEngine(engineId, () => createFencedEngine(engineId, declaresFence));
-      const warn = vi.fn();
-      const lease = await createLease(engineId, warn);
+      using warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const lease = await createLease(engineId);
 
       const recorder = createUserTurnTranscriptRecorder({ target: () => undefined });
       if (persisted) {
@@ -623,12 +622,13 @@ it("does not construct or quarantine read-only discovery context-engine factorie
       throw new Error("discovery factory must not run");
     });
     const runtime = vi.fn(() => createEngine("lossless-claw"));
+    const registry = requireActivePluginRegistry();
     const registerDiscovery = () =>
-      registerContextEngineForOwner(engineId, readOnly, owner, {
+      registerContextEngineInRegistry(registry, engineId, readOnly, owner, {
         allowSameOwnerRefresh: true,
         lifecycle: "readOnlyDiscovery",
       });
-    await registerDiscovery();
+    registerDiscovery();
     expect((await resolveContextEngine(configWithSlot(engineId))).info.id).toBe("legacy");
     expect(readOnly).not.toHaveBeenCalled();
     expect(await listContextEngineQuarantines()).toEqual([]);
@@ -636,13 +636,12 @@ it("does not construct or quarantine read-only discovery context-engine factorie
 
     await registerContextEngineForOwner(engineId, runtime, owner, {
       allowSameOwnerRefresh: true,
-      lifecycle: "runtime",
     });
     expect((await resolveContextEngine(configWithSlot(engineId))).info.id).toBe("lossless-claw");
     expect(runtime).toHaveBeenCalledOnce();
     expect(await listContextEngineQuarantines()).toEqual([]);
 
-    await registerDiscovery();
+    registerDiscovery();
     expect((await resolveContextEngine(configWithSlot(engineId))).info.id).toBe("lossless-claw");
     expect(readOnly).not.toHaveBeenCalled();
     expect(runtime).toHaveBeenCalledTimes(2);

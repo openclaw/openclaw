@@ -10,6 +10,7 @@ import { registerMaintenanceCommands } from "./register.maintenance.js";
 
 const mocks = vi.hoisted(() => ({
   doctorCommand: vi.fn(),
+  prepareStartupClientCredentials: vi.fn(),
   triageCommand: vi.fn(),
   dashboardCommand: vi.fn(),
   resetCommand: vi.fn(),
@@ -29,6 +30,10 @@ const runDoctorLintCli = vi.mocked(runDoctorLintCliEntry);
 
 // mock-isolation: Verify maintenance dispatch without executing repair, reset, or uninstall operations.
 vi.mock("../../commands/doctor.js", () => ({ doctorCommand: mocks.doctorCommand }));
+// mock-isolation: Verify the narrow credential dispatch without accessing operator credentials.
+vi.mock("../../commands/startup-client-credentials.js", () => ({
+  prepareStartupClientCredentials: mocks.prepareStartupClientCredentials,
+}));
 // mock-isolation: Verify maintenance dispatch without executing repair, reset, or uninstall operations.
 vi.mock("../../commands/triage.js", () => ({ triageCommand: mocks.triageCommand }));
 // mock-isolation: Verify maintenance dispatch without executing repair, reset, or uninstall operations.
@@ -71,7 +76,7 @@ function expectFailure(message: string, json: boolean) {
 }
 
 async function runCli(input: string) {
-  const args = input.split(" ");
+  const args = input.trim().split(/\s+/);
   const program = new Command();
   registerMaintenanceCommands(program);
   const previousArgv = process.argv;
@@ -142,9 +147,51 @@ describe("registered maintenance commands", () => {
     expect(doctorCommand.mock.calls[0]?.[1].fullIntegrityCheck).toBe(fullIntegrityCheck);
   });
 
+  it.each(["--repair", "--fix"])(
+    "dispatches only client credential preparation with %s",
+    async (repair) => {
+      await runCli(`doctor --client-credentials ${repair} --non-interactive`);
+      expect(mocks.prepareStartupClientCredentials).toHaveBeenCalledExactlyOnceWith({
+        env: process.env,
+        runtime,
+      });
+      expectNoCalls(doctorCommand, runDoctorLintCli, runtime.log, runtime.writeJson);
+      expect(runtime.exit).toHaveBeenCalledWith(0);
+    },
+  );
+
+  it("reports credential preparation success as JSON without running lint", async () => {
+    await runCli("doctor --client-credentials --repair --non-interactive --json");
+    expect(mocks.prepareStartupClientCredentials).toHaveBeenCalledOnce();
+    expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith({ ok: true });
+    expectNoCalls(doctorCommand, runDoctorLintCli, runtime.log, runtime.error);
+    expect(runtime.exit).toHaveBeenCalledWith(0);
+  });
+
+  it.each([
+    ["", "requires --repair (or --fix) and --non-interactive."],
+    ["--repair", "requires --repair (or --fix) and --non-interactive."],
+    ["--non-interactive", "requires --repair (or --fix) and --non-interactive."],
+    ...["--lint", "--post-upgrade", "--session-sqlite inspect", "--force", "--yes"].map(
+      (option) => [
+        `--repair --non-interactive ${option}`,
+        "can only be combined with --repair (or --fix), --non-interactive, and --json.",
+      ],
+    ),
+  ])("rejects ambiguous credential preparation options %s", async (options, reason) => {
+    await runCli(`doctor --client-credentials ${options} --json`);
+    expectNoCalls(mocks.prepareStartupClientCredentials, doctorCommand, runDoctorLintCli);
+    expectFailure(`doctor --client-credentials ${reason}`, true);
+  });
+
   it.each([
     ["--state-sqlite compact", doctorCommand, "maintenance failed"],
     ["--lint", runDoctorLintCli, "lint failed"],
+    [
+      "--client-credentials --repair --non-interactive",
+      mocks.prepareStartupClientCredentials,
+      "credential preparation failed",
+    ],
   ] as const)("redacts credentials in %s JSON failures", async (args, handler, message) => {
     const token = "sk-abcdefghijklmnopqrstuv";
     handler.mockRejectedValueOnce(new Error(`${message}: Authorization: Bearer ${token}`));
@@ -220,6 +267,7 @@ describe("registered maintenance commands", () => {
   };
   it.each([
     ["--state-sqlite compact --lint --json", "state", true],
+    ["--state-sqlite compact --client-credentials --json", "state", true],
     ["--session-sqlite-agent main", "orphan", false],
     ["--lint --post-upgrade --json", "operations", true],
     ["--session-sqlite inspect --github-issue --json", "github", true],

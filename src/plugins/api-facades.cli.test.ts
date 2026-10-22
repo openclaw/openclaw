@@ -160,17 +160,6 @@ describe("managed CLI callbacks", () => {
     expect(writeErr).toHaveBeenCalledWith("already reported\n");
   });
 
-  it("leaves host-owned action errors unchanged", async () => {
-    const host = new Command();
-    const error = new Error("host failure");
-    host.command("host").action(() => {
-      throw error;
-    });
-    await register(({ program }) => void program.command("plugin").action(() => {}), host);
-
-    await expect(parse(host, "host")).rejects.toBe(error);
-  });
-
   it("keeps native fluent/subclass identity and scopes delayed action, hook and parser callbacks", async () => {
     class NativeCommand extends Command {
       #marker = "native";
@@ -499,9 +488,11 @@ describe("managed CLI callbacks", () => {
   it("does not adopt preexisting host callbacks or change a caller-owned command's identity", async () => {
     const host = new Command();
     const foreign = new Command("host");
+    const error = new Error("host failure");
     const hostAction = vi.fn(function (this: Command, _options, command) {
       identities(foreign, this, command);
       expect(runtime.tryGetRuntime()).toBeNull();
+      throw error;
     });
     foreign.action(hostAction);
     host.addCommand(foreign);
@@ -510,7 +501,7 @@ describe("managed CLI callbacks", () => {
     }, host);
     expect(host.commands[0]).toBe(foreign);
     await instance.dispose();
-    await parse(host, "host");
+    await expect(parse(host, "host")).rejects.toBe(error);
     expect(hostAction).toHaveBeenCalledOnce();
   });
 });

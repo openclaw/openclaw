@@ -354,6 +354,7 @@
   "secret-input",
   "secret-input-runtime",
   "decisions",
+  "decisions-openai-runtime",
   "secret-ref-readonly",
   "channel-status",
   "status-helpers",

@@ -1,4 +1,4 @@
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asBoolean, asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type Eligibility = "eligible" | "exhausted" | "cooldown" | "stale" | "reauth_required";
 type ClawRouterPoolTraffic = {
@@ -69,9 +69,6 @@ function number(value: unknown, max = Number.MAX_SAFE_INTEGER): number | undefin
     ? value
     : undefined;
 }
-function bool(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
-}
 function date(value: unknown): string | undefined {
   const str = text(value);
   return str && Number.isFinite(Date.parse(str)) ? str : undefined;
@@ -119,7 +116,7 @@ export function parseClawRouterPool(value: unknown): ClawRouterPool | undefined 
       ? {
           strategy: text(routing.strategy),
           includedQuotaReservePercent: number(routing.includedQuotaReservePercent, 100),
-          environmentFallback: bool(routing.environmentFallback),
+          environmentFallback: asBoolean(routing.environmentFallback),
         }
       : undefined,
     models: strings(root.models),
@@ -132,7 +129,7 @@ export function parseClawRouterPool(value: unknown): ClawRouterPool | undefined 
         label: text(grant.label),
         provider: text(grant.provider),
         kind: text(grant.kind),
-        enabled: bool(grant.enabled),
+        enabled: asBoolean(grant.enabled),
         credentialStatus: text(grant.credentialStatus),
         plan: text(grant.plan),
         account: account
@@ -157,11 +154,11 @@ export function parseClawRouterPool(value: unknown): ClawRouterPool | undefined 
         })),
         extraUsage: extra
           ? {
-              enabled: bool(extra.enabled),
+              enabled: asBoolean(extra.enabled),
               usedCredits: number(extra.usedCredits),
               monthlyLimit: number(extra.monthlyLimit),
               currency: text(extra.currency),
-              spendLimitReached: bool(extra.spendLimitReached),
+              spendLimitReached: asBoolean(extra.spendLimitReached),
             }
           : undefined,
         eligibility: Object.fromEntries(

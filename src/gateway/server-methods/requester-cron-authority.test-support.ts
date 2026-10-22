@@ -7,6 +7,7 @@ import { createOpenClawCodingTools } from "../../agents/agent-tools.js";
 import * as cliGrants from "../../agents/cli-runner/mcp-grant-context.js";
 import * as cronAuthority from "../../agents/cron-creator-authority-context.js";
 import { withPreparedEmbeddedGatewayTools } from "../../agents/embedded-agent-runner/run/attempt-gateway-tools.js";
+import type { RequesterOrigin } from "../../agents/requester-origin.js";
 import type { SandboxContext } from "../../agents/sandbox/types.js";
 import { revokeRequesterCronAuthority } from "../../agents/subagents/requester-cron-authority.js";
 import type { PreparedSessionPermissionPolicy } from "../../agents/tool-fs-policy.js";
@@ -14,6 +15,7 @@ import * as cronTools from "../../agents/tools/cron-tool.js";
 import * as gatewayCaller from "../../agents/tools/gateway-caller-context.js";
 import * as runtimeConfig from "../../config/config.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
+import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { CronService } from "../../cron/service.js";
 import { createNoopLogger } from "../../cron/service.test-harness.js";
@@ -42,7 +44,9 @@ export const cfg = { agents: { entries: { main: {} } } };
 export let stateDir: string;
 export let cron: CronService;
 
-export function installRequesterCronAuthorityTestHooks() {
+export function installRequesterCronAuthorityTestHooks(
+  createdActor: SessionCreatedActor = CREATOR,
+) {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   beforeEach(() => {
@@ -51,7 +55,7 @@ export function installRequesterCronAuthorityTestHooks() {
     runtimeConfig.setRuntimeConfigSnapshot(cfg);
     replaceSessionEntrySync(
       { sessionKey: SESSION },
-      { sessionId: SESSION_ID, updatedAt: 1, lifecycleRevision: "original", createdActor: CREATOR },
+      { sessionId: SESSION_ID, updatedAt: 1, lifecycleRevision: "original", createdActor },
     );
   });
 
@@ -103,6 +107,7 @@ export async function inRun<T>(
   admitted: cronAdmission.GatewayCronCreatorAuthorityAdmission | undefined,
   run: RequesterRun<T>,
   operatorAuthority?: runContext.AdmittedRunOperatorAuthority,
+  requesterOrigin?: RequesterOrigin,
 ) {
   const runAdmission = prepareAdmission(runId, "requester-cron-test", {
     cfg: runtimeConfig.getRuntimeConfig(),
@@ -116,7 +121,12 @@ export async function inRun<T>(
       "admitted run",
     );
     registerAgentRunContext(runId, { agentId: "main", sessionKey: SESSION, sessionId: SESSION_ID });
-    const caller = { agentId: "main", sessionKey: SESSION, operationalRunInstance };
+    const caller = {
+      agentId: "main",
+      sessionKey: SESSION,
+      operationalRunInstance,
+      requesterOrigin,
+    };
     const identity: AgentRuntimeIdentity = {
       kind: "agentRuntime",
       ...caller,
@@ -186,6 +196,7 @@ export type CreatorTransportTools = {
 
 export async function createCreatorTransportTools(params: {
   transport: "cli" | "embedded";
+  requesterOrigin?: RequesterOrigin;
   config: OpenClawConfig;
   admitted: runContext.AdmittedRunContext;
   creator?: cronAuthority.CronCreatorAuthorityCapability;
@@ -212,6 +223,7 @@ export async function createCreatorTransportTools(params: {
     const context = cliGrants.buildCliMcpGrantContext({
       run: {
         ...toolContext,
+        requesterOrigin: params.requesterOrigin,
         sessionFile: path.join(workspaceDir, "creator.jsonl"),
         provider: "claude-cli",
         model: "creator-fixture",

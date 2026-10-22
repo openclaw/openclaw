@@ -23,7 +23,7 @@ import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.
 import { migrateSessionCostUsageRollupStorage } from "./session-cost-usage-cache-migration.js";
 import {
   readSessionCostUsageRollupRowsInDatabase,
-  writeSessionCostUsageRollupInDatabase,
+  writeSessionCostUsageRollupsInDatabase,
   type SessionCostUsageDeferredMetadata,
 } from "./session-cost-usage-cache.kernel.js";
 import {
@@ -62,12 +62,13 @@ function encodeJson(value: string, format: "string" | "utf8") {
 
 function writeRollup(
   agentId: string,
-  params: Omit<Parameters<typeof writeSessionCostUsageRollupInDatabase>[1], "blob"> & {
+  params: Omit<Parameters<typeof writeSessionCostUsageRollupsInDatabase>[1][number], "blob"> & {
     blob?: Uint8Array;
   },
 ) {
   return runOpenClawAgentWriteTransaction(
-    ({ db }) => writeSessionCostUsageRollupInDatabase(db, { ...params, blob: params.blob ?? null }),
+    ({ db }) =>
+      writeSessionCostUsageRollupsInDatabase(db, [{ ...params, blob: params.blob ?? null }]),
     { agentId },
     { operationLabel: "session-cost-usage.rollup.write" },
   );

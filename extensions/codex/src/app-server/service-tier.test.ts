@@ -22,19 +22,22 @@ function fixture() {
   const { client } = createClientHarness();
   const request = vi.spyOn(client, "request").mockResolvedValue({ data: [supportedModel] });
   const controller = new AbortController();
+  const params = {
+    enabled: true,
+    serviceTier: "priority",
+    model: "native-model",
+    modelProvider: "openai",
+    client,
+    timeoutMs: 2500,
+    signal: controller.signal,
+    assertCurrent: vi.fn(),
+  };
   return {
     request,
     controller,
-    params: {
-      enabled: true,
-      serviceTier: "priority",
-      model: "native-model",
-      modelProvider: "openai",
-      client,
-      timeoutMs: 2500,
-      signal: controller.signal,
-      assertCurrent: vi.fn(),
-    },
+    params,
+    resolve: (overrides: Partial<Parameters<typeof resolveCodexUltrafastServiceTier>[0]> = {}) =>
+      resolveCodexUltrafastServiceTier({ ...params, ...overrides }),
   };
 }
 
@@ -56,16 +59,11 @@ describe("optional Codex Ultrafast", () => {
         baseline,
       );
       expect(restored.serviceTier).toBe(expected);
-      const { params, request } = fixture();
+      const { resolve, request } = fixture();
       request.mockResolvedValue({
         data: [{ ...supportedModel, serviceTiers: [] }],
       });
-      expect(
-        await resolveCodexUltrafastServiceTier({
-          ...params,
-          serviceTier: restored.serviceTier,
-        }),
-      ).toBe(expected);
+      expect(await resolve({ serviceTier: restored.serviceTier })).toBe(expected);
     },
   );
   it("bounds all catalog pages by one optional discovery budget", async () => {
@@ -83,9 +81,6 @@ describe("optional Codex Ultrafast", () => {
     }
   });
   it("keeps the catalog deadline bounded when the wall clock rewinds", async () => {
-    // The deadline is seeded once and consumed per-page. A wall-clock-based
-    // budget would grow when Date.now() rewinds between pages; the monotonic
-    // budget must stay bounded by the configured discovery budget.
     const { params, request } = fixture();
     const capturedTimeoutMs: number[] = [];
     let monotonicNow = 1000;
@@ -96,9 +91,7 @@ describe("optional Codex Ultrafast", () => {
         if (options?.timeoutMs !== undefined) {
           capturedTimeoutMs.push(options.timeoutMs);
         }
-        // After the first page, rewind the wall clock by 120s while the
-        // monotonic clock advances only 500ms. A wall-clock-based remaining
-        // budget would grow to ~122s; the monotonic budget must shrink to ~2000ms.
+        // Rewinding wall time must not extend the monotonic discovery budget.
         if (capturedTimeoutMs.length === 1) {
           dateNow.mockReturnValue(-120_000);
           monotonicNow += 500;
@@ -121,38 +114,23 @@ describe("optional Codex Ultrafast", () => {
   });
   it.each([
     { enabled: false, serviceTier: "flex", modelProvider: "openai" },
-    {
-      enabled: true,
-      serviceTier: "priority",
-      modelProvider: "custom-provider",
-    },
+    { enabled: true, serviceTier: "priority", modelProvider: "custom-provider" },
   ])("keeps inactive or custom-provider selection $serviceTier", async (selection) => {
-    const { params, request } = fixture();
-    expect(await resolveCodexUltrafastServiceTier({ ...params, ...selection })).toBe(
-      selection.serviceTier,
-    );
+    const { resolve, request } = fixture();
+    expect(await resolve(selection)).toBe(selection.serviceTier);
     expect(request).toHaveBeenCalledTimes(0);
   });
 
   it("supports the managed ChatGPT subscription-sharing provider", async () => {
-    const { params } = fixture();
+    const { resolve } = fixture();
     expect(
-      await resolveCodexUltrafastServiceTier({
-        ...params,
-        modelProvider: CODEX_RESPONSES_OAUTH_PROVIDER,
-        serviceTier: null,
-      }),
+      await resolve({ modelProvider: CODEX_RESPONSES_OAUTH_PROVIDER, serviceTier: null }),
     ).toBe("ultrafast");
   });
 
   it("does not match another model through its catalog alias", async () => {
-    const { params } = fixture();
-    expect(
-      await resolveCodexUltrafastServiceTier({
-        ...params,
-        model: "catalog-alias",
-      }),
-    ).toBe("priority");
+    const { resolve } = fixture();
+    expect(await resolve({ model: "catalog-alias" })).toBe("priority");
   });
 
   it("propagates cancellation instead of falling back", async () => {

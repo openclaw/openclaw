@@ -5,6 +5,7 @@ import {
   type EmbeddingProviderCreateResult,
   type EmbeddingProviderIndexIdentity,
 } from "openclaw/plugin-sdk/embedding-providers";
+import { sanitizeAndNormalizeEmbedding } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
@@ -63,15 +64,66 @@ async function prepareEmbeddingServer(
   });
 }
 
-function wrapProvider(params: {
-  provider: EmbeddingProvider;
-  canonicalModel: string;
-  baseUrl: string;
-}): EmbeddingProvider {
+export async function createLlamaCppEmbeddingProvider(
+  options: EmbeddingProviderCreateOptions,
+  embeddingSource: string,
+  identity: EmbeddingProviderIndexIdentity,
+): Promise<EmbeddingProviderCreateResult> {
+  if (
+    options.dimensions !== undefined &&
+    (!Number.isInteger(options.dimensions) || options.dimensions <= 0)
+  ) {
+    throw new Error("Local embeddings dimensions must be a positive integer.");
+  }
+  await prepareEmbeddingServer(options, embeddingSource);
+  const genericAdapter = getEmbeddingProvider("openai-compatible", options.config);
+  if (!genericAdapter) {
+    throw new Error("OpenAI-compatible embedding transport is unavailable.");
+  }
+  const acquireLocalService = (options as LocalServiceAwareOptions).acquireLocalService; // SAFETY: core runtime owns this injected option.
+  const result = await genericAdapter.create({
+    ...options,
+    provider: LLAMA_CPP_PROVIDER_ID,
+    model: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_ID,
+    remote: undefined,
+    // The local wrapper owns projection; llama-server always returns native vectors.
+    dimensions: undefined,
+    ...(acquireLocalService
+      ? {
+          acquireLocalService: (...[target, signal]: Parameters<AcquireLocalService>) =>
+            acquireLocalService({ ...target, reconcile: reconcileLocalService }, signal),
+        }
+      : {}),
+  });
+  if (!result.provider) {
+    return result;
+  }
+  const provider = result.provider;
+  const canonicalModel = identity.model;
+  const baseUrl = resolveManagedLlamaCppProviderConfig(options.config).baseUrl ?? "";
+  const dimensions = options.dimensions;
+  const normalize = (vector: number[]): number[] => {
+    if (dimensions !== undefined && vector.length < dimensions) {
+      throw Object.assign(
+        new Error(
+          `Local embeddings expected ${dimensions} dimensions, got ${vector.length}; reduce or remove memory.search.outputDimensionality or request dimensions.`,
+        ),
+        {
+          code: "INVALID_EMBEDDING_RESPONSE",
+          expectedDimensions: dimensions,
+          actualDimensions: vector.length,
+        },
+      );
+    }
+    // Preserve local GGUF projection: truncate before restoring unit length.
+    return sanitizeAndNormalizeEmbedding(
+      dimensions === undefined ? vector : vector.slice(0, dimensions),
+    );
+  };
   let runtimeFacts: LlamaServerRuntimeFacts | undefined;
   const refreshFacts = async (loadError?: string) => {
     runtimeFacts = await inspectLlamaServerRuntime({
-      baseUrl: params.baseUrl,
+      baseUrl,
       modelId: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_ID,
       loadError,
     });
@@ -88,54 +140,22 @@ function wrapProvider(params: {
   };
   const wrapped: EmbeddingProvider = {
     id: "local",
-    model: params.canonicalModel,
-    dimensions: params.provider.dimensions,
+    model: canonicalModel,
+    dimensions,
     // Reserve BOS/EOS, a possible SentencePiece prefix, and the causal context boundary.
-    maxInputTokens: params.provider.maxInputTokens ?? DEFAULT_LLAMA_CPP_EMBEDDING_CONTEXT_SIZE - 4,
-    embed: (input, callOptions) => withFacts(() => params.provider.embed(input, callOptions)),
+    maxInputTokens: provider.maxInputTokens ?? DEFAULT_LLAMA_CPP_EMBEDDING_CONTEXT_SIZE - 4,
+    embed: (input, callOptions) =>
+      withFacts(async () => normalize(await provider.embed(input, callOptions))),
     embedBatch: (inputs, callOptions) =>
-      withFacts(() => params.provider.embedBatch(inputs, callOptions)),
-    close: params.provider.close,
+      withFacts(async () => (await provider.embedBatch(inputs, callOptions)).map(normalize)),
+    close: provider.close,
   };
   Object.defineProperty(wrapped, LOCAL_EMBEDDING_RUNTIME_FACTS, {
     enumerable: false,
     value: () => runtimeFacts,
   });
-  return wrapped;
-}
-
-export async function createLlamaCppEmbeddingProvider(
-  options: EmbeddingProviderCreateOptions,
-  embeddingSource: string,
-  identity: EmbeddingProviderIndexIdentity,
-): Promise<EmbeddingProviderCreateResult> {
-  await prepareEmbeddingServer(options, embeddingSource);
-  const genericAdapter = getEmbeddingProvider("openai-compatible", options.config);
-  if (!genericAdapter) {
-    throw new Error("OpenAI-compatible embedding transport is unavailable.");
-  }
-  const acquireLocalService = (options as LocalServiceAwareOptions).acquireLocalService; // SAFETY: core runtime owns this injected option.
-  const result = await genericAdapter.create({
-    ...options,
-    provider: LLAMA_CPP_PROVIDER_ID,
-    model: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_ID,
-    remote: undefined,
-    ...(acquireLocalService
-      ? {
-          acquireLocalService: (...[target, signal]: Parameters<AcquireLocalService>) =>
-            acquireLocalService({ ...target, reconcile: reconcileLocalService }, signal),
-        }
-      : {}),
-  });
-  if (!result.provider) {
-    return result;
-  }
   return {
-    provider: wrapProvider({
-      provider: result.provider,
-      canonicalModel: identity.model,
-      baseUrl: resolveManagedLlamaCppProviderConfig(options.config).baseUrl ?? "",
-    }),
+    provider: wrapped,
     runtime: {
       id: "local",
       inlineQueryTimeoutMs: 5 * 60_000,

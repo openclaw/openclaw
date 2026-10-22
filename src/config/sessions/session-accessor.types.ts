@@ -397,6 +397,8 @@ export type SessionTranscriptWriteLockAccessorContext = {
   /** Reads bounded indexed facts for supplied transcript mirror identities. */
   readMessageFacts: (params: {
     idempotencyKeys: readonly string[];
+    /** Limit identities to the current active branch; default includes abandoned branches. */
+    activeBranchOnly?: boolean;
     sourceRunId?: string;
   }) => Promise<{
     anchorsByIdempotencyKey: Map<string, TranscriptEntryAnchor>;

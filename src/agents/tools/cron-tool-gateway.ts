@@ -18,14 +18,18 @@ export function createCronToolGatewayCaller({
   operationSignal,
   readStreamExecPolicy,
   onEffectsStart,
+  assertCurrent,
 }: {
   managementAuthority: ReturnType<typeof bindCronManagementGrant>;
   requesterAuthority: ReturnType<typeof bindCronRequesterGrant>;
   operationSignal?: AbortSignal;
   readStreamExecPolicy: () => CronStreamExecPolicy | undefined;
   onEffectsStart?: () => void;
+  assertCurrent?: () => void;
 }): typeof callGatewayTool {
   return async <T>(...request: Parameters<typeof callGatewayTool>) => {
+    operationSignal?.throwIfAborted();
+    assertCurrent?.();
     if (request[0] === "cron.add" || request[0] === "cron.update") {
       onEffectsStart?.();
     }
@@ -51,15 +55,21 @@ export function createCronToolGatewayCaller({
         await assertCronStreamExecPolicyWithoutApproval(streamExecPolicy);
       }
     }
-    return (grant || requesterGrant) && identity
-      ? await withGatewayToolCallerIdentity(
-          {
-            ...identity,
-            ...(grant ? { cronManagementGrant: grant } : {}),
-            ...(requesterGrant ? { cronCreatorAuthorityGrant: requesterGrant } : {}),
-          },
-          () => callGatewayTool<T>(...request),
-        )
-      : await callGatewayTool<T>(...request);
+    operationSignal?.throwIfAborted();
+    assertCurrent?.();
+    const result =
+      (grant || requesterGrant) && identity
+        ? await withGatewayToolCallerIdentity(
+            {
+              ...identity,
+              ...(grant ? { cronManagementGrant: grant } : {}),
+              ...(requesterGrant ? { cronCreatorAuthorityGrant: requesterGrant } : {}),
+            },
+            () => callGatewayTool<T>(...request),
+          )
+        : await callGatewayTool<T>(...request);
+    operationSignal?.throwIfAborted();
+    assertCurrent?.();
+    return result;
   };
 }

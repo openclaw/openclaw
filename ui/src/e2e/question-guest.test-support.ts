@@ -1,7 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
+import { onTestFinished, vi } from "vitest";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.ts";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
+import * as questionDispatch from "../../../src/agents/harness/gateway-question-dispatch.js";
 import type { AgentQuestionDispatcher } from "../../../src/agents/harness/gateway-question-dispatch.js";
 import { createAskUserTool } from "../../../src/agents/tools/ask-user-tool.js";
 import { setRuntimeConfigSnapshot } from "../../../src/config/runtime-snapshot.js";
@@ -11,6 +13,7 @@ import { createAgentRuntimeApprovalAuthorityValidator } from "../../../src/gatew
 import { captureGatewayOperatorRunAuthority } from "../../../src/gateway/operator-run-authority.js";
 import type { OperatorScope } from "../../../src/gateway/operator-scopes.js";
 import { QuestionManager } from "../../../src/gateway/question-manager.js";
+import type { SerializedGatewayFrame } from "../../../src/gateway/serialized-json.js";
 import { createGatewayBroadcaster } from "../../../src/gateway/server-broadcast.js";
 import { createDirectChatContext } from "../../../src/gateway/server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../../../src/gateway/server-methods.js";
@@ -86,7 +89,7 @@ export async function createGuestQuestionFixture(deliver: (frame: unknown) => Pr
     close() {},
     terminate() {},
     send(
-      wire: string | Buffer,
+      wire: string | Buffer | SerializedGatewayFrame,
       options?: { binary: false } | ((error?: Error) => void),
       onSent?: (error?: Error) => void,
     ) {
@@ -242,11 +245,15 @@ export async function createGuestQuestionFixture(deliver: (frame: unknown) => Pr
       return result.payload;
     },
   };
+  const nativeDispatcher = questionDispatch.resolveAgentQuestionGatewayCall(gatewayCall);
+  const dispatcherSpy = vi
+    .spyOn(questionDispatch, "resolveAgentQuestionGatewayCall")
+    .mockReturnValue(nativeDispatcher);
+  onTestFinished(() => dispatcherSpy.mockRestore());
   const tool = createAskUserTool({
     agentId: "main",
     sessionKey: guestQuestionSessionKey,
     runId,
-    gatewayCall,
   });
   return {
     profileId: profile.id,

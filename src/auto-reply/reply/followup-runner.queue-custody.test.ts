@@ -8,6 +8,11 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import { withSessionTurn } from "../../sessions/session-controller.admission.js";
+import {
+  getCurrentSessionControllerOwner,
+  withSessionControllerOwner,
+} from "../../sessions/session-controller.context.js";
 import {
   createReplyOperation,
   markReplyOperationExecutionStarted,
@@ -116,6 +121,10 @@ it("acquires fresh required placement for a queued successor after its predecess
     return admitted(queued, successor, "required-placement-successor");
   });
   state.execute.mockImplementation(async () => {
+    expect(getCurrentSessionControllerOwner()).toBe(successor);
+    await withSessionTurn(identity, async (borrowed) => {
+      expect(borrowed).toBe(successor);
+    });
     markReplyOperationExecutionStarted(successor!);
     try {
       await withRequiredSessionPlacement(identity, options, async () => {
@@ -143,18 +152,20 @@ it("acquires fresh required placement for a queued successor after its predecess
   });
   try {
     setRuntimeConfigSnapshot(queued.run.config);
-    await withRequiredSessionPlacement(identity, options, async () => {
-      enqueueFollowupRun(identity.sessionKey, queued, { mode: "followup", debounceMs: 0 });
-      scheduleFollowupDrain(
-        identity.sessionKey,
-        createFollowupRunner({ typing, typingMode: "never", defaultModel: "gpt-test" }),
-      );
-      // Settlement wakes the successor from the predecessor's retained async context.
-      retirement = (async () => {
-        await releasePredecessor.promise;
-        predecessor.complete();
-      })();
-    });
+    await withSessionControllerOwner(predecessor, () =>
+      withRequiredSessionPlacement(identity, options, async () => {
+        enqueueFollowupRun(identity.sessionKey, queued, { mode: "followup", debounceMs: 0 });
+        scheduleFollowupDrain(
+          identity.sessionKey,
+          createFollowupRunner({ typing, typingMode: "never", defaultModel: "gpt-test" }),
+        );
+        // Settlement wakes the successor from the predecessor's retained async context.
+        retirement = (async () => {
+          await releasePredecessor.promise;
+          predecessor.complete();
+        })();
+      }),
+    );
     expect(events).toEqual(["admit:1", "release:1"]);
     releasePredecessor.resolve();
     await retirement;

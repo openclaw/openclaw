@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   GatewayClient,
   GatewayClientRequestTimeoutError,
@@ -12,13 +12,11 @@ import {
   createAgentDatabaseInspectionRefusal,
   recordAgentDatabaseAdmissions,
 } from "../state/agent-database-admission.js";
+import { authorizationClient } from "./server-methods.authorization.test-support.js";
 import { handleGatewayRequest } from "./server-methods.js";
-import type { GatewayRequestContext, GatewayRequestHandler } from "./server-methods/types.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
 
 type ProtocolHarness = {
-  socket: GatewayProtocolSocket;
-  stopped: boolean;
-  generation: number;
   handleMessage(socket: GatewayProtocolSocket, generation: number, raw: string): void;
 };
 
@@ -31,43 +29,31 @@ function createFixture(method: (typeof methods)[number]) {
   const reachedAdmission = createDeferred();
   const connection = new AbortController();
   const preparation = createDeferred();
-  let pending = true;
-  const cfg: OpenClawConfig = {
-    agents: { ownership: "explicit", entries: { main: {} } },
+  const refusal = createAgentDatabaseInspectionRefusal({
+    agentId: "main",
+    paths: [],
+    reason: "Synthetic startup inspection is pending.",
+    pending: true,
+  });
+  recordAgentDatabaseAdmissions([refusal], { source: "startup" });
+  const startup = {
+    hasPendingAgents: true,
+    waitForAgentPreparation: () => {
+      reachedAdmission.resolve();
+      return startup.hasPendingAgents ? preparation.promise : undefined;
+    },
   };
-  recordAgentDatabaseAdmissions(
-    [
-      createAgentDatabaseInspectionRefusal({
-        agentId: "main",
-        paths: [],
-        reason: "Synthetic startup inspection is pending.",
-        pending: true,
-      }),
-    ],
-    { source: "startup" },
-  );
+  const cfg: OpenClawConfig = { agents: { ownership: "explicit", entries: { main: {} } } };
   const context = {
     getRuntimeConfig: () => cfg,
     logGateway: { warn: vi.fn(), info: vi.fn() },
-    agentDatabaseStartup: {
-      get hasPendingAgents() {
-        return pending;
-      },
-      waitForAgentPreparation: () => {
-        reachedAdmission.resolve();
-        return pending ? preparation.promise : undefined;
-      },
-    },
+    agentDatabaseStartup: startup,
   };
   const writes: RequestFrame[] = [];
-  const handler: GatewayRequestHandler = ({ req, respond }) => {
-    writes.push(req);
-    respond(true, { status: "written" });
-  };
   const client = new GatewayClient({});
   const protocol = (client as unknown as { protocol: ProtocolHarness }).protocol;
   const sent: string[] = [];
-  const active = new Set<Promise<void>>();
+  const active: Promise<void>[] = [];
   const errors: unknown[] = [];
   const socket: GatewayProtocolSocket = {
     isOpen: () => true,
@@ -75,39 +61,35 @@ function createFixture(method: (typeof methods)[number]) {
     send: (raw) => {
       sent.push(raw);
       const req = JSON.parse(raw) as RequestFrame;
-      const work = handleGatewayRequest({
-        req,
-        client: {
-          connId: "startup-deadline",
-          connectionSignal: connection.signal,
-          connect: {
-            role: "operator",
-            scopes: ["operator.admin"],
-            client: { id: "cli", version: "test", platform: "linux", mode: "cli" },
-            minProtocol: 1,
-            maxProtocol: 1,
+      active.push(
+        handleGatewayRequest({
+          req,
+          client: authorizationClient(
+            "startup-deadline",
+            ["operator.admin"],
+            { connectionSignal: connection.signal },
+            { client: { id: "cli", version: "test", platform: "linux", mode: "cli" } },
+          ),
+          signal: connection.signal,
+          isWebchatConnect: () => false,
+          context: context as unknown as GatewayRequestContext,
+          extraHandlers: {
+            [method]: ({ req: written, respond }) => {
+              writes.push(written);
+              respond(true, { status: "written" });
+            },
           },
-        },
-        signal: connection.signal,
-        isWebchatConnect: () => false,
-        context: context as unknown as GatewayRequestContext,
-        extraHandlers: { [method]: handler },
-        respond: (ok, payload, error) => {
-          reachedAdmission.resolve();
-          protocol.handleMessage(
-            socket,
-            1,
-            JSON.stringify({ type: "res", id: req.id, ok, payload, error }),
-          );
-        },
-      });
-      active.add(work);
-      void work.then(
-        () => active.delete(work),
-        (error: unknown) => {
-          active.delete(work);
+          respond: (ok, payload, error) => {
+            reachedAdmission.resolve();
+            protocol.handleMessage(
+              socket,
+              1,
+              JSON.stringify({ type: "res", id: req.id, ok, payload, error }),
+            );
+          },
+        }).catch((error: unknown) => {
           errors.push(error);
-        },
+        }),
       );
     },
   };
@@ -125,7 +107,7 @@ function createFixture(method: (typeof methods)[number]) {
       ...(method === "sessions.send" ? { key: "agent:main:test" } : {}),
     },
     ready() {
-      pending = false;
+      startup.hasPendingAgents = false;
       recordAgentDatabaseAdmissions([], { source: "startup" });
       preparation.resolve();
     },
@@ -159,64 +141,57 @@ afterEach(async () => {
   tempDirs.cleanup();
 });
 
-describe("startup write deadlines through GatewayClient and the request router", () => {
-  it.each(methods)("never dispatches %s after its default client deadline", async (method) => {
-    const fixture = createFixture(method);
-    const outcome = fixture.client.request(method, fixture.params).catch((error: unknown) => error);
-    await fixture.reachedAdmission;
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(await outcome).toBeInstanceOf(GatewayClientRequestTimeoutError);
-    expect(fixture.writes).toHaveLength(0);
-
-    await vi.advanceTimersByTimeAsync(15_000);
-    fixture.ready();
-    await fixture.drain();
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(fixture.writes).toHaveLength(0);
-  });
-
-  it.each(["sessions.create", "agent"] as const)(
-    "waits for 45-second startup and dispatches %s exactly once",
-    async (method) => {
-      const fixture = createFixture(method);
-      const request = fixture.client.request(method, fixture.params, { timeoutMs: 60_000 });
-      const outcome = request.catch((error: unknown) => error);
-      let settled = false;
-      void outcome.then(() => {
-        settled = true;
-      });
-      await fixture.reachedAdmission;
-      await vi.advanceTimersByTimeAsync(45_000);
-      expect(settled).toBe(false);
-      expect(fixture.writes).toHaveLength(0);
-      fixture.ready();
-      await vi.advanceTimersByTimeAsync(1_000);
-      await expect(outcome).resolves.toEqual({ status: "written" });
-      await fixture.drain();
-      expect(fixture.writes).toHaveLength(1);
-      expect(fixture.sent.length).toBeGreaterThan(1);
-      expect(new Set(fixture.sent).size).toBe(1);
-      expect(fixture.writes[0]).toMatchObject({
-        params: { idempotencyKey: "startup-write" },
-      });
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(fixture.writes).toHaveLength(1);
-    },
+const scenarios = [
+  ...["timeout", "abort"].flatMap((ending) => methods.map((method) => ({ method, ending }))),
+  ...(["sessions.create", "agent"] as const).map((method) => ({ method, ending: "ready" })),
+];
+it.each(scenarios)("startup $method: $ending", async ({ method, ending }) => {
+  const fixture = createFixture(method);
+  const controller = new AbortController();
+  const options =
+    ending === "timeout"
+      ? undefined
+      : {
+          timeoutMs: 60_000,
+          ...(ending === "abort" ? { signal: controller.signal } : {}),
+        };
+  const outcome = fixture.client
+    .request(method, fixture.params, options)
+    .catch((error: unknown) => error);
+  const settled = vi.fn();
+  void outcome.then(settled);
+  await fixture.reachedAdmission;
+  await vi.advanceTimersByTimeAsync(
+    ending === "timeout" ? 30_000 : ending === "abort" ? 35_000 : 45_000,
   );
-
-  it.each(methods)("never dispatches %s when the caller aborts during startup", async (method) => {
-    const fixture = createFixture(method);
-    const controller = new AbortController();
-    const outcome = fixture.client
-      .request(method, fixture.params, { timeoutMs: 60_000, signal: controller.signal })
-      .catch((error: unknown) => error);
-    await fixture.reachedAdmission;
-    await vi.advanceTimersByTimeAsync(35_000);
+  if (ending === "abort") {
     controller.abort();
     expect(await outcome).toMatchObject({ message: `gateway request aborted for ${method}` });
-    fixture.ready();
-    await fixture.drain();
-    await vi.advanceTimersByTimeAsync(30_000);
+  } else {
+    if (ending === "timeout") {
+      expect(await outcome).toBeInstanceOf(GatewayClientRequestTimeoutError);
+    } else {
+      expect(settled).not.toHaveBeenCalled();
+    }
     expect(fixture.writes).toHaveLength(0);
-  });
+    if (ending === "timeout") {
+      await vi.advanceTimersByTimeAsync(15_000);
+    }
+  }
+  fixture.ready();
+  if (ending === "ready") {
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(outcome).resolves.toEqual({ status: "written" });
+  }
+  await fixture.drain();
+  if (ending === "ready") {
+    expect(fixture.writes).toMatchObject([{ params: { idempotencyKey: "startup-write" } }]);
+    expect(fixture.sent.length).toBeGreaterThan(1);
+    expect(new Set(fixture.sent).size).toBe(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fixture.writes).toHaveLength(1);
+  } else {
+    await vi.advanceTimersByTimeAsync(ending === "abort" ? 30_000 : 1_000);
+    expect(fixture.writes).toHaveLength(0);
+  }
 });

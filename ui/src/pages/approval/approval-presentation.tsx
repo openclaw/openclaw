@@ -4,7 +4,10 @@ import type {
   ApprovalSnapshot,
 } from "../../../../packages/gateway-protocol/src/approval-result-validators.js";
 import { summarizeApprovalScopeLabel } from "../../app/approval-presentation.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerApprovalsEnglish } from "../../i18n/locales/en-approvals.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+
+registerEnglishCatalog(registerApprovalsEnglish);
 
 export type ResolutionOrigin = "here" | "elsewhere" | "observed";
 

@@ -214,11 +214,10 @@ function hasStructuredPayloadPart(payload: ReplyPayload): boolean {
 
 export function shouldSuppressGoogleChatManualExecApprovalFollowupPayload(
   payload: ReplyPayload,
-  nowMs = Date.now(),
 ): boolean {
   const text = payload.text?.trim();
   if (!text || hasStructuredPayloadPart(payload)) {
     return false;
   }
-  return shouldSuppressGoogleChatManualExecApprovalFollowupText(text, nowMs);
+  return shouldSuppressGoogleChatManualExecApprovalFollowupText(text);
 }

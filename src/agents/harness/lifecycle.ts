@@ -31,7 +31,6 @@ import type { EmbeddedRunAttemptResult } from "../embedded-agent-runner/run/type
 import { copyCoreTtsAttemptResultProvenance } from "../tools/tts-tool-result-provenance.js";
 import { subscribeAgentCommentaryDiagnostics } from "./commentary-diagnostics.js";
 import { recordAgentHarnessPreflightOwner } from "./errors.js";
-import { applyAgentHarnessResultClassification } from "./result-classification.js";
 import {
   EmptySettledTurnFinalizationError,
   type PreparedSettledTurnFinalizationResult,
@@ -376,11 +375,28 @@ export async function runAgentHarnessLifecycleAttempt(
       diagnostics.setPhase("resolve");
       // Classification happens inside the diagnostic phase so failures identify
       // whether they came from send or result resolution.
+      let classifiedResult: AgentHarnessAttemptResult;
+      if (!harness.classify) {
+        classifiedResult = { ...rawResult, agentHarnessId: harness.id };
+      } else {
+        // Reclassify from the raw result so retries or wrappers cannot preserve an
+        // obsolete classification from an earlier harness.
+        const {
+          agentHarnessResultClassification: _previousClassification,
+          ...resultWithoutPrevious
+        } = rawResult;
+        const classification = harness.classify(resultWithoutPrevious, params);
+        classifiedResult = {
+          ...resultWithoutPrevious,
+          agentHarnessId: harness.id,
+          ...(classification && classification !== "ok"
+            ? { agentHarnessResultClassification: classification }
+            : {}),
+        };
+      }
       return copyCoreTtsAttemptResultProvenance(
         rawResult,
-        normalizeAgentHarnessAttemptResult(
-          applyAgentHarnessResultClassification(harness, rawResult, params),
-        ),
+        normalizeAgentHarnessAttemptResult(classifiedResult),
       );
     };
     result = await diagnostics.run(runAndClassify);

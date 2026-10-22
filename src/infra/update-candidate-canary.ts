@@ -110,13 +110,13 @@ export async function validateUpdateCandidateCanary(params: {
   };
   const recordStep = async (step: UpdateStepResult) => {
     steps.push(step);
-    await reportReceipt(onStep, step);
+    // Cleanup receipts report completed work; they cannot revoke the candidate result.
+    await (step.name.endsWith("-cleanup") ? onStep?.(step) : reportReceipt(onStep, step));
   };
   let candidateSchemaVersions: schemaVersions.OpenClawSchemaVersions | undefined;
   let gatewayRestartCompletion = false;
   let doctorConfigWrites = false;
   let doctorConfigChanges: UpdateDoctorConfigChange[] = [];
-  let listenerIsolation: canaryCmd.CanaryResult["listenerIsolation"];
   const progress: { phase: canaryCmd.CanaryPhase } = { phase: "runtime" };
   const finish = (
     outcome: canaryCmd.CanaryOutcome,
@@ -130,7 +130,6 @@ export async function validateUpdateCandidateCanary(params: {
     gatewayRestartCompletion,
     ...(outcome.status === "ok" && doctorConfigWrites ? { doctorConfigWrites } : {}),
     ...(doctorConfigChanges.length ? { doctorConfigChanges } : {}),
-    listenerIsolation,
     steps,
   });
   const capture = (chunk: Buffer | string) => {
@@ -226,22 +225,30 @@ export async function validateUpdateCandidateCanary(params: {
       migrationPolicy: params.migrationPolicy,
       fullIntegrityCheck: params.fullIntegrityCheck,
     });
+    const { port, stateDir: copiedStateDir } = rehearsal;
+    // Each fresh process may inspect the private state again, including the Gateway.
+    const processBudget = resolveSqliteInspectionBudget(
+      "update validation",
+      copiedStateDir,
+      rehearsal.snapshotCapacity.sqliteBytes + (rehearsal.snapshotCapacity.pluginBytes ?? 0),
+    ).timeoutMs;
+    const budget = Math.max(1, params.timeoutMs ?? processBudget);
     // Copying private state has its own size/progress budget; preserve the
     // runtime validation budget after large snapshots finish.
-    const snapshotStep: UpdateStepResult = {
+    await recordStep({
       ...currentStep(0),
       snapshotCapacity: rehearsal.snapshotCapacity,
       diagnostics: rehearsal.snapshotDiagnostics,
-      warnings: rehearsal.snapshotWarnings,
-    };
-    await recordStep(snapshotStep);
+      warnings:
+        budget < processBudget
+          ? [
+              ...(rehearsal.snapshotWarnings ?? []),
+              `The update deadline allows at most ${budget / 1000} s per candidate check, below the automatic ${processBudget / 1000} s allowance for this state. Checks may time out early; increase --timeout to allow more time.`,
+            ]
+          : rehearsal.snapshotWarnings,
+    });
     env = { ...rehearsal.env };
-    const { port, stateDir: copiedStateDir } = rehearsal;
     const doctorResultOptions = { tmpdir: () => copiedStateDir };
-    listenerIsolation = {
-      gateway: { host: "127.0.0.1", port },
-      mcpAppSandbox: "disabled",
-    };
     const commands = canaryCmd.buildUpdateCanaryCommands({
       continuationEntry,
       migrationPolicy: params.migrationPolicy,
@@ -259,13 +266,6 @@ export async function validateUpdateCandidateCanary(params: {
           )
         ).has("--full-integrity-check"),
     });
-    // Each fresh process may inspect the private state again, including the Gateway.
-    const processBudget = resolveSqliteInspectionBudget(
-      "update validation",
-      copiedStateDir,
-      rehearsal.snapshotCapacity.sqliteBytes + (rehearsal.snapshotCapacity.pluginBytes ?? 0),
-    ).timeoutMs;
-    const budget = Math.max(1, params.timeoutMs ?? processBudget);
     let deadline = 0;
     let workDeadline = 0;
     const startBudget = () => {

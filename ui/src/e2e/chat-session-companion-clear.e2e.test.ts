@@ -2,10 +2,11 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { closeChatLayoutMenu, openChatLayoutMenu } from "../test-helpers/chat-layout-menu.ts";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
+  controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
   installMockGateway,
   navigateToControlUiSession,
@@ -29,6 +30,7 @@ const resetError = "Companion reset unavailable during reconnect";
 async function withCompanion(
   run: (surface: Awaited<ReturnType<typeof companionSurface>>) => Promise<void>,
   width = 1200,
+  placement: "main" | "side" = "main",
 ): Promise<void> {
   const artifactDir = artifactRoot
     ? createControlUiE2eArtifactDir("chat-session-companion-clear", artifactRoot)
@@ -42,7 +44,48 @@ async function withCompanion(
         ? { recordVideo: { dir: artifactDir, size: { height: 800, width: 1200 } } }
         : {}),
     },
-    async ({ page }) => run(await companionSurface(page, artifactDir)),
+    async ({ page }) => {
+      // Desktop side tabs reset on close; Clear remains available in the main pane.
+      if (width === 1200 && placement === "main") {
+        await page.addInitScript(
+          ({ key, companionSessionKey }) =>
+            localStorage.setItem(
+              key,
+              JSON.stringify({
+                sessionKey: companionSessionKey,
+                sidebarSessionLayouts: {
+                  [companionSessionKey]: {
+                    columns: [
+                      {
+                        id: "side-panel-column",
+                        side: "right",
+                        panels: [
+                          { id: "companion", slot: "companion" },
+                          { id: "conversation", slot: "conversation" },
+                        ],
+                        activePanelId: "conversation",
+                        width: 480,
+                        height: 360,
+                      },
+                    ],
+                    mainPanelId: "companion",
+                    open: true,
+                  },
+                },
+              }),
+            ),
+          {
+            key: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+            companionSessionKey: sessionKey,
+          },
+        );
+      }
+      const surface = await companionSurface(page, artifactDir);
+      if (width === 1200 && placement === "main") {
+        await page.locator('[data-panel-slot="companion"][data-region="main"]').waitFor();
+      }
+      await run(surface);
+    },
   );
 }
 
@@ -76,13 +119,32 @@ async function companionSurface(page: Page, artifactDir: string | undefined) {
   const text = (value: string) => companion.getByText(value, { exact: true });
   await text(answer).waitFor();
   const input = companion.getByRole("textbox", { name: "Ask in side chat", exact: true });
+  const clearButton = exactButton(page, "Clear side chat");
+  const hideMobile = async () => {
+    const host = page.locator(".chat-mobile-host");
+    const close = exactButton(host, "Close");
+    if (!(await close.isVisible())) {
+      return false;
+    }
+    const resetCount = (await gateway.getRequests("sessions.companion.reset")).length;
+    await close.click();
+    await host.waitFor({ state: "hidden" });
+    expect(await gateway.getRequests("sessions.companion.reset")).toHaveLength(resetCount);
+    return true;
+  };
   const clear = async (defer = false) => {
     if (defer) {
       await gateway.deferNext("sessions.companion.reset");
     }
-    await openChatLayoutMenu(page);
-    await page.getByRole("button", { name: "Clear side chat", exact: true }).click();
-    await closeChatLayoutMenu(page);
+    if (await clearButton.isVisible()) {
+      await clearButton.click();
+    } else {
+      const reopen = await hideMobile();
+      await selectChatLayoutAction(page, "Clear side chat");
+      if (reopen) {
+        await openChatSidePanelType(page, "Side chat");
+      }
+    }
     await gateway.waitForRequest("sessions.companion.reset");
   };
   const finishClear = async () => {
@@ -97,15 +159,70 @@ async function companionSurface(page: Page, artifactDir: string | undefined) {
       );
     }
   };
-  return { clear, finishClear, companion, input, text, gateway, page, capture };
+  return {
+    clear,
+    clearButton,
+    finishClear,
+    hideMobile,
+    companion,
+    input,
+    text,
+    gateway,
+    page,
+    capture,
+  };
 }
 
 suite.define(() => {
+  it("keeps a desktop side tab open on reset failure and closes it after confirmation", async () => {
+    await withCompanion(
+      async ({ clearButton, companion, gateway, page }) => {
+        expect(await clearButton.count()).toBe(0);
+        const close = page.getByRole("button", { name: "Close Side chat", exact: true });
+        const input = companion.getByRole("textbox", { name: "Ask in side chat", exact: true });
+        await input.fill("Keep this draft if closing fails");
+        await close.click();
+        await gateway.waitForRequest("sessions.companion.reset");
+        await page.getByRole("alert").filter({ hasText: resetError }).waitFor();
+        await companion.getByText(answer, { exact: true }).waitFor();
+        expect(await input.inputValue()).toBe("Keep this draft if closing fails");
+
+        const resetCount = (await gateway.getRequests("sessions.companion.reset")).length;
+        await gateway.deferNext("sessions.companion.reset");
+        await close.click();
+        await gateway.waitForRequest("sessions.companion.reset", { after: resetCount });
+        expect(await gateway.getRequests("sessions.companion.reset")).toHaveLength(resetCount + 1);
+        expect(await close.isVisible()).toBe(true);
+        await gateway.setMethodResponse("sessions.companion.state", { exchanges: [] });
+        await gateway.resolveDeferred("sessions.companion.reset", { ok: true });
+        await close.waitFor({ state: "hidden" });
+        await openChatSidePanelType(page, "Side chat");
+        await input.waitFor();
+        expect(await input.inputValue()).toBe("");
+        expect(await companion.getByText(answer, { exact: true }).count()).toBe(0);
+        expect(await gateway.getRequests("sessions.reset")).toHaveLength(0);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      },
+      1200,
+      "side",
+    );
+  });
+
   it.each([1200, 390])(
     "preserves the thread on reset failure and a newer draft after a successful retry at %ipx",
     async (width) => {
       await withCompanion(
-        async ({ clear, finishClear, companion, input, text, gateway, page, capture }) => {
+        async ({
+          clear,
+          finishClear,
+          hideMobile,
+          companion,
+          input,
+          text,
+          gateway,
+          page,
+          capture,
+        }) => {
           await clear();
 
           const alert = page.getByRole("alert").filter({ hasText: resetError });
@@ -113,9 +230,15 @@ suite.define(() => {
           await text(answer).waitFor();
           await capture("reset-failure", [alert, companion]);
 
+          const reopen = await hideMobile();
           await openChatDetails(page);
-          await closeChatDetails(page);
+          if (!(await hideMobile())) {
+            await closeChatDetails(page);
+          }
           await alert.getByRole("button", { name: "Dismiss error" }).click();
+          if (reopen) {
+            await openChatSidePanelType(page, "Side chat");
+          }
           await clear(true);
 
           await expect

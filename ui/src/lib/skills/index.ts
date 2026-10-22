@@ -44,7 +44,6 @@ export type SkillsState = {
   clawhubIconUrls: Record<string, string>;
   clawhubDetail: ClawHubSkillDetail | null;
   clawhubDetailRef: string | null;
-  clawhubDetailLoading: boolean;
   clawhubDetailError: string | null;
   clawhubInstallMessage: {
     kind: "success" | "error";
@@ -524,7 +523,6 @@ export async function loadClawHubDetail(state: SkillsState, ref: string) {
   const client = state.client;
   const isCurrentAgent = captureSkillsAgentScope(state);
   state.clawhubDetailRef = ref;
-  state.clawhubDetailLoading = true;
   state.clawhubDetailError = null;
   state.clawhubDetail = null;
   const isCurrent = () =>
@@ -544,14 +542,12 @@ export async function loadClawHubDetail(state: SkillsState, ref: string) {
     }
     state.clawhubDetailError = formatUiError(err);
   }
-  state.clawhubDetailLoading = false;
 }
 
 export function closeClawHubDetail(state: SkillsState) {
   state.clawhubDetailRef = null;
   state.clawhubDetail = null;
   state.clawhubDetailError = null;
-  state.clawhubDetailLoading = false;
 }
 
 export async function installFromClawHub(state: SkillsState, ref: string, version?: string) {

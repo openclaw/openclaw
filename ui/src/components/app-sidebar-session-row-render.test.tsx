@@ -169,6 +169,35 @@ it("hides archived pages in the restored sidebar before live data arrives", asyn
   ).toEqual([true, false, false]);
 });
 
+it("sorts built-in Pages alphabetically without reordering dashboards", async () => {
+  const { host, context, dom } = await createCachedHost();
+  const dashboardKeys = ["agent:main:dashboard:zulu", "agent:main:dashboard:alpha"];
+  host.restoreSidebarSnapshot({
+    ...emptySnapshot,
+    mode: "roster",
+    navigationView: "pages",
+    pageScopeId: context.agentSelection.state.scopeId,
+    pages: snapshotSessions(
+      dashboardKeys.map((key) => projectSidebarSession({ key, label: key, hasBoard: true })),
+    ),
+  });
+  host.invalidate();
+  await host.updateComplete;
+  const entries = [...dom.all(".sidebar-pages [data-sidebar-entry]")];
+  const routes = entries
+    .map((entry) => entry.getAttribute("data-sidebar-entry"))
+    .filter((entry): entry is string => Boolean(entry?.startsWith("route:")));
+  const routeLabels = routes.map(
+    (route) => dom.query(`[data-sidebar-entry="${route}"] a`)?.textContent?.trim() ?? "",
+  );
+  expect(routeLabels.length).toBeGreaterThan(4);
+  expect(routeLabels).not.toContain("");
+  expect(routeLabels).toEqual(routeLabels.toSorted((left, right) => left.localeCompare(right)));
+  expect(entries.map((entry) => entry.getAttribute("data-sidebar-entry")).slice(-2)).toEqual(
+    dashboardKeys.map((key) => `session:${key}`),
+  );
+});
+
 it("paints the restored roster and workspace in the first sidebar update", async () => {
   const { host, dom } = await createCachedHost();
   host.sidebarAgentsMode = "chip";
@@ -412,11 +441,14 @@ it("renders the saved chip identity before agent discovery without reviving anot
     );
     expect(card!.querySelector("[data-avatar='⚓']")).not.toBeNull();
   });
+  // The visible name already labels the trigger; no hover tooltip repeats it.
+  expect(dom.query("openclaw-tooltip")).toBeNull();
   host.sessionKey = "agent:other:thread";
   context.agentSelection.set("other");
   update();
   expect(dom.query("openclaw-sidebar-agent-card")).toBeNull();
   expect(dom.query(".sidebar-workspace-header")).not.toBeNull();
+  expect(dom.query("openclaw-tooltip")).toBeNull();
 });
 
 it("retains the workspace name DOM across unrelated sidebar publications and renames", () => {
@@ -499,7 +531,7 @@ it.each([false, true])(
   "keeps row facepiles idle with unchanged inputs (owner: %s), while admitting new presence",
   async (withOwner) => {
     const { host, container, dom } = createHost();
-    const session = projectSidebarSession({
+    let session = projectSidebarSession({
       key: "agent:main:thread",
       owner: withOwner
         ? { actor: { type: "human", id: "ada", identity: { type: "profile", id: "ada" } } }
@@ -545,8 +577,9 @@ it.each([false, true])(
       withOwner ? undefined : "ada",
     );
 
-    session.owner = {
-      actor: { type: "human", id: "bea", identity: { type: "profile", id: "bea" } },
+    session = {
+      ...session,
+      owner: { actor: { type: "human", id: "bea", identity: { type: "profile", id: "bea" } } },
     };
     update();
     await facepile.updateComplete;

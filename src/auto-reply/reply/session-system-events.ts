@@ -10,13 +10,16 @@ import {
   formatZonedTimestamp,
   resolveTimezone,
 } from "../../infra/format-time/format-datetime.ts";
-import { isExecCompletionSystemEvent } from "../../infra/heartbeat-events-filter.js";
+import {
+  isExecCompletionSystemEvent,
+  isHeartbeatWakeEvent,
+} from "../../infra/heartbeat-events-filter.js";
 import {
   isSystemEventStoreCurrent,
   resolveSystemEventQueueKey,
 } from "../../infra/system-event-ownership.js";
 import {
-  consumeSelectedSystemEventEntries,
+  adoptSelectedSystemEventEntries,
   isSystemEventTurnOwned,
   peekSystemEventEntries,
   type SystemEvent,
@@ -39,8 +42,7 @@ function compactSystemEvent(event: SystemEvent): string | null {
   if (
     lower.includes("reason periodic") ||
     lower.startsWith("read heartbeat.md") ||
-    lower.includes("heartbeat poll") ||
-    lower.includes("heartbeat wake")
+    isHeartbeatWakeEvent(trimmed)
   ) {
     return null;
   }
@@ -97,7 +99,7 @@ export async function drainFormattedSystemEvents(params: {
   const systemLines: string[] = [];
   const queueKey = resolveSystemEventQueueKey(params.sessionKey, params.agentId);
   // Claimed turns and legacy exec wakes retain their own execution and delivery owner.
-  const queued = consumeSelectedSystemEventEntries(
+  const queued = adoptSelectedSystemEventEntries(
     queueKey,
     (params.events ?? peekSystemEventEntries(queueKey)).filter(
       (event) => !isSystemEventTurnOwned(queueKey, event) && !isExecCompletionSystemEvent(event),

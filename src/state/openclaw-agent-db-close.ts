@@ -71,7 +71,8 @@ export function createAgentDatabaseHandleCloser(cache: {
       releaseOpenClawAgentDatabaseLease(
         lease.leaseId,
         { env: lease.env, initializationAgentPaths: [database.path] },
-        clean ?? (retainRuntimeProof ? "uncheckpointed" : undefined),
+        clean ??
+          (retainRuntimeProof ? (postgres ? "postgres-closed" : "uncheckpointed") : undefined),
       );
       cache.leases.delete(database.path);
     }

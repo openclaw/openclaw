@@ -44,7 +44,6 @@ export function createGatewayMatrixConfig(params: {
         workspace: path.join(root, "workspace"),
         skipBootstrap: true,
         thinkingDefault: params.thinking,
-        heartbeat: { every: "0m" },
         systemAgent: { agentId: "qa" },
       },
       entries: { qa: {} },

@@ -1,4 +1,4 @@
-// Covers fail-closed Doctor import of the retired primary device identity JSON.
+// Covers fail-closed Doctor import of retired client device identity JSON.
 import { createHash, generateKeyPairSync } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
@@ -17,6 +17,7 @@ import {
   normalizeLegacyDeviceIdentity,
   type NormalizedLegacyDeviceIdentity,
 } from "./device-identity-legacy.js";
+import { readStoredDeviceIdentity } from "./device-identity-store.js";
 import { deriveDeviceIdFromPublicKey } from "./device-identity.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import {
@@ -126,9 +127,14 @@ describe("legacy device identity Doctor migration", () => {
       stateDir?: string;
       value?: unknown;
       bytes?: Buffer;
+      filename?: string;
     } = {},
   ): Promise<string> {
-    const sourcePath = path.join(params.stateDir ?? stateDir, "identity", "device.json");
+    const sourcePath = path.join(
+      params.stateDir ?? stateDir,
+      "identity",
+      params.filename ?? "device.json",
+    );
     await fsp.mkdir(path.dirname(sourcePath), { recursive: true });
     await fsp.writeFile(
       sourcePath,
@@ -269,6 +275,40 @@ describe("legacy device identity Doctor migration", () => {
       sha256: createHash("sha256").update(bytes).digest("hex"),
     });
   });
+
+  it.each([
+    ["node", "node-device.json"],
+    ["shareExtension", "share-device.json.native-importing"],
+  ] as const)(
+    "migrates the %s identity before client admission and consumes its source once",
+    async (identityKey, filename) => {
+      const sourcePath = await writeLegacy({ filename, value: swiftIdentity() });
+      const sourceBytes = await fsp.readFile(sourcePath);
+      expect(() => readStoredDeviceIdentity({ env, identityKey })).toThrow("require migration");
+
+      const result = await migrate();
+
+      expect(result.warnings).toEqual([]);
+      const migrated = readStoredDeviceIdentity({ env, identityKey });
+      expect(migrated).toMatchObject({ deviceId: SWIFT_RAW_DEVICE_ID, createdAtMs: CREATED_AT_MS });
+      expect(migrated).toEqual(normalizedSwift());
+      expect(identityRow()).toBeUndefined();
+      await expect(fsp.readFile(sourcePath)).resolves.toEqual(sourceBytes);
+      const consumed = withDatabase(
+        (db) => readClientCredentialReceipt(db)?.receipt.legacyImports[`identity:${identityKey}`],
+      );
+      expect(consumed).toEqual({ sha256: createHash("sha256").update(sourceBytes).digest("hex") });
+
+      await fsp.writeFile(sourcePath, JSON.stringify({ version: 1, ...anotherIdentity() }));
+      expect((await migrate()).warnings).toEqual([]);
+      expect(readStoredDeviceIdentity({ env, identityKey })).toEqual(normalizedSwift());
+      expect(
+        withDatabase(
+          (db) => readClientCredentialReceipt(db)?.receipt.legacyImports[`identity:${identityKey}`],
+        ),
+      ).toEqual(consumed);
+    },
+  );
 
   it("repairs noncanonical PEM formatting while preserving JSON", async () => {
     const expected = normalizedSwift();

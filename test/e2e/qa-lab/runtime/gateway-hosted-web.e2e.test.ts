@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, expect, it, vi } from "vitest";
 import adminHttpRpcPlugin from "../../../../extensions/admin-http-rpc/index.js";
@@ -22,11 +21,10 @@ import {
   resetPluginRuntimeStateForTest,
 } from "../../../../src/plugins/runtime.js";
 import { withEnvAsync } from "../../../../src/test-utils/env.js";
-import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
+import { withOpenClawTestState } from "../../../../src/test-utils/openclaw-test-state.js";
 
 const TOKEN = "qa-hosted-web-token";
 const OPERATOR_SCOPES = ["operator.read", "operator.write", "operator.admin"];
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(async () => {
   vi.useRealTimers();
@@ -39,45 +37,37 @@ it(
   "serves the Control UI, admin RPC, and capability-scoped A2UI assets",
   { timeout: 90_000 },
   async () => {
-    const root = tempDirs.make("openclaw-qa-hosted-web-");
-    const stateDir = path.join(root, "state");
-    const controlUiRoot = path.join(root, "control-ui");
-    const configPath = path.join(root, "openclaw.json");
-    await Promise.all([
-      fs.mkdir(stateDir, { recursive: true }),
-      fs.mkdir(controlUiRoot, { recursive: true }),
-    ]);
-    await fs.writeFile(
-      path.join(controlUiRoot, "index.html"),
-      "<!doctype html><html><body>Gateway hosted Control UI</body></html>",
-      "utf8",
-    );
-
-    const config: OpenClawConfig = {
-      gateway: {
-        mode: "local",
-        bind: "loopback",
-        auth: { mode: "token", token: TOKEN },
-        controlUi: { enabled: true, root: controlUiRoot },
-      },
-    };
-    await fs.writeFile(configPath, `${JSON.stringify(config)}\n`, "utf8");
-
-    await withEnvAsync(
+    await withOpenClawTestState(
       {
-        ...snapshotGatewayStartupEnv(),
-        HOME: root,
-        OPENCLAW_CONFIG_PATH: configPath,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        OPENCLAW_HOME: root,
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
-        OPENCLAW_STATE_DIR: stateDir,
+        label: "qa-hosted-web",
+        env: {
+          ...snapshotGatewayStartupEnv(),
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+          OPENCLAW_SKIP_CHANNELS: "1",
+          OPENCLAW_SKIP_CRON: "1",
+          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+          OPENCLAW_SKIP_PROVIDERS: "1",
+        },
       },
-      async () => {
+      async (state) => {
+        const controlUiRoot = state.path("control-ui");
+        await fs.mkdir(controlUiRoot, { recursive: true });
+        await fs.writeFile(
+          state.path("control-ui", "index.html"),
+          "<!doctype html><html><body>Gateway hosted Control UI</body></html>",
+          "utf8",
+        );
+
+        const config: OpenClawConfig = {
+          gateway: {
+            mode: "local",
+            bind: "loopback",
+            auth: { mode: "token", token: TOKEN },
+            controlUi: { enabled: true, root: controlUiRoot },
+          },
+        };
+        await state.writeConfig(config);
         clearConfigCache();
         clearRuntimeConfigSnapshot();
         const claim = await acquireGatewayE2ePortBlock();

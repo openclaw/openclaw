@@ -3,6 +3,17 @@ type PluginArtifactLocation = { modulePath: string; boundaryRoot: string };
 
 export type PluginModuleLoader = (target: string) => unknown;
 
+export type InspectionNativeEsmPolicy = {
+  workspaces: ReadonlySet<string>;
+  sources: ReadonlyMap<string, string>;
+  devSourceRoot?: string | null;
+};
+
+/** Admission owns the lifetime; the module loader owns concrete code and capture resources. */
+export type InspectionNativeEsmRetention = InspectionNativeEsmPolicy & {
+  dispose?: () => Promise<void>;
+};
+
 type PluginModuleCacheVariant = {
   exports?: { value: unknown };
   pending?: Promise<unknown>;

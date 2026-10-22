@@ -95,7 +95,7 @@ export function resolveTwitchAccountContext(cfg: OpenClawConfig, accountId?: str
     ? normalizeAccountId(accountId)
     : resolveDefaultTwitchAccountId(cfg);
   const account = getAccountConfig(cfg, resolvedAccountId);
-  const tokenResolution = resolveTwitchToken(cfg, { accountId: resolvedAccountId });
+  const tokenResolution = resolveTwitchToken(cfg, resolvedAccountId);
   return {
     accountId: resolvedAccountId,
     account,

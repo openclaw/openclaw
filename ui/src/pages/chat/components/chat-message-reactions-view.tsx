@@ -3,10 +3,14 @@ import { isReactionEmoji } from "../../../../../packages/gateway-protocol/src/re
 import { EmojiSearchPanel } from "../../../components/emoji-search-panel.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../../components/solid/popover.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
-import type { MessageReactionPlacement } from "./chat-message-reaction-model.ts";
 import "./chat-message-reactions.css";
+import type { MessageReactionPlacement } from "./chat-message-reaction-model.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 const QUICK_REACTIONS = ["👍", "❤️", "🎉", "👀", "🚀", "😂"] as const;
 // Shown before the search has a query; quick reactions lead so the grid extends the palette.
@@ -125,19 +129,11 @@ export function MessageReactionPicker(props: MessageReactionPickerProps) {
           aria-expanded="false"
           onClick={() => popover?.overlay.request(!popover.overlay.open)}
         >
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
+          <StrokeIcon aria-hidden="true">
             <path d="M21 11.5a9 9 0 1 1-8.5-8.5" />
             <path d="M8 14s1.5 2 4 2 4-2 4-2M16 5h6M19 2v6" />
             <path d="M9 9h.01M15 9h.01" />
-          </svg>
+          </StrokeIcon>
         </button>
       </openclaw-tooltip>
       <Popover

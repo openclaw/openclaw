@@ -53,6 +53,7 @@ import {
   extractToolResultText,
   formatToolResultText,
 } from "./tool-result-text.js";
+import { getPublishedRuntimeToolInputSchema } from "./tool-schema-json-projection.js";
 
 const MISTRAL_TOOL_CALL_ID_LENGTH = 9;
 
@@ -133,7 +134,7 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
       let convertedToolNames: Set<string> | undefined;
 
       if (context.tools?.length) {
-        const tools = toFunctionTools(context.tools);
+        const tools = toFunctionTools(context.tools, Boolean(options?.onPayload));
         convertedToolNames = new Set(tools.map((tool) => tool.function.name));
         payload.tools = tools;
       }
@@ -576,16 +577,23 @@ function resolveMistralPromptCacheKey(options?: MistralOptions): string | undefi
   return options?.promptCacheKey?.trim() || options?.sessionId?.trim() || undefined;
 }
 
-function toFunctionTools(tools: Tool[]): Array<FunctionTool & { type: "function" }> {
+function toFunctionTools(
+  tools: Tool[],
+  mutablePayload: boolean,
+): Array<FunctionTool & { type: "function" }> {
   const converted = tools.map((tool) => {
     const name = tool.name;
     const description = tool.description;
+    const parameters = tool.parameters;
     const value = {
       type: "function",
       function: {
         name,
         description,
-        parameters: structuredClone(tool.parameters),
+        parameters:
+          !mutablePayload && getPublishedRuntimeToolInputSchema(parameters)
+            ? parameters
+            : structuredClone(parameters),
         strict: false,
       },
     } satisfies FunctionTool & { type: "function" };

@@ -255,9 +255,13 @@ describe("native OpenAI Responses WebSocket transport", () => {
     const callers = new AsyncLocalStorage<object>();
     const references: WeakRef<object>[] = [];
     const httpCalls: number[] = [];
-    queueCompletions(...(failed ? [] : ["resp_1", "resp_2"]));
+    const callerCount = failed ? 1 : 32;
+    queueCompletions(
+      ...(failed ? [] : Array.from({ length: callerCount + 1 }, (_, index) => `resp_${index + 1}`)),
+    );
+    let turnIndex = 0;
     const turn = () => {
-      const caller = { turn: 1 };
+      const caller = { turn: ++turnIndex };
       const body = { model: "gpt-5.6-luna", input: [firstUser] };
       const restoreRequest = () => body;
       const requestClient = new OpenAI({
@@ -273,6 +277,7 @@ describe("native OpenAI Responses WebSocket transport", () => {
         await consumeResponse(
           createStream(body, {
             client: requestClient,
+            sessionId: failed ? "session-1" : `retention-${caller.turn}`,
             ...(failed ? { restoreRequest, degradeCooldownMs: 60_000 } : {}),
           }),
         );
@@ -283,12 +288,20 @@ describe("native OpenAI Responses WebSocket transport", () => {
     };
     try {
       // Vitest's async matcher retains the rejection until the test finishes.
-      await runTurnOutsideCollector(() =>
-        failed ? assert.rejects(turn(), /failed after request dispatch/) : turn(),
+      for (let index = 0; index < callerCount; index++) {
+        await runTurnOutsideCollector(() =>
+          failed ? assert.rejects(turn(), /failed after request dispatch/) : turn(),
+        );
+      }
+      expect(httpCalls).toEqual(
+        failed ? [] : Array.from({ length: callerCount }, (_, index) => index + 1),
       );
-      expect(httpCalls).toEqual(failed ? [] : [1]);
       const control = new WeakRef({ unowned: true });
       // Keep real cache timers and ALS alive while collecting the completed turn.
+      await nextTurn();
+      queryObjects(WeakRef);
+      // Completed SDK promise state can keep the last caller reachable during
+      // the first collection. Collect across a job boundary without closing sockets.
       await nextTurn();
       queryObjects(WeakRef);
       expect(control.deref()).toBeUndefined();
@@ -301,16 +314,18 @@ describe("native OpenAI Responses WebSocket transport", () => {
             }),
           );
         } else {
-          const followup = createStream();
+          const followup = createStream(request(), { sessionId: `retention-${callerCount}` });
           expect(followup).toMatchObject({
             reusedConnection: true,
-            request: { previous_response_id: "resp_1" },
+            request: { previous_response_id: `resp_${callerCount}` },
           });
           await consumeResponse(followup);
-          expect(websocketState.instances[0]?.closed).toBe(false);
+          for (const instance of websocketState.instances) {
+            expect(instance.closed).toBe(false);
+          }
         }
       });
-      expect(websocketState.instances).toHaveLength(1);
+      expect(websocketState.instances).toHaveLength(callerCount);
     } finally {
       cleanupSessionResources(undefined, host);
       callers.disable();

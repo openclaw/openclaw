@@ -377,6 +377,7 @@ it
         if (kind === "timeout") {
           // Expire the owner synchronously, without dispatching its timer.
           vi.useFakeTimers({ toFake: ["Date"] });
+          vi.spyOn(performance, "now").mockImplementation(() => Date.now());
           vi.setSystemTime(Date.now() + 60_001);
           run.executorFence.assertCurrent();
           throw new Error("The activation deadline did not revoke its owner");

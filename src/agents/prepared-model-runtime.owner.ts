@@ -441,7 +441,6 @@ export async function publishPreparedModelRuntimeOwnerBatch(
     providerDiscoveryTimeoutMs?: number;
     isPublicationCurrent?: () => boolean;
     isOwnerRegistered?: (key: string, owner: PreparedModelRuntimeOwner) => boolean;
-    isOwnerPublished?: (key: string, owner: PreparedModelRuntimeOwner) => boolean;
     isBuildCurrent?: () => boolean;
     onBuildStats?: (stats: PreparedModelRuntimeBuildStats) => void;
     registerEntriesAfterBuildStart?: boolean;
@@ -477,7 +476,6 @@ export async function publishPreparedModelRuntimeOwnerBatch(
       owner.generation === generation &&
       (params.isOwnerRegistered?.(key, owner) ?? params.owners.get(key) === owner);
     const isCurrent = () => (params.isPublicationCurrent?.() ?? true) && isGenerationCurrent();
-    const isPublished = params.isOwnerPublished;
     return {
       catalogMode: owner.catalogMode,
       input,
@@ -487,7 +485,6 @@ export async function publishPreparedModelRuntimeOwnerBatch(
       prepareInboundPluginRegistry: owner.provenance === "configured",
       inspectRegistry:
         owner.provenance === "run" || (owner.provenance === "ephemeral" && input.readOnly === true),
-      isPublished: isPublished ? () => isPublished(key, owner) : undefined,
       isGenerationCurrent,
       retirementSignal: capturePreparedModelRuntimeGeneration(owner),
       isBuildCurrent: params.isBuildCurrent ?? isCurrent,

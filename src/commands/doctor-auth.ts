@@ -234,29 +234,6 @@ function formatOAuthRefreshFailureReason(reason: OAuthRefreshFailureReason | nul
   }
 }
 
-function formatOAuthRefreshFailureDoctorLine(params: {
-  profileId: string;
-  provider: string;
-  message: string;
-}): string | null {
-  const classified = classifyOAuthRefreshFailure(params.message);
-  if (!classified) {
-    return null;
-  }
-  const rawProvider = classified.provider ?? params.provider;
-  const provider = rawProvider
-    ? (DOCTOR_REAUTH_PROVIDER_ALIASES[rawProvider] ?? rawProvider)
-    : null;
-  const command = buildOAuthRefreshFailureLoginCommand(provider, {
-    profileId: provider === rawProvider ? params.profileId : undefined,
-  });
-  const commandMarkdown = formatOAuthRefreshFailureLoginCommandMarkdown(command);
-  if (classified.reason) {
-    return `- ${params.profileId}: re-auth required [${formatOAuthRefreshFailureReason(classified.reason)}] — Run ${commandMarkdown}.`;
-  }
-  return `- ${params.profileId}: OAuth refresh failed — Try again; if this persists, run ${commandMarkdown}.`;
-}
-
 async function resolveAuthIssueHint(
   issue: AuthIssue,
   cfg: OpenClawConfig,
@@ -411,78 +388,6 @@ export async function collectAuthProfileHealthFindings(params: {
   return findings;
 }
 
-async function noteAuthProfileHealthForTarget(params: {
-  cfg: OpenClawConfig;
-  prompter: DoctorPrompter;
-  allowKeychainPrompt: boolean;
-  target: AuthProfileHealthTarget;
-  labelStores: boolean;
-}): Promise<string[]> {
-  let { store, summary } = loadAuthProfileHealth(params);
-  const noteTitle = (title: string) =>
-    params.labelStores ? `${title} (${params.target.label})` : title;
-  const unusable = collectAuthProfileCooldowns(store).map(
-    ({ profileId, kind, remaining, hint }) =>
-      `- ${profileId}: ${kind} (${remaining})${hint ? ` — ${hint}` : ""}`,
-  );
-
-  if (unusable.length > 0) {
-    note(unusable.join("\n"), noteTitle("Auth profile cooldowns"));
-  }
-
-  let issues = summary.profiles.filter(isAuthProfileHealthIssue);
-  if (issues.length === 0) {
-    return [];
-  }
-
-  const refreshTargets = issues.filter((issue) => issue.type === "oauth");
-  const shouldRefresh =
-    refreshTargets.length > 0 &&
-    (await params.prompter.confirmAutoFix({
-      message: "Refresh expiring OAuth tokens now? (static tokens need re-auth)",
-      initialValue: true,
-    }));
-
-  if (shouldRefresh) {
-    const errors: string[] = [];
-    for (const profile of refreshTargets) {
-      try {
-        await resolveApiKeyForProfile({
-          cfg: params.cfg,
-          store,
-          profileId: profile.profileId,
-          agentDir: params.target.agentDir,
-          forceRefresh: true,
-        });
-      } catch (err) {
-        const message = formatErrorMessage(err);
-        errors.push(
-          formatOAuthRefreshFailureDoctorLine({
-            profileId: profile.profileId,
-            provider: profile.provider,
-            message,
-          }) ?? `- ${profile.profileId}: ${message}`,
-        );
-      }
-    }
-    if (errors.length > 0) {
-      note(errors.join("\n"), noteTitle("OAuth refresh errors"));
-    }
-    ({ store, summary } = loadAuthProfileHealth({ ...params, allowKeychainPrompt: false }));
-    issues = summary.profiles.filter(isAuthProfileHealthIssue);
-  }
-
-  return Promise.all(
-    issues.map(async (issue) => {
-      const remaining =
-        issue.remainingMs !== undefined ? ` (${formatRemainingShort(issue.remainingMs)})` : "";
-      const hint = await resolveAuthIssueHint(issue, params.cfg, store);
-      const reason = issue.reasonCode ? ` [${issue.reasonCode}]` : "";
-      return `- ${issue.profileId}: ${issue.status}${reason}${remaining}${hint ? ` — ${hint}` : ""}`;
-    }),
-  );
-}
-
 export async function noteAuthProfileHealth(params: {
   cfg: OpenClawConfig;
   prompter: DoctorPrompter;
@@ -496,7 +401,81 @@ export async function noteAuthProfileHealth(params: {
   const labelStores = activeTargets.length > 1;
   const storesByIssueLine = new Map<string, Set<string>>();
   for (const target of activeTargets) {
-    for (const line of await noteAuthProfileHealthForTarget({ ...params, target, labelStores })) {
+    const { cfg, prompter, allowKeychainPrompt } = params;
+    let { store, summary } = loadAuthProfileHealth({ cfg, target, allowKeychainPrompt });
+    const noteTitle = (title: string) => (labelStores ? `${title} (${target.label})` : title);
+    const unusable = collectAuthProfileCooldowns(store).map(
+      ({ profileId, kind, remaining, hint }) =>
+        `- ${profileId}: ${kind} (${remaining})${hint ? ` — ${hint}` : ""}`,
+    );
+
+    if (unusable.length > 0) {
+      note(unusable.join("\n"), noteTitle("Auth profile cooldowns"));
+    }
+
+    let issues = summary.profiles.filter(isAuthProfileHealthIssue);
+    if (issues.length === 0) {
+      continue;
+    }
+
+    const refreshTargets = issues.filter((issue) => issue.type === "oauth");
+    const shouldRefresh =
+      refreshTargets.length > 0 &&
+      (await prompter.confirmAutoFix({
+        message: "Refresh expiring OAuth tokens now? (static tokens need re-auth)",
+        initialValue: true,
+      }));
+
+    if (shouldRefresh) {
+      const errors: string[] = [];
+      for (const profile of refreshTargets) {
+        try {
+          await resolveApiKeyForProfile({
+            cfg,
+            store,
+            profileId: profile.profileId,
+            agentDir: target.agentDir,
+            forceRefresh: true,
+          });
+        } catch (err) {
+          const message = formatErrorMessage(err);
+          const classified = classifyOAuthRefreshFailure(message);
+          if (!classified) {
+            errors.push(`- ${profile.profileId}: ${message}`);
+            continue;
+          }
+          const rawProvider = classified.provider ?? profile.provider;
+          const provider = rawProvider
+            ? (DOCTOR_REAUTH_PROVIDER_ALIASES[rawProvider] ?? rawProvider)
+            : null;
+          const command = buildOAuthRefreshFailureLoginCommand(provider, {
+            profileId: provider === rawProvider ? profile.profileId : undefined,
+          });
+          const commandMarkdown = formatOAuthRefreshFailureLoginCommandMarkdown(command);
+          errors.push(
+            classified.reason
+              ? `- ${profile.profileId}: re-auth required [${formatOAuthRefreshFailureReason(classified.reason)}] — Run ${commandMarkdown}.`
+              : `- ${profile.profileId}: OAuth refresh failed — Try again; if this persists, run ${commandMarkdown}.`,
+          );
+        }
+      }
+      if (errors.length > 0) {
+        note(errors.join("\n"), noteTitle("OAuth refresh errors"));
+      }
+      ({ store, summary } = loadAuthProfileHealth({ cfg, target, allowKeychainPrompt: false }));
+      issues = summary.profiles.filter(isAuthProfileHealthIssue);
+    }
+
+    const issueLines = await Promise.all(
+      issues.map(async (issue) => {
+        const remaining =
+          issue.remainingMs !== undefined ? ` (${formatRemainingShort(issue.remainingMs)})` : "";
+        const hint = await resolveAuthIssueHint(issue, cfg, store);
+        const reason = issue.reasonCode ? ` [${issue.reasonCode}]` : "";
+        return `- ${issue.profileId}: ${issue.status}${reason}${remaining}${hint ? ` — ${hint}` : ""}`;
+      }),
+    );
+    for (const line of issueLines) {
       const labels = storesByIssueLine.get(line) ?? new Set<string>();
       storesByIssueLine.set(line, labels.add(target.label));
     }

@@ -238,7 +238,7 @@ describe("managed unified Computer Use marketplace", () => {
         const result = await readStatus(params);
         expect(result).toMatchObject({
           ...disabledStatus,
-          installation: { status: "unchecked", ok: false },
+          installation: "unchecked",
         });
         const display = formatComputerUseStatus(result);
         expect(display).toContain("Plugin: computer-use (installation unchecked)");

@@ -62,12 +62,7 @@ async function expectRejectedTurn(page: Page, message: string, error: string) {
 }
 
 async function withNewSessionPage(run: (page: Page) => Promise<void>): Promise<void> {
-  const context = await suite.browser.newContext(createControlUiE2eContextOptions());
-  try {
-    await run(await context.newPage());
-  } finally {
-    await context.close();
-  }
+  await suite.withPage(createControlUiE2eContextOptions(), ({ page }) => run(page));
 }
 
 suite.define(() => {
@@ -398,25 +393,21 @@ suite.define(() => {
           mediaImageLayout: { slots: [{ kind: "inline", factIndex: 0 }] },
         },
       };
+      const responses = initialPromptResponses(sessionKey, runId, "single-image-prompt");
       const gateway = await installMockGateway(page, {
         deferredMethods: ["chat.startup"],
         methodResponses: {
+          ...responses,
           "sessions.create": {
-            key: sessionKey,
-            runId,
+            ...responses["sessions.create"],
             entry: { sessionId: "single-image-prompt" },
-            runStarted: true,
-            messageSeq: 1,
           },
-          "sessions.list": createdSessionListResult(sessionKey),
           "chat.startup": {
+            ...responses["chat.startup"],
             messages: [authoritative],
-            sessionId: "single-image-prompt",
             sessionInfo: {
+              ...responses["chat.startup"].sessionInfo,
               activeRunIds: [runId],
-              hasActiveRun: true,
-              key: sessionKey,
-              status: "running",
             },
           },
         },
@@ -447,6 +438,10 @@ suite.define(() => {
         const captureThumbnail = () => userImage.screenshot({ animations: "disabled" });
         const initialPixels = await captureThumbnail();
         await userImage.evaluate((image) => image.setAttribute("data-initial-image-node", "true"));
+        const expectStablePixels = async () => {
+          expect((await captureThumbnail()).equals(initialPixels)).toBe(true);
+          expect(await userRow.locator('[aria-busy="true"]').count()).toBe(0);
+        };
         await pollLocatorText(userRow).toContain(message);
         await pollLocatorText(userRow).not.toContain("Attached image");
 
@@ -476,8 +471,7 @@ suite.define(() => {
         await expect.poll(() => metadataRequested).toBe(true);
         await pollAttribute(userImage, "data-initial-image-node").toBe("true");
         await pollAttribute(userImage, "src").toBe(initialImageSrc);
-        expect((await captureThumbnail()).equals(initialPixels)).toBe(true);
-        expect(await userRow.locator('[aria-busy="true"]').count()).toBe(0);
+        await expectStablePixels();
 
         const worktreeSession = {
           key: sessionKey,
@@ -512,8 +506,7 @@ suite.define(() => {
         );
         expect(await userImage.getAttribute("data-initial-image-node")).toBe("true");
         expect(await userImage.getAttribute("src")).toBe(initialImageSrc);
-        expect((await captureThumbnail()).equals(initialPixels)).toBe(true);
-        expect(await userRow.locator('[aria-busy="true"]').count()).toBe(0);
+        await expectStablePixels();
 
         await gateway.resolveDeferred("chat.startup");
 

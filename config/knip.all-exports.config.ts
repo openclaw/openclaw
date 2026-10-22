@@ -189,6 +189,10 @@ const workspaces = Object.fromEntries(
               ...(workspace === "extensions/team-reports"
                 ? ["src/report-run.benchmark.test-support.ts!"]
                 : []),
+              // extensions/diagnostics-prometheus/benchmarks/README.md invokes this Node benchmark by path.
+              ...(workspace === "extensions/diagnostics-prometheus"
+                ? ["src/metric-store.benchmark.test-support.ts!"]
+                : []),
               // The PostgreSQL fixture resolves this backend through openEngineWorkerStore.
               ...(workspace === "extensions/workboard"
                 ? ["src/test/postgres-fixture-worker.test-support.ts!"]

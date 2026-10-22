@@ -51,7 +51,7 @@ async function installRenderProbe(page: Page) {
 }
 
 suite.define(() => {
-  it("prewarms session actions after a busy cold load without building unrelated menus or losing the draft", () =>
+  it("leaves session actions unbuilt after a busy cold load until opened without losing the draft", () =>
     suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 1440, height: 1000 } },
       async ({ page }) => {
@@ -190,9 +190,9 @@ suite.define(() => {
         await nextFrame(page);
         const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
         expect(pageErrors).toEqual([]);
-        await expect
-          .poll(() => pane.locator('openclaw-chat-header-session-menu [role^="menuitem"]').count())
-          .toBeGreaterThan(0);
+        expect(
+          await pane.locator('openclaw-chat-header-session-menu [role^="menuitem"]').count(),
+        ).toBe(0);
         expect(await pane.locator('[role="menu"][popover]:popover-open').count()).toBe(0);
         const measurement = await page.evaluate(() => {
           const items = Array.from(
@@ -230,12 +230,14 @@ suite.define(() => {
         await page.keyboard.press("Escape");
         await pane.getByRole("button", { name: "Session sharing", exact: true }).click();
         const sharing = pane.locator(".chat-pane__sharing-menu");
-        await sharing.getByText("Members", { exact: true }).waitFor();
-        const search = sharing.getByRole("searchbox", { name: "Search people and agents…" });
+        await sharing.getByText("Session access", { exact: true }).waitFor();
+        const searchToggle = sharing.getByRole("button", { name: "Search people…", exact: true });
+        await searchToggle.click();
+        const search = sharing.getByRole("searchbox", { name: "Search people…", exact: true });
         await search.fill("Person 109");
         await nextFrame(page);
         await page.keyboard.press("ArrowDown");
-        expect(await sharing.locator(".chat-pane__sharing-member").count()).toBe(1);
+        expect(await sharing.locator(".chat-pane__sharing-person").count()).toBe(1);
         expect(
           await sharing
             .locator('[data-value="member:person-109"]')
@@ -244,7 +246,10 @@ suite.define(() => {
         await page.keyboard.press("ArrowUp");
         expect(await search.evaluate((element) => element === document.activeElement)).toBe(true);
         await page.keyboard.press("Escape");
-        expect(await search.inputValue()).toBe("");
+        expect(await sharing.locator('input[type="search"]').inputValue()).toBe("");
+        expect(await searchToggle.evaluate((element) => element === document.activeElement)).toBe(
+          true,
+        );
         await page.keyboard.press("Escape");
         expect(
           await sharing

@@ -24,7 +24,6 @@ openclaw-board-view {
 }
 
 .board-view--loading {
-  opacity: 0;
   pointer-events: none;
 }
 
@@ -346,7 +345,14 @@ openclaw-board-widget-cell {
   min-height: 0;
 }
 
+.board-view--loading .board-widget__frame-pane > .board-widget__frame {
+  z-index: 3;
+}
+
 .board-widget__frame-pane > .board-widget__frame {
+  /* Paint over the placeholder without waiting for host readiness. */
+  background: transparent;
+  position: relative;
   flex: 1;
   min-height: 0;
 }

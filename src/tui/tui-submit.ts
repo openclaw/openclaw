@@ -147,11 +147,9 @@ export function createSubmitBurstCoalescer(params: {
   captureSnapshot?: () => TuiChatSubmitSnapshot;
   enabled: boolean;
   burstWindowMs?: number;
-  now?: () => number;
   onCapture?: (value: string, snapshot?: TuiChatSubmitSnapshot) => void;
 }) {
   const windowMs = Math.max(1, params.burstWindowMs ?? 50);
-  const now = params.now ?? (() => Date.now());
   let pending: { value: string; snapshot?: TuiChatSubmitSnapshot } | null = null;
   let pendingAt = 0;
   let flushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -194,7 +192,7 @@ export function createSubmitBurstCoalescer(params: {
       submit(value, params.captureSnapshot?.());
       return;
     }
-    const ts = now();
+    const ts = Date.now();
     const snapshot = params.captureSnapshot?.();
     params.onCapture?.(value, snapshot);
     if (pending && ts - pendingAt <= windowMs) {

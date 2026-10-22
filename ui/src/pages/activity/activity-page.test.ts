@@ -151,7 +151,7 @@ function activityGateway() {
   store
     .current()
     .request.mockImplementation(async (method, params) => activityResponse(method, params));
-  store.current().opts.onHello?.(activityHello());
+  store.current().testOptions.onHello?.(activityHello());
   return store;
 }
 
@@ -229,7 +229,7 @@ describe("ActivityPage gateway lifecycle", () => {
       vi.useFakeTimers();
       try {
         const message = (session: GatewaySessionRow) =>
-          current().opts.onEvent?.(
+          current().testOptions.onEvent?.(
             createGatewayEvent("session.message", {
               sessionKey: active.key,
               agentId: "main",
@@ -299,7 +299,7 @@ describe("ActivityPage gateway lifecycle", () => {
         8_640_000_000_000_001,
       ].entries()) {
         now.mockReturnValue(updatedAt);
-        current().opts.onEvent?.(
+        current().testOptions.onEvent?.(
           createGatewayEvent("session.tool", {
             stream: "tool",
             runId: `time-${index}`,
@@ -354,8 +354,8 @@ describe("ActivityPage gateway lifecycle", () => {
     await i18n.setLocale("en");
     const { gateway: source, current } = activityGateway();
     const page = await bindActivity(source, "/control");
-    current().opts.onEvent?.(toolEvent("exec", "main", "exec", "live run:a/b"));
-    current().opts.onEvent?.(toolEvent("read"));
+    current().testOptions.onEvent?.(toolEvent("exec", "main", "exec", "live run:a/b"));
+    current().testOptions.onEvent?.(toolEvent("read"));
     flush();
     const container = page.container;
     const toolbar = container.querySelector(".activity-live-toolbar");
@@ -447,8 +447,8 @@ describe("ActivityPage gateway lifecycle", () => {
     await i18n.setLocale("en");
     const { gateway: source, current } = activityGateway();
     const page = await bindActivity(source);
-    current().opts.onEvent?.(toolEvent("exec", "main", "exec"));
-    current().opts.onEvent?.(toolEvent("read"));
+    current().testOptions.onEvent?.(toolEvent("exec", "main", "exec"));
+    current().testOptions.onEvent?.(toolEvent("read"));
     flush();
     const container = page.container;
     const tool = container.querySelector<HTMLSelectElement>(".activity-live-filter-popover select");
@@ -467,13 +467,13 @@ describe("ActivityPage gateway lifecycle", () => {
     ).toEqual(["read"]);
 
     container.querySelector<HTMLButtonElement>(".activity-page button.danger")?.click();
-    current().opts.onEvent?.(toolEvent("read"));
+    current().testOptions.onEvent?.(toolEvent("read"));
     flush();
     expect(tool?.value).toBe("read");
     expect(tool?.selectedOptions[0]?.textContent).toBe("read");
     expect(container.querySelectorAll(".activity-entry")).toHaveLength(1);
 
-    current().opts.onEvent?.(toolEvent("exec", "main", "exec"));
+    current().testOptions.onEvent?.(toolEvent("exec", "main", "exec"));
     tool.value = "";
     tool.dispatchEvent(new Event("change", { bubbles: true }));
     flush();
@@ -486,7 +486,7 @@ describe("ActivityPage gateway lifecycle", () => {
     await i18n.setLocale("en");
     const { gateway: source, current } = activityGateway();
     const page = await bindActivity(source);
-    current().opts.onEvent?.(
+    current().testOptions.onEvent?.(
       createGatewayEvent("agent", {
         stream: "item",
         runId: "run-1",
@@ -529,7 +529,7 @@ describe("ActivityPage gateway lifecycle", () => {
   it("starts empty on initial bind and source replacement", async () => {
     const first = activityGateway();
     const page = await bindActivity(first.gateway);
-    first.current().opts.onEvent?.(toolEvent("old"));
+    first.current().testOptions.onEvent?.(toolEvent("old"));
     expect(previews(page)).toEqual(["old output"]);
     page.dispose();
     const next = activityGateway();
@@ -540,15 +540,15 @@ describe("ActivityPage gateway lifecycle", () => {
   it("does not collect live events in sessions mode", async () => {
     const { gateway: source, current } = activityGateway();
     const page = await bindActivity(source);
-    current().opts.onEvent?.(toolEvent("first"));
+    current().testOptions.onEvent?.(toolEvent("first"));
     expandFirst(page);
     page.setRouteLocation({ pathname: "/activity", search: "", hash: "" });
-    current().opts.onEvent?.(toolEvent("while-away"));
+    current().testOptions.onEvent?.(toolEvent("while-away"));
     page.setRouteLocation({ pathname: "/activity", search: "?view=live", hash: "" });
     await syncActivityRoster(page);
     expect(previews(page)).toEqual(["first output"]);
     expect(page.container.querySelector<HTMLDetailsElement>(".activity-entry")?.open).toBe(true);
-    current().opts.onEvent?.(toolEvent("returned"));
+    current().testOptions.onEvent?.(toolEvent("returned"));
     expect(previews(page)).toEqual(["first output", "returned output"]);
   });
 
@@ -576,12 +576,12 @@ describe("ActivityPage gateway lifecycle", () => {
   it("retires the mounted session's activity after an account change", async () => {
     const { gateway: source, current } = activityGateway();
     const page = await bindActivity(source);
-    current().opts.onEvent?.(toolEvent("old"));
+    current().testOptions.onEvent?.(toolEvent("old"));
     expect(previews(page)).toEqual(["old output"]);
     expandFirst(page);
 
-    current().opts.onClose?.({ code: 1006, reason: "reconnecting", willRetry: true });
-    current().opts.onHello?.(activityHello("activity-owner-b"));
+    current().testOptions.onClose?.({ code: 1006, reason: "reconnecting", willRetry: true });
+    current().testOptions.onHello?.(activityHello("activity-owner-b"));
 
     expect(previews(page)).toEqual([]);
     flush();
@@ -590,22 +590,22 @@ describe("ActivityPage gateway lifecycle", () => {
       current().request.mockImplementation(async (method, params) =>
         activityResponse(method, params),
       );
-      current().opts.onHello?.(activityHello());
+      current().testOptions.onHello?.(activityHello());
     }
     await syncActivityRoster(page);
-    current().opts.onEvent?.(toolEvent("new"));
+    current().testOptions.onEvent?.(toolEvent("new"));
     expect(previews(page)).toEqual(["new output"]);
   });
 
   it("keeps streamed previews and expansion across ordinary appends and reconnects", async () => {
     const { gateway: source, current } = activityGateway();
     const page = await bindActivity(source);
-    current().opts.onEvent?.(toolEvent("first"));
+    current().testOptions.onEvent?.(toolEvent("first"));
     const firstRow = expandFirst(page);
 
-    current().opts.onEvent?.(toolEvent("second"));
+    current().testOptions.onEvent?.(toolEvent("second"));
     source.connect();
-    current().opts.onHello?.(activityHello());
+    current().testOptions.onHello?.(activityHello());
 
     expect(previews(page)).toEqual(["first output", "second output"]);
     expect(firstRow.open).toBe(true);
@@ -622,7 +622,7 @@ describe("ActivityPage gateway lifecycle", () => {
     const rows = () => page.container.querySelectorAll(".activity-current-work__row");
     expect(rows()).toHaveLength(2);
 
-    current().opts.onClose?.({ code: 1006, reason: "reconnecting", willRetry: true });
+    current().testOptions.onClose?.({ code: 1006, reason: "reconnecting", willRetry: true });
     flush();
     expect(rows()).toHaveLength(2);
     expect(filter.value).toBe("my draft filter");
@@ -631,7 +631,7 @@ describe("ActivityPage gateway lifecycle", () => {
     current().request.mockImplementation(async (method, params) =>
       method === "sessions.list" ? failed.promise : activityResponse(method, params),
     );
-    current().opts.onHello?.(activityHello());
+    current().testOptions.onHello?.(activityHello());
     flush();
     expect(rows()).toHaveLength(2);
     expect(filter.value).toBe("my draft filter");
@@ -660,19 +660,19 @@ describe("ActivityPage gateway lifecycle", () => {
     const { gateway: source, current } = activityGateway();
     const hello = activityHello();
     hello.auth = { ...hello.auth, scopes: ["operator.sessions.read"] };
-    current().opts.onHello?.(hello);
+    current().testOptions.onHello?.(hello);
     const page = await bindActivity(source);
     const rows = () => page.container.querySelectorAll(".activity-current-work__row");
     expect(rows()).toHaveLength(2);
 
-    current().opts.onClose?.({ code: 1006, reason: "reconnecting", willRetry: true });
+    current().testOptions.onClose?.({ code: 1006, reason: "reconnecting", willRetry: true });
     flush();
     expect(rows()).toHaveLength(2);
     const refreshed = createDeferred<SessionsListResult>();
     current().request.mockImplementation(async (method, params) =>
       method === "sessions.list" ? refreshed.promise : activityResponse(method, params),
     );
-    current().opts.onHello?.({
+    current().testOptions.onHello?.({
       ...hello,
       auth: { ...hello.auth, scopes: ["operator.sessions.write"] },
     });
@@ -686,7 +686,7 @@ describe("ActivityPage gateway lifecycle", () => {
     await waitForSolid(() => expect(rows()).toHaveLength(1));
     expect(rows()[0]?.textContent).toContain("Refreshed work");
 
-    current().opts.onHello?.({ ...hello, auth: { ...hello.auth, scopes: [] } });
+    current().testOptions.onHello?.({ ...hello, auth: { ...hello.auth, scopes: [] } });
     flush();
     expect(rows()).toHaveLength(0);
   });
@@ -696,14 +696,14 @@ describe("ActivityPage gateway lifecycle", () => {
     async (mode) => {
       const { gateway: source, current } = activityGateway();
       if (mode === "run") {
-        current().opts.onHello?.({
+        current().testOptions.onHello?.({
           ...activityHello(),
           features: { methods: ["audit.run.inspect"], events: [] },
         });
       }
       let presenceVersion = 0;
       const attachAccount = (id: string) => {
-        current().opts.onEvent?.(
+        current().testOptions.onEvent?.(
           createGatewayEvent("presence", {
             reset: true,
             version: ++presenceVersion,
@@ -735,7 +735,7 @@ describe("ActivityPage gateway lifecycle", () => {
           .querySelector<HTMLButtonElement>(".run-inspector__pagination button")!
           .click();
       } else {
-        current().opts.onEvent?.(toolEvent("previous-account"));
+        current().testOptions.onEvent?.(toolEvent("previous-account"));
         expect(previews(page)).toEqual(["previous-account output"]);
       }
       const replacement = createDeferred<AuditRunInspectResult | SessionsListResult>();
@@ -768,7 +768,7 @@ describe("ActivityPage gateway lifecycle", () => {
       ...activityHello(recoveryScope),
       features: { methods: ["audit.run.inspect"], events: [] },
     });
-    current().opts.onHello?.(hello());
+    current().testOptions.onHello?.(hello());
     const first = presentResult("retained-run");
     const second = {
       ...first,
@@ -795,7 +795,7 @@ describe("ActivityPage gateway lifecycle", () => {
     const stale = createDeferred<AuditRunInspectResult>();
     inspection = stale.promise;
     loadMore().click();
-    current().opts.onClose?.({ code: 1006, reason: "reconnecting", willRetry: true });
+    current().testOptions.onClose?.({ code: 1006, reason: "reconnecting", willRetry: true });
     flush();
     expect(receipts()).toHaveLength(2);
     expect(loadMore().disabled).toBe(true);
@@ -806,7 +806,7 @@ describe("ActivityPage gateway lifecycle", () => {
 
     const failedRefresh = createDeferred<AuditRunInspectResult>();
     inspection = failedRefresh.promise;
-    current().opts.onHello?.(hello());
+    current().testOptions.onHello?.(hello());
     flush();
     expect(receipts()).toHaveLength(2);
     failedRefresh.reject(new Error("Run inspection refresh unavailable"));
@@ -848,8 +848,8 @@ describe("ActivityPage gateway lifecycle", () => {
 
     const replacement = createDeferred<AuditRunInspectResult>();
     inspection = replacement.promise;
-    current().opts.onClose?.({ code: 1006, reason: "reconnecting", willRetry: true });
-    current().opts.onHello?.(hello("activity-owner-b"));
+    current().testOptions.onClose?.({ code: 1006, reason: "reconnecting", willRetry: true });
+    current().testOptions.onHello?.(hello("activity-owner-b"));
     flush();
     expect(receipts()).toHaveLength(0);
     replacement.resolve(first);
@@ -861,7 +861,7 @@ describe("ActivityPage gateway lifecycle", () => {
       ...activityHello(),
       features: { methods: ["audit.run.inspect"], events: [] },
     };
-    current().opts.onHello?.(hello);
+    current().testOptions.onHello?.(hello);
     const first = presentResult("growing-run");
     delete first.nextDecisionCursor;
     let inspection: AuditRunInspectResult = first;
@@ -879,7 +879,7 @@ describe("ActivityPage gateway lifecycle", () => {
     await waitForSolid(() => expect(receipts()).toHaveLength(1));
     expect(loadMore()).toBeNull();
 
-    current().opts.onClose?.({ code: 1006, reason: "reconnecting", willRetry: true });
+    current().testOptions.onClose?.({ code: 1006, reason: "reconnecting", willRetry: true });
     flush();
     expect(receipts()).toHaveLength(1);
     inspection = {
@@ -887,7 +887,7 @@ describe("ActivityPage gateway lifecycle", () => {
       decisionDisplays: [{ ...first.decisionDisplays[0]!, selectorId: "new-first-page" }],
       nextDecisionCursor: "fresh-cursor",
     };
-    current().opts.onHello?.(hello);
+    current().testOptions.onHello?.(hello);
     await waitForSolid(() => expect(receipts()).toHaveLength(2));
     expect(loadMore()?.textContent?.trim()).toBe("Load more receipts");
     expect(loadMore()?.disabled).toBe(false);
@@ -922,7 +922,7 @@ describe("ActivityPage gateway lifecycle", () => {
         ...activityHello(),
         features: { methods: ["audit.run.inspect"], events: [] },
       };
-      current().opts.onHello?.(hello);
+      current().testOptions.onHello?.(hello);
       const first = presentResult("run-a");
       const second = createDeferred<AuditRunInspectResult>();
       let inspection: Promise<AuditRunInspectResult> = Promise.resolve(first);
@@ -938,7 +938,7 @@ describe("ActivityPage gateway lifecycle", () => {
       await waitForSolid(() => expect(receipts()).toHaveLength(1));
       inspection = second.promise;
       if (phase === "offline") {
-        current().opts.onClose?.({ code: 1006, reason: "reconnecting", willRetry: true });
+        current().testOptions.onClose?.({ code: 1006, reason: "reconnecting", willRetry: true });
         flush();
         expect(receipts()).toHaveLength(1);
       }
@@ -951,7 +951,7 @@ describe("ActivityPage gateway lifecycle", () => {
           expect.objectContaining({ runId: "run-b" }),
           expect.anything(),
         );
-        current().opts.onHello?.(hello);
+        current().testOptions.onHello?.(hello);
         flush();
         expect(receipts()).toHaveLength(0);
       }
@@ -983,12 +983,12 @@ describe("ActivityPage gateway lifecycle", () => {
         if (action === "stop") {
           source.stop();
         } else {
-          current().opts.onEvent?.(toolEvent("new-context"));
+          current().testOptions.onEvent?.(toolEvent("new-context"));
         }
       });
       try {
         const page = await bindActivity(source);
-        current().opts.onEvent?.(toolEvent("old"));
+        current().testOptions.onEvent?.(toolEvent("old"));
         retiring = true;
 
         source.connect({ gatewayUrl: "wss://other-activity.example.test" });
@@ -1005,18 +1005,18 @@ describe("ActivityPage gateway lifecycle", () => {
 
   it("starts each visit empty and ignores events received before opening", async () => {
     const { gateway: source, current } = activityGateway();
-    current().opts.onEvent?.(toolEvent("before-open"));
+    current().testOptions.onEvent?.(toolEvent("before-open"));
     const firstPage = await bindActivity(source);
     expect(previews(firstPage)).toEqual([]);
-    current().opts.onEvent?.(toolEvent("first-visit"));
+    current().testOptions.onEvent?.(toolEvent("first-visit"));
     expect(previews(firstPage)).toEqual(["first-visit output"]);
     expect(source.eventLog).toEqual([]);
     firstPage.dispose();
 
-    current().opts.onEvent?.(toolEvent("while-away"));
+    current().testOptions.onEvent?.(toolEvent("while-away"));
     const nextPage = await bindActivity(source);
     expect(previews(nextPage)).toEqual([]);
-    current().opts.onEvent?.(toolEvent("next-visit"));
+    current().testOptions.onEvent?.(toolEvent("next-visit"));
     expect(previews(nextPage)).toEqual(["next-visit output"]);
     expect(previews(nextPage)).not.toContain("first-visit output");
   });
@@ -1053,7 +1053,7 @@ describe("ActivityPage gateway lifecycle", () => {
       acquisitions.mockRestore();
     }
     for (const origin of origins) {
-      current().opts.onEvent?.(
+      current().testOptions.onEvent?.(
         createGatewayEvent("agent", {
           ...origin,
           stream: "item",
@@ -1094,7 +1094,7 @@ describe("ActivityPage gateway lifecycle", () => {
     current().request.mockClear();
 
     globalThis.dispatchEvent(new Event("pagehide"));
-    current().opts.onEvent?.(toolEvent("hidden"));
+    current().testOptions.onEvent?.(toolEvent("hidden"));
     pending.resolve({ key: "agent:other:work" });
     await sessions.unsubscribeMessages(await otherSession);
     const remainingOwner = await sessions.subscribeMessages("main");
@@ -1117,10 +1117,10 @@ describe("ActivityPage gateway lifecycle", () => {
       activityResponse(method, params),
     );
     globalThis.dispatchEvent(new Event("pageshow"));
-    current().opts.onEvent?.(toolEvent("visible"));
+    current().testOptions.onEvent?.(toolEvent("visible"));
     expect(previews(page)).toEqual(["visible output"]);
     page.dispose();
-    current().opts.onEvent?.(toolEvent("unmounted"));
+    current().testOptions.onEvent?.(toolEvent("unmounted"));
     expect(page.container.isConnected).toBe(false);
   });
 
@@ -1186,7 +1186,7 @@ describe("ActivityPage gateway lifecycle", () => {
     );
     retry?.click();
     const recovered = await sessions.subscribeMessages("main");
-    current().opts.onEvent?.(toolEvent("recovered"));
+    current().testOptions.onEvent?.(toolEvent("recovered"));
     flush();
 
     expect(container.querySelector('[role="alert"]')).toBeNull();
@@ -1197,14 +1197,14 @@ describe("ActivityPage gateway lifecycle", () => {
   it("preserves activity and Clear when the selected chat changes", async () => {
     const { gateway: source, current } = activityGateway();
     const page = await bindActivity(source);
-    current().opts.onEvent?.(toolEvent("original"));
+    current().testOptions.onEvent?.(toolEvent("original"));
     const originalRow = expandFirst(page);
     source.setSessionKey("agent:other:work");
 
     expect(previews(page)).toEqual(["original output"]);
     expect(originalRow.open).toBe(true);
     expect(page.container.querySelector(".activity-entry")).toBe(originalRow);
-    current().opts.onEvent?.(toolEvent("other", "agent:other:work"));
+    current().testOptions.onEvent?.(toolEvent("other", "agent:other:work"));
     expect(previews(page)).toEqual(["original output", "other output"]);
 
     const container = page.container;
@@ -1213,7 +1213,7 @@ describe("ActivityPage gateway lifecycle", () => {
     clear?.click();
     source.setSessionKey("main");
     expect(previews(page)).toEqual([]);
-    current().opts.onEvent?.(toolEvent("after-clear", "agent:other:work"));
+    current().testOptions.onEvent?.(toolEvent("after-clear", "agent:other:work"));
     expect(previews(page)).toEqual(["after-clear output"]);
   });
 

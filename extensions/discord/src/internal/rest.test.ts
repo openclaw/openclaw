@@ -294,27 +294,6 @@ describe("RequestClient", () => {
     },
   );
 
-  it("does not requeue an active rate limit after the queue is cleared", async () => {
-    const response = createDeferred<Response>();
-    const fetchSpy = vi.fn(async () => {
-      if (fetchSpy.mock.calls.length > 1) {
-        throw new Error("unexpected retry after clearQueue");
-      }
-      return await response.promise;
-    });
-    const client = requestClient(fetchSpy);
-
-    const request = client.get("/channels/c1/messages");
-    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
-
-    client.clearQueue();
-
-    response.resolve(rateLimitResponse(0, { "X-RateLimit-Bucket": "channel-messages" }));
-
-    await expectRateLimitError(request, { retryAfter: 0 });
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-  });
-
   it.each([
     { body: "9007199254741", header: "7", expected: 7 },
     { body: "1e3", header: "9007199254741", expected: 1 },

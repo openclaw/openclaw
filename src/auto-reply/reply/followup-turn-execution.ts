@@ -7,7 +7,6 @@ import { isAgentRunDirectAbortReason } from "../../agents/run-termination.js";
 import { isIngressAdoptionLostError } from "../../channels/message/ingress-drain-state.js";
 import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
 import { sessionPersonalProfileId } from "../../config/sessions/session-entry-provenance.js";
-import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { captureReplyOperationSessionReader } from "../../sessions/session-controller.state.js";
 import { withCurrentUserTurnInput } from "../../sessions/user-turn-transcript-runtime-context.js";
@@ -207,13 +206,16 @@ export async function executeFollowupTurn(params: {
   };
   const progressOpts: InternalGetReplyOptions = {
     ...sourceOpts,
-    // Presentation defaults can belong to another source or an already settled ingress.
+    // Derived follow-ups take execution capabilities from their queued input.
     cronCreatorAuthorityCapability: undefined,
     isHeartbeat,
     sourceReplyDeliveryMode: turn.queued.run.sourceReplyDeliveryMode,
+    bootstrapContextMode: turn.queued.run.bootstrapContextMode,
+    cleanupBundleMcpOnRunEnd: undefined,
+    scheduledAutomation: turn.queued.run.scheduledAutomation,
     internalEventExecution: turn.queued.run.internalEventExecution,
     userTurnTranscriptRecorder: turn.queued.userTurnTranscriptRecorder,
-    // A refreshed runner owns presentation defaults, never another source's authority or callbacks.
+    // The source runner owns callbacks; the queued input owns this execution's authority.
     operatorAuthority: turn.queued.operatorAuthority,
     abortSignal: turn.operation.abortSignal,
     toolsAllow: turn.queued.toolsAllow,
@@ -314,7 +316,7 @@ export async function executeFollowupTurn(params: {
   let pendingWorkDrain: Promise<void> | undefined;
   const drainPendingWork = () => {
     pendingWorkDrain ??= (async () => {
-      await drainPendingToolTasks({ tasks: pendingWorkTasks, onTimeout: logVerbose });
+      await drainPendingToolTasks({ tasks: pendingWorkTasks });
       // This terminal owner gets one bounded wait. Retire the accounting handoff
       // so timed-out tool delivery cannot start a second idle window.
       pendingToolTasks.clear();
@@ -491,7 +493,7 @@ export async function executeFollowupTurn(params: {
       },
     };
   }
-  // Runner defaults may be newer; only the queued sources own this execution result.
+  // Only the queued sources own this execution result.
   recordReplyOperationAgentTurn(
     turn.queued.replyOperationRunStates,
     turn.operation,

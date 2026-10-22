@@ -14,6 +14,7 @@ import {
   mockToolRequests,
   runLiveRuntimeToolFixture as runLiveFixture,
   runMockRuntimeToolFixture as runMockFixture,
+  runRuntimeToolFixtureWithDeps,
   runtimePatchAddInput,
   runtimePatchUpdateInput,
   runtimeToolFixtureConfig,
@@ -27,7 +28,6 @@ import {
   type RuntimeToolFixtureDeps,
 } from "../test/runtime-tool-fixture-helpers.js";
 import { QaSuiteInfraError } from "./errors.js";
-import { runRuntimeToolFixture } from "./runtime-tool-fixture.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
 const PATCH_ADDED = "apply_patch live provider happy planned args";
@@ -174,6 +174,7 @@ function runAsyncImageFixture(requests: Parameters<typeof mockToolRequests>[0]) 
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   resetPluginStateStoreForTests({ closeDatabase: false });
 });
 afterAll(cleanupRuntimeToolFixtureTempRoots);
@@ -215,7 +216,7 @@ describe("runtime tool fixture", () => {
 
     const runAgentPrompt = vi.fn<RuntimeToolFixtureDeps["runAgentPrompt"]>().mockResolvedValue({});
     await expect(
-      runRuntimeToolFixture(
+      runRuntimeToolFixtureWithDeps(
         env,
         {
           toolName: "read",
@@ -631,7 +632,7 @@ it.each(["correlated success and error", "missing nested result"])(
       });
     }
     await writeRuntimeToolTranscripts(env, "web_fetch", happy, [receipt("failure")]);
-    const result = runRuntimeToolFixture(
+    const result = runRuntimeToolFixtureWithDeps(
       env,
       runtimeToolFixtureConfig("web_fetch"),
       runtimeToolFixtureDeps({ tools: ["web_fetch"] }),

@@ -1,16 +1,51 @@
-import { createSignal } from "solid-js";
-import { expect, it, vi } from "vitest";
+import { createMemo, createSignal } from "solid-js";
+import { expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../../test/helpers/promise.js";
+import type { GatewayBrowserClient } from "../../../api/gateway.ts";
+import { projectMutableSource } from "../../../lib/reactive/projection.ts";
+import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { ComposerSkillCatalog } from "../composer-capability-catalog.ts";
 import {
   docsServer,
   docsTools,
   makeCapabilities,
   makeMenu,
 } from "./chat-composer-menu.test-support.ts";
+import { renderComposerMenuOption as ComposerMenuOption } from "./chat-composer-menu.tsx";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
 import type { ChatComposerPlusMenuProps as Menu } from "./chat-composer-plus-menu.types.ts";
 import { createSlashMenu, SlashMenu, type SlashMenuHost } from "./chat-composer-slash-menu.tsx";
+
+it("uses the current focus policy on a retained suggestion option", () => {
+  let setPreserveFocus!: (value: boolean) => void;
+  const view = mountSolid(() => {
+    const [preserveFocus, update] = createSignal(true);
+    setPreserveFocus = update;
+    return (
+      <ComposerMenuOption
+        id="retained-option"
+        active={false}
+        preserveFocus={preserveFocus()}
+        select={vi.fn()}
+        hover={vi.fn()}
+        icon={undefined}
+        name="Suggestion"
+        description=""
+      />
+    );
+  });
+  const option = view.getByRole("option");
+  for (const preserve of [true, false, true]) {
+    setPreserveFocus(preserve);
+    flush();
+    expect(view.getByRole("option")).toBe(option);
+    const event = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+    option.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(preserve);
+  }
+});
 
 it("retains the slash viewport during selection changes and resets it when switching mode", () => {
   const command = { key: "status", name: "status", description: "Show status" };
@@ -91,9 +126,8 @@ it("retains the focused capability row and management link through catalog refre
   expect(document.activeElement).toBe(row);
 
   update(
-    {},
+    { toolOverrides: { skills: { focused: false } } },
     {
-      skillsLoading: true,
       skills: [{ key: "focused", name: "Focused skill", enabled: false, baseEnabled: true }],
     },
   );
@@ -105,7 +139,7 @@ it("retains the focused capability row and management link through catalog refre
   update(
     {},
     {
-      skillsLoading: false,
+      skillsRead: null,
       skills: [
         { key: "new", name: "New skill", enabled: true, baseEnabled: true },
         { key: "focused", name: "Refreshed skill", enabled: false, baseEnabled: true },
@@ -260,3 +294,133 @@ it.each(["item", "external", "closed"] as const)(
     }
   },
 );
+
+it("keeps skill navigation live through failure, retry and a retired connection read", async () => {
+  const failed = createDeferred<unknown>();
+  const retired = createDeferred<unknown>();
+  const current = createDeferred<unknown>();
+  for (const request of [failed, retired, current]) {
+    onTestFinished(() => request.resolve({ skills: [] }));
+  }
+  const request = vi
+    .fn()
+    .mockReturnValueOnce(failed.promise)
+    .mockReturnValueOnce(retired.promise)
+    .mockReturnValueOnce(current.promise);
+  // SAFETY: the catalog only consumes the Gateway request contract in this fixture.
+  const client = { request } as unknown as GatewayBrowserClient;
+  let epoch = 1;
+  let overrides: SessionToolOverrides | null = null;
+  let publish = () => {};
+  const catalog = new ComposerSkillCatalog(() => publish());
+  const load = () => {
+    const admittedEpoch = epoch;
+    catalog.load(client, admittedEpoch, "main", () => admittedEpoch === epoch);
+  };
+  const view = mountSolid(() => {
+    const projection = projectMutableSource(catalog, (owner) => ({
+      skills: owner.rows("main", overrides),
+      skillsRead: owner.read("main"),
+    }));
+    publish = projection.publish;
+    const [open, setOpen] = createSignal(false);
+    const [selected, setSelected] = createSignal<Menu["view"]>("root");
+    const menu = createMemo(() =>
+      makeMenu({
+        open: open(),
+        view: selected(),
+        toolOverrides: overrides,
+        onOpenChange: setOpen,
+        onViewChange: setSelected,
+        capabilityMenu: makeCapabilities({
+          ...projection.read(),
+          onLoadSkills: load,
+          onPatchToolOverrides: (next) => {
+            overrides = next;
+            publish();
+          },
+        }),
+      }),
+    );
+    return <ChatComposerPlusMenu menu={menu()} />;
+  });
+  const trigger = view.container.querySelector<HTMLButtonElement>(
+    ".agent-chat__input-btn--attach",
+  )!;
+  const panel = view.container.querySelector<HTMLElement>(".agent-chat__capability-menu-panel")!;
+  expect(request).not.toHaveBeenCalled();
+  trigger.click();
+  await waitForSolid(() =>
+    expect(view.getByRole("menuitem", { name: "Skills", hidden: true })).toBeTruthy(),
+  );
+  view.getByRole("menuitem", { name: "Skills", hidden: true }).click();
+  await waitForSolid(() =>
+    expect(view.getByRole("status").textContent).toContain("Loading skills"),
+  );
+  const back = view.getByRole("menuitem", { name: "Back", hidden: true });
+  const manage = view.getByRole("menuitem", { name: "Manage skills", hidden: true });
+  back.focus();
+  back.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }),
+  );
+  await waitForSolid(() => expect(document.activeElement).toBe(manage));
+  failed.reject(new Error("Synthetic skill read failure"));
+  await waitForSolid(() =>
+    expect(view.getByRole("alert").textContent).toContain("Couldn’t load skills"),
+  );
+  expect(panel.matches(":popover-open")).toBe(true);
+  expect(view.getByRole("menuitem", { name: "Back", hidden: true })).toBe(back);
+  expect(view.getByRole("menuitem", { name: "Manage skills", hidden: true })).toBe(manage);
+  trigger.click();
+  await waitForSolid(() => expect(panel.matches(":popover-open")).toBe(false));
+  trigger.click();
+  await waitForSolid(() => {
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(view.queryByRole("alert")).toBeNull();
+    expect(view.getByRole("status").textContent).toContain("Loading skills");
+  });
+  trigger.click();
+  await waitForSolid(() => expect(panel.matches(":popover-open")).toBe(false));
+  epoch = 2;
+  catalog.synchronize(client, epoch);
+  publish();
+  trigger.click();
+  await waitForSolid(() => expect(request).toHaveBeenCalledTimes(3));
+  const skill = (name: string) => ({
+    name,
+    skillKey: name,
+    disabled: false,
+    blockedByAllowlist: false,
+    missing: { anyBins: [], bins: [], env: [], config: [], os: [] },
+  });
+  retired.resolve({ skills: [skill("Retired skill")] });
+  overrides = { skills: { Current: false } };
+  publish();
+  await Promise.resolve();
+  flush();
+  expect(view.queryByRole("menuitemcheckbox", { name: "Retired skill", hidden: true })).toBeNull();
+  expect(view.getByRole("status").textContent).toContain("Loading skills");
+  current.resolve({ skills: [skill("Current")] });
+  await waitForSolid(() =>
+    expect(
+      view
+        .getByRole("menuitemcheckbox", { name: "Current", hidden: true })
+        .getAttribute("aria-checked"),
+    ).toBe("false"),
+  );
+  expect(view.container.querySelector(".agent-chat__input-btn--attach")).toBe(trigger);
+  expect(view.getByRole("menuitem", { name: "Back", hidden: true })).toBe(back);
+  expect(view.getByRole("menuitem", { name: "Manage skills", hidden: true })).toBe(manage);
+  back.focus();
+  back.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }),
+  );
+  const row = view.getByRole("menuitemcheckbox", { name: "Current", hidden: true });
+  await waitForSolid(() => expect(document.activeElement).toBe(row));
+  row.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+  );
+  await waitForSolid(() => expect(catalog.rows("main", overrides)?.[0]?.enabled).toBe(true));
+  await waitForSolid(() => expect(row.getAttribute("aria-checked")).toBe("true"));
+  expect(panel.matches(":popover-open")).toBe(true);
+});

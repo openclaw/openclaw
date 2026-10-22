@@ -655,6 +655,22 @@ merge_run() {
   local MERGE_OUTCOME_REF MERGE_OUTCOME_OID MERGE_OUTCOME_RECORD MERGE_REPO
   local MERGE_REPO_URL MERGE_REPO_HOST MERGE_REPO_NAME MERGE_OBSERVATION MERGE_ENTRY_OBSERVATION MERGE_TRANSPORT=rest
   merge_outcome_init "$pr" || return 1
+  if [ -n "${PR_WORKFLOW_RECOVERY_PROVENANCE:-}" ]; then
+    [ "$recovery_oid" = "${PR_WORKFLOW_RECOVERY_OUTCOME:-}" ] &&
+      [ "$replacement_head" = "${PR_WORKFLOW_RECOVERY_HEAD:-}" ] &&
+      [ "$auto_merge_requested" = false ] && [ "$cancel_auto" = false ] &&
+      [ -z "$merged_head$observed_head$legacy_directory$refusal_directory" ] &&
+      [ "$recovery_oid" = "$MERGE_OUTCOME_OID" ] &&
+      printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e --arg replacement "$replacement_head" \
+        --argjson admin "$MERGE_USE_PRIOR_CI_ADMIN" '
+        .phase == "intent" and .method == "squash" and
+        (if $replacement != "" then .route == "auto" and .cancellation.state == "confirmed"
+         else $admin and .route == "admin" and .accepted == false and
+           .priorCiAdmin.dispatchTransport == "rest" end)' >/dev/null || {
+        merge_outcome_stop "current workflow recovery requires the selected cancelled auto outcome or confirmed same-head REST admin recovery"
+        return 1
+      }
+  fi
   if [ "$cancel_auto" = true ]; then
     [ -n "$recovery_oid" ] && [ -z "$replacement_head$body_path$legacy_directory$refusal_directory" ] && [ "$auto_merge_requested" = false ] || return 2
     merge_outcome_cancel_auto "$pr" "$recovery_oid" "$observed_head"
@@ -1278,6 +1294,10 @@ merge_run() {
   fi
   if [ -n "$refusal" ]; then
     intent=$(printf '%s\n' "$intent" | jq -c --argjson refusal "$refusal" '.recovery.preDispatchRefusal=$refusal') || return 1
+  fi
+  if [ -n "${PR_WORKFLOW_RECOVERY_PROVENANCE:-}" ]; then
+    intent=$(printf '%s\n' "$intent" | jq -c --argjson provenance "$PR_WORKFLOW_RECOVERY_PROVENANCE" \
+      '.workflowRecovery=$provenance') || return 1
   fi
   if [ -n "$provider_rejection" ]; then
     intent=$(printf '%s\n' "$intent" | jq -c --argjson rejection "$provider_rejection" '.recovery.providerRejection=$rejection') || return 1

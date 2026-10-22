@@ -1,6 +1,29 @@
 import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { JSX } from "@solidjs/web";
-import { Show } from "solid-js";
+import { Errored, Loading, Show } from "solid-js";
+import { formatUiError } from "../../../lib/format-error.ts";
+import type { DreamingProps } from "./view-types.ts";
+
+export function DreamingRead(props: {
+  read?: DreamingProps["readStatus"];
+  on?: unknown;
+  fallback?: JSX.Element;
+  errorClass?: string;
+  children?: JSX.Element;
+}) {
+  return (
+    <Errored
+      fallback={(error) =>
+        props.errorClass ? <div class={props.errorClass}>{formatUiError(error())}</div> : undefined
+      }
+    >
+      <Loading on={props.on} fallback={props.fallback}>
+        {props.read?.() && undefined}
+        {props.children}
+      </Loading>
+    </Errored>
+  );
+}
 
 export function formatCompactDateTime(value: string): string {
   const parsed = parseDateStringTimestampMs(value);

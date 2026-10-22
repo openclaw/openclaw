@@ -47,6 +47,16 @@ vi.mock("./followup-delivery.js", () => ({
   deliverFollowupDecision: async () => ({ kind: "completed", payloads: [] }),
 }));
 
+// mock-isolation: Preparation returns synthetic operations; real lifecycle custody
+// is covered by followup-runner.queue-custody.test.ts.
+vi.mock("./reply-turn-admission-lifecycle.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./reply-turn-admission-lifecycle.js")>()),
+  runWithReplyOperationLifecycleAdmission: async (
+    _operation: unknown,
+    run: () => Promise<unknown>,
+  ) => await run(),
+}));
+
 const { createFollowupRunner } = await import("./followup-runner.js");
 const state = getFollowupTurnTestState();
 const key = "followup-heartbeat-drain";

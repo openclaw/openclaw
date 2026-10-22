@@ -6,11 +6,13 @@ export function PanelEmptyState(props: {
   heading: string;
   description: string;
   action?: JSX.Element;
+  /** Explicit session presentation; omitted keeps existing consumers unchanged. */
+  presentation?: "desktop" | "mobile";
 }) {
   return (
     <openclaw-panel-empty-state>
       <style>{panelStyles}</style>
-      <div class="empty-state" role="status">
+      <div class="empty-state" data-presentation={props.presentation} role="status">
         <div class="empty-state__icon" aria-hidden="true">
           {props.icon}
         </div>

@@ -99,38 +99,57 @@ export async function runGatewayStartupObservers(params: {
   if (params.signal.aborted || params.isClosing?.()) {
     return;
   }
-  const recovery = runWithGatewayIndependentRootWorkAdmission(
+  const deletionRecovery = runWithGatewayIndependentRootWorkAdmission(
     async () => {
       const context = params.resolveGatewayContext();
       if (context && !params.signal.aborted && !params.isClosing?.()) {
         const { resumeAgentDeletions } = await import("./server-agent-deletion-recovery.js");
         await resumeAgentDeletions(context, params.signal);
       }
+    },
+    "startup:agent-deletion-recovery",
+    params.signal,
+  ).then(
+    () => true,
+    (error: unknown) => {
+      if (!params.signal.aborted && !params.isClosing?.()) {
+        params.log.warn(`Agent deletion recovery failed before replay: ${String(error)}`);
+      }
+      return false;
+    },
+  );
+  // Delivery keeps its admission and shutdown tail outside registry activation.
+  const delivery = runWithGatewayIndependentRootWorkAdmission(
+    async () => {
+      if (!(await deletionRecovery)) {
+        return;
+      }
+      const context = params.resolveGatewayContext();
+      if (context && !params.signal.aborted && !params.isClosing?.()) {
+        await measureStartup(params.startupTrace, "sidecars.delivery-recovery", async () => {
+          const { recoverSessionSendDeliveries } = await import("./session-send-recovery.js");
+          await recoverSessionSendDeliveries(context, params.signal, params.startupTrace);
+        });
+      }
+    },
+    "startup:delivery-recovery",
+    params.signal,
+  ).catch((error: unknown) => {
+    if (!params.signal.aborted) {
+      params.log.warn(
+        `Session delivery restart recovery could not complete; saved inputs remain available: ${formatErrorMessageForDisplay(error, formatErrorMessageWithCode(error))}`,
+      );
+    }
+  });
+  const recovery = runWithGatewayIndependentRootWorkAdmission(
+    async () => {
+      if (!(await deletionRecovery)) {
+        return;
+      }
       await measureStartup(params.startupTrace, "sidecars.subagent-recovery", async () => {
         // Each recovery owner retains its pending agents. Their waits must not
         // serialize unrelated recovery, and shutdown still joins every tail.
         const outcomes = await Promise.allSettled([
-          (async () => {
-            if (context && !params.signal.aborted && !params.isClosing?.()) {
-              try {
-                await measureStartup(
-                  params.startupTrace,
-                  "sidecars.delivery-recovery",
-                  async () => {
-                    const { recoverSessionSendDeliveries } =
-                      await import("./session-send-recovery.js");
-                    await recoverSessionSendDeliveries(context, params.signal, params.startupTrace);
-                  },
-                );
-              } catch (error) {
-                if (!params.signal.aborted) {
-                  params.log.warn(
-                    `Session delivery restart recovery could not complete; saved inputs remain available: ${formatErrorMessageForDisplay(error, formatErrorMessageWithCode(error))}`,
-                  );
-                }
-              }
-            }
-          })(),
           (async () => {
             if (!params.signal.aborted && !params.isClosing?.()) {
               await measureStartup(params.startupTrace, "sidecars.exec-recovery", async () => {
@@ -172,18 +191,19 @@ export async function runGatewayStartupObservers(params: {
     },
     "startup:subagent-recovery",
     params.signal,
-  )
-    .catch((err: unknown) => {
-      if (!params.signal.aborted && !params.isClosing?.()) {
-        params.log.warn(`subagent restart recovery failed to activate: ${String(err)}`);
-      }
-    })
-    .finally(() => {
-      if (params.isClosing?.() !== true) {
-        params.unlockStartupMethods?.();
-      }
-      params.onSubagentRecoverySettled?.();
-    });
+  ).catch((err: unknown) => {
+    if (!params.signal.aborted && !params.isClosing?.()) {
+      params.log.warn(`subagent restart recovery failed to activate: ${String(err)}`);
+    }
+  });
+  const inputRecovery = Promise.all([recovery, delivery]).finally(() => {
+    // Keep new chat input behind saved inputs until replay has handed off custody.
+    if (params.isClosing?.() !== true) {
+      params.unlockStartupMethods?.();
+    }
+    // The main-session sweep must not reserve predecessors during saved-input admission.
+    params.onSubagentRecoverySettled?.();
+  });
   const sentinelRefresh = runWithGatewayIndependentRootWorkAdmission(
     async () => {
       await measureStartup(params.startupTrace, "post-attach.update-sentinel", async () => {
@@ -232,6 +252,6 @@ export async function runGatewayStartupObservers(params: {
     });
   } finally {
     // Independent observers overlap, but shutdown joins all accepted startup work.
-    await Promise.all([sentinelRefresh, recovery]);
+    await Promise.all([sentinelRefresh, inputRecovery]);
   }
 }

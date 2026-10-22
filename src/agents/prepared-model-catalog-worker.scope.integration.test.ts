@@ -16,6 +16,7 @@ import { unregisterResolvedAgentDir } from "./agent-dir-registry.js";
 import { MINIMAX_CLI_PROFILE_ID } from "./auth-profiles/constants.js";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
 import { saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
+import { model } from "./model-catalog-fixtures.test-support.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
   HARNESS_ID,
@@ -284,16 +285,7 @@ describe("prepared model catalog worker plugin scope", () => {
               api: "openai-completions",
               baseUrl: "https://published-fixture.invalid/v1",
               apiKey: "published-fixture-key-not-real",
-              models: [
-                {
-                  id: "published-model",
-                  name: "Published model",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  maxTokens: 1_024,
-                },
-              ],
+              models: [model("published-model", "Published model")],
             },
           },
         },

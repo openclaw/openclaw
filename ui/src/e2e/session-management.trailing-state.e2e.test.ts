@@ -319,6 +319,15 @@ suite.define(() => {
       }
       await accessibility.detach();
 
+      // Resting PR state takes the archive action's column, not the sidebar edge.
+      await plainRow.hover();
+      const plainArchive = plainRow.locator("[data-sidebar-session-archive] svg");
+      await ui.visible(plainArchive);
+      expect(ui.centerX(await ui.bounds(pullRequestIcon.locator("svg")))).toBeCloseTo(
+        ui.centerX(await ui.bounds(plainArchive)),
+        1,
+      );
+
       await pullRequestRow.hover();
 
       await pullRequestIcon.waitFor({ state: "hidden" });
@@ -452,6 +461,7 @@ suite.define(() => {
         expect(ui.centerY(nameBounds)).toBeCloseTo(ui.centerY(pinBounds), 1);
         expect(ui.right(nameBounds)).toBeLessThanOrEqual(pinBounds.x + 1);
         expect(ui.right(pinBounds)).toBeLessThanOrEqual(menuBounds.x);
+        expect(ui.centerX(restingStateBounds)).toBeCloseTo(ui.centerX(menuBounds), 1);
       });
     }));
 });

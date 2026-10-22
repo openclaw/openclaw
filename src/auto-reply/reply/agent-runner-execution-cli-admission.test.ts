@@ -17,6 +17,7 @@ import {
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveSqliteScope } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import type * as nodeRuntime from "../../gateway/node-agent-cli-runtime.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -452,7 +453,7 @@ it("carries the admitted session permission and placement into the CLI grant", a
       execNode: "node-a",
     });
 
-    const nodeInvoke = vi.fn<typeof executeDeps.invokeNodeClaudeCliRun>(async (request) => {
+    const nodeInvoke = vi.fn<typeof nodeRuntime.invokeNodeClaudeCliRun>(async (request) => {
       expect(request.nodeId).toBe("node-a");
       expect(request.argv).toContain("new-native-session");
       expect(request.argv).not.toContain("old-native-session");
@@ -461,7 +462,6 @@ it("carries the admitted session permission and placement into the CLI grant", a
         payloadJSON: JSON.stringify({ exitCode: 0, stderrTail: "", truncated: false }),
       };
     });
-    const restoreNodeInvoke = executeDeps.invokeNodeClaudeCliRun;
     const backend = {
       command: "claude",
       args: ["-p"],
@@ -485,11 +485,13 @@ it("carries the admitted session permission and placement into the CLI grant", a
     };
     prepared.cwd = run.cwd;
     prepared.reusableCliSession = { mode: "reuse", sessionId: observedCliSessionId };
-    executeDeps.invokeNodeClaudeCliRun = nodeInvoke;
+    const nodeInvokeSpy = vi
+      .spyOn(executeDeps, "invokeNodeClaudeCliRun")
+      .mockImplementation(nodeInvoke);
     try {
       await executePreparedCliRun(prepared, observedCliSessionId);
     } finally {
-      executeDeps.invokeNodeClaudeCliRun = restoreNodeInvoke;
+      nodeInvokeSpy.mockRestore();
     }
     expect(nodeInvoke).toHaveBeenCalledOnce();
     return { payloads: [{ text: "done" }], meta: {} };

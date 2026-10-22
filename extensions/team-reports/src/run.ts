@@ -6,28 +6,9 @@ import { createDiscordSource } from "./sources/discord/index.js";
 import { createGithubSource } from "./sources/github/index.js";
 import type { TeamReportsStore } from "./store.js";
 import { generateSummaries, type SummaryLlm } from "./summaries.js";
-import type {
-  DiscordSource,
-  GithubSource,
-  Person,
-  PeriodDescriptor,
-  SourceRuntime,
-  SourceStatus,
-} from "./types.js";
+import type { Person, PeriodDescriptor, SourceRuntime, SourceStatus } from "./types.js";
 
 export type ResolvedTeamReportsConfig = Awaited<ReturnType<typeof resolveTeamReportsConfig>>;
-export type ReportSourceFactory = (runtime: SourceRuntime) => {
-  github: GithubSource;
-  discord?: DiscordSource;
-};
-
-export function createReportSources(runtime: SourceRuntime, discordEnabled: boolean) {
-  return {
-    github: createGithubSource(runtime),
-    discord: discordEnabled ? createDiscordSource(runtime) : undefined,
-  };
-}
-
 export async function generateReportPeriods(params: {
   config: TeamReportsConfig;
   resolved: ResolvedTeamReportsConfig;
@@ -36,11 +17,13 @@ export async function generateReportPeriods(params: {
   periods: PeriodDescriptor[];
   reuseCollectedDays?: boolean;
   runtime: SourceRuntime;
-  sources: ReportSourceFactory;
   onRoster: (people: Person[]) => void;
 }): Promise<Record<string, SourceStatus>> {
   const { config, resolved, store, runtime } = params;
-  const sources = params.sources(runtime);
+  const sources = {
+    github: createGithubSource(runtime),
+    discord: resolved.discord ? createDiscordSource(runtime) : undefined,
+  };
   const loaded = await sources.github.loadRoster(resolved.github);
   if (!loaded.status.ok) {
     throw new Error("GitHub roster unavailable; check token access and configured teams");

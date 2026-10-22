@@ -181,13 +181,32 @@ async function keepsWindowControlsClear(page: Page, platform: "linux" | "windows
     ),
   ).toBe(true);
   expect(await actions()).toEqual(beforeTextPress);
-  const bar = await toolbar.boundingBox();
-  expect(bar).not.toBeNull();
-  await drag(page, bar!.x + 140, 40);
+  const header = page.locator(".chat-pane__header:visible").first();
+  const dragPoint = await header.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    for (const y of [bounds.top + bounds.height / 2, bounds.top + 12, bounds.bottom - 8]) {
+      for (let x = bounds.left + 12; x + 20 < bounds.right - 12; x += 8) {
+        if (
+          document.elementFromPoint(x, y) === element &&
+          document.elementFromPoint(x + 20, y) === element
+        ) {
+          return { x, y };
+        }
+      }
+    }
+    throw new Error("Expected a blank session header area for the native drag gesture");
+  });
+  expect(
+    await header.evaluate(
+      (element, point) => document.elementFromPoint(point.x, point.y) === element,
+      dragPoint,
+    ),
+  ).toBe(true);
+  await drag(page, dragPoint.x, dragPoint.y);
   await expect
     .poll(async () => (await actions()).filter((action) => action === "drag"))
     .toHaveLength(1);
-  await page.mouse.dblclick(bar!.x + 140, 40);
+  await page.mouse.dblclick(dragPoint.x, dragPoint.y);
   const maximize = page.locator('.openclaw-window-controls [data-action="toggle-maximize"]');
   await attribute(maximize, "aria-label").toBe("Restore window");
   await maximize.click();

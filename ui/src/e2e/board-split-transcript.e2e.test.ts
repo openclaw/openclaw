@@ -1,13 +1,9 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { openChatLayoutMenu, selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createBoardE2eSuite } from "./board-browser.test-support.ts";
-import {
-  focusChatSidePanel,
-  openChatSidePanelType,
-  restoreChatAsMain,
-} from "./chat-side-panel.test-support.ts";
+import { focusChatSidePanel, openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 
 const sessionKey = "agent:main:board-split-transcript";
 const suite = createBoardE2eSuite("Board split transcript restore", { sandbox: false });
@@ -66,6 +62,10 @@ async function visibleTranscriptState(page: Page) {
     const scroller = inner?.parentElement;
     if (!inner || !scroller) {
       return { present: false, intersectingRows: 0 };
+    }
+    // Expanded desktop panels retain the hidden transcript's geometry.
+    if (!scroller.checkVisibility({ visibilityProperty: true })) {
+      return { present: true, intersectingRows: 0 };
     }
     const rect = scroller.getBoundingClientRect();
     const intersectingRows = [...inner.querySelectorAll<HTMLElement>(".chat-virtual-row")].filter(
@@ -252,22 +252,26 @@ suite.define(() => {
     const expectedTabLabels = ["Dashboard", "Browser", "zsh"];
     await expectSidePanelTabs(page, expectedTabLabels);
     const terminalPanel = page.locator('[data-panel-slot="terminal"]');
-    const widthBeforeExpand = await terminalPanel.evaluate(
+    const terminal = await terminalPanel.elementHandle();
+    await sidePanel.locator(".tabstrip-tab").filter({ hasText: "Dashboard" }).click();
+    const dashboardPanel = page.locator('[data-panel-slot="dashboard"]');
+    const widthBeforeExpand = await dashboardPanel.evaluate(
       (element) => element.getBoundingClientRect().width,
     );
-
-    await focusChatSidePanel(page);
+    const dashboardMenu = page.locator(".chat-dashboard-menu").filter({ visible: true });
+    await dashboardMenu.getByRole("button", { name: "Dashboard options", exact: true }).click();
+    await dashboardMenu.getByRole("menuitem", { name: "Expand Dashboard", exact: true }).click();
     await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
     await expect.poll(() => chat.isHidden()).toBe(true);
     await expect
-      .poll(() => terminalPanel.evaluate((element) => element.getBoundingClientRect().width))
+      .poll(() => dashboardPanel.evaluate((element) => element.getBoundingClientRect().width))
       .toBeGreaterThan(widthBeforeExpand);
-    await expectSidePanelTabs(page, ["Dashboard", "Browser", "OpenClaw"], false);
+    expect(await terminal!.evaluate((element) => element.isConnected)).toBe(true);
+    await expectSidePanelTabs(page, expectedTabLabels);
 
     await selectChatLayoutAction(page, "Restore split");
     await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
     await expect.poll(() => chat.isVisible()).toBe(true);
-    await restoreChatAsMain(page);
     await expectSidePanelTabs(page, expectedTabLabels);
     expect(await sidePanel.locator('[data-panel-slot="dashboard"]').count()).toBe(1);
     const dashboard = await retainDashboard(page);
@@ -330,12 +334,18 @@ suite.define(() => {
         gateway.getRequests("session.discussion.info").then((requests) => requests.length),
       )
       .toBe(1);
-    const layoutMenu = await openChatLayoutMenu(page);
-    await expect
-      .poll(() =>
-        layoutMenu.locator('[role^="menuitem"]').filter({ hasText: "Discussion" }).count(),
-      )
-      .toBe(0);
+    await sidePanel.getByRole("button", { name: "New tab", exact: true }).click();
+    const launcher = sidePanel.locator(".side-panel-launcher");
+    await launcher.waitFor();
+    expect(
+      await launcher
+        .locator(".side-panel-type-option__label")
+        .filter({ hasText: /^Discussion$/ })
+        .count(),
+    ).toBe(0);
+    await sidePanel.getByRole("button", { name: "Close New tab", exact: true }).click();
+    await launcher.waitFor({ state: "hidden" });
+    await expectSidePanelTabs(page, ["Dashboard"]);
   }, 120_000);
 
   it("retains a sole Dashboard when minimized and reopened from Layout", async () => {

@@ -53,7 +53,7 @@ export type LogbookCard = {
   keyframeId?: number;
 };
 
-export type LogbookCardDraft = Omit<LogbookCard, "id">;
+export type LogbookCardDraft = Omit<LogbookCard, "id" | "keyframeId">;
 
 export type LogbookDayStats = {
   trackedMs: number;

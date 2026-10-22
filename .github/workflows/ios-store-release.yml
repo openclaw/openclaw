@@ -23,6 +23,10 @@ on:
         description: Collect the temporary resource timeline (screenshots operation only)
         type: boolean
         default: true
+      startup_probe:
+        description: Observe idle host and iPhone simulator before screenshots (temporary, no upload)
+        type: boolean
+        default: false
 
 permissions: {}
 
@@ -94,10 +98,20 @@ jobs:
       - name: Capture iPhone, iPad, and Watch screenshots
         env:
           OPENCLAW_SNAPSHOT_DIAGNOSTICS: "1"
-          OPENCLAW_IOS_RESOURCE_DIAGNOSTICS: ${{ inputs.resource_diagnostics && '1' || '0' }}
+          OPENCLAW_IOS_RESOURCE_DIAGNOSTICS: ${{ (inputs.resource_diagnostics || inputs.startup_probe) && '1' || '0' }}
+          OPENCLAW_SNAPSHOT_STARTUP_PROBE: ${{ inputs.startup_probe && '1' || '0' }}
+          OPENCLAW_SNAPSHOT_DEVICE_FAMILY: ${{ inputs.startup_probe && 'iphone' || '' }}
+          OPENCLAW_SNAPSHOT_SKIP_WATCH: ${{ inputs.startup_probe && '1' || '0' }}
         run: |
           node scripts/ios-resource-timeline.mjs --output "$RUNNER_TEMP/ios-resource-timeline.jsonl" -- \
             pnpm ios:screenshots
+
+      - name: Compare Spotlight eligibility of build products
+        if: inputs.startup_probe
+        run: |
+          node scripts/ios-spotlight-probe.mjs \
+            --source apps/ios/build/SnapshotDerivedData \
+            --output "$RUNNER_TEMP/ios-spotlight-probe.json"
 
       - name: Retain screenshots and sanitized diagnostics
         if: always()
@@ -109,6 +123,7 @@ jobs:
             apps/ios/build/SnapshotTestResults/capture-attempts.json
             apps/ios/build/screenshot-diagnostics.json
             ${{ runner.temp }}/ios-resource-timeline.jsonl
+            ${{ runner.temp }}/ios-spotlight-probe.json
           if-no-files-found: error
           compression-level: 0
           retention-days: 14

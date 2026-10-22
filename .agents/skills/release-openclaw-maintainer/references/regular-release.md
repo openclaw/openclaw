@@ -83,7 +83,25 @@ for a required-lane defect. A second cut (re-basing the candidate on newer
 merged `main` commits only for a confirmed release blocker and name each one in
 the handoff record.
 
-Run deterministic source preflight, then validate the exact Code SHA:
+After the final backport or release commit and before every release-branch push
+that can feed validation, run the integrated exact-HEAD gate:
+
+```bash
+pnpm release:push
+```
+
+This wrapper refreshes and pins `origin/main`, requires a clean canonical
+`release/YYYY.M.PATCH` worktree, captures `HEAD`, and runs changed
+static/type checks, production dead-code analysis, and changed tests from a
+fresh detached worktree with a frozen dependency install. It pushes that
+captured SHA itself only after every gate passes and the source branch,
+worktree, and HEAD remain unchanged. Do not use a separate `git push`:
+validation and push must stay one operation. A failed gate, concurrent commit,
+or non-fast-forward remote update blocks the push and FRV dispatch. Record the
+passing SHA and comparison base in the handoff; do not substitute
+`release:prepush`, a worker's partial check, or an earlier branch state.
+
+Then run deterministic source preflight and validate the same exact Code SHA:
 
 ```bash
 PUBLICATION_SELECTION='{"route":"normal","npmDistTag":"beta","publishOpenclawNpm":true,"pluginPublishScope":"all-publishable","plugins":[]}'
@@ -99,6 +117,9 @@ This example qualifies a final version for beta-first publication. Select
 for the prepared button. A beta prerelease uses the beta profile and soak policy.
 Keep that intended selection on later notes-only parents. This admits committed
 publication source, not registry eligibility or publication authority.
+Publish-purpose dispatches first run the `pnpm release:candidate` release-notes
+and contribution-record gates at the Code SHA and refuse to dispatch on failure.
+A record target lost to a squash merge needs a corrected record and a new Code SHA.
 
 Record and reuse C/Q and independently trusted P. The helper defaults Q=C;
 `--workflow-sha`, if explicit here, must equal C. P performs lightweight admission
@@ -242,8 +263,11 @@ no run IDs and no retained `frv-request.json`. The P tooling pin is not part of
 that identity: a repaired P resumes the same `--output-dir` at any phase, keeps
 bound FRV/npm runs, and gets its own publication tag; the helper reuses a saved
 tag only for the same P SHA. Once qualification is bound, keep the original
-flags and request; do not delete dispatch state to force a retry. Use a separate
-`--output-dir` only for a deliberately new request.
+flags and request; do not delete dispatch state to force a retry. The default
+output directory includes the resolved candidate SHA, so changing C starts a
+separate state namespace automatically while another launch for the same C
+resumes its retained state. Supply `--output-dir` only to resume a legacy or
+explicitly named request, or to start another deliberate request for the same C.
 If FRV was admitted without Windows, omit `--windows-node-tag` when consuming it
 and attach Windows afterward with `windows-node-release.yml`, or obtain new FRV
 evidence with Windows selected. A fresh checklist launch already admits the

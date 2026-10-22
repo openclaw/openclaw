@@ -1,9 +1,3 @@
-/**
- * Test support for existing-session browser route modules.
- *
- * Supplies mocked agent.shared helpers and mutable tab/profile state for route
- * tests that exercise Chrome MCP branches without launching Chrome.
- */
 import { vi } from "vitest";
 import {
   assertBrowserNavigationResultAllowed,
@@ -12,41 +6,26 @@ import {
 import type { BrowserRouteContext } from "../server-context.js";
 import type { BrowserRequest, BrowserResponse } from "./types.js";
 
-/** Mutable profile/tab state consumed by existing-session route mocks. */
+const makeTab = () => ({ targetId: "7", url: "https://example.com" });
+
 export const existingSessionRouteState = {
   profileCtx: {
-    profile: {
-      driver: "existing-session" as const,
-      name: "chrome-live",
-    },
-    listTabs: vi.fn(async () => [
-      {
-        targetId: "7",
-        url: "https://example.com",
-      },
-    ]),
-    ensureTabAvailable: vi.fn(async () => ({
-      targetId: "7",
-      url: "https://example.com",
-    })),
+    profile: { driver: "existing-session" as const, name: "chrome-live" },
+    listTabs: vi.fn(async () => [makeTab()]),
+    ensureTabAvailable: vi.fn(async () => makeTab()),
     closeTab: vi.fn(async () => {}),
   },
-  tab: {
-    targetId: "7",
-    url: "https://example.com",
-  },
+  tab: makeTab(),
 };
 
-/** Create a vi mock module for routes that import agent.shared helpers. */
 export function createExistingSessionAgentSharedModule() {
   return {
     browserNavigationPolicyForProfile: vi.fn((ctx: BrowserRouteContext) =>
       withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy),
     ),
     handleRouteError: vi.fn((res: BrowserResponse, err: unknown) => {
-      const message = err instanceof Error ? err.message : String(err);
       res.status(400);
-      res.json({ error: message });
+      res.json({ error: err instanceof Error ? err.message : String(err) });
     }),
     readBody: vi.fn((req: BrowserRequest) => req.body ?? {}),
     requirePwAi: vi.fn(async () => {
@@ -65,17 +44,13 @@ export function createExistingSessionAgentSharedModule() {
     ),
     withPlaywrightRouteContext: vi.fn(),
     withRouteTabContext: vi.fn(
-      async ({
-        ctx,
-        enforceCurrentUrlAllowed,
-        req,
-        run,
-      }: {
+      async (options: {
         ctx: BrowserRouteContext;
         enforceCurrentUrlAllowed?: boolean;
         req: BrowserRequest;
         run: (args: unknown) => Promise<void>;
       }) => {
+        const { ctx, enforceCurrentUrlAllowed, req, run } = options;
         if (enforceCurrentUrlAllowed) {
           const ssrfPolicyOpts = withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy);
           if (ssrfPolicyOpts.ssrfPolicy) {

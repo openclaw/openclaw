@@ -834,6 +834,39 @@ describeUnix("inspectPortUsage", () => {
 });
 
 describe("inspectPortUsage on Windows", () => {
+  it.each([false, true])(
+    "shares one socket snapshot and PID lookup across ports (WMIC fallback: %s)",
+    async (fallback) => {
+      const commandLine = "node fixture-gateway";
+      mockWindowsCommands({
+        netstat: commandOutput(
+          "TCP 127.0.0.1:18789 0.0.0.0:0 LISTENING 4242\r\n" +
+            "TCP [::1]:18789 [::]:0 LISTENING 4242\r\n" +
+            "TCP 127.0.0.1:19001 0.0.0.0:0 LISTENING 4242\r\n" +
+            "TCP [::1]:19001 [::]:0 LISTENING 4242\r\n",
+        ),
+        tasklist: commandOutput('"node.exe","4242","Console","1","10,000 K"\r\n'),
+        powershell: fallback ? failedCommand() : commandOutput(commandLine),
+        wmic: commandOutput(`CommandLine=${commandLine}\r\n`),
+      });
+
+      const results = await inspectPortUsages([18789, 19001, 18789]);
+
+      expect([...results.keys()]).toEqual([18789, 19001]);
+      for (const port of [18789, 19001]) {
+        expect(results.get(port)).toMatchObject({
+          port,
+          status: "busy",
+          listeners: [
+            { pid: 4242, address: `127.0.0.1:${port}`, command: "node.exe", commandLine },
+            { pid: 4242, address: `[::1]:${port}`, command: "node.exe", commandLine },
+          ],
+        });
+      }
+      expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(fallback ? 4 : 3);
+    },
+  );
+
   it("classifies SSH through locale-independent tasklist CSV output", async () => {
     mockProcessPlatform("win32");
     runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {

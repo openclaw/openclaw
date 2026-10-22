@@ -28,6 +28,7 @@ import {
   createChatProviderReview,
   type ChatProviderReviewOwner,
 } from "./chat-provider-review-controller.tsx";
+import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 import { sessionWorkspaceForHost } from "./components/chat-session-workspace-state.ts";
 import { activeQueuedMessageEdit, subscribeQueuedMessageEdit } from "./queued-message-edit.ts";
@@ -51,6 +52,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     runtime.boardPresentation,
     runtime.pendingPanelToggles,
     runtime.workspaceConflicts,
+    runtime.mobilePresentation,
   ]) {
     projectChatFields(owner);
   }
@@ -58,6 +60,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     ...chatPanePropertyKeys,
     "paneWidth",
     "desktopFocus",
+    "dashboardControls",
     "replyNavigationSessionKey",
     "replyNavigationId",
   ]);
@@ -267,6 +270,10 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       source: () => frame().providerReviewSource,
       readState: () => runtime.state,
     });
+    const questions = createComposerQuestions(
+      runtime.presentationId,
+      () => frame().layout?.primary.chat ?? null,
+    );
     // Commit transcript geometry and control the browser timer after Solid publishes the frame.
     createEffect(
       () => ({ frame: frame(), presented: runtime.presented }),
@@ -294,7 +301,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         prop:agentId={runtime.agentId ?? parseAgentSessionKey(runtime.sessionKey)?.agentId}
         prop:sessionKey={runtime.sessionKey}
       >
-        <PaneLayout layout={frame().layout} />
+        <PaneLayout layout={frame().layout} questions={questions} />
         <ChatProviderReviewDialog owner={providerReview} />
         <Show when={frame().capabilityDialogs}>
           {(dialogs) => <ChatComposerCapabilityDialogs {...dialogs()} />}

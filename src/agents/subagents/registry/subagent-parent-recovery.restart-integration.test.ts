@@ -764,6 +764,8 @@ describe("subagent parent recovery — durable yielded continuation", () => {
       await activateGatewayRuntime();
       await testing.sweepOnceForTests();
       await vi.waitFor(() => expect(wakeRequester).toHaveBeenCalled());
+      // A sibling can wake the parent before background recovery finishes its session writes.
+      await fixture.settle();
       expect(dispatchAgent).not.toHaveBeenCalled();
       const persisted = loadSubagentRegistryFromSqlite();
       for (const child of children) {

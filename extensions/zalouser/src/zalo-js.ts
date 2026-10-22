@@ -570,10 +570,8 @@ export function normalizeZaloInboundMessage(
     wasExplicitlyMentioned,
     implicitMention,
     quotedGlobalMsgId: quotedGlobalMsgId || undefined,
-    quotedOwnerId: quoteOwnerId || undefined,
     quotedBody: quotedBody || undefined,
     eventMessage,
-    raw: message,
   };
 }
 
@@ -777,7 +775,6 @@ export async function resolveZaloGroupContext(
         const response = await api.getGroupInfo(normalizedGroupId);
         const groupInfo = response.gridInfoMap?.[normalizedGroupId];
         return {
-          groupId: normalizedGroupId,
           name: normalizeOptionalString(groupInfo?.name),
           members: extractGroupMembersFromInfo(groupInfo),
         };
@@ -956,7 +953,8 @@ export async function startZaloQrLogin(params: {
     resetQrLogin(profile);
   }
 
-  if (!activeQrLogins.has(profile)) {
+  let active = activeQrLogins.get(profile);
+  if (!active) {
     const login: ActiveZaloQrLogin = {
       id: randomUUID(),
       startedAt: Date.now(),
@@ -1059,11 +1057,7 @@ export async function startZaloQrLogin(params: {
     })();
 
     activeQrLogins.set(profile, login);
-  }
-
-  const active = activeQrLogins.get(profile);
-  if (!active) {
-    return { message: "Failed to initialize Zalo QR login." };
+    active = login;
   }
 
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, DEFAULT_QR_START_TIMEOUT_MS, 3000);

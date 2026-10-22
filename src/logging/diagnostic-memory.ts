@@ -7,6 +7,7 @@ import {
   type DiagnosticMemoryPressureEvent,
   type DiagnosticMemoryUsage,
 } from "../infra/diagnostic-events.js";
+import { getOldGenerationAfterGcBytes } from "../infra/gc-observer.js";
 import { sampleTrackedWorkerMemory } from "../infra/worker-cpu.js";
 import { getWorkerMessageMetrics } from "../infra/worker-message-metrics.js";
 import { createSubsystemLogger } from "./subsystem.js";
@@ -328,6 +329,8 @@ export function emitDiagnosticMemorySample(
   ].filter(isPositiveMemoryLimit);
   const rssLimitBytes = memoryLimits.length ? Math.min(...memoryLimits) : undefined;
   const shouldEmitSample = collectDiagnostics && options?.emitSample !== false;
+  memory.heapSizeLimitBytes = heapLimitBytes;
+  memory.oldGenerationAfterGcBytes = isBun ? undefined : getOldGenerationAfterGcBytes();
 
   if (shouldEmitSample) {
     publishMemorySample(memory, options?.uptimeMs ?? Math.round(process.uptime() * 1000));

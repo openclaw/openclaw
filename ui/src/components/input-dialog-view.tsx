@@ -112,19 +112,19 @@ export function InputDialogView(props: {
         ) : undefined}
         <openclaw-modal-actions class="exec-approval-actions">
           <button
-            type="submit"
-            class="btn primary"
-            disabled={state().submitting || submitBlocked(rawValue())}
-          >
-            {initialOptions.submitLabel ?? t("common.save")}
-          </button>
-          <button
             type="button"
             class="btn"
             disabled={state().submitting}
             onClick={() => props.finish(null)}
           >
             {initialOptions.cancelLabel ?? t("common.cancel")}
+          </button>
+          <button
+            type="submit"
+            class="btn primary"
+            disabled={state().submitting || submitBlocked(rawValue())}
+          >
+            {initialOptions.submitLabel ?? t("common.save")}
           </button>
         </openclaw-modal-actions>
       </form>
