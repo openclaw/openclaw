@@ -1657,6 +1657,7 @@ export const en: TranslationMap & {
   presence: {
     sharedOwner: {
       name: "Shared owner",
+      named: "{name} · Shared owner",
       hint: "Connected with the Gateway token or over a tunnel, not a personal sign-in.",
     },
     rosterTitle: "Online",

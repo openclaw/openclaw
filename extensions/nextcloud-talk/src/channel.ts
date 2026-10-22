@@ -122,6 +122,7 @@ function sendNextcloudTalkMessage(
   return sendMessageNextcloudTalk(ctx.to, text, {
     accountId: ctx.accountId ?? undefined,
     replyTo: ctx.replyToId ?? undefined,
+    silent: ctx.silent,
     cfg: ctx.cfg,
     onPlatformSendDispatch: ctx.onPlatformSendDispatch,
     assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
@@ -152,6 +153,7 @@ const nextcloudTalkMessageAdapter = defineChannelMessageAdapter({
       text: true,
       media: true,
       replyTo: true,
+      silent: true,
     },
   },
   send: {

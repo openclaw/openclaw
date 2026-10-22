@@ -3,7 +3,6 @@ import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-sch
 import {
   buildChannelOutboundSessionRoute,
   createChatChannelPlugin,
-  stripChannelTargetPrefix,
   type PluginRuntime,
 } from "openclaw/plugin-sdk/channel-core";
 import {
@@ -35,19 +34,9 @@ import { probeTwitch } from "./probe.js";
 import { resolveTwitchTargets } from "./resolver.js";
 import { twitchSetupPlugin } from "./setup-surface.js";
 import { collectTwitchStatusIssues } from "./status.js";
+import { normalizeTwitchMessagingTarget } from "./target.js";
 import type { ChannelLogSink, ChannelPlugin, TwitchAccountConfig } from "./types.js";
-import { isAccountConfigured, normalizeTwitchChannel } from "./utils/twitch.js";
-
-function normalizeTwitchMessagingTarget(target: string): string {
-  const providerTarget = stripChannelTargetPrefix(target, "twitch", "twitch-chat");
-  const kindMatch = /^(user|dm|channel|group|conversation|room):/i.exec(providerTarget);
-  const kind = kindMatch?.[1]?.toLowerCase();
-  if (kind === "user" || kind === "dm") {
-    return "";
-  }
-  const channelTarget = kindMatch ? providerTarget.slice(kindMatch[0].length) : providerTarget;
-  return normalizeTwitchChannel(channelTarget);
-}
+import { isAccountConfigured } from "./utils/twitch.js";
 
 export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
   createChatChannelPlugin<ResolvedTwitchAccount>({

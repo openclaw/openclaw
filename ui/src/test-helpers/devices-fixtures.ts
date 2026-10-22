@@ -61,6 +61,7 @@ export function createDevicesViewProps(overrides: Partial<DevicesProps> = {}): D
       pending: [],
       paired: [],
     },
+    devicesDeciding: [],
     canPairDevice: true,
     canManagePairing: true,
     canAdmin: true,
