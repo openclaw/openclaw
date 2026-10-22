@@ -117,6 +117,9 @@ This example qualifies a final version for beta-first publication. Select
 for the prepared button. A beta prerelease uses the beta profile and soak policy.
 Keep that intended selection on later notes-only parents. This admits committed
 publication source, not registry eligibility or publication authority.
+Publish-purpose dispatches first run the `pnpm release:candidate` release-notes
+and contribution-record gates at the Code SHA and refuse to dispatch on failure.
+A record target lost to a squash merge needs a corrected record and a new Code SHA.
 
 Record and reuse C/Q and independently trusted P. The helper defaults Q=C;
 `--workflow-sha`, if explicit here, must equal C. P performs lightweight admission

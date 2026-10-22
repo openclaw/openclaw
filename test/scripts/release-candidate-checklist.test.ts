@@ -24,6 +24,12 @@ import { parse } from "yaml";
 import { normalizePublicationIntent } from "../../scripts/full-release-publication-contract.mjs";
 import { stripLeadingPackageManagerSeparator } from "../../scripts/lib/arg-utils.mts";
 import { parsePluginReleaseSelection } from "../../scripts/lib/plugin-npm-release.ts";
+import {
+  candidateCumulativeShippedPullRequests,
+  loadCandidateShippedBaseline,
+  validateCandidateChangelogProvenance,
+  validateCandidateReleaseNotes,
+} from "../../scripts/lib/release-candidate-changelog.mts";
 import { splitChangelog } from "../../scripts/lib/release-changelog.mjs";
 import { releaseBranchForTag } from "../../scripts/lib/release-context.mjs";
 import {
@@ -43,12 +49,10 @@ import {
   buildPrepareCommand,
   buildTelegramArtifactInputs,
   assertReleaseCandidateTag,
-  candidateCumulativeShippedPullRequests,
   candidateParallelsArgs,
   candidateParallelsShellCommand,
   githubApi,
   isDirectReleaseCandidateExecution,
-  loadCandidateShippedBaseline,
   parseArgs,
   preflightCorePackageTarballs,
   preflightDependencyTarballs,
@@ -59,9 +63,7 @@ import {
   resolveReleaseCandidateOutputDir,
   requireRunIdFromDispatchOutput,
   run,
-  validateCandidateChangelogProvenance,
   validateCandidateCheckout,
-  validateCandidateReleaseNotes,
   validateFullManifest,
   validateNpmPreflightRunSource,
   validateParallelsRegistryPackageArtifact,
@@ -70,7 +72,6 @@ import {
   validateWindowsSourceRelease,
 } from "../../scripts/release-candidate-checklist.mts";
 import type { runReleasePublishPreflight } from "../../scripts/release-publish-preflight.mts";
-import { loadReleaseNotesForTag } from "../../scripts/render-github-release-notes.mts";
 import { isShaPinnedReleaseValidationBranch } from "../../scripts/validate-full-release-validation-evidence.mjs";
 import { stripNodeTypeScriptTypes } from "../helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -887,10 +888,10 @@ describe("release candidate checklist", () => {
           parsePluginReleaseSelection,
           isRecord,
           requireString: (value: string) => value,
-          releaseNotesVersionForTag: () => "2026.9.1",
-          loadReleaseNotesForTag,
-          validateCandidateReleaseNotes: () => ({ status: "passed" }),
-          validateCandidateChangelogProvenance: () => ({ status: "passed", shippedBaselines: [] }),
+          validateCandidateChangelog: () => ({
+            releaseNotesCheck: { status: "passed" },
+            releaseNotesProvenance: { status: "passed", shippedBaselines: [] },
+          }),
           runLocalGeneratedCheckIfNeeded: generatedChecks,
           runEarlyPluginSdkApiReview: () => {},
           releaseBranchForTag,
@@ -1327,7 +1328,9 @@ describe("release candidate checklist", () => {
     const source = readFileSync("scripts/release-candidate-checklist.mts", "utf8");
     const owner = source.match(/^function runFromTrustedTooling\([\s\S]*?^\}/mu)?.[0];
     const jsonReader = source.match(/^function readJson\([\s\S]*?^\}/mu)?.[0];
-    const ancestry = source.match(/^function gitIsAncestor\([\s\S]*?^\}/mu)?.[0];
+    const ancestry = readFileSync("scripts/lib/release-candidate-changelog.mts", "utf8")
+      .match(/^export function gitIsAncestor\([\s\S]*?^\}/mu)?.[0]
+      .replace(/^export /u, "");
     const cleanupWarning = vi.fn();
     let toolingRoot = "";
     let toolingAdminDir = "";
@@ -1858,7 +1861,7 @@ describe("release candidate checklist", () => {
     ).toThrow("does not contain ## 2026.7.1-beta.3");
     const source = readFileSync("scripts/release-candidate-checklist.mts", "utf8");
     const validationIndex = source.indexOf(
-      "const releaseNotesCheck = validateCandidateReleaseNotes",
+      "const { releaseNotesCheck, releaseNotesProvenance } = validateCandidateChangelog({",
     );
     const fullMatrixDispatchIndex = source.indexOf(
       "options.fullReleaseRunId = dispatchFullReleaseUsingHelper(",
@@ -1867,9 +1870,6 @@ describe("release candidate checklist", () => {
     expect(check).toMatchObject({ status: "passed", mode: "compact" });
     expect(validationIndex).toBeGreaterThanOrEqual(0);
     expect(fullMatrixDispatchIndex).toBeGreaterThan(validationIndex);
-    expect(source).toContain("const releaseChangelog = loadReleaseNotesForTag({");
-    expect(source).toContain("ref: targetSha,");
-    expect(source).toContain("changelog: releaseChangelog.record ?? releaseChangelog.section,");
   });
 
   it("rejects contribution-record provenance outside the release tag history", () => {

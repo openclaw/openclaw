@@ -18,11 +18,43 @@ import type { AgentMessage } from "../../runtime/index.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import { log } from "../logger.js";
 import { canContinueFromMessage, trimToContinuableTail } from "./compaction-timeout.js";
+import type { PreparedEmbeddedAttemptDispatchInput } from "./execution-context.js";
 import { isMidTurnPrecheckAssistantError } from "./midturn-precheck.js";
 import { preserveTrailingTranscriptMetadata } from "./transcript-tail-metadata.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type AttemptSessionManager = ReturnType<typeof guardSessionManager>;
+
+/** Reuse the admitted prompt target, otherwise resolve the dispatch's exact transcript. */
+export async function resolveAttemptDispatchSessionTarget(params: {
+  agentId: string;
+  config?: OpenClawConfig;
+  sessionKey: string;
+  promptState: Pick<
+    PreparedEmbeddedAttemptDispatchInput["sessionPromptState"],
+    "sessionTarget" | "sessionTargetAdopted" | "sessionId" | "sessionWriterFence"
+  >;
+}) {
+  const state = params.promptState;
+  const existing = state.sessionTarget;
+  const reusable =
+    existing?.sessionKey === params.sessionKey || state.sessionTargetAdopted ? existing : undefined;
+  const resolved =
+    reusable ??
+    (params.sessionKey
+      ? await resolveSessionTranscriptRuntimeTarget({
+          agentId: params.agentId,
+          sessionId: state.sessionId,
+          sessionKey: params.sessionKey,
+          storePath: resolveSessionStorePathCore(params.config?.session?.store, {
+            agentId: params.agentId,
+          }),
+        })
+      : undefined);
+  return resolved || state.sessionTarget
+    ? { ...state.sessionTarget, ...resolved, ...state.sessionWriterFence }
+    : undefined;
+}
 
 export async function removeTrailingMidTurnPrecheckAssistantError(params: {
   activeSession: { agent: { state: { messages: AgentMessage[] } } };

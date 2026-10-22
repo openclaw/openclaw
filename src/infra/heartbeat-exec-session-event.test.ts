@@ -48,7 +48,6 @@ import { runHeartbeatOnce } from "./heartbeat-runner-run.js";
 import { startHeartbeatRunner } from "./heartbeat-runner-scheduler.js";
 import { bindHeartbeatSend } from "./heartbeat-runner.boundary-test-support.js";
 import { seedHeartbeatScratchForTest } from "./heartbeat-runner.test-utils.js";
-import { requestHeartbeat } from "./heartbeat-wake.js";
 import { resolveSystemEventQueueKey } from "./system-event-ownership.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "./system-events.js";
 
@@ -116,7 +115,6 @@ it("runs a targeted manual next-heartbeat wake when recurring heartbeats are dis
         cronEnabled: true,
         log,
         enqueueSystemEvent,
-        requestHeartbeat: (request) => requestHeartbeat({ ...request, coalesceMs: 0 }),
         runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok" }),
         enqueueSessionEvent: createGatewayCronTargetResolver(state.env, log).enqueueSessionEvent,
       });

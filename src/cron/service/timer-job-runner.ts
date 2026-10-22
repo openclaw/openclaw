@@ -32,11 +32,7 @@ import {
 } from "./execution-errors.js";
 import type { CronIdleAdmissionSource, CronServiceState } from "./state.js";
 import { resolveCronJobTimeoutMs } from "./timeout-policy.js";
-import {
-  type CronJobRunResult,
-  type ExecuteJobCoreOptions,
-  runsDetachedFromMainSession,
-} from "./timer-execution-timeout.js";
+import type { CronJobRunResult, ExecuteJobCoreOptions } from "./timer-execution-timeout.js";
 import { executeJobCore } from "./timer-execution.js";
 import {
   type CronCoreRunOutcome,
@@ -306,7 +302,7 @@ async function executeJobCoreWithTimeoutUnfinalized(
       interruptedByRestart:
         resolveAgentRunAbortLifecycleFields(runAbortController.signal).stopReason === "restart",
       // A timeout raised by this service-owned watchdog is authoritative even
-      // when the interrupted main-session heartbeat has no model attribution.
+      // when the interrupted main-session turn has no model attribution.
       errorClassification,
       // The abort race must retain attribution already reported by the runner.
       ...(execution && {
@@ -326,7 +322,6 @@ async function executeJobCoreWithTimeoutUnfinalized(
     runAbortController.abort("Gateway restarting.");
     return await createInterruptionOutcome("cancelled");
   }
-  const detachedPayload = runsDetachedFromMainSession(job);
   const releaseCronTaskRun = registerActiveCronTaskRun({
     runId: opts?.runId ?? `cron-active:${job.id}`,
     controller: runAbortController,
@@ -390,7 +385,6 @@ async function executeJobCoreWithTimeoutUnfinalized(
       }
     };
     const trackExecution = !watchdog || deferTimeoutUntilExecutionStart;
-    const resolveHeartbeatTimeoutMs = state.deps.resolveHeartbeatTimeoutMs;
     const executionIdentity = opts?.executionIdentity;
     const coreOptions: ExecuteJobCoreOptions = {
       migrationPending: opts?.migrationPending,
@@ -400,24 +394,9 @@ async function executeJobCoreWithTimeoutUnfinalized(
       streamBatch: opts?.streamBatch,
       streamScheduleKey: opts?.streamScheduleKey,
       streamSourceIdentity: opts?.streamSourceIdentity,
-      // Only the private legacy heartbeat branch transfers cancellation before settlement.
-      onPayloadExecutionStarted: detachedPayload ? undefined : releaseCronTaskRun,
       onExecutionStarted: trackExecution ? noteRunnerStarted : undefined,
       onExecutionPhase: trackExecution ? (watchdog?.notePhase ?? accumulateExecution) : undefined,
       onLaneWait: watchdog && deferTimeoutUntilExecutionStart ? noteLaneState : undefined,
-      // Trigger and preflight keep the cron deadline; the heartbeat gets its own.
-      onHeartbeatExecutionStarted: watchdog
-        ? (heartbeat) => {
-            const heartbeatTimeoutMs = resolveHeartbeatTimeoutMs
-              ? resolveHeartbeatTimeoutMs(heartbeat)
-              : jobTimeoutMs;
-            // The queue owns admission and retries; only attempts spend the deadline.
-            return {
-              onAttemptStarted: () => watchdog.replaceTimeout(heartbeatTimeoutMs),
-              onQueued: () => watchdog.replaceTimeout(undefined),
-            };
-          }
-        : undefined,
       assertRunCurrent,
       executionIdentity: executionIdentity && {
         ...executionIdentity,

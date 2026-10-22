@@ -4,7 +4,6 @@ import type { AgentsFilesListResult } from "../../api/types.ts";
 import { pathForAgentPanel } from "../../app-route-paths.ts";
 import { togglePinnedAgent } from "../../app/bootstrap-navigation-preferences.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { createGitHubIdentity } from "../../features/github-connections/github-identity.ts";
 import { t } from "../../i18n/index.ts";
 import { selectableAgentsList } from "../../lib/agents/display.ts";
 import {
@@ -28,6 +27,7 @@ import {
 import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { ModelCatalogReader } from "../../lib/model-catalog-reader.ts";
 import { modelCatalogRefreshError, readAgentModelCatalog } from "../../lib/model-catalog-store.ts";
+import { createGitHubIdentityView } from "../../lib/reactive/domain-github-identity.ts";
 import { observeState } from "../../lib/reactive/observe-state.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
@@ -210,7 +210,7 @@ export function createAgentsPageState(
     getReport: () => state.agentSkillsReport,
     onPrimaryChanged: () => void refreshVisibleToolsEffectiveForCurrentSession(state),
   });
-  const githubIdentity = createGitHubIdentity({
+  const githubIdentity = createGitHubIdentityView({
     runExternalMutation: (task, options) =>
       context.runtimeConfig.runExternalMutation(task, options),
   });

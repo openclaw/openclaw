@@ -86,6 +86,7 @@ export type InternalSteeringQueueObserver = {
   drainContext?: () => AgentMessage[];
   reserve: (messages: readonly AgentMessage[]) => () => void;
   onChange?: () => void;
+  subscribe?: (listener: () => void) => () => void;
 };
 const steeringQueueObserverByCallback = new WeakMap<
   InternalSteeringGetter,
@@ -179,10 +180,18 @@ export function attachInternalSyncSteeringGetter(
   observer?: InternalSteeringQueueObserver,
 ): InternalSteeringGetter {
   syncSteeringGetterByCallback.set(callback, syncGetter);
+  attachInternalSteeringQueueObserver(callback, observer);
+  return callback;
+}
+
+/** Wrapping a getter must retain observation of its exact underlying queue. */
+export function attachInternalSteeringQueueObserver(
+  callback: InternalSteeringGetter,
+  observer: InternalSteeringQueueObserver | undefined,
+): void {
   if (observer) {
     steeringQueueObserverByCallback.set(callback, observer);
   }
-  return callback;
 }
 
 export function getInternalSteeringQueueObserver(
