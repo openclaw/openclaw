@@ -2,14 +2,19 @@ import fs from "node:fs";
 import path from "node:path";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { listClickClackAccountIds, resolveClickClackAccount } from "./accounts.js";
+import {
+  listClickClackAccountIds,
+  listEnabledClickClackAccounts,
+  resolveClickClackAccount,
+} from "./accounts.js";
 import type { ClickClackAccountConfig, CoreConfig, ResolvedClickClackAccount } from "./types.js";
 
 const ACCOUNT_BASE = { baseUrl: "https://app.clickclack.chat", workspace: "wsp_1" };
 function accountConfig(
   settings: ClickClackAccountConfig & { accounts?: Record<string, ClickClackAccountConfig> },
+  secrets?: CoreConfig["secrets"],
 ): CoreConfig {
-  return { channels: { clickclack: { ...ACCOUNT_BASE, ...settings } } };
+  return { secrets, channels: { clickclack: { ...ACCOUNT_BASE, ...settings } } };
 }
 
 function expectUnavailable(
@@ -208,5 +213,116 @@ describe("ClickClack account resolution", () => {
       controlUrlBase: "https://team.openclaw.ai/",
       section: "Live work",
     });
+  });
+});
+
+const selectedEnvId = "CLICKCLACK_SELECTED_TEST_TOKEN";
+const selectedRef = { source: "env", provider: "selected", id: selectedEnvId } as const;
+const otherRef = { ...selectedRef, provider: "other" };
+const fallbackEnv = { CLICKCLACK_BOT_TOKEN: "fallback-token" };
+type SecretProviders = NonNullable<CoreConfig["secrets"]>["providers"];
+function refConfig(
+  token: ClickClackAccountConfig["token"],
+  providers?: SecretProviders,
+  named = false,
+) {
+  return accountConfig(
+    named ? { token: "lower-priority-root-token", accounts: { work: { token } } } : { token },
+    { defaults: { env: "selected" }, providers },
+  );
+}
+
+describe("ClickClack SecretRef provider policy", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it.each([
+    ["exec", " injected-token ", "injected-token"],
+    ["file", undefined, ""],
+  ] as const)(
+    "uses injected env, not ambient or fallback, with a selected %s alias",
+    (source, value, token) => {
+      vi.stubEnv(selectedEnvId, "ambient-token-must-not-win");
+      const providers =
+        source === "exec"
+          ? { selected: { source, command: "/unused" } }
+          : { selected: { source, path: "/unused" } };
+      const cfg = refConfig(selectedRef, providers, true);
+      expect(
+        resolveClickClackAccount({
+          cfg,
+          accountId: "work",
+          env: { ...fallbackEnv, [selectedEnvId]: value },
+        }),
+      ).toMatchObject({
+        accountId: "work",
+        token,
+        tokenSource: "config",
+        tokenStatus: token ? "available" : "configured_unavailable",
+        configured: true,
+      });
+    },
+  );
+
+  it.each<[ClickClackAccountConfig["token"], SecretProviders, string]>([
+    [
+      selectedRef,
+      { selected: { source: "env", allowlist: [] } },
+      `Environment variable "${selectedEnvId}" is not allowlisted in secrets.providers.selected.allowlist.`,
+    ],
+    [
+      otherRef,
+      { other: { source: "file", path: "/unused" } },
+      'Secret provider "other" has source "file" but ref requests "env".',
+    ],
+    [
+      otherRef,
+      undefined,
+      `Secret provider "other" is not configured (ref: env:other:${selectedEnvId}).`,
+    ],
+  ])("rejects an unauthorized env provider (%#)", (token, providers, message) => {
+    const cfg = refConfig(token, providers);
+    expect(() =>
+      resolveClickClackAccount({ cfg, env: { ...fallbackEnv, [selectedEnvId]: "injected-token" } }),
+    ).toThrow(new Error(message));
+  });
+
+  it("never borrows an env token for a file source ref", () => {
+    const cfg = accountConfig({
+      token: { source: "file", provider: "default", id: "/selected/token" },
+    });
+    expect(
+      resolveClickClackAccount({
+        cfg,
+        env: { ...fallbackEnv, [selectedEnvId]: "wrong-source-token" },
+      }),
+    ).toMatchObject({
+      token: "",
+      tokenSource: "config",
+      tokenStatus: "configured_unavailable",
+      configured: true,
+    });
+  });
+
+  it("filters disabled accounts while retaining enabled unavailable collision accounts", () => {
+    vi.stubEnv(selectedEnvId, "selected-token");
+    vi.stubEnv("CLICKCLACK_MISSING_TEST_TOKEN", undefined);
+    vi.stubEnv("CLICKCLACK_BOT_TOKEN", "fallback-token");
+    const token = { source: "env", provider: "default", id: selectedEnvId } as const;
+    const cfg = accountConfig(
+      {
+        token,
+        accounts: {
+          work: { token },
+          disabled: { token, enabled: false },
+          unavailable: { token: { ...token, id: "CLICKCLACK_MISSING_TEST_TOKEN" } },
+        },
+      },
+      { providers: { default: { source: "file", path: "/unused" } } },
+    );
+    expect(listEnabledClickClackAccounts(cfg)).toMatchObject([
+      { accountId: "default", tokenStatus: "available", token: "selected-token" },
+      { accountId: "unavailable", tokenStatus: "configured_unavailable", token: "" },
+      { accountId: "work", tokenStatus: "available", token: "selected-token" },
+    ]);
   });
 });

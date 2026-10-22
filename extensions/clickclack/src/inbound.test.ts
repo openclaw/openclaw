@@ -6,10 +6,7 @@ import {
   recordPendingDiscussionOpen,
   reserveDiscussionBindingGeneration,
 } from "./discussions/binding-generation.js";
-import {
-  getClickClackDiscussionBindingStore,
-  type ClickClackDiscussionBinding,
-} from "./discussions/binding-store.js";
+import { getClickClackDiscussionBindingStore } from "./discussions/binding-store.js";
 import { markClickClackDiscussionChannelRevoked } from "./discussions/revoked-channel-store.js";
 import { handleClickClackInbound } from "./inbound.js";
 import {
@@ -290,59 +287,49 @@ describe("handleClickClackInbound", () => {
     });
   });
 
-  it("drops inbound delivery as soon as the main session is archived", async () => {
-    vi.mocked(runtime.agent.session.getSessionEntry).mockReturnValue({
-      sessionId: "session-id",
-      updatedAt: 2,
-      archivedAt: 1,
-    });
-    await bindDiscussion();
-
-    await handleDiscussion("Archived before sync");
-
-    expectNoDispatch();
-  });
-
-  it("drops a persisted managed channel after discussions are disabled", async () => {
-    await bindDiscussion();
-
-    await handleDiscussion("Use the normal route", createAgentAccount({ replyMode: "model" }), {});
-
-    expectNoDispatch();
-  });
-
-  it("drops delayed inbound after the live binding has been released", async () => {
-    const mainSessionKey = "agent:research:released";
-    const binding: ClickClackDiscussionBinding = createInboundDiscussionBinding({
-      externalRef: "openclaw:test:released",
-      label: "Released",
-    });
-    const bindingStore = getClickClackDiscussionBindingStore(runtime);
-    await bindingStore.setIfCurrent(mainSessionKey, undefined, binding);
-    await markClickClackDiscussionChannelRevoked(runtime, mainSessionKey, binding);
-    await bindingStore.deleteIfCurrent(mainSessionKey, binding);
-
-    await handleDiscussion("Delayed managed event", createAgentAccount({ replyMode: "model" }), {});
-
-    expectNoDispatch();
-  });
-
-  it("does not lose managed ownership when the local account id changes", async () => {
-    await bindDiscussion(
-      createInboundDiscussionBinding({
-        externalRef: "openclaw:test:renamed-account",
-        label: "Renamed account",
-      }),
-    );
-
-    await handleDiscussion(
-      "Old managed channel",
-      createAgentAccount({ accountId: "replacement", replyMode: "model" }),
-      {},
-    );
-
-    expectNoDispatch();
-  });
+  it.each(["archived", "disabled", "released", "renamed", "workspace moved"] as const)(
+    "drops a managed discussion after it is %s",
+    async (change) => {
+      const binding = createInboundDiscussionBinding();
+      await bindDiscussion(binding);
+      if (change === "archived") {
+        vi.mocked(runtime.agent.session.getSessionEntry).mockReturnValue({
+          sessionId: "session-id",
+          updatedAt: 2,
+          archivedAt: 1,
+        });
+      }
+      if (change === "released") {
+        await markClickClackDiscussionChannelRevoked(runtime, "agent:research:main", binding);
+        await getClickClackDiscussionBindingStore(runtime).deleteIfCurrent(
+          "agent:research:main",
+          binding,
+        );
+      }
+      const workspace = change === "workspace moved" ? "wsp_2" : "wsp_1";
+      const enabled = change === "archived" || change === "workspace moved";
+      const account = createAgentAccount({
+        accountId: change === "renamed" ? "replacement" : "default",
+        replyMode: "model",
+        ...(enabled ? { discussions: { enabled: true, workspace, section: "Sessions" } } : {}),
+      });
+      const config: CoreConfig = enabled ? createInboundDiscussionConfig() : {};
+      if (change === "workspace moved") {
+        config.channels = {
+          clickclack: {
+            enabled: true,
+            baseUrl: account.baseUrl,
+            token: account.token,
+            workspace,
+            replyMode: "model",
+            discussions: { enabled: true, workspace },
+          },
+        };
+      }
+      await handleDiscussion("Delayed managed event", account, config);
+      expectNoDispatch();
+    },
+  );
 
   it("quarantines unbound channel events while a create outcome is ambiguous", async () => {
     const account = createAgentAccount({ replyMode: "model" });
@@ -373,35 +360,6 @@ describe("handleClickClackInbound", () => {
       account,
       config: {} satisfies CoreConfig,
       message: createMessage({ channel_id: "chn_unknown", body: "Maybe managed" }),
-    });
-
-    expectNoDispatch();
-  });
-
-  it("drops a managed channel after the discussion workspace changes", async () => {
-    await bindDiscussion();
-    const account = createAgentAccount({
-      replyMode: "model",
-      discussions: { enabled: true, workspace: "wsp_2", section: "Sessions" },
-    });
-
-    const currentConfig = {
-      channels: {
-        clickclack: {
-          enabled: true,
-          baseUrl: account.baseUrl,
-          token: account.token,
-          workspace: "wsp_2",
-          replyMode: "model",
-          discussions: { enabled: true, workspace: "wsp_2" },
-        },
-      },
-    } satisfies CoreConfig;
-    vi.mocked(runtime.config.current).mockReturnValue(currentConfig);
-    await handleClickClackInbound({
-      account,
-      config: currentConfig,
-      message: createMessage({ channel_id: "chn_1", body: "Use the normal route" }),
     });
 
     expectNoDispatch();

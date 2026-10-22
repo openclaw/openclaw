@@ -164,71 +164,23 @@ function createOversizedJsonServer(): { server: Server; closed: Promise<number> 
   return { server, closed: closed.promise };
 }
 
-function streamedErrorResponse(body: string, limit: number) {
-  const encoded = new TextEncoder().encode(body);
-  let readCount = 0;
-  const cancel = vi.fn(async () => undefined);
-  const releaseLock = vi.fn();
-  const text = vi.fn(async () => {
-    throw new Error("raw response.text() should not be used");
-  });
-
-  const response = {
-    ok: false,
-    status: 502,
-    text,
-    body: {
-      getReader: () => ({
-        read: async () => {
-          if (readCount > 0) {
-            return { done: true, value: undefined };
-          }
-          readCount += 1;
-          return { done: false, value: encoded };
-        },
-        cancel,
-        releaseLock,
-      }),
+function streamedErrorResponse(body: string) {
+  const cancel = vi.fn();
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(body));
     },
-  } as unknown as Response;
-
-  return {
-    response,
     cancel,
-    releaseLock,
-    text,
-    expectedDetail: body.slice(0, limit),
-  };
+  });
+  return { response: new Response(stream, { status: 502 }), stream, cancel };
 }
 
 describe("ClickClack HTTP client", () => {
-  it("creates, updates, and reads managed discussion channels", async () => {
-    const channel = { id: "chn_discussion" };
-    const fetchMock = jsonResponses(
-      { channel },
-      { channel },
-      { messages: [], oldest_seq: 0, newest_seq: 0, has_older: false },
-    );
-    const client = createTestClient(fetchMock);
-    const create = {
-      name: "release-planning",
-      kind: "public" as const,
-      external_managed: true,
-      external_ref: "agent:main:main",
-      external_url: "https://control.example/chat/main",
-      sidebar_section: "Sessions",
-    };
-    const update = {
-      archived: true,
-      name: "release-done",
-      sidebar_section: "Archive",
-    };
-    await client.createChannel("wsp_1", create);
-    await client.updateChannel("chn_discussion", update);
-    await client.latestChannelMessages("chn_discussion", 30);
-    expectRequest(fetchMock.mock.calls, 1, "workspaces/wsp_1/channels", "POST", create);
-    expectRequest(fetchMock.mock.calls, 2, "channels/chn_discussion", "PATCH", update);
-    expectRequest(fetchMock.mock.calls, 3, "channels/chn_discussion/messages?limit=200");
+  it("serializes explicit archive requests", async () => {
+    const fetchMock = jsonFetch({ channel: { id: "chn_discussion" } });
+    const patch = { archived: true, name: "release-done", sidebar_section: "Archive" };
+    await createTestClient(fetchMock).updateChannel("chn_discussion", patch);
+    expectRequest(fetchMock.mock.calls, 1, "channels/chn_discussion", "PATCH", patch);
   });
 
   it("merges recent thread replies into the global latest-message window", async () => {
@@ -389,15 +341,16 @@ describe("ClickClack HTTP client", () => {
   });
 
   it("bounds error response bodies without using raw response.text()", async () => {
-    const streamed = streamedErrorResponse("x".repeat(9000), 8 * 1024);
+    const streamed = streamedErrorResponse("x".repeat(9000));
+    const text = vi.spyOn(streamed.response, "text");
     const fetchMock = vi.fn(async () => streamed.response);
     const client = createTestClient(fetchMock);
 
-    await expect(client.me()).rejects.toThrow(`ClickClack 502: ${streamed.expectedDetail}`);
+    await expect(client.me()).rejects.toThrow(`ClickClack 502: ${"x".repeat(8 * 1024)}`);
 
-    expect(streamed.text).not.toHaveBeenCalled();
+    expect(text).not.toHaveBeenCalled();
     expect(streamed.cancel).toHaveBeenCalledTimes(1);
-    expect(streamed.releaseLock).toHaveBeenCalledTimes(1);
+    expect(streamed.stream.locked).toBe(false);
   });
 
   it("redacts non-2xx response details with built-in patterns", async () => {
@@ -420,29 +373,15 @@ describe("ClickClack HTTP client", () => {
   });
 
   it.each([
-    [
-      "channel",
-      { channelId: "chn_1" },
-      "ran bash",
-      "agent_tool",
-      "msg_9",
-      "channels/chn_1/messages",
-    ],
-    [
-      "DM",
-      { conversationId: "dcn_1" },
-      "thinking about it",
-      "agent_commentary",
-      "msg_10",
-      "dms/dcn_1/messages",
-    ],
-  ] as const)("creates %s activity rows", async (_label, target, body, kind, id, path) => {
-    const fetchMock = jsonFetch({ message: { id } }, 201);
+    [{ channelId: "chn_1" }, "agent_tool", "channels/chn_1/messages"],
+    [{ conversationId: "dcn_1" }, "agent_commentary", "dms/dcn_1/messages"],
+  ] as const)("creates activity rows for %j", async (target, kind, path) => {
+    const fetchMock = jsonFetch({ message: { id: "msg_9" } }, 201);
     const client = createTestClient(fetchMock);
     expect(
-      await client.createActivityMessage({ ...target, body, kind, turnId: "t1" }),
-    ).toMatchObject({ id });
-    expectRequest(fetchMock.mock.calls, 1, path, "POST", { body, kind, turn_id: "t1" });
+      await client.createActivityMessage({ ...target, body: "activity", kind, turnId: "t1" }),
+    ).toMatchObject({ id: "msg_9" });
+    expectRequest(fetchMock.mock.calls, 1, path, "POST", { body: "activity", kind, turn_id: "t1" });
   });
 
   it("serializes retry nonces and reads persisted attachments", async () => {
