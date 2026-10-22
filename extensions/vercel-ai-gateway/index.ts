@@ -29,8 +29,8 @@ export default defineSingleProviderPluginEntry({
     },
     resolveDynamicModel: ({ modelId }) => resolveVercelAiGatewayModel(modelId),
     resolveThinkingProfile: ({ modelId }) => resolveVercelAiGatewayThinkingProfile(modelId),
-    classifyFailoverReason: ({ provider, status, errorMessage }) => {
-      if (provider?.trim().toLowerCase() !== PROVIDER_ID || status !== 403) {
+    classifyFailoverReason: ({ status, errorMessage }) => {
+      if (status !== 403) {
         return undefined;
       }
       // Token Pass uses the same status and error type for credit and model scope
