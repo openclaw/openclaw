@@ -59,22 +59,12 @@ import {
   syncGitHubIdentity,
 } from "../../state/user-profile-writes.worker.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
-import {
-  buildChannelInboundEventContext,
-  type BuildChannelInboundEventContextAsyncParams,
-  type BuildChannelInboundEventContextParams,
-  type BuiltChannelInboundEventContext,
-} from "../inbound-event/context.js";
-import { createHostChannelInboundEventContextBuilder } from "../inbound-event/host-context-builder.js";
+import { createHostIngressFixture } from "./host-ingress.test-support.js";
 import {
   registerOperatorAssignmentTests,
   withOperatorModels,
 } from "./operator-assignment.test-support.js";
-import {
-  createCommandOwnerTestGateway,
-  withAdminIngress,
-} from "./operator-authority.test-support.js";
-import { createHostChannelIngressRuntime } from "./runtime.js";
+import { withAdminIngress } from "./operator-authority.test-support.js";
 
 function authorize(cfg: Parameters<typeof resolveCommandAuthorization>[0]["cfg"], ctx: MsgContext) {
   return resolveCommandAuthorization({ cfg, ctx, commandAuthorized: true });
@@ -689,31 +679,10 @@ it("carries native Slack requester authority and keeps relay replays asserted", 
       accountId: "team",
       senderId: "U123",
     });
-    const gateway = createCommandOwnerTestGateway(cfg);
-    const owner = {
-      channelId: "slack",
-      isLive: () => true,
-      resolveGatewayContext: () => gateway,
-    };
-    const buildHostContext = createHostChannelInboundEventContextBuilder(
-      buildChannelInboundEventContext,
-      owner,
-    );
-    function buildContext(
-      input: BuildChannelInboundEventContextAsyncParams,
-    ): Promise<BuiltChannelInboundEventContext>;
-    function buildContext(
-      input: BuildChannelInboundEventContextParams,
-    ): BuiltChannelInboundEventContext;
-    function buildContext(input: BuildChannelInboundEventContextParams) {
-      return buildHostContext(input);
-    }
+    const { ingress, buildContext } = createHostIngressFixture("slack", cfg);
     const runtime = createPluginRuntimeMock({
       channel: {
-        inbound: {
-          ingress: createHostChannelIngressRuntime(owner),
-          buildContext,
-        },
+        inbound: { ingress, buildContext },
       },
     });
     const { withSlackIngressIdentityTestHarness } = await loadBundledPluginFacade<{

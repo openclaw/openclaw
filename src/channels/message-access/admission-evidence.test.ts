@@ -19,6 +19,7 @@ import {
   readChannelContextGatewayContextResolver,
   type ChannelAdmissionEvidence,
 } from "./admission-evidence.js";
+import { ingressInput as hostIngressInput, ingressMessage } from "./host-ingress.test-support.js";
 import type { ResolveStableChannelMessageIngressParams } from "./runtime-types.js";
 import { createHostChannelIngressRuntime, resolveStableChannelIngressPolicy } from "./runtime.js";
 
@@ -52,36 +53,24 @@ afterEach(() => {
 });
 
 function makeContext(senderId: string, messageId?: string) {
-  return {
-    channel: "test",
+  return ingressMessage("test", "agent:main:test:dm:dm-1", senderId, {
     accountId: "acct:primary",
-    ...(messageId ? { messageId } : {}),
+    messageId,
     from: "test:route:dm-1",
-    sender: { id: senderId },
-    conversation: { kind: "direct" as const, id: "dm-1" },
-    route: { agentId: "main", routeSessionKey: "agent:main:test:dm:dm-1" },
+    conversation: { kind: "direct", id: "dm-1" },
     reply: { to: "test:route:dm-1" },
-    message: { rawBody: "hello" },
-  };
+  });
 }
 function ingressInput(
   params: ReturnType<typeof makeContext>,
   overrides: Partial<ResolveStableChannelMessageIngressParams> = {},
 ): ResolveStableChannelMessageIngressParams {
-  return {
-    channelId: params.channel,
-    accountId: params.accountId,
-    subject: { stableId: params.sender.id },
-    conversation: params.conversation,
-    contextBinding: {
-      agentId: params.route.agentId,
-      sessionKey: params.route.routeSessionKey,
-      messageId: params.messageId,
-      inboundEventKind: "user_request",
-    },
-    dmPolicy: "open",
+  return hostIngressInput(params, {
+    groupPolicy: undefined,
+    allowFrom: undefined,
+    useDefaultPairingStore: undefined,
     ...overrides,
-  };
+  });
 }
 
 function createOwner(audit: ChannelAdmissionAudit, resolveGatewayContext?: GatewayContextResolver) {

@@ -1,5 +1,4 @@
 import { appendFile, readFile, writeFile } from "node:fs/promises";
-import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
 import { expect, it } from "vitest";
 import {
   getAcpSessionManager,
@@ -7,15 +6,13 @@ import {
 } from "../../acp/control-plane/manager.js";
 import { disposeAcpSessionManagerInstance } from "../../acp/control-plane/manager.lifecycle.js";
 import { ensureConfiguredAcpBindingSession } from "../../acp/persistent-bindings.lifecycle.js";
-import { resolveConfiguredAcpBindingSpecFromRecord } from "../../acp/persistent-bindings.types.js";
 import {
   registerAcpRuntimeBackend,
   unregisterAcpRuntimeBackend,
 } from "../../acp/runtime/registry.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
-import { resolveConfiguredBinding } from "../plugins/configured-binding-registry.js";
 import { withDiscordNativeAdminFixture } from "./discord-native-owner.test-support.js";
+import { configureNativeAcp, createNativeAcpRuntime } from "./native-acp-owner.test-support.js";
 
 it.each([
   { commandName: "think", preparation: "initialize", label: "initialization" },
@@ -29,90 +26,16 @@ it.each([
 ] as const)("fences /$commandName ACP $label", async ({ commandName, preparation }) => {
   await withDiscordNativeAdminFixture(
     async ({ cfg, state, profile, publishConfig, run, dispatch, autocomplete }) => {
-      const backendId = "discord-owner-proof";
-      cfg.acp = { enabled: true, backend: backendId, allowedAgents: ["main"] };
-      cfg.session = { store: state.path("native-acp-sessions.json") };
-      cfg.agents = {
-        ownership: "explicit",
-        defaults: { systemAgent: { agentId: "main" }, thinkingDefault: "high" },
-        entries: { main: { workspace: state.workspaceDir, model: "fixture/current" } },
-      };
-      cfg.bindings = [
-        {
-          type: "acp",
-          agentId: "main",
-          match: {
-            channel: "discord",
-            accountId: "default",
-            peer: { kind: "channel", id: "234567890123456789" },
-          },
-          acp: { backend: backendId, cwd: state.workspaceDir, mode: "persistent" },
-        },
-      ];
-      publishConfig();
-      const binding = resolveConfiguredBinding({
-        cfg,
-        conversation: {
-          channel: "discord",
-          accountId: "default",
-          conversationId: "234567890123456789",
-        },
-      });
-      const spec = binding && resolveConfiguredAcpBindingSpecFromRecord(binding.record);
-      if (!binding || !spec) {
-        throw new Error("Expected the configured native-command ACP binding");
-      }
+      const { backendId, binding, spec } = configureNativeAcp(cfg, state, "discord", publishConfig);
       const effectsPath = state.path("acp-effects.log");
       const effects = () => readFile(effectsPath, "utf8");
       const record = (effect: string) => appendFile(effectsPath, effect + "\n");
-      const acceptedOptions = new Map<string, string>();
-      const readinessAwaited = createDeferredCore();
-      const releaseReadiness = createDeferredCore();
-      let pauseReadiness = false;
-      const runtime: AcpRuntime = {
-        ownerAwareSessions: 1,
-        async ensureSession(input) {
-          await record("initialize");
-          acceptedOptions.clear();
-          if (input.model) {
-            acceptedOptions.set("model", input.model);
-          }
-          if (input.thinking) {
-            acceptedOptions.set("thinking", input.thinking);
-          }
-          return {
-            agentId: input.agentId,
-            sessionKey: input.sessionKey,
-            backend: backendId,
-            runtimeSessionName: input.sessionKey,
-            backendSessionId: `runtime:${input.sessionKey}`,
-            cwd: input.cwd,
-          };
-        },
-        async getCapabilities() {
-          if (pauseReadiness && preparation === "revoke") {
-            readinessAwaited.resolve();
-            await releaseReadiness.promise;
-          }
-          return { controls: ["session/set_config_option"] };
-        },
-        async setConfigOption({ key, value }) {
-          await record(`configure:${key}`);
-          acceptedOptions.set(key, value);
-          if (pauseReadiness && preparation === "settle" && key === "model") {
-            readinessAwaited.resolve();
-            await releaseReadiness.promise;
-          }
-          return {
-            configOptions: [...acceptedOptions].map(([id, currentValue]) => ({ id, currentValue })),
-          };
-        },
-        close: () => record("close"),
-        async cancel() {},
-        runTurn() {
-          throw new Error("This fixture must not start a provider turn");
-        },
-      };
+      const { runtime, preparing, finish, pause } = createNativeAcpRuntime(
+        backendId,
+        record,
+        preparation === "revoke" ? "capability" : preparation === "settle" ? "control" : undefined,
+        true,
+      );
       managerTesting.resetAcpSessionManagerForTests();
       registerAcpRuntimeBackend({ id: backendId, runtime });
       const manager = getAcpSessionManager();
@@ -186,12 +109,12 @@ it.each([
         }
         expectDenied(denied);
         await expectUnchanged();
-        pauseReadiness = true;
+        pause();
         const allowedRun = run(command);
         if (preparation === "revoke" || preparation === "settle") {
-          await readinessAwaited.promise;
+          await preparing.promise;
           setUserProfileRole(profile.id, "member");
-          releaseReadiness.resolve();
+          finish.resolve();
           expectDenied(await allowedRun);
           const after = manager.resolveSession(target);
           if (preparation === "revoke") {
@@ -220,7 +143,7 @@ it.each([
           meta: { runtimeOptions: { model: spec.model, cwd: state.workspaceDir } },
         });
       } finally {
-        releaseReadiness.resolve();
+        finish.resolve();
         await disposeAcpSessionManagerInstance(manager, "test complete");
         unregisterAcpRuntimeBackend(backendId);
         managerTesting.resetAcpSessionManagerForTests();

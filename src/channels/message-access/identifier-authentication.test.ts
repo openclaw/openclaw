@@ -24,6 +24,8 @@ const resolveVerified = (overrides: Input) =>
     policy: { minIdentifierAuthentication: "verified" },
     ...overrides,
   });
+const verifiedPolicy = { minIdentifierAuthentication: "verified" } as const;
+const groupConversation = { kind: "group", id: "room-1" } as const;
 
 function emailIdentity(
   authentication?: IdentifierAuthentication,
@@ -42,7 +44,7 @@ const claimed = (stableId: string, field: string, strength: IdentifierAuthentica
   authentication: { [field]: strength },
 });
 const inheritedRoute = {
-  conversation: { kind: "group" as const, id: "room-1" },
+  conversation: groupConversation,
   allowFrom: [],
   groupAllowFrom: ["other"],
   route: { id: "route-1", senderPolicy: "inherit" as const, senderAllowFrom: ["sender-1"] },
@@ -84,7 +86,7 @@ it("combines each matched entry with the exact same-kind subject identifier", as
       identity,
       subject,
       allowFrom: [value],
-      policy: { minIdentifierAuthentication: "verified" },
+      policy: verifiedPolicy,
     });
   const strong = await resolveEntry("strong@example.test");
   const weak = await resolveEntry("weak@example.test");
@@ -103,7 +105,7 @@ it("does not cross-bind same-kind authentication between identity fields", async
     identity: emailIdentity("asserted", "alias-email", "verified"),
     subject: claimed("shared@example.test", "primary-email", "asserted"),
     allowFrom: ["shared@example.test"],
-    policy: { minIdentifierAuthentication: "verified" },
+    policy: verifiedPolicy,
   });
 
   expect(result.senderAccess).toMatchObject(denied);
@@ -156,7 +158,7 @@ it.each<[string, Input, boolean, string, string]>([
     "preserves static strength without a claim map",
     {
       identity: { authentication: "verified" },
-      policy: { minIdentifierAuthentication: "verified" },
+      policy: verifiedPolicy,
     },
     true,
     "stableId",
@@ -200,42 +202,38 @@ it("does not let a wildcard without an exact primary identifier claim verified",
     identity: { authentication: "verified" },
     subject: {},
     allowFrom: ["*"],
-    policy: { minIdentifierAuthentication: "verified" },
+    policy: verifiedPolicy,
   });
 
   expect(result.senderAccess).toMatchObject(denied);
 });
 
-it.each([
-  {
-    name: "group sender",
-    patch: {
-      conversation: { kind: "group" as const, id: "room-1" },
-      allowFrom: [],
-      groupAllowFrom: ["sender-1"],
-    },
-    check: (result: Result) => result.senderAccess.allowed,
-  },
-  {
-    name: "command owner",
-    patch: {
+it.each<[string, Input, (result: Result) => boolean]>([
+  [
+    "group sender",
+    { conversation: groupConversation, allowFrom: [], groupAllowFrom: ["sender-1"] },
+    (result) => result.senderAccess.allowed,
+  ],
+  [
+    "command owner",
+    {
       command: {
         allowTextCommands: true,
         hasControlCommand: true,
         commandOwnerAllowFrom: ["sender-1"],
       },
     },
-    check: (result: Result) => result.commandAccess.authorized,
-  },
-  {
-    name: "route sender",
-    patch: {
+    (result) => result.commandAccess.authorized,
+  ],
+  [
+    "route sender",
+    {
       ...inheritedRoute,
-      route: { ...inheritedRoute.route, senderPolicy: "replace" as const },
+      route: { ...inheritedRoute.route, senderPolicy: "replace" },
     },
-    check: (result: Result) => result.routeAccess.allowed && result.senderAccess.allowed,
-  },
-])("applies the exact-pair threshold to $name gates", async ({ patch, check }) => {
+    (result) => result.routeAccess.allowed && result.senderAccess.allowed,
+  ],
+])("applies the exact-pair threshold to %s gates", async (_name, patch, check) => {
   const result = await resolveVerified(patch);
   expect(check(result)).toBe(false);
 });
@@ -255,7 +253,7 @@ it("namespaces exact pairs from inherited route lists", async () => {
       authentication: (value) => (value === "sender-1" ? "verified" : "asserted"),
     },
     subject: claimed("sender-1", "stableId", "verified"),
-    policy: { minIdentifierAuthentication: "verified" },
+    policy: verifiedPolicy,
   });
 
   expect(result.senderAccess).toMatchObject({
@@ -270,7 +268,7 @@ it("does not cross-bind same-kind origin-subject fields", async () => {
     identity: emailIdentity(),
     subject: claimed("shared@example.test", "primary-email", "verified"),
     event: originEvent("alias-email", "email", "shared@example.test"),
-    policy: { minIdentifierAuthentication: "verified" },
+    policy: verifiedPolicy,
   });
 
   expect(result.ingress).toMatchObject(originDenied);
@@ -292,27 +290,22 @@ it("applies the threshold to access-group and origin-subject gates", async () =>
   expect(origin.ingress).toMatchObject(originDenied);
 });
 
-it.each([
-  {
-    name: "runtime resolver",
-    patch: {
-      resolveAccessGroupMembership: async () => true,
-    },
-  },
-  {
-    name: "precomputed membership",
-    patch: {
+it.each<[string, Input]>([
+  ["runtime resolver", { resolveAccessGroupMembership: async () => true }],
+  [
+    "precomputed membership",
+    {
       accessGroupMembership: [
         {
-          kind: "matched" as const,
+          kind: "matched",
           groupName: "audience",
-          source: "dynamic" as const,
+          source: "dynamic",
           matchedEntryIds: ["access-group:audience"],
         },
       ],
     },
-  },
-])("fails $name access-group matches closed at a verified minimum", async ({ patch }) => {
+  ],
+])("fails %s access-group matches closed at a verified minimum", async (_name, patch) => {
   const result = await resolve({
     ...patch,
     allowFrom: ["accessGroup:audience"],
@@ -323,7 +316,7 @@ it.each([
         channelId: "channel-1",
       },
     },
-    policy: { minIdentifierAuthentication: "verified" },
+    policy: verifiedPolicy,
   });
 
   expectThresholdDenied(result);
