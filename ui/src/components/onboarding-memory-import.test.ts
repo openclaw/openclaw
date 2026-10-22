@@ -413,6 +413,34 @@ describe("OnboardingMemoryImport", () => {
     expect(element.querySelector("openclaw-modal-dialog")).toBeNull();
   });
 
+  it("shows a completed provider while the next import is pending", async () => {
+    const pendingApply = createDeferred<ReturnType<typeof createApplyResult>>();
+    const request = vi.fn(async (method: string, params?: { providerId?: string }) => {
+      if (method === "migrations.memory.plan") {
+        return createPlan(["codex", "claude"]);
+      }
+      return params?.providerId === "claude"
+        ? await pendingApply.promise
+        : createApplyResult("codex");
+    });
+    const element = await mount(createContext(request));
+    (await waitForAction(element)).click();
+    try {
+      await waitForSolid(() => {
+        expect(request).toHaveBeenCalledTimes(3);
+        expect(element.querySelector("[data-provider-id='codex']")?.textContent).toContain(
+          "Migrated 1, skipped 0",
+        );
+        expect(element.querySelector("[data-provider-id='claude']")?.textContent).toContain(
+          "Importing",
+        );
+      });
+    } finally {
+      pendingApply.resolve(createApplyResult("claude"));
+    }
+    await waitForAction(element, "continue");
+  });
+
   it("sets the guard when skipped", async () => {
     const request = vi.fn(async () => createPlan());
     const context = createContext(request);

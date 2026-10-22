@@ -71,7 +71,6 @@
   "path-existence-runtime",
   "node-crypto-runtime",
   "node-selection-runtime",
-  "heartbeat-runtime",
   "http-response-runtime",
   "expect-runtime",
   "number-runtime",

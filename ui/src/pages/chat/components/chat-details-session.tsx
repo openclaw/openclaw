@@ -106,13 +106,13 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
         .filter(Boolean)
         .join(" ");
     };
-    const identity = createMemo(() =>
+    const readIdentity = () =>
       JSON.stringify([
         props.props?.sessionKey,
         props.props?.currentAgentId,
         props.props?.selectedSession?.sessionId,
-      ]),
-    );
+      ]);
+    const identity = createMemo(readIdentity);
     const outputsDemand = createMemo(() =>
       props.presented && props.desktop && props.props?.outputs
         ? props.props.retainOutputs
@@ -221,6 +221,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
             if (!snapshot) {
               return null;
             }
+            const navigationIdentity = readIdentity();
             const current = () =>
               host.isConnected && props.presented && props.props?.outputs === snapshot;
             return {
@@ -231,8 +232,9 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                 }
               },
               onViewAll: () => {
-                if (current()) {
-                  snapshot.onViewAll();
+                // Native props can advance before the visible Outputs row settles.
+                if (host.isConnected && props.presented && readIdentity() === navigationIdentity) {
+                  props.props?.outputs?.onViewAll();
                 }
               },
               onRetryArtifacts: snapshot.onRetryArtifacts

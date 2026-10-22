@@ -46,7 +46,7 @@ it("collects superseded resident rows and their materializations after metadata 
         for (const activeOnly of [false, true]) {
           selections.push(
             ...prepareSessionRowSelection(projection, { ...opts, activeOnly }, { ordered: true })
-              .entries()
+              .entries("all")
               .map(weak),
           );
         }

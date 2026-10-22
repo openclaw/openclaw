@@ -58,6 +58,7 @@ import {
 import { hasInboundAudio } from "./inbound-media.js";
 import { normalizeMessageTimestampMs } from "./message-timestamp.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
+import { resolveReplySteeringIntent } from "./reply-steering-intent.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority-inbound.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
@@ -689,6 +690,10 @@ export async function executePreparedReplyRun(
   const execute = () =>
     runReplyAgent({
       ...params,
+      steeringIntent: resolveReplySteeringIntent({
+        directives: params.directives,
+        resetTriggered: effectiveResetTriggered,
+      }),
       commandBody: prefixedCommandBody,
       transcriptCommandBody,
       followupRun,

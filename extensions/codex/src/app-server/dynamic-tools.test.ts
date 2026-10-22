@@ -4,7 +4,6 @@ import path from "node:path";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { createOpenClawCodingTools, type AnyAgentTool } from "openclaw/plugin-sdk/agent-harness";
 import {
-  HEARTBEAT_RESPONSE_TOOL_NAME,
   embeddedAgentLog,
   getPluginToolMeta,
   wrapToolWithBeforeToolCallHook,
@@ -512,33 +511,34 @@ describe("createCodexDynamicToolBridge", () => {
   });
 
   it("can register a durable tool schema while denying execution for the current turn", async () => {
-    const heartbeatExecute = vi.fn(async () => textToolResult("heartbeat recorded"));
+    const unavailableToolName = "unavailable_task";
+    const unavailableExecute = vi.fn(async () => textToolResult("unavailable tool recorded"));
     const onToolOutcome = vi.fn();
     const bridge = createSingleToolBridge(createTool("message"), {
       registeredTools: [
         createTool("message"),
-        createTool(HEARTBEAT_RESPONSE_TOOL_NAME, { execute: heartbeatExecute }),
+        createTool(unavailableToolName, { execute: unavailableExecute }),
       ],
       hookContext: { runId: "run-unavailable", onToolOutcome },
     });
 
     expect(specNames(bridge.availableSpecs)).toEqual(["message"]);
     expect(bridge.availableTools.map((tool) => tool.name)).toEqual(["message"]);
-    expect(specNames(bridge.specs)).toEqual([HEARTBEAT_RESPONSE_TOOL_NAME, "message"]);
+    expect(specNames(bridge.specs)).toEqual(["message", unavailableToolName]);
 
-    const result = await callTool(bridge, HEARTBEAT_RESPONSE_TOOL_NAME);
+    const result = await callTool(bridge, unavailableToolName);
 
     expectInputText(
       result,
-      `OpenClaw tool is not available for this turn: ${HEARTBEAT_RESPONSE_TOOL_NAME}`,
+      `OpenClaw tool is not available for this turn: ${unavailableToolName}`,
       false,
     );
     expect(result).toEqual(
       expect.objectContaining({ executionStarted: false, executedArguments: {} }),
     );
-    expect(heartbeatExecute).not.toHaveBeenCalled();
+    expect(unavailableExecute).not.toHaveBeenCalled();
     expect(onToolOutcome).toHaveBeenLastCalledWith({
-      toolName: HEARTBEAT_RESPONSE_TOOL_NAME,
+      toolName: unavailableToolName,
       argsHash: "",
       resultHash: "",
       terminalPresentation: undefined,

@@ -236,7 +236,9 @@ describe("chat metadata store", () => {
       beginChatMetadataPublication(client, scope).publish({ revision: "failed" }),
     ).toThrow("Chat commands are unavailable");
     expect(peek(scope)).toBeUndefined();
-    invalidateChatMetadataStore(client, undefined, undefined, "refresh", false);
+    invalidateChatMetadataStore(client, undefined, undefined, "refresh", {
+      commandsChanged: false,
+    });
     await load(scope);
     expect(request).toHaveBeenCalledOnce();
     expect(peek(scope)).toEqual(metadata("recovered"));

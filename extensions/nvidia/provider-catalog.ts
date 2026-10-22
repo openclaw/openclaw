@@ -66,24 +66,27 @@ export function buildNvidiaProvider(): ModelProviderConfig {
     providerId: "nvidia",
     catalog: manifest.modelCatalog.providers.nvidia,
   });
+  for (const model of provider.models) {
+    if (model.id === NVIDIA_DEFAULT_MODEL_ID) {
+      model.params = {
+        ...model.params,
+        chat_template_kwargs: {
+          ...NVIDIA_ULTRA_DEFAULT_PARAMS.chat_template_kwargs,
+          ...(isRecord(model.params?.chat_template_kwargs)
+            ? model.params.chat_template_kwargs
+            : {}),
+        },
+      };
+    }
+  }
   return {
     ...provider,
     apiKey: "NVIDIA_API_KEY",
-    models: applyNvidiaModelDefaults(provider.models),
   };
 }
 
 export async function buildLiveNvidiaProvider(): Promise<ModelProviderConfig> {
   const provider = buildNvidiaProvider();
-  return {
-    ...provider,
-    models: await loadNvidiaLiveModels(provider.models),
-  };
-}
-
-async function loadNvidiaLiveModels(
-  bundledModels: ModelDefinitionConfig[],
-): Promise<ModelDefinitionConfig[]> {
   const [inventory, featured] = await Promise.allSettled([
     getCachedLiveCatalogValue({
       keyParts: ["nvidia", "model-ids", NVIDIA_MODELS_URL],
@@ -109,20 +112,50 @@ async function loadNvidiaLiveModels(
         });
       },
     }),
-    loadNvidiaFeaturedModels(),
+    getCachedLiveCatalogValue({
+      keyParts: ["nvidia", "featured-models", NVIDIA_FEATURED_MODELS_URL],
+      ttlMs: FEATURED_MODEL_CACHE_TTL_MS,
+      load: async (signal) => {
+        const rows = await fetchLiveProviderModelRows({
+          providerId: "nvidia",
+          endpoint: NVIDIA_FEATURED_MODELS_URL,
+          timeoutMs: FEATURED_MODEL_FETCH_TIMEOUT_MS,
+          requireHttps: true,
+          signal,
+          policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(NVIDIA_FEATURED_MODELS_URL),
+          // The NVIDIA-owned CloudFront catalog can stall on all-family DNS lookup.
+          lookupFn: lookupNvidiaFeaturedModelHostname,
+          auditContext: "nvidia-featured-model-catalog",
+          readRows: (payload) => {
+            if (!isRecord(payload) || !Array.isArray(payload["featured-models"])) {
+              throw new Error("NVIDIA featured catalog must contain featured-models[]");
+            }
+            return payload["featured-models"];
+          },
+        });
+        const models = rows
+          .slice(0, FEATURED_MODEL_MAX_ROWS)
+          .map(parseNvidiaFeaturedModel)
+          .filter((model) => model !== null);
+        if (rows.length > 0 && models.length === 0) {
+          throw new Error("NVIDIA featured catalog contains no usable model metadata");
+        }
+        return models;
+      },
+    }),
   ]);
   if (inventory.status === "rejected") {
     throw inventory.reason;
   }
   // Empty inference inventory is authoritative even when featured metadata is unavailable.
   if (inventory.value.length === 0) {
-    return [];
+    return { ...provider, models: [] };
   }
   if (featured.status === "rejected") {
     throw featured.reason;
   }
   const available = new Set(inventory.value);
-  const known = new Map(bundledModels.map((model) => [model.id, model]));
+  const known = new Map(provider.models.map((model) => [model.id, model]));
   // /models includes embeddings and other non-chat endpoints without capabilities.
   // Only exact known chat metadata or the vendor's featured chat rows are selectable.
   const ranked = new Map(
@@ -148,65 +181,10 @@ async function loadNvidiaLiveModels(
   }
   // A fresh inventory can restore a republished legacy id, but a stale featured
   // recommendation cannot restore an id the inference endpoint no longer lists.
-  return [...ranked.values()].filter((model) => available.has(model.id));
-}
-
-async function loadNvidiaFeaturedModels(): Promise<ModelDefinitionConfig[]> {
-  return await getCachedLiveCatalogValue({
-    keyParts: ["nvidia", "featured-models", NVIDIA_FEATURED_MODELS_URL],
-    ttlMs: FEATURED_MODEL_CACHE_TTL_MS,
-    load: async (signal) => {
-      const rows = await fetchLiveProviderModelRows({
-        providerId: "nvidia",
-        endpoint: NVIDIA_FEATURED_MODELS_URL,
-        timeoutMs: FEATURED_MODEL_FETCH_TIMEOUT_MS,
-        requireHttps: true,
-        signal,
-        policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(NVIDIA_FEATURED_MODELS_URL),
-        // The NVIDIA-owned CloudFront catalog can stall on all-family DNS lookup.
-        lookupFn: lookupNvidiaFeaturedModelHostname,
-        auditContext: "nvidia-featured-model-catalog",
-        readRows: (payload) => {
-          if (!isRecord(payload) || !Array.isArray(payload["featured-models"])) {
-            throw new Error("NVIDIA featured catalog must contain featured-models[]");
-          }
-          return payload["featured-models"];
-        },
-      });
-      const models = parseNvidiaFeaturedModels(rows);
-      if (!models) {
-        throw new Error("NVIDIA featured catalog contains no usable model metadata");
-      }
-      return models;
-    },
-  });
-}
-
-function parseNvidiaFeaturedModels(rows: readonly unknown[]): ModelDefinitionConfig[] | null {
-  const models = rows
-    .slice(0, FEATURED_MODEL_MAX_ROWS)
-    .map(parseNvidiaFeaturedModel)
-    .filter((model) => model !== null);
-  return rows.length === 0 || models.length > 0 ? models : null;
-}
-
-function applyNvidiaModelDefaults(models: ModelDefinitionConfig[]): ModelDefinitionConfig[] {
-  return models.map((model) =>
-    model.id === NVIDIA_DEFAULT_MODEL_ID
-      ? {
-          ...model,
-          params: {
-            ...model.params,
-            chat_template_kwargs: {
-              ...NVIDIA_ULTRA_DEFAULT_PARAMS.chat_template_kwargs,
-              ...(isRecord(model.params?.chat_template_kwargs)
-                ? model.params.chat_template_kwargs
-                : {}),
-            },
-          },
-        }
-      : model,
-  );
+  return {
+    ...provider,
+    models: [...ranked.values()].filter((model) => available.has(model.id)),
+  };
 }
 
 function parseNvidiaFeaturedModel(row: unknown): ModelDefinitionConfig | null {

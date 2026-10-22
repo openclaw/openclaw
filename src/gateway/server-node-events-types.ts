@@ -57,6 +57,7 @@ export type NodeEventHandlerOptions = {
   pairingGeneration?: NodePairingGeneration;
   presenceAllowed?: boolean;
   isConnectionCurrent?: () => boolean | Promise<boolean>;
+  assertSessionEventCurrent?: () => void;
   resolveApnsRegistrationGeneration?: () => string | null | Promise<string | null>;
   assertApnsRegistrationCurrent?: () => void;
 };

@@ -11,6 +11,7 @@ import type { AgentSessionEvent } from "./agent-session-types.js";
 import { AgentSession } from "./agent-session.js";
 import { AuthStorage } from "./auth-storage.js";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
+import type { ExtensionEvent, ThinkingLevelSelectEvent } from "./extensions/types.js";
 import { ModelRegistry, type ProviderConfigInput } from "./model-registry.js";
 import { createAgentSession, type CreateAgentSessionOptions } from "./sdk.js";
 import { SessionManager } from "./session-manager.js";
@@ -75,7 +76,7 @@ export function createAssistantResultStream(message: AssistantMessage) {
   return stream;
 }
 
-export function holdAssistantResponse(text: string) {
+export function holdAssistantResponse(text: string | (() => AssistantMessage)) {
   const response = createAssistantMessageEventStream();
   let released = false;
   return {
@@ -89,7 +90,7 @@ export function holdAssistantResponse(text: string) {
       response.push({
         type: "done",
         reason: "stop",
-        message: createAssistant(testModel, text),
+        message: typeof text === "string" ? createAssistant(testModel, text) : text(),
       });
       response.end();
     },
@@ -143,9 +144,10 @@ type TestSessionOptions = Partial<
     | "resolveCompactionThinkingLevel"
     | "withSessionWriteSettlement"
   >
->;
+> & { extension?: Parameters<typeof createResourceLoader>[0] };
 
 export async function createTestSession(options: TestSessionOptions = {}) {
+  const { extension, ...sessionOptions } = options;
   const model = options.model ?? testModel;
   const authStorage = AuthStorage.inMemory();
   authStorage.setRuntimeApiKey(model.provider, "test-api-key");
@@ -163,12 +165,12 @@ export async function createTestSession(options: TestSessionOptions = {}) {
     streamSimple: streamMocks.streamSimple,
   });
   const result = await createAgentSession({
-    ...options,
+    ...sessionOptions,
     systemPrompt: options.systemPrompt ?? "Test session prompt",
     model,
     thinkingLevel: settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL,
     tools: options.customTools?.map((tool) => tool.name) ?? [],
-    resourceLoader: options.resourceLoader ?? (await createResourceLoader()),
+    resourceLoader: options.resourceLoader ?? (await createResourceLoader(extension)),
     sessionManager,
     settingsManager,
     modelRegistry,
@@ -179,6 +181,35 @@ export async function createTestSession(options: TestSessionOptions = {}) {
   });
   sessions.push(result.session);
   return { ...result, modelRegistry, settingsManager, sessionManager };
+}
+
+export async function createModelSelectionSession({
+  model,
+  models,
+  onModelSelect,
+  onThinkingSelect,
+  ...options
+}: Pick<TestSessionOptions, "thinkingLevel" | "sessionManager"> & {
+  model: Model;
+  models: NonNullable<Parameters<ModelRegistry["registerProvider"]>[1]["models"]>;
+  onModelSelect?: (event: Extract<ExtensionEvent, { type: "model_select" }>) => Promise<void>;
+  onThinkingSelect?: (event: ThinkingLevelSelectEvent) => Promise<void>;
+}) {
+  const resourceLoader = await createResourceLoader((api) => {
+    if (onModelSelect) {
+      api.on("model_select", onModelSelect);
+    }
+    if (onThinkingSelect) {
+      api.on("thinking_level_select", onThinkingSelect);
+    }
+  });
+  const fixture = await createTestSession({ ...options, model, resourceLoader });
+  fixture.modelRegistry.registerProvider(model.provider, {
+    api: model.api,
+    baseUrl: model.baseUrl,
+    models,
+  });
+  return { ...fixture, extensionRuntime: resourceLoader.getExtensions().runtime };
 }
 
 export async function appendHistory(
