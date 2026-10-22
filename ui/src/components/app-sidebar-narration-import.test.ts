@@ -21,18 +21,20 @@ vi.mock("./app-sidebar-session-narration.ts", async (original) => {
 it("keeps navigation usable after narration fails and retries on live-activity reactivation", async () => {
   const { sidebar } = await mountSidebar(
     createGateway(createTestGatewayClient(vi.fn().mockResolvedValue({}))),
-    createSessions("main", ["agent:main:task"]),
+    createSessions("main", []),
   );
   sidebar.connected = true;
   await sidebar.updateComplete;
   await waitForSolid(() => expect(narration.create).toHaveBeenCalledTimes(1));
-  const row = sidebar.querySelector('[data-session-key="agent:main:task"]');
-  expect(row).not.toBeNull();
+  const home = sidebar.querySelector(".sidebar-footer-bar__home");
+  expect(home, "Home navigation remains mounted after narration fails").not.toBeNull();
   expect(sidebar.narration).toBeNull();
   sidebar.sidebarLiveActivity = false;
   await sidebar.updateComplete;
   sidebar.sidebarLiveActivity = true;
-  await waitForSolid(() => expect(sidebar.narration).not.toBeNull());
+  await waitForSolid(() =>
+    expect(sidebar.narration, "Narration recovers after live-activity reactivation").not.toBeNull(),
+  );
   expect(narration.create).toHaveBeenCalledTimes(2);
-  expect(sidebar.querySelector('[data-session-key="agent:main:task"]')).toBe(row);
+  expect(sidebar.querySelector(".sidebar-footer-bar__home")).toBe(home);
 });
