@@ -1,10 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
-import {
-  createPluginStateKeyedStoreV2ForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import type {
   RealtimeVoiceBridge,
@@ -14,8 +10,8 @@ import type {
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createVoiceCallStateRuntimeForTests } from "./manager.test-harness.js";
 import { MockProvider } from "./providers/mock.js";
-import type { VoiceCallStateRuntime } from "./runtime-state.js";
 import { createVoiceCallRuntime, type VoiceCallRuntime } from "./runtime.js";
 import { createVoiceCallBaseConfig } from "./test-fixtures.js";
 import { connectWs, startUpgradeWsServer, waitForClose } from "./websocket-test-support.js";
@@ -31,20 +27,6 @@ vi.mock("./realtime-voice.runtime.js", async (importOriginal) => {
     resolveConfiguredRealtimeVoiceProviderAsync: mocks.resolveConfiguredRealtimeVoiceProviderAsync,
   };
 });
-
-function unusedIngress(): never {
-  throw new Error("Channel ingress is not used by realtime routing tests");
-}
-
-function createStateRuntime(): VoiceCallStateRuntime["state"] {
-  return {
-    resolveStateDir: () => "",
-    openKeyedStoreV2: <T>(options: OpenAsyncKeyedStoreOptions) =>
-      createPluginStateKeyedStoreV2ForTests<T>("voice-call", options, { assertCurrent() {} }),
-    openChannelIngressQueue: unusedIngress,
-    openChannelIngressDrain: unusedIngress,
-  };
-}
 
 function createOwner(agentId: string, id: string, model: string) {
   const connected = createDeferred<void>();
@@ -141,9 +123,8 @@ describe("voice-call realtime route ownership", () => {
         scheduler: createTestPluginServiceScheduler(),
         config,
         coreConfig: fullConfig,
-        fullConfig,
         agentRuntime: {} as never,
-        stateRuntime: createStateRuntime(),
+        stateRuntime: createVoiceCallStateRuntimeForTests(),
       });
       expect(mocks.resolveConfiguredRealtimeVoiceProviderAsync).not.toHaveBeenCalled();
 

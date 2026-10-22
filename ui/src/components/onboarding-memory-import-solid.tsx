@@ -23,7 +23,7 @@ import { projectSource } from "../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import "../styles/onboarding-memory-import.css";
-import "./modal-dialog.ts";
+import "./modal-dialog.tsx";
 
 const ONBOARDING_MEMORY_IMPORT_KEY = "openclaw.onboarding.memory-import";
 type Props = { context?: ApplicationContext; active: boolean };

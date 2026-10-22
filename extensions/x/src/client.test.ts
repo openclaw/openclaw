@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getXApi } from "./client.js";
 import type { XAccountConfig } from "./config-schema.js";
 import { setXRuntime } from "./runtime.js";
+import { setXTestFetch } from "./test-support/fetch.js";
 
 const fixture = vi.hoisted(() => {
   return { fetch: vi.fn<(input: string, init?: RequestInit) => Promise<Response>>() };
@@ -24,17 +25,6 @@ const fixture = vi.hoisted(() => {
 let current: OpenClawConfig;
 let stateDir: string;
 let failTokenCommit: "before" | "after" | undefined;
-
-vi.mock("./api.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./api.js")>();
-  return {
-    ...actual,
-    createXApiClient(options: Parameters<typeof actual.createXApiClient>[0]) {
-      options.fetch = fixture.fetch;
-      return actual.createXApiClient(options);
-    },
-  };
-});
 
 function config(overrides: Partial<XAccountConfig> = {}): OpenClawConfig {
   return {
@@ -117,6 +107,7 @@ beforeEach(async () => {
   current = config();
   failTokenCommit = undefined;
   fixture.fetch.mockReset();
+  setXTestFetch("api.x.com", fixture.fetch);
   restartRuntime();
 });
 

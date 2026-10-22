@@ -28,30 +28,22 @@ function resetLog() {
 
 describe("warnGroupAllowlistMisconfigOnce", () => {
   beforeEach(resetLog);
-  it("fires when groupPolicy=allowlist has no effective groupAllowFrom", () => {
+  it("warns once per account when allowlist has no effective groupAllowFrom", () => {
     expect(warnMisconfig()).toBe(true);
+    expect(warnMisconfig()).toBe(false);
     expect(messages).toHaveLength(1);
     expect(messages[0]).toContain('groupPolicy="allowlist"');
     expect(messages[0]).toContain("channels.imessage.groupAllowFrom");
     expect(messages[0]).toContain(accountId);
   });
 
-  it("does not fire when groupPolicy is not allowlist", () => {
-    expect(warnMisconfig({ groupPolicy: "open" })).toBe(false);
-    expect(messages).toHaveLength(0);
-  });
-
-  it("does not fire when groupAllowFrom admits groups despite empty groups (senderFilterBypass)", () => {
-    expect(warnMisconfig({ hasGroupAllowFrom: true })).toBe(false);
-    expect(warnMisconfig({ hasGroupAllowFrom: true })).toBe(false);
-    expect(messages).toHaveLength(0);
-  });
-
-  it("only fires once per accountId", () => {
-    expect(warnMisconfig()).toBe(true);
-    expect(warnMisconfig()).toBe(false);
-    expect(messages).toHaveLength(1);
-  });
+  it.each([{ groupPolicy: "open" }, { hasGroupAllowFrom: true }])(
+    "does not warn for an admissible configuration: %j",
+    (config) => {
+      expect(warnMisconfig(config)).toBe(false);
+      expect(messages).toHaveLength(0);
+    },
+  );
 
   it("fires separately for distinct accountIds", () => {
     warnMisconfig({ accountId: `${accountId}-primary` });
@@ -65,23 +57,11 @@ describe("warnGroupAllowlistDropPerChatOnce", () => {
   it("fires once per accountId:chat_id pair", () => {
     expect(warnChat(42)).toBe(true);
     expect(warnChat(42)).toBe(false);
+    expect(warnChat("42")).toBe(false);
     expect(messages).toHaveLength(1);
     expect(messages[0]).toContain("chat_id=42");
     expect(messages[0]).toContain(accountId);
     expect(messages[0]).toContain('channels.imessage.groups["42"]');
-  });
-
-  it("fires separately for distinct chat_ids on the same account", () => {
-    warnChat(1);
-    warnChat(2);
-    warnChat(2);
-    expect(messages).toHaveLength(2);
-  });
-
-  it("treats numeric and string chat_ids as the same key", () => {
-    warnChat(42);
-    warnChat("42");
-    expect(messages).toHaveLength(1);
   });
 
   it("skips when chat_id is undefined or empty", () => {

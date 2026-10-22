@@ -215,6 +215,9 @@ describe("CommandPalette pending searches", () => {
     const list = vi.fn(async () => null);
     const { palette, query } = await mountSearch({ request }, list);
     palette.onSelectSession = undefined;
+    await enterQuery(palette, "");
+    expect(findPaletteOption(palette, "Plugins")).toBeDefined();
+    expect(query('[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");
     await enterQuery(palette, "zzcatalog");
     expect(palette.textContent).not.toContain("Searching commands");
     await vi.advanceTimersByTimeAsync(200);
@@ -235,6 +238,33 @@ describe("CommandPalette pending searches", () => {
     expect(query('[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");
     expect(request).toHaveBeenCalledOnce();
     expect(list).not.toHaveBeenCalled();
+  });
+
+  it("keeps static commands visible when reopened over a pending catalog", async () => {
+    const catalog = createDeferred<{ models: never[] }>();
+    const { palette, query } = await mountSearch(
+      { request: () => catalog.promise },
+      async () => null,
+    );
+    await searchPalette(palette, "plugins");
+    palette.togglePalette();
+    await palette.updateComplete;
+    palette.openPalette({
+      value: "plugins",
+      selectionStart: 7,
+      selectionEnd: 7,
+      selectionDirection: "none",
+    });
+    await palette.updateComplete;
+    try {
+      expect(paletteInput(palette).value).toBe("plugins");
+      expect(findPaletteOption(palette, "Plugins")).toBeDefined();
+      expect(query('[role="listbox"]')?.getAttribute("aria-busy")).toBe("true");
+    } finally {
+      catalog.resolve({ models: [] });
+    }
+    await settlePalette(palette);
+    expect(query('[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");
   });
 
   it("waits for the transcript source after metadata settles", async () => {

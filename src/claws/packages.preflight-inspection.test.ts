@@ -3,6 +3,11 @@ import { join } from "node:path";
 import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import { describe, expect, it, vi } from "vitest";
 import type { installPluginFromClawHub } from "../plugins/clawhub.js";
+import {
+  testPluginPackage as pluginPackage,
+  testPluginProbe,
+  withStagedInspection,
+} from "./packages.boundary.test-support.js";
 import { preflightClawPackage } from "./packages.js";
 import { emptyPluginCapabilityEvidence } from "./packages.test-support.js";
 
@@ -11,46 +16,14 @@ vi.mock("@openclaw/fs-safe/temp", async (importOriginal) => {
   return { ...actual, tempWorkspace: vi.fn(actual.tempWorkspace) };
 });
 
-const integrity = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-const pluginPackage = {
-  kind: "plugin",
-  source: "clawhub",
-  ref: "@owner/audit",
-  version: "2.0.1",
-  integrity,
-} as const;
-
+const { integrity } = pluginPackage;
 type Probe = typeof installPluginFromClawHub;
 type PluginProbe = Extract<Awaited<ReturnType<Probe>>, { ok: true }>;
-function pluginProbe(overrides: Partial<PluginProbe> = {}): PluginProbe {
-  return {
-    ok: true,
-    pluginId: "audit",
-    packageName: "@owner/audit",
-    targetDir: "/tmp/plugin",
-    extensions: [],
+const pluginProbe = (overrides: Partial<PluginProbe> = {}) =>
+  testPluginProbe({
     artifactInspection: { format: "openclaw", mapped: ["plugin"], unavailable: [] },
-    clawhub: {
-      source: "clawhub",
-      clawhubUrl: "https://clawhub.ai",
-      clawhubPackage: "@owner/audit",
-      clawhubFamily: "code-plugin",
-      integrity,
-    },
     ...overrides,
-  };
-}
-const withStagedInspection = (probe: Probe) => async (request: Parameters<Probe>[0]) => {
-  const result = await probe(request);
-  if (result.ok) {
-    await request.onPluginArtifactInspect?.({
-      pluginId: result.pluginId,
-      stagedArtifactDir: "/tmp/staged-audit",
-      mode: "install",
-    });
-  }
-  return result;
-};
+  });
 const inspectPluginCapabilities = vi.fn((_rootDir: string, pluginId: string) => ({
   ...emptyPluginCapabilityEvidence,
   grantsByPluginId: { [pluginId]: emptyPluginCapabilityEvidence.grants },

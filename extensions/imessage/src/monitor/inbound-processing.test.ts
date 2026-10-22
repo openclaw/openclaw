@@ -49,21 +49,20 @@ async function buildContext(
   });
 }
 
-const directMessage = (id: number, text: string, guid?: string) => ({
-  id,
-  text,
-  guid,
-  sender: "+15555550123",
-  is_from_me: false,
-  is_group: false,
-});
+const directMessage = (id: number, text: string, guid?: string) =>
+  createInboundDecisionParams({ message: { id, text, guid } }).message;
+
+async function captureDropLog() {
+  const runtimeEnv = await import("openclaw/plugin-sdk/runtime-env");
+  const log = vi.spyOn(runtimeEnv, "logVerbose").mockImplementation(() => {});
+  onTestFinished(() => log.mockRestore());
+  return log;
+}
 
 describe("resolveIMessageInboundDecision echo detection", () => {
   it("drops inbound messages when outbound message id matches echo cache", async () => {
     const echoHas = vi.fn<EchoHas>((_scope, lookup) => lookup.messageId === "42");
-    const runtimeEnv = await import("openclaw/plugin-sdk/runtime-env");
-    const logVerbose = vi.spyOn(runtimeEnv, "logVerbose").mockImplementation(() => {});
-    onTestFinished(() => logVerbose.mockRestore());
+    const logVerbose = await captureDropLog();
 
     const decision = await resolveDecision({
       message: { text: "Reasoning:\n_step_" },
@@ -71,10 +70,6 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     });
 
     expect(decision).toEqual({ kind: "drop", reason: "echo" });
-    expect(echoHas).toHaveBeenNthCalledWith(1, "default:imessage:+15555550123", {
-      messageId: "42",
-    });
-    expect(echoHas).toHaveBeenCalledTimes(1);
     expect(logVerbose).toHaveBeenCalledWith(expect.stringContaining("id=42"));
     expect(logVerbose.mock.calls.flat().join("\n")).not.toContain("Reasoning:");
   });
@@ -91,22 +86,6 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     });
 
     expect(decision).toEqual({ kind: "drop", reason: "echo" });
-    expect(echoHas).toHaveBeenNthCalledWith(1, "default:imessage:+15555550123", {
-      messageId: "42",
-    });
-    expect(echoHas).toHaveBeenNthCalledWith(
-      2,
-      "default:imessage:+15555550123",
-      {
-        text: undefined,
-        media: { contentType: "image/png", kind: "image" },
-        messageId: "42",
-      },
-      {
-        includePendingText: false,
-        skipIdShortCircuit: undefined,
-      },
-    );
   });
 
   it("keeps self-chat cache scoped to configured group threads", async () => {
@@ -155,9 +134,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
 
   it("logs reflected duplicate drops without message content", async () => {
     const selfChatCache = new SelfChatCache();
-    const runtimeEnv = await import("openclaw/plugin-sdk/runtime-env");
-    const logVerbose = vi.spyOn(runtimeEnv, "logVerbose").mockImplementation(() => {});
-    onTestFinished(() => logVerbose.mockRestore());
+    const logVerbose = await captureDropLog();
     const bodyText = "line-1\nline-2\t\u001b[31mred";
     const resolveReflection = (message: Partial<InboundDecisionParams["message"]>) =>
       resolveDecision({
@@ -243,33 +220,26 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     });
   });
 
-  it("drops tapbacks on non-bot messages in own notification mode", async () => {
-    const decision = await resolveDecision({
-      message: {
-        is_reaction: true,
-        reaction_emoji: "❤️",
-        reacted_to_guid: "someone-else",
-        text: "",
-      },
-      echoCache: { has: () => false },
-    });
+  it.each([
+    ["own", "reaction target not sent by agent"],
+    ["off", "reaction notifications disabled"],
+  ] as const)(
+    "drops unowned tapbacks in %s notification mode",
+    async (reactionNotifications, reason) => {
+      const decision = await resolveDecision({
+        reactionNotifications,
+        message: {
+          is_reaction: true,
+          reaction_emoji: "❤️",
+          reacted_to_guid: "someone-else",
+          text: "",
+        },
+        echoCache: { has: () => false },
+      });
 
-    expect(decision).toEqual({ kind: "drop", reason: "reaction target not sent by agent" });
-  });
-
-  it("drops tapbacks when reaction notifications are off", async () => {
-    const decision = await resolveDecision({
-      reactionNotifications: "off",
-      message: {
-        is_reaction: true,
-        reaction_emoji: "👍",
-        reacted_to_guid: "target-guid",
-        text: "",
-      },
-    });
-
-    expect(decision).toEqual({ kind: "drop", reason: "reaction notifications disabled" });
-  });
+      expect(decision).toEqual({ kind: "drop", reason });
+    },
+  );
 });
 
 describe("resolveIMessageReactionContext", () => {

@@ -987,7 +987,7 @@ describe("Docker scheduler trusted harness execution", () => {
         driver,
         [
           "import fs from 'node:fs';",
-          "import { runCleanupSmokePhase, runShellCommand } from './scripts/test-docker-all.mts';",
+          "import { runCleanupSmokePhase, runShellCommand, writeRunSummary } from './scripts/test-docker-all.mts';",
           callbackGateSource,
           "const phases = [];",
           ...(order === "signal-first"
@@ -1037,6 +1037,11 @@ describe("Docker scheduler trusted harness execution", () => {
           "try {",
           "const failure = await runCleanupSmokePhase(process.env, process.env.OPENCLAW_DOCKER_ALL_LOG_DIR, phases);",
           "state.returned = true; snapshot();",
+          ...(order === "ordinary"
+            ? [
+                "await writeRunSummary(process.env.OPENCLAW_DOCKER_ALL_LOG_DIR, { failures: [failure], lanes: [], phases, status: 'failed' });",
+              ]
+            : []),
           `const next = ${order === "signal-first" ? `await runShellCommand({ command: ${JSON.stringify(nextCommand)}, env: process.env, label: 'post-signal-admission' })` : "undefined"};`,
           `fs.writeFileSync(${JSON.stringify(resultPath)}, JSON.stringify({ failure, phases, next }));`,
           `} catch (error) {
@@ -1126,6 +1131,27 @@ describe("Docker scheduler trusted harness execution", () => {
           expect(phases).toEqual([
             expect.objectContaining({ name: "cleanup-smoke", status: "failed" }),
           ]);
+          if (order === "ordinary") {
+            const expected = {
+              rerunCommand: `(cd ${quote(fixture.selectedHarness)} && ${quote(fixture.pinnedPnpm)} test:docker:cleanup)`,
+              status: 3,
+              targetable: false,
+            };
+            const summary = readJson(path.join(fixture.root, "logs/summary.json"));
+            expect(summary).toMatchObject({
+              status: "failed",
+              failures: [{ name: "cleanup-smoke", ...expected }],
+              phases: [expect.objectContaining({ name: "cleanup-smoke", status: "failed" })],
+              lanes: [],
+            });
+            const index = readJson(path.join(fixture.root, "logs/failures.json"));
+            expect(index).not.toHaveProperty("status");
+            expect(index.combinedGhWorkflowCommand).toBeUndefined();
+            expect(index.lanes[0]?.ghWorkflowCommand).toBeUndefined();
+            expect(index.lanes).toEqual([
+              expect.objectContaining({ lane: "cleanup-smoke", ...expected }),
+            ]);
+          }
           expect(readFileSync(path.join(fixture.root, "logs/cleanup-smoke.log"), "utf8")).toContain(
             "cleanup smoke failed intentionally",
           );
@@ -1421,6 +1447,7 @@ if (${JSON.stringify(failure)} === "timeout") {
       );
       for (const call of calls) {
         expect(call).toMatchObject({
+          cwd: call.lane === "gateway-network" ? fixture.selectedHarness : fixture.target,
           target: fixture.target,
           harness: fixture.selectedHarness,
           liveTarget: fixture.target,
@@ -1433,11 +1460,6 @@ if (${JSON.stringify(failure)} === "timeout") {
           cache: path.join(fixture.target, "relative cache"),
           tools: path.join(fixture.target, "relative tools"),
         });
-      }
-      for (const lane of laneNames) {
-        expect(calls.find((call) => call.lane === lane).cwd).toBe(
-          lane === "gateway-network" ? fixture.selectedHarness : fixture.target,
-        );
       }
       const summary = readJson(path.join(logDir, "summary.json"));
       expect(summary.status).toBe("passed");

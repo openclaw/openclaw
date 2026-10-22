@@ -1,3 +1,4 @@
+import { createRouter } from "@openclaw/uirouter";
 import { createComponent, createSignal } from "solid-js";
 import { resolveThemeBranding } from "../../../../packages/gateway-protocol/src/theme.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -40,7 +41,7 @@ export function completeConfigContext(context: ApplicationContext): ApplicationC
   const subscribe = () => () => undefined;
   Object.assign(context, {
     basePath: context.basePath ?? "",
-    router: context.router ?? { subscribe, getState: () => ({ pendingMatches: [], matches: [] }) },
+    router: context.router ?? createRouter({ routes: [] }),
     config: context.config ?? { current: { assistantIdentity: { name: "OpenClaw" } }, subscribe },
     settingsAgentSelection: context.settingsAgentSelection ?? {
       state: { selectedId: "main" },
