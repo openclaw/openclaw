@@ -6,7 +6,6 @@ import { DiscordConfigSchema as schema } from "../config-api.js";
 
 function invalid(config: unknown) {
   const res = schema.safeParse(config);
-  expect(res.success).toBe(false);
   if (res.success) {
     throw new Error("expected Discord config to be invalid");
   }
@@ -29,11 +28,11 @@ describe("discord config schema", () => {
         ? payload.find((entry: { path: string }) => entry.path === "channels.discord")?.value
         : payload;
     expect(discord).toBeDefined();
-    expect(discord.dm).toEqual(
-      legacy ? { policy: "allowlist", allowFrom: ["111111111111111111"] } : undefined,
+    expect([discord.dm, discord.dmPolicy, discord.allowFrom]).toEqual(
+      legacy
+        ? [{ policy: "allowlist", allowFrom: ["111111111111111111"] }, undefined, undefined]
+        : [undefined, "allowlist", ["111111111111111111"]],
     );
-    expect(discord.dmPolicy).toBe(legacy ? undefined : "allowlist");
-    expect(discord.allowFrom).toEqual(legacy ? undefined : ["111111111111111111"]);
     // The public schema is the config-set boundary; runtime Zod preprocessing
     // would silently normalize the legacy specimen and miss a bad baseline cutoff.
     expect(

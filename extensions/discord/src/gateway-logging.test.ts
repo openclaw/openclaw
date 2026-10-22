@@ -32,26 +32,18 @@ describe("attachDiscordGatewayLogging", () => {
     cleanup = attachDiscordGatewayLogging({ emitter, runtime });
   });
   afterEach(() => cleanup());
-  it("logs debug events and promotes reconnect/close to info", () => {
-    const messages = [
-      "Gateway websocket closed: 1001",
-      "Gateway reconnect scheduled in 1000ms (close, resume=true)",
-      "Gateway forcing fresh IDENTIFY after 3 failed resume attempts",
-    ];
-    for (const message of ["Gateway websocket opened", ...messages]) {
-      emitter.emit("debug", message);
-    }
-    expect(logVerbose).toHaveBeenCalledTimes(4);
+  it.each([
+    ["debug", "Gateway websocket opened", false],
+    ["debug", "Gateway websocket closed: 1001", true],
+    ["debug", "Gateway reconnect scheduled in 1000ms (close, resume=true)", true],
+    ["debug", "Gateway forcing fresh IDENTIFY after 3 failed resume attempts", true],
+    ["warning", "High latency detected: 1200ms", true],
+  ] as const)("logs %s: %s", (event, message, promoted) => {
+    emitter.emit(event, message);
+    const verbose = `discord gateway${event === "warning" ? " warning" : ""}: ${message}`;
+    expect(logVerbose).toHaveBeenCalledExactlyOnceWith(verbose);
     expect(runtime.log.mock.calls).toEqual(
-      messages.map((message) => [`discord gateway: ${message}`]),
-    );
-  });
-
-  it("promotes warnings", () => {
-    emitter.emit("warning", "High latency detected: 1200ms");
-    expect(logVerbose).toHaveBeenCalledTimes(1);
-    expect(runtime.log).toHaveBeenCalledWith(
-      "warn:discord gateway warning: High latency detected: 1200ms",
+      promoted ? [[event === "warning" ? `warn:${verbose}` : verbose]] : [],
     );
   });
 

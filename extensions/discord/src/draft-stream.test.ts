@@ -108,9 +108,13 @@ describe("createDiscordDraftStream", () => {
     expect(stream.messageId()).toBe("1001");
   });
 
-  it.each(["clear", "deleteCurrentMessage"] as const)(
-    "%s claims a preview once and preserves its replacement during deletion",
-    async (method) => {
+  it.each([
+    ["clear", "pending"],
+    ["deleteCurrentMessage", "pending"],
+    ["clear", "settled"],
+  ] as const)(
+    "%s claims a preview once and preserves its replacement with deletion %s",
+    async (method, timing) => {
       const deleteStarted = createDeferred<void>();
       const finishDelete = createDeferred<void>();
       const remove = vi.fn(async () => {
@@ -119,11 +123,13 @@ describe("createDiscordDraftStream", () => {
         return undefined;
       });
       const { rest, stream } = createHarness({}, ["1001", "1002"], remove);
-
+      if (timing === "settled") {
+        finishDelete.resolve();
+      }
       await flushText(stream, "original preview");
       const deleting = stream[method]();
       await deleteStarted.promise;
-      await stream[method]();
+      await (timing === "settled" ? deleting : stream[method]());
       stream.forceNewMessage();
       await flushText(stream, "replacement preview");
       finishDelete.resolve();
@@ -144,16 +150,5 @@ describe("createDiscordDraftStream", () => {
     expect(rest.post).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalledWith("discord stream preview stopped (text length 6 > 5)");
     expect(stream.messageId()).toBeUndefined();
-  });
-
-  it("starts a new preview after a cleared turn is re-armed", async () => {
-    const { rest, stream } = createHarness({}, ["1001", "1002"]);
-    await flushText(stream, "first draft");
-    await stream.clear();
-    stream.forceNewMessage();
-    await flushText(stream, "queued turn draft");
-    expect(rest.post).toHaveBeenCalledTimes(2);
-    expect(rest.delete).toHaveBeenCalledTimes(1);
-    expect(stream.messageId()).toBe("1002");
   });
 });

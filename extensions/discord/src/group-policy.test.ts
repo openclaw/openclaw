@@ -46,17 +46,16 @@ describe("discord group policy", () => {
   });
 
   it("prefers channel policy, then guild policy, with sender-specific overrides", () => {
+    const channel = {
+      requireMention: true,
+      tools: allow("message.channel"),
+      toolsBySender: { "id:user:channel-admin": { deny: ["exec"] } },
+    };
     const cfg = guildConfig({
       requireMention: false,
       tools: allow("message.guild"),
       toolsBySender: { "id:user:guild-admin": allow("sessions.list") },
-      channels: {
-        "123": {
-          requireMention: true,
-          tools: allow("message.channel"),
-          toolsBySender: { "id:user:channel-admin": { deny: ["exec"] } },
-        },
-      },
+      channels: { "123": channel },
     });
     expectPolicy(group(cfg, "123", "user:channel-admin"), { deny: ["exec"] }, true);
     expectPolicy(group(cfg, "123", "user:someone"), allow("message.channel"));
@@ -65,36 +64,22 @@ describe("discord group policy", () => {
   });
 
   it("honors account-scoped guild and channel overrides", () => {
+    const accountGuild = {
+      requireMention: false,
+      tools: allow("message.account"),
+      channels: { "123": { requireMention: true, tools: allow("message.account-channel") } },
+    };
     const cfg = createCfg({
       guilds: { guild: { requireMention: true, tools: allow("message.root") } },
-      accounts: {
-        work: {
-          guilds: {
-            guild: {
-              requireMention: false,
-              tools: allow("message.account"),
-              channels: {
-                "123": { requireMention: true, tools: allow("message.account-channel") },
-              },
-            },
-          },
-        },
-      },
+      accounts: { work: { guilds: { guild: accountGuild } } },
     });
     expectPolicy(group(cfg, "missing", undefined, "work"), allow("message.account"), false);
     expectPolicy(group(cfg, "123", undefined, "work"), allow("message.account-channel"), true);
   });
 
   it.each(["ops", "#ops", "2026"])("binds resolved name key %s to its channel id", (channelKey) => {
-    const cfg = guildConfig({
-      ...denied,
-      channels: {
-        [channelKey]: {
-          ...allowed,
-          toolsBySender: { "id:alice": { allow: ["privileged"] } },
-        },
-      },
-    });
+    const channel = { ...allowed, toolsBySender: { "id:alice": allow("privileged") } };
+    const cfg = guildConfig({ ...denied, channels: { [channelKey]: channel } });
     const context = { cfg, ...boundContext(channelKey) };
     expectPolicy({ ...context, groupId: "999" }, denied.tools, true);
     expectPolicy({ ...context, groupId: "999", senderId: "alice" }, denied.tools);

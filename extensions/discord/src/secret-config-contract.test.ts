@@ -1,4 +1,4 @@
-import type { ResolverContext } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
+import { createResolverContext } from "openclaw/plugin-sdk/secret-ref-runtime";
 import { describe, expect, it } from "vitest";
 import {
   collectRuntimeConfigAssignments as collect,
@@ -19,14 +19,7 @@ function collectVoiceAssignments(
   work: ReturnType<typeof voice>,
   accountId = "Work",
 ) {
-  const context: ResolverContext = {
-    sourceConfig: {},
-    env: {},
-    cache: {},
-    warnings: [],
-    warningKeys: new Set(),
-    assignments: [],
-  };
+  const context = createResolverContext({ sourceConfig: {}, env: {} });
   const discord = {
     voice: root,
     accounts: { inherited: { enabled: true }, [accountId]: { enabled: true, voice: work } },
@@ -75,15 +68,11 @@ describe("Discord secret target registry", () => {
     );
 
     expect(context.assignments).toStrictEqual([]);
-    expect(context.warnings).toMatchObject([
-      {
+    expect(context.warnings).toMatchObject(
+      ["channels.discord", "channels.discord.accounts.work"].map((path) => ({
         code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-        path: "channels.discord.voice.realtime.providers.openai.apiKey",
-      },
-      {
-        code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-        path: "channels.discord.accounts.work.voice.realtime.providers.openai.apiKey",
-      },
-    ]);
+        path: `${path}.voice.realtime.providers.openai.apiKey`,
+      })),
+    );
   });
 });
