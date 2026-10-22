@@ -1,26 +1,30 @@
 import { setCapabilityOverrides } from "@earendil-works/pi-tui";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { ChatLog } from "./components/chat-log.js";
 import type { TuiImageData, TuiImageRequest } from "./tui-backend.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
+import { extractTextFromMessage, extractTuiAbortedText } from "./tui-formatters.js";
 import {
   createBaseState,
   createTestSessionActions,
   makeTui,
   makeTuiBackend,
 } from "./tui-session-actions-test-support.js";
+import { getTuiSessionProjection, reduceTuiSessionProjection } from "./tui-session-projection.js";
+import { TuiStreamAssembler } from "./tui-stream-assembler.js";
 
 const png = createSolidPngBuffer(80, 40, { r: 20, g: 140, b: 200 }).toString("base64");
 const imageData = { data: png, mimeType: "image/png" };
 const image = { type: "image", data: png, mimeType: "image/png" };
-const message = (role: string, content: unknown, metadata = {}) => ({
+const makeMessage = (role: string, content: unknown, metadata = {}) => ({
   role,
   content,
   __openclaw: metadata,
 });
-const assistantImage = message("assistant", [image]);
+const assistantImage = makeMessage("assistant", [image]);
 const cleanups: Array<() => void> = [];
 
 beforeEach(() => setCapabilityOverrides({ images: "kitty" }));
@@ -34,11 +38,16 @@ afterEach(() => {
 function createHarness(
   messages: unknown[] = [],
   loadImage = vi.fn<(request: TuiImageRequest) => Promise<TuiImageData>>(async () => imageData),
+  overrides: {
+    state?: Parameters<typeof createBaseState>[0];
+    loadHistory?: Parameters<typeof createEventHandlers>[0]["loadHistory"];
+  } = {},
 ) {
   const state = createBaseState({
     sessionScope: "per-sender",
     currentSessionId: "session-1",
     historyLoaded: true,
+    ...overrides.state,
   });
   const tui = makeTui();
   const chatLog = new ChatLog(180, {
@@ -59,13 +68,15 @@ function createHarness(
     chatLog,
     tui,
     btw: { clear: vi.fn(), showResult: vi.fn() },
-    setActivityStatus: vi.fn(),
+    setActivityStatus: vi.fn((value: string) => {
+      state.activityStatus = value;
+    }),
     updateFooter: vi.fn(),
   };
   const actions = createTestSessionActions({ client, ...context });
   const handlers = createEventHandlers({
     ...context,
-    loadHistory: actions.loadHistory,
+    loadHistory: overrides.loadHistory ?? actions.loadHistory,
     streamingWatchdogMs: 0,
   });
   cleanups.push(() => {
@@ -79,6 +90,12 @@ function createHarness(
     actions,
     handlers,
     render: (width = 100) => chatLog.render(width).join("\n"),
+    visible: () =>
+      chatLog
+        .render(160)
+        .map((line) => stripAnsi(line).trimEnd())
+        .join("\n")
+        .trim(),
   };
 }
 
@@ -94,7 +111,7 @@ it("deduplicates mixed content and persisted images", async () => {
   const second = "media://inbound/second.png";
   const media = [first, second].map((url) => ({ kind: "image", url }));
   const harness = await loadHarness([
-    message("user", [{ type: "image", url: first }], {
+    makeMessage("user", [{ type: "image", url: first }], {
       media,
     }),
   ]);
@@ -126,12 +143,12 @@ it.each(["kitty", "iterm2"] as const)(
       artifactId: "artifact_managed_media_generated",
     };
     const harness = await loadHarness([
-      message("user", "Compare this image", {
+      makeMessage("user", "Compare this image", {
         id: "user-1",
         seq: 1,
         media: [{ kind: "image", path: "media://inbound/photo.png" }],
       }),
-      message(
+      makeMessage(
         "assistant",
         [
           { type: "text", text: "Here is the result" },
@@ -168,7 +185,7 @@ it("renders peer/tool images and reuses unchanged tool previews", async () => {
   harness.handlers.handleSessionMessageEvent({
     sessionKey: harness.state.currentSessionKey,
     sessionId: "session-1",
-    message: message("user", [image], { id: "peer-user", seq: 1 }),
+    message: makeMessage("user", [image], { id: "peer-user", seq: 1 }),
   });
   harness.chatLog.startTool("tool-1", "read", {});
   harness.chatLog.updateToolResult("tool-1", { content: [image] });
@@ -217,7 +234,7 @@ it("redacts credentials and paths from failed previews", async () => {
 it("bounds previews and cancels them when scrollback is cleared", async () => {
   const harness = await loadHarness(
     Array.from({ length: 30 }, (_, index) =>
-      message("assistant", [{ type: "text", text: `Result ${index}` }, image], {
+      makeMessage("assistant", [{ type: "text", text: `Result ${index}` }, image], {
         id: `image-${index}`,
         seq: index + 1,
       }),
@@ -228,4 +245,145 @@ it("bounds previews and cancels them when scrollback is cleared", async () => {
   harness.chatLog.clearAll();
   expect(harness.loadImage.mock.calls.every(([request]) => request.signal.aborted)).toBe(true);
   expect(harness.render()).toBe("");
+});
+const audioFailure = {
+  type: "attachment_error",
+  attachment: { code: "delivery-failed", kind: "audio", label: "Generated audio 1" },
+};
+const audioReceipt = "⚠️ audio attachment: Delivery failed. Try sending this file again.";
+const recordingReceipt = `Your recording\n${audioReceipt}`;
+const caption = { type: "text", text: "Your recording" };
+const failureImage = { type: "image", url: "file:///private/image.png" };
+const assistant = (content: readonly unknown[]) => ({ role: "assistant", content });
+const privateMetadata = {
+  label: "\x1b]52;c;private-clipboard\x07file:///private/name",
+  url: "https://private.invalid/file?ticket=private",
+  mimeType: "private/type",
+};
+const missingImage = "⚠️ image attachment: File not found. Check the path and try again.";
+const blockedVideo =
+  "⚠️ video attachment: Rejected by the local attachment allowlist. Send a supported file type.";
+const failedFile = "⚠️ file attachment: Delivery failed. Try sending this file again.";
+function privateAttachment(kind: string, code: string) {
+  return assistant([{ type: "attachment_error", attachment: { kind, code, ...privateMetadata } }]);
+}
+function expectHistoryAndFinal(message: unknown, expected: string) {
+  expect(extractTextFromMessage(message)).toBe(expected);
+  expect(new TuiStreamAssembler().finalize("run-1", message, false)).toBe(
+    expected || "(no output)",
+  );
+}
+
+describe("TUI attachment failure presentation", () => {
+  beforeEach(() => setCapabilityOverrides({ images: null }));
+  const createDisplayHarness = () =>
+    createHarness([], undefined, {
+      state: { sessionMainKey: "main" },
+      loadHistory: async () => ({ loaded: false }),
+    });
+  it.each([
+    ["two failures", assistant([audioFailure, audioFailure]), `${audioReceipt}\n${audioReceipt}`],
+    ["private missing image", privateAttachment("image", "file-not-found"), missingImage],
+    ["private blocked video", privateAttachment("video", "unsupported-format"), blockedVideo],
+    ["private failed file", privateAttachment("document", "delivery-failed"), failedFile],
+  ] as const)(
+    "renders %s in history and final output without source metadata",
+    (_name, message, expected) => expectHistoryAndFinal(message, expected),
+  );
+
+  it("retains streamed captions and thinking before a failure-only final", () => {
+    const assembler = new TuiStreamAssembler();
+    assembler.ingestDelta(
+      "run-1",
+      assistant([caption, { type: "thinking", thinking: "Preparing" }]),
+      true,
+    );
+    expect(assembler.finalize("run-1", assistant([audioFailure]), true)).toBe(
+      `[thinking]\nPreparing\n\nYour recording\n${audioReceipt}`,
+    );
+  });
+
+  it("keeps genuine errors ahead of success fallback while appending the failure receipt", () => {
+    const message = {
+      ...assistant([failureImage, audioFailure]),
+      stopReason: "error",
+      errorMessage: "generation stopped",
+    };
+    expect(extractTextFromMessage(message)).toBe(`generation stopped\n${audioReceipt}`);
+    const final = new TuiStreamAssembler().finalize(
+      "run-1",
+      assistant([failureImage, audioFailure]),
+      false,
+      "generation stopped",
+    );
+    expect(final).toBe(`generation stopped\n${audioReceipt}`);
+  });
+
+  it.each([
+    ["failure only", [audioFailure], false, audioReceipt],
+    ["mixed attachments", [failureImage, audioFailure], false, `Attached image\n${audioReceipt}`],
+    ["streamed caption", [failureImage, audioFailure], true, recordingReceipt],
+  ] as const)(
+    "renders one receipt through optimistic and authoritative history: %s",
+    (_name, content, streamed, expected) => {
+      const harness = createDisplayHarness();
+      const event = { runId: "run-1", sessionKey: harness.state.currentSessionKey };
+      if (streamed) {
+        harness.handlers.handleChatEvent({
+          ...event,
+          state: "delta",
+          message: assistant([caption]),
+        });
+        expect(harness.visible()).toBe("Your recording");
+      }
+      const message = assistant(content);
+      harness.handlers.handleChatEvent({ ...event, state: "final", message });
+      expect(harness.visible()).toBe(expected);
+      expect(harness.state.activityStatus).toBe("idle");
+      for (const messages of [
+        [],
+        [
+          {
+            ...assistant(streamed ? [caption, ...content] : content),
+            __openclaw: { id: "assistant-1", seq: 1, runId: event.runId },
+          },
+        ],
+      ]) {
+        const projection = reduceTuiSessionProjection(harness.state, {
+          type: "snapshotLoaded",
+          messages,
+        });
+        expect(projection.messages).toHaveLength(1);
+        harness.chatLog.clearAll();
+        for (const row of projection.messages) {
+          harness.chatLog.finalizeAssistant(extractTextFromMessage(row));
+        }
+        expect(harness.visible()).toBe(expected);
+      }
+    },
+  );
+
+  it("keeps failure-only aborts diagnostic and ignores a late attachment final", () => {
+    const harness = createDisplayHarness();
+    const event = {
+      runId: "run-1",
+      sessionKey: harness.state.currentSessionKey,
+      message: assistant([audioFailure]),
+    };
+    expect(extractTuiAbortedText(event.message, false)).toBe("");
+    harness.handlers.handleChatEvent({ ...event, state: "aborted" });
+    harness.handlers.handleChatEvent({ ...event, state: "final" });
+    expect(harness.visible()).toBe("run aborted");
+    expect(getTuiSessionProjection(harness.state).messages).toHaveLength(0);
+  });
+
+  it("does not invent failure output for empty or unsupported blocks", () => {
+    for (const content of [
+      [],
+      [{ type: "tool_use", name: "search" }],
+      [{ type: "attachment_error", attachment: { code: "unknown", kind: "audio" } }],
+    ]) {
+      expectHistoryAndFinal(assistant(content), "");
+    }
+  });
 });

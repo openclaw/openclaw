@@ -111,11 +111,17 @@ suite.define(() => {
         ).toBe(1);
 
         const detailsDialog = await openChatDetails(activePane);
-        await detailsDialog.getByRole("status").filter({ hasText: "Loading…" }).waitFor();
+        await detailsDialog.getByRole("status", { name: "Loading…", exact: true }).waitFor();
+        expect(
+          await detailsDialog
+            .getByRole("status", { name: "Loading…", exact: true })
+            .getByText("Loading…", { exact: true })
+            .count(),
+        ).toBe(0);
         detailsChunk.resolve();
         await detailsDialog.locator(".chat-details-session").waitFor();
         expect(
-          await detailsDialog.getByRole("status").filter({ hasText: "Loading…" }).count(),
+          await detailsDialog.getByRole("status", { name: "Loading…", exact: true }).count(),
         ).toBe(0);
         expect(
           await activePane

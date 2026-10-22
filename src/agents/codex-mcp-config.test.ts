@@ -53,38 +53,6 @@ afterEach(async () => {
 });
 
 describe("buildCodexMcpServersConfig", () => {
-  it("normalizes OpenClaw MCP servers into Codex app-server mcp_servers shape", () => {
-    expect(
-      buildCodexMcpServersConfig({
-        mcpServers: {
-          openclaw: {
-            type: "http",
-            url: "http://127.0.0.1:23119/mcp",
-            connectionTimeoutMs: 12_345,
-            requestTimeoutMs: 20_125,
-            supportsParallelToolCalls: true,
-            headers: {
-              Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
-              "x-session-key": "${OPENCLAW_MCP_SESSION_KEY}",
-              "x-static": "static-value",
-            },
-          },
-        },
-      }),
-    ).toEqual({
-      openclaw: {
-        url: "http://127.0.0.1:23119/mcp",
-        startup_timeout_sec: 12.345,
-        tool_timeout_sec: 20.125,
-        supports_parallel_tool_calls: true,
-        default_tools_approval_mode: "approve",
-        bearer_token_env_var: "OPENCLAW_MCP_TOKEN",
-        http_headers: { "x-static": "static-value" },
-        env_http_headers: { "x-session-key": "OPENCLAW_MCP_SESSION_KEY" },
-      },
-    });
-  });
-
   it("keeps native timeout projection within OpenClaw timer bounds", () => {
     expect(
       buildCodexMcpServersConfig({

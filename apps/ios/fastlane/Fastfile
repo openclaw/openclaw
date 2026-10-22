@@ -287,12 +287,28 @@ end
 def repair_watch_screenshot_runtime!(runtime)
   version = runtime ? runtime.split(".watchOS-").last.tr("-", ".") : sh("xcrun", "--sdk", "watchsimulator", "--show-sdk-version").strip
   runtime ||= "com.apple.CoreSimulator.SimRuntime.watchOS-#{version.tr(".", "-")}"
-  images = JSON.parse(sh("xcrun", "simctl", "runtime", "list", "-j", log: false)).values
-    .select { |image| image["runtimeIdentifier"] == runtime }
-  report_watch_runtime_images(runtime, images)
-  UI.user_error!("Cannot repair #{runtime}: expected at most one registered disk image, found #{images.length}.") if images.length > 1
+  2.times do |attempt|
+    images = JSON.parse(sh("xcrun", "simctl", "runtime", "list", "-j", log: false)).values
+      .select { |image| image["runtimeIdentifier"] == runtime }
+    report_watch_runtime_images(runtime, images)
+    UI.user_error!("Cannot repair #{runtime}: expected at most one registered disk image, found #{images.length}.") if images.length > 1
+    break if images.empty?
 
-  sh("xcrun", "simctl", "runtime", "delete", images.first.fetch("identifier")) unless images.empty?
+    deletion_error = nil
+    sh("xcrun", "simctl", "runtime", "delete", images.first.fetch("identifier"),
+      error_callback: ->(output) { deletion_error = output })
+    break if deletion_error.nil?
+    unless attempt.zero? &&
+      deletion_error.include?("domain=com.apple.CoreSimulator.simdiskimaged.SimDiskImageError, code=30)") &&
+      deletion_error.include?("Removed the runtime, but did not reclaim its MobileAsset")
+      UI.user_error!("Watch runtime deletion failed: #{deletion_error.strip}")
+    end
+
+    # Apple removed the registration, so re-scan and resolve its new image ID.
+    UI.important("Watch runtime asset reclamation was incomplete; re-registering before one more targeted deletion.")
+    sh("xcrun", "simctl", "runtime", "scan-and-mount")
+  end
+
   sh("xcodebuild", "-downloadPlatform", "watchOS", "-buildVersion", version)
   images = JSON.parse(sh("xcrun", "simctl", "runtime", "list", "-j", log: false)).values
     .select { |image| image["runtimeIdentifier"] == runtime }

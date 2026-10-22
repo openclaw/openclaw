@@ -2,7 +2,7 @@
 import { expect, it, vi } from "vitest";
 import { findMenuShortcut } from "../../../components/menu-shortcuts.ts";
 import type { ModelProviderAuthLabel } from "../../../lib/model-provider-auth-label.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import {
   modelControlSelector,
   modelOption as option,
@@ -62,6 +62,51 @@ it.each([false, true])(
     expect([other.hidden, selected.hidden]).toEqual([false, true]);
   },
 );
+
+it("retains disclosure across catalog refreshes and forgets removed providers", async () => {
+  const params = pickerProps({
+    open: true,
+    modelOptions: [
+      option("selected", "current"),
+      option("other", "lead", { recommended: true }),
+      option("other", "rest"),
+    ],
+    selectedModelValue: "selected/current",
+  });
+  const { container, update } = mountPicker(params);
+  await waitForMenu(container);
+  const group = () =>
+    container.querySelector<HTMLElement>('[data-chat-model-provider-group="other"]')!;
+  const toggle = () =>
+    group().querySelector<HTMLButtonElement>(modelControlSelector("provider-toggle"))!;
+  const rest = () =>
+    group().querySelector<HTMLButtonElement>(modelControlSelector("option", "other/rest"))!;
+  toggle().click();
+  flush();
+  group().querySelector<HTMLButtonElement>(modelControlSelector("more-toggle"))!.click();
+  flush();
+  const initialRest = rest();
+  expect(initialRest.hidden).toBe(false);
+
+  update({ ...params, modelOptions: params.modelOptions.map((entry) => ({ ...entry })) });
+  expect(rest()).toBe(initialRest);
+  expect(rest().hidden).toBe(false);
+  expect(toggle().getAttribute("aria-expanded")).toBe("true");
+
+  update({
+    ...params,
+    modelOptions: params.modelOptions.filter((entry) => entry.provider !== "other"),
+  });
+  expect(group()).toBeNull();
+  update(params);
+  expect(toggle().getAttribute("aria-expanded")).toBe("false");
+  toggle().click();
+  flush();
+  expect(rest().hidden).toBe(true);
+  expect(
+    group().querySelector<HTMLButtonElement>(modelControlSelector("more-toggle"))!.hidden,
+  ).toBe(false);
+});
 
 it.each([false, true])(
   "keeps current visible in a bounded catalog with Default=%s",
@@ -201,7 +246,7 @@ it("derives rank and keyboard choices across model, target, and account rows", a
       {
         id: "target",
         label: "Target",
-        status: "ready",
+        completion: { promise: Promise.resolve([{ value: "remote", label: "Needle target" }]) },
         errorLabel: "",
         options: [{ value: "remote", label: "Needle target" }],
       },
@@ -225,6 +270,9 @@ it("derives rank and keyboard choices across model, target, and account rows", a
   });
   const { container, update } = mountPicker(params);
   await waitForMenu(container);
+  await waitForSolid(() =>
+    expect(container.querySelector(modelControlSelector("target", "remote"))).not.toBeNull(),
+  );
   const search = container.querySelector<HTMLInputElement>(modelControlSelector("search"))!;
   search.value = "needle";
   search.dispatchEvent(new Event("input", { bubbles: true }));
@@ -266,6 +314,87 @@ it("derives rank and keyboard choices across model, target, and account rows", a
   search.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   expect(selectTarget).toHaveBeenCalledWith("target", "remote");
   expect(selectAccount).not.toHaveBeenCalled();
+});
+
+it("keeps model search and account indexing live while CLI targets load", async () => {
+  const completion = Promise.withResolvers<readonly { value: string; label: string }[]>();
+  const accountProps = vi.fn((startIndex: number) => ({
+    selectionKind: "automatic" as const,
+    disabled: false,
+    selectedIdentity: "Current account",
+    options: [{ value: "current", label: "Needle account" }],
+    currentValue: "current",
+    open: true,
+    error: null,
+    startIndex,
+    onToggle() {},
+    onSelect: vi.fn(),
+  }));
+  const group = {
+    id: "target",
+    label: "CLI agents",
+    errorLabel: "CLI agents unavailable",
+    options: [],
+    completion: { promise: completion.promise },
+  };
+  const params = pickerProps({
+    open: true,
+    modelOptions: [option("fixture", "current", { label: "Needle model" })],
+    targetGroups: [group],
+    accountSection: { onClose() {}, viewProps: accountProps },
+  });
+  const { container, update } = mountPicker(params);
+  await waitForMenu(container);
+  const search = container.querySelector<HTMLInputElement>(modelControlSelector("search"))!;
+  const model = container.querySelector<HTMLButtonElement>(
+    modelControlSelector("option", "fixture/current"),
+  )!;
+  expect(
+    container.querySelector(
+      '[data-chat-model-target-group] [data-chat-model-catalog-state="loading"]',
+    ),
+  ).not.toBeNull();
+  expect(accountProps).toHaveBeenLastCalledWith(1);
+  search.focus();
+  search.value = "needle";
+  search.dispatchEvent(new Event("input", { bubbles: true }));
+  flush();
+  expect(model.hidden).toBe(false);
+  expect(search.getAttribute("aria-activedescendant")).toBe(model.id);
+  expect(container.querySelector(modelControlSelector("option", "account:current"))).not.toBeNull();
+
+  const options = [{ value: "remote", label: "Needle target" }];
+  update({ ...params, targetGroups: [{ ...group, options }] });
+  completion.resolve(options);
+  await waitForSolid(() =>
+    expect(container.querySelector(modelControlSelector("target", "remote"))).not.toBeNull(),
+  );
+  expect(container.querySelector(modelControlSelector("search"))).toBe(search);
+  expect(container.querySelector(modelControlSelector("option", "fixture/current"))).toBe(model);
+  expect(document.activeElement).toBe(search);
+  expect(accountProps).toHaveBeenLastCalledWith(2);
+  search.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+  flush();
+  const target = container.querySelector<HTMLButtonElement>(
+    modelControlSelector("target", "remote"),
+  )!;
+  expect(search.getAttribute("aria-activedescendant")).toBe(target.id);
+
+  target.focus();
+  update({
+    ...params,
+    modelOptions: params.modelOptions.map((entry) =>
+      Object.assign({}, entry, { label: "Needle renamed" }),
+    ),
+    targetGroups: [{ ...group, options }],
+  });
+  await waitForSolid(() => expect(model.textContent).toContain("Needle renamed"));
+  expect(container.querySelector(modelControlSelector("target", "remote"))).toBe(target);
+  expect(document.activeElement).toBe(target);
+  expect(
+    container.querySelector("[data-chat-model-target-group] [data-chat-model-catalog-state]"),
+  ).toBeNull();
+  expect(search.value).toBe("needle");
 });
 
 it("restores the selected keyboard choice when an unfiltered picker reopens", async () => {

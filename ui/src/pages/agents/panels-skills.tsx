@@ -1,5 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { For, createMemo } from "solid-js";
+import { Errored, For, Loading, Show, createMemo, isPending } from "solid-js";
+import type { SkillStatusReport } from "../../api/types.ts";
 import {
   SettingsSection,
   SettingsRow,
@@ -8,6 +9,7 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { resolveAgentConfig, resolveAgentSkillsFilter } from "../../lib/agents/display.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { groupSkills } from "../../lib/skills-grouping.ts";
 import {
@@ -22,14 +24,62 @@ import { AgentPanelAction } from "./panel-ui.tsx";
 
 registerSettingsEnglish();
 
-export function AgentSkills(
-  params: AgentConfigActions &
-    AgentsPageView["agentSkills"] &
-    Pick<AgentsPageView, "readData"> & {
-      agentId: string;
-      configForm: Record<string, unknown> | null;
-      canPatchConfig: boolean;
-    },
+type AgentSkillsProps = AgentConfigActions &
+  AgentsPageView["agentSkills"] &
+  Pick<AgentsPageView, "readData"> & {
+    agentId: string;
+    configForm: Record<string, unknown> | null;
+    canPatchConfig: boolean;
+  };
+
+export function AgentSkills(params: AgentSkillsProps) {
+  const issued = createMemo(() => params.readData().agentSkillsRead);
+  const cached = createMemo(() =>
+    params.readData().agentSkillsAgentId === params.agentId
+      ? params.readData().agentSkillsReport
+      : null,
+  );
+  const report = createMemo(async () => {
+    const read = issued();
+    return read?.agentId === params.agentId ? read.result : cached();
+  });
+  const scope = createMemo(() => `${params.agentId}:${params.readData().requestGeneration}`);
+  return (
+    <Show when={scope()} keyed>
+      <Show when={issued() ?? scope()} keyed>
+        {(_receipt) => {
+          return (
+            <Errored
+              fallback={(error) => (
+                <AgentSkillsContent
+                  {...params}
+                  report={cached()}
+                  pending={false}
+                  readError={formatUiError(error())}
+                />
+              )}
+            >
+              <Loading fallback={<AgentSkillsContent {...params} report={cached()} pending />}>
+                <AgentSkillsContent
+                  {...params}
+                  report={report() ?? cached()}
+                  pending={isPending(() => report())}
+                />
+              </Loading>
+            </Errored>
+          );
+        }}
+      </Show>
+    </Show>
+  );
+}
+
+function AgentSkillsContent(
+  params: AgentSkillsProps & {
+    report: SkillStatusReport | null;
+    pending: boolean;
+    readError?: string;
+  },
 ) {
   const configReady = () =>
     Boolean(params.configForm) && !params.configLoading && !params.configSaving;
@@ -39,14 +89,7 @@ export function AgentSkills(
   const allowlist = createMemo(() => resolveAgentSkillsFilter(params.configForm, params.agentId));
   const allowSet = createMemo(() => new Set(allowlist() ?? []));
   const usingAllowlist = () => allowlist() !== undefined;
-  const reportReady = () =>
-    Boolean(
-      params.readData().agentSkillsReport &&
-      params.readData().agentSkillsAgentId === params.agentId,
-    );
-  const rawSkills = createMemo(() =>
-    reportReady() ? (params.readData().agentSkillsReport?.skills ?? []) : [],
-  );
+  const rawSkills = createMemo(() => params.report?.skills ?? []);
   const filter = createMemo(() => normalizeLowercaseStringOrEmpty(params.filter));
   const filtered = createMemo(() =>
     filter()
@@ -78,11 +121,13 @@ export function AgentSkills(
             : "agents.skillsPanel.allEnabled",
         )}
       </div>
-      {!reportReady() && !params.readData().agentSkillsLoading ? (
+      {!params.report && !params.pending ? (
         <div class="callout info">{t("agents.skillsPanel.loadAgent")}</div>
       ) : undefined}
-      {params.readData().agentSkillsError ? (
-        <div class="callout danger">{params.readData().agentSkillsError}</div>
+      {params.readError || params.readData().agentSkillsUpdateError ? (
+        <div class="callout danger">
+          {params.readError || params.readData().agentSkillsUpdateError}
+        </div>
       ) : undefined}
       <SettingsSection
         title={t("agents.skillsPanel.title")}
@@ -110,10 +155,8 @@ export function AgentSkills(
             />
             <AgentConfigButtons {...params}>
               <AgentPanelAction
-                label={
-                  params.readData().agentSkillsLoading ? t("common.loading") : t("common.refresh")
-                }
-                disabled={params.readData().agentSkillsLoading}
+                label={params.pending ? t("common.loading") : t("common.refresh")}
+                disabled={params.pending}
                 onClick={params.onRefresh}
               />
             </AgentConfigButtons>

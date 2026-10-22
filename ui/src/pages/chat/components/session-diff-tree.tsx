@@ -1,11 +1,15 @@
-import { createMemo, createSignal, For, Show } from "solid-js";
+import { createMemo, createStore, For, Show } from "solid-js";
 import type { SessionDiffFile } from "../../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
-import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
+import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
+import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
 import { DiffStatChips } from "./chat-diff-stat.solid.tsx";
-import { ReviewDisclosure } from "./session-diff-disclosure.tsx";
+import { FileDisclosure } from "./file-disclosure.tsx";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 type ReviewNode = { key: string; name: string; path: string } & (
   | { kind: "file"; file: SessionDiffFile; children: [] }
@@ -20,25 +24,9 @@ export function ReviewFilename(props: { name: string }) {
       ? props.name.length - compound[0].length
       : Math.max(0, props.name.lastIndexOf("."));
   });
-  const [overflow, setOverflow] = createSignal(false);
-  let basename: HTMLSpanElement | undefined;
-  createLayoutMeasurement(
-    () => props.name,
-    () => {
-      const overflowing = Boolean(basename && basename.scrollWidth > basename.clientWidth);
-      return () => setOverflow(overflowing);
-    },
-    { targets: () => (basename ? [basename] : []) },
-  );
   return (
     <span class="session-diff__filename-label">
-      <span
-        ref={(element) => {
-          basename = element;
-        }}
-        class="session-diff__basename"
-        data-overflow={overflow() ? "true" : "false"}
-      >
+      <span ref={createTextOverflow(() => props.name)} class="session-diff__basename">
         {split() ? props.name.slice(0, split()) : props.name}
       </span>
       {split() > 0 && <span class="session-diff__extension">{props.name.slice(split())}</span>}
@@ -60,7 +48,7 @@ function reviewTree(files: readonly SessionDiffFile[], query: string): ReviewNod
     if (filter && !file.path.toLocaleLowerCase().includes(filter)) {
       continue;
     }
-    const parts = file.path.split("/");
+    const parts = file.path.replace(/\/$/, "").split("/");
     let parent = root;
     for (let index = 0; index < parts.length - 1; index++) {
       const name = parts[index]!;
@@ -119,16 +107,16 @@ export function SessionDiffTree(props: {
 }) {
   const nodes = createMemo(() => reviewTree(props.files, props.query));
   // A new search opens matching directories; local toggles survive other refreshes.
-  const [closed, setClosed] = createSignal(() => {
+  const [closed, setClosed] = createStore<Record<string, true>>(() => {
     void props.query;
-    return new Set<string>();
+    return Object.create(null);
   });
   function Rows(row: { nodes: ReviewNode[] }) {
     return (
       <ul>
         <For each={row.nodes} keyed={(node) => node.key}>
           {(node) => {
-            const expanded = () => !closed().has(node().key);
+            const expanded = () => !closed[node().key];
             return (
               <li>
                 <button
@@ -145,14 +133,13 @@ export function SessionDiffTree(props: {
                     if (file) {
                       props.onSelect(file.path);
                     } else {
-                      setClosed((previous) => {
-                        const next = new Set(previous);
-                        if (next.has(node().key)) {
-                          next.delete(node().key);
+                      setClosed((draft) => {
+                        const key = node().key;
+                        if (draft[key]) {
+                          delete draft[key];
                         } else {
-                          next.add(node().key);
+                          draft[key] = true;
                         }
-                        return next;
                       });
                     }
                   }}
@@ -162,23 +149,17 @@ export function SessionDiffTree(props: {
                       <AttachmentFileIcon filename={node().name} mode="preview-with-favicon" />
                     ) : (
                       <Show when={expanded()} fallback={<Icon name="folder" />}>
-                        <svg
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="2"
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                          aria-hidden="true"
-                        >
+                        <StrokeIcon aria-hidden="true">
                           <path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" />
-                        </svg>
+                        </StrokeIcon>
                       </Show>
                     )}
                     {node().file ? (
                       <ReviewFilename name={node().name} />
                     ) : (
-                      <span>{node().name}</span>
+                      <span ref={createTextOverflow(() => node().name)} title={node().name}>
+                        {node().name}
+                      </span>
                     )}
                   </span>
                   <Show when={props.statsAvailable && node().file}>
@@ -190,9 +171,14 @@ export function SessionDiffTree(props: {
                   </Show>
                 </button>
                 <Show when={!node().file}>
-                  <ReviewDisclosure open={expanded()} active={props.active} instant={props.instant}>
+                  <FileDisclosure
+                    variant="review"
+                    open={expanded()}
+                    active={props.active}
+                    instant={props.instant}
+                  >
                     <Rows nodes={node().children} />
-                  </ReviewDisclosure>
+                  </FileDisclosure>
                 </Show>
               </li>
             );

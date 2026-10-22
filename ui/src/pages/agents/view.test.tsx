@@ -5,7 +5,7 @@ import type { ChannelAccountSnapshot, CronJob } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { zh_CN } from "../../i18n/locales/zh-CN.ts";
-import { createInitialCronState, loadCronJobsPage } from "../../lib/cron/index.ts";
+import { createInitialCronState } from "../../lib/cron/index.ts";
 import { formatNextRun } from "../../lib/presenter.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
@@ -15,6 +15,7 @@ import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { createSkill } from "../skills/view.test-support.ts";
+import { createAgentCronPresenter } from "./agent-cron-presenter.ts";
 import { createAgentFileEditors } from "./agent-file-state.test-helpers.ts";
 import {
   createAgentViewTestProps as createProps,
@@ -111,6 +112,17 @@ function expectAgentTab(container: Element, text: string): HTMLElement & { disab
 }
 
 describe("renderAgents", () => {
+  it("announces an agent list failure as an alert", () => {
+    const container = document.createElement("div");
+    renderView({ error: "Agent list unavailable" }, container);
+
+    expect(
+      Array.from(container.querySelectorAll('[role="alert"]'), (alert) =>
+        alert.textContent?.trim(),
+      ),
+    ).toEqual(["Agent list unavailable"]);
+  });
+
   it("renders the selected agent's tool catalog loading state", () => {
     const container = document.createElement("div");
     const props = createProps();
@@ -217,6 +229,63 @@ describe("renderAgents", () => {
     expect(nextWakeRow?.textContent).not.toContain(formatNextRun(nextWakeAtMs));
   });
 
+  it("shows a rejected agent jobs refresh beside retained jobs without hiding scheduler feedback", async () => {
+    const client = createTestGatewayClient(async (method) => {
+      throw new Error(
+        method === "cron.status"
+          ? "Scheduler status is unavailable."
+          : "Agent jobs could not be refreshed.",
+      );
+    });
+    const cronState = {
+      ...createInitialCronState({ client, connected: true }),
+      cronAgentId: "alpha",
+      cronError: "Scheduler status is unavailable.",
+      cronJobs: [createCronJob("retained-job", { name: "Retained reminder" })],
+    };
+    const container = document.createElement("div");
+    const presenter = createAgentCronPresenter({
+      currentState: () => cronState,
+      readState: () => cronState,
+      canCall: () => true,
+      publish: () => renderCurrent(),
+    });
+    const renderCurrent = (): void => {
+      renderView(
+        {
+          selectedAgentId: "alpha",
+          cron: {
+            ...createProps().cron,
+            read: presenter.read,
+            onRefresh: presenter.onRefresh,
+          },
+          readData: () => ({ ...createProps().readData(), agentsPanel: "cron", cron: cronState }),
+        },
+        container,
+      );
+    };
+    renderCurrent();
+    const scheduler = [...container.querySelectorAll(".settings-section")].find(
+      (section) =>
+        section.querySelector("h2")?.textContent === t("agents.cronPanel.schedulerTitle"),
+    );
+    const refresh = scheduler?.querySelector<HTMLButtonElement>("button");
+    expect(refresh).toBeInstanceOf(HTMLButtonElement);
+    refresh?.click();
+
+    await waitForSolid(() => {
+      const jobs = [...container.querySelectorAll(".settings-section")].find(
+        (section) =>
+          section.querySelector("h2")?.textContent === t("agents.cronPanel.agentJobsTitle"),
+      );
+      expect(jobs?.querySelector('[role="alert"]')?.textContent).toContain(
+        "Agent jobs could not be refreshed.",
+      );
+      expect(jobs?.textContent).toContain("Retained reminder");
+      expect(container.textContent).toContain("Scheduler status is unavailable.");
+    });
+  });
+
   it("loads and renders the selected agent's 51st cron job when Load more is clicked", async () => {
     const snapshotRevision = "agents-view-cron-fixture";
     const jobs = Array.from({ length: 50 }, (_, index) =>
@@ -246,17 +315,20 @@ describe("renderAgents", () => {
       cronJobsNextOffset: 50,
     };
     const container = document.createElement("div");
+    const presenter = createAgentCronPresenter({
+      currentState: () => cronState,
+      readState: () => cronState,
+      canCall: () => true,
+      publish: () => renderCurrentPage(),
+    });
     const renderCurrentPage = (): void => {
       renderView(
         {
           selectedAgentId: "alpha",
           cron: {
             ...createProps().cron,
-            onLoadMore: () => {
-              const nextPage = loadCronJobsPage(cronState, { append: true, tableFilters: true });
-              renderCurrentPage();
-              void nextPage.then(renderCurrentPage);
-            },
+            read: presenter.read,
+            onLoadMore: presenter.onLoadMore,
           },
           readData: () => ({
             ...createProps().readData(),
@@ -502,8 +574,6 @@ describe("renderAgents", () => {
             managedSkillsDir: "/tmp/skills",
             skills: [createSkill()],
           },
-          agentSkillsLoading: false,
-          agentSkillsError: null,
           agentSkillsAgentId: "alpha",
         }),
       },
@@ -525,8 +595,6 @@ describe("renderAgents", () => {
             managedSkillsDir: "/tmp/skills",
             skills: [createSkill()],
           },
-          agentSkillsLoading: false,
-          agentSkillsError: null,
           agentSkillsAgentId: "beta",
         }),
       },

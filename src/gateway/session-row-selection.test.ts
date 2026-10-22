@@ -269,6 +269,26 @@ it("maintains list order across metadata changes and archived-row rematerializat
       expect((await list())[0]?.key).toBe(first);
       expect((await list("activity"))[0]?.key).toBe(second);
       expect((await list("lastInteractionAt"))[0]?.key).toBe(first);
+      // A retained pin becomes effective only when the child is a sidebar root.
+      for (const sidebarRoot of [false, true, false]) {
+        replaceSessionEntrySync(
+          { agentId: "main", sessionKey: first },
+          {
+            sessionId: first,
+            updatedAt: 2,
+            lastInteractionAt: 1,
+            pinnedAt: 10,
+            parentSessionKey: second,
+            sidebarRoot,
+          },
+        );
+        expect((await list())[0]?.key).toBe(sidebarRoot ? first : second);
+        expect(
+          (await listProjectedSessions({ projection, opts: { pinned: true } })).sessions.map(
+            (row) => row.key,
+          ),
+        ).toEqual(sidebarRoot ? [first] : []);
+      }
       replaceSessionEntrySync(
         { agentId: "main", sessionKey: first },
         { sessionId: first, updatedAt: 2, lastInteractionAt: 1, label: "Unpinned" },
@@ -578,12 +598,12 @@ it.each([false, true])(
           includeGlobal: true,
           includeUnknown: true,
         });
-        expect(prepared.entries("all").map(([, entry]) => entry.sessionId)).toEqual(
+        expect(prepared.entries().map(([, entry]) => entry.sessionId)).toEqual(
           activeOnly
             ? ["ordinary", "main-global", "ops-global", "unknown-winner", "unknown-shadow"]
             : ["ordinary", "main-global", "unknown-winner"],
         );
-        for (const [key, entry] of prepared.entries("all")) {
+        for (const [key, entry] of prepared.entries()) {
           const target = prepared.getTarget(key)!;
           const original = rows.find((row) => row.entry === entry)!;
           expect(target.entry).toBe(entry);

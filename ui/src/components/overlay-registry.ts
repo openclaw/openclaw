@@ -1,6 +1,12 @@
 import { listen } from "../lib/reactive/listener.ts";
 import type { Overlay, OverlayOptions } from "./overlay-types.ts";
 
+declare global {
+  interface Document {
+    openClawModalLayers?: Set<HTMLElement>;
+  }
+}
+
 type OverlayRoot = Document | ShadowRoot;
 type RegisteredOverlay = {
   options: OverlayOptions;

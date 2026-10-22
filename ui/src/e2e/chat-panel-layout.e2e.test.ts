@@ -201,21 +201,22 @@ suite.define(() => {
         const input = widgetInput(page);
         await input.fill("Keep the release note while discussing changes");
         const identity = await documentIdentity(input);
-        const header = page.locator(".chat-pane__header");
-        const chat = header.getByRole("button", { name: "Chat", exact: true });
+        const panels = page
+          .locator(".sidebar-region__panels-toggle")
+          .getByRole("button", { name: "Panels", exact: true });
         const composer = page.locator(".agent-chat__composer-combobox textarea");
-        await chat.waitFor();
-        expect(await chat.getAttribute("aria-pressed")).toBe("false");
+        await panels.waitFor();
+        expect(await panels.getAttribute("aria-expanded")).toBe("false");
         await expect.poll(() => composer.isVisible()).toBe(false);
         // Details is session context, not a shortcut that reveals the transcript.
         const details = await openChatDetails(page);
         expect(await details.getAttribute("role")).toBe("dialog");
         await expect.poll(() => composer.isVisible()).toBe(false);
         await closeChatDetails(page);
-        await chat.click();
+        await panels.click();
         await composer.fill("Let's review the eight remaining changes.");
         await page.getByText("The release overview is ready.", { exact: false }).waitFor();
-        expect(await chat.getAttribute("aria-pressed")).toBe("true");
+        expect(await panels.getAttribute("aria-expanded")).toBe("true");
         expect(await input.isVisible()).toBe(true);
         // Allow the card inset, but not a fixed-height row when opening Chat.
         const pageHeight = await regionSize(
@@ -225,9 +226,10 @@ suite.define(() => {
         expect(await regionSize(page.locator(".board-widget__frame"), "height")).toBeGreaterThan(
           pageHeight - 32,
         );
-        await chat.click();
+        await panels.click();
         await composer.waitFor({ state: "hidden" });
-        await chat.click();
+        await panels.click();
+        await composer.waitFor();
         expect(await composer.inputValue()).toBe("Let's review the eight remaining changes.");
         // The mobile dock keeps the conversation available and retains the saved desktop layout.
         await page.setViewportSize({ width: 390, height: 844 });

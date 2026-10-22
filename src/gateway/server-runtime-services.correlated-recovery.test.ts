@@ -113,10 +113,10 @@ describe("registered correlated completion recovery custody", () => {
         context,
       );
       child.delivery!.queueId = queueId;
-      const queued = await loadPendingSessionDelivery(queueId, context);
-      if (!queued) {
-        throw new Error("Expected the retained queue owner");
-      }
+      const queued = expectDefined(
+        await loadPendingSessionDelivery(queueId, context),
+        "Expected the retained queue owner",
+      );
       await markSessionDeliverySettlement(queued, outcome, context);
       const persist = (root: string) => {
         const database = openOpenClawStateDatabase({
@@ -131,11 +131,10 @@ describe("registered correlated completion recovery custody", () => {
         getDeliveryQueueEntryStatus(SESSION_DELIVERY_QUEUE_NAME, queueId, state.stateDir);
       const restore = (mergeOnly = false) =>
         restoreSubagentRunsFromDisk({ runs: subagentRuns, mergeOnly });
-      const expectPendingReceipt = async (settlementOutcome: typeof outcome) => {
+      const expectPendingReceipt = async () =>
         expect(await loadPendingSessionDelivery(queueId, context)).toMatchObject({
-          settlementOutcome,
+          settlementOutcome: outcome,
         });
-      };
       if (change === "hydration pending") {
         const store = await import("../state/openclaw-state-db-readonly.js");
         const unavailable = vi
@@ -290,7 +289,7 @@ describe("registered correlated completion recovery custody", () => {
         if (change === "hydration pending") {
           expect(subagentRuns.has(child.runId)).toBe(false);
           expect(readChild()?.delivery?.status).toBe("in_progress");
-          await expectPendingReceipt("recovered");
+          await expectPendingReceipt();
           expect(resume).not.toHaveBeenCalled();
           expect(await restore(true)).toBe(1);
           await replaySettlement();
@@ -299,7 +298,7 @@ describe("registered correlated completion recovery custody", () => {
           const committed = readChild();
           expect(committed?.delivery?.status).toBe("delivered");
           expect(resume).not.toHaveBeenCalled();
-          await expectPendingReceipt("recovered");
+          await expectPendingReceipt();
           if (replacement) {
             expect(readChild(replacement)).toEqual(replacementBefore);
           }
@@ -322,7 +321,7 @@ describe("registered correlated completion recovery custody", () => {
             expect.stringContaining("settled callback failed"),
           );
           if (change === "default") {
-            await expectPendingReceipt(outcome);
+            await expectPendingReceipt();
             expect(readChild()?.delivery?.status).toBe("in_progress");
           }
         } else {

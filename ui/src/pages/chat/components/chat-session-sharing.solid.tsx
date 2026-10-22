@@ -15,9 +15,12 @@ import {
   type MenuEntry,
   type MenuHandle,
 } from "../../../components/solid/menu.tsx";
+import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { SessionOwnerChip } from "../../../components/solid/session-owner-chip.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import {
   type ChatSessionSharingProps,
   VISIBILITY_LABEL_KEYS,
@@ -26,7 +29,10 @@ import {
   canManageChatSessionSharing,
   ChatSessionSharingModeIcon,
   projectChatSessionSharingRoster,
+  chatSessionMembershipLabel,
 } from "./chat-session-sharing-shared.tsx";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 export * from "./chat-session-sharing-shared.tsx";
 export { useChatSessionSharingMenu } from "./chat-session-sharing-menu.tsx";
@@ -39,18 +45,10 @@ function SharingModeContent(props: { visibility: SessionVisibility }) {
           when={props.visibility === "read-only"}
           fallback={<ChatSessionSharingModeIcon visibility={props.visibility} />}
         >
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
+          <StrokeIcon aria-hidden="true">
             <path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z" />
             <path d="M7 11h10M7 15h6M7 7h8" />
-          </svg>
+          </StrokeIcon>
         </Show>
       </span>
       <span class="chat-pane__sharing-mode-text">
@@ -230,11 +228,7 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
                 />
               </Show>
               <span class="chat-pane__sharing-permission">
-                {t(
-                  isCreator()
-                    ? "chat.sessionSharing.owner"
-                    : "chat.sessionSharing.permissionUnavailable",
-                )}
+                {chatSessionMembershipLabel(isCreator(), selected())}
               </span>
               <span
                 class="chat-pane__sharing-member-check"
@@ -282,9 +276,7 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
                         type="button"
                         class="chat-pane__sharing-person"
                         disabled={Boolean(reason() || props.state?.loading)}
-                        title={
-                          reason() ?? t("chat.sessionSharing.permissionUnavailableDescription")
-                        }
+                        title={reason()}
                       >
                         <Content />
                       </button>
@@ -300,13 +292,14 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
   const showPermissions = () =>
     props.membersAvailable !== false &&
     (!result() || props.state?.loading || Boolean(props.state?.error) || people().length > 0);
+  const permissionItems = () => (showPermissions() ? rosterItems()().map((item) => item()) : []);
   // The observer and its ref share the mounted permissions subtree's lifetime.
   const SharingPermissions = (view: { children: JSX.Element }) => {
     const scroll = useScrollState();
     return (
       <section class="chat-pane__sharing-section chat-pane__sharing-permissions">
         <div class="chat-pane__sharing-section-label chat-pane__sharing-search-heading">
-          <span>{t("chat.sessionSharing.messagePermissions")}</span>
+          <span>{t("chat.sessionSharing.sessionMembers")}</span>
           <Show when={people().length > 0}>
             <button
               ref={[
@@ -379,20 +372,25 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
             <Show
               when={matches().length > 0}
               fallback={
-                <div class="chat-pane__sharing-empty" role="status">
-                  <span>
-                    {t(
-                      props.state?.loading
-                        ? "common.loading"
-                        : people().length === 0
-                          ? "chat.sessionSharing.noPeople"
-                          : "chat.sessionSharing.noPeopleFound",
-                    )}
-                  </span>
-                  <Show when={!props.state?.loading && people().length > 0 && query().trim()}>
-                    <span>{t("chat.sessionSharing.tryAnotherName")}</span>
-                  </Show>
-                </div>
+                <Show
+                  when={props.state?.loading}
+                  fallback={
+                    <div class="chat-pane__sharing-empty" role="status">
+                      <span>
+                        {t(
+                          people().length === 0
+                            ? "chat.sessionSharing.noPeople"
+                            : "chat.sessionSharing.noPeopleFound",
+                        )}
+                      </span>
+                      <Show when={people().length > 0 && query().trim()}>
+                        <span>{t("chat.sessionSharing.tryAnotherName")}</span>
+                      </Show>
+                    </div>
+                  }
+                >
+                  <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
+                </Show>
               }
             >
               {view.children}
@@ -514,11 +512,11 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
         kind: "group",
         id: "permissions",
         get items() {
-          return showPermissions() ? rosterItems()().map((item) => item()) : [];
+          return permissionItems();
         },
-        render: (children) => (
+        render: (renderItems) => (
           <Show when={showPermissions()}>
-            <SharingPermissions>{children}</SharingPermissions>
+            <SharingPermissions>{renderItems(permissionItems)}</SharingPermissions>
           </Show>
         ),
       },
@@ -646,7 +644,7 @@ export function ChatSessionSharing(props: ChatSessionSharingProps) {
                   </span>
                 </Show>
               </span>
-              <Icon name="chevronDown" />
+              <Icon name="chevronDown" class="chat-pane__sharing-chevron" />
             </>
           }
           items={sharing.items()}

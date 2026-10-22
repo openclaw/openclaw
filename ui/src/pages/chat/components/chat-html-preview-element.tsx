@@ -72,7 +72,8 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
         candidate.sourceIdentity === host.sourceIdentity &&
         candidate.sessionFileSource?.sessionKey === host.sessionFileSource?.sessionKey &&
         candidate.sessionFileSource?.agentId === host.sessionFileSource?.agentId &&
-        candidate.sessionFileSource?.path === host.sessionFileSource?.path,
+        candidate.sessionFileSource?.path === host.sessionFileSource?.path &&
+        candidate.sessionFileSource?.messageEntryId === host.sessionFileSource?.messageEntryId,
       );
 
     const sourceInput = createMemo(
@@ -84,6 +85,7 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
           props.sessionFileSource?.sessionKey,
           props.sessionFileSource?.agentId,
           props.sessionFileSource?.path,
+          props.sessionFileSource?.messageEntryId,
           snapshot?.client,
           snapshot?.phase === "connected",
           getCanvasWidgetFrameConnectionGeneration(),
@@ -195,7 +197,7 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
             </div>
           </Show>
           <Show when={!rendered()}>
-            <HtmlPreviewLoading desktop={props.desktop} />
+            <HtmlPreviewLoading />
           </Show>
           <iframe
             ref={(element) => (frame = element)}
@@ -259,7 +261,7 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
       );
       return (
         <Errored fallback={(reason) => <ErrorNotice message={formatUiError(reason())} />}>
-          <Show when={view()} keyed fallback={<HtmlPreviewLoading desktop={props.desktop} />}>
+          <Show when={view()} keyed fallback={<HtmlPreviewLoading />}>
             {(preview) => (
               <Show when={props.embedSandboxMode} keyed>
                 {(mode) => renderFrame(preview, mode)}

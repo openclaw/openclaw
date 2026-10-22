@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 import { showToast } from "../lib/toast.ts";
-import "../lib/toast-host.ts";
+import "../lib/toast-host.tsx";
 import {
   afterModalHidden,
   getRenderedModalDialog,

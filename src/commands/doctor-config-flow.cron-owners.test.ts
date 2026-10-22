@@ -160,7 +160,7 @@ function createCron(defaultAgentId?: string) {
     resolveDefaultAgentId: () => defaultAgentId,
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     enqueueSystemEvent: () => false,
-    requestHeartbeat() {},
+    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: execute,
   });
   stops.push(async () => {

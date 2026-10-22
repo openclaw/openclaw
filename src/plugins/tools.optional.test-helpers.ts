@@ -1,13 +1,13 @@
+import assert from "node:assert/strict";
 import path from "node:path";
-import { buildPluginApi } from "./api-builder.js";
-import { instrumentPluginInstanceApi } from "./api-facades.js";
 import { runPluginRegisterSyncInRegistry } from "./loader-module-runtime.js";
 import { createPluginRecord as createLoaderPluginRecord } from "./loader-records.js";
-import { PluginInstance } from "./plugin-instance.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
 import { bindPluginRuntimeArtifactSelection } from "./plugin-runtime-artifact-binding.js";
 import { resolvePluginRuntimeArtifactSelection } from "./plugin-runtime-artifact-selection.js";
-import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import { createPluginRuntime } from "./runtime/index.js";
+import type { OpenClawPluginToolContext } from "./tool-types.js";
 
 export type MockRegistryToolEntry = {
   pluginId: string;
@@ -16,76 +16,53 @@ export type MockRegistryToolEntry = {
   source: string;
   names: string[];
   declaredNames?: string[];
-  factory: (ctx: unknown) => unknown;
+  factory: (ctx: OpenClawPluginToolContext) => unknown;
 };
 
+const toolManifest = (id: string, tool: string) => ({
+  id,
+  origin: "bundled",
+  enabledByDefault: true,
+  channels: [],
+  providers: [],
+  contracts: { tools: [tool] },
+});
+
 export function createXaiToolManifest() {
+  const rootPath = "plugins.entries.xai.config";
   return {
-    id: "xai",
-    origin: "bundled",
-    enabledByDefault: true,
-    channels: [],
+    ...toolManifest("xai", "x_search"),
     providers: ["xai"],
-    setup: {
-      providers: [{ id: "xai", envVars: ["XAI_API_KEY"] }],
-    },
-    contracts: {
-      tools: ["x_search"],
-    },
+    setup: { providers: [{ id: "xai", envVars: ["XAI_API_KEY"] }] },
     toolMetadata: {
       x_search: {
         replaySafe: true,
         authSignals: [{ provider: "xai" }],
-        configSignals: [
-          {
-            rootPath: "plugins.entries.xai.config",
-            overlayPath: "webSearch",
-            required: ["apiKey"],
-          },
-        ],
+        configSignals: [{ rootPath, overlayPath: "webSearch", required: ["apiKey"] }],
       },
     },
   };
 }
 
 export function createFeishuToolManifest() {
+  const credentials = { rootPath: "channels.feishu", required: ["appId", "appSecret"] };
   return {
-    id: "feishu",
-    origin: "bundled",
-    enabledByDefault: true,
+    ...toolManifest("feishu", "feishu_doc"),
     channels: ["feishu"],
-    providers: [],
-    contracts: {
-      tools: ["feishu_doc"],
-    },
     toolMetadata: {
       feishu_doc: {
-        configSignals: [
-          {
-            rootPath: "channels.feishu",
-            required: ["appId", "appSecret"],
-          },
-          {
-            rootPath: "channels.feishu",
-            overlayMapPath: "accounts",
-            required: ["appId", "appSecret"],
-          },
-        ],
+        configSignals: [credentials, { ...credentials, overlayMapPath: "accounts" }],
       },
     },
   };
 }
 
-export function makeTool(name: string) {
-  return {
-    name,
-    description: `${name} tool`,
-    parameters: { type: "object", properties: {} },
-    async execute() {
-      return { content: [{ type: "text", text: "ok" }] };
-    },
-  };
-}
+export const makeTool = (name: string) => ({
+  name,
+  description: `${name} tool`,
+  parameters: { type: "object", properties: {} },
+  execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+});
 
 export function createNamedToolEntry(
   pluginId: string,
@@ -98,8 +75,7 @@ export function createNamedToolEntry(
     optional: false,
     source: `/tmp/${pluginId}.js`,
     names: toolNames,
-    factory: () =>
-      toolNames.length === 1 ? makeTool(toolNames[0]!) : toolNames.map((name) => makeTool(name)),
+    factory: () => (toolNames.length === 1 ? makeTool(toolNames[0]!) : toolNames.map(makeTool)),
     ...overrides,
   };
 }
@@ -108,35 +84,21 @@ export function createToolRegistry(
   entries: MockRegistryToolEntry[],
   registrationMode: "full" | "discovery" | "tool-discovery" = "full",
 ) {
-  const tools: Array<
-    Omit<MockRegistryToolEntry, "declaredNames"> & { declaredNames?: ReadonlySet<string> }
-  > = [];
-  const registry = {
-    ...createEmptyPluginRegistry(),
-    plugins: entries.map((entry) =>
-      createToolRuntimeRecord(entry.pluginId, entry.source, entry.origin),
-    ),
-    tools,
-  };
+  const builder = createTestPluginRegistry(createPluginRuntime());
+  const registry: Omit<typeof builder.registry, "tools"> & {
+    tools: Array<
+      Omit<MockRegistryToolEntry, "declaredNames"> & { declaredNames?: ReadonlySet<string> }
+    >;
+  } = builder.registry;
+  registry.plugins = entries.map((entry) =>
+    createToolRuntimeRecord(entry.pluginId, entry.source, entry.origin),
+  );
   registry.tools = entries.map((entry, index) => {
-    const instance = new PluginInstance(entry.pluginId, {
-      record: registry.plugins[index]!,
-      registry: registry as never,
-    });
-    const api = instrumentPluginInstanceApi(
-      buildPluginApi({
-        id: entry.pluginId,
-        name: entry.pluginId,
-        source: entry.source,
-        registrationMode,
-        config: {},
-        runtime: createPluginRuntime(),
-        logger: { info() {}, warn() {}, error() {} },
-        resolvePath: (value) => value,
-      }),
-      instance,
-    );
-    runPluginRegisterSyncInRegistry(() => {}, api, registry as never, entry.pluginId);
+    const record = registry.plugins[index]!;
+    const api = builder.createApi(record, { config: {}, registrationMode });
+    runPluginRegisterSyncInRegistry(() => {}, api, builder.registry, entry.pluginId);
+    const instance = getPluginInstance(record);
+    assert(instance, "expected the registry API's plugin instance");
     const { declaredNames, ...registration } = entry;
     return {
       ...registration,
@@ -147,17 +109,13 @@ export function createToolRegistry(
   return registry;
 }
 
-function createToolRuntimeRecord(
+export function createToolRuntimeRecord(
   id: string,
   source = `/tmp/${id}.js`,
   origin: MockRegistryToolEntry["origin"] = "bundled",
 ) {
-  const artifact = {
-    source,
-    rootDir: path.dirname(source),
-    origin,
-    preferBuiltPluginArtifacts: false,
-  };
+  const rootDir = path.dirname(source);
+  const artifact = { source, rootDir, origin, preferBuiltPluginArtifacts: false };
   const record = createLoaderPluginRecord({ id, ...artifact, enabled: true, configSchema: true });
   bindPluginRuntimeArtifactSelection(record, {
     preferBuiltPluginArtifacts: false,

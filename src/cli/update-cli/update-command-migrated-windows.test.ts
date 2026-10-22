@@ -21,6 +21,7 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { createUpdateCliBaseSnapshot } from "./update-cli-config.test-support.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
+import { finishParams, updateResult } from "./update-command-maintenance-fixtures.test-support.js";
 import type { MigratedUpdateFinalizationInput } from "./update-command-migrated-types.js";
 import { continueMigratedUpdateInFreshProcess } from "./update-command-migrated.js";
 import { readMigratedUpdateRunRow } from "./update-command-migrated.test-support.js";
@@ -248,31 +249,21 @@ it.each([
       });
       const continueUpdate = () =>
         continueMigratedUpdateInFreshProcess(
-          {
-            mutationStarted: true,
+          finishParams({
             root,
-            result: { status: "ok", mode: "npm", root, runId, steps: [], durationMs: 0 },
-            installKindChanged: false,
+            result: updateResult({ root, runId, durationMs: 0 }),
             configSnapshot: {
               ...createUpdateCliBaseSnapshot({}),
               path: path.join(home, "openclaw.json"),
               exists: false,
               raw: null,
             },
-            requestedChannel: null,
-            storedChannel: "stable",
-            channel: "stable",
-            downgradeRisk: false,
-            shouldRestart: true,
             opts: { json: true, run },
             preManagedServiceStop: stopped,
-            controlPlaneUpdateSentinelMeta: null,
-            preUpdatePluginInstallRecords: {},
-            startedAt: Date.now(),
             packageUpdateNodeRunner: process.execPath,
             updateStepTimeoutMs: 1_000,
             rollbackBlockedReason: "state-migrated-no-rollback",
-          },
+          }),
           [],
         );
       const refusesBeforeReceipt = outcome === "launch failure" || replaced;

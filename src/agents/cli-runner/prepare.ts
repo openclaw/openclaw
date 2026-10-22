@@ -886,19 +886,14 @@ async function prepareCliRunContextWithinReadFence(
     bootstrapFiles: bootstrapFilesForInjectionStats,
     injectedFiles: contextFiles,
   });
-  const {
-    bootstrapAnalysis,
-    bootstrapMaxChars,
-    bootstrapPromptWarning,
-    bootstrapPromptWarningMode,
-    bootstrapTotalMaxChars,
-  } = buildBootstrapBudgetState({
-    config: params.config,
-    agentId: sessionAgentId,
-    files: bootstrapInjectionStats,
-    seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
-    previousSignature: params.bootstrapPromptWarningSignature,
-  });
+  const { bootstrapAnalysis, bootstrapMaxChars, bootstrapPromptWarning, bootstrapTotalMaxChars } =
+    buildBootstrapBudgetState({
+      config: params.config,
+      agentId: sessionAgentId,
+      files: bootstrapInjectionStats,
+      seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
+      previousSignature: params.bootstrapPromptWarningSignature,
+    });
   const bootstrapTruncationNotice = buildBootstrapPromptWarningNotice(bootstrapPromptWarning.lines);
   const nodeSkillWorkshop = nodeWorkshopEnabled
     ? projectedTools.find((tool) => tool.name === "skill_workshop")
@@ -1633,7 +1628,6 @@ async function prepareCliRunContextWithinReadFence(
       bootstrapTotalMaxChars,
       bootstrapTruncation: buildBootstrapTruncationReportMeta({
         analysis: bootstrapAnalysis,
-        warningMode: bootstrapPromptWarningMode,
         warning: bootstrapPromptWarning,
       }),
       sandbox: { mode: "off", sandboxed: false },

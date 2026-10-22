@@ -19,6 +19,9 @@ import { writeOpenAiResponsesSse } from "../../../helpers/openai-responses-sse.j
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { createQaPreparedRepoCliCommand } from "../../../helpers/qa-prepared-repo-cli.js";
 import {
+  bindTelegramProof,
+  telegramProofChannel,
+  forwardTelegramProvider,
   createTelegramApi,
   succeedTelegram as succeed,
   telegramGatewayOptions,
@@ -118,19 +121,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       ]);
       return;
     }
-    const upstream = await fetch(`${mock.baseUrl}${pathname}`, {
-      method: req.method,
-      ...(raw.length ? { body: raw.toString() } : {}),
-      headers: {
-        "content-type": "application/json",
-        ...(typeof req.headers.session_id === "string"
-          ? { session_id: req.headers.session_id }
-          : {}),
-        ...(typeof req.headers["x-session-affinity"] === "string"
-          ? { "x-session-affinity": req.headers["x-session-affinity"] }
-          : {}),
-      },
-    });
+    const upstream = await forwardTelegramProvider(req, mock.baseUrl, pathname, raw.toString());
     const payload = await upstream.text();
     if (modelRequest) {
       const events = payload
@@ -290,32 +281,20 @@ beforeAll(async () => {
           providerMode: "mock-openai",
           providerBaseUrl: `${apiRoot}/v1`,
           mockSessionObserverUrl: mock.sessionObserverUrl,
-          telegram: {
-            enabled: true,
-            defaultAccount: "proof",
-            accounts: {
-              proof: {
-                enabled: true,
-                botToken: BOT_TOKEN,
-                apiRoot,
-                groupPolicy: "open",
-                groups: {
-                  [String(CHAT_ID)]: { groupPolicy: "open", requireMention: false },
-                },
-                streaming: { mode: "off" },
-                commands: { native: false },
-              },
+          telegram: telegramProofChannel(apiRoot, BOT_TOKEN, {
+            groupPolicy: "open",
+            groups: {
+              [String(CHAT_ID)]: { groupPolicy: "open", requireMention: false },
             },
-          },
+            streaming: { mode: "off" },
+            commands: { native: false },
+          }),
           runtimeEnvPatch: {
             OPENCLAW_SKIP_CHANNELS: undefined,
             OPENCLAW_SKIP_PROVIDERS: undefined,
           },
           mutateConfig: (cfg) => {
-            cfg.bindings = [
-              ...(cfg.bindings ?? []),
-              { agentId: "qa", match: { channel: "telegram", accountId: "proof" } },
-            ];
+            bindTelegramProof(cfg);
             return cfg;
           },
         }),

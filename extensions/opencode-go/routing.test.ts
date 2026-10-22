@@ -51,74 +51,26 @@ const families = [
 type Protocol = (typeof families)[number]["api"];
 
 function wireResponse(api: Protocol, id: string): Response {
-  let events: unknown[];
-  switch (api) {
-    case "openai-completions":
-      events = [
-        {
-          id: "chat-fixture",
-          choices: [
-            { index: 0, delta: { role: "assistant", content: "ok" }, finish_reason: "stop" },
-          ],
-        },
-      ];
-      break;
-    case "openai-responses":
-      events = [
-        {
-          type: "response.completed",
-          response: {
-            id: "resp-fixture",
-            object: "response",
-            status: "completed",
-            model: id,
-            output: [
-              {
-                id: "msg-fixture",
-                type: "message",
-                status: "completed",
-                role: "assistant",
-                content: [{ type: "output_text", text: "ok", annotations: [] }],
-              },
-            ],
-            usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-          },
-        },
-      ];
-      break;
-    case "anthropic-messages":
-      events = [
-        {
-          type: "message_start",
-          message: {
-            id: "msg-fixture",
-            type: "message",
-            role: "assistant",
-            model: id,
-            content: [],
-            usage: { input_tokens: 1, output_tokens: 0 },
-          },
-        },
-        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
-        { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
-        { type: "content_block_stop", index: 0 },
-        { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
-        { type: "message_stop" },
-      ];
-      break;
-    case "google-generative-ai":
-      events = [
-        {
-          candidates: [
-            { content: { role: "model", parts: [{ text: "ok" }] }, finishReason: "STOP" },
-          ],
-        },
-      ];
-      break;
-    default:
-      throw new Error("Missing wire response fixture");
-  }
-  return new Response(events.map((event) => "data: " + JSON.stringify(event) + "\n\n").join(""), {
+  const events: Record<Protocol, string[]> = {
+    "openai-completions": [
+      '{"id":"chat-fixture","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}',
+    ],
+    "openai-responses": [
+      `{"type":"response.completed","response":{"id":"resp-fixture","object":"response","status":"completed","model":${JSON.stringify(id)},"output":[{"id":"msg-fixture","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ok","annotations":[]}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+    ],
+    "anthropic-messages": [
+      `{"type":"message_start","message":{"id":"msg-fixture","type":"message","role":"assistant","model":${JSON.stringify(id)},"content":[],"usage":{"input_tokens":1,"output_tokens":0}}}`,
+      '{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+      '{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}',
+      '{"type":"content_block_stop","index":0}',
+      '{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}',
+      '{"type":"message_stop"}',
+    ],
+    "google-generative-ai": [
+      '{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]},"finishReason":"STOP"}]}',
+    ],
+  };
+  return new Response(events[api].map((event) => "data: " + event + "\n\n").join(""), {
     headers: { "content-type": "text/event-stream" },
   });
 }
@@ -130,6 +82,25 @@ it.each(families)(
   "routes discovered and saved $api models to the correct family endpoint",
   async (family) => {
     const acquisitionUrls: string[] = [];
+    const metadata = {
+      "opencode-go": {
+        id: "opencode-go",
+        api: root + "/openai/v1",
+        npm: "@ai-sdk/openai-compatible",
+        models: Object.fromEntries(
+          families.map(({ id, npm, api, baseUrl }) => [
+            id,
+            {
+              id,
+              name: id,
+              limit: { context: 128000, output: 8192 },
+              provider: { npm, api: api === "anthropic-messages" ? baseUrl + "/v1" : baseUrl },
+            },
+          ]),
+        ),
+      },
+    };
+    const listing = { data: families.map(({ id }) => ({ id, object: "model" })) };
     const catalog = await buildOpencodeGoLiveProviderConfig({
       discoveryApiKey: "synthetic-key",
       fetchGuard: async ({ url }) => {
@@ -138,32 +109,7 @@ it.each(families)(
           finalUrl: url,
           release: async () => {},
           response: Response.json(
-            url === "https://models.opencode.ai/api.json"
-              ? {
-                  "opencode-go": {
-                    id: "opencode-go",
-                    api: root + "/openai/v1",
-                    npm: "@ai-sdk/openai-compatible",
-                    models: Object.fromEntries(
-                      families.map((entry) => [
-                        entry.id,
-                        {
-                          id: entry.id,
-                          name: entry.id,
-                          limit: { context: 128000, output: 8192 },
-                          provider: {
-                            npm: entry.npm,
-                            api:
-                              entry.api === "anthropic-messages"
-                                ? entry.baseUrl + "/v1"
-                                : entry.baseUrl,
-                          },
-                        },
-                      ]),
-                    ),
-                  },
-                }
-              : { data: families.map(({ id }) => ({ id, object: "model" })) },
+            url === "https://models.opencode.ai/api.json" ? metadata : listing,
           ),
         };
       },
@@ -183,6 +129,12 @@ it.each(families)(
       input: row.input.filter((kind) => kind === "text" || kind === "image"),
     };
     const provider = await registerSingleProviderPlugin(plugin);
+    const normalize = (saved: Model) =>
+      provider.normalizeResolvedModel?.({
+        provider: "opencode-go",
+        modelId: saved.id,
+        model: saved,
+      });
     const requests: Request[] = [];
     const captureFetch: typeof fetch = async (input, init) => {
       requests.push(new Request(input, init));
@@ -193,36 +145,25 @@ it.each(families)(
     const registry = createApiRegistry();
     registerBuiltInApiProviders(registry);
     const runtime = createNodeLlmRuntime(registry, host);
+    const context = { messages: [{ role: "user" as const, content: "Reply ok", timestamp: 1 }] };
+    const options = {
+      apiKey: "synthetic-key",
+      sessionId: "routing-fixture",
+      cacheRetention: "none" as const,
+    };
     for (const baseUrl of [model.baseUrl, "https://opencode.ai/zen/go/v1"]) {
       const saved = { ...model, baseUrl };
-      const resolved: Model = {
-        ...saved,
-        ...provider.normalizeResolvedModel?.({
-          provider: "opencode-go",
-          modelId: saved.id,
-          model: saved,
-        }),
-      };
+      const resolved: Model = { ...saved, ...normalize(saved) };
       expect(resolved).toMatchObject({ api: family.api, baseUrl: family.baseUrl });
       const result = await runWithAiTransportHost(host, async () => {
         if (family.api === "google-generative-ai") {
-          return runtime.completeSimple(
-            resolved,
-            { messages: [{ role: "user", content: "Reply ok", timestamp: 1 }] },
-            { apiKey: "synthetic-key", sessionId: "routing-fixture", cacheRetention: "none" },
-          );
+          return runtime.completeSimple(resolved, context, options);
         }
         const stream = createBoundaryAwareStreamFnForModel(resolved);
         if (!stream) {
           throw new Error("Expected a native family transport");
         }
-        return (
-          await stream(
-            resolved,
-            { messages: [{ role: "user", content: "Reply ok", timestamp: 1 }] },
-            { apiKey: "synthetic-key", sessionId: "routing-fixture", cacheRetention: "none" },
-          )
-        ).result();
+        return (await stream(resolved, context, options)).result();
       });
       expect(result.stopReason, result.errorMessage).toBe("stop");
       expect(result.content).toEqual([expect.objectContaining({ type: "text", text: "ok" })]);
@@ -233,13 +174,7 @@ it.each(families)(
     ]);
     expect(acquisitionUrls).toContain(root + "/v1/models");
     const proxy = { ...model, baseUrl: "https://proxy.example/v1" };
-    expect(
-      provider.normalizeResolvedModel?.({
-        provider: "opencode-go",
-        modelId: proxy.id,
-        model: proxy,
-      })?.baseUrl ?? proxy.baseUrl,
-    ).toBe(proxy.baseUrl);
+    expect(normalize(proxy)?.baseUrl ?? proxy.baseUrl).toBe(proxy.baseUrl);
   },
 );
 

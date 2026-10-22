@@ -25,7 +25,7 @@ import { handleGatewayRequest } from "../server-methods.js";
 import { SessionMutationFactsUnavailableError } from "../session-sharing-preparation.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { createBoardHarness } from "./board.test-support.js";
-import { createProgressCardHandlers } from "./progress-card.js";
+import { progressCardHandlers } from "./progress-card.js";
 import type { RespondFn } from "./types.js";
 
 const methods = [
@@ -162,7 +162,7 @@ it.each([
         inGrant = false;
       }
     });
-    const handlers = { ...board.handlers, ...createProgressCardHandlers() };
+    const handlers = { ...board.handlers, ...progressCardHandlers };
     const handler = handlers[method]!;
     const expectUnchanged = () => {
       expect(databaseState()).toEqual(previousState);

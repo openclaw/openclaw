@@ -65,6 +65,7 @@ const workerMethods = new Set<string>([...WORKER_PROTOCOL_METHODS, ...WORKER_INF
 
 type WorkerWsMessageHandlerParams = {
   socket: WebSocket;
+  transport: GatewayWsClient["socket"];
   connectionWork: GatewayConnectionWork;
   connId: string;
   service?: WorkerConnectionService;
@@ -179,7 +180,7 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       publicAdmission: params.publicAdmission,
       claim: (identity) => {
         const client: GatewayWsClient = {
-          socket: params.socket,
+          socket: params.transport,
           connect: {
             minProtocol: connect.minProtocol,
             maxProtocol: connect.maxProtocol,

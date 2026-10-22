@@ -366,6 +366,22 @@ describe("registered Teams delivery handoff", () => {
       const submitted = holdResponse();
       const onPlatformSendDispatch = vi.fn(async () => {});
       const onDeliveryResult = vi.fn();
+      if (kind === "image") {
+        resolveMSTeamsSendContext.mockResolvedValue({
+          ...fixture.context,
+          conversationType: "personal",
+          ref: {
+            ...fixture.context.ref,
+            conversation: { id: conversationId, conversationType: "personal" },
+          },
+          sharePointSiteId: "configured-site",
+          tokenProvider: {
+            getAccessToken: async () => {
+              throw new Error("personal images must not upload to SharePoint");
+            },
+          },
+        });
+      }
       const id =
         kind === "text"
           ? "accepted-before-close"
@@ -416,6 +432,14 @@ describe("registered Teams delivery handoff", () => {
         ]);
       } else {
         expect(fixture.requests).toHaveLength(1);
+        if (kind === "image") {
+          expect(fixture.requests[0]?.activity.attachments).toEqual([
+            expect.objectContaining({
+              contentType: "image/png",
+              contentUrl: expect.stringMatching(/^data:image\/png;base64,/),
+            }),
+          ]);
+        }
       }
     },
   );

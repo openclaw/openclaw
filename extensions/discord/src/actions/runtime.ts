@@ -60,9 +60,6 @@ export async function handleDiscordAction(
   const isActionEnabled = createDiscordActionGate({ cfg, accountId });
 
   if (messagingActions.has(action)) {
-    if (!cfg) {
-      throw new Error("Discord messaging actions require a resolved runtime config.");
-    }
     const ctx = createDiscordMessagingActionContext({
       action,
       input: params,
@@ -175,13 +172,7 @@ export async function handleDiscordAction(
     return jsonResult({
       ok: true,
       status,
-      activities: activities.map((a) =>
-        Object.assign(
-          { type: a.type, name: a.name },
-          a.url ? { url: a.url } : {},
-          a.state ? { state: a.state } : {},
-        ),
-      ),
+      activities,
     });
   }
   throw new Error(`Unknown action: ${action}`);

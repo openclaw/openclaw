@@ -82,11 +82,7 @@ export function readConfigCorpusFixture(name: string): string {
   config.commands.ownerAllowFrom = ["telegram:900000020"];
   config.channels.telegram.allowFrom = ["900000020"];
   config.gateway.controlUi.allowedOrigins = [
-    "http://fixture-25.invalid:18789/",
-    "http://fixture-26.invalid:18789/",
-    "http://fixture-27.invalid:18789/",
-    "http://fixture-28.invalid:18789/",
-    "http://fixture-29.invalid:18789/",
+    ...[25, 26, 27, 28, 29].map((id) => `http://fixture-${id}.invalid:18789/`),
     "https://fixture-30.invalid/",
   ];
   config.diagnostics.otel.endpoint = "http://fixture-32.invalid:4318/";

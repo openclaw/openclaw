@@ -1,13 +1,7 @@
 /* @vitest-environment jsdom */
 
-import type {
-  ControlUiDialogProps,
-  ControlUiHost,
-  ControlUiPage,
-  ControlUiViewContext,
-} from "openclaw/plugin-sdk/control-ui";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import type * as UI from "openclaw/plugin-sdk/control-ui";
+import { expect, it, onTestFinished, vi } from "vitest";
 import plugin from "./control-ui.js";
 
 const caller = {
@@ -20,26 +14,18 @@ const caller = {
 const grants = { grants: [], caller, relayUrl: "https://relay.example" };
 const consent = {
   kind: "oauth",
-  clientName: "Example app",
   redirectHost: "app.example",
   expiresAt: 1_800_000_000_000,
   caller,
 };
-const cleanup: Array<() => void> = [];
+const body = () => document.body.textContent!;
+const shows = (text: string) => vi.waitFor(() => expect(body()).toContain(text));
+const button = (label: string) =>
+  [...document.querySelectorAll("button")].find((node) => node.textContent === label);
 
-afterEach(() => {
-  for (const dispose of cleanup.splice(0).toReversed()) {
-    dispose();
-  }
-  document.body.replaceChildren();
-});
-
-function rendered(predicate: () => boolean) {
-  return vi.waitFor(() => expect(predicate()).toBe(true));
-}
-
-function fixture(request: ReturnType<typeof vi.fn>, props: Record<string, string> = {}) {
-  let page: ControlUiPage | undefined;
+function fixture(responses: unknown[], props: Record<string, string> = {}) {
+  const request = vi.fn(async () => responses.shift());
+  const registerPage = vi.fn<(page: UI.ControlUiPage) => () => void>(() => () => {});
   const controller = new AbortController();
   const host = {
     locale: "en-US",
@@ -48,141 +34,121 @@ function fixture(request: ReturnType<typeof vi.fn>, props: Record<string, string
     redact: (text: string) => text,
     request,
     subscribe: () => () => {},
-    ui: {
-      registerPage: (entry: ControlUiPage) => {
-        page = entry;
-        return () => {};
-      },
-    },
+    ui: { registerPage },
     components: {
-      mountDialog: (container: HTMLElement, input: ControlUiDialogProps) => {
-        container.append(input.content);
-        return { dispose: () => input.content.remove(), update: () => {} };
+      mountDialog: (container: HTMLElement, { content }: UI.ControlUiDialogProps) => {
+        container.append(content);
+        return { dispose: () => content.remove(), update: () => {} };
       },
     },
-  } as unknown as ControlUiHost;
+  } as unknown as UI.ControlUiHost;
   void plugin.activate(host);
+  const page = registerPage.mock.calls[0]?.[0];
   if (!page) {
     throw new Error("Connected apps page was not registered");
   }
-  const container = document.createElement("div");
-  document.body.append(container);
-  const context: ControlUiViewContext = {
+  const context: UI.ControlUiViewContext = {
     host,
     props,
     signal: controller.signal,
     presented: true,
     mountDefault: () => () => {},
   };
-  const view = page.mount(container, context);
-  cleanup.push(() => {
+  const view = page.mount(document.body, context);
+  onTestFinished(() => {
     controller.abort();
     view?.dispose?.();
+    document.body.replaceChildren();
   });
-  return { context, view, container };
+  return {
+    request,
+    navigate: (requestId: string) => view?.update?.({ ...context, props: { request: requestId } }),
+  };
 }
 
 function click(label: string) {
-  const button = [...document.querySelectorAll("button")].find(
-    (node) => node.textContent === label,
-  );
-  expect(button, `button ${label}`).toBeDefined();
-  button?.click();
+  const target = button(label);
+  expect(target, `button ${label}`).toBeDefined();
+  target?.click();
 }
 
-describe("Connected apps native page", () => {
-  it("pairs with the caller's read/write ceiling without accepting a principal from the browser", async () => {
-    const request = vi.fn().mockResolvedValueOnce(grants).mockResolvedValueOnce({
+it("pairs within the caller's ceiling without a browser-supplied principal", async () => {
+  const { request } = fixture([
+    grants,
+    {
       code: "ABCDE-FGHIJ",
       expiresAt: 1_800_000_000_000,
       mcpUrl: "https://relay.example/mcp",
-    });
-    fixture(request);
-    await rendered(() => document.body.textContent!.includes("Pair with code"));
-    click("Pair with code");
-    expect(document.body.textContent).not.toContain("Full role access");
-    click("Create pairing code");
-    await rendered(() => document.body.textContent!.includes("ABCDE-FGHIJ"));
-    expect(request).toHaveBeenLastCalledWith("mcp-relay.pair", {
-      ceiling: ["operator.read", "operator.write"],
-    });
-    expect(document.body.textContent).toContain("https://relay.example/mcp");
+    },
+  ]);
+  await shows("Pair with code");
+  click("Pair with code");
+  expect(body()).not.toContain("Full role access");
+  click("Create pairing code");
+  await shows("ABCDE-FGHIJ");
+  expect(request).toHaveBeenLastCalledWith("mcp-relay.pair", {
+    ceiling: ["operator.read", "operator.write"],
   });
+  expect(body()).toContain("https://relay.example/mcp");
+});
 
-  it("renders untrusted app labels as text and rejects a continuation to an unconfigured relay", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce(grants)
-      .mockResolvedValueOnce({
-        ...consent,
-        clientName: '<img src=x onerror="alert(1)">',
-      })
-      .mockResolvedValueOnce({ continueUrl: "https://foreign.example/oauth/continue?request=one" });
-    fixture(request, { request: "one", relay: "https://foreign.example" });
-    await rendered(() =>
-      [...document.querySelectorAll("button")].some(
-        (node) => node.textContent === "Allow" && !node.disabled,
-      ),
-    );
-    expect(document.querySelector("img")).toBeNull();
-    expect(document.body.textContent).toContain('<img src=x onerror="alert(1)">');
-    expect(document.body.textContent).toContain("app.example");
-    click("Allow");
-    await rendered(() => document.body.textContent!.includes("invalid return address"));
-    expect(request).toHaveBeenLastCalledWith("mcp-relay.authorize.approve", {
-      requestId: "one",
-      ceiling: ["operator.read", "operator.write"],
-    });
+it("escapes app labels and rejects foreign relay continuations", async () => {
+  const clientName = '<img src=x onerror="alert(1)">';
+  const { request } = fixture(
+    [
+      grants,
+      { ...consent, clientName },
+      { continueUrl: "https://foreign.example/oauth/continue?request=one" },
+    ],
+    { request: "one", relay: "https://foreign.example" },
+  );
+  await vi.waitFor(() => expect(button("Allow")?.disabled).toBe(false));
+  expect(document.querySelector("img")).toBeNull();
+  expect(body()).toContain(clientName);
+  expect(body()).toContain("app.example");
+  click("Allow");
+  await shows("invalid return address");
+  expect(request).toHaveBeenLastCalledWith("mcp-relay.authorize.approve", {
+    requestId: "one",
+    ceiling: ["operator.read", "operator.write"],
   });
+});
 
-  it("does not publish consent details from a previous request after navigation", async () => {
-    const previous = createDeferred<unknown>();
-    const describing = createDeferred<void>();
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce(grants)
-      .mockImplementationOnce(() => {
-        describing.resolve();
-        return previous.promise;
-      })
-      .mockResolvedValueOnce(grants)
-      .mockResolvedValueOnce({ ...consent, clientName: "Current app" });
-    const { view, context } = fixture(request, { request: "old" });
-    await describing.promise;
-    view?.update?.({ ...context, props: { request: "new" } });
-    await rendered(() => document.body.textContent!.includes("Connect Current app?"));
-    previous.resolve({ ...consent, clientName: "Old app" });
-    await previous.promise;
-    expect(document.body.textContent).toContain("Connect Current app?");
-    expect(document.body.textContent).not.toContain("Old app");
-  });
+it("ignores stale consent responses after navigation", async () => {
+  const previous = Promise.withResolvers<unknown>();
+  const { request, navigate } = fixture(
+    [grants, previous.promise, grants, { ...consent, clientName: "Current app" }],
+    { request: "old" },
+  );
+  await vi.waitFor(() =>
+    expect(request).toHaveBeenCalledWith("mcp-relay.authorize.describe", { requestId: "old" }),
+  );
+  navigate("new");
+  await shows("Connect Current app?");
+  previous.resolve({ ...consent, clientName: "Old app" });
+  await previous.promise;
+  expect(body()).toContain("Connect Current app?");
+  expect(body()).not.toContain("Old app");
+});
 
-  it("lets an administrator revoke another person's grant and reflects the authoritative result", async () => {
-    const grant = {
-      grantId: "grant-other",
-      clientName: "Team app",
-      principal: { kind: "person", profileId: "person-other" },
-      principalLabel: "Jordan Example",
-      ceiling: ["operator.read"],
-      createdAt: 1_800_000_000_000,
-    };
-    const snapshot = { ...grants, grants: [grant], caller: { ...caller, canAdmin: true } };
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce(snapshot)
-      .mockResolvedValueOnce({ revoked: true })
-      .mockResolvedValueOnce({ ...snapshot, grants: [] });
-    fixture(request);
-    await rendered(() => document.body.textContent!.includes("Team app"));
-    expect(document.body.textContent).toContain("Jordan Example");
-    click("Revoke");
-    await rendered(() =>
-      document.body.textContent!.includes("Its MCP and embedded UI access has ended."),
-    );
-    expect(request).toHaveBeenCalledWith("mcp-relay.revoke", { grantId: "grant-other" });
-    expect(document.querySelector(".mcp-connected-apps__grant")).toBeNull();
-    expect(document.querySelector('[role="status"]')?.textContent).toBe(
-      "Team app revoked. Its MCP and embedded UI access has ended.",
-    );
-  });
+it("revokes another person's grant as admin and shows the authoritative result", async () => {
+  const grant = {
+    grantId: "grant-other",
+    clientName: "Team app",
+    principal: { kind: "person", profileId: "person-other" },
+    principalLabel: "Jordan Example",
+    ceiling: ["operator.read"],
+    createdAt: 1_800_000_000_000,
+  };
+  const snapshot = { ...grants, grants: [grant], caller: { ...caller, canAdmin: true } };
+  const { request } = fixture([snapshot, { revoked: true }, { ...snapshot, grants: [] }]);
+  await shows("Team app");
+  expect(body()).toContain("Jordan Example");
+  click("Revoke");
+  await shows("Its MCP and embedded UI access has ended.");
+  expect(request).toHaveBeenCalledWith("mcp-relay.revoke", { grantId: "grant-other" });
+  expect(document.querySelector(".mcp-connected-apps__grant")).toBeNull();
+  expect(document.querySelector('[role="status"]')?.textContent).toBe(
+    "Team app revoked. Its MCP and embedded UI access has ended.",
+  );
 });

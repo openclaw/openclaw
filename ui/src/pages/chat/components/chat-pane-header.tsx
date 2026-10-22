@@ -1,4 +1,4 @@
-import { Show, onSettled, onCleanup, type Element } from "solid-js";
+import { Show, createMemo, merge, onSettled, type Element } from "solid-js";
 import { isIncognitoSessionKey } from "../../../../../src/shared/incognito-session-key.js";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
 import { NAV_DRAWER_TOGGLE_REGISTRATION } from "../../../app/navigation-surface.ts";
@@ -12,15 +12,16 @@ import { StandalonePersonLink } from "../../../components/person-activity-link-s
 import { personActivityLink } from "../../../components/person-activity-link.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { renderSessionOwnerChip } from "../../../components/solid/session-presentation.tsx";
-import { redactLoginFailureError } from "../../../lib/connection-hints.ts";
+import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import "../../../components/tooltip.ts";
+import { redactLoginFailureError } from "../../../lib/connection-hints.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { HoverMarquee } from "../../../lib/solid/hover-marquee.tsx";
 import { PaneHeaderPresence, PaneSubagentStop } from "../chat-pane-header-view.tsx";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
 import { ChatDetails } from "./chat-details.tsx";
-import { ChatHeaderCreateClawAction } from "./chat-header-create-claw-action.tsx";
 import {
   ChatPanelHeaderActions,
   ChatDashboardMenu,
@@ -33,6 +34,8 @@ import { ChatPanePlacement } from "./chat-pane-placement.tsx";
 import { ChatPaneVersionsMenu } from "./chat-pane-versions-menu.tsx";
 import { ChatSessionPublicIndicator, ChatSessionSharing } from "./chat-session-sharing.solid.tsx";
 import { ContinueInTerminalDialog } from "./continue-in-terminal-dialog.tsx";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 export function PaneHeaderView(props: ChatPaneHeaderPresentation) {
   return (
@@ -47,19 +50,11 @@ export function PaneHeaderView(props: ChatPaneHeaderPresentation) {
 
 function DetailsGlyph() {
   return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="1.6"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-      aria-hidden="true"
-    >
+    <StrokeIcon stroke-width="1.6" aria-hidden="true">
       <circle cx="5" cy="7" r="3" />
       <circle cx="5" cy="17" r="3" />
       <path d="M13 7h8M13 17h8" />
-    </svg>
+    </StrokeIcon>
   );
 }
 
@@ -77,44 +72,49 @@ export function ChatPaneHeader(props: ChatPaneHeaderProps) {
   );
   onSettled(() => {
     props.setDashboardControls?.(dashboardControls);
+    return () => props.setDashboardControls?.(undefined);
   });
-  onCleanup(() => props.setDashboardControls?.(undefined));
   const incognito = () =>
     (props.incognito ?? props.session?.incognito) || isIncognitoSessionKey(props.session?.key);
   const Details = (detailsProps: {
     placement: Parameters<typeof ChatPanePlacement>[0];
     onOpenMachine: () => void;
-  }) => (
-    <Show when={props.detailsControl !== undefined}>
-      <ChatDetails
-        {...props.detailsControl!}
-        chat={
-          props.detailsControl!.chat
-            ? {
-                ...props.detailsControl!.chat,
-                environment: {
-                  ...props.detailsControl!.chat.environment,
-                  placement: detailsProps.placement,
-                  onOpenMachine:
-                    props.detailsControl?.nativePresentation === "mobile"
-                      ? detailsProps.onOpenMachine
-                      : undefined,
-                },
-              }
-            : undefined
-        }
-        triggerContent={!props.mergedChrome ? detailsGlyph : undefined}
-        mobileBindings={
-          props.detailsControl?.mobileBindings
-            ? {
-                ...props.detailsControl.mobileBindings,
-                versions: props.mobileVersions,
-              }
-            : undefined
-        }
-      />
-    </Show>
-  );
+  }) => {
+    const chat = createMemo(() => {
+      const source = props.detailsControl?.chat;
+      return source
+        ? merge(source, {
+            environment: merge(
+              () => source.environment ?? {},
+              () => ({
+                placement: detailsProps.placement,
+                onOpenMachine:
+                  props.detailsControl?.nativePresentation === "mobile"
+                    ? detailsProps.onOpenMachine
+                    : undefined,
+              }),
+            ),
+          })
+        : undefined;
+    });
+    return (
+      <Show when={props.detailsControl !== undefined}>
+        <ChatDetails
+          {...props.detailsControl!}
+          chat={chat()}
+          triggerContent={!props.mergedChrome ? detailsGlyph : undefined}
+          mobileBindings={
+            props.detailsControl?.mobileBindings
+              ? {
+                  ...props.detailsControl.mobileBindings,
+                  versions: props.mobileVersions,
+                }
+              : undefined
+          }
+        />
+      </Show>
+    );
+  };
   const notice = (
     <Show when={incognito()}>
       <aside class="chat-pane__incognito-notice" aria-label={t("sessionsView.incognitoLabel")}>
@@ -233,7 +233,8 @@ function ChatPaneHeaderChrome(
               </button>
             </openclaw-tooltip>
           </Show>
-          <Show when={!props.agent}>
+          {/* Roster mode has no session crumbs beside the agent pill; rename still edits inline. */}
+          <Show when={!props.agent || props.editing}>
             <IdentityCrumbs {...props} />
           </Show>
           <Show when={!props.mergedChrome}>
@@ -441,7 +442,6 @@ function ChatPaneHeaderChrome(
               <RunningSubagents count={props.runningSubagentCount} />
             </Show>
             <Show when={props.runAction}>{(action) => <PaneSubagentStop {...action()} />}</Show>
-            <ChatHeaderCreateClawAction onCreateClaw={props.onCreateClaw} />
             <Show when={!props.mergedChrome}>
               <Show when={props.presence}>
                 {(presence) => <PaneHeaderPresence {...presence()} />}

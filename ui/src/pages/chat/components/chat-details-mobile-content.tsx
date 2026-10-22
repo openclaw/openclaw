@@ -8,7 +8,8 @@ import {
   progressCardPresentation,
 } from "../../../components/session-progress-card.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listSubagents } from "../chat-subagent-wait.ts";
 import {
   SessionAutomationMobileList,
@@ -63,8 +64,10 @@ import {
   type ChatSessionVersionsMobileProps,
 } from "./chat-session-versions-mobile.tsx";
 import type { SessionAutomationInventory } from "./chat-summary-automations.tsx";
-import { sessionAutomationSchedule } from "./session-automation-schedule.ts";
 import "../../../styles/chat/details.css";
+import { sessionAutomationSchedule } from "./session-automation-schedule.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 type ChatDetailsMobileRegionProps = {
   details: ChatDetailsProps;
@@ -215,7 +218,7 @@ function MobileRoot(
       total: inventory.loaded() ? inventory.total() : undefined,
       summary: input.summary,
       notice:
-        inventory.error() && inventory.connected() ? (
+        inventory.readDenied() && inventory.connected() ? (
           <div class="chat-details-mobile-root__notice" role="status">
             <span>
               {t(
@@ -232,13 +235,6 @@ function MobileRoot(
             >
               {t("common.retry")}
             </button>
-          </div>
-        ) : !inventory.loaded() &&
-          inventory.loading() &&
-          inventory.available() &&
-          inventory.connected() ? (
-          <div class="chat-details-mobile-root__notice" role="status">
-            {t("chat.sessionDetails.automationLoading")}
           </div>
         ) : undefined,
     };
@@ -271,15 +267,9 @@ function MobileRoot(
           : undefined
       }
       taskProgressNotice={
-        props.details.progressCardInitialLoading || props.details.progressCardError ? (
+        props.details.progressCardError === "access-denied" ? (
           <div class="chat-details-mobile-root__notice" role="status">
-            {t(
-              props.details.progressCardError === "access-denied"
-                ? "sessionProgressCard.widgetAccessDenied"
-                : props.details.progressCardError
-                  ? "sessionProgressCard.widgetUnavailable"
-                  : "sessionProgressCard.widgetLoading",
-            )}
+            {t("sessionProgressCard.widgetAccessDenied")}
           </div>
         ) : undefined
       }
@@ -323,7 +313,8 @@ function MobileRoot(
       }
       processes={
         props.content.processes &&
-        (props.content.processes.rows.length > 0 || props.content.processes.error) ? (
+        (props.content.processes.rows.length > 0 ||
+          (props.content.processes.errorKind !== "read" && props.content.processes.error)) ? (
           <ChatDetailsMobileProcesses
             data={props.content.processes}
             presented={props.presented}

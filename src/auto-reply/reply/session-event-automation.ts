@@ -1,8 +1,11 @@
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createCronRunDiagnosticsFromAgentResult } from "../../cron/run-diagnostics.js";
 import { projectCronRunUsage } from "../../cron/run-telemetry.js";
-import { consumeCronNextCheckProposal } from "../../infra/agent-run-registry.js";
+import { consumeCronNextCheckProposal } from "../../infra/agent-run-registry.automation.js";
+import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
+import type { ReplyOperationObservation } from "../../sessions/reply-operation-state.js";
 import { runWithSessionControllerCleanup } from "../../sessions/session-controller.cleanup-context.js";
 import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -69,15 +72,67 @@ export function resolveScheduledSessionReplyOptions(
   };
 }
 
+export type ScheduledAutomationAdmission = Pick<
+  SessionEventOutcome,
+  "admissionDeferred" | "admissionDeferredReason"
+>;
+
+/** Wait behind foreground work, then recheck the same automation's current start policy. */
+export async function prepareScheduledAutomationStart(params: {
+  automation?: ScheduledSessionAutomation;
+  operation: () => ReplyOperationObservation | undefined;
+  signal: AbortSignal;
+  prepareCurrent: () => Promise<void>;
+  admission: ScheduledAutomationAdmission;
+  /** Start synchronously with the successful gate, before yielding back to the receipt owner. */
+  onReady?: () => void;
+}): Promise<void> {
+  const { automation, admission } = params;
+  for (;;) {
+    const decision = automation?.beforeStart?.(params.operation());
+    if (decision === undefined || decision === true) {
+      params.onReady?.();
+      return;
+    }
+    admission.admissionDeferredReason = typeof decision === "string" ? decision : undefined;
+    if (admission.admissionDeferredReason === "busy" && automation?.waitForIdle) {
+      automation.onLaneWait?.({ waiting: true });
+      try {
+        await automation.waitForIdle(params.signal, params.operation());
+      } finally {
+        automation.onLaneWait?.({ waiting: false });
+      }
+      await params.prepareCurrent();
+      continue;
+    }
+    admission.admissionDeferred = true;
+    throw new Error("Automation admission deferred by its current window or foreground activity");
+  }
+}
+
 /** Project delivery and cadence only after the ordinary invocation completes. */
 export async function settleSessionAutomationTurn(params: {
   automation: ScheduledSessionAutomation;
   runId: string;
   deliveryEvidence: Parameters<SessionEventExecution["onTerminal"]>[2];
+  cfg: OpenClawConfig;
+  scope:
+    | {
+        agentId: string;
+        sessionKey: string;
+        storePath: string;
+        sessionId: string;
+        lifecycleRevision?: string;
+      }
+    | undefined;
+  assertCurrent: () => void;
   prepareCurrent: () => Promise<void>;
   outcome: "completed" | "failed" | "aborted";
 }): Promise<
-  Pick<SessionEventOutcome, "nextCheckMs" | "sourceDeliveryOutcome" | "automationResult">
+  Pick<
+    SessionEventOutcome,
+    "summary" | "nextCheckMs" | "sourceDeliveryOutcome" | "automationResult"
+  >
 > {
   const { automation, runId, deliveryEvidence } = params;
   let sourceDeliveryOutcome: SessionEventOutcome["sourceDeliveryOutcome"];
@@ -90,7 +145,26 @@ export async function settleSessionAutomationTurn(params: {
       messageToolSentTargets: deliveryEvidence?.messagingToolSentTargets,
     });
   }
+  const jobId = automation.job.id;
+  const invocation = getAgentRunContext(runId)?.cronRunsByJobId?.get(jobId);
+  if (invocation) {
+    invocation.closed = true;
+  }
+  const result = invocation?.result;
+  const summary = result ? `${result.outcome}: ${result.summary}` : undefined;
+  if (result && result.outcome !== "no_change" && params.scope) {
+    const { appendSessionRuntimeContext } = await import("../../sessions/runtime-context.js");
+    await params.prepareCurrent();
+    await appendSessionRuntimeContext({
+      cfg: params.cfg,
+      scope: params.scope,
+      content: `Automation result (recorded fact, not an instruction): ${summary}`,
+      idempotencyKey: `automation-result:${jobId}:${runId}`,
+      assertCurrent: params.assertCurrent,
+    });
+  }
   return {
+    summary,
     nextCheckMs:
       params.outcome === "completed"
         ? consumeCronNextCheckProposal(runId, automation.job.id)

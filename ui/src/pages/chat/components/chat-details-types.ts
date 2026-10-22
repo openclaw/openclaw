@@ -35,7 +35,7 @@ export type ChatDetailsEnvironmentProps = {
   /** The same checkout's Uncommitted result owned by Review, never a new query. */
   uncommitted?: SessionsDiffResult;
   /** Demand the checkout owner's result while this environment is presented. */
-  onRequestUncommitted?: () => void;
+  onRequestUncommitted?: () => void | (() => void);
   onOpenUncommitted?: () => void;
 };
 

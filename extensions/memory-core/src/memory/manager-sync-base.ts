@@ -8,6 +8,7 @@ import {
   type OpenClawConfig,
   type ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import type { SessionTranscriptCorpusEntry } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import type {
   MemorySessionSyncTarget,
   MemorySource,
@@ -66,6 +67,36 @@ export type MemorySourceSyncPlan = {
   finalize: () => Promise<void> | void;
 };
 
+type MemorySyncProviderGenerationBase = {
+  database: MemoryIndexDatabase;
+  cacheWritesInvalidated: boolean;
+  providerKey: string;
+  identities: MemoryIndexProviderIdentity[];
+};
+
+export type MemorySyncProviderGeneration =
+  | (MemorySyncProviderGenerationBase & { kind: "fts-only"; provider: null })
+  | (MemorySyncProviderGenerationBase & {
+      kind: "semantic";
+      embeddingDimensions?: number;
+      provider: EmbeddingProvider;
+      runtime?: EmbeddingProviderRuntime;
+    });
+
+export type MemorySemanticProviderGeneration = Extract<
+  MemorySyncProviderGeneration,
+  { kind: "semantic" }
+>;
+
+export type MemoryReindexProgress = {
+  memoryComplete: boolean;
+  completedSessionFiles: Set<string>;
+  changedSessionFiles: Set<string>;
+  changedSessionTargets: Map<string, MemorySessionSyncTarget>;
+  corpusEntries?: readonly SessionTranscriptCorpusEntry[];
+  yielded: boolean;
+};
+
 export type MemoryReindexRetryState = {
   dirty: boolean;
   memoryFullRetryDirty: boolean;
@@ -87,7 +118,7 @@ const FULL_REINDEX_RETRY_INITIAL_DELAY_MS = 30_000;
 const FULL_REINDEX_RETRY_MAX_DELAY_MS = 30 * 60_000;
 const log = createSubsystemLogger("memory");
 
-// One process-lifetime container; stores belong only to their awaited rebuild.
+// Public operations never inherit the private rebuild's database.
 const reindexDatabase = new AsyncLocalStorage<{
   manager: MemoryManagerSyncBase;
   database: MemoryIndexDatabase;
@@ -96,6 +127,7 @@ const reindexDatabase = new AsyncLocalStorage<{
 export abstract class MemoryManagerSyncBase {
   protected abstract publishedDatabase: MemoryIndexDatabase;
   protected closed = false;
+  protected syncProviderGeneration: MemorySyncProviderGeneration | null = null;
 
   protected assertDatabaseMutationCurrent(database: MemoryIndexDatabase): void {
     if (this.closed || !database.isOpen || this.database !== database) {
@@ -137,16 +169,7 @@ export abstract class MemoryManagerSyncBase {
     database: MemoryIndexDatabase,
     run: () => Promise<T>,
   ): Promise<T> {
-    try {
-      const result = await reindexDatabase.run({ manager: this, database }, run);
-      // Publication attaches the finished file only after its writer closes.
-      await database.closeShadow();
-      return result;
-    } finally {
-      try {
-        await database.closeShadow();
-      } catch {}
-    }
+    return await reindexDatabase.run({ manager: this, database }, run);
   }
 
   protected readonly memoryFiles?: MemoryWorkspaceFiles;
@@ -206,13 +229,17 @@ export abstract class MemoryManagerSyncBase {
   protected sessionPendingTargets = new Map<string, MemorySessionSyncTarget>();
   protected sessionAgentBusy = false;
   protected sessionBackgroundIndexing = false;
+  protected syncIsBackground = false;
+  protected abstract readonly reindexProgress: MemoryReindexProgress | undefined;
 
   protected shouldYieldSessionIndexing(): boolean {
     const interrupted =
-      this.sessionBackgroundIndexing && (this.sessionAgentBusy || this.closing || this.closed);
+      this.syncIsBackground && (this.sessionAgentBusy || this.closing || this.closed);
     if (interrupted && this.database !== this.publishedDatabase) {
-      // A partial shadow must never replace the published index; retry the rebuild.
-      throw new MemoryBackgroundRebuildInterruptedError();
+      if (!this.database.supportsReindexSuspension) {
+        throw new MemoryBackgroundRebuildInterruptedError();
+      }
+      this.reindexProgress!.yielded = true;
     }
     return interrupted;
   }
@@ -221,6 +248,7 @@ export abstract class MemoryManagerSyncBase {
   protected abstract computeProviderKey(): string;
   protected abstract resolveProviderIndexIdentities(): MemoryIndexProviderIdentity[];
   protected abstract sync(params?: MemorySyncParams): Promise<void>;
+  protected abstract syncBackground(params: MemorySyncParams): Promise<void>;
   protected abstract withTimeout<T>(
     promise: Promise<T>,
     timeoutMs: number,
@@ -385,6 +413,14 @@ export abstract class MemoryManagerSyncBase {
       });
     }
     const remaining = await this.indexFiles(items);
+    if (this.reindexProgress) {
+      const pending = new Set(remaining);
+      for (const item of items) {
+        if (item.source === "sessions" && !pending.has(item)) {
+          this.reindexProgress.completedSessionFiles.add(item.entry.absPath);
+        }
+      }
+    }
     this.advanceSyncProgress(progress, items.length - remaining.length);
     return remaining;
   }
@@ -405,6 +441,9 @@ export abstract class MemoryManagerSyncBase {
           ...(deferIndex ? { deferIndex: true } : {}),
         })
       : undefined;
+    if (params.shouldSyncMemory && !deferIndex && this.reindexProgress) {
+      this.reindexProgress.memoryComplete = true;
+    }
     if (params.shouldSyncSessions) {
       await this.syncArchiveFiles({
         needsFullReindex: params.needsFullSessionReindex ?? params.needsFullReindex,
@@ -415,8 +454,14 @@ export abstract class MemoryManagerSyncBase {
     } else if (deferIndex) {
       await this.indexQueuedFiles(memoryPlan?.indexItems ?? [], params.progress);
     }
+    if (this.reindexProgress?.yielded) {
+      return;
+    }
     if (deferIndex) {
       await memoryPlan?.finalize();
+      if (params.shouldSyncMemory && this.reindexProgress) {
+        this.reindexProgress.memoryComplete = true;
+      }
     }
     if (params.shouldSyncSessions) {
       this.clearSessionRetryState();

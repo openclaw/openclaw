@@ -15,7 +15,10 @@ import type {
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
-import { wrapProviderPayloadHook } from "openclaw/plugin-sdk/provider-stream-shared";
+import {
+  createAnthropicThinkingPrefillPayloadWrapper,
+  wrapProviderPayloadHook,
+} from "openclaw/plugin-sdk/provider-stream-shared";
 import {
   buildProviderToolCompatFamilyHooks,
   findUnsupportedSchemaKeywords,
@@ -23,6 +26,7 @@ import {
   SCHEMA_NESTED_KEYS,
 } from "openclaw/plugin-sdk/provider-tools";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
@@ -32,15 +36,17 @@ import {
   normalizeFastMode,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { containsAsciiControlCharacter } from "openclaw/plugin-sdk/string-normalization-runtime";
+import { clawrouterMediaUnderstandingProvider } from "./audio-transcription.js";
+import { normalizeClawRouterApiBaseUrl, normalizeClawRouterRootUrl } from "./base-url.js";
 import { buildClawRouterDecisionProvider } from "./decision-provider.js";
+import { buildClawRouterImageGenerationProvider } from "./image-generation-provider.js";
+import { listClawRouterImageModelCatalog } from "./image-model-catalog.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { parseClawRouterPool, type ClawRouterPoolResult } from "./pool.js";
 import {
   buildClawRouterProviderConfig,
   CLAWROUTER_REASONING_EFFORT_LEVELS,
-  normalizeClawRouterApiBaseUrl,
   normalizeClawRouterReasoningEfforts,
-  normalizeClawRouterRootUrl,
   normalizeClawRouterResolvedModel,
   prepareClawRouterRequestModel,
 } from "./provider-catalog.js";
@@ -49,6 +55,7 @@ import {
   resolveFastModeSupport,
   resolveServiceTiers,
 } from "./provider-policy-api.js";
+import { buildClawRouterSpeechProvider } from "./speech-provider.js";
 import { fetchClawRouterUsage } from "./usage.js";
 
 const PERPLEXITY_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
@@ -152,13 +159,22 @@ function setHeaderDefault(
 }
 
 const openAiServiceTier = buildProviderStreamFamilyHooks("openai-responses-service-tier");
+const log = createSubsystemLogger("clawrouter-stream");
 
 function wrapClawRouterProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
-  const underlying = ctx.streamFn;
-  if (!underlying) {
+  const streamFn = ctx.streamFn;
+  if (!streamFn) {
     return undefined;
   }
+  // Same Claude contract as the native Anthropic provider: extended thinking needs a
+  // final user turn, and the transport strips prefill only for some Claude families.
+  const claudeStream = createAnthropicThinkingPrefillPayloadWrapper(streamFn, (stripped) => {
+    log.warn(
+      `removed ${stripped} trailing assistant prefill message${stripped === 1 ? "" : "s"} because Anthropic extended thinking requires conversations to end with a user turn`,
+    );
+  });
   return (model, context, options) => {
+    const underlying = model.api === "anthropic-messages" ? claudeStream : streamFn;
     const apiKey = options?.apiKey?.trim();
     const dispatchKey = apiKey && apiKey !== ENV_API_KEY_MARKER ? apiKey : undefined;
     const preparedModel = prepareClawRouterRequestModel(model);
@@ -406,7 +422,15 @@ export default defineSingleProviderPluginEntry({
   description: "Managed multi-provider model routing and quotas",
   manifest,
   register(api) {
+    api.registerSpeechProvider(buildClawRouterSpeechProvider);
+    api.registerMediaUnderstandingProvider(clawrouterMediaUnderstandingProvider);
     api.registerDecisionProvider(buildClawRouterDecisionProvider());
+    api.registerImageGenerationProvider(buildClawRouterImageGenerationProvider());
+    api.registerModelCatalogProvider({
+      provider: "clawrouter",
+      kinds: ["image_generation"],
+      liveCatalog: listClawRouterImageModelCatalog,
+    });
     api.registerGatewayMethod(
       "clawrouter.pool.get",
       async (request) => {

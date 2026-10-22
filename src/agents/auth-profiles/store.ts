@@ -109,10 +109,9 @@ import { loadPersistedAuthProfileStoreFromRows } from "./sqlite-read.js";
 import {
   deletePersistedAuthProfileStoreRaw,
   inspectPersistedAuthProfileStoreRaw,
-  inspectPersistedSharedAuthProfileStoreRaw,
+  readPersistedAuthProfileRows,
   readPersistedAuthProfileStoreRaw,
   readPersistedAuthProfileStateRaw,
-  readPersistedSharedAuthProfileStateRaw,
   resolveAuthProfileDatabasePath as resolveAgentAuthPath,
   resolveAuthProfileStoreOwner,
   runAuthProfileWriteTransaction,
@@ -921,22 +920,23 @@ export function createAuthProfileStoreRuntime(
       ? resolveAgentAuthPath(effectiveAgentDir)
       : resolveSharedAuthPath(env);
     const readStore = () => {
-      if (preparedRows) {
-        return loadPersistedAuthProfileStoreFromRows(preparedRows, databasePath);
+      if (preparedRows || !effectiveOptions?.database) {
+        return loadPersistedAuthProfileStoreFromRows(
+          preparedRows ??
+            readPersistedAuthProfileRows(effectiveAgentDir, effectiveAgentDir ? undefined : env),
+          databasePath,
+        );
       }
-      const sharedEnv = !effectiveAgentDir && !effectiveOptions?.database ? env : undefined;
-      const inspected = sharedEnv
-        ? inspectPersistedSharedAuthProfileStoreRaw(sharedEnv)
-        : inspectPersistedAuthProfileStoreRaw(effectiveAgentDir, effectiveOptions?.database);
+      const inspected = inspectPersistedAuthProfileStoreRaw(
+        effectiveAgentDir,
+        effectiveOptions.database,
+      );
       const store = mergePersistedAuthProfileState(
         inspected.status === "readable" ? inspected.raw : null,
-        () =>
-          sharedEnv
-            ? readPersistedSharedAuthProfileStateRaw(sharedEnv)
-            : readPersistedAuthProfileStateRaw(effectiveAgentDir, effectiveOptions?.database),
+        () => readPersistedAuthProfileStateRaw(effectiveAgentDir, effectiveOptions.database),
       );
       if (!store && inspected.status !== "missing") {
-        throw new AuthProfileStoreUnreadableError(effectiveOptions?.database?.path ?? databasePath);
+        throw new AuthProfileStoreUnreadableError(effectiveOptions.database.path);
       }
       return store;
     };

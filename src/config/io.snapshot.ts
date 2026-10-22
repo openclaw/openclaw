@@ -166,9 +166,7 @@ async function readConfigSnapshot(
     const rawHash = await deps.measure("config.snapshot.read.hash", () => hashConfigRaw(raw));
     fallbackRaw = raw;
     fallbackHash = rawHash;
-    const parsedRes = await deps.measure("config.snapshot.read.parse", () =>
-      parseConfigJson5(raw, deps.json5),
-    );
+    const parsedRes = await deps.measure("config.snapshot.read.parse", () => parseConfigJson5(raw));
     if (!parsedRes.ok) {
       return await finalizeReadConfigSnapshotInternalResult(deps, {
         snapshot: invalidSourceSnapshot(
@@ -620,7 +618,7 @@ export async function readSourceConfigBestEffortFromContext(
   // degradation records why the real config was not used.
   try {
     const raw = deps.fs.readFileSync(configPath, "utf-8");
-    const parsed = parseConfigJson5(raw, deps.json5);
+    const parsed = parseConfigJson5(raw);
     if (!parsed.ok) {
       deps.logger.warn(
         `Config (${configPath}): best-effort read ignored unparseable config: ${parsed.error}`,

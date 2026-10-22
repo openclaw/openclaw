@@ -65,7 +65,7 @@ function expectNoLoggedToken(token: string) {
 
 const browserUrl =
   "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789";
-const notReady = { ready: false, status: {}, reason: "Gateway is not running.", recoverable: true };
+const notReady = { ready: false, reason: "Gateway is not running." };
 
 function mockSnapshot(
   token: unknown = "abc",
@@ -95,9 +95,7 @@ beforeEach(() => {
   issueDeviceBootstrapToken
     .mockReset()
     .mockResolvedValue({ token: "browser-bootstrap", expiresAtMs: 123_456 });
-  ensureDashboardGatewayReady
-    .mockReset()
-    .mockResolvedValue({ ready: true, status: {}, recovered: false });
+  ensureDashboardGatewayReady.mockReset().mockResolvedValue({ ready: true, recovered: false });
   waitForControlUiDocument.mockReset().mockResolvedValue({ ready: true });
   copyToClipboard.mockResolvedValue(true);
   detectBrowserOpenSupport.mockResolvedValue({ ok: true });

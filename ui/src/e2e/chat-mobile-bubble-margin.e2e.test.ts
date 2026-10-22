@@ -83,6 +83,13 @@ suite.define(() => {
                 )
                 .toBe(true);
             }
+            if (testCase.id === "clawhub") {
+              // Compare settled catalog content, not the transient loading card.
+              await expectBrowser(page.locator(".chat-clawhub-card")).toHaveAttribute(
+                "aria-busy",
+                "false",
+              );
+            }
             const desktop = await measure();
             for (const width of [390, 430]) {
               const label = `${testCase.id} at ${width} px in ${theme}`;

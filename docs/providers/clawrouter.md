@@ -124,6 +124,72 @@ this still does not bypass the per-call key grant check.
 See [Decision models](/concepts/decision-models) for the shared API and selector
 semantics.
 
+## Text embeddings for memory
+
+ClawRouter text embeddings use OpenClaw's existing OpenAI-compatible embedding
+bridge, not a separate ClawRouter embedding adapter. Your key must grant the
+embedding model and your ClawRouter deployment must serve `POST /v1/embeddings`.
+An embedding-only model does not need to appear in the conversational model list.
+OpenClaw does not currently have an embedding model-picker catalog kind, so
+`models list` is not an embedding inventory or a grant check.
+
+Merge these settings into your existing configuration; keep your conversational
+models, auth bindings, and primary/fallback model settings. Use the API base ending
+in `/v1` (the conversational ClawRouter plugin accepts this form too):
+
+```json5
+{
+  models: {
+    providers: {
+      clawrouter: {
+        baseUrl: "https://clawrouter.openclaw.ai/v1",
+        apiKey: { source: "env", provider: "default", id: "CLAWROUTER_API_KEY" },
+      },
+    },
+  },
+  memory: {
+    search: {
+      provider: "clawrouter",
+      model: "openai/text-embedding-3-large",
+      fallback: "none",
+      remote: { batch: { enabled: false } },
+    },
+  },
+}
+```
+
+The bridge requires an explicit configured API key (including a SecretRef or an
+existing saved-profile binding in `models.providers.clawrouter.apiKey`); it does
+not automatically select a conversational auth profile. Preserve an existing
+managed binding instead of replacing it with the example SecretRef. Do not use
+an upstream OpenAI key. The bridge sends `openai/text-embedding-3-large` unchanged
+to the configured router, not `text-embedding-3-large` to OpenAI.
+
+Verify the configured route with the registered CLI:
+
+```bash
+openclaw infer embedding create --agent <id> \
+  --model clawrouter/openai/text-embedding-3-large \
+  --text "A short memory note" --json
+openclaw memory status --agent <id> --deep
+```
+
+The CLI reference includes the outer provider prefix `clawrouter/`; the memory
+`model` setting contains only the router's qualified model id `openai/...`.
+The JSON result reports the bridge provider `openai-compatible`. This is still
+ClawRouter routing; no upstream credential or alternate provider is selected.
+
+Requests use inline `/embeddings` calls, including multiple text inputs; they do
+not require ClawRouter to implement the asynchronous OpenAI `/files` or `/batches`
+APIs. Leave batch API indexing disabled. If you set
+`memory.search.outputDimensionality`, the bridge sends `dimensions` and rejects
+vectors of any other size. Omit it for the model's native size. A forbidden or
+unknown model fails with the router's HTTP error; `fallback: "none"` prevents
+cross-provider recovery. These settings do not add image or audio embeddings.
+
+See [Memory search](/concepts/memory-search) and
+[embedding dimensions](/reference/memory-config#provider-specific-config).
+
 ## Managed non-interactive deployment
 
 Keep the ClawRouter key in the workload's secret injection and store only a
@@ -267,6 +333,17 @@ are treated as text-only. When `input` is absent, OpenClaw retains its existing
 family inference and recognizes exact known native OpenAI image-capable models;
 unknown model names do not inherit image support from a new GPT generation prefix.
 
+OpenAI Responses and Anthropic Messages rows also receive the model facts that
+the bundled OpenAI and Anthropic catalogs declare for the same upstream model id
+and API: the Code Mode tier (so the default `tools.codeMode: "auto"` engages for
+the same models), whether the model accepts `temperature` (GPT-6 and GPT-5.6
+requests drop it instead of failing upstream), and image size limits (for
+example 2576 px for current Claude models). This works without enabling those
+plugins. Matching is exact; unknown, renamed, or future models inherit nothing.
+Reasoning efforts still come from the ClawRouter catalog. Requests to Claude with
+extended thinking drop a trailing assistant prefill, as the native Anthropic
+provider does.
+
 Adding a model to a supported ClawRouter provider needs no OpenClaw release.
 Successful catalog responses, including an empty granted-model list, are reused
 for one hour per endpoint and resolved credential. Ordinary model-list reads
@@ -306,6 +383,44 @@ schemas without them. A catalog provider exposing only an
 unsupported request format is intentionally not advertised as an OpenClaw
 text model. Normalize those providers to one of the supported contracts in
 ClawRouter rather than sending an incompatible payload.
+
+## Image generation
+
+The bundled plugin also registers ClawRouter with the native image runtime,
+`image_generate` tool, and `openclaw infer image generate` CLI. This is **JSON
+generation only** through `/v1/images/generations`: edits, masks, variations, and
+streaming are not supported. The ClawRouter deployment must support this route.
+Plugin readiness alone does not mean the current key can generate images.
+
+Supported wire-model IDs are `openai/gpt-image-2.5-flare`,
+`openai/gpt-image-2.5-sunburst`, and their `-2026-09-08` snapshots. These IDs are
+protocol support, not grants. Image discovery advertises a model only when the
+same key's live `/v1/catalog` contains its `image.generation` capability and an
+eligible HTTP offer for the unified `/v1/images/generations` route.
+Request-dependent affordability remains selectable; the service decides the
+actual request's grant and budget. Missing, unknown, empty, or failed catalogs
+never fall back to a static list or a previous successful image lookup.
+
+There is no implicit ClawRouter image default. Select an entitled image model
+explicitly; do not substitute the direct OpenAI provider's default. For example,
+only if your key's image catalog grants this model:
+
+```bash
+openclaw infer image generate \
+  --model clawrouter/openai/gpt-image-2.5-flare \
+  --prompt "A blue square on a white background" \
+  --size 1024x1024 --output-format png --output ./square.png
+```
+
+Generation and the immediately preceding catalog check use the same resolved
+ClawRouter credential, including a configured auth-profile binding. A missing
+or rejected bound profile does not switch to another profile or an upstream
+OpenAI key. HTTP failures preserve their status and do not retry a paid image
+request. Result URLs are fetched without provider credentials, with bounded
+downloads and private-network checks. Cancellation and the request deadline
+cover catalog lookup, generation, and result downloads. Prompt, image-count, and
+explicit size bounds come from that model’s current catalog generation limits;
+unknown limits do not authorize generation.
 
 ## Quotas and usage
 

@@ -1,4 +1,4 @@
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, For, Loading, Show } from "solid-js";
 import { resolveCloudProfileIconData } from "../../components/provider-icon-data.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import type { PopoverHandle } from "../../components/solid/popover.tsx";
@@ -156,6 +156,12 @@ export function WhereChip(props: {
     ),
   );
   const gatewayIcon = <Icon name="home" />;
+  const cloudProfilesCompletion = createMemo(
+    () => ({ promise: props.params.gateway.cloudProfilesRead }),
+    { equals: (previous, next) => previous.promise === next.promise },
+  );
+  // The owner keeps retry failures quiet and retains its accepted catalog.
+  const cloudProfilesRead = createMemo(() => cloudProfilesCompletion().promise?.then(() => null));
   const view = createMemo(() => {
     const cloudSelection = props.params.place.cloudSelection;
     const cloudPresentation = resolveCloudProfileIconData(
@@ -250,15 +256,6 @@ export function WhereChip(props: {
       props.params.submitting ||
       props.params.place.suggestedCloudProfile.pending ||
       props.params.pendingPlacement;
-    const showDeviceSkeletons =
-      props.params.place.canWrite() &&
-      props.params.gateway.cloudProfilesPending &&
-      devices.length === 0;
-    const showCloudSkeletons =
-      props.params.place.isAdmin() &&
-      props.params.place.canWrite() &&
-      props.params.gateway.cloudProfilesPending &&
-      cloudProfiles.length === 0;
     return {
       cloudSelection,
       cloudDisabledReason,
@@ -278,10 +275,25 @@ export function WhereChip(props: {
       showAuto,
       autoHelp,
       busy,
-      showDeviceSkeletons,
-      showCloudSkeletons,
     };
   });
+  function CloudHeading(heading: { pending?: boolean }) {
+    return (
+      <EnvironmentHeading
+        label={t("newSession.cloud")}
+        action="manage-cloud-workers"
+        disabled={view().busy}
+        onAction={
+          props.params.place.isAdmin() && !heading.pending && !view().showSuggestion
+            ? () => {
+                props.params.place.browser.close();
+                props.params.onNavigate("cloud-workers");
+              }
+            : undefined
+        }
+      />
+    );
+  }
   return (
     <SessionPicker
       ref={(handle) => props.ref?.(handle)}
@@ -421,7 +433,16 @@ export function WhereChip(props: {
                 return <SessionMenuItem item={item()} submitting={view().busy} />;
               }}
             </For>
-            {view().showDeviceSkeletons ? renderEnvironmentSkeletons("devices") : undefined}
+            <Loading
+              on={cloudProfilesCompletion()}
+              fallback={
+                props.params.place.canWrite() && view().devices.length === 0
+                  ? renderEnvironmentSkeletons("devices")
+                  : undefined
+              }
+            >
+              {cloudProfilesRead()}
+            </Loading>
             {view().hosted.length || view().showHostedSetup ? (
               <div class="new-session-page__environment-heading">
                 <span>{t("newSession.hosted")}</span>
@@ -468,28 +489,26 @@ export function WhereChip(props: {
               </a>
             ) : undefined}
             <Show
-              when={
-                view().cloudProfiles.length ||
-                view().showSuggestion ||
-                view().showMissingCloud ||
-                view().showCloudSkeletons
+              when={view().cloudProfiles.length}
+              fallback={
+                <Loading
+                  on={cloudProfilesCompletion()}
+                  fallback={
+                    props.params.place.isAdmin() && props.params.place.canWrite() ? (
+                      <CloudHeading pending />
+                    ) : view().showSuggestion || view().showMissingCloud ? (
+                      <CloudHeading />
+                    ) : undefined
+                  }
+                >
+                  {cloudProfilesRead()}
+                  <Show when={view().showSuggestion || view().showMissingCloud}>
+                    <CloudHeading />
+                  </Show>
+                </Loading>
               }
             >
-              <EnvironmentHeading
-                label={t("newSession.cloud")}
-                action="manage-cloud-workers"
-                disabled={view().busy}
-                onAction={
-                  props.params.place.isAdmin() &&
-                  !view().showCloudSkeletons &&
-                  !view().showSuggestion
-                    ? () => {
-                        props.params.place.browser.close();
-                        props.params.onNavigate("cloud-workers");
-                      }
-                    : undefined
-                }
-              />
+              <CloudHeading />
             </Show>
             {view().showSuggestion ? (
               <SessionMenuItem
@@ -528,7 +547,18 @@ export function WhereChip(props: {
                 },
               }}
             />
-            {view().showCloudSkeletons ? renderEnvironmentSkeletons("cloud") : undefined}
+            <Loading
+              on={cloudProfilesCompletion()}
+              fallback={
+                props.params.place.isAdmin() &&
+                props.params.place.canWrite() &&
+                view().cloudProfiles.length === 0
+                  ? renderEnvironmentSkeletons("cloud")
+                  : undefined
+              }
+            >
+              {cloudProfilesRead()}
+            </Loading>
             {view().showMissingCloud ? (
               <SessionMenuItem
                 item={{
@@ -545,19 +575,20 @@ export function WhereChip(props: {
                 submitting={view().busy}
               />
             ) : undefined}
-            {!view().showLocal &&
-            view().devices.length === 0 &&
-            view().cloudProfiles.length === 0 &&
-            view().hosted.length === 0 &&
-            !view().showHostedSetup &&
-            !view().showMissingCloud &&
-            !view().showSuggestion &&
-            !view().showDeviceSkeletons &&
-            !view().showCloudSkeletons ? (
-              <div class="new-session-page__environment-empty" role="status">
-                {t("newSession.environmentSearchEmpty")}
-              </div>
-            ) : undefined}
+            <Loading on={cloudProfilesCompletion()}>
+              {cloudProfilesRead()}
+              {!view().showLocal &&
+              view().devices.length === 0 &&
+              view().cloudProfiles.length === 0 &&
+              view().hosted.length === 0 &&
+              !view().showHostedSetup &&
+              !view().showMissingCloud &&
+              !view().showSuggestion ? (
+                <div class="new-session-page__environment-empty" role="status">
+                  {t("newSession.environmentSearchEmpty")}
+                </div>
+              ) : undefined}
+            </Loading>
           </div>
         </div>
       </div>

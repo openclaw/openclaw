@@ -47,7 +47,6 @@ export async function startGatewayEarlyRuntime(params: {
     | "getRuntimeConfig"
     | "activeWorkInspectors"
     | "isNixMode"
-    | "runWorktreeGc"
     | "runDeliveryQueueMediaGc"
     | "runManagedOutgoingMediaGc"
   >;

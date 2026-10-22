@@ -217,7 +217,7 @@ describe("imessage message actions", () => {
     );
     expect(runtimeMock.resolveIMessageMessageId).toHaveBeenCalledWith(
       "3",
-      expect.objectContaining({ requireKnownShortId: true }),
+      expect.objectContaining({ chatContext: { chatGuid } }),
     );
     expectAuthorization("poll-full-guid");
     expectCall(runtimeMock.sendPollVote, {

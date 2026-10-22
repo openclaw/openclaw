@@ -7,32 +7,19 @@ import type {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginRuntimeMock } from "../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import { registerPluginCommand } from "../../plugins/commands.js";
-import {
-  captureActivePluginRegistrySnapshot,
-  rollbackStagedPluginRegistry,
-  stageActivePluginRegistry,
-} from "../../plugins/runtime.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import type { PluginCommandContext } from "../../plugins/types.js";
 import { linkUserChannelIdentity } from "../../state/user-channel-identities.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import {
-  buildChannelInboundEventContext,
-  type BuildChannelInboundEventContextAsyncParams,
-  type BuildChannelInboundEventContextParams,
-  type BuiltChannelInboundEventContext,
-} from "../inbound-event/context.js";
-import { createHostChannelInboundEventContextBuilder } from "../inbound-event/host-context-builder.js";
 import type { ChannelPlugin } from "../plugins/types.public.js";
-import { createCommandOwnerTestGateway } from "./operator-authority.test-support.js";
-import { createHostChannelIngressRuntime } from "./runtime.js";
+import { createHostIngressFixture, withTestChannelRegistry } from "./host-ingress.test-support.js";
+import { createCommandOwnerTestRoles } from "./operator-authority.test-support.js";
 
 type TelegramNativeCommandTestDriver = {
   invoke: (input?: {
@@ -75,19 +62,14 @@ export async function withTelegramNativeOwners(
   asserted = false,
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const previous = captureActivePluginRegistrySnapshot();
-    stageActivePluginRegistry(
-      createTestRegistry([{ pluginId: "telegram", plugin: telegramPlugin, source: "test" }]),
-      null,
-      "default",
-    );
-    const fixture = await createFixture(asserted, state);
-    try {
-      await run(fixture);
-    } finally {
-      fixture.close();
-      rollbackStagedPluginRegistry(previous);
-    }
+    await withTestChannelRegistry(telegramPlugin, async () => {
+      const fixture = await createFixture(asserted, state);
+      try {
+        await run(fixture);
+      } finally {
+        fixture.close();
+      }
+    });
   });
 }
 
@@ -95,19 +77,7 @@ async function createFixture(asserted: boolean, state: OpenClawTestState) {
   const cfg: OpenClawConfig = {
     commands: { ownerAllowFrom: ["telegram:999999"] },
     channels: { telegram: { dmPolicy: "pairing", allowFrom: [] } },
-    gateway: {
-      roles: {
-        default: "member",
-        definitions: {
-          admin: { scopes: ["operator.admin"], agents: "*", sessions: { others: "write" } },
-          member: {
-            scopes: ["operator.read", "operator.write"],
-            agents: "*",
-            sessions: { others: "view" },
-          },
-        },
-      },
-    },
+    gateway: { roles: createCommandOwnerTestRoles() },
   };
   const admins = [100, 200].map((senderId) => {
     const profile = ensureProfileForEmail(`admin-${senderId}@example.test`);
@@ -116,35 +86,18 @@ async function createFixture(asserted: boolean, state: OpenClawTestState) {
     linkUserChannelIdentity(profile.id, identity);
     return { profile, identity };
   });
-  let live = true;
-  const gateway = createCommandOwnerTestGateway(cfg);
-  const host = { channelId: "telegram", isLive: () => live, resolveGatewayContext: () => gateway };
-  const ingress = createHostChannelIngressRuntime(host);
+  const { ingress, buildContext, retire } = createHostIngressFixture("telegram", cfg);
   const handler = vi.fn(async (ctx: PluginCommandContext) => {
     ctx.assertOwnerCurrent?.();
     return { text: "TELEGRAM-OWNER-OK" };
   });
-  expect(
-    registerPluginCommand("owner-probe", {
-      name: "qaowner",
-      description: "Owner authority probe",
-      requiredScopes: ["operator.admin"],
-      handler,
-    }),
-  ).toEqual({ ok: true });
-  const buildHostContext = createHostChannelInboundEventContextBuilder(
-    buildChannelInboundEventContext,
-    host,
-  );
-  function buildContext(
-    input: BuildChannelInboundEventContextAsyncParams,
-  ): Promise<BuiltChannelInboundEventContext>;
-  function buildContext(
-    input: BuildChannelInboundEventContextParams,
-  ): BuiltChannelInboundEventContext;
-  function buildContext(input: BuildChannelInboundEventContextParams) {
-    return buildHostContext(input);
-  }
+  const registered = registerPluginCommand("owner-probe", {
+    name: "qaowner",
+    description: "Owner authority probe",
+    requiredScopes: ["operator.admin"],
+    handler,
+  });
+  expect(registered).toEqual({ ok: true });
   const runtime = createPluginRuntimeMock({
     channel: {
       inbound: {
@@ -181,7 +134,7 @@ async function createFixture(asserted: boolean, state: OpenClawTestState) {
     invoke: (senderId = 100) => driver.invoke({ senderId }),
     invokeTopic: () => driver.invoke({ group: true, chatId: -10012345, threadId: 42 }),
     close: () => {
-      live = false;
+      retire();
       driver.close();
     },
   };

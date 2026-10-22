@@ -218,6 +218,14 @@ export function currentDisplayRuntimeConfig(
     null
   );
 }
+
+/** Speech's full-read fallback also accepts config-only snapshots. */
+export function currentDisplaySpeechConfig(
+  state: RuntimeConfigState,
+): Record<string, unknown> | null {
+  const snapshot = !staleConfigSnapshots.has(state) ? state.configSnapshot : null;
+  return snapshot?.runtimeConfig ?? snapshot?.config ?? state.bootstrapConfig ?? null;
+}
 export type AgentConfigEntryTarget = {
   path: ["agents", "entries", string];
   entry: Record<string, unknown>;

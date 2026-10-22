@@ -190,7 +190,6 @@ export async function runDoctorRepairSequence(params: {
     maybeRepairCodexRoutes({
       cfg: state.candidate,
       env,
-      shouldRepair: true,
       blockedProviderPlan: params.blockedCodexProviderPlan,
     }),
   );

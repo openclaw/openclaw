@@ -148,6 +148,7 @@ describe("admin-http-rpc plugin handler", () => {
   });
 
   it.each([
+    [[], "request body must be an object"],
     [{ id: "missing" }, "method must be a non-empty string"],
     ["", "request body must be JSON"],
     ["{", "request body must be valid JSON"],

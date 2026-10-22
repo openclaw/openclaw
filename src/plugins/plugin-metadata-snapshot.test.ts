@@ -353,22 +353,26 @@ describe("plugin metadata snapshot", () => {
     expect(reloaded.finalizePluginMetadataSnapshot(snapshot)).toBe(snapshot);
   });
 
-  it("reuses discovery from a derived empty plugin index", () => {
+  it.each(["derived", "persisted"])("keeps an empty %s index authoritative", (source) => {
     const index = makeIndex();
     index.plugins = [];
     const discovery: PluginDiscoveryResult = { candidates: [], diagnostics: [] };
     loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "derived",
+      source,
       snapshot: index,
       diagnostics: [],
-      discovery,
+      ...(source === "derived" ? { discovery } : {}),
     });
     loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
       plugins: [],
       diagnostics: [],
     });
 
-    const snapshot = loadPluginMetadataSnapshot({ config: {}, env: {} });
+    const snapshot = loadPluginMetadataSnapshot({
+      config: {},
+      env: {},
+      ...(source === "persisted" ? { index } : {}),
+    });
 
     expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
@@ -376,32 +380,9 @@ describe("plugin metadata snapshot", () => {
         includeDisabled: true,
       }),
     );
-    expect(snapshot.discovery).toBe(discovery);
-  });
-
-  it("keeps an empty installed index authoritative without rediscovering plugins", () => {
-    const index = makeIndex();
-    index.plugins = [];
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "persisted",
-      snapshot: index,
-      diagnostics: [],
-    });
-    loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
-      plugins: [],
-      diagnostics: [],
-    });
-
-    const snapshot = loadPluginMetadataSnapshot({ config: {}, env: {}, index });
-
+    expect(snapshot.discovery).toBe(source === "derived" ? discovery : undefined);
     expect(snapshot.plugins).toEqual([]);
     expect(snapshot.index.plugins).toEqual([]);
-    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        index: expect.objectContaining({ plugins: [] }),
-        includeDisabled: true,
-      }),
-    );
   });
 
   it("carries a derived manifest graph into snapshot construction without rebuilding it", () => {
@@ -578,14 +559,6 @@ describe("plugin metadata snapshot", () => {
       const unscoped = loadPluginMetadataSnapshot({ config, env: {}, index });
       setCurrentPluginMetadataSnapshot(unscoped, { config, env: {} });
       loadPluginManifestRegistryForInstalledIndex.mockClear();
-      loadPluginManifestRegistryForInstalledIndex.mockImplementation(
-        (params: { pluginIds?: readonly string[] }) => ({
-          ...makeManifestRegistry(),
-          plugins: makeManifestRegistry().plugins.filter(
-            (plugin) => params.pluginIds === undefined || params.pluginIds.includes(plugin.id),
-          ),
-        }),
-      );
 
       const scoped = resolvePluginMetadataSnapshot({ config, env: {}, pluginIds });
 

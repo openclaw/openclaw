@@ -9,6 +9,7 @@ import {
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { withWidgetChromeDiagnostics } from "./solo-widget-chrome.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "single widget chrome" });
 const sessionKey = "agent:main:dashboard:42d71fe0-1234-4567-8901-234567890abc";
@@ -111,6 +112,7 @@ async function showDashboardMenu(page: Page, input: "pointer" | "keyboard" = "po
   }
   await surface.waitFor({ state: "visible" });
   await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
+  await expect.poll(() => surface.getAttribute("data-phase")).toBe("open");
   return menu;
 }
 
@@ -123,133 +125,148 @@ suite.define(() => {
   it("retains page controls in split view and restores multi-widget controls without reloading", async () => {
     await suite.withPage(
       { viewport: { width: 1280, height: 900 }, serviceWorkers: "block" },
-      async ({ page }) => {
-        const { gateway, board } = await openDashboard(page, snapshot());
-        const widget = page.locator('[data-widget-name="release-status"]');
-        const frame = widget.locator("iframe");
-        const note = frame.contentFrame().getByRole("textbox", { name: "Release note" });
-        await note.fill("Keep this local draft");
-        const original = await frame.elementHandle();
-        await widget.focus();
-        expect(await widget.locator(chrome).count()).toBe(0);
+      async ({ page }) =>
+        withWidgetChromeDiagnostics(
+          page,
+          () => suite.artifactDir,
+          async () => {
+            const { gateway, board } = await openDashboard(page, snapshot());
+            const widget = page.locator('[data-widget-name="release-status"]');
+            const frame = widget.locator("iframe");
+            const note = frame.contentFrame().getByRole("textbox", { name: "Release note" });
+            await note.fill("Keep this local draft");
+            const original = await frame.elementHandle();
+            await widget.focus();
+            expect(await widget.locator(chrome).count()).toBe(0);
 
-        await showDashboardMenu(page);
-        await page.keyboard.press("Escape");
-        const menu = await showDashboardMenu(page, "keyboard");
-        const capabilities = menu.getByRole("note", { name: "Active widget capabilities" });
-        await capabilities.waitFor({ state: "visible" });
-        expect(await capabilities.textContent()).toContain("Tool: health");
-        await menu.locator('[data-value="resize:xl"]').waitFor();
-        const itemFonts = await menu.evaluate((element) =>
-          Array.from(element.querySelectorAll('[role^="menuitem"]'), (item) => {
-            const style = getComputedStyle(item);
-            // Numeric presets use tabular-nums, which prevents font shorthand serialization.
-            return [
-              style.fontFamily,
-              style.fontSize,
-              style.fontWeight,
-              style.fontStyle,
-              style.lineHeight,
-            ].join(" / ");
-          }),
-        );
-        expect([...new Set(itemFonts)]).toEqual([expect.any(String)]);
+            await showDashboardMenu(page);
+            await page.keyboard.press("Escape");
+            const menu = await showDashboardMenu(page, "keyboard");
+            const capabilities = menu.getByRole("note", { name: "Active widget capabilities" });
+            await capabilities.waitFor({ state: "visible" });
+            expect(await capabilities.textContent()).toContain("Tool: health");
+            await menu.locator('[data-value="resize:xl"]').waitFor();
+            const itemFonts = await menu.evaluate((element) =>
+              Array.from(element.querySelectorAll('[role^="menuitem"]'), (item) => {
+                const style = getComputedStyle(item);
+                // Numeric presets use tabular-nums, which prevents font shorthand serialization.
+                return [
+                  style.fontFamily,
+                  style.fontSize,
+                  style.fontWeight,
+                  style.fontStyle,
+                  style.lineHeight,
+                ].join(" / ");
+              }),
+            );
+            expect([...new Set(itemFonts)]).toEqual([expect.any(String)]);
 
-        const resized = { ...board, revision: 2 };
-        await gateway.setMethodResponse("board.update", resized);
-        await menu.locator('[data-value="resize:xl"]').click();
-        const resize = await gateway.waitForRequest("board.update");
-        expect(resize.params).toMatchObject({
-          sessionKey,
-          agentId: "main",
-          ops: [
-            {
-              kind: "widget_resize",
-              name: "release-status",
-              sizeW: 12,
-              sizeH: 8,
-              heightMode: "fixed",
-            },
-          ],
-        });
-        expect(await frame.evaluate((element, previous) => element === previous, original)).toBe(
-          true,
-        );
-        expect(await note.inputValue()).toBe("Keep this local draft");
-        await selectChatLayoutAction(page, "Restore split");
-        await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
-        await widget.focus();
-        expect(await widget.locator(chrome).count()).toBe(0);
-        const splitMenu = await showDashboardMenu(page);
-        await splitMenu.locator('[data-value="resize:xl"]').waitFor();
-        await page.keyboard.press("Escape");
+            const resized = { ...board, revision: 2 };
+            await gateway.setMethodResponse("board.update", resized);
+            await menu.locator('[data-value="resize:xl"]').click();
+            const resize = await gateway.waitForRequest("board.update");
+            expect(resize.params).toMatchObject({
+              sessionKey,
+              agentId: "main",
+              ops: [
+                {
+                  kind: "widget_resize",
+                  name: "release-status",
+                  sizeW: 12,
+                  sizeH: 8,
+                  heightMode: "fixed",
+                },
+              ],
+            });
+            // Request capture precedes completion of the board's serialized mutation.
+            await expect
+              .poll(() => page.locator(".board-announcer").textContent())
+              .toBe("Resized Release status.");
+            expect(
+              await frame.evaluate((element, previous) => element === previous, original),
+            ).toBe(true);
+            expect(await note.inputValue()).toBe("Keep this local draft");
+            // Request capture precedes completion; wait before changing pages and mutating again.
+            await page
+              .getByText("Resized Release status.", { exact: true })
+              .waitFor({ state: "attached" });
+            await selectChatLayoutAction(page, "Restore split");
+            await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
+            await widget.focus();
+            expect(await widget.locator(chrome).count()).toBe(0);
+            const splitMenu = await showDashboardMenu(page);
+            await splitMenu.locator('[data-value="resize:xl"]').waitFor();
+            await page.keyboard.press("Escape");
 
-        await selectChatLayoutAction(page, "Focus");
-        await expect.poll(() => widget.locator(chrome).count()).toBe(0);
-        const multiple = {
-          ...board,
-          revision: 3,
-          widgets: [
-            ...board.widgets,
-            {
-              ...board.widgets[0]!,
-              name: "second",
-              title: "Second widget",
-              position: 1,
-              grantState: "pending" as const,
-            },
-          ],
-        };
-        await updateBoard(gateway, multiple);
-        await expect.poll(() => page.locator(".board-widget").count()).toBe(2);
-        await widget.locator(".board-widget__menu-trigger").waitFor({ state: "attached" });
-        await showDashboardMenu(page);
-        expect(await page.locator(menuSelector).locator(widgetActions).count()).toBe(0);
-        await page.keyboard.press("Escape");
-        expect(await frame.evaluate((element, previous) => element === previous, original)).toBe(
-          true,
-        );
-        expect(await note.inputValue()).toBe("Keep this local draft");
-        await updateBoard(gateway, {
-          ...board,
-          revision: 4,
-          widgets: [
-            board.widgets[0]!,
-            {
-              ...board.widgets[0]!,
-              name: "research-widget",
-              tabId: "research",
-              title: "Research widget",
-            },
-          ],
-        });
-        await expect.poll(() => widget.locator(chrome).count()).toBe(0);
-        await page.getByRole("tab", { name: "Research", exact: true }).click();
-        await page.locator('[data-widget-name="research-widget"]').waitFor();
-        const researchMenu = await showDashboardMenu(page);
-        expect(
-          await page
-            .getByRole("tab", { name: "Research", exact: true })
-            .getAttribute("aria-selected"),
-        ).toBe("true");
-        await gateway.setMethodResponse("board.update", { ...board, revision: 5 });
-        await researchMenu.locator('[data-value="remove"]').click();
-        const remove = await gateway.waitForRequest("board.update", { after: 1 });
-        expect(remove.params).toMatchObject({
-          sessionKey,
-          ops: [{ kind: "widget_remove", name: "research-widget" }],
-        });
-        await page.locator('[data-test-id="board-empty"]').waitFor();
-        await showDashboardMenu(page);
-        expect(await page.locator(menuSelector).locator(widgetActions).count()).toBe(0);
-        await page.keyboard.press("Escape");
-        await page.getByRole("tab", { name: "Overview", exact: true }).click();
-        await frame.waitFor();
-        expect(await frame.evaluate((element, previous) => element === previous, original)).toBe(
-          true,
-        );
-        expect(await note.inputValue()).toBe("Keep this local draft");
-      },
+            await selectChatLayoutAction(page, "Focus");
+            await expect.poll(() => widget.locator(chrome).count()).toBe(0);
+            const multiple = {
+              ...board,
+              revision: 3,
+              widgets: [
+                ...board.widgets,
+                {
+                  ...board.widgets[0]!,
+                  name: "second",
+                  title: "Second widget",
+                  position: 1,
+                  grantState: "pending" as const,
+                },
+              ],
+            };
+            await updateBoard(gateway, multiple);
+            await expect.poll(() => page.locator(".board-widget").count()).toBe(2);
+            await widget.locator(".board-widget__menu-trigger").waitFor({ state: "attached" });
+            await showDashboardMenu(page);
+            expect(await page.locator(menuSelector).locator(widgetActions).count()).toBe(0);
+            await page.keyboard.press("Escape");
+            expect(
+              await frame.evaluate((element, previous) => element === previous, original),
+            ).toBe(true);
+            expect(await note.inputValue()).toBe("Keep this local draft");
+            await updateBoard(gateway, {
+              ...board,
+              revision: 4,
+              widgets: [
+                board.widgets[0]!,
+                {
+                  ...board.widgets[0]!,
+                  name: "research-widget",
+                  tabId: "research",
+                  title: "Research widget",
+                },
+              ],
+            });
+            await expect.poll(() => widget.locator(chrome).count()).toBe(0);
+            await page.getByRole("tab", { name: "Research", exact: true }).click();
+            await page
+              .locator('[data-widget-name="research-widget"].board-widget--page-chrome')
+              .waitFor();
+            const researchMenu = await showDashboardMenu(page);
+            expect(
+              await page
+                .getByRole("tab", { name: "Research", exact: true })
+                .getAttribute("aria-selected"),
+            ).toBe("true");
+            await gateway.setMethodResponse("board.update", { ...board, revision: 5 });
+            await researchMenu.locator('[data-value="remove"]').click();
+            const remove = await gateway.waitForRequest("board.update", { after: 1 });
+            expect(remove.params).toMatchObject({
+              sessionKey,
+              ops: [{ kind: "widget_remove", name: "research-widget" }],
+            });
+            await page.locator('[data-test-id="board-empty"]').waitFor();
+            await showDashboardMenu(page);
+            expect(await page.locator(menuSelector).locator(widgetActions).count()).toBe(0);
+            await page.keyboard.press("Escape");
+            await page.getByRole("tab", { name: "Overview", exact: true }).click();
+            await frame.waitFor();
+            expect(
+              await frame.evaluate((element, previous) => element === previous, original),
+            ).toBe(true);
+            expect(await note.inputValue()).toBe("Keep this local draft");
+          },
+        ),
     );
   });
 

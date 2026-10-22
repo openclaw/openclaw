@@ -34,7 +34,7 @@ import {
   type SessionListFilterParams,
   type SessionListFilteredEntries,
 } from "./session-list-filters.js";
-import { sortAndLimitSessionEntries, type SessionEntryPair } from "./session-list-order.js";
+import { sortAndLimitSessionEntries, type SessionListEntry } from "./session-list-order.js";
 import { bindSessionListRowRead } from "./session-list-read-result.js";
 import type { SessionRowGeneration } from "./session-row-identity.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
@@ -51,7 +51,6 @@ import {
 import type { SessionRowProjection } from "./session-row-projection.js";
 import { createSessionRowSelection } from "./session-row-selection.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
-import { matchesSessionArchiveFilter } from "./session-utils-core.js";
 import { getSessionDefaults } from "./session-utils-model.js";
 import type { GatewaySessionRow, SessionsListResult } from "./session-utils.types.js";
 
@@ -78,8 +77,8 @@ export function* selectSessionEntries(
     !params.opts.includeOwnerSessionCounts;
   let filteredResult: SessionListFilteredEntries;
   if (incremental) {
-    const entries: SessionEntryPair[] = [];
-    const ownerEntries: SessionEntryPair[] = [];
+    const entries: SessionListEntry[] = [];
+    const ownerEntries: SessionListEntry[] = [];
     const owners = new Map<string, SessionListFilteredEntries["ownerFacet"][number]>();
     let totalCount = 0;
     let activityExpiresAt = Infinity;
@@ -93,10 +92,7 @@ export function* selectSessionEntries(
       if (!part) {
         part = yield* filterSessionEntries({
           ...params,
-          entries: (archived) =>
-            Array.from(partition.entries.values()).filter(([, entry]) =>
-              matchesSessionArchiveFilter(entry, archived),
-            ),
+          entries: () => partition.entries.values(),
         });
         part.entries = yield* sortAndLimitSessionEntries(part.entries, pageEnd, params.opts.sortBy);
         part.ownerEntries = yield* sortAndLimitSessionEntries(
@@ -372,7 +368,7 @@ export function prepareSessionRowSelection(
   };
 }
 
-export function filterAndSortSessionEntries(params: SessionListFilterParams): SessionEntryPair[] {
+export function filterAndSortSessionEntries(params: SessionListFilterParams): SessionListEntry[] {
   return withAgentRosterFactsBatch(params.cfg, () =>
     runSynchronousWork(
       selectSessionEntries({
@@ -395,7 +391,7 @@ export async function prepareSessionSearchIdentityNames(
   });
   const scope = projection.state.scope(opts);
   const agentIds = new Set(scope.agentId ? [scope.agentId] : listAgentIds(prepared.cfg));
-  for (const [key] of prepared.entries("all")) {
+  for (const [key] of prepared.entries()) {
     const agentId = prepared.getTarget(key)?.agentId;
     if (agentId) {
       agentIds.add(agentId);
@@ -437,7 +433,7 @@ export function prepareProjectedSessionList(params: {
         projection.physicalPaths,
       )
     : undefined;
-  const presentation = prepareSessionRowPublication(projection, now)(client, projectRun);
+  const { presentation } = prepareSessionRowPublication(projection, now)(client, projectRun);
   const prepared = prepareSessionRowSelection(projection, opts, {
     key: exactKey,
     now,
@@ -604,6 +600,16 @@ export async function listProjectedSessions(params: {
           let materializedRowCount = 0;
           projection.setArchivePageSize(selection.entries.length);
           const sessions: GatewaySessionRow[] = [];
+          const rowOptions = [false, true].map((includeTranscriptFields) =>
+            [false, true].map((isSentinel) => ({
+              includeDerivedTitles: opts.includeDerivedTitles && includeTranscriptFields,
+              includeLastMessage: opts.includeLastMessage && includeTranscriptFields,
+              includeActivitySummary: opts.includeActivitySummary === true,
+              rowMode: opts.rowMode,
+              omitSentinelChildren: opts.activeOnly && isSentinel,
+              childArchiveFilter: opts.archived ?? false,
+            })),
+          );
           for (let index = 0; index < selection.entries.length; index++) {
             const [key] = selection.entries[index]!;
             const target = getTarget(key);
@@ -611,6 +617,7 @@ export async function listProjectedSessions(params: {
               continue;
             }
             const includeTranscriptFields =
+              (!opts.includeDerivedTitles && !opts.includeLastMessage) ||
               index < SESSIONS_LIST_TRANSCRIPT_LIMIT + selection.ownerCount;
             const { row: sharedRow, record } = presentation.snapshot(
               {
@@ -618,14 +625,9 @@ export async function listProjectedSessions(params: {
                 key: target.key,
                 storePath: target.storeTarget.storePath,
               },
-              {
-                includeDerivedTitles: opts.includeDerivedTitles && includeTranscriptFields,
-                includeLastMessage: opts.includeLastMessage && includeTranscriptFields,
-                includeActivitySummary: opts.includeActivitySummary === true,
-                rowMode: opts.rowMode,
-                omitSentinelChildren: opts.activeOnly && sentinel(target.key),
-                childArchiveFilter: opts.archived ?? false,
-              },
+              rowOptions[Number(includeTranscriptFields)]![
+                opts.activeOnly && sentinel(target.key) ? 1 : 0
+              ]!,
             );
             if (!sharedRow || !record) {
               continue;

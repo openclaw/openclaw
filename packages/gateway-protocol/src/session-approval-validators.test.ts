@@ -35,101 +35,45 @@ const terminal = {
   resolvedAtMs: approval.createdAtMs + 1_000,
   reason: "user",
 } as const;
+const event = (phase: string, snapshot: unknown) =>
+  Value.Check(SessionApprovalEventSchema, {
+    sessionKey: "agent:main:main",
+    sourceSessionKey: "agent:worker:subagent:child",
+    updatedAtMs: terminal.resolvedAtMs,
+    phase,
+    approval: snapshot,
+  });
 
 describe("session approval protocol validators", () => {
   it("keeps approval subscription opt-in additive and literal", () => {
     expect(validateSessionsMessagesSubscribeParams({ key: "agent:main:main" })).toBe(true);
-    expect(
-      validateSessionsMessagesSubscribeParams({
-        key: "agent:main:main",
-        includeApprovals: true,
-      }),
-    ).toBe(true);
-    expect(
-      validateSessionsMessagesSubscribeParams({
-        key: "agent:main:main",
-        includeApprovals: false,
-      }),
-    ).toBe(false);
+    const subscribe = (includeApprovals: boolean) =>
+      validateSessionsMessagesSubscribeParams({ key: "agent:main:main", includeApprovals });
+    expect(subscribe(true)).toBe(true);
+    expect(subscribe(false)).toBe(false);
   });
 
   it("requires event phase to match the approval snapshot state", () => {
-    const common = {
-      sessionKey: "agent:main:main",
-      sourceSessionKey: "agent:worker:subagent:child",
-      updatedAtMs: terminal.resolvedAtMs,
-    } as const;
-
-    expect(
-      Value.Check(SessionApprovalEventSchema, {
-        ...common,
-        phase: "pending",
-        approval: pending,
-      }),
-    ).toBe(true);
-    expect(
-      Value.Check(SessionApprovalEventSchema, {
-        ...common,
-        phase: "terminal",
-        approval: terminal,
-      }),
-    ).toBe(true);
-    expect(
-      Value.Check(SessionApprovalEventSchema, {
-        ...common,
-        phase: "pending",
-        approval: terminal,
-      }),
-    ).toBe(false);
-    expect(
-      Value.Check(SessionApprovalEventSchema, {
-        ...common,
-        phase: "terminal",
-        approval: pending,
-      }),
-    ).toBe(false);
+    expect(event("pending", pending)).toBe(true);
+    expect(event("terminal", terminal)).toBe(true);
+    expect(event("pending", terminal)).toBe(false);
+    expect(event("terminal", pending)).toBe(false);
   });
 
   it("rejects terminal reasons that contradict the terminal status", () => {
-    const common = {
-      sessionKey: "agent:main:main",
-      phase: "terminal",
-      updatedAtMs: terminal.resolvedAtMs,
-    } as const;
     const terminalCommon = {
       ...approval,
       resolvedAtMs: terminal.resolvedAtMs,
     } as const;
 
-    expect(
-      Value.Check(SessionApprovalEventSchema, {
-        ...common,
-        approval: { ...terminal, reason: "timeout" },
-      }),
-    ).toBe(false);
-    expect(
-      Value.Check(SessionApprovalEventSchema, {
-        ...common,
-        approval: {
-          ...terminalCommon,
-          status: "allowed",
-          decision: "allow-once",
-          reason: "timeout",
-        },
-      }),
-    ).toBe(false);
-    expect(
-      Value.Check(SessionApprovalEventSchema, {
-        ...common,
-        approval: { ...terminalCommon, status: "expired", reason: "user" },
-      }),
-    ).toBe(false);
-    expect(
-      Value.Check(SessionApprovalEventSchema, {
-        ...common,
-        approval: { ...terminalCommon, status: "cancelled", reason: "timeout" },
-      }),
-    ).toBe(false);
+    for (const snapshot of [
+      { ...terminal, reason: "timeout" },
+      { ...terminalCommon, status: "allowed", decision: "allow-once", reason: "timeout" },
+      { ...terminalCommon, status: "expired", reason: "user" },
+      { ...terminalCommon, status: "cancelled", reason: "timeout" },
+    ]) {
+      expect(event("terminal", snapshot)).toBe(false);
+    }
   });
 
   it("keeps pending replay authoritative", () => {
@@ -141,11 +85,8 @@ describe("session approval protocol validators", () => {
     } as const;
 
     expect(Value.Check(SessionApprovalReplaySchema, replay)).toBe(true);
-    expect(
-      Value.Check(SessionApprovalReplaySchema, {
-        ...replay,
-        approvals: [terminal],
-      }),
-    ).toBe(false);
+    expect(Value.Check(SessionApprovalReplaySchema, { ...replay, approvals: [terminal] })).toBe(
+      false,
+    );
   });
 });

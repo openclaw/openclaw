@@ -2475,12 +2475,42 @@ function qualificationReusePolicyIdentity(admission) {
       trustedWorkflow: { sha: "<candidate>" },
     }),
   );
+  // A main-dispatched admission always runs at the main tip, so a changelog
+  // descendant is admitted by a newer P. The caller proves that P descends
+  // from the selected P; coverage, baselines and source digests stay exact.
+  const publisher =
+    identity.publisher.workflowFullRef === "refs/heads/main"
+      ? { ...identity.publisher, workflowSha: "<trusted-main-descendant>" }
+      : identity.publisher;
   return {
     ...identity,
     candidateSha: "<candidate>",
     qualificationSha: "<candidate>",
+    publisher,
     inputs,
   };
+}
+
+function isTrustedMainDescendantAdmission(evidenceClient, selectedAdmission, requestedAdmission) {
+  const selected = selectedAdmission.producer;
+  const requested = requestedAdmission.producer;
+  if (selected.workflowSha === requested.workflowSha) {
+    return true;
+  }
+  if (
+    selected.workflowFullRef !== "refs/heads/main" ||
+    requested.workflowFullRef !== "refs/heads/main"
+  ) {
+    return false;
+  }
+  const comparison = evidenceClient.compareCommitLineage(
+    selected.workflowSha,
+    requested.workflowSha,
+  );
+  return (
+    String(comparison.status) === "ahead" &&
+    comparison.merge_base_commit?.sha === selected.workflowSha
+  );
 }
 
 /**
@@ -2727,7 +2757,8 @@ export async function validateReleaseRunEvidence(
       isDeepStrictEqual(
         qualificationReusePolicyIdentity(selectedAdmission),
         qualificationReusePolicyIdentity(requestedAdmission),
-      );
+      ) &&
+      isTrustedMainDescendantAdmission(evidenceClient, selectedAdmission, requestedAdmission);
     if (
       (reuseRequest !== undefined &&
         reuseRequest.targetSha !== requestedAdmission.request.candidateSha) ||

@@ -64,6 +64,7 @@ import type { ChatPaneHeaderAction } from "./components/chat-pane-header.types.t
 import type { ChatSessionSharingState } from "./components/chat-session-sharing.solid.tsx";
 import { getTranscriptState } from "./components/chat-thread-interactions.ts";
 import { createChatTranscript } from "./components/chat-transcript-controller.ts";
+import type { ComposerActivityLayout } from "./components/chat-transcript-layout-owner.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.tsx";
 import { canAutoFollowChat, handleChatScrollTakeover } from "./scroll.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
@@ -95,6 +96,14 @@ export abstract class ChatPaneStateOwner {
   transcriptAnnouncement: HTMLElement | null = null;
   composerShell: HTMLElement | null = null;
   composerFloat: HTMLElement | null = null;
+  private composerActivityLayout: ComposerActivityLayout | null = null;
+  protected readonly onActivityPillsLayout = (layout: ComposerActivityLayout, detached = false) => {
+    if (detached && this.composerActivityLayout?.strip !== layout.strip) {
+      return;
+    }
+    this.composerActivityLayout = detached ? null : layout;
+    this.transcript.syncViewportGeometry();
+  };
   private registerPaneElement(
     key:
       | "headerElement"
@@ -404,6 +413,7 @@ export abstract class ChatPaneStateOwner {
   readonly transcript = createChatTranscript(() => this.paneId, {
     geometryEventTarget: this.element,
     getComposerFloat: () => (this.usesMobileHost ? this.composerFloat : null),
+    getComposerActivityLayout: () => (this.usesMobileHost ? this.composerActivityLayout : null),
     onViewportResize: () => this.chatState.handleTranscriptResize(),
     canFollowEnd: () => this.state !== undefined && canAutoFollowChat(this.state),
     onReaderScroll: (towardEnd) => this.state && handleChatScrollTakeover(this.state, towardEnd),

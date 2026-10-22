@@ -6,6 +6,7 @@ import { resolveGatewayStartupPluginPlanFromRegistry } from "./gateway-startup-p
 import { createInstalledPluginIndexFixture } from "./gateway-startup.test-helpers.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import { loadPluginManifest } from "./manifest.js";
+import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 
 function loadBundledManifest(pluginId: string) {
   const result = loadPluginManifest(
@@ -25,18 +26,11 @@ function createManifestRegistry(
 ): PluginManifestRegistry {
   return {
     plugins: [
-      {
-        origin: "bundled",
-        channels: [],
-        providers: [],
-        cliBackends: [],
-        skills: [],
-        hooks: [],
+      createPluginManifestRecordFixture({
         rootDir: `/fixture/${plugin.id}`,
         source: `/fixture/${plugin.id}/index.ts`,
-        manifestPath: `/fixture/${plugin.id}/openclaw.plugin.json`,
         ...plugin,
-      },
+      }),
     ],
     diagnostics: [],
   };
@@ -44,119 +38,83 @@ function createManifestRegistry(
 
 const manifestRegistry = createManifestRegistry(acpxManifest);
 
+function plan(
+  activationSourceConfig: OpenClawConfig,
+  registry: PluginManifestRegistry,
+  candidates: Parameters<typeof materializePluginAutoEnableCandidates>[0]["candidates"],
+) {
+  const { config } = materializePluginAutoEnableCandidates({
+    config: activationSourceConfig,
+    candidates,
+    env: {},
+    manifestRegistry: registry,
+  });
+  return resolveGatewayStartupPluginPlanFromRegistry({
+    config,
+    activationSourceConfig,
+    env: {},
+    index: createInstalledPluginIndexFixture(registry),
+    manifestRegistry: registry,
+  }).pluginIds;
+}
+
 describe("auto-enabled plugin startup", () => {
-  it.each<{
-    name: string;
-    acp?: OpenClawConfig["acp"];
-    plugins?: OpenClawConfig["plugins"];
-    expected: string[];
-  }>([
-    { name: "no ACP key", expected: ["acpx"] },
-    { name: "explicitly enabled", acp: { enabled: true }, expected: ["acpx"] },
-    {
-      name: "documented baseline",
-      acp: {
-        enabled: true,
-        dispatch: { enabled: true },
-        backend: "acpx",
-        defaultAgent: "codex",
-        allowedAgents: ["claude", "codex"],
-        stream: { deliveryMode: "live" },
-      },
-      expected: ["acpx"],
-    },
-    { name: "explicitly disabled", acp: { enabled: false }, expected: ["acpx"] },
-    {
-      name: "ACP enabled but acpx excluded from the allowlist",
-      acp: { enabled: true },
-      plugins: { allow: ["other"] },
-      expected: [],
-    },
-    {
-      name: "ACP enabled and acpx included in the allowlist",
-      acp: { enabled: true },
-      plugins: { allow: ["other", "acpx"] },
-      expected: ["acpx"],
-    },
-    {
-      name: "ACP enabled but acpx denied",
-      acp: { enabled: true },
-      plugins: { deny: ["acpx"] },
-      expected: [],
-    },
-    {
-      name: "ACP enabled but acpx explicitly disabled",
-      acp: { enabled: true },
-      plugins: { entries: { acpx: { enabled: false } } },
-      expected: [],
-    },
-  ])("plans the expected plugin with $name", ({ acp, plugins, expected }) => {
-    const activationSourceConfig: OpenClawConfig = { ...(acp ? { acp } : {}), plugins };
-    const { config } = materializePluginAutoEnableCandidates({
-      config: activationSourceConfig,
-      candidates:
-        acp?.enabled === true
+  it.each<[string, OpenClawConfig, string[]]>([
+    ["no ACP key", {}, ["acpx"]],
+    ["explicitly enabled", { acp: { enabled: true } }, ["acpx"]],
+    ["explicitly disabled", { acp: { enabled: false } }, ["acpx"]],
+    ["acpx excluded from allowlist", { acp: { enabled: true }, plugins: { allow: ["other"] } }, []],
+    [
+      "acpx included in allowlist",
+      { acp: { enabled: true }, plugins: { allow: ["other", "acpx"] } },
+      ["acpx"],
+    ],
+    ["acpx denied", { acp: { enabled: true }, plugins: { deny: ["acpx"] } }, []],
+    [
+      "acpx explicitly disabled",
+      { acp: { enabled: true }, plugins: { entries: { acpx: { enabled: false } } } },
+      [],
+    ],
+  ])("plans the expected plugin with %s", (_name, activationSourceConfig, expected) => {
+    expect(
+      plan(
+        activationSourceConfig,
+        manifestRegistry,
+        activationSourceConfig.acp?.enabled === true
           ? [{ pluginId: "acpx", kind: "setup-auto-enable", reason: "ACP runtime configured" }]
           : [],
-      env: {},
-      manifestRegistry,
-    });
-    expect(
-      resolveGatewayStartupPluginPlanFromRegistry({
-        config,
-        activationSourceConfig,
-        env: {},
-        index: createInstalledPluginIndexFixture(manifestRegistry),
-        manifestRegistry,
-      }).pluginIds,
+      ),
     ).toEqual(expected);
   });
 
-  it.each([
-    {
-      name: "a default-disabled startup plugin",
-      plugin: { id: "optional", enabledByDefault: false, activation: { onStartup: true } },
-      activationSourceConfig: {},
-      expected: [],
-    },
-    {
-      name: "a default-enabled plugin without a startup trigger",
-      plugin: { id: "lazy", enabledByDefault: true, activation: { onStartup: false } },
-      activationSourceConfig: {},
-      expected: [],
-    },
-    {
-      name: "Codex with a configured harness",
-      plugin: codexManifest,
-      activationSourceConfig: {
+  it.each<[string, Parameters<typeof createManifestRegistry>[0], OpenClawConfig, string[]]>([
+    [
+      "a default-disabled startup plugin",
+      { id: "optional", enabledByDefault: false, activation: { onStartup: true } },
+      {},
+      [],
+    ],
+    [
+      "a default-enabled plugin without a startup trigger",
+      { id: "lazy", enabledByDefault: true, activation: { onStartup: false } },
+      {},
+      [],
+    ],
+    [
+      "Codex with a configured harness",
+      codexManifest,
+      {
         agents: { defaults: { models: { "openai/gpt-test": { agentRuntime: { id: "codex" } } } } },
       },
-      expected: ["codex"],
-    },
-    {
-      name: "an enabled Codex tool owner without a configured harness",
-      plugin: codexManifest,
-      activationSourceConfig: {},
-      expected: ["codex"],
-    },
-  ])("preserves startup eligibility for $name", ({ plugin, activationSourceConfig, expected }) => {
+      ["codex"],
+    ],
+    ["an enabled Codex tool owner without a configured harness", codexManifest, {}, ["codex"]],
+  ])("preserves startup eligibility for %s", (_name, plugin, activationSourceConfig, expected) => {
     const registry = createManifestRegistry(plugin);
-    const config = materializePluginAutoEnableCandidates({
-      config: activationSourceConfig,
-      candidates: [
-        { pluginId: plugin.id, kind: "agent-harness-runtime-configured", runtime: "codex" },
-      ],
-      env: {},
-      manifestRegistry: registry,
-    }).config;
     expect(
-      resolveGatewayStartupPluginPlanFromRegistry({
-        config,
-        activationSourceConfig,
-        env: {},
-        index: createInstalledPluginIndexFixture(registry),
-        manifestRegistry: registry,
-      }).pluginIds,
+      plan(activationSourceConfig, registry, [
+        { pluginId: plugin.id, kind: "agent-harness-runtime-configured", runtime: "codex" },
+      ]),
     ).toEqual(expected);
   });
 });

@@ -86,7 +86,8 @@ const scrollTop = (page: Locator) => page.evaluate((element) => element.scrollTo
 const scrollRemaining = (board: Locator) =>
   board.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop);
 async function expectWidgetReady(board: Locator, frame: Locator) {
-  await expect.poll(() => frame.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
+  await expect.poll(() => frame.getAttribute("inert")).toBeNull();
+  expect(await frame.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
   expect(await board.getByRole("status", { name: "Loading…", exact: true }).count()).toBe(0);
 }
 
@@ -347,14 +348,13 @@ suite.define(() => {
               )
               .toBe(true);
             await page.screenshot({ path: `${suite.artifactDir}/dashboard-loading.png` });
-            expect(await frame.evaluate((element) => getComputedStyle(element).opacity)).toBe("0");
+            expect(await frame.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
             expect(await frame.getAttribute("inert")).toBe("");
             await board.getByRole("status", { name: "Loading…", exact: true }).waitFor();
           } finally {
             releaseDocument();
           }
           await expectWidgetReady(board, frame);
-          expect(await frame.getAttribute("inert")).toBeNull();
           await page.screenshot({ path: `${suite.artifactDir}/dashboard-ready.png` });
           await expect
             .poll(() => board.evaluate((element) => element.scrollHeight > element.clientHeight))

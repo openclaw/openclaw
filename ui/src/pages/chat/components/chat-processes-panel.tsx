@@ -1,8 +1,9 @@
-import { For, Show, createMemo, createSignal, onSettled } from "solid-js";
+import { For, Show, createMemo, createSignal, createStore, onSettled } from "solid-js";
 import type { SessionProcessSummary } from "../../../../../packages/gateway-protocol/src/schema/session-processes.js";
 import { ElapsedTime } from "../../../components/elapsed-time.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
+import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -36,7 +37,9 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
       ProcessesPanelData,
       (identityChanged) => {
         if (identityChanged) {
-          setNavigation(emptyNavigation());
+          setNavigation((draft) => {
+            Object.assign(draft, emptyNavigation());
+          });
           if (list) {
             list.scrollTop = 0;
           }
@@ -44,6 +47,10 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
       },
     );
     const data = () => panel().snapshot;
+    // Full Processes keeps its failed-read empty/loading states; compact Details retains rows.
+    const rows = () => (data().readError ? [] : data().rows);
+    const visibleError = () =>
+      data().readError ? (data().loading ? null : data().readError) : data().error;
     // Only local return targets/offsets reset on denied access; output remains with the data owner.
     const emptyNavigation = (): {
       listTop: number;
@@ -58,23 +65,24 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
       openers: new Map<string, HTMLButtonElement>(),
       outputPositions: new Map<string, { left: number; top: number }>(),
     });
-    const denied = createMemo(() => Boolean(data().error && !data().rows.length));
-    const [navigation, setNavigation] = createSignal<ReturnType<typeof emptyNavigation>>(
-      (previous) => (denied() ? emptyNavigation() : (previous ?? emptyNavigation())),
-    );
+    const denied = createMemo(() => Boolean(visibleError() && !rows().length));
+    const [navigation, setNavigation] = createStore<ReturnType<typeof emptyNavigation>>((draft) => {
+      if (denied()) {
+        Object.assign(draft, emptyNavigation());
+      }
+    }, emptyNavigation());
     // Rendered selection observes denial transitions even while the detail is closed.
-    const selected = () => navigation().selected;
+    const selected = () => navigation.selected;
     const open = (row: SessionProcessSummary) => {
-      setNavigation((previous) => ({
-        ...previous,
-        listTop: list.scrollTop,
-        returnInstance: row.instanceId,
-        selected: row.instanceId,
-      }));
+      setNavigation((draft) => {
+        draft.listTop = list.scrollTop;
+        draft.returnInstance = row.instanceId;
+        draft.selected = row.instanceId;
+      });
     };
-    const selectedRow = createMemo(() => data().rows.find((row) => row.instanceId === selected()));
-    const running = createMemo(() => data().rows.filter((row) => row.status === "running"));
-    const finished = createMemo(() => data().rows.filter((row) => row.status !== "running"));
+    const selectedRow = createMemo(() => rows().find((row) => row.instanceId === selected()));
+    const running = createMemo(() => rows().filter((row) => row.status === "running"));
+    const finished = createMemo(() => rows().filter((row) => row.status !== "running"));
     const status = (row: SessionProcessSummary) =>
       t(
         data().stopping.has(row.instanceId)
@@ -115,9 +123,9 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
         </button>
       );
     const error = () =>
-      data().error && (
+      visibleError() && (
         <div class="chat-processes__error" role="alert">
-          {data().error}
+          {visibleError()}
           <button class="btn btn--sm" type="button" onClick={() => void panel().refresh()}>
             {t("common.retry")}
           </button>
@@ -134,7 +142,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
     const rowView = (row: () => SessionProcessSummary) => {
       onSettled(() => {
         const id = row().instanceId;
-        const initialOpeners = navigation().openers;
+        const initialOpeners = navigation.openers;
         return () => initialOpeners.delete(id);
       });
       return (
@@ -158,7 +166,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
                   title={row().name}
                   aria-label={row().name}
                   ref={(element) => {
-                    navigation().openers.set(row().instanceId, element);
+                    navigation.openers.set(row().instanceId, element);
                   }}
                   onClick={() => open(row())}
                 >
@@ -213,7 +221,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
                 type="button"
                 aria-label={row().name}
                 ref={(element) => {
-                  navigation().openers.set(row().instanceId, element);
+                  navigation.openers.set(row().instanceId, element);
                 }}
                 onClick={() => open(row())}
               >
@@ -251,7 +259,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
       const savePosition = () => {
         const id = selected();
         if (id && output) {
-          navigation().outputPositions.set(id, { left: output.scrollLeft, top: output.scrollTop });
+          navigation.outputPositions.set(id, { left: output.scrollLeft, top: output.scrollTop });
         }
       };
       onSettled(() => {
@@ -260,7 +268,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
       const Output = (outputProps: { row: SessionProcessSummary }) => {
         const scrollState = useScrollState();
         onSettled(() => {
-          const position = navigation().outputPositions.get(outputProps.row.instanceId);
+          const position = navigation.outputPositions.get(outputProps.row.instanceId);
           if (position) {
             output.scrollLeft = position.left;
             output.scrollTop = position.top;
@@ -321,15 +329,18 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
                 title={props.mobile ? undefined : t("chat.processesPanel.back")}
                 onClick={() => {
                   savePosition();
-                  setNavigation((previous) => ({ ...previous, selected: null }));
+                  setNavigation((draft) => {
+                    draft.selected = null;
+                  });
                   onSettled(() => {
-                    const current = navigation();
-                    list.scrollTop = current.listTop;
-                    const opener = current.returnInstance
-                      ? current.openers.get(current.returnInstance)
+                    list.scrollTop = navigation.listTop;
+                    const opener = navigation.returnInstance
+                      ? navigation.openers.get(navigation.returnInstance)
                       : undefined;
                     (opener?.isConnected ? opener : list).focus({ preventScroll: true });
-                    current.returnInstance = null;
+                    setNavigation((draft) => {
+                      draft.returnInstance = null;
+                    });
                   });
                 }}
               >
@@ -369,17 +380,22 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
           <Show
             when={selectedRow()}
             fallback={
-              <div class="chat-processes__empty" role="status">
-                {t(
-                  data().loading
-                    ? "common.loading"
-                    : data().hasResult
-                      ? data().truncated
-                        ? "chat.processesPanel.omitted"
-                        : "chat.processesPanel.expired"
-                      : "chat.processesPanel.disconnected",
-                )}
-              </div>
+              <Show
+                when={data().loading}
+                fallback={
+                  <div class="chat-processes__empty" role="status">
+                    {t(
+                      data().hasResult
+                        ? data().truncated
+                          ? "chat.processesPanel.omitted"
+                          : "chat.processesPanel.expired"
+                        : "chat.processesPanel.disconnected",
+                    )}
+                  </div>
+                }
+              >
+                <PanelLoadingSkeleton variant="terminal" label={t("common.loading")} compact />
+              </Show>
             }
           >
             {(row) => (
@@ -424,18 +440,21 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
         >
           {error()}
           <Show
-            when={data().rows.length}
+            when={rows().length}
             fallback={
               <Show
                 when={data().hasResult && !data().error && !data().loading}
                 fallback={
-                  <div class="chat-processes__empty" role="status">
-                    {data().loading
-                      ? t("common.loading")
-                      : !data().error
-                        ? t("chat.processesPanel.disconnected")
-                        : null}
-                  </div>
+                  <Show
+                    when={data().loading}
+                    fallback={
+                      <div class="chat-processes__empty" role="status">
+                        {!visibleError() ? t("chat.processesPanel.disconnected") : null}
+                      </div>
+                    }
+                  >
+                    <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
+                  </Show>
                 }
               >
                 <PanelEmptyState

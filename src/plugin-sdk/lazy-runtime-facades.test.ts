@@ -12,74 +12,39 @@ const minimaxArgs = [...usageArgs, { baseUrl: "https://usage.example/anthropic" 
 const preparationParams = {
   cfg: { agents: { defaults: { model: "synthetic/model" } } },
   agentId: "sdk-agent",
-  agentDir: "/tmp/sdk-agent",
   modelRef: "synthetic/model@profile",
-  useUtilityModel: true,
-  preferredProfile: "synthetic:preferred",
-  allowMissingApiKeyModes: ["aws-sdk"],
-  allowBundledStaticCatalogFallback: true,
-  useAsyncModelResolution: true,
-  skipAgentDiscovery: true,
-  bindAuthOwner: true,
 } satisfies Parameters<
   typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent
 >[0];
 
+function usageCase(
+  name: string,
+  provider: string,
+  args: readonly unknown[],
+  invoke: (sdk: typeof import("./provider-usage.js")) => Promise<unknown>,
+) {
+  return {
+    name,
+    ownerExport: name,
+    owner: `../infra/provider-usage.fetch.${provider}.js`,
+    args,
+    load: async () => {
+      const sdk = await import("./provider-usage.js");
+      return () => invoke(sdk);
+    },
+  };
+}
 const cases = [
-  {
-    name: "fetchClaudeUsage",
-    owner: "../infra/provider-usage.fetch.claude.js",
-    args: usageArgs,
-    load: async () => {
-      const sdk = await import("./provider-usage.js");
-      return () => sdk.fetchClaudeUsage(...usageArgs);
-    },
-  },
-  {
-    name: "fetchCodexUsage",
-    owner: "../infra/provider-usage.fetch.codex.js",
-    args: codexArgs,
-    load: async () => {
-      const sdk = await import("./provider-usage.js");
-      return () => sdk.fetchCodexUsage(...codexArgs);
-    },
-  },
-  {
-    name: "fetchDeepSeekUsage",
-    owner: "../infra/provider-usage.fetch.deepseek.js",
-    args: usageArgs,
-    load: async () => {
-      const sdk = await import("./provider-usage.js");
-      return () => sdk.fetchDeepSeekUsage(...usageArgs);
-    },
-  },
-  {
-    name: "fetchGeminiUsage",
-    owner: "../infra/provider-usage.fetch.gemini.js",
-    args: geminiArgs,
-    load: async () => {
-      const sdk = await import("./provider-usage.js");
-      return () => sdk.fetchGeminiUsage(...geminiArgs);
-    },
-  },
-  {
-    name: "fetchMinimaxUsage",
-    owner: "../infra/provider-usage.fetch.minimax.js",
-    args: minimaxArgs,
-    load: async () => {
-      const sdk = await import("./provider-usage.js");
-      return () => sdk.fetchMinimaxUsage(...minimaxArgs);
-    },
-  },
-  {
-    name: "fetchZaiUsage",
-    owner: "../infra/provider-usage.fetch.zai.js",
-    args: usageArgs,
-    load: async () => {
-      const sdk = await import("./provider-usage.js");
-      return () => sdk.fetchZaiUsage(...usageArgs);
-    },
-  },
+  usageCase("fetchClaudeUsage", "claude", usageArgs, (sdk) => sdk.fetchClaudeUsage(...usageArgs)),
+  usageCase("fetchCodexUsage", "codex", codexArgs, (sdk) => sdk.fetchCodexUsage(...codexArgs)),
+  usageCase("fetchDeepSeekUsage", "deepseek", usageArgs, (sdk) =>
+    sdk.fetchDeepSeekUsage(...usageArgs),
+  ),
+  usageCase("fetchGeminiUsage", "gemini", geminiArgs, (sdk) => sdk.fetchGeminiUsage(...geminiArgs)),
+  usageCase("fetchMinimaxUsage", "minimax", minimaxArgs, (sdk) =>
+    sdk.fetchMinimaxUsage(...minimaxArgs),
+  ),
+  usageCase("fetchZaiUsage", "zai", usageArgs, (sdk) => sdk.fetchZaiUsage(...usageArgs)),
   {
     name: "prepareSimpleCompletionModelForAgent",
     ownerExport: "acquireSimpleCompletionModelForAgent",
@@ -109,12 +74,7 @@ describe("lazy SDK execution facades", () => {
     "defers $name to its execution owner and preserves arguments and outcomes",
     async (testCase) => {
       const loaded: string[] = [];
-      const resolvedError = {
-        provider: "openai",
-        displayName: "SDK fixture",
-        windows: [],
-        error: "Owner unavailable",
-      };
+      const resolvedError = { error: "Owner unavailable" };
       const failure = new Error("Owner request failed");
       const execute = vi.fn<(...args: unknown[]) => Promise<unknown>>();
       execute.mockResolvedValueOnce(resolvedError).mockRejectedValueOnce(failure);

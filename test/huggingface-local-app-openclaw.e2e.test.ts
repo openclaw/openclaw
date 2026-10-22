@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { afterEach, expect, it } from "vitest";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
+import { listenLoopback, readRequestText } from "./helpers/gateway-integration-fixtures.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -120,16 +121,8 @@ async function startFakeOpenAiServer(params: { modelId: string }) {
     new Promise<void>((resolve) => {
       server.close(() => resolve());
     });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    await close();
-    throw new Error("fake OpenAI server did not bind a TCP port");
-  }
   return {
-    baseUrl: `http://127.0.0.1:${address.port}/v1`,
+    baseUrl: `${await listenLoopback(server)}/v1`,
     requests,
     close,
   };
@@ -153,19 +146,10 @@ async function handleFakeOpenAiRequest(
     return;
   }
 
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-  }
-  const payload: Omit<CapturedChatRequest, "path"> = JSON.parse(
-    Buffer.concat(chunks).toString("utf8"),
+  const { messages, model, stream }: Omit<CapturedChatRequest, "path"> = JSON.parse(
+    await readRequestText(req),
   );
-  requests.push({
-    path: req.url,
-    messages: payload.messages,
-    model: payload.model,
-    stream: payload.stream,
-  });
+  requests.push({ path: req.url, messages, model, stream });
 
   res.writeHead(200, {
     "cache-control": "no-cache",

@@ -140,8 +140,8 @@ it("validates tenant domains and UUIDs through the prompt boundary", async () =>
     return " contoso.onmicrosoft.com ";
   });
 
-  await expect(promptTenantId({ prompter: { text } } as never, { required: true })).resolves.toBe(
-    "contoso.onmicrosoft.com",
-  );
+  await expect(
+    promptTenantId({ prompter: { text, note: vi.fn() } } as never, { reason: "Choose a tenant." }),
+  ).resolves.toBe("contoso.onmicrosoft.com");
   expect(text).toHaveBeenCalledTimes(1);
 });

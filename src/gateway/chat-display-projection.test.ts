@@ -9,13 +9,11 @@ import {
 import { getMediaDir } from "../media/store.js";
 import { readRunFailureNotice } from "../shared/run-failure-notice.js";
 import { augmentChatHistoryWithCanvasBlocks } from "./chat-display-projection.canvas.js";
-import { createPreSessionStartAnnouncePairFilter } from "./chat-display-projection.history.js";
 import {
   projectChatDisplayMessage,
   projectChatDisplayMessages,
 } from "./chat-display-projection.js";
 import { sanitizeChatHistoryMessages } from "./chat-display-projection.sanitize.js";
-import { SessionHistorySseState } from "./session-history-state.js";
 
 const text = (value: string) => ({ type: "text", text: value });
 const phasedText = (value: string, phase: string) => ({
@@ -676,43 +674,6 @@ it("repairs only matching attempts when run identities interleave", () => {
     other["__openclaw"],
     answer["__openclaw"],
   ]);
-});
-
-it("refreshes SSE history after an appended failure recovers", async () => {
-  const state = SessionHistorySseState.fromSnapshot({
-    target: { sessionId: "session", sessionKey: "agent:main:test" },
-    snapshot: {
-      history: { items: [user], messages: [user], hasMore: false },
-      rawTranscriptSeq: 1,
-      turnBoundaryPending: false,
-      assistantErrorPending: false,
-    },
-  });
-  expect(
-    (await state.prepareInlineMessage({ message: failed, messageSeq: 2 }))()?.message,
-  ).toBeUndefined();
-  expect((await state.prepareInlineMessage({ message: answer, messageSeq: 3 }))()).toEqual({
-    shouldRefresh: true,
-  });
-});
-
-it("drops only old announce pairs across adjacent chunks", () => {
-  const announce = {
-    role: "user",
-    timestamp: 10,
-    content: "Earlier child finished",
-    provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
-  };
-  const oldReply = { role: "assistant", timestamp: 11, content: "Acknowledged" };
-  const newReply = { ...oldReply, timestamp: 30 };
-  const rows = [announce, oldReply, announce, newReply, user];
-  for (let split = 1; split < rows.length; split++) {
-    const filter = createPreSessionStartAnnouncePairFilter(20);
-    expect([...filter(rows.slice(0, split)), ...filter(rows.slice(split))]).toEqual([
-      newReply,
-      user,
-    ]);
-  }
 });
 
 const schemaError = "Invalid service_tier argument";

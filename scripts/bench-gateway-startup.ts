@@ -221,7 +221,6 @@ const GATEWAY_CASES: readonly GatewayBenchCase[] = [
       ...BASE_CONFIG,
       gateway: { ...BASE_CONFIG.gateway, auth: { mode: "token", token: TEAM_BOOT_AUTH_TOKEN } },
       cron: { enabled: false },
-      agents: { defaults: { heartbeat: { every: "0m" } } },
     },
   },
   {
@@ -233,7 +232,6 @@ const GATEWAY_CASES: readonly GatewayBenchCase[] = [
       ...BASE_CONFIG,
       plugins: { enabled: false },
       cron: { enabled: false },
-      agents: { defaults: { heartbeat: { every: "0m" } } },
     },
     env: { OPENCLAW_SKIP_CHANNELS: "1" },
   },
@@ -245,7 +243,6 @@ const GATEWAY_CASES: readonly GatewayBenchCase[] = [
       ...BASE_CONFIG,
       plugins: { enabled: false },
       cron: { enabled: false },
-      agents: { defaults: { heartbeat: { every: "0m" } } },
     },
     env: { OPENCLAW_SKIP_CHANNELS: "1" },
   },

@@ -391,3 +391,12 @@
 :root[data-theme-mode="light"] .chat-activity-pills .activity-pill {
   border-color: var(--chat-composer-light-outline, var(--border));
 }
+
+:root[data-theme-mode="light"] .chat-activity-pills .activity-pill__avatar {
+  background: hsl(var(--subagent-avatar-hue) var(--subagent-avatar-tint));
+  color: hsl(var(--subagent-avatar-hue) var(--subagent-avatar-ink));
+}
+
+:root[data-theme-mode="light"] .chat-activity-pills .activity-pill--flow .activity-pill__avatar {
+  border-color: hsl(var(--subagent-avatar-hue) var(--subagent-avatar-tint));
+}

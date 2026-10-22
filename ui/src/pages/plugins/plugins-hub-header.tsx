@@ -44,7 +44,7 @@ export function PluginsHubHeader(props: PluginsHubHeaderProps) {
             ]}
             aria-label={props.secondaryAction.label}
             title={props.secondaryAction.icon ? props.secondaryAction.label : undefined}
-            onClick={props.secondaryAction.onClick}
+            onClick={() => props.secondaryAction?.onClick()}
           >
             {props.secondaryAction.icon ?? props.secondaryAction.label}
           </button>

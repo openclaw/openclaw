@@ -282,8 +282,11 @@ describe("chat pane connection lifecycle", () => {
         );
       };
       renderReply();
-      expect(view.querySelector(".chat-message-image")?.getAttribute("src")).toBe(
-        "data:image/png;base64,cGFpcmluZy1maXh0dXJl",
+      await vi.dynamicImportSettled();
+      await waitForSolid(() =>
+        expect(view.querySelector(".chat-message-image")?.getAttribute("src")).toBe(
+          "data:image/png;base64,cGFpcmluZy1maXh0dXJl",
+        ),
       );
       const cached = {
         messages: [live],

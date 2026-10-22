@@ -4294,6 +4294,7 @@ type ProtectedPreflightConsumerParams = {
   additionalPreflightArtifactNames?: string[];
   archiveFailureStatus?: number;
   repeatDownload?: boolean;
+  sdkArtifactFiles?: string[];
 };
 
 function writePreflightConsumerTooling(toolingDir: string) {
@@ -4548,7 +4549,10 @@ async function runReleasePublishPreflightConsumerGuard(params: ProtectedPrefligh
       : [[preflightName, ["preflight-manifest.json", "dependency-evidence/proof.json"]]]),
     [
       `plugin-sdk-api-release-diff-${producerRun.id}-${producerRun.run_attempt}`,
-      ["plugin-sdk-api-release-diff.json", "plugin-sdk-api-release-evidence.json"],
+      params.sdkArtifactFiles ?? [
+        "plugin-sdk-api-release-diff.json",
+        "plugin-sdk-api-release-evidence.json",
+      ],
     ],
     ...(params.additionalPreflightArtifactNames ?? []).map((artifactName) => [
       artifactName,
@@ -6026,6 +6030,56 @@ esac
       );
     }
   });
+
+  it.each([
+    { name: "FRV", fullReleasePreflight: true },
+    { name: "historical NPM", fullReleasePreflight: false },
+  ])(
+    "accepts the readable SDK diff summary but still requires both JSON proofs ($name)",
+    async ({ fullReleasePreflight }) => {
+      const qualifiedName = `openclaw-npm-preflight-${"a".repeat(40)}`;
+      const run = (sdkArtifactFiles: string[]) =>
+        runReleasePublishPreflightConsumerGuard({
+          currentRef: "refs/heads/main",
+          currentWorkflowSha: "b".repeat(40),
+          fullReleasePreflight,
+          preflightHeadBranch: "main",
+          preflightHeadSha: "a".repeat(40),
+          preflightArtifactName: fullReleasePreflight ? qualifiedName : undefined,
+          sdkArtifactFiles,
+        });
+      const withSummary = await run([
+        "plugin-sdk-api-release-diff.json",
+        "plugin-sdk-api-release-evidence.json",
+        "plugin-sdk-api-release-diff.md",
+      ]);
+      expect(withSummary.status, withSummary.stderr).toBe(0);
+      expect(
+        readFileSync(
+          join(
+            withSummary.runnerTemp,
+            "openclaw-plugin-sdk-api-evidence",
+            "plugin-sdk-api-release-evidence.json",
+          ),
+          "utf8",
+        ),
+      ).toBe(JSON.stringify({ fixture: "plugin-sdk-api-release-evidence.json" }));
+
+      const missingEvidence = await run([
+        "plugin-sdk-api-release-diff.json",
+        "plugin-sdk-api-release-diff.md",
+      ]);
+      expect(missingEvidence.status).toBe(1);
+      expect(missingEvidence.stderr).toContain("missing plugin-sdk-api-release-evidence.json");
+
+      const unexpected = await run([
+        "plugin-sdk-api-release-diff.json",
+        "plugin-sdk-api-release-evidence.json",
+        "unexpected.json",
+      ]);
+      expect(unexpected.status).toBe(1);
+    },
+  );
 
   it("never retries permanent core download failures or switches to a historical alias", async () => {
     const result = await runReleasePublishPreflightConsumerGuard({
@@ -10130,6 +10184,24 @@ describe("package artifact reuse", () => {
     expect(result.stderr).toContain(
       `live_suite_filter '${suiteId}' does not match any runnable suite`,
     );
+  });
+
+  it("uploads native live reports and sanitized owned evidence after failures", () => {
+    const job = workflowJob(LIVE_E2E_WORKFLOW, "validate_live_provider_suites");
+    const run = workflowStep(job, "Run ${{ matrix.label }}");
+    expect(run.run).toContain('tee ".artifacts/live-shards/${{ matrix.suite_id }}.log"');
+    const upload = workflowStep(job, "Upload native live diagnostics");
+    expect(upload).toMatchObject({
+      if: "always() && steps.selection.outputs.run == 'true'",
+      uses: "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+      with: {
+        name: "native-live-${{ matrix.suite_id }}-${{ needs.validate_selected_ref.outputs.selected_sha }}-${{ github.run_id }}-${{ github.run_attempt }}",
+        "retention-days": 14,
+        "if-no-files-found": "warn",
+      },
+    });
+    expect(upload.with?.path).toContain(".artifacts/live-shards/");
+    expect(upload.with?.path).toContain(".artifacts/qa-e2e/");
   });
 
   it("shards broad native live tests instead of one serial live-all job", () => {

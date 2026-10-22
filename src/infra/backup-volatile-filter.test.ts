@@ -1,10 +1,15 @@
-// Tests volatile path filtering for backup operations.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { isTransientSqliteBackupPath, isVolatileBackupPath } from "./backup-volatile-filter.js";
 
 const stateDir = "/opt/openclaw/state";
 const plan = { stateDirs: [stateDir] };
+const expectVolatile = (relative: string, expected: boolean, root = stateDir) =>
+  expect(
+    isVolatileBackupPath(`${root}${root.includes("\\") ? "\\" : "/"}${relative}`, {
+      stateDirs: [root],
+    }),
+  ).toBe(expected);
 
 describe("isVolatileBackupPath", () => {
   it.each([
@@ -42,7 +47,6 @@ describe("isVolatileBackupPath", () => {
     [`${stateDir}/tmp/plugin-captures/instance/captures/source.js`, true],
     [`${stateDir}/tmp/plugin-captures/instance/owner.sqlite`, true],
     [`${stateDir}/tmp/plugin-captures-saved/source.js`, false],
-
     // non-volatile: session config, not jsonl/log
     [`${stateDir}/sessions/s-abc/meta.json`, false],
     [`${stateDir}/agents/main/sessions/sessions.json`, false],
@@ -63,7 +67,6 @@ describe("isVolatileBackupPath", () => {
   ])("classifies %s as volatile=%s", (p, expected) => {
     expect(isVolatileBackupPath(p, plan)).toBe(expected);
   });
-
   it("does not skip transient extensions without a state anchor", () => {
     expect(isVolatileBackupPath("/any/path/daemon.sock", { stateDirs: [] })).toBe(false);
     expect(isVolatileBackupPath("/any/path/daemon.pid", { stateDirs: [] })).toBe(false);
@@ -71,11 +74,13 @@ describe("isVolatileBackupPath", () => {
   });
 
   it("does not match paths that escape the anchor via `..`", () => {
-    // `/opt/openclaw/state/sessions/../config.jsonl` resolves to
-    // `/opt/openclaw/state/config.jsonl`, which is NOT inside sessions/.
-    expect(isVolatileBackupPath(`${stateDir}/sessions/../config.jsonl`, plan)).toBe(false);
-    expect(isVolatileBackupPath(`${stateDir}/cron/runs/../jobs.log`, plan)).toBe(false);
-    expect(isVolatileBackupPath(`${stateDir}/logs/../notes.jsonl`, plan)).toBe(false);
+    for (const relative of [
+      "sessions/../config.jsonl",
+      "cron/runs/../jobs.log",
+      "logs/../notes.jsonl",
+    ]) {
+      expectVolatile(relative, false);
+    }
   });
 
   it("treats nested delivery-queue json files under stateDir as volatile", () => {
@@ -97,28 +102,17 @@ describe("isVolatileBackupPath", () => {
 
   it("normalizes Windows-style separators before anchor checks", () => {
     const winStateDir = "C:\\openclaw\\state";
-    const winPlan = { stateDirs: [winStateDir] };
-    expect(isVolatileBackupPath(`${winStateDir}\\sessions\\s-abc\\transcript.jsonl`, winPlan)).toBe(
-      true,
-    );
-    expect(isVolatileBackupPath(`${winStateDir}\\agents\\main\\sessions\\s.jsonl`, winPlan)).toBe(
-      true,
-    );
-    expect(isVolatileBackupPath(`${winStateDir}\\cron\\runs\\2026\\job.jsonl`, winPlan)).toBe(true);
-    expect(
-      isVolatileBackupPath(`${winStateDir}\\browser\\openclaw\\user-data\\SingletonLock`, winPlan),
-    ).toBe(true);
-    expect(
-      isVolatileBackupPath(`${winStateDir}\\sandbox\\skills-workspaces\\workspace-main`, winPlan),
-    ).toBe(true);
-    expect(
-      isVolatileBackupPath(
-        `${winStateDir}\\logs\\config-audit.jsonl.migrated.raw.quarantined-copy`,
-        winPlan,
-      ),
-    ).toBe(true);
-    // `..` escape via backslashes must also be rejected.
-    expect(isVolatileBackupPath(`${winStateDir}\\sessions\\..\\config.jsonl`, winPlan)).toBe(false);
+    for (const relative of [
+      "sessions\\s-abc\\transcript.jsonl",
+      "agents\\main\\sessions\\s.jsonl",
+      "cron\\runs\\2026\\job.jsonl",
+      "browser\\openclaw\\user-data\\SingletonLock",
+      "sandbox\\skills-workspaces\\workspace-main",
+      "logs\\config-audit.jsonl.migrated.raw.quarantined-copy",
+    ]) {
+      expectVolatile(relative, true, winStateDir);
+    }
+    expectVolatile("sessions\\..\\config.jsonl", false, winStateDir);
   });
 
   it.runIf(process.platform !== "win32")(
