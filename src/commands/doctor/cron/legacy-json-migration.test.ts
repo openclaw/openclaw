@@ -107,6 +107,37 @@ it("archives uninterpretable cron definitions with actionable recovery instead o
   });
 });
 
+it("refuses legacy job definitions whose bytes are not valid UTF-8", async () => {
+  await withOpenClawTestState({ label: "cron-malformed-encoding" }, async (fixture) => {
+    const storePath = await fixture.writeText("cron/jobs.json", "");
+    const legacyJob = {
+      id: "legacy",
+      name: "Résumé",
+      enabled: true,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "keep me" },
+      state: {},
+    };
+    const source = Buffer.from(JSON.stringify({ version: 1, jobs: [legacyJob] }), "utf8");
+    // One invalid byte inside the name keeps the JSON parseable, so lossy decoding imports it.
+    source[source.indexOf(Buffer.from("é", "utf8"))] = 0xff;
+    await fs.writeFile(storePath, source);
+
+    const result = await repairLegacyCronStoreWithoutPrompt({
+      cfg: { cron: { store: storePath } } as OpenClawConfig,
+    });
+
+    expect((await loadCronStore(storePath)).jobs.map((job) => job.name)).toEqual([]);
+    expect(result.warnings.join("\n")).toContain("Legacy cron job store must be valid UTF-8");
+    expect(await fs.readFile(`${storePath}.migrated`)).toEqual(source);
+    await expect(fs.stat(storePath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+});
+
 it.each(["load", "commit"])(
   "retains cron sources after a SQLite %s failure and archives only after retry",
   async (phase) => {

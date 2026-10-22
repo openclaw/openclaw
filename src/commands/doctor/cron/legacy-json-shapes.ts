@@ -9,14 +9,15 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { coerceFiniteScheduleNumber } from "../../../cron/schedule-number.js";
 import { normalizeCronStaggerMs } from "../../../cron/stagger.js";
+import { decodeUtf8Input } from "../../../infra/utf8-input.js";
 import { parseJsonWithJson5Fallback } from "../../../utils/parse-json-compat.js";
 
-function parseCronStateFile(raw: string): {
+function parseCronStateFile(bytes: Buffer): {
   version: 1;
   jobs: Record<string, unknown>;
 } | null {
   try {
-    const parsed = parseJsonWithJson5Fallback(raw);
+    const parsed = parseJsonWithJson5Fallback(decodeUtf8Input(bytes, "Legacy cron runtime state"));
     if (!isRecord(parsed) || parsed.version !== 1 || !isRecord(parsed.jobs)) {
       return null;
     }
@@ -124,7 +125,8 @@ export function parseLegacyCronJobs(
   jobs: Array<Record<string, unknown>>;
   warnings: string[];
 } {
-  const parsed = parseJsonWithJson5Fallback(storeBytes.toString("utf8"));
+  // Definition text is imported verbatim; replacement decoding would rewrite it.
+  const parsed = parseJsonWithJson5Fallback(decodeUtf8Input(storeBytes, "Legacy cron job store"));
   const rows = Array.isArray(parsed) ? parsed : isRecord(parsed) ? parsed.jobs : undefined;
   if (!Array.isArray(rows)) {
     throw new Error("Unrecognized legacy cron job store; expected an array or a jobs array");
@@ -146,7 +148,7 @@ export function parseLegacyCronJobs(
     }
     jobs.push(row);
   }
-  const stateFile = stateBytes ? parseCronStateFile(stateBytes.toString("utf8")) : null;
+  const stateFile = stateBytes ? parseCronStateFile(stateBytes) : null;
   if (stateBytes && !stateFile) {
     warnings.push("Unrecognized legacy cron runtime state remains available in the archive.");
   }
