@@ -18,7 +18,7 @@ describe("detectReflectedContent", () => {
   });
 
   it.each([
-    "NO_REPLY +#+#+#+# <thinking>step</thinking> assistant to=final",
+    ["NO_REPLY +#+#+#+# <thinking>step</thinking> assistant to=final", "internal-separator"],
     ["some text assistant to=final rest", "assistant-role-marker"],
     ["<thinking>internal reasoning</thinking>", "thinking-tag"],
     ["<thought>secret</thought>", "thinking-tag"],
@@ -36,7 +36,7 @@ describe("detectReflectedContent", () => {
       "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-5.5` with the Codex OAuth profile, or set `OPENAI_API_KEY` for direct OpenAI API-key runs.",
       "gateway-missing-api-key",
     ],
-  ])("detects %s", (text, label) => {
+  ] satisfies [string, string][])("detects %s", (text, label) => {
     const result = detectReflectedContent(text);
     expect(result.isReflection).toBe(true);
     expect(result.matchedLabels).toContain(label);
