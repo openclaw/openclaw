@@ -1,4 +1,3 @@
-import { createHmac } from "node:crypto";
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -20,11 +19,17 @@ import {
   verifyTwilioSignature,
 } from "./twilio.js";
 import type { ResolvedSmsAccount } from "./types.js";
-import { createSmsTestAccount } from "./webhook.test-support.js";
+import {
+  createSmsTestAccount,
+  signSmsTestForm,
+  createSmsTestPhoneNumber,
+  createSmsTestMessage,
+} from "./webhook.test-support.js";
 
 const WEBHOOK = "https://gateway.example.com/webhooks/sms";
 const TO = "+15551234567";
 const FROM = "+15557654321";
+const SIGNATURE_BASE = "https://gateway.example.com/base";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 
@@ -77,20 +82,6 @@ function readUrlEncodedRequestBody(init: RequestInit | undefined): URLSearchPara
     return init.body;
   }
   throw new Error("Expected Twilio request body to be URL-encoded.");
-}
-
-function computeTestTwilioSignature(params: {
-  url: string;
-  authToken: string;
-  form: Record<string, string>;
-}): string {
-  const data =
-    params.url +
-    Object.keys(params.form)
-      .toSorted()
-      .map((key) => `${key}${params.form[key] ?? ""}`)
-      .join("");
-  return createHmac("sha1", params.authToken).update(data).digest("base64");
 }
 
 async function readTestTwilioForm(body: string): Promise<Record<string, string>> {
@@ -270,7 +261,7 @@ describe("Twilio SMS helpers", () => {
 
   it("verifies Twilio signatures over sorted form fields", () => {
     const params = { url: WEBHOOK, authToken: "secret", form: inboundForm() };
-    const signature = computeTestTwilioSignature(params);
+    const { signature } = signSmsTestForm(params.form, createAccount());
     expect(verifyTwilioSignature({ ...params, signature })).toBe(true);
     expect(verifyTwilioSignature({ ...params, signature, url: `${params.url}/other` })).toBe(false);
     expect(verifyTwilioSignature({ ...params, signature: signature.slice(0, -1) })).toBe(false);
@@ -280,7 +271,7 @@ describe("Twilio SMS helpers", () => {
     const form = await readTestTwilioForm(
       "From=%2B15551234567&To=%2B15557654321&Body=+hello+&MessageSid=SM123&WaId=",
     );
-    const signature = computeTestTwilioSignature({ url: WEBHOOK, authToken: "secret", form });
+    const { signature } = signSmsTestForm(form, createAccount());
 
     expect(form.Body).toBe(" hello ");
     expect(form.WaId).toBe("");
@@ -307,55 +298,33 @@ describe("Twilio SMS helpers", () => {
       "content-type": "application/x-www-form-urlencoded",
     });
     const body = readUrlEncodedRequestBody(init);
-    expect(body.get("From")).toBe(FROM);
-    expect(body.get("To")).toBe(TO);
-    expect(body.get("Body")).toBe("hello");
-    expect(body.get("StatusCallback")).toBe(`${WEBHOOK}#rp=4xx,ct,rt,5xx&rt=5000&rc=1`);
+    expect(Object.fromEntries(body)).toMatchObject({
+      From: FROM,
+      To: TO,
+      Body: "hello",
+      StatusCallback: `${WEBHOOK}#rp=4xx,ct,rt,5xx&rt=5000&rc=1`,
+    });
   });
 
   it("opts delivery commits into bounded connection, timeout, and 5xx retries", () => {
     const callbackUrl = resolveTwilioStatusCallbackUrl(WEBHOOK);
     const overrides = new URLSearchParams(callbackUrl.split("#")[1]);
 
-    expect(overrides.get("rp")?.split(",")).toEqual(["ct", "rt", "5xx"]);
-    expect(overrides.get("rp")?.split(",")).not.toContain("4xx");
-    expect(overrides.get("rt")).toBe("5000");
-    expect(overrides.get("rc")).toBe("1");
+    expect(Object.fromEntries(overrides)).toEqual({ rp: "ct,rt,5xx", rt: "5000", rc: "1" });
   });
 
   it.each([
     [
-      "accepts an absolute HTTP callback URL",
       "http://gateway.example.com/webhooks/sms",
       "http://gateway.example.com/webhooks/sms#rp=ct,rt,5xx&rt=5000&rc=1",
     ],
-    [
-      "preserves the query and existing retry policy",
-      `${WEBHOOK}?tenant=support#rp=4xx`,
-      `${WEBHOOK}?tenant=support#rp=4xx,ct,rt,5xx&rt=5000&rc=1`,
-    ],
-    [
-      "preserves an all-failures policy and configured retry count",
-      `${WEBHOOK}#rt=5000&rp=all&rc=3`,
-      `${WEBHOOK}#rt=5000&rp=all&rc=3`,
-    ],
-    [
-      "preserves a configured read timeout",
-      `${WEBHOOK}#rt=1200&rp=ct`,
-      `${WEBHOOK}#rt=1200&rp=ct,rt,5xx&rc=1`,
-    ],
-    [
-      "repairs an invalid read timeout",
-      `${WEBHOOK}#rt=16000`,
-      `${WEBHOOK}#rt=5000&rp=ct,rt,5xx&rc=1`,
-    ],
-    [
-      "repairs a disabled retry count without replacing other overrides",
-      `${WEBHOOK}#e=singapore&rc=0`,
-      `${WEBHOOK}#e=singapore&rc=1&rp=ct,rt,5xx&rt=5000`,
-    ],
-  ])("%s", (_name, publicWebhookUrl, expected) => {
-    expect(resolveTwilioStatusCallbackUrl(publicWebhookUrl)).toBe(expected);
+    [`${WEBHOOK}?tenant=support#rp=4xx`, `${WEBHOOK}?tenant=support#rp=4xx,ct,rt,5xx&rt=5000&rc=1`],
+    [`${WEBHOOK}#rt=5000&rp=all&rc=3`, `${WEBHOOK}#rt=5000&rp=all&rc=3`],
+    [`${WEBHOOK}#rt=1200&rp=ct`, `${WEBHOOK}#rt=1200&rp=ct,rt,5xx&rc=1`],
+    [`${WEBHOOK}#rt=16000`, `${WEBHOOK}#rt=5000&rp=ct,rt,5xx&rc=1`],
+    [`${WEBHOOK}#e=singapore&rc=0`, `${WEBHOOK}#e=singapore&rc=1&rp=ct,rt,5xx&rt=5000`],
+  ])("repairs callback overrides for %s", (input, expected) => {
+    expect(resolveTwilioStatusCallbackUrl(input)).toBe(expected);
   });
 
   it("omits the delivery callback when no public webhook URL is configured", () => {
@@ -512,13 +481,10 @@ describe("Twilio SMS helpers", () => {
     const fetchImpl = mockTwilioFetch(async () =>
       Response.json({
         incoming_phone_numbers: [
-          {
+          createSmsTestPhoneNumber({
             sid: "PN123",
-            phone_number: FROM,
-            sms_url: WEBHOOK,
-            sms_method: "POST",
             voice_url: "https://gateway.example.com/voice/webhook",
-          },
+          }),
         ],
       }),
     );
@@ -547,17 +513,12 @@ describe("Twilio SMS helpers", () => {
     const fetchImpl = mockTwilioFetch(async () =>
       Response.json({
         messages: [
-          {
-            sid: "SM123",
-            direction: "inbound",
-            status: "received",
-            to: FROM,
-            from: TO,
+          createSmsTestMessage({
             error_code: 11200,
             body: "hello",
             date_created: "Sun, 31 May 2026 10:00:00 +0000",
             date_sent: null,
-          },
+          }),
         ],
       }),
     );
@@ -767,15 +728,11 @@ describe("Twilio SMS helpers", () => {
   });
 
   it.each([
-    [
-      "/webhooks/sms?foo=bar",
-      "https://gateway.example.com/base#rp=4xx",
-      "https://gateway.example.com/base?foo=bar",
-    ],
+    ["/webhooks/sms?foo=bar", `${SIGNATURE_BASE}#rp=4xx`, `${SIGNATURE_BASE}?foo=bar`],
     [
       "/webhooks/sms?foo=request",
-      "https://gateway.example.com/base?foo=configured#rp=all",
-      "https://gateway.example.com/base?foo=configured",
+      `${SIGNATURE_BASE}?foo=configured#rp=all`,
+      `${SIGNATURE_BASE}?foo=configured`,
     ],
     [
       "/webhooks/sms",

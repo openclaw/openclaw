@@ -49,7 +49,6 @@ function createRuntime() {
     }) => Promise<void>
   >(async () => undefined);
   const buildContext = vi.fn();
-  const resolveStorePath = vi.fn();
   const saveRemoteMedia = vi.fn(async () => ({
     id: "media-1",
     path: "/tmp/mms-1.jpg",
@@ -62,7 +61,7 @@ function createRuntime() {
     routing: { resolveAgentRoute },
     inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress, run, buildContext },
     media: { saveRemoteMedia },
-    session: { resolveStorePath, recordInboundSession: vi.fn() },
+    session: { resolveStorePath: vi.fn(), recordInboundSession: vi.fn() },
     reply: { dispatchReplyWithBufferedBlockDispatcher: vi.fn() },
   } as unknown as SmsChannelRuntime;
   return {
@@ -74,7 +73,6 @@ function createRuntime() {
     shouldComputeCommandAuthorized,
     run,
     buildContext,
-    resolveStorePath,
     saveRemoteMedia,
   };
 }
@@ -117,15 +115,11 @@ async function resolveAuthorizedSmsTurn(params: {
     accountSid: "AC123",
     media: [],
   };
-  await dispatchSmsInboundEvent({
-    cfg: {},
-    account: createAccount({ dmPolicy: "allowlist", allowFrom: [SMS_FROM] }),
-    channelRuntime: mocks.runtime,
+  await dispatch(mocks.runtime, msg, {
     receivedAt: params.receivedAt ?? 1_700_000_000_123,
     ...(params.turnAdoptionLifecycle
       ? { turnAdoptionLifecycle: params.turnAdoptionLifecycle }
       : {}),
-    msg,
   });
   const runParams = expectDefined(mocks.run.mock.calls[0]?.[0], "SMS inbound run parameters");
   const turn = await runParams.adapter.resolveTurn(runParams.adapter.ingest(msg));
@@ -165,6 +159,10 @@ function dispatch(
 
 function lifecycle(): SmsTurnAdoptionLifecycle {
   return { onAdopted: vi.fn(async () => undefined), onDeferred: vi.fn(), onAbandoned: vi.fn() };
+}
+
+function expectCleanedMedia() {
+  expect(unlinkIfExistsMock).toHaveBeenCalledExactlyOnceWith("/tmp/mms-1.jpg");
 }
 
 describe("dispatchSmsInboundEvent", () => {
@@ -247,7 +245,7 @@ describe("dispatchSmsInboundEvent", () => {
         },
       }),
     );
-    expect(unlinkIfExistsMock).toHaveBeenCalledExactlyOnceWith("/tmp/mms-1.jpg");
+    expectCleanedMedia();
     const runParams = expectDefined(mocks.run.mock.calls[0]?.[0], "SMS inbound run parameters");
     await runParams.adapter.resolveTurn(runParams.adapter.ingest(msg));
     expect(mocks.buildContext).toHaveBeenCalledWith(
@@ -280,21 +278,7 @@ describe("dispatchSmsInboundEvent", () => {
 
     expect(mocks.saveRemoteMedia).toHaveBeenCalledOnce();
     expect(mocks.run).not.toHaveBeenCalled();
-    expect(unlinkIfExistsMock).toHaveBeenCalledExactlyOnceWith("/tmp/mms-1.jpg");
-  });
-
-  it("cleans materialized MMS files when inbound.run fails before adoption", async () => {
-    const mocks = createAuthorizedRuntime();
-    const runError = new Error("inbound dispatch failed");
-    mocks.run.mockRejectedValueOnce(runError);
-
-    await expect(
-      dispatch(mocks.runtime, createMmsMessage("MM-run-failure"), {
-        turnAdoptionLifecycle: lifecycle(),
-      }),
-    ).rejects.toBe(runError);
-
-    expect(unlinkIfExistsMock).toHaveBeenCalledExactlyOnceWith("/tmp/mms-1.jpg");
+    expectCleanedMedia();
   });
 
   it("retains deferred MMS files until the turn is abandoned", async () => {
@@ -323,7 +307,7 @@ describe("dispatchSmsInboundEvent", () => {
     expect(unlinkIfExistsMock).not.toHaveBeenCalled();
     await wrappedLifecycle?.onAbandoned?.();
     await vi.waitFor(() => expect(originalLifecycle.onAbandoned).toHaveBeenCalledOnce());
-    expect(unlinkIfExistsMock).toHaveBeenCalledExactlyOnceWith("/tmp/mms-1.jpg");
+    expectCleanedMedia();
     expect(events).toEqual(["cleanup", "abandon"]);
   });
 
@@ -342,28 +326,34 @@ describe("dispatchSmsInboundEvent", () => {
     expect(unlinkIfExistsMock).not.toHaveBeenCalled();
   });
 
-  it("cleans deferred MMS files when turn adoption fails", async () => {
-    const mocks = createAuthorizedRuntime();
-    const adoptionError = new Error("durable adoption failed");
-    const originalLifecycle: SmsTurnAdoptionLifecycle = {
-      ...lifecycle(),
-      onAdopted: vi.fn(async () => {
-        throw adoptionError;
-      }),
-    };
-    mocks.run.mockImplementationOnce(async (runParams) => {
-      runParams.turnAdoptionLifecycle?.onDeferred?.();
-      await runParams.turnAdoptionLifecycle?.onAdopted();
-    });
+  it.each(["before adoption", "after deferral"])(
+    "cleans MMS files on failure %s",
+    async (phase) => {
+      const mocks = createAuthorizedRuntime();
+      const adoptionError = new Error("durable adoption failed");
+      const originalLifecycle: SmsTurnAdoptionLifecycle = {
+        ...lifecycle(),
+        onAdopted: vi.fn(async () => {
+          throw adoptionError;
+        }),
+      };
+      mocks.run.mockImplementationOnce(async (runParams) => {
+        if (phase === "before adoption") {
+          throw adoptionError;
+        }
+        runParams.turnAdoptionLifecycle?.onDeferred?.();
+        await runParams.turnAdoptionLifecycle?.onAdopted();
+      });
 
-    await expect(
-      dispatch(mocks.runtime, createMmsMessage("MM-adoption-failed"), {
-        turnAdoptionLifecycle: originalLifecycle,
-      }),
-    ).rejects.toBe(adoptionError);
+      await expect(
+        dispatch(mocks.runtime, createMmsMessage("MM-adoption-failed"), {
+          turnAdoptionLifecycle: originalLifecycle,
+        }),
+      ).rejects.toBe(adoptionError);
 
-    expect(unlinkIfExistsMock).toHaveBeenCalledExactlyOnceWith("/tmp/mms-1.jpg");
-  });
+      expectCleanedMedia();
+    },
+  );
 
   it.each<[string, string, boolean]>([
     ["/status", "SM-command", true],

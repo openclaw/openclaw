@@ -199,49 +199,35 @@ describe("SMS delivery observations", () => {
     },
   );
 
-  it("allows a scheduled message to be canceled before queueing", async () => {
+  it.each([
+    ["scheduled", "canceled", 1, 2, { status: "canceled" }],
+    [
+      "delivered",
+      "sent",
+      200,
+      300,
+      {
+        status: "delivered",
+        firstObservedAt: 200,
+        lastObservedAt: 300,
+        observations: [{ status: "delivered" }, { status: "sent" }],
+      },
+    ],
+  ] as const)("reduces API transition %s → %s", async (first, next, start, end, expected) => {
     const store = createStore();
-    await recordApiStatus(store, "scheduled", 1);
-    const canceled = await recordApiStatus(store, "canceled", 2);
-
-    expect(canceled.status).toBe("canceled");
+    await recordApiStatus(store, first, start);
+    expect(await recordApiStatus(store, next, end)).toMatchObject(expected);
   });
 
-  it("does not regress a terminal state when an older transition arrives late", async () => {
+  it.each([
+    ["failed", { status: "failed", errorCode: "30006", lastObservedAt: 200 }],
+    ["delivered", { status: "conflicted", conflict: true, errorCode: "30006" }],
+  ] as const)("reduces a failed callback after %s", async (first, expected) => {
     const store = createStore();
-    await recordApiStatus(store, "delivered", 200);
-    const lateSent = await recordApiStatus(store, "sent", 300);
-
-    expect(lateSent).toMatchObject({
-      status: "delivered",
-      firstObservedAt: 200,
-      lastObservedAt: 300,
-    });
-    expect(lateSent.observations.map((entry) => entry.status)).toEqual(["delivered", "sent"]);
-  });
-
-  it("fills a missing error from a later observation of the same state", async () => {
-    const store = createStore();
-    await recordCallback(store, statusForm("failed"), 100);
-    const enriched = await recordCallback(store, statusForm("failed", { ErrorCode: "30006" }), 200);
-
-    expect(enriched.record).toMatchObject({
-      status: "failed",
-      errorCode: "30006",
-      lastObservedAt: 200,
-    });
-  });
-
-  it("records conflicting terminal observations without choosing a false winner", async () => {
-    const store = createStore();
-    await recordCallback(store, statusForm("delivered"), 100);
-    const failed = await recordCallback(store, statusForm("failed", { ErrorCode: "30006" }), 200);
-
-    expect(failed.record).toMatchObject({
-      status: "conflicted",
-      conflict: true,
-      errorCode: "30006",
-    });
+    await recordCallback(store, statusForm(first), 100);
+    expect(
+      (await recordCallback(store, statusForm("failed", { ErrorCode: "30006" }), 200)).record,
+    ).toMatchObject(expected);
   });
 
   it("deduplicates semantic retries despite unrelated form differences", async () => {
@@ -321,12 +307,12 @@ describe("SMS delivery observations", () => {
     const store = createStore();
     await recordCallback(store, statusForm("delivered"));
 
-    await expect(listRecentSmsDeliveryRecords(createAccount("support"), 5, store)).resolves.toEqual(
-      [],
-    );
-    await expect(
-      listRecentSmsDeliveryRecords(createAccount("default", { accountSid: "AC-other" }), 5, store),
-    ).resolves.toEqual([]);
+    for (const account of [
+      createAccount("support"),
+      createAccount("default", { accountSid: "AC-other" }),
+    ]) {
+      await expect(listRecentSmsDeliveryRecords(account, 5, store)).resolves.toEqual([]);
+    }
     await expect(
       listRecentSmsDeliveryRecords(
         createAccount("default", { authToken: "rotated-secret" }),

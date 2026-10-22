@@ -2,7 +2,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SmsDeliveryRecord } from "./delivery-observations.js";
 import { formatSmsProbeLines, probeSmsAccount } from "./status.js";
 import type { ResolvedSmsAccount } from "./types.js";
-import { createSmsTestAccount } from "./webhook.test-support.js";
+import {
+  createSmsTestAccount,
+  createSmsTestPhoneNumber,
+  createSmsTestMessage,
+  SMS_TEST_WEBHOOK,
+} from "./webhook.test-support.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
@@ -18,16 +23,7 @@ function mockTwilioFetch(fetchImpl: typeof fetch) {
 }
 
 function createWebhookResponse(overrides: Record<string, string> = {}) {
-  return {
-    incoming_phone_numbers: [
-      {
-        phone_number: "+15557654321",
-        sms_url: "https://gateway.example.com/webhooks/sms",
-        sms_method: "POST",
-        ...overrides,
-      },
-    ],
-  };
+  return { incoming_phone_numbers: [createSmsTestPhoneNumber(overrides)] };
 }
 
 function createFetch(responses: Array<unknown>): typeof fetch {
@@ -73,18 +69,7 @@ function expectUnavailable(result: Awaited<ReturnType<typeof probe>>, error: str
 }
 
 function inbound(sid: string, extra: Record<string, unknown> = {}) {
-  return {
-    messages: [
-      {
-        sid,
-        direction: "inbound",
-        status: "received",
-        to: "+15557654321",
-        from: "+15551234567",
-        ...extra,
-      },
-    ],
-  };
+  return { messages: [createSmsTestMessage({ sid, ...extra })] };
 }
 
 function probeService(use_inbound_webhook_on_number: boolean) {
@@ -92,7 +77,7 @@ function probeService(use_inbound_webhook_on_number: boolean) {
     [
       {
         sid: "MG123",
-        inbound_request_url: "https://gateway.example.com/webhooks/sms",
+        inbound_request_url: SMS_TEST_WEBHOOK,
         inbound_method: "POST",
         use_inbound_webhook_on_number,
       },
@@ -119,7 +104,7 @@ describe("SMS status probe", () => {
       ok: true,
       webhook: {
         status: "matches",
-        configuredUrl: "https://gateway.example.com/webhooks/sms",
+        configuredUrl: SMS_TEST_WEBHOOK,
         voiceUrl: "https://gateway.example.com/voice/webhook",
       },
       recentInbound: { sid: "SM123", status: "received" },
@@ -170,7 +155,7 @@ describe("SMS status probe", () => {
       webhook: {
         status: "messaging-service-matches",
         serviceSid: "MG123",
-        configuredUrl: "https://gateway.example.com/webhooks/sms",
+        configuredUrl: SMS_TEST_WEBHOOK,
       },
     });
   });
@@ -189,7 +174,7 @@ describe("SMS status probe", () => {
       formatSmsProbeLines({
         ok: false,
         error: "Recent inbound SMS SM11200 has Twilio error 11200.",
-        webhook: { status: "matches", configuredUrl: "https://gateway.example.com/webhooks/sms" },
+        webhook: { status: "matches", configuredUrl: SMS_TEST_WEBHOOK },
         recentInbound: { sid: "SM11200", status: "received", errorCode: "11200" },
         recentOutbound: { messageSid: "SM-outbound", status: "undelivered", errorCode: "30005" },
         hints: ["Check the public route."],
@@ -244,14 +229,24 @@ describe("SMS status probe", () => {
     });
   });
 
-  it.each(["webhook", "history"] as const)(
-    "preserves sibling and durable facts when the %s lookup fails",
-    async (lookup) => {
+  it.each([
+    ["webhook", false],
+    ["history", false],
+    ["webhook", true],
+    ["history", true],
+  ] as const)(
+    "preserves sibling and durable facts when %s fails (timeout: %s)",
+    async (lookup, timeout) => {
       const webhookFailed = lookup === "webhook";
-      const error = webhookFailed ? "number lookup unavailable" : "message history unavailable";
+      const failure = webhookFailed ? "number lookup unavailable" : "message history unavailable";
+      const error = timeout
+        ? `Twilio ${webhookFailed ? "webhook" : "message history"} check failed: timed out after 900ms`
+        : failure;
       const fetchImpl = vi.fn<typeof fetch>(async (input) => {
         if (fetchInputUrl(input).includes("IncomingPhoneNumbers.json") === webhookFailed) {
-          throw new Error(error);
+          throw timeout
+            ? Object.assign(new Error("request timed out"), { name: "TimeoutError" })
+            : new Error(failure);
         }
         return Response.json(webhookFailed ? inbound("SM-inbound") : createWebhookResponse());
       });
@@ -261,37 +256,14 @@ describe("SMS status probe", () => {
       const result = await probeDelivery(outbound, fetchImpl);
       expect(result).toMatchObject({
         ok: false,
-        error: expect.stringContaining(error),
-        webhook: { status: webhookFailed ? "unavailable" : "matches" },
-        recentOutbound: { messageSid: outbound.messageSid, status: outbound.status },
+        error: timeout ? error : expect.stringContaining(error),
+        webhook: {
+          status: webhookFailed ? "unavailable" : "matches",
+          ...(timeout && webhookFailed ? { reason: error } : {}),
+        },
+        recentOutbound: outbound,
         ...(webhookFailed ? { recentInbound: { sid: "SM-inbound", status: "received" } } : {}),
       });
-    },
-  );
-
-  it.each(["webhook", "history"] as const)(
-    "preserves sibling and durable delivery facts when the %s request times out",
-    async (lookup) => {
-      const webhookTimedOut = lookup === "webhook";
-      const fetchImpl = vi.fn<typeof fetch>(async (input) => {
-        if (fetchInputUrl(input).includes("IncomingPhoneNumbers.json") === webhookTimedOut) {
-          throw Object.assign(new Error("request timed out"), { name: "TimeoutError" });
-        }
-        return Response.json(webhookTimedOut ? inbound("SM-inbound") : createWebhookResponse());
-      });
-      const outbound = { messageSid: "SM-timeout", status: "delivered", lastObservedAt: 2 };
-      const result = await probeDelivery(outbound, fetchImpl);
-      const error = `Twilio ${webhookTimedOut ? "webhook" : "message history"} check failed: timed out after 900ms`;
-
-      expect(result).toMatchObject({
-        ok: false,
-        error,
-        webhook: webhookTimedOut ? { status: "unavailable", reason: error } : { status: "matches" },
-        recentOutbound: outbound,
-      });
-      if (webhookTimedOut) {
-        expect(result.recentInbound).toMatchObject({ sid: "SM-inbound", status: "received" });
-      }
     },
   );
 });

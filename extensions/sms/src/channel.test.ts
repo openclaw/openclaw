@@ -8,10 +8,13 @@ import { createPartialSmsSend } from "./partial-send.test-support.js";
 import type { probeSmsAccount as probeSmsAccountType } from "./status.js";
 import type { sendSmsViaTwilio as sendSmsViaTwilioType } from "./twilio.js";
 import type { SmsChannelConfig } from "./types.js";
-import { createSmsTestAccount } from "./webhook.test-support.js";
+import { createSmsTestAccount, SMS_TEST_WEBHOOK } from "./webhook.test-support.js";
 
 const TO = "+15551234567";
 const FROM = "+15557654321";
+const outbound = smsPlugin.outbound;
+const messageSend = smsPlugin.message?.send;
+const lifecycle = messageSend?.lifecycle;
 
 const sendSmsViaTwilio = vi.hoisted(() => vi.fn<typeof sendSmsViaTwilioType>());
 const hostedMediaMocks = vi.hoisted(() => {
@@ -89,7 +92,7 @@ function mediaContext({
   onPlatformSendDispatch?: () => Promise<void>;
 } = {}) {
   return {
-    cfg: createConfig({ publicWebhookUrl: "https://gateway.example.com/webhooks/sms", ...config }),
+    cfg: createConfig({ publicWebhookUrl: SMS_TEST_WEBHOOK, ...config }),
     to: TO,
     text: "caption",
     kind: "media" as const,
@@ -141,23 +144,18 @@ describe("smsPlugin outbound", () => {
       "channels.sms.authToken",
     ]);
     expect(smsPlugin.messaging?.targetPrefixes).toEqual(["twilio-sms"]);
-    expect(smsPlugin.outbound?.chunker?.("alpha beta", 6)).toEqual(["alpha", "beta"]);
+    expect(outbound?.chunker?.("alpha beta", 6)).toEqual(["alpha", "beta"]);
     expect(
-      smsPlugin.outbound?.resolveEffectiveTextChunkLimit?.({
+      outbound?.resolveEffectiveTextChunkLimit?.({
         cfg: createConfig({ textChunkLimit: 42 }),
       }),
     ).toBe(42);
     expect(
-      smsPlugin.outbound?.resolveEffectiveTextChunkLimit?.({
+      outbound?.resolveEffectiveTextChunkLimit?.({
         cfg: createConfig({
           defaultAccount: "support",
           accounts: {
-            support: {
-              accountSid: "AC-support",
-              authToken: "support-token",
-              fromNumber: "+15551112222",
-              textChunkLimit: 700,
-            },
+            support: { textChunkLimit: 700 },
           },
         }),
       }),
@@ -165,7 +163,7 @@ describe("smsPlugin outbound", () => {
   });
 
   it("uses defaultTo for targetless sends and preserves Twilio receipt metadata", async () => {
-    const result = await smsPlugin.outbound?.sendText?.({
+    const result = await outbound?.sendText?.({
       cfg: createConfig({ defaultTo: TO }),
       to: "",
       text: "hello",
@@ -184,9 +182,10 @@ describe("smsPlugin outbound", () => {
   });
 
   it("resolves the configured default SMS target for outbound delivery", () => {
-    expect(
-      smsPlugin.outbound?.resolveTarget?.({ cfg: createConfig({ defaultTo: TO }), to: "" }),
-    ).toEqual({ ok: true, to: TO });
+    expect(outbound?.resolveTarget?.({ cfg: createConfig({ defaultTo: TO }), to: "" })).toEqual({
+      ok: true,
+      to: TO,
+    });
   });
 
   it("hosts and sends outbound media as MMS with an ordered multipart receipt", async () => {
@@ -199,8 +198,8 @@ describe("smsPlugin outbound", () => {
       mediaLocalRoots: ["/tmp"],
       mediaReadFile: async () => Buffer.from("photo"),
     });
-    await smsPlugin.message?.send?.lifecycle?.beforeSendAttempt?.(ctx);
-    const result = await smsPlugin.message?.send?.media?.(ctx);
+    await lifecycle?.beforeSendAttempt?.(ctx);
+    const result = await messageSend?.media?.(ctx);
 
     expect(hostedMediaMocks.prepare).toHaveBeenCalledWith(
       expect.objectContaining({ mediaUrl: "/tmp/photo.jpg", mediaLocalRoots: ["/tmp"] }),
@@ -214,8 +213,10 @@ describe("smsPlugin outbound", () => {
       expect.objectContaining({ to: TO, text: " beta" }),
     );
     expect(sendSmsViaTwilio.mock.calls[1]?.[0]).not.toHaveProperty("mediaUrls");
-    expect(result?.messageId).toBe("MM-first");
-    expect(result?.receipt.platformMessageIds).toEqual(["MM-first", "SM-second"]);
+    expect(result).toMatchObject({
+      messageId: "MM-first",
+      receipt: { platformMessageIds: ["MM-first", "SM-second"] },
+    });
     expect(result?.receipt.parts.map((part) => part.kind)).toEqual(["media", "text"]);
     expect(recordInitialSmsDeliveryResult).toHaveBeenCalledTimes(2);
     for (const [index, sid] of ["MM-first", "SM-second"].entries()) {
@@ -244,13 +245,13 @@ describe("smsPlugin outbound", () => {
       },
     });
 
-    await smsPlugin.message?.send?.lifecycle?.beforeSendAttempt?.(ctx);
+    await lifecycle?.beforeSendAttempt?.(ctx);
     events.push("platform-start");
-    await smsPlugin.message?.send?.media?.(ctx);
+    await messageSend?.media?.(ctx);
 
     expect(hostedMediaMocks.prepare).toHaveBeenCalledOnce();
     expect(events).toEqual(["prepare", "platform-start", "dispatch", "send"]);
-    await expect(smsPlugin.message?.send?.media?.(ctx)).rejects.toThrow(
+    await expect(messageSend?.media?.(ctx)).rejects.toThrow(
       "SMS message lifecycle did not prepare the MMS attachment.",
     );
   });
@@ -274,9 +275,8 @@ describe("smsPlugin outbound", () => {
           }
         },
       });
-      const lifecycle = smsPlugin.message?.send?.lifecycle;
       const attemptToken = await lifecycle?.beforeSendAttempt?.(ctx);
-      const observed = await smsPlugin.message?.send?.media?.(ctx).then(
+      const observed = await messageSend?.media?.(ctx).then(
         () => undefined,
         (error: unknown) => error,
       );
@@ -289,7 +289,6 @@ describe("smsPlugin outbound", () => {
 
   it("discards staged MMS media when core fails before entering the adapter", async () => {
     const ctx = mediaContext();
-    const lifecycle = smsPlugin.message?.send?.lifecycle;
     const attemptToken = await lifecycle?.beforeSendAttempt?.(ctx);
 
     await lifecycle?.afterSendFailure?.({
@@ -326,9 +325,8 @@ describe("smsPlugin outbound", () => {
         text: partial ? "alpha beta" : "caption",
         onPlatformSendDispatch: async () => undefined,
       });
-      const lifecycle = smsPlugin.message?.send?.lifecycle;
       const attemptToken = await lifecycle?.beforeSendAttempt?.(ctx);
-      const observed = await smsPlugin.message?.send?.media?.(ctx).catch((error: unknown) => error);
+      const observed = await messageSend?.media?.(ctx).catch((error: unknown) => error);
 
       if (partial) {
         expect(isChannelPartialDeliveryError(observed)).toBe(true);
@@ -345,7 +343,7 @@ describe("smsPlugin outbound", () => {
     const fixture = createPartialSmsSend(sendSmsViaTwilio, "SM-first", "text");
     const { onPlatformSendDispatch, onDeliveryResult } = fixture;
 
-    const observed = await smsPlugin.message?.send
+    const observed = await messageSend
       ?.text?.({
         cfg: createConfig({ textChunkLimit: 5 }),
         to: TO,

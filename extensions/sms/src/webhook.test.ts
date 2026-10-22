@@ -1,4 +1,4 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { IncomingMessage } from "node:http";
 import { Socket } from "node:net";
 import { Readable } from "node:stream";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -9,6 +9,8 @@ import { createSmsWebhookHandler, type SmsWebhookHandlerParams } from "./webhook
 import {
   advanceSmsTestAccountId,
   createSmsTestAccount,
+  createSmsTestRequest,
+  createSmsTestResponse as createResponse,
   createSmsTestDeliveryRecorder,
   createSmsTestForm,
   signSmsTestForm as signForm,
@@ -58,22 +60,6 @@ function createLoopbackSocket(remoteAddress = "127.0.0.1"): Socket {
   return socket;
 }
 
-function createRequest(
-  body: string,
-  signature: string,
-  options?: { headers?: Record<string, string>; remoteAddress?: string },
-): IncomingMessage {
-  const req = Readable.from([body]) as IncomingMessage;
-  req.method = "POST";
-  req.headers = {
-    "content-length": String(Buffer.byteLength(body)),
-    "x-twilio-signature": signature,
-    ...options?.headers,
-  };
-  Object.defineProperty(req, "socket", { value: createLoopbackSocket(options?.remoteAddress) });
-  return req;
-}
-
 function configureRequest(req: IncomingMessage): IncomingMessage {
   req.method = "POST";
   req.headers = {};
@@ -97,30 +83,15 @@ function createPendingRequest(): IncomingMessage {
   return configureRequest(new Readable({ read() {} }) as IncomingMessage);
 }
 
-type TestResponse = ServerResponse & {
-  setHeaderMock: ReturnType<typeof vi.fn>;
-  endMock: ReturnType<typeof vi.fn>;
-};
-
-function createResponse(): TestResponse {
-  const setHeaderMock = vi.fn();
-  const endMock = vi.fn();
-  return {
-    statusCode: 200,
-    setHeader: setHeaderMock,
-    setHeaderMock,
-    end: endMock,
-    endMock,
-  } as unknown as TestResponse;
-}
+type TestResponse = ReturnType<typeof createResponse>;
 
 async function dispatch(
   handler: ReturnType<typeof createHandler>,
   payload: { body: string; signature: string },
-  options?: Parameters<typeof createRequest>[2],
+  options?: Parameters<typeof createSmsTestRequest>[1],
 ) {
   const res = createResponse();
-  await handler(createRequest(payload.body, payload.signature, options), res);
+  await handler(createSmsTestRequest(payload, options), res);
   return res;
 }
 
@@ -128,7 +99,7 @@ async function expectStatus(
   handler: ReturnType<typeof createHandler>,
   payload: { body: string; signature: string },
   statusCode = 200,
-  options?: Parameters<typeof createRequest>[2],
+  options?: Parameters<typeof createSmsTestRequest>[1],
 ) {
   const res = await dispatch(handler, payload, options);
   expect(res.statusCode).toBe(statusCode);
@@ -271,7 +242,7 @@ describe("createSmsWebhookHandler", () => {
     const handler = createHandler({ account, delivery });
     const res = createResponse();
 
-    const pending = handler(createRequest(payload.body, payload.signature), res);
+    const pending = handler(createSmsTestRequest(payload), res);
     await vi.waitFor(() => expect(delivery.record).toHaveBeenCalledOnce());
     expect(res.endMock).not.toHaveBeenCalled();
     expect(res.setHeaderMock).not.toHaveBeenCalledWith("x-openclaw-delivery-accepted", "durable");
@@ -314,7 +285,7 @@ describe("createSmsWebhookHandler", () => {
           : createSignedSmsPayload(createMessageSid(2));
       const handler = createHandler(kind === "delivery" ? { delivery } : {});
       const res = createResponse();
-      await expect(handler(createRequest(payload.body, payload.signature), res)).rejects.toThrow(
+      await expect(handler(createSmsTestRequest(payload), res)).rejects.toThrow(
         "sqlite unavailable",
       );
       expect(res.endMock).not.toHaveBeenCalled();
@@ -332,7 +303,7 @@ describe("createSmsWebhookHandler", () => {
     const handler = createHandler();
     const res = createResponse();
 
-    const handling = handler(createRequest(body, signature), res);
+    const handling = handler(createSmsTestRequest({ body, signature }), res);
     await vi.waitFor(() => expect(enqueueSmsIngress).toHaveBeenCalledTimes(1));
     expect(res.endMock).not.toHaveBeenCalled();
     admission.resolve({ kind: "accepted", duplicate: false });
