@@ -20,7 +20,12 @@ import {
 } from "./message-hook-mappers.js";
 
 const audio = { path: "/tmp/a.ogg", url: "https://cdn.test/a.ogg", contentType: "audio/ogg" };
-const photo = { path: "/tmp/p.jpg", url: "https://cdn.test/p.jpg", contentType: "image/jpeg" };
+const photo = {
+  path: "/tmp/p.jpg",
+  url: "/tmp/p.jpg",
+  contentType: "image/jpeg",
+  workspaceDir: "/tmp",
+};
 const inboundRouting = {
   channelId: "demo-chat",
   accountId: "acc-1",
@@ -69,7 +74,7 @@ const expectedMediaMetadata = {
   mediaUrl: "https://cdn.test/a.ogg",
   mediaType: "audio/ogg",
   mediaPaths: ["/tmp/a.ogg", "/tmp/p.jpg"],
-  mediaUrls: ["https://cdn.test/a.ogg", "https://cdn.test/p.jpg"],
+  mediaUrls: ["https://cdn.test/a.ogg", "/tmp/p.jpg"],
   mediaTypes: ["audio/ogg", "image/jpeg"],
 };
 
@@ -243,23 +248,6 @@ it("projects retained facts into hook media metadata", () => {
     mediaUrls: ["/tmp/tree.jpg", "https://example.test/ramp.jpg"],
     mediaTypes: ["image/jpeg", "image"],
   });
-
-  const staged = makeCanonicalInbound({
-    media: [
-      {
-        path: "/tmp/staged/tree.jpg",
-        url: "/tmp/staged/tree.jpg",
-        contentType: "image/jpeg",
-        workspaceDir: "/tmp/staged",
-      },
-    ],
-  });
-  expect(staged).toMatchObject({
-    mediaPath: "/tmp/staged/tree.jpg",
-    mediaUrl: "/tmp/staged/tree.jpg",
-    mediaPaths: ["/tmp/staged/tree.jpg"],
-    mediaUrls: ["/tmp/staged/tree.jpg"],
-  });
 });
 
 it("uses complete staged compatibility projections in hook media metadata", () => {
@@ -402,17 +390,13 @@ it.each([
 });
 
 it.each([
-  {
-    name: "transcribed",
-    project: toInternalMessageTranscribedContext,
-    expected: { transcript: "" },
-  },
-  {
-    name: "preprocessed",
-    project: toInternalMessagePreprocessedContext,
-    expected: { transcript: undefined, isGroup: true, groupId: "demo-chat:chat:456" },
-  },
-])("maps the internal $name payload", ({ project, expected }) => {
+  ["transcribed", toInternalMessageTranscribedContext, { transcript: "" }],
+  [
+    "preprocessed",
+    toInternalMessagePreprocessedContext,
+    { transcript: undefined, isGroup: true, groupId: "demo-chat:chat:456" },
+  ],
+] as const)("maps the internal %s payload", (_name, project, expected) => {
   const cfg: OpenClawConfig = {};
   const result = project(makeCanonicalInbound({ Transcript: undefined }), cfg);
   expect(result).toMatchObject(expected);

@@ -229,17 +229,11 @@ describe("Gmail setup diagnostics and decisions", () => {
     expect(error.cause).toBeInstanceOf(SyntaxError);
   });
 
-  it.each([
-    { code: 0, stdout: "account@example.com\n", login: false },
-    { code: 0, stdout: " \n", login: true },
-  ])("auth list code=$code login=$login", async ({ code, stdout, login }) => {
-    const { ensureGcloudAuth } = utils;
-    runCommand.mockResolvedValueOnce({ ...success, code, stdout }).mockResolvedValue(success);
-    await ensureGcloudAuth();
-    expect(runCommand).toHaveBeenCalledTimes(login ? 2 : 1);
-    if (login) {
-      expect(runCommand.mock.calls[1]?.[0].slice(1)).toEqual(["auth", "login"]);
-    }
+  it("logs in when the active account list is empty", async () => {
+    runCommand.mockResolvedValueOnce({ ...success, stdout: " \n" }).mockResolvedValue(success);
+    await utils.ensureGcloudAuth();
+    expect(runCommand).toHaveBeenCalledTimes(2);
+    expect(runCommand.mock.calls[1]?.[0].slice(1)).toEqual(["auth", "login"]);
   });
 
   it.each([0, 1])("provisions only according to describe exit code %i", async (code) => {

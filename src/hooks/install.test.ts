@@ -1,8 +1,17 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import * as tar from "tar";
-import { afterAll, assert, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  assert,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import {
   requestDeferredPackageDirInstall,
   resolvePackageDirInstallTransaction,
@@ -20,14 +29,7 @@ import { createZipBuffer, createZipHookPackBuffer } from "./install-archive.test
 
 type InstallHooksFromPath = typeof import("./install.js").installHooksFromPath;
 
-const commandSuccess = {
-  code: 0,
-  stdout: "",
-  stderr: "",
-  signal: null,
-  killed: false,
-  termination: "exit",
-};
+const commandSuccess = createCommandResult();
 const runCommandWithTimeoutMock = vi.fn();
 const scanPackageInstallSourceMock = vi.fn();
 const scanInstalledPackageDependencyTreeMock = vi.fn();
@@ -88,6 +90,7 @@ beforeEach(() => {
   scanInstalledPackageDependencyTreeMock.mockReset();
   scanInstalledPackageDependencyTreeMock.mockResolvedValue(undefined);
 });
+afterEach(() => vi.restoreAllMocks());
 
 beforeAll(() => {
   fs.mkdirSync(fixtureRoot, { recursive: true });
@@ -104,10 +107,7 @@ function expectInstallFailureContains(
   result: Awaited<ReturnType<InstallHooksFromPath>>,
   snippets: string[],
 ) {
-  expect(result.ok).toBe(false);
-  if (result.ok) {
-    throw new Error("expected install failure");
-  }
+  assert(!result.ok, "expected install failure");
   for (const snippet of snippets) {
     expect(result.error).toContain(snippet);
   }
@@ -149,9 +149,9 @@ async function createTarGzHookPackBuffer() {
   const packageDir = path.join(workDir, "package");
   fs.mkdirSync(packageDir, { recursive: true });
   writeHookPackFiles({ pkgDir: packageDir });
-  const archivePath = path.join(workDir, "pack.tgz");
-  await tar.c({ cwd: workDir, file: archivePath, gzip: true }, ["package"]);
-  return fs.readFileSync(archivePath);
+  return fs.readFileSync(
+    await packToArchive({ pkgDir: packageDir, outDir: workDir, outName: "pack.tgz" }),
+  );
 }
 
 async function installArchiveFixture(params: { fileName: string; contents: Buffer }) {
@@ -316,23 +316,19 @@ describe("installHooksFromPath", () => {
     }
     const targetAvailability = vi.spyOn(hookInstallRuntime, "ensureInstallTargetAvailable");
 
-    try {
-      const result = await installHooksFromPath({
-        path: pkgDir,
-        hooksDir,
-        inspection: "package-kind",
-      });
-      expect(result).toEqual({
-        ok: false,
-        error: 'duplicate hook name "shared-hook" in hook package',
-      });
-      expect(targetAvailability).not.toHaveBeenCalled();
-      expect(scanPackageInstallSourceMock).not.toHaveBeenCalled();
-      expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
-      expect(fs.existsSync(hooksDir)).toBe(false);
-    } finally {
-      targetAvailability.mockRestore();
-    }
+    const result = await installHooksFromPath({
+      path: pkgDir,
+      hooksDir,
+      inspection: "package-kind",
+    });
+    expect(result).toEqual({
+      ok: false,
+      error: 'duplicate hook name "shared-hook" in hook package',
+    });
+    expect(targetAvailability).not.toHaveBeenCalled();
+    expect(scanPackageInstallSourceMock).not.toHaveBeenCalled();
+    expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+    expect(fs.existsSync(hooksDir)).toBe(false);
   });
 
   it("installs dependencies with lifecycle scripts disabled", async () => {
@@ -500,20 +496,15 @@ describe("installHooksFromPath", () => {
       "ensureInstallTargetAvailable",
     );
 
-    try {
-      const result = await installHooksFromPath({
-        path: pkgDir,
-        hooksDir,
-        inspection: "package-kind",
-      });
-
-      expect(result).toMatchObject({ ok: true, packageKind: "hook-only" });
-      expect(scanPackageInstallSourceMock).not.toHaveBeenCalled();
-      expect(ensureInstallTargetAvailableSpy).not.toHaveBeenCalled();
-      expect(fs.existsSync(hooksDir)).toBe(false);
-    } finally {
-      ensureInstallTargetAvailableSpy.mockRestore();
-    }
+    const result = await installHooksFromPath({
+      path: pkgDir,
+      hooksDir,
+      inspection: "package-kind",
+    });
+    expect(result).toMatchObject({ ok: true, packageKind: "hook-only" });
+    expect(scanPackageInstallSourceMock).not.toHaveBeenCalled();
+    expect(ensureInstallTargetAvailableSpy).not.toHaveBeenCalled();
+    expect(fs.existsSync(hooksDir)).toBe(false);
   });
 
   it("enforces archive install policy against the validated extracted hook package", async () => {
@@ -643,10 +634,7 @@ describe("installHooksFromNpmSpec", () => {
       hooksDir,
       logger: { info: () => {}, warn: () => {} },
     });
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
-    }
+    assert(result.ok, "expected npm hook installation to succeed");
     expect(result).toMatchObject({
       hookPackId: "test-hooks",
       packageKind: "hook-only",

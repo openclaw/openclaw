@@ -244,22 +244,3 @@ it.each(["tailscale", "spawn"])("cleans up signals after %s startup failure", as
   expect(children).toHaveLength(0);
   expectStopped();
 });
-
-it("bounds retries after split bind errors while continuing watch renewal", async () => {
-  await runGmailService({});
-  children[0]!.exit();
-  await vi.advanceTimersByTimeAsync(5_000);
-  const countBeforeBind = children.length;
-  for (const delayMs of [5_000, 10_000, 20_000, 60_000]) {
-    const child = children.at(-1)!;
-    child.stderr.emit("data", Buffer.from("address alre"));
-    child.alive = false;
-    child.emit("exit", 1, null);
-    child.stderr.emit("data", Buffer.from("ady in use\n"));
-    child.emit("close", 1, null);
-    await vi.advanceTimersByTimeAsync(delayMs);
-  }
-  expect(children).toHaveLength(countBeforeBind + 3);
-  expect(children.filter((candidate) => candidate.alive)).toHaveLength(0);
-  expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(2);
-});

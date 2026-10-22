@@ -388,14 +388,24 @@ it("recovers after a transient bind conflict and cancels pending retries on stop
   expect(children).toHaveLength(2);
 });
 
-it("bounds bind retries even when a split marker exceeds the stderr tail", async () => {
-  const children = await startMockWatcher();
+it("bounds bind retries despite late oversized stderr and keeps renewing after exhaustion", async () => {
+  mocks.runCommandWithTimeout.mockResolvedValue(commandSuccess);
+  const children = collectChildren(true);
+  await startWatcher(createGmailConfig(undefined, 1), {
+    scheduler: createTestGatewayScheduler("fake-timers"),
+  });
+  children[0]!.exit();
+  await vi.advanceTimersByTimeAsync(5_000);
   for (const delayMs of [5_000, 10_000, 20_000, 60_000]) {
     const child = expectDefined(children.at(-1), "watcher child");
     child.stderr.emit("data", Buffer.from("address alre"));
+    child.alive = false;
+    child.emit("exit", 1, null);
     child.stderr.emit("data", Buffer.from(`ady in use ${"x".repeat(800)}`));
     child.emit("close", 1, null);
     await vi.advanceTimersByTimeAsync(delayMs);
   }
-  expect(children).toHaveLength(4);
+  expect(children).toHaveLength(5);
+  expect(children.filter((child) => child.alive)).toHaveLength(0);
+  expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(2);
 });
