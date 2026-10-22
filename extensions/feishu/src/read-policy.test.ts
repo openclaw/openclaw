@@ -74,13 +74,26 @@ describe("Feishu read policy", () => {
     });
   });
 
-  it("does not treat wildcard group defaults as admission", () => {
-    const account = createAccount({
-      dmPolicy: "open",
-      groups: { "*": { requireMention: false } },
-    });
-    expectDenied({ account, chatId: "oc_unconfigured" });
-  });
+  it.each([
+    {
+      name: "wildcard defaults are not admission",
+      account: createAccount({ dmPolicy: "open", groups: { "*": { requireMention: false } } }),
+      chatId: "oc_unconfigured",
+    },
+    {
+      name: "disabled group policy blocks unclassified current targets",
+      account: createAccount({ groupPolicy: "disabled" }),
+      chatId: "oc_current",
+      ctx: currentContext,
+    },
+    {
+      name: "disabled group targets block direct operators",
+      account: createAccount({ groups: { oc_blocked: { enabled: false } } }),
+      chatId: "oc_blocked",
+      chatType: "group",
+      ctx: { conversationReadOrigin: "direct-operator" },
+    },
+  ] satisfies Array<Parameters<typeof read>[0] & { name: string }>)("$name", expectDenied);
 
   it("requires an effective wildcard before open policy allows non-current DMs", () => {
     const mergedCfg = {
@@ -100,10 +113,7 @@ describe("Feishu read policy", () => {
     expectDenied(target);
     expect(canEnumerateAllFeishuPeers(account)).toBe(false);
 
-    account.config = {
-      ...account.config,
-      allowFrom: ["ou_admin", "feishu:*"],
-    };
+    account.config = { ...account.config, allowFrom: ["ou_admin", "feishu:*"] };
     expect(read(target)).toBe("oc_other");
     expect(canEnumerateAllFeishuPeers(account)).toBe(true);
   });
@@ -112,23 +122,6 @@ describe("Feishu read policy", () => {
     const account = createAccount({ groupAllowFrom: ["*"] });
     expect(read({ account, chatId: "oc_any", chatType: "group" })).toBe("oc_any");
     expect(canEnumerateAllFeishuGroups(cfg, account)).toBe(true);
-  });
-
-  it("rejects an unclassified current target when group reads are disabled", () => {
-    expectDenied({
-      account: createAccount({ groupPolicy: "disabled" }),
-      chatId: "oc_current",
-      ctx: currentContext,
-    });
-  });
-
-  it("keeps disabled group targets blocked for direct operators", () => {
-    expectDenied({
-      account: createAccount({ groups: { oc_blocked: { enabled: false } } }),
-      chatId: "oc_blocked",
-      chatType: "group",
-      ctx: { conversationReadOrigin: "direct-operator" },
-    });
   });
 
   it("requires metadata only when an unknown target has mixed scope policy", () => {
