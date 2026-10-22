@@ -56,6 +56,7 @@ export const ImageLightbox = defineSolidBridge<ImageLightboxProps>(
       src: { default: "" },
       originalSrc: { default: "" },
       imageTitle: { default: "", attribute: false },
+      imageDescription: { default: "", attribute: false },
       imageWidth: { default: undefined, attribute: false },
       imageHeight: { default: undefined, attribute: false },
     },

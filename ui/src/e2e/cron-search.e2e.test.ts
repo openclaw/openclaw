@@ -98,8 +98,38 @@ suite.define(() => {
       // Count work rather than wall time so the regression is independent of CPU speed.
       expect(recalculated.length).toBeGreaterThan(0);
       expect(Math.max(...recalculated)).toBeLessThan(jobs.length);
-      await gateway.resolveDeferred("cron.list");
-      await expect.poll(() => rows.count()).toBe(50);
+      const resultClient = await context.newCDPSession(page);
+      try {
+        await resultClient.send("Performance.enable");
+        const before: { metrics: Array<{ name: string; value: number }> } =
+          await resultClient.send("Performance.getMetrics");
+        const started = performance.now();
+        await gateway.resolveDeferred("cron.list");
+        await expect.poll(() => rows.count()).toBe(50);
+        const elapsedMs = performance.now() - started;
+        const after: typeof before = await resultClient.send("Performance.getMetrics");
+        console.log(
+          JSON.stringify({
+            proof: "cron-expanded-inventory-search-results",
+            jobs: jobs.length,
+            elapsedMs,
+            metrics: Object.fromEntries(
+              ["ScriptDuration", "TaskDuration", "LayoutDuration", "RecalcStyleDuration"].map(
+                (name) => {
+                  const earlier = before.metrics.find((entry) => entry.name === name)?.value;
+                  const later = after.metrics.find((entry) => entry.name === name)?.value;
+                  if (earlier === undefined || later === undefined) {
+                    throw new Error(`Missing CDP metric: ${name}`);
+                  }
+                  return [name, (later - earlier) * 1000];
+                },
+              ),
+            ),
+          }),
+        );
+      } finally {
+        await resultClient.detach();
+      }
       expect(await search.inputValue()).toBe("i");
       expect(await search.evaluate((element) => element === document.activeElement)).toBe(true);
       await expect.poll(() => loadMore.isEnabled()).toBe(true);
