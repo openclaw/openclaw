@@ -12,9 +12,9 @@ import { nodeFilePath } from "../../test-utils/node-file-path.js";
 import { getSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { refreshSkillsDiscovery } from "../runtime/refresh.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../runtime/session-snapshot.js";
-import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { writePluginWithSkill } from "../test-support/skill-plugin-fixtures.test-support.js";
 import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
+import { writeSkillFixture } from "./loading.test-support.js";
 import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
 import { syncWorkspaceSkills } from "./workspace-skill-sync.runtime.js";
 
@@ -29,7 +29,7 @@ function sourceOptions(workspace: string) {
 }
 
 function writeTestSkill(dir: string, name: string, description: string) {
-  return writeSkill({ dir, name, description });
+  return writeSkillFixture(dir, name, description);
 }
 
 const skillPath = (workspace: string, ...parts: string[]) =>
@@ -161,10 +161,7 @@ describe("syncWorkspaceSkills", () => {
     const sourceWorkspace = await createCaseDir("source");
     const targetWorkspace = await createCaseDir("target");
     await writeTestSkill(skillPath(sourceWorkspace, "alpha"), "alpha", "Alpha skill");
-    await writeSkill({
-      dir: skillPath(sourceWorkspace, "hidden"),
-      name: "hidden",
-      description: "Prompt-hidden skill",
+    await writeSkillFixture(skillPath(sourceWorkspace, "hidden"), "hidden", "Prompt-hidden skill", {
       frontmatterExtra: "disable-model-invocation: true",
     });
     const skillsSnapshot = await buildSnapshot(sourceWorkspace);
@@ -637,11 +634,7 @@ describe("syncWorkspaceSkills", () => {
     const managedDir = path.join(sourceWorkspace, ".managed");
     const skillName = "managed-linked";
     const targetSkillDir = path.join(await createCaseDir("manager-cache"), ".hidden-target");
-    await writeSkill({
-      dir: targetSkillDir,
-      name: skillName,
-      description: "Managed symlink target",
-    });
+    await writeSkillFixture(targetSkillDir, skillName, "Managed symlink target");
     await fs.mkdir(managedDir, { recursive: true });
     await fs.symlink(
       targetSkillDir,

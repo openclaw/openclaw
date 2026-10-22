@@ -1,16 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as cryptoDigest from "../../infra/crypto-digest.js";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { loggingState } from "../../logging/state.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
-import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import type { OpenClawSkillMetadata, SkillEntry } from "../types.js";
 import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import * as frontmatter from "./frontmatter.js";
+import { writeSkillFixture, useLoadingFixture } from "./loading.test-support.js";
 import { createSyntheticSourceInfo } from "./skill-contract.js";
 import { loadWorkspaceSkills } from "./workspace-skill-loader.js";
 import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
@@ -24,15 +23,7 @@ vi.mock("./plugin-skills.js", () => ({
   resolvePluginSkillRoots: () => [],
 }));
 
-const fixtureSuite = createFixtureSuite("openclaw-skills-prompt-suite-");
-
-beforeAll(async () => {
-  await fixtureSuite.setup();
-});
-
-afterAll(async () => {
-  await fixtureSuite.cleanup();
-});
+const fixtureSuite = useLoadingFixture("openclaw-skills-prompt-suite-");
 
 afterEach(() => {
   setLoggerOverride(null);
@@ -66,7 +57,7 @@ function createSkillEntry(name: string, metadata: OpenClawSkillMetadata): SkillE
 }
 
 const skill = (dir: string, name: string, description: string, body?: string) =>
-  writeSkill({ dir, name, description, body });
+  writeSkillFixture(dir, name, description, { body });
 
 function refresh(workspaceDir: string, options: Parameters<typeof loadWorkspaceSkills>[1]) {
   bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
@@ -75,7 +66,7 @@ function refresh(workspaceDir: string, options: Parameters<typeof loadWorkspaceS
 
 describe("buildWorkspaceSkillsPrompt", () => {
   it("aggregates 30 differing skills per root pair and stays silent on unchanged refresh", async () => {
-    const root = await fixtureSuite.createCaseDir("aggregate-collisions");
+    const root = await fixtureSuite.createDir("aggregate-collisions");
     const info = captureLogger();
     const warn = vi.mocked(loggingState.rawConsole!.warn);
     const cases = [];
@@ -150,7 +141,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
   ] as const)(
     "resolves %j collisions in favor of %s without replaying reports",
     async (roots, winner, source, compact) => {
-      const workspaceDir = await fixtureSuite.createCaseDir("precedence");
+      const workspaceDir = await fixtureSuite.createDir("precedence");
       const config = {
         agents: { entries: { main: { agentDir: path.join(workspaceDir, ".agent") } } },
       };
@@ -223,10 +214,10 @@ describe("buildWorkspaceSkillsPrompt", () => {
   );
 
   it("silently reuses identical skill content across copies and rebuilds without changing winners", async () => {
-    const root = await fixtureSuite.createCaseDir("identical-content");
+    const root = await fixtureSuite.createDir("identical-content");
     const bundledSkillsDir = path.join(root, "bundled");
     const name = "identical-collision";
-    await writeSkill({ dir: path.join(bundledSkillsDir, name), name, description: "Shared facts" });
+    await writeSkillFixture(path.join(bundledSkillsDir, name), name, "Shared facts");
     const raw = await fs.readFile(path.join(bundledSkillsDir, name, "SKILL.md"), "utf8");
     const warn = captureLogger("warn");
     const hash = vi.spyOn(cryptoDigest, "sha256Hex");
@@ -275,20 +266,17 @@ describe("buildWorkspaceSkillsPrompt", () => {
   });
 
   it("reports each root pair once and reports changed aggregate content and membership again", async () => {
-    const root = await fixtureSuite.createCaseDir("different-content");
+    const root = await fixtureSuite.createDir("different-content");
     const bundledSkillsDir = path.join(root, "bundled");
     const name = "different-collision";
-    await writeSkill({
-      dir: path.join(bundledSkillsDir, name),
-      name,
-      description: "Shared metadata",
+    await writeSkillFixture(path.join(bundledSkillsDir, name), name, "Shared metadata", {
       body: "Bundled",
     });
     const warn = captureLogger("warn");
     for (const id of ["first", "second"]) {
       const workspaceDir = path.join(root, id);
       const dir = path.join(workspaceDir, "skills", name);
-      await writeSkill({ dir, name, description: "Shared metadata", body: "Override" });
+      await writeSkillFixture(dir, name, "Shared metadata", { body: "Override" });
       const options = { bundledSkillsDir, managedSkillsDir: path.join(root, "managed") };
       loadWorkspaceSkills(workspaceDir, options);
       refresh(workspaceDir, options);
@@ -302,7 +290,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
       ["Changed metadata", "Changed instructions", 4],
       ["Shared metadata", "Override", 5],
     ] as const) {
-      await writeSkill({ dir, name, description, body });
+      await writeSkillFixture(dir, name, description, { body });
       refresh(workspaceDir, options);
       expect(warn).toHaveBeenCalledTimes(count);
     }
@@ -311,11 +299,11 @@ describe("buildWorkspaceSkillsPrompt", () => {
       [bundledSkillsDir, "Bundled"],
       [path.join(workspaceDir, "skills"), "Workspace"],
     ] as const) {
-      await writeSkill({
-        dir: path.join(base, "another-collision"),
-        name: "another-collision",
+      await writeSkillFixture(
+        path.join(base, "another-collision"),
+        "another-collision",
         description,
-      });
+      );
     }
     refresh(workspaceDir, options);
     expect(warn).toHaveBeenCalledTimes(6);
@@ -342,13 +330,13 @@ describe("buildWorkspaceSkillsPrompt", () => {
     // Retiring this pair must not replay the other workspace's unchanged collision.
     loadWorkspaceSkills(path.join(root, "first"), options);
     expect(warn).toHaveBeenCalledTimes(7);
-    await writeSkill({ dir: remainingDir, name: "another-collision", description: "Workspace" });
+    await writeSkillFixture(remainingDir, "another-collision", "Workspace");
     refresh(workspaceDir, options);
     expect(warn).toHaveBeenCalledTimes(8);
   });
 
   it("gates by bins, config, and always", async () => {
-    const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+    const workspaceDir = await fixtureSuite.createDir("workspace");
     const entries = [
       createSkillEntry("bin-skill", { requires: { bins: ["fakebin"] } }),
       createSkillEntry("anybin-skill", { requires: { anyBins: ["missingbin", "fakebin"] } }),
@@ -402,7 +390,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
   it.each(["config", "session"] as const)(
     "uses the canonical skillKey for %s disabling",
     async (surface) => {
-      const workspaceDir = await fixtureSuite.createCaseDir("workspace");
+      const workspaceDir = await fixtureSuite.createDir("workspace");
       const prompt = await withEnvAsync({ HOME: workspaceDir, PATH: "" }, () =>
         buildWorkspaceSkillsPrompt(workspaceDir, {
           entries: [createSkillEntry("alias-skill", { skillKey: "alias" })],

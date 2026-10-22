@@ -1,8 +1,7 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
@@ -18,15 +17,15 @@ import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metada
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
 import { getSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { closeSkillsWatchers } from "../runtime/refresh.js";
-import { writeSkill, writeWorkspaceSkills } from "../test-support/e2e-test-helpers.js";
-import {
-  restoreMockSkillsHomeEnv,
-  setMockSkillsHomeEnv,
-  type SkillsHomeEnvSnapshot,
-} from "../test-support/home-env.test-support.js";
+import { writeWorkspaceSkills } from "../test-support/e2e-test-helpers.js";
 import { writePluginWithSkill } from "../test-support/skill-plugin-fixtures.test-support.js";
 import type { OpenClawSkillMetadata, SkillEligibilityContext } from "../types.js";
 import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
+import {
+  writeSkillFixture,
+  useLoadingFixture,
+  captureWarningLogger,
+} from "./loading.test-support.js";
 import {
   loadVisibleSkills,
   loadWorkspaceSkills,
@@ -43,7 +42,7 @@ vi.mock("../../plugins/manifest-registry.js", () => ({
 const names = (entries: Awaited<ReturnType<typeof prepareWorkspaceSkills>>) =>
   entries.map((entry) => entry.skill.name);
 const writeNamedSkill = (dir: string, name: string, description: string) =>
-  writeSkill({ dir: path.join(dir, name), name, description });
+  writeSkillFixture(path.join(dir, name), name, description);
 async function writeRawSkill(dir: string, content: string) {
   await fs.mkdir(dir, { recursive: true });
   const file = path.join(dir, "SKILL.md");
@@ -74,15 +73,15 @@ describe("prompt asynchronous binary preparation", () => {
     vi.stubEnv("PATHEXT", "");
     vi.stubEnv("OPENCLAW_TEST_PROBE_KEY", "");
     for (const skill of skills) {
-      await writeSkill({
-        dir: path.join(
+      await writeSkillFixture(
+        path.join(
           skill.name === "bundled" ? bundledSkillsDir : path.join(workspaceDir, "skills"),
           skill.name,
         ),
-        name: skill.name,
-        description: skill.name,
-        metadata: JSON.stringify({ openclaw: skill.metadata }),
-      });
+        skill.name,
+        skill.name,
+        { metadata: JSON.stringify({ openclaw: skill.metadata }) },
+      );
     }
     const config: OpenClawConfig = { plugins: { enabled: false }, browser: { enabled: false } };
     const eligibility: SkillEligibilityContext = {};
@@ -198,10 +197,7 @@ describe("prompt asynchronous binary preparation", () => {
   });
 });
 
-let fakeHome = "";
-let envSnapshot: SkillsHomeEnvSnapshot;
-let tempRoot = "";
-let workspaceCaseIndex = 0;
+const fixture = useLoadingFixture("openclaw-skills-workspace-skill-loader-", true);
 
 function createWorkspacePluginRegistry(workspaceDir: string): PluginManifestRegistry {
   const extensionsRoot = path.join(workspaceDir, ".openclaw", "extensions");
@@ -255,23 +251,7 @@ function createWorkspacePluginMetadataSnapshot(params: {
   };
 }
 
-async function createTempWorkspaceDir() {
-  const workspaceDir = path.join(tempRoot, `workspace-${++workspaceCaseIndex}`);
-  await fs.mkdir(workspaceDir, { recursive: true });
-  return workspaceDir;
-}
-
-function captureWarningLogger() {
-  setLoggerOverride({ level: "silent", consoleLevel: "warn" });
-  const warn = vi.fn();
-  loggingState.rawConsole = {
-    log: vi.fn(),
-    info: vi.fn(),
-    warn,
-    error: vi.fn(),
-  };
-  return warn;
-}
+const createTempWorkspaceDir = () => fixture.createDir();
 
 function loadTestWorkspaceSkills(
   workspaceDir: string,
@@ -291,27 +271,12 @@ function loadTestWorkspaceSkills(
   });
 }
 
-beforeAll(async () => {
-  tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-workspace-"));
-  fakeHome = path.join(tempRoot, "home");
-  await fs.mkdir(fakeHome, { recursive: true });
-  envSnapshot = setMockSkillsHomeEnv(fakeHome);
-});
-
 afterEach(async () => {
   await closeSkillsWatchers(true);
   vi.useRealTimers();
   setLoggerOverride(null);
   loggingState.rawConsole = null;
   resetLogger();
-});
-
-afterAll(async () => {
-  await restoreMockSkillsHomeEnv(envSnapshot, async () => {
-    if (tempRoot) {
-      await fs.rm(tempRoot, { recursive: true, force: true });
-    }
-  });
 });
 
 async function setupWorkspaceSkillPlugin() {

@@ -22,23 +22,6 @@ describe("resolveSkillManifestMetadata install validation", () => {
       ?.install;
   }
 
-  it("accepts safe install specs", () => {
-    const install = resolveInstall(
-      { kind: "brew", formula: "python@3.12" },
-      { kind: "node", package: "@scope/pkg@1.2.3" },
-      { kind: "go", module: "example.com/tool/cmd@v1.2.3" },
-      { kind: "uv", package: "uvicorn[standard]==0.31.0" },
-      { kind: "download", url: "https://example.com/tool.tar.gz" },
-    );
-    expect(install).toEqual([
-      { kind: "brew", formula: "python@3.12" },
-      { kind: "node", package: "@scope/pkg@1.2.3" },
-      { kind: "go", module: "example.com/tool/cmd@v1.2.3" },
-      { kind: "uv", package: "uvicorn[standard]==0.31.0" },
-      { kind: "download", url: "https://example.com/tool.tar.gz" },
-    ]);
-  });
-
   it.each([
     { kind: "brew", formula: "wget --HEAD" },
     { kind: "node", package: "file:../malicious" },
@@ -46,6 +29,17 @@ describe("resolveSkillManifestMetadata install validation", () => {
     { kind: "download", url: "file:///tmp/payload.tgz" },
   ])("drops unsafe $kind install specs", (spec) => {
     expect(resolveInstall(spec)).toBeUndefined();
+  });
+
+  it("accepts safe install specs", () => {
+    const specs = [
+      { kind: "brew", formula: "python@3.12" },
+      { kind: "node", package: "@scope/pkg@1.2.3" },
+      { kind: "go", module: "example.com/tool/cmd@v1.2.3" },
+      { kind: "uv", package: "uvicorn[standard]==0.31.0" },
+      { kind: "download", url: "https://example.com/tool.tar.gz" },
+    ];
+    expect(resolveInstall(...specs)).toEqual(specs);
   });
 
   it("normalizes a download installer's optional SHA-256 digest", () => {

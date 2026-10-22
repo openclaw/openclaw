@@ -6958,7 +6958,6 @@
 ["src/skills/loading/plugin-skills.test.ts","../../plugins/plugin-metadata-snapshot.js","a2cd739a038b76722922e9cfd16a93a50fd422d4cd0a445e04a5eed84570724c",1]
 ["src/skills/loading/plugin-skills.test.ts","../../plugins/plugin-registry.js","37d9ad6ffa0a0c449caab7e4834224e46224c6367fe803e3e9ac83bfb435e556",1]
 ["src/skills/loading/skill-path-containment.test.ts","./plugin-skills.js","c8ccfb0a959d873a41923e11008c850ac8dfc1d3e0bfc10f26768714061567be",1]
-["src/skills/loading/skill-root-discovery.test.ts","./plugin-skills.js","c8ccfb0a959d873a41923e11008c850ac8dfc1d3e0bfc10f26768714061567be",1]
 ["src/skills/loading/workspace-precedence.test.ts","./plugin-skills.js","c8ccfb0a959d873a41923e11008c850ac8dfc1d3e0bfc10f26768714061567be",1]
 ["src/skills/loading/workspace-skill-prompt-resolution.test.ts","../../logging/subsystem.js","b70c5b7eb870a6236a746bc880691a6cb5c877a6a11d550ae449e08809ba8c22",1]
 ["src/skills/runtime/session-snapshot.test.ts","../loading/workspace-skill-prompt.js","c26cc28752b5b5247baef0a5ca540f92bf17a9c022ced2bf0b775f346fcfd39b",1]
