@@ -36,6 +36,7 @@ import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
+import { isComposingKeyboardEvent, recordCompositionEnd } from "../../lib/ime.ts";
 import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
 import { projectAgentSelection } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
@@ -560,8 +561,9 @@ export function SearchPage() {
                                   invalidateTest();
                                 }
                               }}
+                              onCompositionEnd={recordCompositionEnd}
                               onKeyDown={(event) => {
-                                if (event.key === "Enter") {
+                                if (event.key === "Enter" && !isComposingKeyboardEvent(event)) {
                                   void test(renderScope);
                                 }
                               }}

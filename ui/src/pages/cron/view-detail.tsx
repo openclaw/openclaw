@@ -5,7 +5,13 @@ import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSection, SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { AdminRequired, ErrorBanner, EnabledSwitch, JobMenu } from "./view-controls.tsx";
+import {
+  AdminRequired,
+  ErrorBanner,
+  EnabledSwitch,
+  JobMenu,
+  NoticeBanner,
+} from "./view-controls.tsx";
 import { Editor } from "./view-editor.tsx";
 import { describeJobSchedule, TriggerIndicator } from "./view-job-status.tsx";
 import { RunsSection } from "./view-runs.tsx";
@@ -50,6 +56,7 @@ export function DetailView(
         <AdminRequired {...props} />
         {hasDetailTabs() ? <DetailTabs {...props} /> : undefined}
         <ErrorBanner error={props.error} />
+        <NoticeBanner notice={props.notice} />
         <div
           id="cron-detail-panel"
           class="cron-tab-panel"
