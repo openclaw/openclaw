@@ -76,6 +76,7 @@ type StoredChatOutboxDrainLane = {
   outcomes: Map<string, QueuedChatSendResult>;
   pendingOptions: Map<string, QueuedChatSendOptions>;
   promise: Promise<void>;
+  reconcileActiveRun: boolean;
   rerun: boolean;
   waitingForVisibleOwner?: boolean;
 };
@@ -112,6 +113,7 @@ async function reconcileStoredChatOutboxHead(
   dependencies: ChatOutboxDrainDependencies,
   accepted: Set<string>,
   retryUnconfirmed = false,
+  reconcileActiveRun = false,
 ): Promise<"blocked" | "continue" | "send"> {
   const client = host.client;
   const connectionEpoch = host.connectionEpoch;
@@ -141,6 +143,7 @@ async function reconcileStoredChatOutboxHead(
     (delayMs: number) => scheduleStoredChatOutboxRetry(host, outbox, delayMs, dependencies),
     accepted,
     retryUnconfirmed,
+    reconcileActiveRun,
   );
 }
 
@@ -402,6 +405,7 @@ async function drainStoredChatOutbox(
         dependencies,
         accepted,
         retryUnconfirmed,
+        lane.reconcileActiveRun,
       );
       if (reconciled === "blocked") {
         return;
@@ -452,6 +456,7 @@ export async function scheduleStoredChatOutboxDrain(
   itemId?: string,
   options?: QueuedChatSendOptions,
   changed?: boolean,
+  reconcileActiveRun = false,
 ): Promise<QueuedChatSendResult | undefined> {
   const client = host.client;
   if (!host.connected || !client) {
@@ -467,6 +472,7 @@ export async function scheduleStoredChatOutboxDrain(
   // Drain ownership follows the live client, never a disconnected pending RPC.
   const existing = lanes.get(key);
   if (existing) {
+    existing.reconcileActiveRun ||= reconcileActiveRun;
     const ownerRequestedRecovery = existing.host === host;
     const ownerConnectionChanged =
       !existing.owner.host.connected ||
@@ -502,6 +508,7 @@ export async function scheduleStoredChatOutboxDrain(
     outcomes: new Map(),
     pendingOptions: new Map(itemId && options ? [[itemId, options]] : []),
     promise: Promise.resolve(),
+    reconcileActiveRun,
     rerun: false,
   };
   lanes.set(key, lane);
