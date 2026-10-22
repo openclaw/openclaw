@@ -37,6 +37,7 @@ describe("ollama provider policy public artifact", () => {
       ...createModel("configured", "Configured", { reasoning: true }),
       provider: provider.trim().toLowerCase(),
       api: "ollama",
+      baseUrl: OLLAMA_DEFAULT_BASE_URL,
     };
     expect(projectConfiguredModelRow({ provider, modelId: model.id, model })).toBe(expected);
   });

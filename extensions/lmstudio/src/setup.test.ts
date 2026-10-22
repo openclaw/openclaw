@@ -758,22 +758,22 @@ describe("lmstudio-runtime", () => {
     ).resolves.toBe("custom-template-lmstudio-key");
   });
 
-  it.each(["${LMSTUDIO_API_KEY}", { source: "env", provider: "default", id: "LMSTUDIO_API_KEY" }])(
-    "fails closed for unresolved %j unless explicitly allowed",
-    async (apiKey) => {
-      const options = { config: buildConfig({ apiKey }), env: {} };
+  it.each<SecretInput>([
+    "${LMSTUDIO_API_KEY}",
+    { source: "env", provider: "default", id: "LMSTUDIO_API_KEY" },
+  ])("fails closed for unresolved %j unless explicitly allowed", async (apiKey) => {
+    const options = { config: buildConfig({ apiKey }), env: {} };
 
-      await expect(resolveLmstudioConfiguredApiKey(options)).rejects.toThrow(
-        'models.providers["lmstudio"].apiKey',
-      );
-      await expect(
-        resolveLmstudioConfiguredApiKey({ ...options, allowUnresolved: true }),
-      ).resolves.toBeUndefined();
-    },
-  );
+    await expect(resolveLmstudioConfiguredApiKey(options)).rejects.toThrow(
+      'models.providers["lmstudio"].apiKey',
+    );
+    await expect(
+      resolveLmstudioConfiguredApiKey({ ...options, allowUnresolved: true }),
+    ).resolves.toBeUndefined();
+  });
 
   it("throws a path-specific error when a SecretRef header cannot be resolved", async () => {
-    const headerRef = {
+    const headerRef: Record<string, SecretInput> = {
       "X-Proxy-Auth": { source: "env", provider: "default", id: "LMSTUDIO_PROXY_TOKEN" },
     };
     await expect(

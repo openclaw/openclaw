@@ -461,7 +461,7 @@ async function discoverConfigured(
       lmstudio: { baseUrl: "http://localhost:1234/api/v1/", models: [], ...provider },
     }),
     env,
-    resolveProviderApiKey: () => ({ discoveryApiKey }),
+    resolveProviderApiKey: () => ({ apiKey: undefined, discoveryApiKey }),
   });
   return { result, fetchMock };
 }

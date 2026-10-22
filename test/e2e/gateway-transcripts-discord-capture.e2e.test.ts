@@ -573,7 +573,7 @@ it("fences late Discord STT through the model-selected plugin instance", async (
   } finally {
     // Keep the actual runtime and edge spies alive until sources, streams and Gateway settle.
     await runQaGatewayFixture(
-      () => {
+      async () => {
         fixtureScheduler?.beginClose();
       },
       () => fixture?.close(),

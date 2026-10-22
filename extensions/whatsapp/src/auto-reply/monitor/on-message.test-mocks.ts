@@ -1,4 +1,4 @@
-import { vi } from "vitest";
+import { vi, type Mock } from "vitest";
 
 export const {
   processMessageMock,
@@ -7,6 +7,13 @@ export const {
   transcribeFirstAudioMock,
   maybeSendAckReactionMock,
   createStatusReactionControllerMock,
+}: {
+  processMessageMock: Mock;
+  resolveGroupActivationForMock: Mock;
+  updateLastRouteInBackgroundMock: Mock;
+  transcribeFirstAudioMock: Mock;
+  maybeSendAckReactionMock: Mock;
+  createStatusReactionControllerMock: Mock;
 } = vi.hoisted(() => ({
   processMessageMock: vi.fn(),
   resolveGroupActivationForMock: vi.fn(),
