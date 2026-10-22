@@ -26,7 +26,6 @@ function mountDetails() {
     },
     outputs: {
       artifacts: null,
-      artifactsLoading: true,
       artifactsError: null,
       dashboard: undefined,
       dashboardError: null,
@@ -88,13 +87,14 @@ it("keeps unknown and empty desktop Outputs and Progress quiet during slow reads
   view.update({
     progressCardInitialLoading: false,
     progressCard: null,
-    outputs: { ...view.initial.outputs!, artifacts: [], artifactsLoading: false, dashboard: null },
+    outputs: { ...view.initial.outputs!, artifacts: [], dashboard: null },
   });
   expect(view.container.querySelector('[role="status"]')).toBeNull();
   expect(view.group("outputs")).toBeNull();
   view.update({ outputs: { ...view.initial.outputs!, artifacts: [], dashboard: null } });
   expect(view.group("outputs")).toBeNull();
   view.update({ outputs: { ...view.initial.outputs!, artifactsError: "Cannot load files" } });
+  await vi.advanceTimersByTimeAsync(0);
   expect(view.group("outputs")?.textContent).toContain("Cannot load files");
   view.update({
     outputs: { ...view.initial.outputs!, dashboard: { title: "Build report", onOpen() {} } },

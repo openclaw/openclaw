@@ -2375,6 +2375,62 @@ Gateway diagnostics. Whole-window CPU/allocation divided by source-event or
 socket-delivery counts is a workload-normalized cost, not isolated encode/send
 cost. Use CPU profiles when attributing broadcast work.
 
+Allocation profiles also report `broadcastAllocation`: every sampled allocation
+under `broadcastInternal`, classified into disjoint event-projection, recipient
+setup, row-presentation, encoding, and remaining-broadcast subtrees. Attribution
+uses the complete stack; each family's ten largest sites retain their full stacks.
+`projectionSelfSampledBytes` separately counts allocations directly attributed to
+the session-event projection module, including its envelope objects and closures.
+It overlaps the family totals and must not be added to them. The report normalizes
+the broadcast subtree by source session events and completed turns as
+`broadcastAllocatedBytesPerSessionEvent` and `broadcastAllocatedBytesPerTurn`.
+These include other broadcast event types in the same measured window; they are
+workload-normalized costs, not session-event-only allocation counters.
+Use `--entry src/entry.ts` from each measured checkout for source-file attribution;
+bundled anonymous functions cannot reliably identify these owners. A false
+`sourceProjectionObserved` means that owner attribution is unavailable, not zero
+projection allocation. Allocation sampling cannot determine exact projection,
+clone, or serialization invocation counts; use the owner work-count tests for
+those facts. Repeated identical audiences and distinct viewers should be separate,
+equally configured comparisons.
+
+For session-projection comparisons from one installed checkout, add
+`--entry src/entry.ts --session-projection-source <directory>` to both arms.
+The directory must contain all four coherent owner files:
+`session-event-projection.ts`, `session-row-presentation.ts`,
+`session-sharing-read.ts`, and `session-utils-list.ts`. Put their original
+revision's files in a baseline directory and use `--session-projection-source
+src/gateway` for the candidate. The preload reads all four before Gateway startup
+and fails on a missing file; it substitutes raw TypeScript while retaining canonical
+module URLs, relative imports, and source line numbers. The report records the
+resolved `sessionProjectionSource`. It also loads the canonical broadcaster as
+native TypeScript so its function name remains visible in allocation profiles
+without installing the timer. Use separate fixtures and ports with matching
+workload flags. Collect allocation and broadcast-timing comparisons in separate
+passes so the timing observer's allocations do not enter the broadcast profile.
+
+The existing allocation diagnostics include per-kind GC pause `count`, `total`,
+`max`, `p95`, and `p99` under `allocation.diagnostics.gc`, plus event-loop sample
+count and p99 under `allocation.diagnostics.eventLoopDelay`. Promotion is read
+from the matching main-isolate V8 trace after the Gateway exits. Report baseline
+and candidate maximum pauses and collection counts alongside totals and tails.
+`chatDeltaDeliveryMs` includes count, p95, p99, maximum, and individual samples;
+it measures publication-to-receipt delivery. Add `--broadcast-timing --diagnostics
+--entry src/entry.ts` to time the synchronous `broadcastInternal` owner, including
+targeted sends and retained replays. `broadcastLatencyMs` reports each event's
+actual call count, total, maximum, p95, and p99. A benchmark-only source loader
+inserts a timer and private numeric diagnostics publication, refusing changed
+source anchors or an unloaded owner. This includes recipient projection, encoding,
+and synchronous socket submission; it excludes completion of asynchronous socket
+writes. It also counts calls that return without delivering a frame. Enable it
+identically in both arms and report that timing instrumentation was present.
+The timer rejects allocation sampling, including stream-start and memory-soak
+retained profiles; use `--retained-profile-ms 0` for a timing-only memory soak.
+Use a sufficiently long single allocation round when gating natural GC and loop
+tails; for example, 4,000 chunks at 10 ms with eight concurrent runs and 48 clients.
+Check actual sample counts rather than inferring them from requested duration.
+`--start-at <epoch-ms>` synchronizes measured windows after each side's warmup.
+
 The default transcript-broadcast clients use direct loopback ingress, which does
 not negotiate compression. Add `--compressed` to use one synthetic trusted-proxy
 identity over loopback and exercise negotiated permessage-deflate. Add

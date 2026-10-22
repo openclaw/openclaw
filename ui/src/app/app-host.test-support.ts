@@ -1,25 +1,10 @@
 import { vi } from "vitest";
 import type { AgentsListResult } from "../api/types.ts";
 import type { ApplicationRouter, RouteId } from "../app-routes.ts";
-import type { ShellNavigationOwner } from "./app-shell-navigation.ts";
 import { createApplicationConfigCapability } from "./config.ts";
 import type { ApplicationContext } from "./context.ts";
 import type { OptionalCustomElement } from "./lazy-custom-element.ts";
 export type { OptionalCustomElement as TestOptionalCustomElement } from "./lazy-custom-element.ts";
-
-export type ShellRouteCommitState = {
-  runtime: { context: ApplicationContext };
-  activeSessionKey: string;
-  didConsiderNativeRouteRestore: boolean;
-  shellNavigation: ShellNavigationOwner;
-};
-
-export type ShellCustodianRouteState = {
-  custodianMinimizeRequestId: number;
-  shellNavigation: ShellNavigationOwner;
-};
-
-export type ShellKeyboardState = { element: HTMLElement } & Pick<ShellRouteCommitState, "runtime">;
 
 export function resetAppHostTestGlobals(): void {
   vi.useRealTimers();

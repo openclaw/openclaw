@@ -23,6 +23,7 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { makePrompter } from "./doctor-auth-flat-profiles.test-support.js";
+import { mockDoctorServicePlatform } from "./doctor-maintenance.state-owner.test-support.js";
 
 const edges = vi.hoisted(() => ({
   command: vi.fn<typeof import("../process/exec.js").runCommandWithTimeout>(),
@@ -146,7 +147,7 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
     }
 
     // Model one synthetic OS account; the real install-identity guard still runs.
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    mockDoctorServicePlatform("linux");
     vi.spyOn(os, "homedir").mockReturnValue(home);
     vi.spyOn(os, "userInfo").mockReturnValue({
       homedir: home,

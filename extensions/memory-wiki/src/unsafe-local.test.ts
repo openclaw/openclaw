@@ -105,31 +105,7 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
     expect(openedPages).toEqual([await fs.realpath(path.join(vaultDir, canaryPage))]);
   });
 
-  it("salvages unsafe-local page Notes when configured files disappear", async () => {
-    const humanNotes = "Durable unsafe-local annotation";
-    const privateDir = await createPrivateDir("private-prune");
-
-    const secretPath = path.join(privateDir, "secret.md");
-    await fs.writeFile(secretPath, "# private\n", "utf8");
-
-    const { vaultDir, config, first } = await importSources([privateDir]);
-    const firstPagePath = first.pagePaths[0] ?? "";
-    const firstPageAbsPath = path.join(vaultDir, firstPagePath);
-    const firstPage = await addNotes(firstPageAbsPath, humanNotes);
-    expect(firstPage).toContain("# private");
-
-    await fs.rm(secretPath);
-    const second = await syncMemoryWikiUnsafeLocalSources(config);
-
-    expect(second).toMatchObject({ artifactCount: 0, removedCount: 1 });
-    await expect(fs.stat(firstPageAbsPath)).rejects.toHaveProperty("code", "ENOENT");
-    const salvageDir = path.join(vaultDir, ".salvage");
-    await expect(
-      fs.readFile(path.join(salvageDir, `${firstPagePath.replace(/\//g, "_")}.notes.md`), "utf8"),
-    ).resolves.toContain(humanNotes);
-  });
-
-  it("preserves pages and human notes for unavailable configured paths", async () => {
+  it("preserves unavailable paths while salvaging notes from removed files", async () => {
     const unavailableDir = await createPrivateDir("temporarily-unavailable");
     const availableDir = await createPrivateDir("still-available");
     const unavailableSource = path.join(unavailableDir, "keep.md");
@@ -151,6 +127,8 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
     const unavailablePagePath = path.join(vaultDir, unavailablePage!.pagePath);
     const availablePagePath = path.join(vaultDir, availablePage!.pagePath);
     await addNotes(unavailablePagePath, "remember this");
+    const humanNotes = "Durable unsafe-local annotation";
+    expect(await addNotes(availablePagePath, humanNotes)).toContain("# delete me");
 
     const offlinePath = `${unavailableDir}.offline`;
     await fs.rename(unavailableDir, offlinePath);
@@ -160,6 +138,10 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
     expect(duringOutage).toMatchObject({ artifactCount: 0, removedCount: 1 });
     await expect(fs.readFile(unavailablePagePath, "utf8")).resolves.toContain("remember this");
     await expect(fs.stat(availablePagePath)).rejects.toHaveProperty("code", "ENOENT");
+    const salvagePath = availablePage!.pagePath.replace(/\//g, "_") + ".notes.md";
+    await expect(
+      fs.readFile(path.join(vaultDir, ".salvage", salvagePath), "utf8"),
+    ).resolves.toContain(humanNotes);
 
     await fs.rename(offlinePath, unavailableDir);
     const afterRecovery = await syncMemoryWikiUnsafeLocalSources(config);
