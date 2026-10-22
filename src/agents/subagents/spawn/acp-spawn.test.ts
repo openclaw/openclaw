@@ -39,7 +39,6 @@ import { createOperationalRunInstanceRef } from "../../admitted-run-context.js";
 import { reserveChildAdmissionSlot } from "../../child-admission.js";
 import { expectRecordFields } from "../../subagent-test-fixtures.test-helpers.js";
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
-import { registerAcpSpawnOwnerTests } from "./acp-spawn-owner.test-support.js";
 import { registerAcpSpawnPolicyTests } from "./acp-spawn-policy.test-support.js";
 import { createAcpSpawnSessionBinding as createSessionBinding } from "./acp-spawn-store.test-support.js";
 import { withParentExecutionIdentity } from "./execution-identity-spawn-context.js";
@@ -433,21 +432,72 @@ function trackActiveAcpTurn(sessionKey: string, ownerSessionKey: string) {
 }
 
 describe("spawnAcpDirect", () => {
+  it.each([
+    { agent: "codex", exists: true },
+    { agent: "claude-code", exists: true },
+    { agent: "claude-code", exists: false },
+  ])("resolves $agent ownership and workspace (exists=$exists)", async ({ agent, exists }) => {
+    const workspace = await createCrossAgentWorkspaceFixture({
+      createTargetWorkspace: exists,
+    });
+    const rawHarness = agent === "codex";
+    const owner = rawHarness ? "main" : agent;
+    const cfg = hoisted.state.cfg;
+    try {
+      cfg.acp = { ...cfg.acp, allowedAgents: rawHarness ? [agent] : ["codex", agent] };
+      cfg.agents = {
+        entries: {
+          main: { workspace: workspace.mainWorkspace },
+          ...(!rawHarness ? { [agent]: { workspace: workspace.targetWorkspace } } : {}),
+        },
+      };
+      const { childSessionKey } = expectAcceptedSpawn(await spawn({ agentId: agent, mode: "run" }));
+      expect(childSessionKey).toMatch(new RegExp(`^agent:${owner}:acp:`));
+      expectInitializeSessionFields({
+        agentId: owner,
+        agent,
+        cwd: rawHarness ? workspace.mainWorkspace : exists ? workspace.targetWorkspace : undefined,
+        sessionKey: childSessionKey,
+      });
+      if (rawHarness) {
+        expectRegisteredSubagentRun(
+          hoisted.registerSubagentRunMock,
+          { childSessionKey, childAgentId: "main", requesterAgentId: "main" },
+          { assertCurrent: undefined },
+        );
+      }
+    } finally {
+      await fs.rm(workspace.workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("resumes through the configured ACP owner and backend", async () => {
+    const cfg = hoisted.state.cfg;
+    cfg.agents = {
+      ...cfg.agents,
+      entries: {
+        reviewer: { runtime: { type: "acp", acp: { agent: "codex", backend: "fallback" } } },
+      },
+    };
+    const resumeSessionId = "fixture-resume";
+    hoisted.readAcpResumeSessionOwnerMock.mockResolvedValue({
+      sessionKey: "agent:reviewer:acp:owned",
+      entry: { sessionId: "sess-owned", updatedAt: 100, spawnedBy: "agent:main:main" },
+    });
+    expectAcceptedSpawn(await spawn({ agentId: "reviewer", resumeSessionId }));
+    const expected = { agentId: "reviewer", backendId: "fallback", resumeSessionId };
+    expect(hoisted.readAcpResumeSessionOwnerMock).toHaveBeenCalledWith(
+      expect.objectContaining({ ...expected, runtimeAgentId: "codex" }),
+    );
+    expectInitializeSessionFields({ ...expected, agent: "codex" });
+  });
+
   registerAcpSpawnPolicyTests({
     spawn: spawnAcpDirect,
     state: hoisted.state,
     initializeSessionMock: hoisted.initializeSessionMock,
     upsertSessionEntryMock: hoisted.upsertSessionEntryMock,
     callGatewayMock: hoisted.callGatewayMock,
-  });
-  registerAcpSpawnOwnerTests({
-    spawn,
-    state: hoisted.state,
-    registerSubagentRunMock: hoisted.registerSubagentRunMock,
-    readAcpResumeSessionOwnerMock: hoisted.readAcpResumeSessionOwnerMock,
-    expectAcceptedSpawn,
-    expectInitializeSessionFields,
-    createCrossAgentWorkspaceFixture,
   });
 
   beforeEach(() => {
