@@ -42,13 +42,11 @@ async function handleRequest(request: BridgeRequest) {
   try {
     if (request.operation === "connect") {
       await client.connect();
-      // Matches the pilot's SQLite WAL + synchronous=NORMAL durability tradeoff.
-      await client.query("SET synchronous_commit = off");
       await client.query(
-        "SELECT set_config('lock_timeout', $1, false), set_config('statement_timeout', $2, false)",
-        [`${lockTimeoutMs}ms`, `${statementTimeoutMs}ms`],
+        "SELECT set_config('lock_timeout', $1, false), " +
+          "set_config('statement_timeout', $2, false), set_config('search_path', $3, false)",
+        [`${lockTimeoutMs}ms`, `${statementTimeoutMs}ms`, `"${schema.replaceAll('"', '""')}"`],
       );
-      await client.query(`SET search_path TO "${schema.replaceAll('"', '""')}"`);
       reply = { id: request.id, result: { rows: [], rowCount: 0, fields: [] } };
     } else if (request.operation === "close") {
       await client.end();
