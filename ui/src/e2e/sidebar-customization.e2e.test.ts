@@ -296,40 +296,6 @@ suite.define(() => {
     });
     const page = await context.newPage();
     const video = page.video();
-    await page.addInitScript(() => {
-      const events: object[] = [];
-      Reflect.set(window, "__sidebarSettingsEvents", events);
-      for (const type of ["pointerdown", "pointerup", "click", "menu-select"]) {
-        document.addEventListener(
-          type,
-          (event) => {
-            const target = event.target instanceof Element ? event.target : null;
-            const menu = target?.closest(".sidebar-identity-menu");
-            if (!menu && !target?.closest(".sidebar-identity-card")) {
-              return;
-            }
-            queueMicrotask(() => {
-              events.push({
-                type,
-                identityCard: Boolean(target?.closest(".sidebar-identity-card")),
-                settings:
-                  target?.closest("[data-value]")?.getAttribute("data-value") ===
-                  "command:settings",
-                connected: target?.isConnected ?? false,
-                prevented: event.defaultPrevented,
-                phase: menu?.getAttribute("data-phase"),
-                hidden: menu?.hasAttribute("hidden") ?? false,
-                path: location.pathname,
-              });
-              if (events.length > 16) {
-                events.shift();
-              }
-            });
-          },
-          true,
-        );
-      }
-    });
     await installMockGateway(page, {
       controlUiTabs: [{ group: "control", id: "logbook", label: "Logbook", pluginId: "logbook" }],
       methodResponses: {
@@ -434,13 +400,7 @@ suite.define(() => {
       await expect.poll(() => identityCard.isVisible()).toBe(true);
       await openSettingsFromIdentity();
       const { search: settingsSearch, sidebar: settingsSidebar } =
-        await waitForControlUiSettingsTakeover(page).catch(async (error: unknown) => {
-          console.error(
-            "[sidebar-settings-events]",
-            await page.evaluate(() => Reflect.get(window, "__sidebarSettingsEvents")),
-          );
-          throw error;
-        });
+        await waitForControlUiSettingsTakeover(page);
       await expect
         .poll(() =>
           settingsSidebar

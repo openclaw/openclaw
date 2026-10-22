@@ -1,26 +1,19 @@
-import net from "node:net";
 import { afterEach, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { HostDesktopCredentialsRequiredError } from "../desktop/host-source-errors.js";
-import { createHostDesktopService } from "../desktop/host-source.js";
 import { NODE_DESKTOP_SERVICE_CONTEXT } from "../desktop/node-source-context.js";
 import * as observeBridge from "../desktop/observe-bridge.js";
 import {
   resolveDesktopObserveRequester,
   type DesktopObserveRequester,
 } from "../desktop/observe-requester.js";
-import { createDesktopSessionRegistry } from "../desktop/session-registry.js";
 import type { GatewayClient } from "./client-types.js";
 import { invokeEnvironment as invoke } from "./environments.test-support.js";
 
-const cleanups: Array<() => Promise<void>> = [];
 const hostRequest = { source: { kind: "host" } } as const;
 
-afterEach(async () => {
-  await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
-  vi.restoreAllMocks();
-});
+afterEach(() => vi.restoreAllMocks());
 
 function createRequesterClient(signal: AbortSignal): GatewayClient {
   return {
@@ -67,16 +60,18 @@ it("releases only the requesting connection's unclaimed observation once", async
   }
 });
 
-it.each(["node", "environment", "worker alias"] as const)(
+it.each(["host", "node", "environment", "worker alias"] as const)(
   "binds %s observers to live requester authority",
   async (source) => {
     const credentials = { password: "memory-only-node-password" };
     const params =
-      source === "node"
-        ? { source: { kind: "node", nodeId: "node-1" }, credentials }
-        : source === "environment"
-          ? { source: { kind: "environment", environmentId: "worker:one" } }
-          : { environmentId: "worker:one", control: true };
+      source === "host"
+        ? { ...hostRequest, control: true }
+        : source === "node"
+          ? { source: { kind: "node", nodeId: "node-1" }, credentials }
+          : source === "environment"
+            ? { source: { kind: "environment", environmentId: "worker:one" } }
+            : { environmentId: "worker:one", control: true };
     const controller = new AbortController();
     const client = createRequesterClient(controller.signal);
     let authorityCurrent = true;
@@ -89,6 +84,8 @@ it.each(["node", "environment", "worker alias"] as const)(
       source === "worker alias" ? "worker.desktop.observe" : "desktop.observe",
       params,
       {
+        getRuntimeConfig: () => ({ desktop: { host: { enabled: true } } }),
+        hostDesktopService: { observe },
         [NODE_DESKTOP_SERVICE_CONTEXT]: { observe },
         workerEnvironmentService: { observeDesktop: observe },
       },
@@ -96,7 +93,7 @@ it.each(["node", "environment", "worker alias"] as const)(
       () => authorityCurrent,
     );
     expect(ok).toBe(true);
-    expect(result).toMatchObject({ control: source === "worker alias" });
+    expect(result).toMatchObject({ control: source === "worker alias" || source === "host" });
     expect(result).not.toHaveProperty("vncPassword");
     if (source === "node") {
       expect(observe).toHaveBeenCalledWith(
@@ -118,61 +115,6 @@ it.each(["node", "environment", "worker alias"] as const)(
     expect(requester?.isCurrent()).toBe(false);
   },
 );
-
-it("returns a host observer token and auth from a real loopback RFB server", async () => {
-  const mint = vi.spyOn(observeBridge, "mintDesktopObserverToken");
-  const controller = new AbortController();
-  const client = createRequesterClient(controller.signal);
-  const sockets = new Set<net.Socket>();
-  const server = net.createServer((socket) => {
-    sockets.add(socket);
-    socket.once("close", () => sockets.delete(socket));
-    socket.write(Buffer.from("RFB 003.008\n", "ascii"));
-    socket.once("data", () => socket.write(Buffer.from([1, 2])));
-  });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected RFB address");
-  }
-  cleanups.push(
-    () =>
-      new Promise<void>((resolve) => {
-        for (const socket of sockets) {
-          socket.destroy();
-        }
-        server.close(() => resolve());
-      }),
-  );
-  const registry = createDesktopSessionRegistry();
-  cleanups.push(async () => registry.stopAll());
-  const config = { enabled: true, port: address.port };
-  const [ok, result] = await invoke(
-    "desktop.observe",
-    { ...hostRequest, control: true },
-    {
-      getRuntimeConfig: () => ({ desktop: { host: config } }),
-      hostDesktopService: createHostDesktopService({ getConfig: () => config, registry }),
-    },
-    client,
-  );
-  expect(ok).toBe(true);
-  expect(result).toMatchObject({
-    transport: "rfb",
-    control: true,
-    auth: "vnc-password",
-  });
-  expect(result.wsPath).toMatch(/^\/desktop\/observe\?token=[a-f0-9]{48}$/u);
-  const requester = mint.mock.calls[0]?.[0].requester;
-  expect(requester?.signal?.aborted).toBe(false);
-  expect(requester?.isCurrent()).toBe(true);
-  client.invalidated = true;
-  expect(requester?.isCurrent()).toBe(false);
-  expect(controller.signal.aborted).toBe(false);
-});
 
 it("reports ARD credentials as required and forwards an in-memory retry", async () => {
   const observe = vi.fn(

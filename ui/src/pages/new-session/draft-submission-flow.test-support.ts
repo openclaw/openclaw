@@ -14,6 +14,7 @@ import { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 import type { NewSessionRouteData } from "./location.ts";
 
 type FixtureOptions = {
+  onChange?: () => void;
   gateway?: ApplicationContext["gateway"];
   takePreparedTitle?: () => string | undefined;
   retainForHandoff?: DraftSubmissionCallbacks["retainForHandoff"];
@@ -174,7 +175,7 @@ export function createDraftFixture(options: FixtureOptions = {}) {
     }),
     {
       readAgents: () => context.agents,
-      changed: vi.fn(),
+      changed: vi.fn(options.onChange),
       updateComplete: () => Promise.resolve(),
       onInvalidate: vi.fn(),
       onVisibilityRetired: () => flow?.setVisibility("normal"),
@@ -191,7 +192,7 @@ export function createDraftFixture(options: FixtureOptions = {}) {
     gateway,
     () => ({ context, isAdmin: place?.isAdmin() ?? false }),
     {
-      changed: vi.fn(),
+      changed: vi.fn(options.onChange),
       updateComplete: () => Promise.resolve(),
       onProjectMissing: () => place?.clearProjectSelection(),
       onSelectProject: (projectId) => place?.selectProjectId(projectId),
@@ -209,12 +210,12 @@ export function createDraftFixture(options: FixtureOptions = {}) {
       pendingPlacementSessionKey: flow?.pendingPlacement.sessionKey ?? "",
     }),
     {
-      changed: vi.fn(),
+      changed: vi.fn(options.onChange),
       onError: (error) => flow?.setError(error),
       onClearError: (error) => flow?.clearError(error),
     },
   );
-  const changed = vi.fn();
+  const changed = vi.fn(options.onChange);
   const flow = new DraftSubmissionFlow(
     gateway,
     place,

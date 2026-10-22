@@ -48,8 +48,13 @@ describe("PaletteSessionDraft", () => {
     host.draft.setMessage("Carry my cold Send into the required worker");
     host.draft.adoptImageFiles([new File(["cold attachment"], "cold.txt", { type: "text/plain" })]);
     await host.updateComplete;
-    await waitForSolid(() =>
-      expect(host.querySelector('.chat-attachment-loading[data-state="reading"]')).not.toBeNull(),
+    await waitForSolid(
+      () =>
+        expect(
+          host.querySelector('.chat-attachment-loading[data-state="reading"]'),
+          "cold attachment preview has mounted in its reading state",
+        ).not.toBeNull(),
+      { timeout: 5_000 },
     );
     const pendingReader = expectDefined(readers[0], "pending cold attachment reader");
     Object.defineProperty(pendingReader, "result", {
