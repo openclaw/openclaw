@@ -1,16 +1,9 @@
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
-import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import type { GatewayClient } from "../gateway/client.js";
 import { createTestAcpEventLedger } from "./event-ledger.test-support.js";
-import { createChatEvent, promptAgent } from "./translator.prompt-harness.test-support.js";
 import type { AcpAgentWaitResult } from "./translator.prompt-state.js";
-import {
-  createAcpConnection,
-  createAcpGateway,
-  createAcpGatewayAgent,
-} from "./translator.test-helpers.js";
+import { createPromptScenario } from "./translator.scenario.test-support.js";
 
 const visibleReply = (text = "final answer", status: AcpAgentWaitResult["status"] = "ok") => ({
   status,
@@ -31,59 +24,49 @@ async function createReconnectHarness(
 ) {
   const sessionId = "session-1";
   const sessionKey = "agent:main:main";
-  const sessionStore = createInMemorySessionStore();
-  sessionStore.createSession({ sessionId, sessionKey, cwd: "/tmp" });
   const eventLedger = createTestAcpEventLedger();
   await eventLedger.startSession({ sessionId, sessionKey, cwd: "/tmp", complete: true });
-  const connection = createAcpConnection();
-  let runId: string | undefined;
-  const sent = createDeferred<string>();
-  const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
-    if (method === "chat.send") {
-      runId = typeof params?.idempotencyKey === "string" ? params.idempotencyKey : undefined;
-      if (runId) {
-        sent.resolve(runId);
-      }
-    }
-    if (method === "chat.history") {
-      return {
-        messages:
-          historyText === null
-            ? []
-            : [{ role: "assistant", content: historyText, __openclaw: { runId } }],
-      };
-    }
-    return method === "agent.wait" ? result : {};
-  }) as GatewayClient["request"];
-  const agent = createAcpGatewayAgent(connection, createAcpGateway(request), {
+  const h = createPromptScenario({
     eventLedger,
-    sessionStore,
+    send: () => ({}),
+    request: (method): unknown => {
+      if (method === "chat.history") {
+        return {
+          messages:
+            historyText === null
+              ? []
+              : [
+                  {
+                    role: "assistant",
+                    content: historyText,
+                    __openclaw: { runId: h.runIds[0] },
+                  },
+                ],
+        };
+      }
+      return method === "agent.wait" ? result : {};
+    },
   });
-  const promptPromise = promptAgent(agent, sessionId);
-  promptPromise.catch(() => {});
-  const acceptedRunId = await sent.promise;
+  const pending = h.start();
+  const acceptedRunId = await pending.sent;
 
   return {
-    connection,
+    connection: h.connection,
     eventLedger,
-    promptPromise,
-    chunks: () => textChunks(connection["__sessionUpdateMock"].mock.calls.map(([n]) => n)),
+    promptPromise: pending.result,
+    chunks: () => textChunks(h.sessionUpdate.mock.calls.map(([n]) => n)),
     replay: async () =>
       textChunks((await eventLedger.readReplay({ sessionId, sessionKey })).events),
     reconnect: () => {
-      agent.handleGatewayDisconnect("1006: connection lost");
-      agent.handleGatewayReconnect();
+      h.agent.handleGatewayDisconnect("1006: connection lost");
+      h.agent.handleGatewayReconnect();
     },
     chat: (text: string, state: "delta" | "final" = "delta") =>
-      agent.handleGatewayEvent(
-        createChatEvent({
-          runId: acceptedRunId,
-          sessionKey,
-          seq: state === "delta" ? 1 : 2,
-          state,
-          message: { content: [{ type: "text", text }] },
-        }),
-      ),
+      h.chat(acceptedRunId, {
+        seq: state === "delta" ? 1 : 2,
+        state,
+        message: { content: [{ type: "text", text }] },
+      }),
   };
 }
 

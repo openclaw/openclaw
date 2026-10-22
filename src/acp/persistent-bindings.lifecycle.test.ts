@@ -1,4 +1,3 @@
-/** Tests configured ACP binding lifecycle behavior. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AcpSessionResolution } from "./control-plane/manager.types.js";
@@ -48,29 +47,25 @@ function createPersistentSpec(
   };
 }
 
-function mockReadySession(params: {
-  spec: ConfiguredAcpBindingSpec;
-  cwd: string;
-  model?: string;
-  thinking?: string;
-  state?: "idle" | "running" | "error";
-}) {
-  const sessionKey = buildConfiguredAcpSessionKey(params.spec);
+function mockReadySession(
+  spec: ConfiguredAcpBindingSpec,
+  runtimeOptions: NonNullable<
+    Extract<AcpSessionResolution, { kind: "ready" }>["meta"]["runtimeOptions"]
+  >,
+  state: "idle" | "running" | "error" = "idle",
+) {
+  const sessionKey = buildConfiguredAcpSessionKey(spec);
   managerMocks.resolveSessionAsync.mockResolvedValue({
     kind: "ready",
     sessionKey,
-    agentId: params.spec.agentId,
+    agentId: spec.agentId,
     meta: {
       backend: "acpx",
-      agent: params.spec.acpAgentId ?? params.spec.agentId,
+      agent: spec.acpAgentId ?? spec.agentId,
       runtimeSessionName: "existing",
-      mode: params.spec.mode,
-      runtimeOptions: {
-        cwd: params.cwd,
-        ...(params.model ? { model: params.model } : {}),
-        ...(params.thinking ? { thinking: params.thinking } : {}),
-      },
-      state: params.state ?? "idle",
+      mode: spec.mode,
+      runtimeOptions,
+      state,
       lastActivityAt: Date.now(),
     },
   });
@@ -89,8 +84,7 @@ describe("ensureConfiguredAcpBindingSession", () => {
   it("updates configured runtime options in place", async () => {
     const runtimeOptions = { model: "anthropic/claude-sonnet-4-6", thinking: "off" };
     const spec = createPersistentSpec(runtimeOptions);
-    const sessionKey = mockReadySession({
-      spec,
+    const sessionKey = mockReadySession(spec, {
       cwd: "/workspace/openclaw",
       model: "anthropic/claude-haiku-4-5",
       thinking: "high",
@@ -106,7 +100,7 @@ describe("ensureConfiguredAcpBindingSession", () => {
 
   it("reports rejected live thinking without replacing or overwriting the existing session", async () => {
     const spec = createPersistentSpec({ thinking: "off" });
-    const sessionKey = mockReadySession({ spec, cwd: "/workspace/openclaw", thinking: "high" });
+    const sessionKey = mockReadySession(spec, { cwd: "/workspace/openclaw", thinking: "high" });
     managerMocks.setSessionConfigOption.mockRejectedValue(new Error("Live off is unsupported"));
 
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -128,7 +122,7 @@ describe("ensureConfiguredAcpBindingSession", () => {
       model: "anthropic/claude-sonnet-4-6",
       thinking: "off",
     });
-    const sessionKey = mockReadySession({ spec, cwd: "/workspace/other-repo" });
+    const sessionKey = mockReadySession(spec, { cwd: "/workspace/other-repo" });
     expect(await ensure(spec)).toEqual({ ok: true, sessionKey });
     expect(managerMocks.closeSession).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ sessionKey, clearMeta: false }),
@@ -144,7 +138,7 @@ describe("ensureConfiguredAcpBindingSession", () => {
 
   it("reinitializes a matching session when the stored ACP session is in error state", async () => {
     const spec = createPersistentSpec({ cwd: "/home/bob/clawd" });
-    const sessionKey = mockReadySession({ spec, cwd: "/home/bob/clawd", state: "error" });
+    const sessionKey = mockReadySession(spec, { cwd: "/home/bob/clawd" }, "error");
     expect(await ensure(spec)).toEqual({ ok: true, sessionKey });
     expect(managerMocks.closeSession).toHaveBeenCalledTimes(1);
     expect(managerMocks.initializeSession).toHaveBeenCalledTimes(1);

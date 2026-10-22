@@ -38,7 +38,7 @@ export function createTranslatorScenario(
     createAcpGateway(request as GatewayClient["request"]),
     { ...options, sessionStore },
   );
-  return { agent, sessionStore, sessionUpdate };
+  return { agent, connection, sessionStore, sessionUpdate };
 }
 
 export function expectSingleCall(
