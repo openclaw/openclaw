@@ -1,5 +1,5 @@
 import path from "node:path";
-import { MessageChannel } from "node:worker_threads";
+import { setImmediate } from "node:timers/promises";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
@@ -15,6 +15,9 @@ import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-
 import { removeClonedProjectCheckout } from "./project-clone.js";
 import { selectStoredProjectRegistry } from "./project-registry.js";
 import type { ProjectRegistryRecord } from "./project-registry.types.js";
+
+// Capture before fake timers: settlement needs a real event-loop turn.
+const nextMessageTurn = setImmediate;
 
 const fixture = vi.hoisted(() => ({
   expiresAt: 40_000,
@@ -206,19 +209,6 @@ async function select(signal?: AbortSignal): Promise<Selection> {
     throw new Error("Synthetic project was not selected");
   }
   return selected;
-}
-
-async function nextMessageTurn(): Promise<void> {
-  const { port1, port2 } = new MessageChannel();
-  try {
-    await new Promise<void>((resolve) => {
-      port1.once("message", () => resolve());
-      port2.postMessage(undefined);
-    });
-  } finally {
-    port1.close();
-    port2.close();
-  }
 }
 
 function thrownBy(run: () => void): unknown {

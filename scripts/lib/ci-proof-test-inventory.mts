@@ -3475,7 +3475,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/process/supervisor/supervisor.forced-settlement.real.test.ts",
   "src/process/terminal-pty-node.failure.test.ts",
   "src/process/terminal-pty.test.ts",
-  "src/projects/project-clone-registration.test.ts",
   "src/projects/project-environment.test.ts",
   "src/projects/project-registry.authority.test.ts",
   "src/proxy-capture/proxy-server.test.ts",
