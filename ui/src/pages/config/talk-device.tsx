@@ -15,6 +15,7 @@ import type {
 } from "../../app/native-device-settings.ts";
 import { SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { SettingsSelectRow } from "./settings-select-row.tsx";
 import { NativeVoiceControls, voiceControlErrorFallback } from "./talk-device-controls.tsx";
