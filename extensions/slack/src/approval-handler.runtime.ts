@@ -323,6 +323,7 @@ export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdap
         ? {
             teamId: preparedTarget.teamId,
             client,
+            clientOptions: { ...resolved.context.app.webClientOptions },
             writeClient: getSlackListenerWriteClient({
               listenerClient: client,
               teamId: preparedTarget.teamId,
@@ -336,6 +337,7 @@ export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdap
         threadTs: preparedTarget.threadTs,
         blocks: pendingPayload.blocks,
         client,
+        clientOptions: { ...resolved.context.app.webClientOptions },
         eventScope,
       });
       await setSlackSessionStatus({

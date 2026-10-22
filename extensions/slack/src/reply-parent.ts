@@ -1,7 +1,10 @@
-import type { WebClient } from "@slack/web-api";
+import type { WebClient, WebClientOptions } from "@slack/web-api";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
+import { resolveSlackOperationToken, type ResolvedSlackAccount } from "./accounts.js";
 import { withSlackDnsRequestRetry } from "./client-delivery.js";
+import { createSlackLookupClient } from "./client.js";
 import { getSlackWebApiErrorData } from "./errors.js";
+import type { SlackEventScope } from "./monitor/event-scope.js";
 
 async function hasLiveReplyParent(
   client: WebClient,
@@ -57,7 +60,7 @@ async function hasLiveReplyParent(
   return Boolean(rootTs && rootTs !== ts && isLive(parent) && isLive(await readMessage(rootTs)));
 }
 
-export async function assertSlackReplyParent(
+async function assertSlackReplyParent(
   clients: readonly WebClient[],
   channelId: string,
   threadTs: string,
@@ -82,4 +85,83 @@ export async function assertSlackReplyParent(
     "Slack reply parent is missing or deleted; message not sent. Do not resend at channel top level.",
     { cause: undefined, retryable: false },
   );
+}
+
+export function createSlackReplyDispatch(
+  params: {
+    account: ResolvedSlackAccount;
+    eventScope?: SlackEventScope;
+    recipient: { teamId?: string };
+    opts: {
+      threadTs?: string;
+      client?: WebClient;
+      clientOptions?: WebClientOptions;
+      assertDirectAdapterHandoff?: () => void;
+      onPlatformSendDispatch?: () => Promise<void>;
+    };
+  },
+  credential: string,
+): (channelId: string) => Promise<void> {
+  const { opts, eventScope, recipient } = params;
+  let clients: WebClient[] = [];
+  if (opts.threadTs) {
+    if (eventScope && !eventScope.clientOptions) {
+      clients = [eventScope.client];
+    } else if (
+      !eventScope &&
+      opts.client &&
+      !opts.clientOptions &&
+      !recipient.teamId &&
+      !opts.assertDirectAdapterHandoff
+    ) {
+      // External injected clients own their transport policy. Internal listeners
+      // pass their options so lookups can use a separate bounded read client.
+      clients = [opts.client];
+    } else {
+      const listener =
+        eventScope?.client ??
+        (!recipient.teamId && !opts.assertDirectAdapterHandoff ? opts.client : undefined);
+      const writeToken = listener?.token ?? credential;
+      // Monitor replies pass the account writer explicitly; preserve its reader.
+      // Enterprise and unrelated custom credentials must stay isolated.
+      const readToken =
+        !eventScope && writeToken === resolveSlackOperationToken(params.account, "write")
+          ? (resolveSlackOperationToken(params.account, "read") ?? writeToken)
+          : writeToken;
+      const options = eventScope?.clientOptions ?? opts.clientOptions;
+      const headers = Object.fromEntries(
+        Object.entries(options?.headers ?? {}).filter(
+          ([name]) => name.toLowerCase() !== "authorization",
+        ),
+      );
+      clients = [...new Set([readToken, writeToken])].map((token) =>
+        createSlackLookupClient(
+          token,
+          {
+            ...options,
+            headers: { ...headers },
+            ...(listener ? { slackApiUrl: listener.slackApiUrl } : {}),
+            teamId: eventScope?.teamId ?? recipient.teamId,
+            timeout: undefined,
+          },
+          opts.assertDirectAdapterHandoff,
+        ),
+      );
+    }
+  }
+  let didDispatch = false;
+  return async (channelId) => {
+    if (didDispatch) {
+      return;
+    }
+    if (opts.threadTs) {
+      opts.assertDirectAdapterHandoff?.();
+      // Slack may silently publish replies to deleted parents at channel level.
+      // Check after queue/upload, once per send, not per chunk. A deletion between
+      // this check and the write remains a Slack API race.
+      await assertSlackReplyParent(clients, channelId, opts.threadTs);
+    }
+    didDispatch = true;
+    await opts.onPlatformSendDispatch?.();
+  };
 }

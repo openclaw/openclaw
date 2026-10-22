@@ -1,6 +1,6 @@
 import { createHash, createHmac } from "node:crypto";
 import type { MessageMetadata } from "@slack/types";
-import type { Block, KnownBlock, WebClient } from "@slack/web-api";
+import type { Block, KnownBlock, WebClient, WebClientOptions } from "@slack/web-api";
 import type {
   ChannelMessageUnknownSendContext,
   ChannelMessageUnknownSendReconciliationResult,
@@ -53,7 +53,7 @@ import {
   resolveSlackQuestionActionIds,
   SLACK_QUESTION_FINALIZATION_BLOCKS,
 } from "./reply-action-ids.js";
-import { assertSlackReplyParent } from "./reply-parent.js";
+import { createSlackReplyDispatch } from "./reply-parent.js";
 import {
   createSlackSendReceipt,
   createSlackSendReceiptFromResults,
@@ -86,7 +86,7 @@ export type SlackSendIdentity = SlackPostMessageIdentity;
 
 type SlackResolvedDelivery = Readonly<{
   client: WebClient;
-  readClient?: WebClient;
+  dispatch: (channelId: string) => Promise<void>;
   /** Request-free identity for preserving the shared per-credential DM cache. */
   dmCacheOwner?: WebClient;
   credential: string;
@@ -117,6 +117,8 @@ type SlackSendOpts = {
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   client?: WebClient;
+  /** Internal listener transport for bounded reply-parent reads. */
+  clientOptions?: WebClientOptions;
   /** Monitor-private listener context validated from the active event. */
   eventScope?: SlackEventScope;
   /** Monitor-private delivery limits already resolved for the active listener. */
@@ -352,7 +354,7 @@ function resolveSlackDelivery(params: {
     }
     return Object.freeze({
       client: params.eventScope.writeClient,
-      readClient: params.eventScope.client,
+      dispatch: createSlackReplyDispatch(params, params.eventScope.client.token ?? ""),
       credential: SLACK_ENTERPRISE_LISTENER_QUEUE_CREDENTIAL,
       identity: normalizeSlackSendIdentity(params.opts.identity),
       recipient: params.recipient,
@@ -384,19 +386,9 @@ function resolveSlackDelivery(params: {
         params.opts.assertDirectAdapterHandoff,
       )
     : cachedClient;
-  const readToken = params.opts.token?.trim() || resolveSlackOperationToken(params.account, "read");
-  const readClient =
-    params.opts.threadTs && !params.opts.client && readToken && readToken !== credential
-      ? createSlackReadClient(
-          readToken,
-          { teamId: params.recipient.teamId },
-          undefined,
-          params.opts.assertDirectAdapterHandoff,
-        )
-      : client;
   return Object.freeze({
     client,
-    readClient,
+    dispatch: createSlackReplyDispatch(params, credential),
     ...(client !== cachedClient ? { dmCacheOwner: cachedClient } : {}),
     credential,
     identity:
@@ -1034,27 +1026,7 @@ async function sendMessageSlackQueued(params: {
     await opts.onDeliveryResult?.(deliveryResult);
     return deliveryResult;
   };
-  let didDispatch = false;
-  const dispatchOnce = async () => {
-    if (didDispatch) {
-      return;
-    }
-    if (opts.threadTs) {
-      opts.assertDirectAdapterHandoff?.();
-      // Slack can accept a deleted parent and silently post at channel level.
-      // Check once per logical send, after queueing/upload, not per chunk.
-      // A deletion between this check and the write remains a Slack API race.
-      await assertSlackReplyParent(
-        delivery.readClient && delivery.readClient !== client
-          ? [delivery.readClient, client]
-          : [client],
-        channelId,
-        opts.threadTs,
-      );
-    }
-    didDispatch = true;
-    await opts.onPlatformSendDispatch?.();
-  };
+  const dispatchOnce = () => delivery.dispatch(channelId);
   const explicitNativeDataFallbackBase = Object.hasOwn(opts, "nativeDataFallbackBaseText")
     ? (opts.nativeDataFallbackBaseText?.trim() ?? "")
     : undefined;

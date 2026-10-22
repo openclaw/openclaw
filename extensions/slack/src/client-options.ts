@@ -17,7 +17,7 @@ export type SlackProxyDispatcher = ReturnType<typeof createHttp1EnvHttpProxyAgen
 export type SlackSocketModeDispatcher = SlackSocketModeEnvHttpProxyAgent;
 export type SlackLookupClientOptions = Pick<
   WebClientOptions,
-  "fetch" | "slackApiUrl" | "teamId" | "timeout"
+  "fetch" | "headers" | "slackApiUrl" | "teamId" | "timeout"
 >;
 
 export const SLACK_DEFAULT_RETRY_OPTIONS: RetryOptions = {

@@ -7,6 +7,8 @@ export type SlackEventScope = Readonly<{
   teamId: string;
   // Keep Bolt's exact listener client for reads and native event identity.
   client: WebClient;
+  // Reuse the listener transport when a send needs a bounded read-only lookup.
+  clientOptions?: WebClientOptions;
   // Writes cannot inherit Bolt's retries: Slack may accept a request before
   // its response is lost. Preserve the listener token, transport and team scope.
   writeClient?: WebClient;
@@ -89,6 +91,7 @@ export function resolveSlackEventScope(params: {
     scope: {
       teamId,
       client: params.client,
+      clientOptions: { ...params.clientOptions },
       ...(writeClient ? { writeClient } : {}),
     },
   };
