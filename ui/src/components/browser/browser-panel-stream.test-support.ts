@@ -35,6 +35,16 @@ export async function flush() {
   }
 }
 
+export async function receive(socket: TestScreencastSocket, data: string | ArrayBuffer) {
+  socket.receive(data);
+  await flush();
+}
+
+export async function decoded(image: EventTarget) {
+  image.dispatchEvent(new Event("load"));
+  await flush();
+}
+
 export function deferImages() {
   const images: EventTarget[] = [];
   vi.stubGlobal("Image", function () {

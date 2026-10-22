@@ -21,6 +21,8 @@ import { panelScenario } from "./browser-panel-stream.test-support.ts";
 
 setupBrowserPanelTestCleanup();
 const { receive, stubCanvas } = setupAnnotationCapture();
+const INITIAL_URL = "https://example.test/initial";
+const REJECTED_URL = "https://example.test/rejected";
 const stableTab = (url: string) => makeTab("stable-tab", url, "Page");
 function documentRoutes(read: () => ReturnType<typeof stableTab>) {
   return {
@@ -177,40 +179,76 @@ describe("BrowserPanel tab and lifecycle ownership", () => {
   });
 
   it.each([
-    { scenario: "a changed document URL", committedUrl: "https://example.test/committed" },
-    { scenario: "the same document URL", committedUrl: "https://example.test/initial" },
-  ])("recovers $scenario when a queued navigation is rejected", async ({ committedUrl }) => {
-    stubScreenshotMedia();
-    const initialUrl = "https://example.test/initial";
-    const rejectedUrl = "https://example.test/rejected";
-    const committedNavigation = createDeferred<{ targetId: string; url: string }>();
-    let documentUrl = initialUrl;
-    const { calls, controller } = panelScenario("stable-tab", initialUrl, {
-      "/navigate": async (envelope) => {
-        if (envelope.body?.url === rejectedUrl) {
-          throw new Error("Latest navigation rejected");
-        }
-        const result = await committedNavigation.promise;
-        documentUrl = result.url;
-        return result;
-      },
-      ...documentRoutes(() => stableTab(documentUrl)),
-    });
-
-    const previous = controller.openUrl(committedUrl, { newTab: false });
-    await flushBrowserResponses();
-    const latest = controller.openUrl(rejectedUrl, { newTab: false });
-    committedNavigation.resolve({ targetId: "raw-stable", url: committedUrl });
-    await Promise.all([previous, latest]);
-
-    expect(controller.activeTargetId).toBe("stable-tab");
-    expect(controller.tabs[0]?.url).toBe(committedUrl);
-    expect(controller.view?.url).toBe(committedUrl);
-    expect(controller.view?.dataUrl).toContain(btoa("fresh screenshot"));
-    expect(controller.errorText).toBe("Browser request failed: Latest navigation rejected");
-    expect(controller.loading).toBe(false);
-    expect(calls("/navigate")).toHaveLength(2);
-  });
+    { outcome: "changed URL", url: "https://example.test/committed" },
+    { outcome: "same URL", url: "https://example.test/initial" },
+    { outcome: "tabs failure", url: "https://example.test/committed" },
+    { outcome: "screenshot failure", url: "https://example.test/committed" },
+    { outcome: "removed target", url: "https://example.test/committed" },
+  ])(
+    "reconciles a committed document after rejected navigation: $outcome",
+    async ({ outcome, url }) => {
+      const succeeds = outcome.endsWith("URL");
+      if (succeeds) {
+        stubScreenshotMedia();
+      }
+      const committed = createDeferred<{ targetId: string; url: string }>();
+      const error = succeeds ? "Latest navigation rejected" : "Original navigation rejected";
+      let documentUrl = INITIAL_URL;
+      const { controller, calls } = panelScenario("stable-tab", INITIAL_URL, {
+        "/navigate": async (request) => {
+          if (request.body?.url === REJECTED_URL) {
+            throw new Error(error);
+          }
+          const result = await committed.promise;
+          documentUrl = result.url;
+          return result;
+        },
+        "/tabs": async () => {
+          if (outcome === "tabs failure") {
+            throw new Error("Best-effort tab recovery failed");
+          }
+          return {
+            running: true,
+            tabs: outcome === "removed target" ? [] : [stableTab(documentUrl)],
+          };
+        },
+        "/screenshot": async () => {
+          if (!succeeds) {
+            throw new Error("Best-effort screenshot recovery failed");
+          }
+          return { path: "/fresh.png", targetId: "raw-stable", url: documentUrl };
+        },
+        "/act": async () => {
+          if (!succeeds) {
+            throw new Error("Unexpected evaluation during failed recovery");
+          }
+          return metrics(documentUrl);
+        },
+      });
+      const previous = controller.openUrl(url, { newTab: false });
+      await flushBrowserResponses();
+      const latest = controller.openUrl(REJECTED_URL, { newTab: false });
+      committed.resolve({ targetId: "raw-stable", url });
+      await expect(Promise.all([previous, latest])).resolves.toEqual([undefined, undefined]);
+      expect(controller).toMatchObject({
+        errorText: "Browser request failed: " + error,
+        loading: false,
+      });
+      if (succeeds) {
+        expect(controller).toMatchObject({
+          activeTargetId: "stable-tab",
+          tabs: [expect.objectContaining({ url })],
+          view: { url, dataUrl: expect.stringContaining(btoa("fresh screenshot")) },
+        });
+        expect(calls("/navigate")).toHaveLength(2);
+      } else if (outcome === "removed target") {
+        expect(controller.tabs).toEqual([]);
+        expect(calls("/screenshot")).toEqual([]);
+      } else {
+        expect(controller).toMatchObject({ activeTargetId: null, view: null, urlDraft: "" });
+      }
+    },
+  );
 
   it("recovers a committed document after its predecessor leaves the navigation queue", async () => {
     stubScreenshotMedia();
@@ -253,76 +291,6 @@ describe("BrowserPanel tab and lifecycle ownership", () => {
     previousSnapshot.resolve({ running: true, tabs: [] });
     await previous;
     expect(controller.loading).toBe(false);
-  });
-
-  it.each(["tabs", "screenshot"] as const)(
-    "keeps the original navigation error when best-effort %s recovery fails",
-    async (failedRecovery) => {
-      const initialUrl = "https://example.test/initial";
-      const committedUrl = "https://example.test/committed";
-      const committedNavigation = createDeferred<{ targetId: string; url: string }>();
-      const { controller } = panelScenario("stable-tab", initialUrl, {
-        "/navigate": async (envelope) => {
-          if (envelope.body?.url === "https://example.test/rejected") {
-            throw new Error("Original navigation rejected");
-          }
-          return await committedNavigation.promise;
-        },
-        "/tabs": async () => {
-          if (failedRecovery === "tabs") {
-            throw new Error("Best-effort tab recovery failed");
-          }
-          return {
-            running: true,
-            tabs: [stableTab(committedUrl)],
-          };
-        },
-        "/screenshot": async () => {
-          throw new Error("Best-effort screenshot recovery failed");
-        },
-      });
-
-      const previous = controller.openUrl(committedUrl, { newTab: false });
-      await flushBrowserResponses();
-      const latest = controller.openUrl("https://example.test/rejected", { newTab: false });
-      committedNavigation.resolve({ targetId: "raw-stable", url: committedUrl });
-      await expect(Promise.all([previous, latest])).resolves.toEqual([undefined, undefined]);
-
-      expect(controller.activeTargetId).toBeNull();
-      expect(controller.view).toBeNull();
-      expect(controller.urlDraft).toBe("");
-      expect(controller.errorText).toBe("Browser request failed: Original navigation rejected");
-      expect(controller.loading).toBe(false);
-    },
-  );
-
-  it("does not capture a navigation target removed during failure reconciliation", async () => {
-    const initialUrl = "https://example.test/initial";
-    const committedUrl = "https://example.test/committed";
-    const committedNavigation = createDeferred<{ targetId: string; url: string }>();
-    const { calls, controller } = panelScenario("stable-tab", initialUrl, {
-      "/navigate": async (envelope) => {
-        if (envelope.body?.url === "https://example.test/rejected") {
-          throw new Error("Original navigation rejected");
-        }
-        return await committedNavigation.promise;
-      },
-      "/tabs": async () => ({ running: true, tabs: [] }),
-      "/screenshot": async () => {
-        throw new Error("Removed tab must never be captured");
-      },
-    });
-
-    const previous = controller.openUrl(committedUrl, { newTab: false });
-    await flushBrowserResponses();
-    const latest = controller.openUrl("https://example.test/rejected", { newTab: false });
-    committedNavigation.resolve({ targetId: "raw-stable", url: committedUrl });
-    await expect(Promise.all([previous, latest])).resolves.toEqual([undefined, undefined]);
-
-    expect(controller.tabs).toEqual([]);
-    expect(controller.errorText).toBe("Browser request failed: Original navigation rejected");
-    expect(controller.loading).toBe(false);
-    expect(calls("/screenshot")).toEqual([]);
   });
 
   it.each(["before", "after"] as const)(
