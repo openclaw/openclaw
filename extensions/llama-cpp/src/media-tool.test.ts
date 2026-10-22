@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -64,23 +65,16 @@ function capture(
   });
   registerLlamaCppMediaTool(api, { id: "llama-cpp", capabilities: ["image"], describeImage });
   const factory = registerTool.mock.calls[0]?.[0];
-  if (typeof factory !== "function") {
-    throw new Error("local_image factory was not registered");
-  }
-  const registered = factory({
+  assert(typeof factory === "function", "local_image factory was not registered");
+  const tool = factory({
     agentDir: "/agent",
     workspaceDir: "/workspace",
     fsPolicy: { workspaceOnly: true },
     ...ctx,
   });
-  if (Array.isArray(registered)) {
-    throw new Error("local_image must register one tool");
-  }
-  const tool = registered;
+  assert(!Array.isArray(tool), "local_image must register one tool");
   async function run(input: unknown = "fixture.png", signal?: AbortSignal) {
-    if (!tool) {
-      throw new Error("Expected the configured local_image tool");
-    }
+    assert(tool, "Expected the configured local_image tool");
     return await tool.execute("test", typeof input === "string" ? { path: input } : input, signal);
   }
   async function blocked(input?: unknown, message?: string) {
