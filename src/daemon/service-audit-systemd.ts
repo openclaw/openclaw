@@ -343,9 +343,7 @@ async function auditSystemdDefinition(
                     : "The installer would replace a custom directive in the managed unit.",
                 // Ignored application metadata still belongs to the operator during rewrites.
                 message:
-                  SYSTEMD_DIRECTIVES.has(key) ||
-                  key.startsWith("X-") ||
-                  key.startsWith("X-", key.indexOf(".") + 1)
+                  SYSTEMD_DIRECTIVES.has(key) || /(?:^|\.)X-/.test(key)
                     ? `Custom systemd ${key}; not changed.`
                     : `Systemd ${key} contains an unrecognized setting.`,
               },
