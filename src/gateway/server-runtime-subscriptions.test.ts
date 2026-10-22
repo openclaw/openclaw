@@ -110,6 +110,7 @@ vi.mock("../config/io.js", () => ({
 vi.mock("../audit/audit-recorder.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../audit/audit-recorder.js")>();
   return {
+    ...actual,
     createAuditEventRecorder: (options: Parameters<typeof actual.createAuditEventRecorder>[0]) => {
       auditTestState.created += 1;
       return actual.createAuditEventRecorder({
@@ -117,11 +118,11 @@ vi.mock("../audit/audit-recorder.js", async (importOriginal) => {
         writer: {
           ready: Promise.resolve(),
           record: (event) => {
-            if (event.kind === "message") {
-              auditTestState.messages += 1;
-            } else {
-              auditTestState.recorded += 1;
-            }
+            auditTestState[event.kind === "message" ? "messages" : "recorded"] += 1;
+            return true;
+          },
+          recordRun: () => {
+            auditTestState.recorded += 2;
             return true;
           },
           recordExecutionIdentity: () => {
@@ -562,44 +563,26 @@ describe("startGatewayEventSubscriptions", () => {
       lifecycleGeneration,
     });
     const entry = registration.entry;
+    const emit = (data: AgentEventPayload["data"]) =>
+      emitAgentEvent({ runId, lifecycleGeneration, stream: "lifecycle", data });
     const transitions: LifecycleTransition[] = [
       { state: "Registered", lifecycle: readLifecycleState(entry) },
     ];
     agentEventHandlerMocks.create.mockReturnValue(Object.assign(vi.fn(), { dispose: vi.fn() }));
     unsubs = startGatewayEventSubscriptions(params);
 
-    emitAgentEvent({
-      runId,
-      lifecycleGeneration,
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: 1_000 },
-    });
+    emit({ phase: "start", startedAt: 1_000 });
     transitions.push({ state: "Start-normalized", lifecycle: readLifecycleState(entry) });
     await waitForFast(() => expect(agentEventHandlerMocks.create).toHaveBeenCalledOnce());
 
-    emitAgentEvent({
-      runId,
-      lifecycleGeneration,
-      stream: "lifecycle",
-      data: { phase: "error", error: "retryable provider failure", endedAt: 2_000 },
-    });
-    emitAgentEvent({
-      runId,
-      lifecycleGeneration,
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: 2_500 },
-    });
+    emit({ phase: "error", error: "retryable provider failure", endedAt: 2_000 });
+    emit({ phase: "start", startedAt: 2_500 });
     expect(agentEventHandlerMocks.persistLifecycle).not.toHaveBeenCalled();
 
     const terminalPersistence = createDeferred();
     agentEventHandlerMocks.persistLifecycle.mockReturnValue(terminalPersistence.promise);
 
-    emitAgentEvent({
-      runId,
-      lifecycleGeneration,
-      stream: "lifecycle",
-      data: { phase: "end", endedAt: 3_000 },
-    });
+    emit({ phase: "end", endedAt: 3_000 });
     const ownedPersistence = entry.adapter.projectSessionTerminalPersistence;
     transitions.push({ state: "Persisting", lifecycle: readLifecycleState(entry) });
 
@@ -827,36 +810,28 @@ describe("startGatewayEventSubscriptions", () => {
   );
 
   it.each([
-    { result: "visible persistence", hidden: false, dispatchFails: false, persistenceFails: false },
-    { result: "hidden no-write", hidden: true, dispatchFails: false, persistenceFails: false },
-    {
-      result: "hidden dispatch failure",
-      hidden: true,
-      dispatchFails: true,
-      persistenceFails: false,
-    },
+    { result: "visible persistence" },
+    { result: "hidden no-write", hidden: true },
+    { result: "hidden dispatch failure", hidden: true, dispatchFails: true },
     {
       result: "visible no-write dispatch failure",
-      hidden: false,
       projectSessionLifecycle: false,
       dispatchFails: true,
-      persistenceFails: false,
     },
-    {
-      result: "dispatch failure with an accepted write",
-      hidden: false,
-      dispatchFails: true,
-      persistenceFails: false,
-    },
+    { result: "dispatch failure with an accepted write", dispatchFails: true },
     {
       result: "dispatch and persistence failures",
-      hidden: false,
       dispatchFails: true,
       persistenceFails: true,
     },
   ])(
     "joins accepted terminal dispatch before settling $result",
-    async ({ hidden, projectSessionLifecycle, dispatchFails, persistenceFails }) => {
+    async ({
+      hidden = false,
+      projectSessionLifecycle,
+      dispatchFails = false,
+      persistenceFails = false,
+    }) => {
       const actual = await vi.importActual<typeof import("./server-chat.js")>("./server-chat.js");
       const runId = "run-abort-persistence-bridge";
       const sessionKey = "agent:main:main";

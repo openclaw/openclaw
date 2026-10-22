@@ -30,6 +30,16 @@ export function DevicesView(props: DevicesProps) {
             )}
           </div>
         ) : undefined}
+        {props.devicesError ? (
+          <div class="callout danger" role="alert">
+            {props.devicesError}
+          </div>
+        ) : undefined}
+        {props.lastError ? (
+          <div class="callout danger" role="alert">
+            {props.lastError}
+          </div>
+        ) : undefined}
         <DeviceInventory {...props} /> <ExecApprovals {...approvalsState()} />
         <Bindings {...bindingState()} />
       </>
@@ -81,7 +91,7 @@ function Bindings(props: BindingState) {
             <button
               class="btn"
               disabled={!props.connected || props.configLoading}
-              onClick={props.onLoadConfig}
+              onClick={() => props.onLoadConfig()}
             >
               {props.configLoading ? t("common.loading") : t("common.loadConfig")}
             </button>

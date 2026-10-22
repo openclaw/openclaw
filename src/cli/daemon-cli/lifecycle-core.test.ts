@@ -330,7 +330,6 @@ it("repairs managed port drift before restarting", async () => {
   expectPartialCall(repairLoadedService, {
     issues: [
       {
-        code: "port-mismatch",
         message: "service port 18789 does not match current gateway config port 19001",
       },
     ],

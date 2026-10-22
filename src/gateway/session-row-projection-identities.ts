@@ -7,6 +7,7 @@ import {
 import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
+import { resolveSessionCreatorActor } from "../config/sessions/session-entry-provenance.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
   first,
@@ -37,8 +38,8 @@ export function createSessionRowCreatorIndex() {
   }
   return {
     update(previous: Row | undefined, next?: Row) {
-      const before = previous?.entry?.createdActor;
-      const after = next?.entry?.createdActor;
+      const before = resolveSessionCreatorActor(previous?.entry?.createdActor);
+      const after = resolveSessionCreatorActor(next?.entry?.createdActor);
       if (
         Boolean(previous?.entry) === Boolean(next?.entry) &&
         before?.id === after?.id &&
@@ -137,20 +138,20 @@ export function createSessionRowCreatorIndex() {
         return [
           ...Array.from(resolved.values(), ({ type, id, label }) => ({ type, id, label })),
           ...(memory
-            ? (memory.owner
-                ?.listSessions(memory.authority)
-                .flatMap(({ entry }) =>
-                  entry?.incognito && entry.createdActor?.id ? [entry.createdActor] : [],
-                ) ?? [])
+            ? (memory.owner?.listSessions(memory.authority).flatMap(({ entry }) => {
+                const actor = resolveSessionCreatorActor(entry?.createdActor);
+                return entry?.incognito && actor?.id ? [actor] : [];
+              }) ?? [])
             : memorySessionActorOwners.list().flatMap((owner) =>
                 owner
                   .listSessions({
                     assertCurrent: owner.assertCurrent,
                     authorize: owner.assertCurrent,
                   })
-                  .flatMap(({ entry }) =>
-                    entry?.incognito && entry.createdActor?.id ? [entry.createdActor] : [],
-                  ),
+                  .flatMap(({ entry }) => {
+                    const actor = resolveSessionCreatorActor(entry?.createdActor);
+                    return entry?.incognito && actor?.id ? [actor] : [];
+                  }),
               )),
         ];
       });

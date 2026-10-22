@@ -1,4 +1,3 @@
-// Discord tests cover thread title.generate plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 import { generateThreadTitle } from "./thread-title.js";
@@ -10,20 +9,13 @@ vi.mock("openclaw/plugin-sdk/reply-dispatch-runtime", async (importOriginal) => 
   generateConversationLabel: generateConversationLabelMock,
 }));
 
-function hasLoneSurrogate(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code >= 0xd800 && code <= 0xdbff) {
-      const next = value.charCodeAt(index + 1);
-      if (!(next >= 0xdc00 && next <= 0xdfff)) {
-        return true;
-      }
-      index += 1;
-    } else if (code >= 0xdc00 && code <= 0xdfff) {
-      return true;
-    }
-  }
-  return false;
+function generate(overrides: Partial<Parameters<typeof generateThreadTitle>[0]> = {}) {
+  return generateThreadTitle({
+    cfg: EMPTY_DISCORD_TEST_CONFIG,
+    agentId: "main",
+    messageText: "Generate title.",
+    ...overrides,
+  });
 }
 
 beforeEach(() => {
@@ -41,19 +33,11 @@ describe("generateThreadTitle", () => {
     ["***Release plan***", "Release plan"],
   ])("normalizes generated title %j", async (generated, expected) => {
     generateConversationLabelMock.mockResolvedValueOnce(generated);
-    await expect(
-      generateThreadTitle({
-        cfg: EMPTY_DISCORD_TEST_CONFIG,
-        agentId: "main",
-        messageText: "Need a generated title.",
-      }),
-    ).resolves.toBe(expected);
+    await expect(generate()).resolves.toBe(expected);
   });
 
   it("routes through the shared isolated label generator", async () => {
-    await generateThreadTitle({
-      cfg: EMPTY_DISCORD_TEST_CONFIG,
-      agentId: "main",
+    await generate({
       modelRef: "openai/gpt-4.1-mini@local",
       messageText: "Summarize deployment blockers and owner follow-ups.",
       channelName: "release-status",
@@ -74,40 +58,23 @@ describe("generateThreadTitle", () => {
   });
 
   it("keeps truncated prompt fields on UTF-16 boundaries", async () => {
-    await generateThreadTitle({
-      cfg: EMPTY_DISCORD_TEST_CONFIG,
-      agentId: "main",
+    await generate({
       messageText: `${"m".repeat(599)}😀tail`,
       channelName: `${"n".repeat(119)}😀tail`,
       channelDescription: `${"d".repeat(319)}😀tail`,
     });
 
     const content = generateConversationLabelMock.mock.calls[0]?.[0]?.userMessage ?? "";
-    expect(hasLoneSurrogate(content)).toBe(false);
-    expect(content).toContain(`${"m".repeat(599)}...`);
-    expect(content).toContain(`${"n".repeat(119)}...`);
-    expect(content).toContain(`${"d".repeat(319)}...`);
+    expect(content).toBe(
+      `Channel: ${"n".repeat(119)}...\n\nChannel description: ${"d".repeat(319)}...\n\nMessage:\n${"m".repeat(599)}...`,
+    );
   });
 
   it("returns null for empty input, empty output, or generation failure", async () => {
-    await expect(
-      generateThreadTitle({ cfg: EMPTY_DISCORD_TEST_CONFIG, agentId: "main", messageText: " " }),
-    ).resolves.toBeNull();
+    await expect(generate({ messageText: " " })).resolves.toBeNull();
     generateConversationLabelMock.mockResolvedValueOnce(null);
-    await expect(
-      generateThreadTitle({
-        cfg: EMPTY_DISCORD_TEST_CONFIG,
-        agentId: "main",
-        messageText: "Generate title.",
-      }),
-    ).resolves.toBeNull();
+    await expect(generate()).resolves.toBeNull();
     generateConversationLabelMock.mockRejectedValueOnce(new Error("network timeout"));
-    await expect(
-      generateThreadTitle({
-        cfg: EMPTY_DISCORD_TEST_CONFIG,
-        agentId: "main",
-        messageText: "Generate title.",
-      }),
-    ).resolves.toBeNull();
+    await expect(generate()).resolves.toBeNull();
   });
 });

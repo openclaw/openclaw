@@ -14,10 +14,7 @@ import {
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { ExecApprovalActionDescriptor } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { formatChannelApprovalResolvedLabel } from "openclaw/plugin-sdk/approval-runtime";
-import type {
-  DiscordExecApprovalConfig,
-  OpenClawConfig,
-} from "openclaw/plugin-sdk/config-contracts";
+import type { DiscordExecApprovalConfig } from "openclaw/plugin-sdk/config-contracts";
 import { logDebug, logError } from "openclaw/plugin-sdk/logging-core";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { findGraphemeChunkEnd } from "openclaw/plugin-sdk/text-grapheme";
@@ -188,43 +185,6 @@ function createApprovalContainer(view: ApprovalViewModel): APIContainerComponent
   return { type: ComponentType.Container, components, accent_color: colorToNumber(accentColor) };
 }
 
-async function finalizeMessage(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  token: string;
-  cleanupAfterResolve?: boolean;
-  channelId: string;
-  messageId: string;
-  container: APIContainerComponent;
-}): Promise<void> {
-  const operations = params.cleanupAfterResolve ? ["delete", "update"] : ["update"];
-  for (const operation of operations) {
-    try {
-      const { rest, request: discordRequest } = createDiscordClient({
-        cfg: params.cfg,
-        token: params.token,
-        accountId: params.accountId,
-      });
-      let request: () => Promise<unknown>;
-      if (operation === "delete") {
-        request = () => deleteChannelMessage(rest, params.channelId, params.messageId);
-      } else {
-        const payload = buildExecApprovalPayload(params.container);
-        request = () =>
-          editChannelMessage(rest, params.channelId, params.messageId, {
-            body: stripUndefinedFields(serializePayload(payload)),
-          });
-      }
-      await discordApprovalMessageUpdates.enqueue(params.messageId, () =>
-        discordRequest(request, `${operation}-approval`),
-      );
-      return;
-    } catch (err) {
-      logError(`discord approvals: failed to ${operation} message: ${String(err)}`);
-    }
-  }
-}
-
 function buildTerminalApprovalResult(
   params: ChannelApprovalCapabilityHandlerContext & {
     view: ResolvedApprovalView | ExpiredApprovalView;
@@ -368,16 +328,37 @@ export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
         return;
       }
       const container = payload as APIContainerComponent;
-      await finalizeMessage({
-        cfg,
-        accountId: resolved.accountId,
-        token: resolved.context.token,
-        cleanupAfterResolve:
-          phase === "resolved" ? resolved.context.config.cleanupAfterResolve : false,
-        channelId: entry.discordChannelId,
-        messageId: entry.discordMessageId,
-        container,
-      });
+      const { token } = resolved.context;
+      const { discordChannelId, discordMessageId } = entry;
+      const operations =
+        phase === "resolved" && resolved.context.config.cleanupAfterResolve
+          ? ["delete", "update"]
+          : ["update"];
+      for (const operation of operations) {
+        try {
+          const { rest, request: discordRequest } = createDiscordClient({
+            cfg,
+            token,
+            accountId: resolved.accountId,
+          });
+          let request: () => Promise<unknown>;
+          if (operation === "delete") {
+            request = () => deleteChannelMessage(rest, discordChannelId, discordMessageId);
+          } else {
+            const messagePayload = buildExecApprovalPayload(container);
+            request = () =>
+              editChannelMessage(rest, discordChannelId, discordMessageId, {
+                body: stripUndefinedFields(serializePayload(messagePayload)),
+              });
+          }
+          await discordApprovalMessageUpdates.enqueue(discordMessageId, () =>
+            discordRequest(request, `${operation}-approval`),
+          );
+          return;
+        } catch (err) {
+          logError(`discord approvals: failed to ${operation} message: ${String(err)}`);
+        }
+      }
     },
   },
   observe: {

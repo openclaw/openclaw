@@ -25,10 +25,6 @@ import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.js";
 import { resolveSelectedModelCredential } from "./model-auth-selected-credential.js";
 import {
-  buildProviderConfigModelCatalogForBrowse,
-  type ModelCatalogBrowseView,
-} from "./model-catalog-browse.js";
-import {
   projectModelCatalogEntryForRoute,
   createConfiguredModelCatalogOverridesResolver,
   type ModelCatalogRoutePolicy,
@@ -38,6 +34,7 @@ import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.ty
 import { hasAuthoredProviderRequestParams } from "./model-extra-params.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import type { ModelRef } from "./model-ref-shared.js";
+import { buildConfiguredModelCatalog as buildInventoryCatalog } from "./model-selection-shared.js";
 import {
   createModelVisibilityPolicy,
   RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
@@ -46,6 +43,8 @@ import {
   createModelCatalogIdentityKeyResolver,
   openAIModelCatalogRoutePolicy,
 } from "./openai-model-routes.js";
+
+type ModelCatalogBrowseView = "default" | "configured" | "provider-config" | "all";
 
 /** Keep capability donors bound to one model and runtime without merging sibling metadata. */
 export function selectModelCatalogRuntimeEntry(params: {
@@ -435,10 +434,17 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
       );
       const canonicalByKey = indexFirstByKey(canonicalEntries, keyOf);
       // Authored config owns membership; captured catalog rows own route metadata.
-      const authored = buildProviderConfigModelCatalogForBrowse({
+      const authored = buildInventoryCatalog({
         cfg: sourceConfig,
         workspaceDir: params.workspaceDir,
-      }).map((entry) => canonicalByKey.get(keyOf(entry)) ?? entry);
+      })
+        .toSorted(
+          (a, b) =>
+            a.provider.localeCompare(b.provider) ||
+            a.name.localeCompare(b.name) ||
+            a.id.localeCompare(b.id),
+        )
+        .map((entry) => canonicalByKey.get(keyOf(entry)) ?? entry);
       return dedupeByKey(
         [
           ...authored,

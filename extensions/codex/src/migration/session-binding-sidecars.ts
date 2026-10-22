@@ -682,6 +682,11 @@ async function readDirectoryEntries(directory: string) {
   }
 }
 
+export async function collectLegacySessionBindingBackupResources(params: MigrationEnvironment) {
+  const { sources } = await collectLegacyBindingSources(params);
+  return sources.map(({ sidecarPath }) => ({ path: sidecarPath, kind: "file" as const }));
+}
+
 export async function detectLegacySessionBindingSidecars(params: MigrationParams) {
   const { sources } = await collectLegacyBindingSources(params, { firstOnly: true });
   return sources.length > 0

@@ -179,7 +179,7 @@ describe("handleDirFetch", () => {
       const big = crypto.randomBytes(512 * 1024);
       await seed(["big1.bin", "big2.bin", "big3.bin"], big);
 
-      // 64KB cap should trip either the du preflight or the streaming SIGTERM.
+      // The compressed stream must stop at the 64KB cap.
       await expectDirFetchError({ path: at(), maxBytes: 64 * 1024 }, "TREE_TOO_LARGE");
     },
     30_000,

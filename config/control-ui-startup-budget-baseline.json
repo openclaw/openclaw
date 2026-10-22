@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 324590,
-  "reason": "Page-owned English catalogs, with shared secret-request labels kept eager, measure 324590 B at startup; preserve one CSS request and cap startup at 325000 B.",
-  "updatedAt": "2026-10-20"
+  "startupJsGzipBytes": 325081,
+  "reason": "Solid 2 action/optimistic runtime adoption, W-SOLID2-RECIPES; offset tracked by HF-STARTUP-BUDGET",
+  "updatedAt": "2026-10-21"
 }

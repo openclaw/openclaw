@@ -83,8 +83,6 @@ export type FallbackStatus = {
 };
 
 export type WaitingApprovalStatus = {
-  approvalId: string;
-  toolCallId: string | null;
   runId: string;
 };
 

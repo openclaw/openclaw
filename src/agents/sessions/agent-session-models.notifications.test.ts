@@ -31,15 +31,12 @@ async function createNotificationSession(
     model?: () => Promise<void>;
   } = {},
 ) {
-  const resourceLoader = createResourceLoader(
-    new Map([
-      [
-        "thinking_level_select",
-        [async (event: unknown) => options.thinking?.(event as ThinkingLevelSelectEvent)],
-      ],
-      ["model_select", [async () => options.model?.()]],
-    ]),
-  );
+  const resourceLoader = await createResourceLoader((api) => {
+    api.on("thinking_level_select", async (event: unknown) =>
+      options.thinking?.(event as ThinkingLevelSelectEvent),
+    );
+    api.on("model_select", async () => options.model?.());
+  });
   const fixture = await createTestSession({
     model: options.reasoning === false ? plainModel : reasoningModel,
     settingsManager: SettingsManager.inMemory({

@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -45,7 +46,10 @@ async function openPickerByTouch(page: Page) {
   await page.goto(`${suite.server.baseUrl}chat`);
   const picker = page.locator(".agent-chat__input .chat-controls__model-picker").first();
   const trigger = picker.locator("[data-chat-model-select]");
+  await page.getByRole("textbox", { name: "Chat composer", exact: true }).tap();
+  await trigger.waitFor({ state: "visible" });
   await expect.poll(() => trigger.getAttribute("aria-disabled")).toBe("false");
+  await waitForLayoutSettled(page, ".agent-chat__input [data-chat-model-select]");
   await tap(page, trigger);
   const toggle = picker.locator(
     '[data-chat-model-provider="openai"] [data-chat-model-provider-toggle]',

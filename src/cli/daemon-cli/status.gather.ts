@@ -111,11 +111,10 @@ function hasActiveGatewayExecProbeCredential(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   explicitAuth: { token?: string; password?: string };
-  mode: "local" | "remote";
 }): boolean {
   const cfg = resolveGatewayProbeCredentialConfig({
     cfg: params.cfg,
-    mode: params.mode,
+    mode: "local",
   });
   return ALL_GATEWAY_SECRET_INPUT_PATHS.some((path) => {
     if (
@@ -123,7 +122,7 @@ function hasActiveGatewayExecProbeCredential(params: {
         config: cfg,
         env: params.env,
         explicitAuth: params.explicitAuth,
-        modeOverride: params.mode,
+        modeOverride: "local",
         path,
         // Remote probe config suppresses ambient credentials across auth types.
         // Mirror that owner here so env auth cannot hide a winning exec ref.
@@ -246,9 +245,7 @@ async function gatherDaemonStatusImpl(
     opts.deep === true && shouldInspectLocalGateway
       ? await inspectWindowsGatewayFirewall({
           bind: gateway.bindMode,
-          mode: "quick",
           port: daemonPort,
-          platform: process.platform,
         })
       : undefined;
   const { portStatus, portCliStatus } = await inspectDaemonPortStatuses({
@@ -309,7 +306,6 @@ async function gatherDaemonStatusImpl(
         cfg: daemonCfg,
         env: mergedDaemonEnv,
         explicitAuth,
-        mode: "local",
       });
     if (probeUrlOverride || explicitAuth.token || explicitAuth.password) {
       daemonProbeAuth = explicitAuth;

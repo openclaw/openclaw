@@ -42,6 +42,9 @@ Options:
   -NodePrefix <path>      Absolute private directory for -NodeOnly (required)
   -NodeVersion <version>  Exact private Node.js version for -NodeOnly
   -Help                   Show this help
+
+Support: https://community.openclaw.ai/
+FAQ: https://docs.openclaw.ai/start/faq
 "@ | Write-Output
     return
 }
@@ -126,6 +129,7 @@ function Complete-Install {
         return
     }
 
+    Write-Host "Support: https://community.openclaw.ai/"
     if ($PSCommandPath) {
         exit $script:InstallExitCode
     }

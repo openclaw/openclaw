@@ -1,9 +1,11 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { For, Show, createEffect, createMemo, onCleanup, onSettled } from "solid-js";
-import { DESKTOP_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
+import { hostDesktopSetupCopy } from "../../components/desktop/host-desktop-setup.ts";
 import "../../components/sparkline-tile.tsx";
-import { Icon } from "../../components/solid/icon.tsx";
+import { DESKTOP_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
 import "../../components/desktop/desktop-panel.ts";
+import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
+import { Icon } from "../../components/solid/icon.tsx";
 import { registerSystemsEnglish } from "../../i18n/locales/en-systems.ts";
 import { formatByteSize, formatTimeAgo } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
@@ -333,29 +335,14 @@ function HostDesktopSetup(props: { controller: Systems; row: SystemsInventoryRow
   const enabled = () => controller().hostDesktopEnabled();
   const isMac = () => systemPlatform(row())?.startsWith("macOS") === true;
   const ready = () => setup()?.state === "ready" || setup()?.state === "managed";
-  const title = () =>
-    enabled()
-      ? "systems.desktopSetupEnabled"
-      : ([
-          ["managed", "systems.managedDesktopConfigured"],
-          ["ready", isMac() ? "systems.screenSharingDetected" : "systems.desktopDetected"],
-          ["needs-server", isMac() ? "systems.screenSharingNeeded" : "systems.desktopServerNeeded"],
-        ].find(([kind]) => kind === setup()?.state)?.[1] ?? "systems.desktopSetupAttention");
-  const hint = () =>
-    enabled()
-      ? "systems.desktopSetupConnecting"
-      : ready()
-        ? "systems.desktopSetupEnableHint"
-        : isMac() && setup()?.state === "needs-server"
-          ? "systems.screenSharingSetupHint"
-          : "systems.desktopServerSetupHint";
+  const copy = () => hostDesktopSetupCopy(setup()?.state, isMac(), enabled());
   return (
     <div class="systems-state" role="status">
       <span class="systems-state__icon" aria-hidden="true">
         <Icon name="monitor" />
       </span>
-      <h2>{t(title())}</h2>
-      <p>{t(hint())}</p>
+      <h2>{t(copy().title)}</h2>
+      <p>{t(copy().hint)}</p>
       {setup()?.state === "unsupported" && setup()!.detail ? <p>{setup()!.detail}</p> : null}
       {controller().state.desktopSetupError ? (
         <p class="systems-callout--error" role="alert">
@@ -411,7 +398,7 @@ function SystemsWorkspace(props: {
       controller().desktopAvailable() &&
       props.presented,
     );
-  const title = () => (row() ? systemName(row()!) : t("systems.title"));
+  const title = () => (row() ? systemName(row()!) : t("systems.select"));
   const auxiliaryErrors = () => Object.values(controller().state.inventory?.errors ?? {});
   const emptyTitle = () =>
     !controller().connected()
@@ -462,9 +449,15 @@ function SystemsWorkspace(props: {
   };
   return (
     <section class="systems-workspace" aria-label={t("systems.title")}>
+      <HubPageHeader
+        active="systems"
+        wide
+        docsUrl="https://docs.openclaw.ai/web/control-ui/sessions-and-sidebar#systems-workspace"
+        class="systems-page-header"
+      />
       <header class="systems-toolbar">
         <div class="systems-heading">
-          <h1>{title()}</h1>
+          <h2>{title()}</h2>
           <span>{row() ? t("systems." + systemKind(row()!)) : t("systems.selectHint")}</span>
         </div>
         <select

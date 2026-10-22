@@ -149,7 +149,6 @@ describe("board provider MCP App views", () => {
 
       await expect(pending).resolves.toEqual({
         status: "stale",
-        error: "Dashboard MCP App view unavailable",
       });
     }
   });
@@ -176,7 +175,6 @@ describe("board provider MCP App views", () => {
 
     await expect(provider.widgetAppView("server-app", 1)).resolves.toEqual({
       status: "stale",
-      error: "origin transcript pruned",
     });
     await expect(provider.refreshWidgetAppView("server-app", 1)).resolves.toMatchObject({
       status: "ready",

@@ -9,8 +9,6 @@ import { dedupeByKey } from "../shared/dedupe-by-key.js";
 type ConnectedNodePluginTool = {
   nodeId: string;
   displayName?: string;
-  platform?: string;
-  remoteIp?: string;
   descriptor: NodePluginToolDescriptor;
   /** See NormalizedNodePluginTool.registered. */
   registered: boolean;
@@ -164,8 +162,6 @@ export function normalizeNodePluginToolDescriptors(params: {
 export function replaceConnectedNodePluginTools(params: {
   nodeId: string;
   displayName?: string;
-  platform?: string;
-  remoteIp?: string;
   tools: readonly NormalizedNodePluginTool[];
 }): void {
   if (params.tools.length === 0) {
@@ -177,8 +173,6 @@ export function replaceConnectedNodePluginTools(params: {
     params.tools.map((entry) => ({
       nodeId: params.nodeId,
       displayName: params.displayName,
-      platform: params.platform,
-      remoteIp: params.remoteIp,
       descriptor: entry.descriptor,
       registered: entry.registered,
     })),

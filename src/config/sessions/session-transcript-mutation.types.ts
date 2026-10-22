@@ -1,5 +1,6 @@
 import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import type { TranscriptEvent, SessionTranscriptWriteScope } from "./session-accessor.types.js";
+import type { SessionMessageRewriteResult } from "./session-message-rewrite.types.js";
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 
@@ -21,7 +22,7 @@ export type SessionMessageRewriteSnapshot = {
 };
 export type SessionMessageRewriteCommitted = {
   kind: "session-message-rewrite";
-  result: { generation: string; messageId: string; message: unknown; unchanged?: true } | null;
+  result: SessionMessageRewriteResult | null;
 };
 
 export type SessionTranscriptEventCommitted = {

@@ -10,7 +10,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
-it("reuses the historical inventory while keeping head analysis fresh and invalidating changed bases", () => {
+it("reuses identical source snapshots while keeping head analysis fresh and invalidating changed bases", () => {
   const root = tempDirs.make("openclaw-sqlite-cached-ratchet-");
   const git = (...args: string[]) =>
     execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], {
@@ -31,12 +31,12 @@ it("reuses the historical inventory while keeping head analysis fresh and invali
   expect(main(root, ["--base", "HEAD"])).toBe(0);
   fs.writeFileSync(file, source.repeat(2));
   expect(main(root, ["--base", "HEAD"])).toBe(1);
-  expect(inspect).toHaveBeenCalledTimes(3);
+  expect(inspect).toHaveBeenCalledTimes(2);
 
   git("add", "src");
   git("commit", "-m", "changed base");
   expect(main(root, ["--base", "HEAD"])).toBe(0);
-  expect(inspect).toHaveBeenCalledTimes(5);
+  expect(inspect).toHaveBeenCalledTimes(3);
 
   // Simulate an edit after module load without changing the running test's source files.
   const analyzerFile = path.resolve("scripts/lib/database-worker-compat.mts");
@@ -51,8 +51,38 @@ it("reuses the historical inventory while keeping head analysis fresh and invali
   });
   expect(main(root, ["--base", "HEAD"])).toBe(0);
   expect(main(root, ["--base", "HEAD"])).toBe(0);
-  expect(inspect).toHaveBeenCalledTimes(9);
+  expect(inspect).toHaveBeenCalledTimes(7);
 });
+
+it.each(["contents", "added path", "renamed path", "deleted path"])(
+  "analyzes both complete snapshots after a source change: %s",
+  (change) => {
+    const root = tempDirs.make("openclaw-sqlite-snapshot-ratchet-");
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], {
+        cwd: root,
+        stdio: "pipe",
+      });
+    fs.mkdirSync(path.join(root, "src"));
+    const file = path.join(root, "src/runtime.ts");
+    fs.writeFileSync(file, "export const value = 1;\n");
+    git("init");
+    git("add", "src");
+    git("commit", "-m", "base");
+    if (change === "contents") {
+      fs.writeFileSync(file, "export const value = 2;\n");
+    } else if (change === "added path") {
+      fs.writeFileSync(path.join(root, "src/added.ts"), "export const value = 1;\n");
+    } else if (change === "renamed path") {
+      fs.renameSync(file, path.join(root, "src/renamed.ts"));
+    } else {
+      fs.rmSync(file);
+    }
+    const inspect = vi.spyOn(databaseWorkerCompat, "inspectDatabaseWorkerBoundaries");
+    expect(main(root, ["--base", "HEAD"])).toBe(0);
+    expect(inspect).toHaveBeenCalledTimes(2);
+  },
+);
 
 it("excludes the reviewed Vitest suite without exempting arbitrary suite-named runtime files", () => {
   const root = tempDirs.make("openclaw-sqlite-suite-ratchet-");

@@ -499,6 +499,7 @@ Notes:
 - `setup-token` and `paste-token` remain generic token commands for providers that expose token auth methods.
 - `setup-token` requires an interactive TTY and runs the provider's token-auth method (defaulting to that provider's `setup-token` method when it exposes one).
 - `paste-token` requires `--provider`, prompts for the token value by default, and writes it to the default profile id `<provider>:manual` unless you pass `--profile-id`. In automation, pipe the token on stdin instead of passing it as an argument so provider credentials do not appear in shell history or process lists.
+- Piped tokens and API keys must be valid UTF-8. Malformed input fails before changing the saved credential or configuration.
 - `paste-token --expires-in <duration>` stores an absolute token expiry from a relative duration such as `365d` or `12h`.
 - For `openai`, OpenAI API keys and ChatGPT/OAuth token material are different auth shapes. Use `paste-api-key` for `sk-...` OpenAI API keys and `paste-token` only for token auth material.
 - Anthropic: `setup-token`/`paste-token` are supported OpenClaw auth paths for `anthropic`, but OpenClaw prefers reusing the Claude CLI (`claude -p`) on the host when it is available.

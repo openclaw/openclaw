@@ -1,38 +1,19 @@
 /**
  * Session settings manager.
  *
- * Loads and persists user/session defaults for models, transports, retry policy, UI, packages, and telemetry.
+ * Holds attempt-local settings after global, plugin, and project preparation.
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { createInvalidConfigError, isInvalidConfigError } from "../../config/io.invalid-config.js";
+import { createInvalidConfigError } from "../../config/io.invalid-config.js";
 import { mergeDeep } from "../../infra/deep-merge.js";
-import { getAgentDir } from "../config.js";
-import {
-  FileSettingsStorage,
-  InMemorySettingsStorage,
-  readSettingsScope,
-  SETTINGS_SCOPES,
-  type Settings,
-  type SettingsError,
-  type SettingsScope,
-  type SettingsStorage,
-  type ThinkingBudgetsSettings,
-  type TransportSetting,
-} from "./settings-storage.js";
-
-export type {
+import type {
   Settings,
-  SettingsError,
   SettingsScope,
-  SettingsStorage,
   ThinkingBudgetsSettings,
   TransportSetting,
 } from "./settings-storage.js";
 
-/** Deep merge settings: project/overrides take precedence, nested objects merge recursively */
-function deepMergeSettings(base: Settings, overrides: Settings): Settings {
-  return mergeDeep(base, overrides) as Settings;
-}
+export type { Settings, ThinkingBudgetsSettings, TransportSetting } from "./settings-storage.js";
 
 export function requireSupportedSettings(value: unknown, scope: SettingsScope): Settings {
   if (!isRecord(value)) {
@@ -66,171 +47,38 @@ export function requireSupportedSettings(value: unknown, scope: SettingsScope): 
   return value as Settings;
 }
 
-interface SettingsScopeState {
-  settings: Settings;
-  loadError: Error | null;
-}
-
 export class SettingsManager {
   private settings: Settings = {};
-  // Non-persisted overrides layered above global/project settings for this manager.
+  private baseSettings: Settings;
   private runtimeOverrides: Settings = {};
-  private writeQueue: Promise<void> = Promise.resolve();
-  private modified = new Map<keyof Settings, Set<string> | null>();
-  private errors: SettingsError[];
 
-  private constructor(
-    private storage: SettingsStorage,
-    private scopes: Record<SettingsScope, SettingsScopeState>,
-  ) {
-    this.errors = SETTINGS_SCOPES.flatMap((scope) => {
-      const error = scopes[scope].loadError;
-      return error ? [{ scope, error }] : [];
-    });
+  private constructor(settings: Settings) {
+    // Prepared snapshots are shared and frozen; setters own this top-level record.
+    this.baseSettings = { ...settings };
     this.recomputeSettings();
-  }
-
-  static create(cwd: string, agentDir: string = getAgentDir()): SettingsManager {
-    return SettingsManager.fromStorage(new FileSettingsStorage(cwd, agentDir));
-  }
-
-  static fromStorage(storage: SettingsStorage): SettingsManager {
-    return new SettingsManager(storage, {
-      global: SettingsManager.loadScope(storage, "global"),
-      project: SettingsManager.loadScope(storage, "project"),
-    });
   }
 
   static inMemory(settings: Partial<Settings> = {}): SettingsManager {
-    const storage = new InMemorySettingsStorage();
-    const initialSettings = requireSupportedSettings(settings, "global");
-    storage.withLock("global", () => JSON.stringify(initialSettings, null, 2));
-    return SettingsManager.fromStorage(storage);
-  }
-
-  private static loadScope(storage: SettingsStorage, scope: SettingsScope): SettingsScopeState {
-    const state: SettingsScopeState = readSettingsScope(storage, scope);
-    if (isInvalidConfigError(state.loadError)) {
-      throw state.loadError;
-    }
-    try {
-      state.settings = requireSupportedSettings(state.settings, scope);
-    } catch (error) {
-      if (isInvalidConfigError(error)) {
-        throw error;
-      }
-      state.loadError = error as Error;
-    }
-    return state;
+    return new SettingsManager(requireSupportedSettings(settings, "global"));
   }
 
   getGlobalSettings(): Settings {
-    return structuredClone(this.scopes.global.settings);
-  }
-
-  getProjectSettings(): Settings {
-    return structuredClone(this.scopes.project.settings);
+    return this.baseSettings;
   }
 
   private recomputeSettings(): void {
-    this.settings = deepMergeSettings(
-      deepMergeSettings(this.scopes.global.settings, this.scopes.project.settings),
-      this.runtimeOverrides,
-    );
+    this.settings = mergeDeep(this.baseSettings, this.runtimeOverrides) as Settings;
   }
 
-  async reload(): Promise<void> {
-    await this.writeQueue;
-    for (const scope of SETTINGS_SCOPES) {
-      const state = this.scopes[scope];
-      const loaded = SettingsManager.loadScope(this.storage, scope);
-      if (loaded.loadError) {
-        state.loadError = loaded.loadError;
-        this.recordError(scope, loaded.loadError);
-      } else {
-        state.settings = loaded.settings;
-        state.loadError = null;
-      }
-      if (scope === "global") {
-        this.modified.clear();
-      }
-    }
-
-    this.recomputeSettings();
-  }
-
-  /** Apply non-persisted overrides on top of global/project settings. */
+  /** Layer runtime policy above the prepared settings and local default changes. */
   applyOverrides(overrides: Partial<Settings>): void {
-    this.runtimeOverrides = deepMergeSettings(this.runtimeOverrides, overrides);
+    this.runtimeOverrides = mergeDeep(this.runtimeOverrides, overrides) as Settings;
     this.recomputeSettings();
   }
 
-  private recordError(scope: SettingsScope, error: unknown): void {
-    const normalizedError = error instanceof Error ? error : new Error(String(error));
-    this.errors.push({ scope, error: normalizedError });
-  }
-
-  private persistGlobalSettings(
-    snapshotSettings: Settings,
-    modified: Map<keyof Settings, Set<string> | null>,
-  ): void {
-    this.storage.withLock("global", (current) => {
-      const currentFileSettings = current
-        ? requireSupportedSettings(JSON.parse(current), "global")
-        : {};
-      const mergedSettings: Settings = { ...currentFileSettings };
-      for (const [field, nestedModified] of modified) {
-        const value = snapshotSettings[field];
-        if (nestedModified && typeof value === "object" && value !== null) {
-          const baseNested = (currentFileSettings[field] as Record<string, unknown>) ?? {};
-          const inMemoryNested = value as Record<string, unknown>;
-          const mergedNested = { ...baseNested };
-          for (const nestedKey of nestedModified) {
-            mergedNested[nestedKey] = inMemoryNested[nestedKey];
-          }
-          (mergedSettings as Record<string, unknown>)[field] = mergedNested;
-        } else {
-          (mergedSettings as Record<string, unknown>)[field] = value;
-        }
-      }
-
-      return JSON.stringify(mergedSettings, null, 2);
-    });
-  }
-
-  private save(): void {
+  private setGlobalSettings(values: Settings): void {
+    Object.assign(this.baseSettings, values);
     this.recomputeSettings();
-    const state = this.scopes.global;
-    if (state.loadError) {
-      return;
-    }
-    const snapshotSettings = structuredClone(state.settings);
-    const modified = new Map(
-      [...this.modified].map(([field, nested]) => [field, nested && new Set(nested)]),
-    );
-    this.writeQueue = this.writeQueue
-      .then(() => {
-        this.persistGlobalSettings(snapshotSettings, modified);
-        this.modified.clear();
-      })
-      .catch((error: unknown) => {
-        this.recordError("global", error);
-      });
-  }
-
-  private setGlobalSettings(values: Settings, nestedField?: string): void {
-    Object.assign(this.scopes.global.settings, values);
-    for (const field of Object.keys(values) as (keyof Settings)[]) {
-      const existing = this.modified.get(field);
-      if (!nestedField || existing === null) {
-        this.modified.set(field, null);
-      } else {
-        const nestedFields = existing ?? new Set<string>();
-        nestedFields.add(nestedField);
-        this.modified.set(field, nestedFields);
-      }
-    }
-    this.save();
   }
 
   private setGlobalNestedSetting(
@@ -238,20 +86,10 @@ export class SettingsManager {
     nestedField: string,
     value: unknown,
   ): void {
-    const current = this.scopes.global.settings[field];
+    const current = this.baseSettings[field];
     const nested = isRecord(current) ? { ...current } : {};
     nested[nestedField] = value;
-    this.setGlobalSettings({ [field]: nested }, nestedField);
-  }
-
-  async flush(): Promise<void> {
-    await this.writeQueue;
-  }
-
-  drainErrors(): SettingsError[] {
-    const drained = this.errors;
-    this.errors = [];
-    return drained;
+    this.setGlobalSettings({ [field]: nested });
   }
 
   setDefaultModelAndProvider(provider: string, modelId: string): void {

@@ -290,7 +290,7 @@ it.each([false, true])(
     await runWorker(input);
 
     const expected = structuredClone(input.params);
-    Object.assign(expected.opts.run, { executorFence: fixture.fence });
+    Object.assign(expected.opts.run, { executorFence: fixture.fence, busyTimeoutMs: 1_000 });
     expect(fixture.finish).toHaveBeenCalledExactlyOnceWith(expected, finalizationOptions);
     expect(fixture.fence.assertCurrent).toHaveBeenCalled();
     expectResultFile(input, restartPending, "candidate-run");
@@ -358,7 +358,7 @@ it("times the fresh-driver handoff from the previous driver's last receipt", asy
     ].map((step) => [
       "handoff-run",
       expect.objectContaining({ ...step, startedAtMs: handoffStartedAtMs, endedAtMs: readyAtMs }),
-      { env: {} },
+      expect.objectContaining({ env: {}, busyTimeoutMs: 1_000 }),
     ]),
   );
 });

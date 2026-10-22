@@ -293,4 +293,9 @@ export type RegisterSubagentRunOptions = {
   assertCurrent?: () => void;
   assertPublicationCurrent?: () => void;
   retainOwnership?: (scope: SubagentRegistrationScope) => void;
+  /** Retain rejection cleanup at the non-queued registration's durable commit. */
+  retainAdmission?: (reject: SubagentAdmissionRejection) => void;
+  admissionSessionEffects?: SubagentSessionEffects;
 };
+
+export type SubagentAdmissionRejection = (error: string) => Promise<void>;

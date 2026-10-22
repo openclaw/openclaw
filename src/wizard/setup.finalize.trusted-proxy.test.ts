@@ -375,7 +375,6 @@ describe("finalizeSetupWizard", () => {
       provider: "anthropic",
       model: "test-model",
       status: "ready",
-      hasAuth: true,
     });
     resolveDefaultModelCatalogFacts.mockReset();
     resolveDefaultModelCatalogFacts.mockReturnValue({});

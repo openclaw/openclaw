@@ -23,9 +23,8 @@ describe("parseNodeHostWorkerInput", () => {
     expect(parse(cancel)).toEqual(cancel);
   });
 
-  it("rejects malformed duplex control frames", () => {
-    expect(parse({ ...input, seq: -1 })).toBeNull();
-    expect(parse({ ...cancel, invokeId: "" })).toBeNull();
+  it("rejects malformed JSON frames", () => {
+    expect(parseNodeHostWorkerInput("{")).toBeNull();
   });
 });
 

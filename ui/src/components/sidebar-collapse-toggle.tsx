@@ -18,7 +18,7 @@ export function SidebarCollapseToggle(props: { onToggle?: () => void }) {
           aria-expanded="true"
           onClick={() => props.onToggle?.()}
         >
-          <Icon name="panelLeftClose" />
+          <Icon name="sessionSidebarClose" />
         </button>
       </openclaw-tooltip>
     </openclaw-sidebar-collapse-toggle>

@@ -6,7 +6,7 @@ import {
   resolveTimeZoneDayStartMs,
   resolveTimezone,
 } from "./format-datetime.js";
-import { formatSingleUnitDuration } from "./format-duration-internal.js";
+import { formatDurationParts, resolveSingleUnitDurationParts } from "./format-duration-internal.js";
 import {
   formatDurationCompact,
   formatDurationHuman,
@@ -86,12 +86,11 @@ it("formats single-unit outputs and day threshold behavior", () => {
     [172800000, "2d"],
   ]);
 });
-it("rounds nearly 24 hours up to one day", () => {
-  expect(formatSingleUnitDuration(86_370_000, true)).toBe("1 day");
-});
-
-it("keeps 12 hours in its own unit", () => {
-  expect(formatSingleUnitDuration(43_200_000, true)).toBe("12 hours");
+it.each([
+  [86_370_000, "1 day"],
+  [43_200_000, "12 hours"],
+] as const)("formats rounded verbose duration for %j", (input, expected) => {
+  expect(formatDurationParts(resolveSingleUnitDurationParts(input), true)).toBe(expected);
 });
 it.each([
   [999, "999ms"],
@@ -200,9 +199,8 @@ describe("formatRelativeTimestamp", () => {
 
   it("returns fallback for invalid timestamp input", () => {
     for (const value of [null, undefined]) {
-      expect(formatRelativeTimestamp(value)).toBe("n/a");
+      expect(formatRelativeTimestamp(value)).toBe("");
     }
-    expect(formatRelativeTimestamp(null, { fallback: "unknown" })).toBe("unknown");
   });
 
   it.each([
@@ -213,12 +211,13 @@ describe("formatRelativeTimestamp", () => {
   });
 
   it("keeps 7-day-old timestamps relative", () => {
-    const options = { dateFallback: true, timezone: "UTC" };
-    expect(formatRelativeTimestamp(Date.now() - 7 * 86400000, options)).toBe("7d ago");
+    expect(formatRelativeTimestamp(Date.now() - 7 * 86400000)).toBe("7d ago");
   });
 
   it("falls back to relative days when date formatting throws", () => {
-    const options = { dateFallback: true, timezone: "Invalid/Timezone" };
-    expect(formatRelativeTimestamp(Date.now() + 8 * 86400000, options)).toBe("in 8d");
+    vi.spyOn(Intl, "DateTimeFormat").mockImplementation(function () {
+      throw new RangeError("synthetic formatter failure");
+    });
+    expect(formatRelativeTimestamp(Date.now() + 8 * 86400000)).toBe("in 8d");
   });
 });

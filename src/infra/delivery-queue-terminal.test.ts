@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -175,6 +176,7 @@ describe("delivery queue pending terminal transition", () => {
     vi.useFakeTimers();
     try {
       const producerRetention = { ...boundedRetention, idPrefix: "producer:" };
+      const terminalReads: number[] = [];
       const fail = (
         ownerQueue: string,
         id: string,
@@ -183,12 +185,25 @@ describe("delivery queue pending terminal transition", () => {
         const entry = { id, enqueuedAt: Date.now(), retryCount: 0, completionRetention };
         seedDeliveryQueueEntry({ queueName: ownerQueue, entry, stateDir });
         const database = openTestDatabase();
-        expect(
-          terminalizePendingDeliveryQueueEntryInDatabase(
-            database,
-            prepareDeliveryQueueTerminalEntry({ queueName: ownerQueue, id, entry }),
-          ).status,
-        ).toBe("terminalized");
+        const reads = trackSqliteStatementExecutions(
+          requireNativeSqliteDatabase(database.db),
+          ["queue"],
+          (sql) =>
+            sql.startsWith("select ") && sql.includes('from "delivery_queue_entries"')
+              ? "queue"
+              : null,
+        );
+        try {
+          expect(
+            terminalizePendingDeliveryQueueEntryInDatabase(
+              database,
+              prepareDeliveryQueueTerminalEntry({ queueName: ownerQueue, id, entry }),
+            ).status,
+          ).toBe("terminalized");
+          terminalReads.push(reads.counts.queue);
+        } finally {
+          reads.restore();
+        }
       };
       const firstId = `${producerRetention.idPrefix}failed-a`;
       const secondId = `${producerRetention.idPrefix}failed-b`;
@@ -206,6 +221,11 @@ describe("delivery queue pending terminal transition", () => {
       fail(queueName, secondId, producerRetention);
       vi.setSystemTime(3_000);
       fail(queueName, thirdId, producerRetention);
+      expect(
+        requireNativeSqliteDatabase(openTestDatabase().db)
+          .prepare("SELECT 1 FROM delivery_queue_entries WHERE queue_name = ? AND id = ?")
+          .get(queueName, firstId),
+      ).toBeUndefined();
       expect(getDeliveryQueueEntryStatus(queueName, firstId, stateDir)).toBeUndefined();
       expect(getDeliveryQueueEntryStatus(queueName, secondId, stateDir)).toBe("failed");
       expect(getDeliveryQueueEntryStatus(queueName, thirdId, stateDir)).toBe("failed");
@@ -214,6 +234,7 @@ describe("delivery queue pending terminal transition", () => {
       fail(queueName, siblingId, siblingRetention);
       vi.setSystemTime(3_200);
       fail(queueName, permanentId, "permanent");
+      expect(terminalReads).toEqual([0, 0, 0, 0, 0]);
       vi.setSystemTime(4_000);
       seedDeliveryQueueEntry({
         queueName,

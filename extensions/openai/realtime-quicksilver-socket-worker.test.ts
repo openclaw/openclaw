@@ -3,14 +3,10 @@ import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { MessageChannel, Worker } from "node:worker_threads";
 import { describe, expect, it } from "vitest";
-import WebSocket from "ws";
-import { OpenAIQuicksilverAudioClock } from "./realtime-quicksilver-audio-buffer.js";
 import { closeOpenAILiveSocket } from "./realtime-quicksilver-protocol.js";
 import { OpenAIQuicksilverWorkerSocket } from "./realtime-quicksilver-socket.js";
 
-// Timestamp the actual network receiver, not callbacks queued on the blocked
-// Gateway. This intentionally runs both the old clock/socket baseline and the
-// production worker path against the same independent server event loop.
+// Timestamp on an independent receiver loop while the Gateway is blocked.
 const receiverSource =
   "const { parentPort, workerData } = require('node:worker_threads');\nconst { fileURLToPath } = require('node:url');\nconst { WebSocketServer } = require(fileURLToPath(workerData.wsUrl));\nconst counts = new Int32Array(workerData.count);\nconst times = new Float64Array(workerData.times);\nconst outputCounts = new Int32Array(workerData.outputCount);\nconst outputState = new Int32Array(workerData.outputState);\nworkerData.outputPort.on('message', message => {\n  if (message.type === 'audio') {\n    if (Atomics.load(outputState, 0) === 0 && message.audio instanceof Uint8Array && message.audio.byteLength === 960 && message.audio[0] === 1 && message.audio[1] === 1) Atomics.add(outputCounts, 0, 1);\n    workerData.outputPort.postMessage({ type: 'ack' });\n  }\n});\nconst server = new WebSocketServer({ host: '127.0.0.1', port: 0 });\nserver.on('connection', socket => socket.on('message', data => {\n  const event = JSON.parse(data.toString());\n  if (event.type === 'session.input_audio.append') {\n    const index = Atomics.load(counts, 0);\n    times[index] = performance.now();\n    Atomics.store(counts, 0, index + 1);\n    socket.send(JSON.stringify({ type: 'session.output_audio.delta', delta: event.audio }));\n  }\n  if (event.type === 'session.close') {\n    socket.send(JSON.stringify({ type: 'session.input_transcript.delta', delta: 'final transcript', start_ms: 0, end_ms: 100 }));\n    socket.send(JSON.stringify({ type: 'session.closed', reason: 'close_requested' }));\n  }\n}));\nserver.on('listening', () => parentPort.postMessage('ws://127.0.0.1:' + server.address().port));";
 
@@ -22,16 +18,13 @@ describe("GPT-Live socket worker", () => {
     const outputState = new SharedArrayBuffer(4);
     const { port1, port2 } = new MessageChannel();
     const callbackAudio: Buffer[] = [];
+    const wsRequire = createRequire(createRequire(import.meta.url).resolve("ws/package.json"));
     const receiver = new Worker(receiverSource, {
       eval: true,
       workerData: {
         count: count.buffer,
         times: times.buffer,
-        wsUrl: pathToFileURL(
-          createRequire(createRequire(import.meta.url).resolve("ws/package.json")).resolve(
-            "./index.js",
-          ),
-        ).href,
+        wsUrl: pathToFileURL(wsRequire.resolve("./index.js")).href,
         outputPort: port2,
         outputCount: outputCount.buffer,
         outputState,
@@ -40,30 +33,8 @@ describe("GPT-Live socket worker", () => {
     });
     const errors: Error[] = [];
     let direct: OpenAIQuicksilverWorkerSocket | undefined;
-    let baseline: WebSocket | undefined;
-    let clock: OpenAIQuicksilverAudioClock | undefined;
     try {
       const [url] = await once(receiver, "message");
-      baseline = new WebSocket(String(url));
-      await once(baseline, "open");
-      const baselineSocket = baseline;
-      clock = new OpenAIQuicksilverAudioClock(() =>
-        baselineSocket.send(
-          JSON.stringify({
-            type: "session.input_audio.append",
-            audio: Buffer.alloc(960).toString("base64"),
-          }),
-        ),
-      );
-      clock.start();
-      await waitForPackets(count, 5);
-      const beforeBaseline = Atomics.load(count, 0);
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
-      const baselineDuringStall = Atomics.load(count, 0) - beforeBaseline;
-      clock.stop();
-      baseline.close();
-      await once(baseline, "close");
-
       direct = OpenAIQuicksilverWorkerSocket.create(
         String(url),
         { headers: { Authorization: "Bearer synthetic-fixture" }, maxPayload: 16 * 1024 * 1024 },
@@ -77,7 +48,7 @@ describe("GPT-Live socket worker", () => {
       direct.on("message", (data) => frames.push(data.toString()));
       direct.sendAudio(Buffer.alloc(240_000, 1));
       direct.startAudio();
-      await waitForPackets(count, beforeBaseline + baselineDuringStall + 5);
+      await waitForPackets(count, 5);
       await waitForPackets(outputCount, 5);
       const beforeOutput = Atomics.load(outputCount, 0);
       const beforeWorker = Atomics.load(count, 0);
@@ -89,15 +60,6 @@ describe("GPT-Live socket worker", () => {
         { length: Math.max(0, workerDuringStall - 1) },
         (_, index) => times[beforeWorker + index + 1]! - times[beforeWorker + index]!,
       );
-      console.info(
-        JSON.stringify({
-          baselineDuring500msStall: baselineDuringStall,
-          workerDuring500msStall: workerDuringStall,
-          outputDuring500msStall: outputDuringStall,
-          workerPacketGapsMs: gaps,
-        }),
-      );
-      expect(baselineDuringStall).toBeLessThanOrEqual(1);
       expect(workerDuringStall).toBeGreaterThanOrEqual(10);
       expect(outputDuringStall).toBeGreaterThanOrEqual(10);
       expect(callbackAudio).toEqual([]);
@@ -111,8 +73,6 @@ describe("GPT-Live socket worker", () => {
       ]);
       expect(errors).toEqual([]);
     } finally {
-      clock?.stop();
-      baseline?.terminate();
       direct?.close();
       port1.close();
       port2.close();

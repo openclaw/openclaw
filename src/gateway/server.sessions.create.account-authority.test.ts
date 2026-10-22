@@ -8,10 +8,12 @@ import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as profileAuthority from "../state/user-channel-identity-operations.js";
 import { connectUserModelAccount, listUserProfileAuthLinks } from "../state/user-model-accounts.js";
-import { linkEmail } from "../state/user-profile-writes.worker.js";
+import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createMentionInbox } from "./mention-inbox.js";
 import { ModelAccountConnectAuthorityError } from "./model-account-connect-errors.js";
 import { createModelAccountConnectService } from "./model-account-connect.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
@@ -82,24 +84,20 @@ function sessionCreation(
     ]);
     expect(entry()).toBeUndefined();
   };
-  const create = (selectedModel?: string, idempotencyKey?: string) =>
+  const send = (params: Record<string, unknown>, webchat = false) =>
     handleGatewayRequest({
-      req: {
-        type: "req",
-        id,
-        method: "sessions.create",
-        params: {
-          key,
-          ...(selectedModel ? { model: selectedModel } : {}),
-          ...(idempotencyKey ? { idempotencyKey } : {}),
-        },
-      },
+      req: { type: "req", id, method: "sessions.create", params: { key, ...params } },
       client,
       context,
       respond,
-      isWebchatConnect: () => false,
+      isWebchatConnect: () => webchat,
     });
-  return { respond, entry, expectRejected, create };
+  const create = (selectedModel?: string, idempotencyKey?: string) =>
+    send({
+      ...(selectedModel ? { model: selectedModel } : {}),
+      ...(idempotencyKey ? { idempotencyKey } : {}),
+    });
+  return { respond, entry, expectRejected, create, send };
 }
 
 function holdCatalog(context: GatewayRequestHandlerOptions["context"]) {
@@ -307,6 +305,74 @@ test("session-only creation does not authorize an explicit personal account sele
   withFixture(["operator.sessions.write", true], async (fixture) => {
     await fixture.create(`${model}@${expectDefined(fixture.authProfileId, "owned account")}`);
     fixture.expectRejected();
+  }));
+
+test("sessions.create rejects a session-only creator revoked after initial mention validation", () =>
+  withFixture(["operator.sessions.write", false], async (fixture) => {
+    const recipientProfile = ensureProfileForEmail("creation-recipient@example.test");
+    const recipient = { ...identifiedClient(recipientProfile.id), connId: "creation-recipient" };
+    fixture.clients.add(recipient);
+    const cfg = fixture.context.getRuntimeConfig();
+    const mentionConfig: typeof cfg = {
+      ...cfg,
+      gateway: {
+        ...cfg.gateway,
+        roles: {
+          default: "guest",
+          definitions: {
+            guest: fixture.role,
+            administrator: {
+              agents: "*",
+              scopes: ["operator.admin"],
+              sessions: { others: "write" },
+            },
+            disabled: { agents: [], scopes: [], sessions: { others: "none" } },
+          },
+        },
+      },
+    };
+    fixture.context.getRuntimeConfig = () => mentionConfig;
+    setUserProfileRole(fixture.owner.id, "guest");
+    setUserProfileRole(recipientProfile.id, "administrator");
+    const inbox = createMentionInbox({
+      scheduler: createTestGatewayScheduler(),
+      gatewayInstanceId: "revoked-initial-mention",
+      getRuntimeConfig: fixture.context.getRuntimeConfig,
+      getClients: () => [...fixture.clients],
+      broadcastToConnIds: vi.fn(),
+    });
+    fixture.context.mentionInbox = inbox;
+    const validateRecipients = inbox.validateRecipientsAsync.bind(inbox);
+    const validation = vi
+      .spyOn(inbox, "validateRecipientsAsync")
+      .mockImplementationOnce(async (...args) => {
+        const result = await validateRecipients(...args);
+        expect(result).toMatchObject({ ok: true });
+        setUserProfileRole(fixture.owner.id, "disabled");
+        return result;
+      });
+    try {
+      await fixture.send(
+        {
+          message: "@Recipient review this",
+          mentions: [{ profileId: recipientProfile.id, start: 0, end: 10 }],
+        },
+        true,
+      );
+      expect(validation).toHaveBeenCalledOnce();
+      fixture.expectRejected();
+      const history = await directSessionReq<{ messages: unknown[] }>(
+        "chat.history",
+        { sessionKey: fixture.key },
+        { client: recipient, context: directContext(fixture.context) },
+      );
+      expect(history).toMatchObject({ ok: true, payload: { messages: [] } });
+      await inbox.listAsync(recipient, (result) => {
+        expect(result).toMatchObject({ ok: true, value: { items: [] } });
+      });
+    } finally {
+      await inbox.dispose();
+    }
   }));
 
 test("raw session-write scopes do not replace recorded session-create admission", () =>

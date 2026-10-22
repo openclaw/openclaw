@@ -7,7 +7,7 @@ import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coe
 import { scheduleOpenClawCompileCacheFlush } from "../../node-compile-cache.mjs";
 import type { AuthProfileReadDatabaseOpener } from "../agents/auth-profiles/sqlite-read-pool.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
-import { parseGatewayLockPayload } from "./gateway-lock-payload.js";
+import { GatewayLockNamespaceError, parseGatewayLockPayload } from "./gateway-lock-payload.js";
 import {
   assertStateDatabaseAccessAllowed,
   resolveGatewayStateOwnerPath,
@@ -65,25 +65,26 @@ const stagingTokens = new Map<string, SqliteStagingToken>();
 
 // Only this database's recorded process identity can authorize native live reads.
 function hasVerifiedLiveSqliteOwner(databasePath: string): boolean {
+  const ownerPath = resolveGatewayStateOwnerPath(databasePath);
   let owner;
   try {
-    owner = parseGatewayLockPayload(
-      fs.readFileSync(resolveGatewayStateOwnerPath(databasePath), "utf8"),
-    );
+    owner = parseGatewayLockPayload(fs.readFileSync(ownerPath, "utf8"));
   } catch {
     return false;
   }
   if (!owner || (owner.role && owner.role !== "gateway" && owner.role !== "agent-embedded")) {
     return false;
   }
-  return (
-    readStateLeaseProcessOwnerStatus({
-      pid: owner.pid,
-      host: owner.processNamespace?.host ?? hostname(),
-      startedAt: owner.startTime ?? null,
-      processNamespace: owner.processNamespace,
-    }) === "live"
-  );
+  const ownerStatus = readStateLeaseProcessOwnerStatus({
+    pid: owner.pid,
+    host: owner.processNamespace?.host ?? hostname(),
+    startedAt: owner.startTime ?? null,
+    processNamespace: owner.processNamespace,
+  });
+  if (ownerStatus === "unknown") {
+    throw new GatewayLockNamespaceError(owner, ownerPath);
+  }
+  return ownerStatus === "live";
 }
 
 // Artifact-preserving sync requests must not open SQLite on the source. Live
@@ -207,13 +208,13 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
       if (!expectedSourceIdentity) {
         throw new Error("SQLite metadata snapshot requires a captured source identity");
       }
-      const liveOwner = hasVerifiedLiveSqliteOwner(pathname);
       assertExistingDatabaseIdentity(
         pathname,
         expectedSourceIdentity.key,
         expectedSourceIdentity.birthtime,
       );
       assertStateDatabaseAccessAllowed(pathname);
+      const liveOwner = hasVerifiedLiveSqliteOwner(pathname);
       prepared = liveOwner
         ? await createOnlineReadOnlyBackup(pathname, stagingRoot)
         : await prepareSqliteReadOnlyCopyInProcess(pathname, stagingRoot, expectedSourceIdentity);

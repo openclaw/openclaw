@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createServer, type ServerResponse } from "node:http";
 import { expect, it } from "vitest";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
-import { resolveSessionEntryResetFreshness } from "../config/sessions/entry-freshness.js";
+import { resolveSessionEntryResetFreshnessAsync } from "../config/sessions/entry-freshness.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -14,13 +14,23 @@ import {
   resetGatewayTestState,
   setupGatewayTempHome,
 } from "./gateway.test-support.js";
-import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+import {
+  connectGatewayClient,
+  disconnectGatewayClient,
+  startGatewayWithClient,
+} from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 const replyText = "Daily rollover reply is ready.";
 const sessionKey = "agent:main:dashboard:rollover-proof";
 
-it("answers chat.send after a dashboard daily rollover", async () => {
+it.each([false, true])(
+  "answers chat.send after a dashboard daily rollover (native reconnect: %s)",
+  verifyDashboardRollover,
+  120_000,
+);
+
+async function verifyDashboardRollover(nativeReconnect: boolean) {
   resetGatewayTestState();
   const home = await setupGatewayTempHome({ prefix: "openclaw-dashboard-title-rollover-" });
   const heartbeatsEnabled = areHeartbeatsEnabled();
@@ -51,7 +61,6 @@ it("answers chat.send after a dashboard daily rollover", async () => {
         defaults: {
           workspace: home.workspaceDir,
           skipBootstrap: true,
-          heartbeat: { every: "0m" },
           model: { primary: model.modelRef },
           models: {
             [model.modelRef]: {
@@ -69,14 +78,31 @@ it("answers chat.send after a dashboard daily rollover", async () => {
       },
       plugins: { slots: { memory: "none" } },
       tools: { profile: "minimal" },
-      gateway: { auth: { mode: "token", token: "rollover-proof" } },
+      gateway: {
+        auth: { mode: "token", token: "rollover-proof" },
+        controlUi: { allowedOrigins: ["http://localhost"] },
+      },
     } satisfies OpenClawConfig;
     gateway = await startGatewayWithClient({
       cfg,
       configPath: await createGatewayConfigPath(home.tempHome),
       token: "rollover-proof",
+      ...(nativeReconnect ? { clientName: "openclaw-macos" as const, mode: "ui" as const } : {}),
       scopes: ["operator.admin", "operator.read", "operator.write"],
     });
+    if (nativeReconnect) {
+      await disconnectGatewayClient(gateway.client);
+      gateway.client = await connectGatewayClient({
+        url: `ws://127.0.0.1:${gateway.port}`,
+        token: "rollover-proof",
+        clientName: "openclaw-macos",
+        mode: "ui",
+        scopes: ["operator.admin", "operator.read", "operator.write"],
+      });
+      console.info(
+        "RECONNECT_PROOF authenticated=true signedDevice=true client=openclaw-macos mode=ui reconnected=true",
+      );
+    }
     const scope = {
       agentId: "main",
       sessionKey,
@@ -92,7 +118,7 @@ it("answers chat.send after a dashboard daily rollover", async () => {
       lastInteractionAt: staleAt,
     });
     clearSessionStoreCacheForTest();
-    const freshness = resolveSessionEntryResetFreshness({
+    const freshness = await resolveSessionEntryResetFreshnessAsync({
       agentId: "main",
       now: Date.now(),
       resetType: "direct",
@@ -101,7 +127,60 @@ it("answers chat.send after a dashboard daily rollover", async () => {
       storePath: scope.storePath,
     });
     const staleReason = freshness.state === "stale" ? freshness.freshness.staleReason : undefined;
-    const result = await sendAndWait(gateway, "Continue after the daily reset.");
+    if (nativeReconnect) {
+      expect(freshness.state).toBe("stale");
+      expect(staleReason).toBe("daily");
+      console.info("RECONNECT_PROOF before_send freshness=stale reason=daily sessionAgeHours=48");
+      let resumed;
+      try {
+        resumed = await sendAndWait(gateway, "Resume the matching displayed session.", {
+          sessionId: seededSessionId,
+          __controlUiReconnectResume: true,
+        });
+      } catch (error) {
+        console.info(
+          `RECONNECT_PROOF marked_send rejected=${JSON.stringify(error instanceof Error ? error.message : String(error))}`,
+        );
+        throw error;
+      }
+      const retained = loadSessionEntry(scope);
+      expect(resumed.status, resumed.error).toBe("ok");
+      expect(resumed.terminalReply?.text).toBe(replyText);
+      expect(retained?.sessionId).toBe(seededSessionId);
+      expect(retained?.lifecycleRevision).toBe("seed-revision");
+      expect(retained?.sessionStartedAt).toBe(staleAt);
+      console.info(
+        "RECONNECT_PROOF marked_send status=ok replyCompleted=true matchingSessionPreserved=true lifecyclePreserved=true startedAtPreserved=true",
+      );
+      const publicClient = await connectGatewayClient({
+        url: `ws://127.0.0.1:${gateway.port}`,
+        token: "rollover-proof",
+        clientName: "webchat-ui",
+        origin: "http://localhost",
+        mode: "webchat",
+        scopes: ["operator.admin", "operator.read", "operator.write"],
+      });
+      try {
+        await expect(
+          publicClient.request("chat.send", {
+            sessionKey,
+            sessionId: seededSessionId,
+            message: "Reject public reconnect metadata.",
+            __controlUiReconnectResume: true,
+            idempotencyKey: randomUUID(),
+          }),
+        ).rejects.toThrow("unexpected property '__controlUiReconnectResume'");
+        expect(loadSessionEntry(scope)?.lifecycleRevision).toBe("seed-revision");
+        console.info(
+          "RECONNECT_PROOF public_client client=webchat-ui mode=webchat authenticated=true markerRejected=true lifecycleUnchanged=true",
+        );
+      } finally {
+        await disconnectGatewayClient(publicClient);
+      }
+    }
+    const result = await sendAndWait(gateway, "Continue after the daily reset.", {
+      sessionId: seededSessionId,
+    });
     const rolled = loadSessionEntry(scope);
     const drainTimeout = (result.error ?? result.terminalReply?.text ?? "").includes(
       "timed out draining work",
@@ -124,6 +203,11 @@ it("answers chat.send after a dashboard daily rollover", async () => {
     expect(rolled?.sessionStartedAt).toBeGreaterThan(staleAt + 24 * 60 * 60 * 1000);
     expect(rolled?.lifecycleRevision).not.toBe("seed-revision");
     expect(drainTimeout).toBe(false);
+    if (nativeReconnect) {
+      console.info(
+        "RECONNECT_PROOF subsequent_send markerAbsent=true status=ok replyCompleted=true lifecycleRotated=true startedAtRefreshed=true matchingSessionIdPreserved=true",
+      );
+    }
   } finally {
     if (gateway) {
       await disconnectGatewayClient(gateway.client);
@@ -138,7 +222,7 @@ it("answers chat.send after a dashboard daily rollover", async () => {
     await removeGatewayTempHome(home.tempHome);
     resetGatewayTestState();
   }
-}, 120_000);
+}
 
 async function readAndComplete(
   request: import("node:http").IncomingMessage,
@@ -163,10 +247,12 @@ async function readAndComplete(
 async function sendAndWait(
   gateway: Awaited<ReturnType<typeof startGatewayWithClient>>,
   message: string,
+  reconnect: { sessionId?: string; __controlUiReconnectResume?: boolean } = {},
 ): Promise<{ status: string; error?: string; terminalReply?: { text?: string } }> {
   const started = await gateway.client.request<{ runId: string }>("chat.send", {
     sessionKey,
     message,
+    ...reconnect,
     deliver: false,
     idempotencyKey: randomUUID(),
   });

@@ -10,19 +10,27 @@ import {
   appendTranscriptMessage,
   listSessionPendingInputs,
   loadTranscriptEvents,
+  readSessionSubmittedInput,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { useTempSessionsFixture } from "../../config/sessions/test-helpers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { captureGatewayRootWorkReleaseObserver } from "../../process/gateway-work-admission.js";
-import { createReplyOperation } from "../../sessions/session-controller.js";
+import { createReplyOperation, type ReplyOperation } from "../../sessions/session-controller.js";
 import {
   createUserTurnTranscriptRecorder,
   type PersistedUserTurnMessage,
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  closeOpenClawAgentDatabasesAsync,
+} from "../../state/openclaw-agent-db.js";
 import { executeAgentTurn } from "./agent-runner-execution.js";
+import { runMemoryFlushIfNeeded, runSessionCompactionIfNeeded } from "./agent-runner-memory.js";
+import { runReplyAgent } from "./agent-runner-run.js";
+import { createFollowupRunner } from "./followup-runner.js";
 import { executeFollowupTurn } from "./followup-turn-execution.js";
 import {
   admitFollowupRunLifecycle,
@@ -35,6 +43,11 @@ import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 import { createTypingController } from "./typing.js";
 
 vi.mock("./agent-runner-execution.js", () => ({ executeAgentTurn: vi.fn() }));
+// mock-isolation: Exercise real input custody with controlled maintenance failures, without loading provider compaction.
+vi.mock("./agent-runner-memory.js", () => ({
+  runMemoryFlushIfNeeded: vi.fn(),
+  runSessionCompactionIfNeeded: vi.fn(),
+}));
 
 const fault = useSqliteWorkerFault([
   {
@@ -60,14 +73,17 @@ describe("followup queue durable input consumption", () => {
     setRuntimeConfigSnapshot(config);
     sessionKey = `agent:main:queue-pending-${++caseSequence}`;
     vi.mocked(executeAgentTurn).mockReset();
+    vi.mocked(runMemoryFlushIfNeeded).mockReset();
+    vi.mocked(runSessionCompactionIfNeeded).mockReset();
     await upsertSessionEntryCore(scope(), { sessionId, updatedAt: 1 });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     clearFollowupQueue(sessionKey);
     for (const recorder of recorders.splice(0)) {
       recorder.finishPendingInput?.("interrupted");
     }
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     clearRuntimeConfigSnapshot();
   });
@@ -104,6 +120,129 @@ describe("followup queue durable input consumption", () => {
     assert(recorder?.withPendingInput, "queued turn is missing its transcript owner");
     return await recorder.withPendingInput(() => recorder.persistApproved());
   };
+
+  it.each(["queued followup", "ordinary reply"] as const)(
+    "retains unstaged channel input across failed maintenance and restart (%s)",
+    async (entrypoint) => {
+      const text = "Original channel request: ünicode 🦞\nKeep this exact input.";
+      const idempotencyKey = "channel-maintenance:user";
+      const recorder = createUserTurnTranscriptRecorder({
+        input: { text, idempotencyKey },
+        target: { ...scope(), sessionEntry: undefined },
+        updateMode: "none",
+      });
+      recorders.push(recorder);
+      const onAdopted = vi.fn(() => {});
+      const observed: { operation?: ReplyOperation } = {};
+      const queued: FollowupRun = {
+        ...createQueueTestRun({ prompt: text, messageId: "channel-maintenance" }),
+        transcriptPrompt: text,
+        originatingChannel: "telegram",
+        userTurnTranscriptRecorder: recorder,
+        turnAdoptionLifecycle: { admission: "cancel-only", onAdopted },
+        run: {
+          ...createQueueTestRun({ prompt: "" }).run,
+          agentId: "main",
+          sessionKey,
+          sessionId,
+          messageProvider: "telegram",
+          workspaceDir: fixture.sessionsDir(),
+          config: { session: { store: fixture.storePath() } },
+          onOperationAdmitted: (operation) => {
+            observed.operation = operation;
+          },
+        },
+      };
+      const sessionEntry = { sessionId, updatedAt: 1 };
+      const typing = createTypingController({});
+      const defaults = {
+        typing,
+        typingMode: "never" as const,
+        sessionEntry,
+        sessionStore: { [sessionKey]: sessionEntry },
+        sessionKey,
+        storePath: fixture.storePath(),
+        defaultModel: "gpt-test",
+      };
+      const failure = new Error("stop after observing maintenance input custody");
+      const maintenanceInputs: Awaited<ReturnType<typeof listSessionPendingInputs>>[] = [];
+      vi.mocked(runMemoryFlushIfNeeded).mockImplementation(async (params) => {
+        maintenanceInputs.push(await listSessionPendingInputs(scope()));
+        return { sessionEntry: params.sessionEntry, outcome: "skipped" };
+      });
+      vi.mocked(runSessionCompactionIfNeeded).mockImplementation(async (params) => {
+        maintenanceInputs.push(await listSessionPendingInputs(scope()));
+        await params.beforeCompaction?.(sessionEntry);
+        throw failure;
+      });
+      expect((await listSessionPendingInputs(scope())).total).toBe(0);
+      try {
+        const run =
+          entrypoint === "queued followup"
+            ? createFollowupRunner(defaults)(queued)
+            : runReplyAgent({
+                ...defaults,
+                commandBody: text,
+                transcriptCommandBody: text,
+                followupRun: queued,
+                queueKey: sessionKey,
+                resolvedQueue: { mode: "interrupt" },
+                shouldSteer: false,
+                shouldFollowup: false,
+                isActive: false,
+                opts: { turnAdoptionLifecycle: queued.turnAdoptionLifecycle },
+                sessionCtx: {
+                  Provider: "telegram",
+                  MessageSid: "channel-maintenance",
+                  SessionKey: sessionKey,
+                },
+                resolvedVerboseLevel: "off",
+                isNewSession: false,
+                blockStreamingEnabled: false,
+                resolvedBlockStreamingBreak: "message_end",
+                shouldInjectGroupIntro: false,
+              });
+        if (entrypoint === "queued followup") {
+          await expect(run).resolves.toBeUndefined();
+          const result = observed.operation?.result;
+          assert(result?.kind === "failed", "Queued failure must be recorded on its operation");
+          expect(result.code).toBe("run_failed");
+          expect(result.cause).toBe(failure);
+        } else {
+          await expect(run).rejects.toBe(failure);
+        }
+        expect(executeAgentTurn).not.toHaveBeenCalled();
+        expect(onAdopted).not.toHaveBeenCalled();
+        expect(maintenanceInputs).toHaveLength(2);
+        for (const pending of maintenanceInputs) {
+          expect(
+            pending,
+            `${entrypoint}: maintenance checkpoint retains staged source`,
+          ).toMatchObject({
+            total: 1,
+            items: [{ state: "queued", message: { role: "user", content: text, idempotencyKey } }],
+          });
+        }
+        expect(() => recorder.withPendingInput?.(() => "stale execution")).toThrow(
+          "ownership ended",
+        );
+        const retained = await listSessionPendingInputs(scope());
+        expect(retained).toMatchObject({ total: 1, items: [{ state: "interrupted" }] });
+        rotateAgentEventLifecycleGeneration();
+        await closeOpenClawAgentDatabasesAsync();
+        closeOpenClawAgentDatabasesForTest();
+        expect(await listSessionPendingInputs(scope())).toEqual(retained);
+        expect(await readSessionSubmittedInput(scope(), idempotencyKey)).toMatchObject({
+          role: "user",
+          content: text,
+          idempotencyKey,
+        });
+        expect(await loadTranscriptEvents(scope())).toEqual([]);
+      } finally {
+        typing.cleanup();
+      }
+    },
+  );
 
   const enqueue = (...runs: FollowupRun[]) => {
     for (const run of runs) {

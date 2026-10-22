@@ -22,6 +22,7 @@ import {
 } from "../../modes/interactive/theme/theme.js";
 import { getReadmePath } from "../../package-metadata.js";
 import type { AgentTool } from "../../runtime/index.js";
+import { bindAgentToolReplaySafety } from "../../tool-replay-safety.js";
 import type { ToolResultBudget } from "../../tool-result-limits.js";
 import { processImage } from "../../utils/image-resize.js";
 import { detectSupportedImageMimeType } from "../../utils/mime.js";
@@ -392,7 +393,7 @@ export function createReadToolDefinition(
   const autoResizeImages = options?.autoResizeImages ?? true;
   const ops = options?.operations ?? defaultReadOperations;
   const maxBytes = options?.maxBytes ?? DEFAULT_MAX_BYTES;
-  return {
+  const definition: ToolDefinition<typeof readToolInputSchema, ReadToolDetails> = {
     name: "read",
     label: "read",
     description: `Read text/image file (jpg/png/gif/webp/bmp); images attach to model context. Text caps ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB. Continue with offset/limit, or cursor within a long line.`,
@@ -639,6 +640,7 @@ export function createReadToolDefinition(
       return reuseTextComponent(context.lastComponent, content);
     },
   };
+  return options?.operations ? definition : bindAgentToolReplaySafety(definition, "bounded-read");
 }
 
 export function createReadTool(

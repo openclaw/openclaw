@@ -422,152 +422,144 @@ export async function resolveAndApplySecretAssignments(params: {
 
   const degradedOwners: DegradedSecretOwner[] = [];
   const resolvedValues = new Map<string, unknown>();
-  let pendingOwners = groupAssignmentsByOwner(params.assignments);
-  while (pendingOwners.length > 0) {
-    const resolution = await resolveSecretRefValuesSettledByProvider(
-      pendingOwners.flat().map((assignment) => assignment.ref),
-      params.options,
+  const owners = groupAssignmentsByOwner(params.assignments);
+  if (owners.length === 0) {
+    return { degradedOwners, resolvedValues };
+  }
+  const resolution = await resolveSecretRefValuesSettledByProvider(
+    owners.flat().map((assignment) => assignment.ref),
+    params.options,
+  );
+  registerResolvedValuesForRedaction(resolution.resolved);
+
+  const failedOwners = new Map<
+    SecretAssignment[],
+    {
+      reason: SecretDegradationReason;
+      providerFailures: NonNullable<DegradedSecretOwner["providerFailures"]>;
+      refFailureReason?: SecretDegradationReason;
+    }
+  >();
+  for (const failure of resolution.failures) {
+    associateAssignmentFailureOwners(owners.flat(), failure.error, params);
+    const matchingOwners = owners.filter((assignments) =>
+      assignments.some((assignment) =>
+        assignmentMatchesResolutionFailure(assignment, failure.error),
+      ),
     );
-    registerResolvedValuesForRedaction(resolution.resolved);
-
-    const failedOwners = new Map<
-      SecretAssignment[],
-      {
-        reason: SecretDegradationReason;
-        providerFailures: NonNullable<DegradedSecretOwner["providerFailures"]>;
-        refFailureReason?: SecretDegradationReason;
-      }
-    >();
-    for (const failure of resolution.failures) {
-      associateAssignmentFailureOwners(pendingOwners.flat(), failure.error, params);
-      const matchingOwners = pendingOwners.filter((assignments) =>
-        assignments.some((assignment) =>
-          assignmentMatchesResolutionFailure(assignment, failure.error),
-        ),
-      );
-      if (matchingOwners.length === 0) {
-        throw failure.error;
-      }
-      for (const assignments of matchingOwners) {
-        const reason = assertOwnerCanBeIsolated(assignments, failure.error);
-        const existing = failedOwners.get(assignments);
-        const providerFailure = isProviderScopedSecretResolutionError(failure.error)
-          ? { source: failure.error.source, provider: failure.error.provider }
-          : undefined;
-        if (!existing) {
-          failedOwners.set(assignments, {
-            reason,
-            providerFailures: providerFailure ? [providerFailure] : [],
-            ...(!providerFailure ? { refFailureReason: reason } : {}),
-          });
-        } else if (
-          providerFailure &&
-          !existing.providerFailures.some(
-            (entry) =>
-              entry.source === providerFailure.source &&
-              entry.provider === providerFailure.provider,
-          )
-        ) {
-          existing.providerFailures.push(providerFailure);
-        } else if (
-          !providerFailure &&
-          (!existing.refFailureReason ||
-            reason === "resolved secret value is a redaction placeholder")
-        ) {
-          existing.refFailureReason = reason;
-        }
-      }
+    if (matchingOwners.length === 0) {
+      throw failure.error;
     }
-
-    const readyAssignments = pendingOwners
-      .filter(
-        (assignments) =>
-          !failedOwners.has(assignments) &&
-          assignments.every((assignment) => resolution.resolved.has(secretRefKey(assignment.ref))),
-      )
-      .flat();
-    if (readyAssignments.length > 0) {
-      // Validate the whole ready set so owners sharing one invalid ref are all reported.
-      // Failure association filters by validated owner keys; unrelated owners stay healthy.
-      try {
-        applyResolvedAssignments({ assignments: readyAssignments, resolved: resolution.resolved });
-        for (const assignment of readyAssignments) {
-          const refKey = secretRefKey(assignment.ref);
-          resolvedValues.set(refKey, resolution.resolved.get(refKey));
-        }
-      } catch (error) {
-        associateAssignmentFailureOwners(readyAssignments, error, params);
-        throw error;
-      }
-    }
-
-    const nextPendingOwners: SecretAssignment[][] = [];
-    for (const assignments of pendingOwners) {
-      const failure = failedOwners.get(assignments);
-      if (failure) {
-        const owner = assignments[0]!;
-        let degradationState = classifySecretOwnerDegradationState({
-          ownerKind: owner.ownerKind as Exclude<typeof owner.ownerKind, "unknown">,
-          ownerId: owner.ownerId,
-          refs: assignments.map((assignment) => assignment.ref),
-          config: params.options.config,
-          contractDigest: assignmentOwnerContractDigest(assignments),
-          forceColdRefKeys: params.forceColdRefKeys,
+    for (const assignments of matchingOwners) {
+      const reason = assertOwnerCanBeIsolated(assignments, failure.error);
+      const existing = failedOwners.get(assignments);
+      const providerFailure = isProviderScopedSecretResolutionError(failure.error)
+        ? { source: failure.error.source, provider: failure.error.provider }
+        : undefined;
+      if (!existing) {
+        failedOwners.set(assignments, {
+          reason,
+          providerFailures: providerFailure ? [providerFailure] : [],
+          ...(!providerFailure ? { refFailureReason: reason } : {}),
         });
-        if (failure.refFailureReason === "resolved secret value is a redaction placeholder") {
-          degradationState = "cold";
-        }
-        const activeOwner =
-          degradationState === "stale"
-            ? getActiveSecretsRuntimeSnapshotState()?.secretOwners?.find(
-                (entry) => entry.ownerKind === owner.ownerKind && entry.ownerId === owner.ownerId,
-              )
-            : undefined;
-        const activeValues = new Map(
-          (activeOwner?.resolvedValues ?? []).map((entry) => [entry.refKey, entry.value]),
-        );
-        if (
-          degradationState === "stale" &&
-          assignments.some((assignment) => !activeValues.has(secretRefKey(assignment.ref)))
-        ) {
-          degradationState = "cold";
-        }
-        for (const assignment of assignments) {
-          const refKey = secretRefKey(assignment.ref);
-          if (degradationState === "stale") {
-            const value = activeValues.get(refKey);
-            assignment.apply(structuredClone(value));
-            resolvedValues.set(refKey, value);
-          } else if (assignment.applyUnavailable) {
-            assignment.applyUnavailable();
-          } else {
-            // Canonicalize shorthand refs so runtime consumers can distinguish an unavailable ref
-            // from a successfully resolved literal that happens to look like `${ENV_VAR}`.
-            assignment.apply({ ...assignment.ref });
-          }
-        }
-        const degradedOwner = createDegradedOwner(
-          assignments,
-          failure.refFailureReason ?? failure.reason,
-          degradationState,
-          failure.providerFailures,
-          failure.refFailureReason,
-        );
-        degradedOwners.push(degradedOwner);
-        warnDegradedSecretOwner(params.context, degradedOwner);
-        continue;
-      }
-      if (
-        assignments.every((assignment) => resolution.resolved.has(secretRefKey(assignment.ref)))
+      } else if (
+        providerFailure &&
+        !existing.providerFailures.some(
+          (entry) =>
+            entry.source === providerFailure.source && entry.provider === providerFailure.provider,
+        )
       ) {
-        continue;
+        existing.providerFailures.push(providerFailure);
+      } else if (
+        !providerFailure &&
+        (!existing.refFailureReason ||
+          reason === "resolved secret value is a redaction placeholder")
+      ) {
+        existing.refFailureReason = reason;
       }
-      nextPendingOwners.push(assignments);
     }
-    if (nextPendingOwners.length === pendingOwners.length) {
+  }
+
+  const readyAssignments = owners
+    .filter(
+      (assignments) =>
+        !failedOwners.has(assignments) &&
+        assignments.every((assignment) => resolution.resolved.has(secretRefKey(assignment.ref))),
+    )
+    .flat();
+  if (readyAssignments.length > 0) {
+    // Validate the whole ready set so owners sharing one invalid ref are all reported.
+    // Failure association filters by validated owner keys; unrelated owners stay healthy.
+    try {
+      applyResolvedAssignments({ assignments: readyAssignments, resolved: resolution.resolved });
+      for (const assignment of readyAssignments) {
+        const refKey = secretRefKey(assignment.ref);
+        resolvedValues.set(refKey, resolution.resolved.get(refKey));
+      }
+    } catch (error) {
+      associateAssignmentFailureOwners(readyAssignments, error, params);
+      throw error;
+    }
+  }
+
+  for (const assignments of owners) {
+    const failure = failedOwners.get(assignments);
+    if (failure) {
+      const owner = assignments[0]!;
+      let degradationState = classifySecretOwnerDegradationState({
+        ownerKind: owner.ownerKind as Exclude<typeof owner.ownerKind, "unknown">,
+        ownerId: owner.ownerId,
+        refs: assignments.map((assignment) => assignment.ref),
+        config: params.options.config,
+        contractDigest: assignmentOwnerContractDigest(assignments),
+        forceColdRefKeys: params.forceColdRefKeys,
+      });
+      if (failure.refFailureReason === "resolved secret value is a redaction placeholder") {
+        degradationState = "cold";
+      }
+      const activeOwner =
+        degradationState === "stale"
+          ? getActiveSecretsRuntimeSnapshotState()?.secretOwners?.find(
+              (entry) => entry.ownerKind === owner.ownerKind && entry.ownerId === owner.ownerId,
+            )
+          : undefined;
+      const activeValues = new Map(
+        (activeOwner?.resolvedValues ?? []).map((entry) => [entry.refKey, entry.value]),
+      );
+      if (
+        degradationState === "stale" &&
+        assignments.some((assignment) => !activeValues.has(secretRefKey(assignment.ref)))
+      ) {
+        degradationState = "cold";
+      }
+      for (const assignment of assignments) {
+        const refKey = secretRefKey(assignment.ref);
+        if (degradationState === "stale") {
+          const value = activeValues.get(refKey);
+          assignment.apply(structuredClone(value));
+          resolvedValues.set(refKey, value);
+        } else if (assignment.applyUnavailable) {
+          assignment.applyUnavailable();
+        } else {
+          // Canonicalize shorthand refs so runtime consumers can distinguish an unavailable ref
+          // from a successfully resolved literal that happens to look like `${ENV_VAR}`.
+          assignment.apply({ ...assignment.ref });
+        }
+      }
+      const degradedOwner = createDegradedOwner(
+        assignments,
+        failure.refFailureReason ?? failure.reason,
+        degradationState,
+        failure.providerFailures,
+        failure.refFailureReason,
+      );
+      degradedOwners.push(degradedOwner);
+      warnDegradedSecretOwner(params.context, degradedOwner);
+      continue;
+    }
+    if (!assignments.every((assignment) => resolution.resolved.has(secretRefKey(assignment.ref)))) {
       throw toErrorObject(resolution.failures[0]?.error, "Secret resolution made no progress.");
     }
-    pendingOwners = nextPendingOwners;
   }
   return { degradedOwners, resolvedValues };
 }

@@ -384,7 +384,12 @@ export function publishSessionEntryCacheInvalidation(
           update.snapshots,
         )
       : undefined;
-  publishSessionSharingEntryChange(database, { ...update, facts, ...(entry ? { entry } : {}) });
+  publishSessionSharingEntryChange(database, {
+    ...update,
+    facts,
+    ...(entry ? { entry } : {}),
+    fullEntry,
+  });
   const identity = findOpenClawAgentDatabaseIdentity(database);
   const sharingChange =
     update.sharingUnchanged || facts?.kind === "unchanged" || facts?.kind === "participants"

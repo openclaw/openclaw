@@ -162,7 +162,7 @@ describe("anthropic provider replay hooks", () => {
 
     const models = next?.agents?.defaults?.models;
     expectFields(next?.agents?.defaults?.contextPruning, { mode: "cache-ttl", ttl: "1h" });
-    expectFields(next?.agents?.defaults?.heartbeat, { every: "30m" });
+    expect(next?.agents?.defaults).not.toHaveProperty("heartbeat");
     expectModelParams(models, "anthropic/claude-opus-4-6", { cacheRetention: "short" });
     expectModelParams(models, "anthropic/claude-sonnet-5-5", { cacheRetention: "short" });
     expectModelParams(models, "anthropic/claude-sonnet-5", { cacheRetention: "short" });
@@ -652,6 +652,7 @@ describe("anthropic provider replay hooks", () => {
                 apiKey: CLAUDE_CLI_NATIVE_AUTH_MARKER,
                 source: "Claude CLI native auth",
                 mode: "oauth",
+                nativeAuth: { runtime: "claude-cli", mode: "oauth" },
               }
             : undefined,
         );

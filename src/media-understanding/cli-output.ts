@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { extractGeminiResponse } from "../../packages/media-understanding-common/src/output-extract.js";
-import { hasErrnoCode } from "../infra/errors.js";
+import { ignoreMissingPath } from "../infra/errno.js";
 
 function extractSherpaOnnxText(raw: string): string | undefined {
   const tryParse = (value: string): string | undefined => {
@@ -104,17 +104,6 @@ function resolveParakeetOutputPath(args: string[], mediaPath: string): string | 
   return path.join(outputDir, `${path.parse(mediaPath).name}.txt`);
 }
 
-async function readCliTranscriptFile(filePath: string): Promise<string> {
-  try {
-    return (await fs.readFile(filePath, "utf8")).trim();
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return "";
-    }
-    throw error;
-  }
-}
-
 export async function resolveCliOutput(params: {
   command: string;
   args: string[];
@@ -133,7 +122,7 @@ export async function resolveCliOutput(params: {
   if (fileOutput) {
     // A known file-output contract is authoritative: falling back would expose
     // progress/status stdout as user speech when transcription is empty or missing.
-    return await readCliTranscriptFile(fileOutput);
+    return (await fs.readFile(fileOutput, "utf8").catch(ignoreMissingPath))?.trim() ?? "";
   }
 
   if (commandId === "gemini") {

@@ -9,7 +9,12 @@ import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import * as gitExec from "./git-exec.js";
 import * as openclawRoot from "./openclaw-root.js";
 import { runGlobalPackageUpdateSteps } from "./package-update-steps.js";
-import { writePackageRoot, createRootRunner } from "./package-update-steps.test-support.js";
+import {
+  writePackageRoot,
+  createRootRunner,
+  createPnpmTarget as pnpmTarget,
+  packageUpdateStepResult,
+} from "./package-update-steps.test-support.js";
 import * as restartSentinel from "./restart-sentinel.js";
 import { createGatewayUpdateLifecycle } from "./update-check-lifecycle.js";
 import { pkgQueryResult } from "./update-freebsd-pkg-ownership.test-support.js";
@@ -73,16 +78,6 @@ async function writePnpmProject(installDir: string, dependencies: Record<string,
     JSON.stringify({ private: true, dependencies }),
     "utf8",
   );
-}
-
-function pnpmTarget(globalRoot: string, packageRoot: string) {
-  return {
-    manager: "pnpm",
-    command: "pnpm",
-    pnpmIsolated: { layoutVersion: 11 },
-    globalRoot,
-    packageRoot,
-  };
 }
 
 function probeRunner(responses: Record<string, ReturnType<typeof commandResult>>): CommandRunner {
@@ -435,14 +430,13 @@ describe("custom Bun global installation ownership", () => {
             path.relative(stageBin, path.join(stagedPackageRoot, "dist/index.js")),
             path.join(stageBin, "openclaw"),
           );
-          return {
-            name,
-            command: argv.join(" "),
-            cwd: cwd ?? base,
-            durationMs: 1,
-            exitCode: installFails ? 1 : 0,
-            ...(installFails ? { stderrTail: "staged Bun install failed" } : {}),
-          };
+          return packageUpdateStepResult(
+            { name, argv, cwd: cwd ?? base },
+            {
+              exitCode: installFails ? 1 : 0,
+              ...(installFails ? { stderrTail: "staged Bun install failed" } : {}),
+            },
+          );
         });
 
         const installTarget = await resolveTarget(runCommand, packageRoot, {

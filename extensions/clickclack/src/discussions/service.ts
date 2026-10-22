@@ -67,10 +67,8 @@ export class ClickClackDiscussionService {
   #reconcileScheduler: DiscussionReconcileScheduler | undefined;
   readonly #withChannelMutationLock = createAsyncLock();
   #timer: ReturnType<PluginServiceSchedulerV1["schedule"]> | undefined;
-  #reconcileAllPromise: Promise<void> | undefined;
   #unsubscribeSessionsChanged: (() => void) | undefined;
   #closed = false;
-  #activation = 0;
   #cleanupPromise: Promise<void> | undefined;
   readonly #operations = new Set<Promise<unknown>>();
 
@@ -94,18 +92,11 @@ export class ClickClackDiscussionService {
     gatewayEvents: Pick<OpenClawPluginGatewayEvents, "onSessionsChanged"> | undefined,
     scheduler: PluginServiceSchedulerV1,
   ): Promise<void> {
-    const activation = ++this.#activation;
     if (this.#cleanupPromise) {
       await this.#cleanupPromise;
     }
-    if (activation !== this.#activation) {
-      return;
-    }
     if (this.#scheduler) {
       await this.#scheduler.stop();
-    }
-    if (activation !== this.#activation) {
-      return;
     }
     this.#cleanupPromise = undefined;
     this.#unsubscribeSessionsChanged?.();
@@ -122,9 +113,7 @@ export class ClickClackDiscussionService {
           (await this.#store.getAsync(event.sessionKey)) ||
           (await getPendingDiscussionOpen(this.#runtime, event.sessionKey))
         ) {
-          if (activation === this.#activation) {
-            this.#reconcileScheduler?.schedule(event.sessionKey);
-          }
+          this.#reconcileScheduler?.schedule(event.sessionKey);
         }
       }).catch((error: unknown) => {
         this.#logger().warn(`discussion event admission failed: ${String(error)}`);
@@ -132,9 +121,6 @@ export class ClickClackDiscussionService {
     });
     await this.#withOperation(async () => {
       for (const sessionKey of await this.#listReconcileSessionKeys()) {
-        if (activation !== this.#activation) {
-          return;
-        }
         this.#reconcileScheduler?.schedule(sessionKey, 0);
       }
       await this.#ensureTimer();
@@ -276,27 +262,17 @@ export class ClickClackDiscussionService {
 
   async reconcileAll(): Promise<void> {
     return await this.#withOperation(async () => {
-      if (this.#reconcileAllPromise) {
-        return await this.#reconcileAllPromise;
-      }
-      this.#reconcileAllPromise = (async () => {
-        try {
-          for (const sessionKey of await this.#listReconcileSessionKeys()) {
-            try {
-              await this.#reconcile(sessionKey);
-            } catch (error) {
-              this.#logger().warn(
-                `discussion reconcile failed for ${sessionKey}: ${String(error)}`,
-              );
-            }
+      try {
+        for (const sessionKey of await this.#listReconcileSessionKeys()) {
+          try {
+            await this.#reconcile(sessionKey);
+          } catch (error) {
+            this.#logger().warn(`discussion reconcile failed for ${sessionKey}: ${String(error)}`);
           }
-        } finally {
-          await this.#ensureTimer();
         }
-      })().finally(() => {
-        this.#reconcileAllPromise = undefined;
-      });
-      return await this.#reconcileAllPromise;
+      } finally {
+        await this.#ensureTimer();
+      }
     });
   }
 
@@ -333,7 +309,6 @@ export class ClickClackDiscussionService {
 
   cleanup(): Promise<void> {
     this.#closed = true;
-    this.#activation += 1;
     this.#unsubscribeSessionsChanged?.();
     this.#unsubscribeSessionsChanged = undefined;
     this.#reconcileScheduler = undefined;

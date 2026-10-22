@@ -1,11 +1,12 @@
 import type { BackupStatusResult, StorageLocationsProbeResult } from "@openclaw/gateway-protocol";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { registerListener } from "../../../../src/shared/listeners.js";
+import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
+import { enableHostDesktop as enableHostDesktopConfig } from "../../components/desktop/host-desktop-setup.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -67,7 +68,7 @@ export function createSystems(context: ApplicationContext) {
   const lifecycle = createGatewayConnectionLifecycle(context.gateway.snapshot);
   const storageProbeRequests = new Map<string, AbortController>();
   const telemetry = new Map<string, readonly SystemsTelemetrySample[]>();
-  const listeners = new Set<() => void>();
+  const listeners = createChangeListeners();
   let backupsRequest: AbortController | undefined;
   let desktopSetupRequest: symbol | undefined;
   let subscriptions: Array<() => void> = [];
@@ -222,20 +223,15 @@ export function createSystems(context: ApplicationContext) {
     state.desktopSetupError = null;
     notify();
     try {
-      await runtimeConfig.ensureLoaded();
-      if (!isCurrent() || !canEnableHostDesktop()) {
-        return;
-      }
-      const patched = await runtimeConfig.patch({
-        raw: { desktop: { host: { enabled: true } } },
-        note: "systems: enable host desktop",
-        canDispatch: () => isCurrent() && canEnableHostDesktop(),
-      });
-      if (isCurrent() && !patched) {
-        state.desktopSetupError = runtimeConfig.state.lastError ?? t("systems.desktopSetupFailed");
-      }
-      if (isCurrent() && patched) {
+      const failure = await enableHostDesktopConfig(
+        runtimeConfig,
+        "systems: enable host desktop",
+        () => isCurrent() && canEnableHostDesktop(),
+      );
+      if (isCurrent() && failure === null) {
         await refresh();
+      } else if (isCurrent() && failure !== undefined) {
+        state.desktopSetupError = failure;
       }
     } catch (error) {
       if (isCurrent()) {
@@ -251,9 +247,7 @@ export function createSystems(context: ApplicationContext) {
 
   const telemetryHistory = (id: string) => (current() ? (telemetry.get(id) ?? []) : []);
 
-  function notify(): void {
-    listeners.forEach((listener) => listener());
-  }
+  const notify = listeners.publish;
 
   function projectRows(): void {
     state.rows =
@@ -568,7 +562,7 @@ export function createSystems(context: ApplicationContext) {
     enableHostDesktop,
     refreshBackups: () => readBackupState(),
     probeStorage: (name: string) => readBackupState(name),
-    subscribe: (listener: () => void) => registerListener(listeners, listener),
+    subscribe: listeners.subscribe,
   };
 }
 

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { getToolTerminalPresentation } from "../tool-terminal-presentation.js";
 import { createCronTool } from "./cron-tool.js";
+import { wrapToolWithGatewayCallerIdentity } from "./gateway-caller-context.js";
 import * as gatewayModule from "./gateway.js";
 
 const gateway = vi.fn();
@@ -48,6 +49,70 @@ beforeEach(() => {
 afterEach(clearRuntimeConfigSnapshot);
 
 describe("cron shorthand recovery", () => {
+  it.each(
+    (["factory", "host-bound"] as const).flatMap((caller) =>
+      (["remove", "update"] as const).flatMap((action) =>
+        [false, true].map((retired) => ({ caller, action, retired })),
+      ),
+    ),
+  )(
+    "pins $action to the active $caller caller after lookup (retired=$retired)",
+    async ({ caller, action, retired }) => {
+      let current = true;
+      let mutated = false;
+      gateway.mockImplementation(async (method: string) => {
+        if (method === "cron.get") {
+          current = !retired;
+          return { id: "watcher", configRevision: "sha256:captured" };
+        }
+        if (method === `cron.${action}`) {
+          mutated = true;
+          return { ok: true };
+        }
+        throw new Error(`Unexpected method: ${method}`);
+      });
+      const identity = {
+        agentId: "main",
+        sessionKey: "agent:main:watcher-control",
+        receiptAuthority: () => current,
+      };
+      // The harness host binds the admitted caller after a plugin builds its tools.
+      const tool = wrapToolWithGatewayCallerIdentity(
+        createCronTool(
+          caller === "factory"
+            ? { agentId: identity.agentId, agentSessionKey: identity.sessionKey }
+            : undefined,
+        ),
+        identity,
+      );
+      const patch = action === "update" ? { enabled: false } : undefined;
+      const mutation = tool.execute("stop-watcher", {
+        action,
+        jobId: "watcher",
+        ...(patch ? { job: patch } : {}),
+      });
+      if (retired) {
+        await expect(mutation).rejects.toThrow("The requesting turn is no longer active.");
+        expect(gateway.mock.calls).toEqual([["cron.get", expect.anything(), { id: "watcher" }]]);
+      } else {
+        await expect(mutation).resolves.toMatchObject({ details: { ok: true } });
+        expect(gateway.mock.calls).toEqual([
+          ["cron.get", expect.anything(), { id: "watcher" }],
+          [
+            `cron.${action}`,
+            expect.anything(),
+            {
+              id: "watcher",
+              expectedConfigRevision: "sha256:captured",
+              ...(patch ? { patch } : {}),
+            },
+          ],
+        ]);
+      }
+      expect(mutated).toBe(!retired);
+    },
+  );
+
   it("presents list metadata without private job content", () => {
     const presentation = getToolTerminalPresentation(createCronTool());
     if (!presentation) {
@@ -66,27 +131,134 @@ describe("cron shorthand recovery", () => {
     expect(presentation({ action: "add" }, result)).toBeUndefined();
   });
 
-  it("prefers a script payload to agent-turn hints", async () => {
-    const script = { script: "return { notify: 'changed' }", timeoutSeconds: 30, toolBudget: 12 };
-    await execute({ action: "add", name: "reminder", everyMs: 60_000, ...script });
-    expectAdd({ payload: { kind: "script", ...script } });
-  });
-  it("forwards out-of-range timestamps for gateway validation", async () => {
-    const atMs = 8_640_000_000_000_001;
-    await execute({ action: "add", name: "reminder", atMs, message: "report" });
-    expectAdd({ schedule: { kind: "at", at: atMs } });
-  });
-  it("rejects on-exit shorthand", async () => {
-    const args = {
-      action: "add",
-      kind: "on-exit",
-      command: "pnpm build",
-      cwd: "/repo",
-      message: "rebuilt",
+  it("presents watcher execution separately from its saved setting", () => {
+    const presentation = getToolTerminalPresentation(createCronTool());
+    expect(presentation).toBeTypeOf("function");
+    const observed = {
+      id: "watcher",
+      name: "Application errors",
+      schedule: { kind: "stream" },
+      enabled: false,
+      state: { streamStatus: "error", streamError: "PRIVATE_DIAGNOSTIC" },
     };
-    await expect(execute(args)).rejects.toThrow(
-      "automation on-exit schedules cannot be created or edited",
-    );
+    const uncertain = presentation?.({ action: "update" }, { content: [], details: observed });
+    expect(uncertain?.text).toContain("Paused. Source termination is not confirmed.");
+    expect(uncertain?.text).not.toContain("PRIVATE_DIAGNOSTIC");
+    expect(
+      presentation?.(
+        { action: "get" },
+        {
+          content: [],
+          details: {
+            ...observed,
+            state: { streamStatus: "stopped" },
+          },
+        },
+      )?.text,
+    ).toContain("Source termination confirmed.");
+    expect(
+      presentation?.(
+        { action: "add" },
+        {
+          content: [],
+          details: {
+            created: true,
+            job: { ...observed, enabled: true, state: { streamStatus: "running" } },
+          },
+        },
+      )?.text,
+    ).toContain("Source running.");
+    expect(
+      presentation?.({ action: "remove" }, { content: [], details: { ok: true, removed: true } }),
+    ).toBeUndefined();
+  });
+
+  it.each([
+    {
+      name: "script before agent-turn hints",
+      input: {
+        everyMs: 60_000,
+        script: "return { notify: 'changed' }",
+        timeoutSeconds: 30,
+        toolBudget: 12,
+      },
+      expected: {
+        payload: {
+          kind: "script",
+          script: "return { notify: 'changed' }",
+          timeoutSeconds: 30,
+          toolBudget: 12,
+        },
+      },
+    },
+    {
+      name: "out-of-range timestamp for gateway validation",
+      input: { atMs: 8_640_000_000_000_001, message: "report" },
+      expected: { schedule: { kind: "at", at: 8_640_000_000_000_001 } },
+    },
+  ])("recovers $name", async ({ input, expected }) => {
+    await execute({ action: "add", name: "reminder", ...input });
+    expectAdd(expected);
+  });
+
+  it.each([
+    {
+      name: "explicit on-exit creation",
+      args: {
+        action: "add",
+        kind: "on-exit",
+        command: "pnpm build",
+        cwd: "/repo",
+        message: "rebuilt",
+      },
+      error: "automation on-exit schedules cannot be created or edited",
+    },
+    {
+      name: "ambiguous command-only update",
+      args: { action: "update", jobId: "job", command: "make" },
+      error: "Read the full automations schema and WATCH OUTPUT example",
+    },
+    {
+      name: "command creation with a flat interval but no schedule kind",
+      args: {
+        action: "add",
+        name: "Build watcher",
+        everyMs: 60_000,
+        command: ["tail", "-F", "/tmp/build.log"],
+        message: "Report build output",
+      },
+      error: "Read the full automations schema and WATCH OUTPUT example",
+    },
+    {
+      name: "command creation with a nested cron expression but no schedule kind",
+      args: {
+        action: "add",
+        job: {
+          name: "Build watcher",
+          schedule: { expr: "* * * * *", command: ["tail", "-F", "/tmp/build.log"] },
+          payload: { kind: "agentTurn", message: "Report build output" },
+        },
+      },
+      error: "Read the full automations schema and WATCH OUTPUT example",
+    },
+    {
+      name: "malformed stream creation without a schedule kind",
+      args: {
+        action: "add",
+        job: {
+          name: "Build watcher",
+          schedule: {
+            type: "stream",
+            command: "/usr/bin/tail -n 0 -F /tmp/build.log",
+            pattern: "^BUILD:",
+          },
+          payload: { type: "send_message", conversationId: "current", template: "{{line}}" },
+        },
+      },
+      error: "Read the full automations schema and WATCH OUTPUT example",
+    },
+  ])("rejects $name before Gateway effects", async ({ args, error }) => {
+    await expect(execute(args)).rejects.toThrow(error);
     expect(gateway).not.toHaveBeenCalled();
   });
 

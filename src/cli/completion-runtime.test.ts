@@ -1,5 +1,6 @@
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -37,6 +38,10 @@ vi.mock("./output-file.runtime.js", async () => {
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 const windowsShells = {
   core: "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
   legacy: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
@@ -101,12 +106,9 @@ function expectAvailableZshToSucceed(result: SpawnSyncReturns<string>): void {
 }
 
 it("preserves zsh's set-but-empty startup directory contract", () => {
-  expect(
-    resolveCompletionProfilePath("zsh", {
-      env: { HOME: "/tmp/openclaw-home", ZDOTDIR: "" },
-      homeDir: () => "/tmp/openclaw-home",
-    }),
-  ).toBe(path.join(path.sep, ".zshrc"));
+  vi.stubEnv("HOME", "/tmp/openclaw-home");
+  vi.stubEnv("ZDOTDIR", "");
+  expect(resolveCompletionProfilePath("zsh")).toBe(path.join(path.sep, ".zshrc"));
 });
 
 it.skipIf(process.platform === "win32")(
@@ -208,25 +210,6 @@ it("loads cached Bash completion from a literal path through the login profile",
     expect(shell.stdout).toContain("complete -W 'status' openclaw");
     expect(shell.stdout).toContain("<value >\n");
   }, "openclaw-completion-literal$dollar Ada's !42-");
-});
-
-it("prints the same canonical reload hint used by Doctor and onboarding", async () => {
-  await withCompletionHome(async () => {
-    await writeCompletionCache("zsh");
-    const profilePath = await writeProfile("zsh", "");
-    await fs.chmod(profilePath, 0o640);
-    const log = vi.spyOn(console, "log").mockImplementation(() => {});
-
-    try {
-      await installCompletion("zsh", false, "openclaw");
-      expect(log).toHaveBeenCalledWith(
-        "Completion installed. Restart your shell or run: source ~/.zshrc",
-      );
-      await expectProfileMode(profilePath);
-    } finally {
-      log.mockRestore();
-    }
-  });
 });
 
 it("preserves an existing profile when atomic publication fails", async () => {
@@ -429,17 +412,21 @@ it.each([
   ["Windows PowerShell", { SHELL: windowsShells.legacy }, "win32", "powershell"],
   ["non-Windows without SHELL", {}, "linux", "zsh"],
 ] as const)("detects %s", (_name, env, platform, expected) => {
-  expect(resolveShellFromEnv(env, platform)).toBe(expected);
+  vi.stubEnv("SHELL", "SHELL" in env ? env.SHELL : undefined);
+  vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+  expect(resolveShellFromEnv()).toBe(expected);
 });
 
 it("resolves Windows PowerShell and pwsh profile directories", () => {
   const home = "C:\\Users\\Ada";
-  const resolve = (SHELL: string) =>
-    resolveCompletionProfilePath("powershell", {
-      env: { SHELL, USERPROFILE: home },
-      homeDir: () => home,
-      platform: "win32",
-    });
+  vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+  vi.spyOn(os, "homedir").mockReturnValue(home);
+  vi.stubEnv("HOME", undefined);
+  vi.stubEnv("USERPROFILE", home);
+  const resolve = (shell: string) => {
+    vi.stubEnv("SHELL", shell);
+    return resolveCompletionProfilePath("powershell");
+  };
   const profile = (directory: string) =>
     path.win32.join(home, "Documents", directory, "Microsoft.PowerShell_profile.ps1");
   expect(resolve(windowsShells.core)).toBe(profile("PowerShell"));

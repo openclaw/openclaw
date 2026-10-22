@@ -329,6 +329,17 @@
             "contextWindow": 400000,
             "maxTokens": 128000,
             "cost": { "input": 0.2, "output": 1.25, "cacheRead": 0.02, "cacheWrite": 0 }
+          },
+          {
+            "id": "gpt-4.1",
+            "name": "GPT-4.1",
+            "status": "deprecated",
+            "statusReason": "API shutdown is scheduled for January 14, 2027.",
+            "reasoning": false,
+            "input": ["text", "image"],
+            "contextWindow": 1047576,
+            "maxTokens": 32768,
+            "cost": { "input": 2, "output": 8, "cacheRead": 0.5, "cacheWrite": 0 }
           }
         ]
       }

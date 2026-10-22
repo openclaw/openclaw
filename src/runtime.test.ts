@@ -1,15 +1,9 @@
-// Tests for terminal runtime helpers.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../packages/terminal-core/src/progress-line.js", () => ({
   clearActiveProgressLine: vi.fn(),
 }));
 
-vi.mock("../packages/terminal-core/src/restore.js", () => ({
-  restoreTerminalState: vi.fn(),
-}));
-
-import { restoreTerminalState } from "../packages/terminal-core/src/restore.js";
 import { loggingState } from "./logging/state.js";
 import {
   createNonExitingRuntime,
@@ -19,71 +13,41 @@ import {
   writeRuntimeStdout,
 } from "./runtime.js";
 
-describe("createNonExitingRuntime", () => {
-  it("throws a typed exit error carrying the requested code", () => {
-    const runtime = createNonExitingRuntime();
-    let thrown: unknown;
+const makeRuntime = () => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() });
+const makeOutputRuntime = () => ({ ...makeRuntime(), writeStdout: vi.fn(), writeJson: vi.fn() });
 
-    try {
-      runtime.exit(42);
-    } catch (error) {
-      thrown = error;
-    }
-
-    expect(thrown).toBeInstanceOf(ExitError);
-    expect(thrown).toBeInstanceOf(Error);
-    expect(thrown).toMatchObject({
-      name: "ExitError",
-      message: "exit 42",
-      code: 42,
-    });
-  });
+it("throws a typed exit error carrying the requested code", () => {
+  let thrown: unknown;
+  try {
+    createNonExitingRuntime().exit(42);
+  } catch (error) {
+    thrown = error;
+  }
+  expect(thrown).toBeInstanceOf(ExitError);
+  expect(thrown).toBeInstanceOf(Error);
+  expect(thrown).toMatchObject({ name: "ExitError", message: "exit 42", code: 42 });
 });
 
 describe("writeRuntimeJson", () => {
   it("writes JSON using writeJson when available", () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-      writeStdout: vi.fn(),
-      writeJson: vi.fn(),
-    };
+    const runtime = makeOutputRuntime();
     writeRuntimeJson(runtime, { key: "value" });
     expect(runtime.writeJson).toHaveBeenCalledWith({ key: "value" }, 2);
   });
 
-  it("writes JSON using log when writeJson not available", () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
-    writeRuntimeJson(runtime, { key: "value" });
-    expect(runtime.log).toHaveBeenCalled();
-  });
-
-  it("handles zero space parameter", () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
-    writeRuntimeJson(runtime, { key: "value" }, 0);
-    expect(runtime.log).toHaveBeenCalledWith('{"key":"value"}');
+  it.each([
+    [undefined, '{\n  "key": "value"\n}'],
+    [0, '{"key":"value"}'],
+  ] as const)("writes JSON through log with space %s", (space, expected) => {
+    const runtime = makeRuntime();
+    writeRuntimeJson(runtime, { key: "value" }, space);
+    expect(runtime.log).toHaveBeenCalledWith(expected);
   });
 });
 
 describe("writeRuntimeStdout", () => {
   it("uses the direct stdout writer when available", () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-      writeStdout: vi.fn(),
-      writeJson: vi.fn(),
-    };
-
+    const runtime = makeOutputRuntime();
     writeRuntimeStdout(runtime, "plain output");
 
     expect(runtime.writeStdout).toHaveBeenCalledWith("plain output");
@@ -91,12 +55,7 @@ describe("writeRuntimeStdout", () => {
   });
 
   it("falls back to the runtime logger when no stdout writer is available", () => {
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
-
+    const runtime = makeRuntime();
     writeRuntimeStdout(runtime, "plain output");
 
     expect(runtime.log).toHaveBeenCalledWith("plain output");
@@ -105,45 +64,38 @@ describe("writeRuntimeStdout", () => {
 
 describe("defaultRuntime terminal restoration", () => {
   const originalForceConsoleToStderr = loggingState.forceConsoleToStderr;
-  const originalStdoutIsTTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
-  const originalStderrIsTTY = Object.getOwnPropertyDescriptor(process.stderr, "isTTY");
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const streams = [
+    { stream: process.stdout, chunks: stdout },
+    { stream: process.stderr, chunks: stderr },
+  ].map(({ stream, chunks }) => ({
+    stream,
+    chunks,
+    isTTY: Object.getOwnPropertyDescriptor(stream, "isTTY"),
+  }));
 
   afterEach(() => {
     vi.restoreAllMocks();
-    vi.mocked(restoreTerminalState).mockReset();
     loggingState.forceConsoleToStderr = originalForceConsoleToStderr;
-    if (originalStdoutIsTTY) {
-      Object.defineProperty(process.stdout, "isTTY", originalStdoutIsTTY);
-    } else {
-      Reflect.deleteProperty(process.stdout, "isTTY");
-    }
-    if (originalStderrIsTTY) {
-      Object.defineProperty(process.stderr, "isTTY", originalStderrIsTTY);
-    } else {
-      Reflect.deleteProperty(process.stderr, "isTTY");
+    for (const { stream, isTTY } of streams) {
+      if (isTTY) {
+        Object.defineProperty(stream, "isTTY", isTTY);
+      } else {
+        Reflect.deleteProperty(stream, "isTTY");
+      }
     }
   });
 
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-
-  beforeEach(async () => {
-    const actualRestore = await vi.importActual<
-      typeof import("../packages/terminal-core/src/restore.js")
-    >("../packages/terminal-core/src/restore.js");
-    vi.mocked(restoreTerminalState).mockImplementation(actualRestore.restoreTerminalState);
-    Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
-    Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });
-    stdout.length = 0;
-    stderr.length = 0;
-    vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
-      stdout.push(String(chunk));
-      return true;
-    });
-    vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
-      stderr.push(String(chunk));
-      return true;
-    });
+  beforeEach(() => {
+    for (const { stream, chunks } of streams) {
+      Object.defineProperty(stream, "isTTY", { value: true, configurable: true });
+      chunks.length = 0;
+      vi.spyOn(stream, "write").mockImplementation((chunk) => {
+        chunks.push(String(chunk));
+        return true;
+      });
+    }
     vi.spyOn(process, "exit").mockImplementation(() => {
       throw new Error("forced native exit");
     });

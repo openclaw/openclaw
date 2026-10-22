@@ -4,18 +4,45 @@ import type {
   OpenClawPluginNodeHostCommand,
   OpenClawPluginNodeHostCommandAvailabilityContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
-import { asFiniteNumber as readFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
-import { clamp } from "openclaw/plugin-sdk/text-utility-runtime";
+import { runCommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import {
-  assertToolResult,
-  formatToolError,
-  isCapabilityEnabledForHost,
-  parseParams,
-} from "./command-utils.js";
-import type { ResolvedLinuxNodePluginConfig } from "./config.js";
+  asFiniteNumber as readFiniteNumber,
+  asNonArrayRecord,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
+import { clamp, safeParseJson, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import {
+  resolveLinuxNodePluginConfigFromHost,
+  type ResolvedLinuxNodePluginConfig,
+} from "./config.js";
 import { resolveExecutable } from "./executables.js";
+
+function parseParams(paramsJSON: string | null | undefined): Record<string, unknown> {
+  return asNonArrayRecord(safeParseJson(paramsJSON ?? ""));
+}
+
+function formatToolError(result: SpawnResult): string {
+  const detail = result.stderr.trim() || result.stdout.trim();
+  return detail
+    ? truncateUtf16Safe(detail.replaceAll(/\s+/gu, " "), 300)
+    : `exit ${result.code ?? "unknown"}`;
+}
+
+function assertToolResult(result: SpawnResult, code: string): void {
+  if (result.termination === "timeout" || result.termination === "no-output-timeout") {
+    throw new Error(`${code}: command timed out`);
+  }
+  if (result.code !== 0) {
+    throw new Error(`${code}: ${formatToolError(result)}`);
+  }
+}
+
+function isCapabilityEnabledForHost(
+  context: OpenClawPluginNodeHostCommandAvailabilityContext,
+  capability: keyof ResolvedLinuxNodePluginConfig,
+): boolean {
+  return resolveLinuxNodePluginConfigFromHost(context.config)?.[capability].enabled === true;
+}
 
 const GEOCLUE_DEMO_PATHS = [
   "/usr/libexec/geoclue-2.0/demos/where-am-i",
@@ -425,14 +452,7 @@ export function createLinuxNodeCommands(
         isCapabilityEnabledForHost(context, "location") &&
         findWhereAmI(context.env) !== null,
       handle: async (paramsJSON) => {
-        if (platform !== "linux") {
-          throw new Error("LOCATION_DISABLED: Linux node host required");
-        }
-        if (!config.location.enabled) {
-          throw new Error(
-            "LOCATION_DISABLED: enable plugins.entries.linux-node.config.location.enabled and restart the node service",
-          );
-        }
+        assertLinuxCapability("location", "LOCATION_DISABLED");
         const whereAmI = findWhereAmI();
         if (!whereAmI) {
           throw new Error("LOCATION_UNAVAILABLE: where-am-i not found");

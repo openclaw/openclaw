@@ -315,7 +315,6 @@ export function readTranscriptExportSnapshotsFromDatabase(
               : transcriptEventJsonSql(database.db)
             ).as("event_json"),
           ])
-          .where("session_id", "in", [...bySession.keys()])
           .where((eb) =>
             eb.or(
               batch.map(({ request, throughSeq, afterSeq }) =>
@@ -672,6 +671,7 @@ export function findTranscriptEventInDatabase(
   sessionId: string,
   match: (event: TranscriptEvent) => boolean,
   navigationMatch?: (event: TranscriptEvent) => boolean,
+  { malformed = "skip" }: { malformed?: "skip" | "throw" } = {},
 ): { event: TranscriptEvent } | undefined {
   return readHotSessionTranscriptSnapshot(database, sessionId, "match", () => {
     const events = getSessionKysely(database.db)
@@ -700,7 +700,7 @@ export function findTranscriptEventInDatabase(
               .where("seq", "=", row.seq),
           )
         : row;
-      const found = payload && findTranscriptEventInRows([payload], match);
+      const found = payload && findTranscriptEventInRows([payload], match, malformed);
       if (found) {
         return found;
       }

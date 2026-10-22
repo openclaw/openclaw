@@ -211,16 +211,15 @@ describe("ClickClack discussion session tool policy", () => {
       const pending = createDeferred<typeof snapshot>();
       vi.spyOn(asyncStore, "entries").mockReturnValueOnce(pending.promise);
       const preparing = bindingStore.prepare();
-      if (operation === "replace") {
-        await bindingStore.setIfCurrent(mainSessionKey, previous, {
-          ...previous,
-          channelId: "chn_replacement",
-        });
-      } else {
-        await bindingStore.deleteIfCurrent(mainSessionKey, previous);
-      }
+      const mutation =
+        operation === "replace"
+          ? bindingStore.setIfCurrent(mainSessionKey, previous, {
+              ...previous,
+              channelId: "chn_replacement",
+            })
+          : bindingStore.deleteIfCurrent(mainSessionKey, previous);
       pending.resolve(snapshot);
-      await preparing;
+      await Promise.all([preparing, mutation]);
 
       expect((await run("sessions_history", { sessionKey: mainSessionKey }))?.block).toBe(true);
       expect(

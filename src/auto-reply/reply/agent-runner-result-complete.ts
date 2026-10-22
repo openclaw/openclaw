@@ -132,8 +132,23 @@ export async function completeReplyAgentRun(input: {
   if (trailingPluginStatusPayload) {
     finalPayloads = [...finalPayloads, trailingPluginStatusPayload];
   }
+  const resolveReplyPolicy = (resolvedSessionKey: string) =>
+    resolveSourceReplyPolicy({
+      cfg,
+      sessionCtx,
+      sessionEntry: activeSessionEntry,
+      sessionKey: resolvedSessionKey,
+      runtimePolicySessionKey,
+      opts,
+    });
+  const sourceReplyPolicy = sessionKey ? resolveReplyPolicy(sessionKey) : undefined;
   if (responseUsageLine) {
-    finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
+    finalPayloads = appendUsageLine(finalPayloads, responseUsageLine, {
+      completedSourceReply:
+        sourceReplyPolicy?.sourceReplyDeliveryMode === "message_tool_only" &&
+        completedSourceReplyDelivery &&
+        prepared.replyCompletion.outcome === "delivered",
+    });
   }
   if (isHookBlockedRun) {
     finalPayloads = markBeforeAgentRunBlockedPayloads(finalPayloads);
@@ -147,18 +162,12 @@ export async function completeReplyAgentRun(input: {
     sessionKey &&
     storePath &&
     runResult.meta?.terminalReply?.disposition !== "silent" &&
+    prepared.replyCompletion.outcome !== "silent" &&
     (finalPayloads.length > 0 ||
       isStrandedReplyRetryRun ||
       runResult.meta?.terminalReply !== undefined)
   ) {
-    const sourceReplyPolicy = resolveSourceReplyPolicy({
-      cfg,
-      sessionCtx,
-      sessionEntry: activeSessionEntry,
-      sessionKey,
-      runtimePolicySessionKey,
-      opts,
-    });
+    const recoverySourceReplyPolicy = sourceReplyPolicy ?? resolveReplyPolicy(sessionKey);
     const assistantFinalText = normalizeAssistantFinalDeliveryText(
       runResult.meta?.finalAssistantVisibleText ?? rawAssistantText ?? "",
     );
@@ -172,8 +181,8 @@ export async function completeReplyAgentRun(input: {
             payloads: finalPayloads,
             finalText: assistantFinalText,
             terminalReply: runResult.meta?.terminalReply,
-            sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
-            sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
+            sourceReplyDeliveryMode: recoverySourceReplyPolicy.sourceReplyDeliveryMode,
+            sendPolicyDenied: recoverySourceReplyPolicy.sendPolicyDenied,
             successfulSourceReplyDelivery: completedSourceReplyDelivery,
             isHeartbeat,
             isRoomEvent: sessionCtx.InboundEventKind === "room_event",
@@ -208,7 +217,9 @@ export async function completeReplyAgentRun(input: {
     const recoverablePendingFinalText = buildRecoverablePendingFinalDeliveryText(
       normalizePendingFinalRecoveryPayloads(finalPayloads),
     );
-    let pendingText = sourceReplyPolicy.suppressDelivery ? "" : (recoverablePendingFinalText ?? "");
+    let pendingText = recoverySourceReplyPolicy.suppressDelivery
+      ? ""
+      : (recoverablePendingFinalText ?? "");
     if (isHeartbeat) {
       const stripped = stripHeartbeatToken(pendingText, {
         mode: "heartbeat",
@@ -216,20 +227,20 @@ export async function completeReplyAgentRun(input: {
       });
       pendingText = stripped.shouldSkip ? "" : stripped.text || pendingText;
     }
-    // The local source observer confirms the committed answer in chat history.
-    // Its live notification needs no second durable delivery state machine.
+    // Committed text/media needs no second delivery state machine; other parts still do.
     const canUseLocalTranscript =
       isInternalSourceReplyChannel(sessionCtx) && !prepared.reminderNoteAppended;
-    const sendableFinalPayloads = sourceReplyPolicy.suppressDelivery
+    const sendableFinalPayloads = recoverySourceReplyPolicy.suppressDelivery
       ? []
       : finalPayloads.filter((payload) => {
           const metadata = getReplyPayloadMetadata(payload);
-          const committedLocalText =
+          const committedSourceReply =
+            metadata?.sourceReplyTranscriptMirror?.transcriptOwner === true;
+          const committedLocalContent =
             canUseLocalTranscript &&
-            metadata?.localTranscriptDeliveryConfirmed === true &&
-            !metadata.assistantMediaFailures?.length &&
-            !payload.mediaUrl &&
-            !payload.mediaUrls?.length &&
+            (metadata?.localTranscriptDeliveryConfirmed === true || committedSourceReply) &&
+            !metadata?.assistantMediaFailures?.length &&
+            (committedSourceReply || (!payload.mediaUrl && !payload.mediaUrls?.length)) &&
             !payload.attachments?.length &&
             !payload.presentation &&
             !payload.interactive &&
@@ -241,7 +252,9 @@ export async function completeReplyAgentRun(input: {
             !payload.ttsSupplement &&
             !metadata?.responsePrefix &&
             !metadata?.responseUsageLine;
-          return !committedLocalText && normalizePendingFinalDeliveryPayloads([payload]).length > 0;
+          return (
+            !committedLocalContent && normalizePendingFinalDeliveryPayloads([payload]).length > 0
+          );
         });
     if (sendableFinalPayloads.length > 0) {
       const commandOwner = getCommandOwnerAuthority(followupRun.run);

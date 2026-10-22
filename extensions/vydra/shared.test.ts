@@ -19,16 +19,17 @@ describe("downloadVydraAsset", () => {
     headers: new Headers(),
     headerOrigin: new URL(url).origin,
   });
-  const download = (fetchFn: typeof fetch, overrides: Partial<DownloadOptions> = {}) =>
-    downloadVydraAsset({
+  const download = (fetchFn: typeof fetch, overrides: Partial<DownloadOptions> = {}) => {
+    vi.stubGlobal("fetch", vi.fn(fetchFn));
+    return downloadVydraAsset({
       url: `https://cdn.vydra.example/generated/test.${overrides.kind === "video" ? "mp4" : "png"}`,
       kind: "image",
       timeoutMs: 250,
       maxBytes: 1024 * 1024,
       requestPolicy: requestPolicyFor("https://cdn.vydra.example"),
-      fetchFn,
       ...overrides,
     });
+  };
   function respond(body: BodyInit, init?: ResponseInit): typeof fetch {
     return async () => new Response(body, init);
   }
@@ -37,6 +38,7 @@ describe("downloadVydraAsset", () => {
     clearTimeout(dripTimer);
     dripTimer = undefined;
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     vi.useRealTimers();
     if (!server) {
       return;

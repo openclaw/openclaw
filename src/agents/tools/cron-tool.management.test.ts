@@ -5,6 +5,7 @@ import {
   getCronManagementAuthority,
   withCronManagementGrant,
 } from "../../gateway/cron-creator-authority-grant.js";
+import { consumeCronNextCheckProposal } from "../../infra/agent-run-registry.automation.js";
 import * as runRegistry from "../../infra/agent-run-registry.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import {
@@ -12,6 +13,7 @@ import {
   runWithCronCreatorAuthorityCapability,
 } from "../cron-creator-authority-context.js";
 import { createCronTool } from "./cron-tool.js";
+import type { CronToolOptions } from "./cron-tool.types.js";
 import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -28,6 +30,12 @@ async function withAdminTool(
   origin: "unknown" | "channel-owner",
   payload: Record<string, unknown> | undefined,
   run: (tool: ReturnType<typeof createCronTool>, calls: Array<[string, unknown]>) => Promise<void>,
+  storedJob?: Record<string, unknown>,
+  readOnly = false,
+  creatorOptions: Pick<
+    CronToolOptions,
+    "config" | "creatorToolAllowlist" | "creatorToolAllowlistCaptureRef"
+  > = {},
 ) {
   const runId = "admin-management-tool-run";
   const sessionKey = "agent:main:control-ui";
@@ -58,13 +66,21 @@ async function withAdminTool(
     return withCronManagementGrant(caller!.cronManagementGrant!, identity, method, async () => {
       getCronManagementAuthority(identity)!();
       calls.push([method, params]);
-      return (method === "cron.get" ? { id: jobId, configRevision, payload } : { id: jobId }) as T;
+      return (
+        method === "cron.get" ? { id: jobId, configRevision, payload, ...storedJob } : { id: jobId }
+      ) as T;
     });
   }
   try {
     await runWithCronCreatorAuthorityCapability(capability, () =>
       withGatewayToolCallerIdentity({ ...identity, approvalAuthority: authority }, async () => {
-        const options = { runId, agentSessionKey: sessionKey, resolveCreatorToolAuthority };
+        const options = {
+          ...creatorOptions,
+          runId,
+          readOnly,
+          agentSessionKey: sessionKey,
+          resolveCreatorToolAuthority,
+        };
         using _ = vi.spyOn(gatewayModule, "callGatewayTool").mockImplementation(callGatewayTool);
         const tool = createCronTool(options);
         await run(tool, calls);
@@ -98,6 +114,150 @@ it.each([
   });
 });
 
+it("permits explicit on-exit edits through admitted management", async () => {
+  await withAdminTool("unknown", undefined, async (tool, calls) => {
+    const patch = { schedule: { kind: "on-exit", command: "make", cwd: "/repo" } };
+    await tool.execute("on-exit-update", { action: "update", jobId, job: patch });
+    expect(calls).toEqual([["cron.update", { id: jobId, patch }]]);
+  });
+});
+
+it("does not expose stream creation through a management grant", async () => {
+  await withAdminTool("unknown", undefined, async (tool, calls) => {
+    await expect(
+      tool.execute("stream-add", {
+        action: "add",
+        job: {
+          name: "watch events",
+          schedule: { kind: "stream", command: ["node", "events.mjs"] },
+          payload: { kind: "agentTurn", message: "handle events" },
+        },
+      }),
+    ).rejects.toThrow("can only list, get, update, run, or remove automations");
+    expect(calls).toEqual([]);
+  });
+});
+
+it.each([
+  {
+    label: "complete exec authority",
+    tools: [{ name: "exec", execOrigin: "openclaw" }],
+    capture: { value: { version: 1, source: "final-executable-surface" } },
+    error: undefined,
+  },
+  {
+    label: "no exec authority",
+    tools: ["read"],
+    capture: { value: { version: 1, source: "final-executable-surface" } },
+    error: "Gateway exec authority",
+  },
+  {
+    label: "incomplete executable surface",
+    tools: [{ name: "exec", execOrigin: "openclaw" }],
+    capture: {},
+    error: "did not capture the complete model-callable tool surface",
+  },
+] satisfies {
+  label: string;
+  tools: CronToolOptions["creatorToolAllowlist"];
+  capture: CronToolOptions["creatorToolAllowlistCaptureRef"];
+  error: string | undefined;
+}[])(
+  "checks the manager's own stream exec authority: $label",
+  async ({ tools, capture, error }) => {
+    const config = { tools: { exec: { host: "gateway", mode: "full" } } } as const;
+    setRuntimeConfigSnapshot(config);
+    await withAdminTool(
+      "unknown",
+      undefined,
+      async (tool, calls) => {
+        const activation = tool.execute("stream-enable", {
+          action: "update",
+          jobId,
+          job: { enabled: true },
+        });
+        if (error) {
+          await expect(activation).rejects.toThrow(error);
+          expect(calls).toEqual([["cron.get", { id: jobId }]]);
+        } else {
+          await expect(activation).resolves.toMatchObject({ details: { id: jobId } });
+          expect(calls).toEqual([
+            ["cron.get", { id: jobId }],
+            [
+              "cron.update",
+              { id: jobId, patch: { enabled: true }, expectedConfigRevision: configRevision },
+            ],
+          ]);
+        }
+      },
+      {
+        enabled: false,
+        schedule: { kind: "stream", command: ["node", "events.mjs"] },
+        state: {},
+      },
+      false,
+      { config, creatorToolAllowlist: tools, creatorToolAllowlistCaptureRef: capture },
+    );
+  },
+);
+
+it.each([false, true])(
+  "keeps management authority intersected with readOnly=%s",
+  async (readOnly) => {
+    await withAdminTool(
+      "unknown",
+      undefined,
+      async (tool, calls) => {
+        const actions = readOnly ? ["list", "get"] : ["list", "get", "update", "run", "remove"];
+        expect(tool.parameters).toHaveProperty("properties.action.enum", actions);
+        for (const key of ["in", "text", "mode", "contextMessages", "sessionKey"]) {
+          expect(tool.parameters).not.toHaveProperty(`properties.${key}`);
+        }
+        if (readOnly) {
+          expect(tool.parameters).not.toHaveProperty("properties.job");
+        } else {
+          expect(tool.parameters).not.toHaveProperty("properties.job.properties.declarationKey");
+          expect(tool.parameters).toHaveProperty("properties.job.properties.agentId");
+        }
+        for (const includeDisabled of [false, true]) {
+          const result = await tool.execute("manager-inventory", {
+            action: "list",
+            includeDisabled,
+          });
+          expect(result.details).toMatchObject({
+            scope: "gateway",
+            includeDisabled,
+            inventoryHint: expect.stringContaining("Absence does not prove deletion"),
+          });
+        }
+        expect((await tool.execute("manager-get", { action: "get", jobId })).details).toMatchObject(
+          { id: jobId },
+        );
+        if (readOnly) {
+          // Read-only availability must not grant reads absent from the management entitlement.
+          for (const action of ["status", "runs"]) {
+            await expect(tool.execute(`manager-${action}`, { action, jobId })).rejects.toThrow(
+              action === "status"
+                ? "read-only during recovery"
+                : "can only list, get, update, run, or remove automations",
+            );
+          }
+          await expect(tool.execute("manager-remove", { action: "remove", jobId })).rejects.toThrow(
+            /read-only/i,
+          );
+        }
+        expect(calls).toEqual([
+          ["cron.list", { includeDisabled: false, compact: true }],
+          ["cron.list", { includeDisabled: true, compact: true }],
+          ["cron.get", { id: jobId }],
+        ]);
+      },
+      undefined,
+      readOnly,
+    );
+  },
+);
+
 it("visibly refuses unsupported next_check", async () => {
   await withAdminTool("unknown", undefined, async (tool, calls) => {
     await expect(tool.execute("unsupported", { action: "next_check", in: "1m" })).rejects.toThrow(
@@ -129,7 +289,7 @@ describe("cron next_check action", () => {
       RUN_ID,
       {
         sessionKey: `agent:main:cron:${JOB_ID}`,
-        cronRunsByJobId: new Map([[JOB_ID, { nextCheckEnabled }]]),
+        cronRunsByJobId: new Map([[JOB_ID, { nextCheckEnabled, assertCurrent: () => {} }]]),
       },
       { trackOwner: true, ownsContext: true },
     );
@@ -154,11 +314,11 @@ describe("cron next_check action", () => {
     await nextCheck();
 
     runRegistry.claimAgentRunContext(RUN_ID, {
-      cronRunsByJobId: new Map([["next-job", { nextCheckEnabled: true }]]),
+      cronRunsByJobId: new Map([["next-job", { nextCheckEnabled: true, assertCurrent: () => {} }]]),
     });
     await nextCheck("next-job", "30m");
 
-    expect(runRegistry.consumeCronNextCheckProposal(RUN_ID, JOB_ID)).toBe(15 * 60_000);
-    expect(runRegistry.consumeCronNextCheckProposal(RUN_ID, "next-job")).toBe(30 * 60_000);
+    expect(consumeCronNextCheckProposal(RUN_ID, JOB_ID)).toBe(15 * 60_000);
+    expect(consumeCronNextCheckProposal(RUN_ID, "next-job")).toBe(30 * 60_000);
   });
 });

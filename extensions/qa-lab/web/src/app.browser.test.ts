@@ -555,7 +555,7 @@ describe("QA Lab runner browser interactions", () => {
   it("renders server-resolved exclusions and errors from a rejected launch", async () => {
     const root = await mountRunner(createRunnerSelection());
     httpMock.postJson.mockRejectedValueOnce(
-      new httpMock.QaLabHttpError("selection rejected", 400, {
+      new httpMock.QaLabHttpError("selection rejected", {
         plan: {
           errors: ["Explicit QA scenario selection is not runnable."],
           exclusions: [

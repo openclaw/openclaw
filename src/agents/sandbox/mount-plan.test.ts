@@ -85,6 +85,10 @@ describe("managed mount plan", () => {
   it("allocates managed skill mount targets as the workspace host owner before engine create", async () => {
     const workspace = path.join(root, "agent");
     fs.mkdirSync(path.join(workspace, ".openclaw"), { mode: 0o750 });
+    if (process.platform !== "win32") {
+      // mkdir's mode is filtered by the runner's umask.
+      fs.chmodSync(path.join(workspace, ".openclaw"), 0o750);
+    }
     fs.writeFileSync(path.join(workspace, ".openclaw/project.json"), "preserved");
     const plan = await prepare("rw", { workspaceSource: "managed-worktree" });
     const target = path.join(workspace, ".openclaw/sandbox-skills/skills");

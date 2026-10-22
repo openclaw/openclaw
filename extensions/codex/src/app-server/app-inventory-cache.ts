@@ -86,14 +86,9 @@ export class CodexAppInventoryCache {
     ) {
       void this.refreshNow(params).catch(() => undefined);
     }
-    let snapshot: CodexAppInventorySnapshot | undefined;
-    if (entry) {
-      const { invalidated: _invalidated, ...rest } = entry;
-      snapshot = rest;
-    }
     return {
       state,
-      ...(snapshot ? { snapshot } : {}),
+      ...(entry ? { snapshot: entry } : {}),
     };
   }
 

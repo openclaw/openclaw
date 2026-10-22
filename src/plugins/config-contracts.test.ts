@@ -102,7 +102,6 @@ describe("resolvePluginConfigContractsById", () => {
       {
         pluginIds: ["prepared-plugin"],
         manifestRegistry,
-        fallbackToBundledMetadata: true,
         fallbackToBundledMetadataForResolvedBundled: true,
         fallbackBundledPluginIds: ["prepared-plugin"],
       },
@@ -138,7 +137,6 @@ describe("resolvePluginConfigContractsById", () => {
       {
         pluginIds: ["prepared-plugin"],
         manifestRegistry: createRegistry("prepared-plugin", "bundled"),
-        fallbackToBundledMetadata: true,
         fallbackToBundledMetadataForResolvedBundled: true,
         fallbackBundledPluginIds: ["prepared-plugin"],
       },
@@ -204,16 +202,6 @@ describe("resolvePluginConfigContractsById", () => {
         secretInputs: { paths: [{ path: "tts.providers.*.apiKey", expected: "string" }] },
       },
     );
-  });
-
-  it("can skip bundled metadata fallback for registry-scoped callers", () => {
-    expect(
-      resolvePluginConfigContractsById({
-        pluginIds: ["missing"],
-        fallbackToBundledMetadata: false,
-      }),
-    ).toEqual(new Map());
-    expect(mocks.loadBundledManifestRegistry).not.toHaveBeenCalled();
   });
 });
 

@@ -516,3 +516,12 @@ export function enqueueExecutionIdentityContextAtAdmission(
     return undefined;
   }
 }
+
+export type ExecutionIdentityRecoveryAdmission = Readonly<{
+  /** Recovery retries never manufacture replacement identity when exact evidence is absent. */
+  retryOnly: boolean;
+  consume: (runId: string) => Readonly<{
+    accepted: boolean;
+    token?: ExecutionIdentityAdmissionToken;
+  }>;
+}>;

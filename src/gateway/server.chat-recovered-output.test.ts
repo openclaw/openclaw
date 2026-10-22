@@ -4,8 +4,11 @@ import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { mergeChatStreamMessage } from "../../packages/gateway-client/src/chat-stream-message.js";
 import type { ChatEvent } from "../../packages/gateway-protocol/src/index.js";
+import {
+  replayChatDisplay,
+  type ChatDisplayFrame,
+} from "../../test/helpers/gateway/chat-display-replay.js";
 import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
 import { collectTextContentBlocks } from "../agents/content-blocks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -29,6 +32,7 @@ const answer = "The answer is 42.";
 const scenarios = ["continuation", "fallback", "terminal", "no-fallback", "settled-write"];
 const requests = new Map<string, Record<string, unknown>[]>();
 const events: ChatEvent[] = [];
+const displayFrames: ChatDisplayFrame[] = [];
 const publishedMessages = new Map<string, unknown[]>();
 let home: Awaited<ReturnType<typeof setupGatewayTempHome>>;
 let gateway: Awaited<ReturnType<typeof startGatewayWithClient>>;
@@ -171,6 +175,10 @@ beforeAll(async () => {
       const payload = event.payload;
       if (event.event === "chat") {
         events.push(payload as ChatEvent);
+        displayFrames.push({ event: "chat", payload: payload as ChatEvent });
+      }
+      if (event.event === "session.message") {
+        displayFrames.push({ event: "session.message", payload });
       }
       if (
         event.event === "session.message" &&
@@ -253,16 +261,21 @@ it.each(scenarios)(
           errorMessage: expect.stringMatching(/\S/),
         },
       ]);
-      const deltas = events.filter(
-        (event): event is Extract<ChatEvent, { state: "delta" }> =>
-          event.runId === runId && event.state === "delta",
+      const display = replayChatDisplay(displayFrames, sessionKey, runId);
+      expect(display.chatRunId).toBeNull();
+      expect(display.chatStream).toBeNull();
+      expect(display.chatStreamSegments).toEqual([]);
+      expect(
+        display.chatMessages
+          .filter(isRecord)
+          .filter((message) => message.role === "assistant")
+          .map(messageText),
+      ).toEqual(
+        history.messages
+          .filter(isRecord)
+          .filter((message) => message.role === "assistant")
+          .map(messageText),
       );
-      const liveMessage = deltas.reduce<unknown>(
-        (previous, event) => mergeChatStreamMessage(previous, event),
-        undefined,
-      );
-      // Saved assistant content belongs to canonical publication, not the unsaved live tail.
-      expect(messageText(liveMessage)).toBe("");
     } else {
       expect(completed).toMatchObject({ status: "ok", terminalReply: { text: answer } });
       expect(messageText(history.messages.at(-1))).toBe(answer);

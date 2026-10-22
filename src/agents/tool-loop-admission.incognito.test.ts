@@ -26,21 +26,18 @@ const cases = [
   ["ping_pong", "critical", 20, "Critical ping-pong loop detected:"],
   ["argument_churn", "warning", 30, "Argument churn warning:"],
 ] as const;
+type LoopCall = [string, Record<string, unknown>, Record<string, unknown>];
+
+function resetDiagnostics(enabled: boolean) {
+  resetDiagnosticSessionStateForTest();
+  resetDiagnosticEventsForTest();
+  resetAdjustedParamsByToolCallIdForTests();
+  setDiagnosticsEnabledForProcess(enabled);
+}
 
 describe.each(["single", "batch"] as const)("%s admission Incognito logging", (entry) => {
-  beforeEach(() => {
-    resetDiagnosticSessionStateForTest();
-    resetDiagnosticEventsForTest();
-    resetAdjustedParamsByToolCallIdForTests();
-    setDiagnosticsEnabledForProcess(true);
-  });
-
-  afterEach(() => {
-    resetDiagnosticSessionStateForTest();
-    resetDiagnosticEventsForTest();
-    resetAdjustedParamsByToolCallIdForTests();
-    setDiagnosticsEnabledForProcess(false);
-  });
+  beforeEach(() => resetDiagnostics(true));
+  afterEach(() => resetDiagnostics(false));
 
   it.each(cases)(
     "keeps %s %s admission at count %i without private formatted output",
@@ -63,46 +60,40 @@ describe.each(["single", "batch"] as const)("%s admission Incognito logging", (e
             loopDetection: { enabled: true },
           } satisfies HookContext;
           const state = getDiagnosticSessionState(ctx);
-          const repeatedCall = (index: number): { name: string; args: Record<string, unknown> } => {
+          const repeatedCall = (index: number): LoopCall => {
             if (detector === "known_poll_no_progress") {
-              return { name: "process", args: { action: "poll", sessionId: "process-1" } };
+              return ["process", { action: "poll", sessionId: "process-1" }, { status: "running" }];
             }
             if (detector === "ping_pong" && index % 2 === 1) {
-              return { name: "list", args: { dir: "/workspace" } };
+              return ["list", { dir: "/workspace" }, {}];
             }
             if (detector === "argument_churn") {
               const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/a.md", "/tmp/b.md"];
-              return {
-                name: "write",
-                args: { path: paths[index % paths.length], content: "same content" },
-              };
+              return [
+                "write",
+                { path: paths[index % paths.length], content: "same content" },
+                { ok: true, changed: false },
+              ];
             }
-            return { name: "read", args: { path: "/tmp/repeated" } };
+            return ["read", { path: "/tmp/repeated" }, {}];
           };
           const historyCount = detector === "ping_pong" ? count - 1 : count;
           for (let index = 0; index < historyCount; index += 1) {
-            const { name, args } = repeatedCall(index);
+            const [name, args, details] = repeatedCall(index);
             const toolCallId = `prior-${index}`;
-            recordToolCall(state, name, args, toolCallId, {
-              runId: ctx.runId,
-            });
+            recordToolCall(state, name, args, toolCallId, { runId: ctx.runId });
             recordToolCallOutcome(state, {
               toolName: name,
               toolParams: args,
               toolCallId,
               result: {
                 content: [{ type: "text", text: `${name} unchanged` }],
-                details:
-                  name === "write"
-                    ? { ok: true, changed: false }
-                    : name === "process"
-                      ? { status: "running" }
-                      : {},
+                details,
               },
               runId: ctx.runId,
             });
           }
-          const { name, args } = repeatedCall(historyCount);
+          const [name, args] = repeatedCall(historyCount);
           const toolCallId = "candidate";
           let intervention;
           if (entry === "single") {
@@ -147,12 +138,9 @@ describe.each(["single", "batch"] as const)("%s admission Incognito logging", (e
           const admissionLog =
             level === "critical" ? `Blocking ${name}` : `Loop warning for ${name}`;
           for (const prefix of [detectorLog, admissionLog]) {
-            const output = await capture.findText(prefix);
-            if (incognito) {
-              expect.soft(output).toBeUndefined();
-            } else {
-              expect(output).toBeDefined();
-            }
+            expect
+              .soft(await capture.findText(prefix))
+              .toEqual(incognito ? undefined : expect.any(String));
           }
         }
         expect(events).toHaveLength(2);

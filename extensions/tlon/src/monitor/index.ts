@@ -22,7 +22,6 @@ import {
   asNullableRecord as asRecord,
   readStringField as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { OpenClawConfig } from "../../runtime-api.js";
 import { createLoggerBackedRuntime } from "../../runtime-api.js";
 import { getTlonRuntime } from "../runtime.js";
@@ -188,43 +187,35 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
 
   let initForeigns: Foreigns | null = null;
 
-  try {
-    settingsState.currentSettings = await settingsManager.load();
-    const migrations = buildTlonSettingsMigrations(account, settingsState.currentSettings);
+  settingsState.currentSettings = await settingsManager.load();
+  const migrations = buildTlonSettingsMigrations(account, settingsState.currentSettings);
 
-    for (const { key, fileValue, settingsValue } of migrations) {
-      if (shouldMigrateTlonSetting(fileValue, settingsValue)) {
-        try {
-          await putTlonSetting(api, key, fileValue);
-          runtime.log?.(`[tlon] Migrated ${key} from config to settings store`);
-        } catch (err) {
-          runtime.log?.(`[tlon] Failed to migrate ${key}: ${String(err)}`);
-        }
+  for (const { key, fileValue, settingsValue } of migrations) {
+    if (shouldMigrateTlonSetting(fileValue, settingsValue)) {
+      try {
+        await putTlonSetting(api, key, fileValue);
+        runtime.log?.(`[tlon] Migrated ${key} from config to settings store`);
+      } catch (err) {
+        runtime.log?.(`[tlon] Failed to migrate ${key}: ${String(err)}`);
       }
     }
-    Object.assign(
-      settingsState,
-      applyTlonSettingsOverrides({
-        account,
-        currentSettings: settingsState.currentSettings,
-        log: (message) => runtime.log?.(message),
-      }),
-    );
-  } catch (err) {
-    runtime.log?.(`[tlon] Settings store not available, using file config: ${String(err)}`);
   }
+  Object.assign(
+    settingsState,
+    applyTlonSettingsOverrides({
+      account,
+      currentSettings: settingsState.currentSettings,
+      log: (message) => runtime.log?.(message),
+    }),
+  );
 
   // Run channel discovery AFTER settings are loaded (so settings store value is used)
   if (settingsState.effectiveAutoDiscoverChannels) {
-    try {
-      const initData = await fetchInitData(api, runtime);
-      if (initData.channels.length > 0) {
-        groupChannels = initData.channels;
-      }
-      initForeigns = initData.foreigns;
-    } catch (error: unknown) {
-      runtime.error?.(`[tlon] Auto-discovery failed: ${formatErrorMessage(error)}`);
+    const initData = await fetchInitData(api, runtime);
+    if (initData.channels.length > 0) {
+      groupChannels = initData.channels;
     }
+    initForeigns = initData.foreigns;
   }
 
   if (account.groupChannels.length > 0) {
@@ -312,36 +303,26 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
     let attachments: Array<{ path: string; contentType: string }> = [];
     let unavailableMediaCount = 0;
     if (messageContent) {
-      try {
-        ({ attachments, unavailableCount: unavailableMediaCount } = await downloadMessageImages(
-          messageContent,
-          account.mediaMaxBytes,
-        ));
-        if (attachments.length > 0) {
-          runtime.log?.(`[tlon] Downloaded ${attachments.length} image(s) from message`);
-        }
-      } catch (error: unknown) {
-        runtime.log?.(`[tlon] Failed to download images: ${formatErrorMessage(error)}`);
+      ({ attachments, unavailableCount: unavailableMediaCount } = await downloadMessageImages(
+        messageContent,
+        account.mediaMaxBytes,
+      ));
+      if (attachments.length > 0) {
+        runtime.log?.(`[tlon] Downloaded ${attachments.length} image(s) from message`);
       }
     }
 
     if (isThreadReply && parentId && channelNest) {
-      try {
-        const threadHistory = await fetchThreadHistory(api, channelNest, parentId, 20, runtime);
-        if (threadHistory.length > 0) {
-          const threadContext = threadHistory
-            .slice(-10)
-            .map((msg) => `${msg.author}: ${msg.content}`)
-            .join("\n");
+      const threadHistory = await fetchThreadHistory(api, channelNest, parentId, 20, runtime);
+      if (threadHistory.length > 0) {
+        const threadContext = threadHistory
+          .slice(-10)
+          .map((msg) => `${msg.author}: ${msg.content}`)
+          .join("\n");
 
-          const contextNote = `[Thread conversation - ${threadHistory.length} previous replies. You are participating in this thread. Only respond if relevant or helpful - you don't need to reply to every message.]`;
-          messageText = `${contextNote}\n\n[Previous messages]\n${threadContext}\n\n[Current message]\n${messageText}`;
-          runtime?.log?.(
-            `[tlon] Added thread context (${threadHistory.length} replies) to message`,
-          );
-        }
-      } catch (error: unknown) {
-        runtime?.log?.(`[tlon] Could not fetch thread context: ${formatErrorMessage(error)}`);
+        const contextNote = `[Thread conversation - ${threadHistory.length} previous replies. You are participating in this thread. Only respond if relevant or helpful - you don't need to reply to every message.]`;
+        messageText = `${contextNote}\n\n[Previous messages]\n${threadContext}\n\n[Current message]\n${messageText}`;
+        runtime?.log?.(`[tlon] Added thread context (${threadHistory.length} replies) to message`);
       }
     }
 
@@ -742,7 +723,15 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
         return;
       }
 
-      const rawText = extractMessageText(content.content);
+      // Extraction renders attacker-controlled content shapes; a failure here must
+      // never tear down the shared SSE stream (the event would replay unacked forever).
+      let rawText: string;
+      try {
+        rawText = extractMessageText(content.content);
+      } catch (error: unknown) {
+        runtime.log?.(`[tlon] Failed to extract message text: ${formatErrorMessage(error)}`);
+        return;
+      }
       if (!rawText.trim()) {
         return;
       }
@@ -754,7 +743,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
         author: senderShip,
         content: rawText,
         timestamp: sentAt,
-        id: messageId,
       });
 
       const { allowedShips, senderAllowed, mentionDecision, parentId, isAdmissionAllowed } =
@@ -785,7 +773,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
             type: "channel",
             requestingShip: senderShip,
             channelNest: nest,
-            messagePreview: sliceUtf16Safe(rawText, 0, 100),
+            messagePreview: rawText,
             originalMessage: {
               messageId,
               messageText: rawText,
@@ -935,7 +923,14 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
         );
       }
 
-      const rawText = extractMessageText(essay.content);
+      // Same extraction-failure containment as the channels firehose above.
+      let rawText: string;
+      try {
+        rawText = extractMessageText(essay.content);
+      } catch (error: unknown) {
+        runtime.log?.(`[tlon] Failed to extract message text: ${formatErrorMessage(error)}`);
+        return;
+      }
       if (!rawText.trim()) {
         return;
       }
@@ -965,7 +960,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
           const approval = createPendingApproval({
             type: "dm",
             requestingShip: senderShip,
-            messagePreview: sliceUtf16Safe(messageText, 0, 100),
+            messagePreview: messageText,
             ...(isClubMessage ? { clubId } : { verifiedDirect: true }),
             // Never store a club message claiming the owner for replay, even as a non-owner.
             ...(isClubMessage && isOwner(senderShip)
@@ -1305,15 +1300,11 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
         if (!settingsState.effectiveAutoDiscoverChannels) {
           return;
         }
-        try {
-          const { channels: discoveredChannels } = await fetchInitData(api, runtime);
-          if (discoveryScheduler.signal.aborted) {
-            return;
-          }
-          addWatchedChannels(discoveredChannels, "[tlon] Now watching new channel: ");
-        } catch (error: unknown) {
-          runtime.error?.(`[tlon] Channel refresh error: ${formatErrorMessage(error)}`);
+        const { channels: discoveredChannels } = await fetchInitData(api, runtime);
+        if (discoveryScheduler.signal.aborted) {
+          return;
         }
+        addWatchedChannels(discoveredChannels, "[tlon] Now watching new channel: ");
       },
     });
     await waitUntilAbort(opts.abortSignal);

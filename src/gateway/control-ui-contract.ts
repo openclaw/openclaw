@@ -131,6 +131,8 @@ export type ControlUiSessionTaskPullRequest = {
 };
 
 export type ControlUiSessionPullRequests = {
+  /** The current bound PR could not be verified; discard previously displayed facts. */
+  discardPrevious?: true;
   /** Branch facts were not refreshed; empty fields do not invalidate retained UI facts. */
   branchRead?: false;
   taskPullRequests?: ControlUiSessionTaskPullRequest[];

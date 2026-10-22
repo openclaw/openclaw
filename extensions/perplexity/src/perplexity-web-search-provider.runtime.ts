@@ -1,3 +1,4 @@
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import {
   readProviderJsonResponse,
   resolveProviderRequestHeaders,
@@ -225,6 +226,7 @@ export async function executePerplexitySearch(
 
   const cacheKey = buildSearchCacheKey([
     "perplexity",
+    sha256Hex(runtime.apiKey),
     runtime.transport,
     runtime.baseUrl,
     runtime.model,

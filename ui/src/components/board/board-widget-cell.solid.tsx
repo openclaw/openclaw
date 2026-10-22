@@ -6,6 +6,7 @@ import {
   isOptionalElementDefined,
   createLazyCustomElementRequests,
 } from "../../app/lazy-custom-element.ts";
+import { registerBoardEnglish } from "../../i18n/locales/en-board.ts";
 import {
   BOARD_DOCUMENT_AUTO_MAX_ROWS,
   boardChromeRowPx,
@@ -18,7 +19,7 @@ import {
 } from "../../lib/board/widgets/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { showToast } from "../../lib/toast.ts";
@@ -41,6 +42,8 @@ import {
 import { BoardWidgetError } from "./board-widget-error.tsx";
 import { createBoardWidgetFrame, BoardWidgetFrame } from "./board-widget-frame.tsx";
 import { BoardWidgetMenu } from "./board-widget-menu.tsx";
+
+registerEnglishCatalog(registerBoardEnglish);
 
 const loadMcpAppView = () => import("../mcp-app-view-registration.ts");
 const cells = new WeakMap<HTMLElement, BoardWidgetCellHandle>();
@@ -159,16 +162,17 @@ function BoardWidgetCellContent(
       : null,
   );
 
-  async function runAction(action: () => Promise<void>, failureMessage?: string) {
+  async function runAction(run: () => Promise<void>, failureMessage?: string) {
     if (actionInFlight || props.busy) {
       return;
     }
     actionInFlight = true;
+    // A cell-local action would hold the shared owner's busy updates across bridge roots.
     setActionPending(true);
     setActionError("");
     menu?.close();
     try {
-      await action();
+      await run();
     } catch (error) {
       if (connected) {
         setActionError(formatUiError(error));

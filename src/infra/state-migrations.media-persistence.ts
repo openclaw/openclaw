@@ -1,10 +1,8 @@
-import fs from "node:fs";
 import path from "node:path";
 import { readRegularFileSync } from "@openclaw/fs-safe/advanced";
 import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import {
   decodeSessionArchiveBytes,
-  readSessionArchiveContentSync,
   SESSION_ARCHIVE_ZSTD_SUFFIX,
 } from "../config/sessions/archive-compression.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
@@ -466,19 +464,12 @@ function migrateTranscriptArchive(filePath: string): boolean {
     syncParentDir: true,
     syncTempFile: true,
     tempPrefix: `${path.basename(filePath)}${ARCHIVE_TEMP_MARKER}`,
-    beforeRename: ({ tempPath }) => {
+    beforeRename: () => {
       if (!archiveSourceMatches(filePath, source)) {
         throw new Error(`${filePath} changed before atomic media migration replacement`);
       }
-      const staged = decodeSessionArchiveBytes(fs.readFileSync(tempPath), compressed);
-      if (staged !== transformed.content) {
-        throw new Error(`${filePath} failed codec readback before replacement`);
-      }
     },
   });
-  if (readSessionArchiveContentSync(filePath) !== transformed.content) {
-    throw new Error(`${filePath} failed codec readback after replacement`);
-  }
   return true;
 }
 

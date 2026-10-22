@@ -3,6 +3,7 @@ import {
   resolveCurrentPairedDeviceNodeBinding,
 } from "../infra/device-pairing-node-state.js";
 import type { VoiceWakeRoutingConfig } from "../infra/voicewake-routing.js";
+import { getOrCreateWeakOwnerMap } from "../shared/weak-owner-map.js";
 import { GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED } from "./events.js";
 import { isLiveTextAppend } from "./live-text-continuity.js";
 import {
@@ -344,11 +345,7 @@ export function createGatewayNodeSessionRuntime(params: {
                 payloadJSON,
                 onSent: () => {
                   if (!liveText.group.aborted || publication.settled) {
-                    let receipts = group.receipts.get(subscription);
-                    if (!receipts) {
-                      receipts = new Map();
-                      group.receipts.set(subscription, receipts);
-                    }
+                    const receipts = getOrCreateWeakOwnerMap(group.receipts, subscription);
                     receipts.set(streamKey, { connId, publication });
                   }
                 },

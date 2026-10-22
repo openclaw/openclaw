@@ -1,5 +1,6 @@
 import { For, Show, createMemo, createSignal, onCleanup } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
 import "../../../components/tooltip.ts";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import type {
@@ -257,14 +258,7 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
                   ]}
                   aria-hidden="true"
                 >
-                  <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
+                  <StrokeIcon>
                     <path
                       class="chat-controls__effort-gauge-dial"
                       d="M3.34 17a10 10 0 1 1 17.32 0"
@@ -275,7 +269,7 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
                       style={{ transform: `rotate(${view().effortAngle}deg)` }}
                     />
                     <circle cx="12" cy="12" r="1" fill="currentColor" stroke="none" />
-                  </svg>
+                  </StrokeIcon>
                   {props.fastMode.active && (
                     <span class="chat-controls__effort-fast-badge">
                       <Icon name="zap" />

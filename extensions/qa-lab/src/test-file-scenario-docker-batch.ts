@@ -110,7 +110,6 @@ export async function prepareDockerE2eEnvironment(params: {
   env: NodeJS.ProcessEnv;
   outputDir: string;
   repoRoot: string;
-  runCommand?: typeof runQaScenarioCommandLifecycle;
   scenarios: readonly QaSeedScenarioWithSource[];
   onPrepared?: (evidence: QaPreparedDockerEvidence) => void;
 }): Promise<Readonly<NodeJS.ProcessEnv> | undefined> {
@@ -138,7 +137,7 @@ export async function prepareDockerE2eEnvironment(params: {
   // Each preparation owns its manifest and package paths. Later attempts cannot
   // overwrite the bytes referenced by an earlier observation's receipt.
   await fs.mkdir(prepDir);
-  const result = await (params.runCommand ?? runQaScenarioCommandLifecycle)({
+  const result = await runQaScenarioCommandLifecycle({
     command: process.execPath,
     args: ["scripts/test-docker-all.mjs", `--prepare-only=${manifestPath}`],
     cwd: params.repoRoot,
@@ -252,7 +251,6 @@ export async function runDockerE2eBatch(params: {
   onCommandOutput?: QaScenarioCommandExecution["onOutput"];
   outputDir: string;
   repoRoot: string;
-  runCommand: typeof runQaScenarioCommandLifecycle;
   scenarios: readonly QaDockerScenario[];
 }): Promise<QaDockerBatchResult[]> {
   const selected = params.scenarios.map((scenario) => ({
@@ -271,7 +269,7 @@ export async function runDockerE2eBatch(params: {
   await fs.rm(summaryPath, { force: true });
   let commandResult: Awaited<ReturnType<typeof runQaScenarioCommandLifecycle>>;
   try {
-    commandResult = await params.runCommand({
+    commandResult = await runQaScenarioCommandLifecycle({
       command: process.execPath,
       args: ["scripts/test-docker-all.mjs"],
       cwd: params.repoRoot,

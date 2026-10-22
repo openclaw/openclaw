@@ -5,7 +5,6 @@ import type {
   WhatsAppQaDriverQuotedMessageKey,
   WhatsAppQaMessageScenarioContext,
   WhatsAppQaMessageScenarioRun,
-  WhatsAppQaObservedMessagesContext,
 } from "./whatsapp-live.contracts.js";
 
 export function messageMatches(message: { text: string }, matchText: string | RegExp) {
@@ -156,7 +155,43 @@ export async function waitForScenarioObservedMessage(
           targetKind: context.targetKind,
         }) && params.match(candidate),
     },
-    () => formatWhatsAppScenarioWaitDiagnostics(context, params),
+    () => {
+      const lowerBoundMs = params.observedAfter?.getTime();
+      const messages = context.driver.getObservedMessages().filter((message) => {
+        if (lowerBoundMs === undefined) {
+          return true;
+        }
+        return new Date(message.observedAt).getTime() >= lowerBoundMs;
+      });
+      if (messages.length === 0) {
+        return "observed 0 WhatsApp driver message(s) after wait lower bound";
+      }
+      const formatted = messages.slice(-5).map((message, index) => {
+        const checks = (params.diagnosticChecks ?? []).map((check) => {
+          try {
+            const matched = check.match(message);
+            return `${check.label}=${matched ? "yes" : "no"}`;
+          } catch {
+            return `${check.label}=no`;
+          }
+        });
+        return [
+          formatWhatsAppMessageShape(message, index),
+          `fromExpectedSut=${
+            isWhatsAppScenarioSutMessage(message, {
+              observedAfter: params.observedAfter ?? new Date(0),
+              sutPhoneE164: context.sutPhoneE164,
+              target: context.target,
+              targetKind: context.targetKind,
+            })
+              ? "yes"
+              : "no"
+          }`,
+          ...checks,
+        ].join(" ");
+      });
+      return `observed ${messages.length} WhatsApp driver message(s) after wait lower bound: ${formatted.join("; ")}`;
+    },
   );
 }
 
@@ -219,53 +254,6 @@ function formatWhatsAppMessageShape(message: WhatsAppQaDriverObservedMessage, in
     `quoted=${message.quoted ? "present" : "missing"}`,
     `quotedMessageId=${formatDiagnosticId(message.quoted?.messageId)}`,
   ].join(" ");
-}
-
-function formatWhatsAppScenarioWaitDiagnostics(
-  context: WhatsAppQaObservedMessagesContext,
-  params: {
-    diagnosticChecks?: Array<{
-      label: string;
-      match: (message: WhatsAppQaDriverObservedMessage) => boolean;
-    }>;
-    observedAfter?: Date;
-  },
-) {
-  const lowerBoundMs = params.observedAfter?.getTime();
-  const messages = context.driver.getObservedMessages().filter((message) => {
-    if (lowerBoundMs === undefined) {
-      return true;
-    }
-    return new Date(message.observedAt).getTime() >= lowerBoundMs;
-  });
-  if (messages.length === 0) {
-    return "observed 0 WhatsApp driver message(s) after wait lower bound";
-  }
-  const formatted = messages.slice(-5).map((message, index) => {
-    const checks = (params.diagnosticChecks ?? []).map((check) => {
-      try {
-        const matched = check.match(message);
-        return `${check.label}=${matched ? "yes" : "no"}`;
-      } catch {
-        return `${check.label}=no`;
-      }
-    });
-    return [
-      formatWhatsAppMessageShape(message, index),
-      `fromExpectedSut=${
-        isWhatsAppScenarioSutMessage(message, {
-          observedAfter: params.observedAfter ?? new Date(0),
-          sutPhoneE164: context.sutPhoneE164,
-          target: context.target,
-          targetKind: context.targetKind,
-        })
-          ? "yes"
-          : "no"
-      }`,
-      ...checks,
-    ].join(" ");
-  });
-  return `observed ${messages.length} WhatsApp driver message(s) after wait lower bound: ${formatted.join("; ")}`;
 }
 
 function hasWhatsAppBatchExpectations(run: WhatsAppQaMessageScenarioRun) {

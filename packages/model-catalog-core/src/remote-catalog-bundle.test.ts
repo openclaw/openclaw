@@ -284,7 +284,15 @@ it("negotiates task metadata only on v3 and rejects malformed declarations per r
     },
   };
   const native = { ...firstModel, inference, compat: { nested: transport } };
-  const candidate = { ...validBundleV2, schemaVersion: 3, models: [native] };
+  const candidate = {
+    ...validBundleV2,
+    schemaVersion: 3,
+    providers: {
+      ...validBundleV2.providers,
+      first: { ...validBundleV2.providers.first, recommendedModels: [native.id] },
+    },
+    models: [native],
+  };
   expect(() => parseV2(candidate)).toThrow();
   expect(() => parseV2({ ...candidate, schemaVersion: 2 })).toThrow();
   expect(parseV3(candidate).models[0]?.inference).toEqual(inference);
@@ -297,5 +305,6 @@ it("negotiates task metadata only on v3 and rejects malformed declarations per r
   const admitted = sanitizeV3({ ...candidate, models: [native, invalid] }, warn);
   expect(admitted.models).toHaveLength(1);
   expect(admitted.models[0]).toMatchObject({ inference, compat: { nested: {} } });
+  expect(admitted.providers.first?.recommendedModels).toEqual([]);
   expect(warn).toHaveBeenCalledOnce();
 });

@@ -138,7 +138,6 @@ describe("feishu setup wizard", () => {
     beginAppRegistrationMock.mockResolvedValueOnce({
       deviceCode: "device-code",
       qrUrl: "https://accounts.larksuite.com/qr",
-      userCode: "user-code",
       interval: 1,
       expireIn: 10,
     });

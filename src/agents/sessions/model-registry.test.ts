@@ -221,6 +221,29 @@ describe("ModelRegistry", () => {
     });
   });
 
+  it("skips native presence while resolving configured HTTP credentials", async () => {
+    const auth = AuthStorage.inMemory({
+      custom: {
+        type: "api_key",
+        key: "synthetic-native-presence",
+        nativeAuth: { runtime: "native-fixture", mode: "oauth" },
+      },
+    });
+    const registry = createRegistry(exampleCatalog("synthetic-configured-api-key"), {}, auth);
+    const model = registry.find("custom", "example-model")!;
+
+    expect(auth.hasAuth("custom")).toBe(true);
+    await expect(auth.getApiKey("custom", { includeFallback: false })).resolves.toBeUndefined();
+    await expect(registry.getApiKeyForProvider("custom")).resolves.toBe(
+      "synthetic-configured-api-key",
+    );
+    await expect(registry.getApiKeyAndHeaders(model)).resolves.toEqual({
+      ok: true,
+      apiKey: "synthetic-configured-api-key",
+      headers: undefined,
+    });
+  });
+
   it("does not restore a source provider after unregistering it from a fork", () => {
     const template = ModelRegistry.inMemory(AuthStorage.inMemory());
     template.registerProvider("template-only", oauthProviderConfig("Template only", "template"));

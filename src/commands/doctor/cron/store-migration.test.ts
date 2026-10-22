@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { resolveAgentHarnessPolicy } from "../../../agents/harness/policy.js";
 import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
+import { makeCronStreamSandboxTarget } from "../../../cron/stream-sandbox.test-support.js";
 import type { QuarantinedCronConfigJob } from "../../../cron/types-shared.js";
 import { legacyCodexProviderIdentityKey } from "../shared/codex-route-model-ref.js";
 import { TASK_SUGGESTION_TOOL_NAME_MIGRATION } from "../shared/legacy-tool-name-migration.js";
@@ -814,17 +815,41 @@ describe("normalizeStoredCronJobs", () => {
           schedule: { kind: "cron", expr: "0 9 * * *" },
         }),
       },
+      {
+        sourceIndex: 5,
+        reason: "invalid-schedule",
+        job: makeLegacyJob({
+          id: "sandbox",
+          name: "sandbox",
+          schedule: { kind: "sandbox-stream", command: ["watch-source"] },
+          streamSandbox: makeCronStreamSandboxTarget(),
+        }),
+      },
+      {
+        sourceIndex: 6,
+        reason: "invalid-schedule",
+        job: makeLegacyJob({
+          id: "missing-target",
+          name: "missing-target",
+          schedule: { kind: "sandbox-stream", command: ["watch-source"] },
+        }),
+      },
     ];
 
     const result = recoverValidQuarantinedCronScheduleJobs(entries, new Set(["existing"]));
 
-    expect(result.recoveredJobs.map((job) => job.id)).toEqual(["variant", "canonical"]);
+    expect(result.recoveredJobs.map((job) => job.id)).toEqual(["variant", "canonical", "sandbox"]);
     expect(result.recoveredJobs[0]).toMatchObject({
       schedule: { kind: "cron" },
       state: { nextRunAtMs: 123 },
       updatedAtMs: 456,
     });
-    expect(result.retainedEntries.map((entry) => entry.sourceIndex)).toEqual([2, 3, 4]);
+    expect(result.recoveredJobs[2]).toMatchObject({
+      schedule: { kind: "stream", command: ["watch-source"] },
+      streamSandbox: makeCronStreamSandboxTarget(),
+    });
+    expect(entries[5]?.job).toMatchObject({ schedule: { kind: "sandbox-stream" } });
+    expect(result.retainedEntries.map((entry) => entry.sourceIndex)).toEqual([2, 3, 4, 6]);
   });
 
   const sourceSessionKey = "agent:main:dashboard:source";

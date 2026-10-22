@@ -284,8 +284,8 @@ export class GatewayChatClient implements TuiBackend {
     await this.ready.promise;
   }
 
-  cancelPendingRequests(scope: TuiRequestScope): boolean {
-    return this.requests.cancelPending(scope);
+  cancelPendingRequests(scope: TuiRequestScope): void {
+    this.requests.cancelPending(scope);
   }
 
   async sendChat(opts: ChatSendOptions): Promise<TuiChatSendResult> {

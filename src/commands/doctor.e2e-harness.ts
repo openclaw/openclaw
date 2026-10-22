@@ -157,9 +157,16 @@ function createLegacyStateMigrationDetectionResult(params?: {
       hasLegacy: false,
     },
     deviceIdentity: {
-      sourcePath: "/tmp/state/identity/device.json",
-      claimPath: "/tmp/state/identity/device.json.doctor-importing",
-      nativeClaimPath: "/tmp/state/identity/device.json.native-importing",
+      sources: [
+        {
+          identityKey: "primary",
+          sourcePath: "/tmp/state/identity/device.json",
+          claimPath: "/tmp/state/identity/device.json.doctor-importing",
+          nativeClaimPath: "/tmp/state/identity/device.json.native-importing",
+          hasLegacy: false,
+          hasInvalidCanonical: false,
+        },
+      ],
       hasLegacy: false,
       hasInvalidCanonical: false,
     },

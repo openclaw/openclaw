@@ -5,7 +5,7 @@ import { adjustTextareaHeight } from "./components/chat-composer-dom.ts";
 import { ComposerDictationOwner, insertComposerDictation } from "./composer-dictation.ts";
 import { ComposerMicrophoneOwner } from "./composer-microphone-picker.ts";
 
-export type DirectDictationTextarea = ReturnType<typeof createDirectDictationTextarea>;
+type DirectDictationTextarea = ReturnType<typeof createDirectDictationTextarea>;
 
 /** Caret mutations stay synchronous so partial and late transcripts target one draft snapshot. */
 export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | null) {

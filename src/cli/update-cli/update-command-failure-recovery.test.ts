@@ -12,6 +12,8 @@ import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import * as updateLedger from "../../infra/update-run-ledger.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import * as utils from "../../utils.js";
@@ -57,6 +59,12 @@ vi.mock("./update-command-service-plan.js", async (importOriginal) => ({
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 let root: string;
 const containing = (value: unknown) => expect.objectContaining(value);
+function resultWith(overrides: Partial<UpdateRunResult>): UpdateRunResult {
+  return { status: "error", mode: "npm", steps: [], durationMs: 0, ...overrides };
+}
+function stepWith(name: string, overrides: Partial<UpdateStepResult>): UpdateStepResult {
+  return { name, command: name, cwd: root, durationMs: 1, exitCode: 0, ...overrides };
+}
 const noCalls = (...fns: unknown[]) => {
   for (const fn of fns) {
     expect(fn).not.toHaveBeenCalled();
@@ -126,14 +134,10 @@ it.each(["managed-service-preflight", "gateway-stop-unverified"])(
     const env = { ...process.env };
     const run = { runId: updateLedger.createUpdateRun({ trigger: "cli" }, { env }).runId, env };
     const result = await verifyUpdateFailureRecovery({
-      result: {
-        status: "error",
-        mode: "npm",
+      result: resultWith({
         reason,
         before: { version: "2026.10.3" },
-        steps: [],
-        durationMs: 0,
-      },
+      }),
       root,
       env,
       opts: { json: true, run },
@@ -209,15 +213,13 @@ it("settles a headless package rollback without waiting for a Gateway", async ()
         serviceMutationAllowed: false,
         serviceUpdateVerdict: { kind: "absent" },
       },
-      result: {
+      result: resultWith({
         status: "ok",
-        mode: "npm",
         root: packageRoot,
         before: { version: "1.0.0" },
         after: { version: "2.0.0" },
-        steps: [],
         durationMs: 1,
-      },
+      }),
     },
   ).catch((error: unknown) => error);
   if (!(failure instanceof ReportedUpdateCommandFailure)) {
@@ -282,38 +284,31 @@ it.each([
             running: false,
             serviceEnv: env,
           },
-          result: {
-            status: "error",
-            mode: "npm",
+          result: resultWith({
             root,
             reason: "doctor-failed",
             recovery: { serviceRestartSafe: true, version: "2026.9.5" },
             steps: [
               ...(deferred
                 ? [
-                    {
-                      name: "post-install-verify",
+                    stepWith("post-install-verify", {
                       command: "verify installed package",
-                      cwd: root,
                       durationMs: 0,
                       exitCode: null,
                       advisory: {
                         kind: "recoverable-maintenance" as const,
                         message: "State verification deferred to the operator restart.",
                       },
-                    },
+                    }),
                   ]
                 : []),
-              {
-                name: "candidate-doctor-lint",
+              stepWith("candidate-doctor-lint", {
                 command: "doctor",
-                cwd: root,
                 exitCode: 2,
-                durationMs: 1,
-              },
+              }),
             ],
             durationMs: 1,
-          },
+          }),
         },
       );
     }).catch((error: unknown) => error);
@@ -436,13 +431,7 @@ it.each(["observation", "terminal", "standalone"] as const)(
         },
       });
     });
-    const failureResult = {
-      status: "error" as const,
-      mode: "npm" as const,
-      reason: "post-update-plugins",
-      steps: [],
-      durationMs: 0,
-    };
+    const failureResult = resultWith({ reason: "post-update-plugins" });
     if (publication === "standalone") {
       await lifecycle.observeFailure(new ReportedUpdateCommandFailure(failureResult));
       lifecycle.complete(1);

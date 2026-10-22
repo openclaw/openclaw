@@ -1,11 +1,7 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
-  chatSessionListResponse,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
   installMockGateway,
@@ -18,41 +14,40 @@ const parent = "agent:main:task-parent";
 const taskPullRequests = ["Typed recovery", "Terminal presentation", "Bounded backlog"].map(
   (title, index) => {
     const number = 417 + index;
-    const pullRequest = {
+    const identity = {
       owner: "example",
       repo: "project",
       number,
       title,
       branch: "fix/child-" + index,
       url: "https://github.com/example/project/pull/" + number,
-      state: "open" as const,
-      additions: 40 + index,
-      deletions: 8,
     };
-    return {
-      owner: pullRequest.owner,
-      repo: pullRequest.repo,
-      number,
-      title,
-      branch: pullRequest.branch,
-      url: pullRequest.url,
+    return Object.assign(identity, {
       sourceSessionKey: "agent:main:child-" + index,
       sourceAgentId: "main",
-      pullRequest,
-    };
+      pullRequest: Object.assign(
+        { state: "open" as const, additions: 40 + index, deletions: 8 },
+        identity,
+      ),
+    });
   },
 );
 
 suite.define(() => {
-  it("shows delegated task PRs without a parent worktree and preserves the parent branch action", async () => {
-    await suite.withPage(
+  it("shows delegated task PRs without a parent worktree and preserves the parent branch action", () =>
+    suite.withPage(
       { colorScheme: "dark", viewport: { width: 1280, height: 900 } },
       async ({ page }) => {
         await page.addInitScript(() =>
           localStorage.setItem("openclaw:sidebar:sessions:collapsed-sections", "[]"),
         );
+        const now = Date.now();
         const gateway = await installMockGateway(page, {
           sessionKey: selected,
+          sessions: [
+            { key: selected, kind: "direct", label: "Release planning", updatedAt: now },
+            { key: parent, kind: "direct", label: "Recovery improvements", updatedAt: now },
+          ],
           featureMethods: [
             "chat.metadata",
             "chat.startup",
@@ -62,19 +57,12 @@ suite.define(() => {
           methodResponses: {
             [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
             "progressCard.get": { card: null },
-            "sessions.list": chatSessionListResponse([
-              { key: selected, kind: "direct", label: "Release planning", updatedAt: Date.now() },
-              {
-                key: parent,
-                kind: "direct",
-                label: "Recovery improvements",
-                updatedAt: Date.now(),
-              },
-            ]),
           },
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, selected));
-        const row = page.locator('.sidebar-recent-session[data-session-key="' + parent + '"]');
+        const sessionRow = (key: string) =>
+          page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
+        const row = sessionRow(parent);
         await row.locator(".sidebar-recent-session__link").focus();
         await waitForWatchedSessionKey(gateway, parent);
         await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
@@ -95,16 +83,6 @@ suite.define(() => {
           },
         });
         const card = page.locator(".session-progress-hovercard");
-        await card.waitFor();
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          const frame = await takeControlUiScreenshotFrame(
-            page,
-            card,
-            [card.locator(".session-hovercard__title")],
-            { animations: "disabled" },
-          );
-          await writeFile(path.join(suite.artifactDir, "task-prs.png"), frame.png);
-        }
         await expect.poll(() => card.locator(".session-hovercard__pr-row").count()).toBe(3);
         await expect
           .poll(() => row.locator(".session-row-badge--pull-request").getAttribute("aria-label"))
@@ -118,16 +96,9 @@ suite.define(() => {
           ).toBe(request.url);
         }
         await page.keyboard.press("Escape");
-        await page
-          .locator(
-            '.sidebar-recent-session[data-session-key="' +
-              selected +
-              '"] .sidebar-recent-session__link',
-          )
-          .focus();
+        await sessionRow(selected).locator(".sidebar-recent-session__link").focus();
         await row.locator(".sidebar-recent-session__link").focus();
         await expect.poll(() => card.locator(".session-hovercard__pr-row").count()).toBe(3);
       },
-    );
-  });
+    ));
 });

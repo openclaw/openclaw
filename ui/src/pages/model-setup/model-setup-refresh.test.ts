@@ -17,6 +17,7 @@ import {
   waitForElement,
   pageButton,
 } from "./model-setup-first-run.test-support.ts";
+import { createPage, mountModelSetupPage } from "./test-helpers/solid-page.test-support.tsx";
 
 const inventory: SystemAgentSetupDetectResult = {
   ...detection,
@@ -39,7 +40,50 @@ describe("Model setup refresh continuity", () => {
     vi.unstubAllGlobals();
   });
 
-  it("keeps editable drafts and focus through a failed rescan", async () => {
+  it("retries an initial detection failure without losing the page controls", async () => {
+    const { context, request } = createFirstRunContext();
+    const initial = createDeferred<SystemAgentSetupDetectResult>();
+    const retry = createDeferred<SystemAgentSetupDetectResult>();
+    request
+      .mockImplementationOnce(() => initial.promise)
+      .mockImplementationOnce(() => retry.promise);
+    const page = createPage(context);
+    page.routeData = { firstRun: false };
+    document.body.append(page);
+    mountModelSetupPage(page);
+    await waitForFast(() => expect(callsFor(request, "openclaw.setup.detect")).toHaveLength(1));
+    const heading = page.querySelector(".model-setup__intro h1");
+    expect(page.querySelector(".model-setup__loading")).not.toBeNull();
+    initial.reject(new Error("Detection failed. Try again."));
+    await waitForFast(() =>
+      expect(page.querySelector('[role="alert"]')?.textContent).toContain("Detection failed"),
+    );
+    expect(page.querySelector(".model-setup__intro h1")).toBe(heading);
+    [...page.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.trim() === "Retry")!
+      .click();
+    await waitForFast(() => expect(callsFor(request, "openclaw.setup.detect")).toHaveLength(2));
+    expect(page.querySelector(".model-setup__intro h1")).toBe(heading);
+    await waitForFast(() => expect(page.querySelector(".model-setup__loading")).not.toBeNull());
+    retry.resolve(inventory);
+    await waitForFast(() => expect(page.querySelector(".model-setup__manual")).not.toBeNull());
+    expect(page.querySelector('[role="alert"]')).toBeNull();
+    expect(page.querySelector(".model-setup__intro h1")).toBe(heading);
+  });
+
+  it("waits for route data without reading props during effect application", async () => {
+    const warnings = vi.spyOn(console, "warn");
+    const { context, request } = createFirstRunContext();
+    const page = createPage(context);
+    document.body.appendChild(page);
+    mountModelSetupPage(page);
+    await page.updateComplete;
+    expect(callsFor(request, "openclaw.setup.detect")).toHaveLength(0);
+    expect(warnings.mock.calls.flat().join("\n")).not.toContain("[STRICT_READ_UNTRACKED]");
+  });
+
+  it("keeps editable drafts and focus through a failed rescan and its retry", async () => {
+    const warnings = vi.spyOn(console, "warn");
     const { context, client, request } = createFirstRunContext();
     const { page } = await mountDetection(context, client, inventory, false);
     await selectManualProvider(page, "fixture-key");
@@ -69,6 +113,18 @@ describe("Model setup refresh continuity", () => {
     expect(input.value).toBe("synthetic-draft");
     expect(document.activeElement).toBe(input);
     expect(page.querySelector('[role="alert"]')?.textContent).toContain("Rescan failed");
+    const recovered = createDeferred<SystemAgentSetupDetectResult>();
+    request.mockImplementation(() => recovered.promise);
+    scan.click();
+    await waitForFast(() => expect(scan.disabled).toBe(true));
+    expect(page.querySelector('[role="alert"]')).toBeNull();
+    recovered.resolve(inventory);
+    await waitForFast(() => expect(scan.disabled).toBe(false));
+    expect(page.querySelector('[role="alert"]')).toBeNull();
+    expect(page.querySelector(manualInput)).toBe(input);
+    expect(input.value).toBe("synthetic-draft");
+    expect(document.activeElement).toBe(input);
+    expect(warnings.mock.calls.flat().join("\n")).not.toContain("[STRICT_READ_UNTRACKED]");
   });
 
   it("reopens the published native inventory without restarting discovery and retries explicitly", async () => {

@@ -224,13 +224,14 @@ export function createQaEvidenceInvocation(params: {
     observations.push(...childOccurrences);
     entries.push(...(child?.entries ?? []));
     for (const entry of result.entries) {
+      const captured = structuredClone(entry);
       entries.push({
-        ...structuredClone(entry),
+        ...captured,
         // A v2 reporter has no assertion/target receipt binding. Do not derive
         // one from its label, coverage set, environment, or package claim.
         binding:
-          "binding" in entry
-            ? structuredClone(entry.binding)
+          "binding" in captured
+            ? captured.binding
             : { occurrenceId, assertionId: null, receiptId: null },
         effective: true,
       });
@@ -254,13 +255,13 @@ export function createQaEvidenceInvocation(params: {
     if (pending) {
       for (const completion of pending.completions) {
         const offset = observations.findIndex((item) => item.id === completion.id);
-        observations[offset] = structuredClone(completion);
+        observations[offset] = completion;
       }
       for (const update of pending.updates) {
         setEffective(update.occurrenceId, update.effective);
       }
-      observations.splice(pending.observationOffset, 0, ...structuredClone(pending.additions));
-      entries.splice(pending.entryOffset, 0, ...structuredClone(pending.rows));
+      observations.splice(pending.observationOffset, 0, ...pending.additions);
+      entries.splice(pending.entryOffset, 0, ...pending.rows);
     }
     const byId = new Map(observations.map((occurrence) => [occurrence.id, occurrence]));
     let selected = occurrenceId === null ? null : byId.get(occurrenceId);

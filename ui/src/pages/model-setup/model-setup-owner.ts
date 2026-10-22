@@ -1,4 +1,4 @@
-import { createEffect, onCleanup, onSettled } from "solid-js";
+import { createEffect, createSignal, onSettled } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   SystemAgentSetupActivateParams,
@@ -30,6 +30,7 @@ import {
   preparedModelActivation,
 } from "./prepare-options.ts";
 import { manualProviderActivation } from "./provider-picker.tsx";
+import type { ModelSetupDetection } from "./rpc.ts";
 import { createModelSetupDetectRequest, createModelSetupVerifyRequest } from "./rpc.ts";
 import {
   activationTargetId,
@@ -62,7 +63,6 @@ export function createModelSetup(
       projection.invalidate();
     }
   };
-  const stopAfterRender = projection.subscribe(() => onSettled(afterRender));
   const actionsDisabled = (): boolean =>
     login.busy ||
     nativeModels.saving ||
@@ -92,9 +92,9 @@ export function createModelSetup(
     pageState: () => state.pageState,
     activationState: () => state.activationState,
     actionsDisabled: () => actionsDisabled() || state.detectionRequest !== null,
-    canUseSetup: (client) => canUseSetup(client),
-    canVerify: (client) => canVerify(client),
-    verify: (modelTarget) => verifyConnection(modelTarget),
+    canUseSetup,
+    canVerify,
+    verify: verifyConnection,
     setVerifyState: (next) => (state.verifyState = next),
     setActivationState: (next) => (state.activationState = next),
     setRefreshWarning: (warning) => (state.setupRefreshWarning = warning),
@@ -102,13 +102,13 @@ export function createModelSetup(
       wizard.restore(recovery, observer);
       void runWizardMutation(() => wizard.resume());
     },
-    closeWizard: () => closeWizard(),
-    notify: () => notify(),
+    closeWizard,
+    notify,
   });
   const nativeModels = createNativeModelSetup({
     getContext: () => context,
     getConnection: () => observedConnection,
-    canUseSetup: (client) => canUseSetup(client),
+    canUseSetup,
     blocked: () => {
       projection.read();
       return activationBlocked();
@@ -131,11 +131,11 @@ export function createModelSetup(
     canStart: () =>
       canUseSetup(context.gateway.snapshot.client) && !firstRun.unresolved && !actionsDisabled(),
     canContinue: () => canUseSetup(context.gateway.snapshot.client) && !firstRun.unresolved,
-    refresh: () => detect(),
+    refresh: detect,
   });
   const wizard = new ModelSetupWizardRunner({
-    getClient: () => context?.gateway.snapshot.client ?? null,
-    getAgentId: () => agentSelection().state.selectedId ?? null,
+    getClient: () => context.gateway.snapshot.client,
+    getAgentId: () => agentSelection().state.selectedId,
     onChange: (next) => {
       if (next.phase !== "starting" && next.phase !== "done") {
         state.activationState = { phase: "idle" };
@@ -165,27 +165,23 @@ export function createModelSetup(
 
   const runDetection = createModelSetupDetectRequest({
     getHello: () => context.gateway.snapshot.hello,
-    onComplete: (outcome) => {
+    onComplete: (outcome): boolean => {
       if (
         state.detectionRequest !== outcome.token ||
         context.gateway.snapshot.client !== outcome.client ||
         context.gateway.snapshot.hello !== outcome.hello ||
         agentSelection().state.selectedId !== outcome.agentId
       ) {
-        return;
+        return false;
       }
       state.detectionRequest = null;
       if ("error" in outcome) {
-        const message = formatModelSetupError(outcome.error);
-        if (state.pageState.phase === "ready") {
-          state.detectionError = message;
-        } else {
+        if (state.pageState.phase !== "ready") {
           firstRun.setReadyConnection(null);
-          state.pageState = { phase: "detect-error", message };
+          state.pageState = { phase: "detect-error" };
         }
-        return;
+        return true;
       }
-      state.detectionError = null;
       firstRun.setReadyConnection({
         client: outcome.client,
         hello: outcome.hello,
@@ -198,10 +194,13 @@ export function createModelSetup(
       ) {
         state.manualProviderId = "";
       }
+      return true;
     },
   });
 
   const runVerification = createModelSetupVerifyRequest();
+
+  const [detectionIdentity, setDetectionRequest] = createSignal<ModelSetupDetection>();
 
   let feedbackState: ModelSetupActivationState | undefined;
 
@@ -226,11 +225,11 @@ export function createModelSetup(
     firstRun.start();
   }
 
-  function synchronizeGateway(snapshot: ApplicationContext["gateway"]["snapshot"]): void {
-    const routeData = props.routeData;
+  function synchronizeGateway(routeData: ModelSetupPageProps["routeData"]): void {
     if (!connected || !routeData) {
       return;
     }
+    const snapshot = context.gateway.snapshot;
     const previous = observedConnection;
     const observation = reconcileModelSetupConnection(
       previous,
@@ -250,6 +249,7 @@ export function createModelSetup(
     if (observation.kind === "pending") {
       if (!wizard.hasAdmittedSession) {
         state.pageState = { phase: "loading" };
+        setDetectionRequest(undefined);
       }
       wizard.suspend(suspendedNotice);
       return;
@@ -285,18 +285,10 @@ export function createModelSetup(
     } else {
       firstRun.connectionChanged(connection);
     }
-    resetActivity();
-    state.pageState = { phase: "loading" };
-    if (canUseSetup(connection.client)) {
-      void detect();
-    }
-  }
-
-  function resetActivity(): void {
     manualProviderRevealPending = false;
     login.reset();
     state.detectionRequest = null;
-    state.detectionError = null;
+    setDetectionRequest(undefined);
     retireWizardMutation();
     void runDetection([null, null, null]);
     state.activationState = { phase: "idle" };
@@ -304,6 +296,10 @@ export function createModelSetup(
     iconLoader.reset();
     pendingPrepareOption = null;
     void wizard.cancel();
+    state.pageState = { phase: "loading" };
+    if (canUseSetup(connection.client)) {
+      void detect();
+    }
   }
 
   function canUseSetup(client: GatewayBrowserClient | null): client is GatewayBrowserClient {
@@ -323,7 +319,6 @@ export function createModelSetup(
       return null;
     }
     resetVerify();
-    state.detectionError = null;
     // Only a cold load replaces the content. Same-owner rescans keep forms and
     // focus mounted; a changed connection clears them in synchronizeGateway.
     if (state.pageState.phase !== "ready") {
@@ -331,7 +326,9 @@ export function createModelSetup(
     }
     const token = {};
     state.detectionRequest = token;
-    const outcome = await runDetection([client, agentSelection().state.selectedId, token]);
+    const completion = runDetection([client, agentSelection().state.selectedId, token]);
+    setDetectionRequest({ completion });
+    const outcome = await completion;
     return outcome?.token === token && "value" in outcome ? outcome.value : null;
   }
 
@@ -604,7 +601,7 @@ export function createModelSetup(
         wizardDialog = element;
       },
       detecting: state.detectionRequest !== null,
-      detectionError: state.detectionError,
+      detectionIdentity,
       embedded: props.embedded ?? false,
       agentLabel: props.agentLabel ?? "",
       credentialChoices: props.credentialChoices ?? [],
@@ -678,16 +675,16 @@ export function createModelSetup(
         state.wizardMode = "prepare";
         void runWizardMutation(() => wizard.start(option.id, "openclaw.setup.prepare.start"));
       },
-      onManualProviderChange: (providerId: string) => selectManualProvider(providerId),
+      onManualProviderChange: selectManualProvider,
       onManualApiKeyChange: (apiKey: string) => {
         state.manualApiKey = apiKey;
         state.manualError = null;
       },
-      onManualConnect: () => connectManual(),
+      onManualConnect: connectManual,
       onMoreSignInToggle: (open: boolean) => {
         state.moreSignInOpen = open;
       },
-      onIconError: (iconUrl: string) => iconLoader.invalidate(iconUrl),
+      onIconError: iconLoader.invalidate,
       onOpenChat: () => (props.embedded ? props.onClose?.() : firstRun.continueSetup()),
       onOpenSetupAssistant: () => firstRun.continueSetup("utility"),
       onSuccessClose: () => {
@@ -704,46 +701,42 @@ export function createModelSetup(
       onWizardAnswer: (value: unknown, includeValue?: boolean): void =>
         void runWizardMutation(() => wizard.answer(value, includeValue)),
       onWizardCancel: (): void => void cancelWizard(),
-      onWizardClose: () => closeWizard(),
+      onWizardClose: closeWizard,
     };
+  };
+  const synchronizeCurrentGateway = () => {
+    synchronizeGateway(props.routeData);
+    notify();
   };
   createEffect(
     () => [props.routeData, agentSelection()],
-    ([, selection]) => {
+    ([routeData, selection]) => {
       // Selection receipts retire wizard ownership before another setup action can run.
-      const stop = selection.subscribe(() => {
-        synchronizeGateway(context.gateway.snapshot);
-        notify();
-      });
-      synchronizeGateway(context.gateway.snapshot);
+      const stop = selection.subscribe(synchronizeCurrentGateway);
+      synchronizeGateway(routeData);
       notify();
       return stop;
     },
   );
   onSettled(() => {
+    const stopAfterRender = projection.subscribe(() => onSettled(afterRender));
     connected = true;
     // Connection authority changes synchronously suspend or retire the admitted wizard.
-    const stopGateway = context.gateway.subscribe(() => {
-      synchronizeGateway(context.gateway.snapshot);
-      notify();
-    });
+    const stopGateway = context.gateway.subscribe(synchronizeCurrentGateway);
     // Receipt-clear events retire restored wizard work before another activation can start.
     const stopFirstRun = firstRun.subscribe(notify);
-    synchronizeGateway(context.gateway.snapshot);
-    notify();
+    synchronizeCurrentGateway();
     return () => {
+      disposed = true;
+      stopAfterRender();
+      connected = false;
       stopGateway();
       stopFirstRun();
+      firstRun.dispose();
+      retireWizardMutation();
+      iconLoader.reset();
+      void wizard.cancel();
     };
-  });
-  onCleanup(() => {
-    disposed = true;
-    stopAfterRender();
-    connected = false;
-    firstRun.dispose();
-    retireWizardMutation();
-    iconLoader.reset();
-    void wizard.cancel();
   });
   return {
     view,

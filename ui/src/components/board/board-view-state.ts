@@ -1,5 +1,5 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
-import { createMemo, createStore, onCleanup } from "solid-js";
+import { createMemo, createStore, onSettled } from "solid-js";
 import {
   BOARD_GRID_COLUMNS,
   BOARD_GRID_GAP,
@@ -97,7 +97,7 @@ export function createBoardViewState(
   type Presentation = typeof initial;
   const [presentation, update] = createStore(sync, initial);
   const contentHeights = { get: (name: string) => presentation.contentHeights[name]?.height };
-  onCleanup(stopGesture);
+  onSettled(() => stopGesture);
 
   function sync(local: Presentation): void {
     const before = previous;
@@ -346,12 +346,10 @@ export function createBoardViewState(
     widgetAppView: async (name, revision) =>
       (await props.callbacks?.widgetAppView?.(name, revision)) ?? {
         status: "stale",
-        error: "MCP App view unavailable",
       },
     refreshWidgetAppView: async (name, revision) =>
       (await props.callbacks?.refreshWidgetAppView?.(name, revision)) ?? {
         status: "stale",
-        error: "MCP App view unavailable",
       },
   };
 

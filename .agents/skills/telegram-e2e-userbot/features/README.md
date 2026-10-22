@@ -44,7 +44,7 @@ The audit lane exercises config the default path never uses:
 | `E2E_TELEGRAM_CONFIG_PATCH` | anything under `channels.telegram` (streaming, replyToMode, richMessages)                                                       |
 | `E2E_ROOT_CONFIG_PATCH`     | the config root — `messages.*` for ack/status reactions and reply visibility; `null` removes a seeded key                       |
 | `E2E_REQUIRE_MENTION=true`  | makes the test group mention-required; ack scope treats `group-mentions` as mention-_required_ groups, so reaction rows need it |
-| `E2E_TELEGRAM_PROVIDER_API` | `openai-completions` for commentary and preamble scenarios                                                                      |
+| `E2E_TELEGRAM_PROVIDER_API` | `openai-responses` for explicitly phased commentary and preamble scenarios                                                      |
 | `E2E_MOCK_SERVER_PATH`      | an alternate mock server for provider-shape controls                                                                            |
 | `--source-gateway`          | core and the Telegram plugin from TypeScript source; other plugins use built output when present                                |
 | `--pre-send '<text>'`       | posts as the QA user before the driven turn, for history-scoped rows                                                            |

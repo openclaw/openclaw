@@ -9,7 +9,7 @@ import "./database-suite-workers.test-support.js";
 import * as terminal from "../../../packages/terminal-core/src/note.js";
 import { createBackupResourcePlan } from "../../commands/backup-resource-inventory.js";
 import { noteDatabaseEngines } from "../../commands/doctor-database-engine.js";
-import { doctorDatabasePort } from "../../commands/doctor-database-port.js";
+import { doctorDatabasePort as port } from "../../commands/doctor-database-port.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveActivatedPluginBackupInventory } from "../../plugins/manifest-backup-resources.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
@@ -34,6 +34,13 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { preparePostgresBackupDiscovery } from "../backup-database-discovery.js";
 import { createBackupSqliteSnapshotPlan } from "../backup-sqlite-snapshot.js";
+import { resolveClientCredentialStorePath } from "../client-credential-paths.js";
+import { readClientCredentialReceipt } from "../client-credential-readiness.js";
+import { readClientCredentialFileIdentity } from "../client-credential-receipt.js";
+import {
+  openClientCredentialCustody,
+  runClientCredentialOperation,
+} from "../client-credential-store.js";
 import * as recovery from "../database-port-recovery.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import * as snapshots from "../sqlite-snapshot.js";
@@ -89,7 +96,12 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
   });
 
   async function withRoots(
-    run: (state: OpenClawTestState, files: string[], config: OpenClawConfig) => Promise<void>,
+    run: (
+      state: OpenClawTestState,
+      files: string[],
+      config: OpenClawConfig,
+      expectCredentials: () => void,
+    ) => Promise<void>,
   ) {
     await withOpenClawTestState({ scenario: "minimal", prefix: "matrix-port-" }, async (state) => {
       const config: OpenClawConfig = {
@@ -97,18 +109,19 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
         database: { engine: "sqlite", postgres: { connection: connection! } },
       };
       await state.writeConfig(config);
-      const files = [
+      const accounts = [
         ["active", "synthetic-current-token"],
         ["active", "synthetic-retained-token"],
         ["disabled", "synthetic-disabled-token"],
-      ].map(([accountId, accessToken]) =>
+      ] as const;
+      const files = accounts.map(([accountId, accessToken]) =>
         path.join(
           matrix.resolveMatrixAccountStorageRoot({
             stateDir: state.stateDir,
             homeserver: "https://matrix.example.org",
             userId: "@synthetic:example.org",
-            accountId: accountId!,
-            accessToken: accessToken!,
+            accountId,
+            accessToken,
           }).rootDir,
           "state",
           "openclaw.sqlite",
@@ -116,18 +129,76 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
       );
       try {
         for (const [index, file] of files.entries()) {
-          const { db } = openOpenClawStateDatabase({ path: file });
+          const { db } = openOpenClawStateDatabase({
+            path: file,
+            env: { ...state.env, OPENCLAW_STATE_DIR: path.dirname(path.dirname(file)) },
+          });
           db.prepare(
             "INSERT INTO plugin_state_entries (plugin_id, namespace, entry_key, value_json, created_at) VALUES ('matrix', 'idb-snapshot', ?, ?, 1)",
           ).run(`chunk-${index}`, cryptoValue);
         }
         await closeOpenClawStateDatabaseAsync();
-        // Current crypto roots without legacy dedupe rows do not require a migration receipt.
-        await expect(
-          doctorDatabasePort({ family: "state", to: "postgres", dryRun: true }),
-        ).resolves.toMatchObject({ phase: "preflight" });
+        const credentialEnv = (file: string) => ({
+          ...state.env,
+          OPENCLAW_STATE_DIR: path.dirname(path.dirname(file)),
+        });
+        const tokenKey = { device_id: "synthetic-matrix-client", role: "operator" };
+        for (const [index, file] of files.entries()) {
+          runClientCredentialOperation(credentialEnv(file), {
+            kind: "token.replace",
+            key: tokenKey,
+            token: {
+              ...tokenKey,
+              token: `synthetic-account-token-${index}`,
+              scopes_json: '["operator.read"]',
+              updated_at_ms: 1,
+            },
+          });
+        }
+        const localSnapshot = (file: string) => {
+          using owner = openClientCredentialCustody(credentialEnv(file));
+          assert(owner);
+          const stored = readClientCredentialReceipt(owner.database);
+          assert(stored);
+          return {
+            local: readClientCredentialFileIdentity(owner.path),
+            stored,
+            token: owner.run({ kind: "token.read", key: tokenKey }),
+          };
+        };
+        const localCredentials = files.map(localSnapshot);
+        const expectCredentials = () => {
+          for (const [index, file] of files.entries()) {
+            const original = localCredentials[index]!;
+            const physical = readBackupEngine(file);
+            expect(localSnapshot(file)).toEqual({
+              ...original,
+              stored: {
+                ...original.stored,
+                receipt: {
+                  ...original.stored.receipt,
+                  sharedFile: readClientCredentialFileIdentity(file),
+                  source: original.stored.receipt.source
+                    ? {
+                        ...original.stored.receipt.source,
+                        engine: physical.engine,
+                        identity:
+                          physical.engine === "postgres"
+                            ? physical.storeId
+                            : original.stored.receipt.source.identity,
+                      }
+                    : null,
+                },
+              },
+            });
+            expect(readBackupEngine(resolveClientCredentialStorePath(credentialEnv(file)))).toEqual(
+              { engine: "sqlite" },
+            );
+          }
+        };
+        const preflight = () => port({ family: "state", to: "postgres", dryRun: true });
+        await expect(preflight()).resolves.toMatchObject({ phase: "preflight" });
         const retainedEntries = files.map(sqliteEntries);
-        // Fresh crypto roots are port-ready; only genuine legacy dedupe rows require repair.
         const legacy = {
           roomId: "!legacy:example.org",
           eventId: "$before-upgrade",
@@ -142,9 +213,7 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
             "INSERT INTO plugin_state_entries (plugin_id, namespace, entry_key, value_json, created_at) VALUES ('matrix', 'inbound-dedupe', ?, ?, ?)",
           ).run(legacyKey, JSON.stringify(legacy), legacy.ts);
         }
-        await expect(
-          doctorDatabasePort({ family: "state", to: "postgres", dryRun: true }),
-        ).rejects.toThrow(
+        await expect(preflight()).rejects.toThrow(
           "Run openclaw doctor --fix first, then retry port. If a named plugin is disabled, enable it for repair.",
         );
         // Complete Doctor's retained-root scan before porting, then keep testing a disabled plugin.
@@ -167,7 +236,8 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
         await closeOpenClawStateDatabaseAsync();
         expect(files.map(sqliteEntries)).toEqual(retainedEntries);
         await state.writeConfig(config);
-        await run(state, files, config);
+        await run(state, files, config, expectCredentials);
+        expectCredentials();
       } finally {
         vi.restoreAllMocks();
         await closeOpenClawStateDatabaseAsync();
@@ -179,9 +249,7 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
             if (entry.isDirectory() && includeOperations) {
               await collectManifests(file, false);
             } else if (entry.name === "manifest.json") {
-              const saved = JSON.parse(
-                await fs.readFile(file, "utf8"),
-              ) as recovery.DatabasePortManifest;
+              const saved = await readManifest(file);
               for (const target of saved.targets) {
                 for (const location of [target.original, target.intended]) {
                   if (location.engine === "postgres") {
@@ -197,9 +265,14 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
     });
   }
 
-  function sqliteEntries(file: string) {
+  function sqliteRows(file: string, sql: string) {
     using db = openNodeSqliteDatabase(file, { readOnly: true });
-    return db.prepare(selectEntries).all();
+    return db.prepare(sql).all();
+  }
+  const sqliteEntries = (file: string) => sqliteRows(file, selectEntries);
+
+  async function readManifest(file: string): Promise<recovery.DatabasePortManifest> {
+    return JSON.parse(await fs.readFile(file, "utf8"));
   }
 
   async function postgresEntries(file: string) {
@@ -222,10 +295,11 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
 
   // Green CI runs 39068774273/39071119824 measured p95 at 310s across the real root round trip.
   it("ports every retained token/account root with the state family and restores fresh namespaces", async () => {
-    await withRoots(async (state, files, config) => {
+    await withRoots(async (state, files, config, expectCredentials) => {
       const expected = files.map(sqliteEntries);
-      const forward = await doctorDatabasePort({ family: "state", to: "postgres" });
+      const forward = await port({ family: "state", to: "postgres" });
       expect(forward).toMatchObject({ engine: "postgres" });
+      expectCredentials();
       const physical = await postgresRoots(files);
       expect(physical.map((root) => root.entries)).toEqual(expected);
       expect(new Set(physical.map((root) => root.anchor.namespace)).size).toBe(files.length);
@@ -323,25 +397,28 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
       });
       const capturedAgent = backup.snapshots.find((entry) => entry.archiveSourcePath === agentPath);
       expect(capturedAgent).toBeDefined();
-      {
-        using database = openNodeSqliteDatabase(capturedAgent!.sourcePath, { readOnly: true });
-        expect(database.prepare("SELECT entry_json FROM session_nodes").get()?.entry_json).toBe(
-          '{"fixture":"registered agent"}',
-        );
-      }
+      expect(sqliteRows(capturedAgent!.sourcePath, "SELECT entry_json FROM session_nodes")).toEqual(
+        [{ entry_json: '{"fixture":"registered agent"}' }],
+      );
       const capturedGlobal = backup.snapshots.find(
         (entry) =>
           entry.archiveSourcePath ===
           `${state.statePath("state", "openclaw.sqlite")}.postgres/database.sqlite`,
       );
       expect(capturedGlobal).toBeDefined();
-      {
-        using database = openNodeSqliteDatabase(capturedGlobal!.sourcePath, { readOnly: true });
-        expect(database.prepare("SELECT agent_id, path FROM agent_databases").all()).toEqual([
-          { agent_id: "retained", path: agentPath },
-        ]);
-      }
+      expect(
+        sqliteRows(capturedGlobal!.sourcePath, "SELECT agent_id, path FROM agent_databases"),
+      ).toEqual([{ agent_id: "retained", path: agentPath }]);
       for (const [index, file] of files.entries()) {
+        const local = resolveClientCredentialStorePath({
+          ...state.env,
+          OPENCLAW_STATE_DIR: path.dirname(path.dirname(file)),
+        });
+        const capturedLocal = backup.snapshots.find((entry) => entry.archiveSourcePath === local);
+        expect(capturedLocal).toBeDefined();
+        expect(
+          sqliteRows(capturedLocal!.sourcePath, "SELECT token FROM device_auth_tokens"),
+        ).toEqual([{ token: `synthetic-account-token-${index}` }]);
         const directory = state.path(`restored-${index}`, path.basename(`${file}.postgres`));
         await fs.mkdir(directory, { recursive: true });
         const capsule = backup.snapshots.filter((entry) =>
@@ -374,7 +451,7 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
       await client.query(
         `DELETE FROM "${globalAnchor.namespace}".agent_databases WHERE agent_id = 'retained'`,
       );
-      await doctorDatabasePort({ family: "state", to: "sqlite" });
+      await port({ family: "state", to: "sqlite" });
       expect(files.map(readBackupEngine)).toEqual(files.map(() => ({ engine: "sqlite" })));
       expect(files.map(sqliteEntries)).toEqual(expected);
       expect(readBackupEngine(agentPath)).toEqual({ engine: "sqlite" });
@@ -384,7 +461,7 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
   it.each(["resume", "rollback"] as const)(
     "%s recovers a partially published multi-root port and blocks ordinary startup meanwhile",
     async (action) => {
-      await withRoots(async (state, files) => {
+      await withRoots(async (state, files, _config, expectCredentials) => {
         const expected = files.map(sqliteEntries);
         const prepare = snapshots.prepareVerifiedSqliteFile;
         let published = 0;
@@ -400,13 +477,11 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
             },
           };
         });
-        await expect(doctorDatabasePort({ to: "postgres" })).rejects.toThrow("Database port");
+        await expect(port({ to: "postgres" })).rejects.toThrow("Database port");
         expect(published).toBe(2);
         vi.restoreAllMocks();
         const manifestPath = recovery.databasePortManifestPath(state.stateDir);
-        const saved = JSON.parse(
-          await fs.readFile(manifestPath, "utf8"),
-        ) as recovery.DatabasePortManifest;
+        const saved = await readManifest(manifestPath);
         expect(saved.state).toBe("publishing");
         expect(saved.targets).toHaveLength(files.length + 1);
         expect(new Set(files.map((file) => readBackupEngine(file).engine))).toEqual(
@@ -420,11 +495,12 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
             action,
           }),
         ).toEqual(saved);
-        await doctorDatabasePort({ [action]: manifestPath });
+        await port({ [action]: manifestPath });
+        expectCredentials();
         expect(() => recovery.assertDatabasePortStartupAllowed(state.stateDir)).not.toThrow();
         if (action === "resume") {
           expect((await postgresRoots(files)).map((root) => root.entries)).toEqual(expected);
-          await doctorDatabasePort({ to: "sqlite" });
+          await port({ to: "sqlite" });
         }
         expect(files.map(sqliteEntries)).toEqual(expected);
       });

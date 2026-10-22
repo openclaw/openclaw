@@ -210,10 +210,10 @@ export function createProfileAvailability({
       return ready.ready && state().extensionRelays?.get(profile.name) === relay;
     }
     if (capabilities.usesChromeMcp) {
-      // countChromeMcpTabs creates the session if needed — no separate availability call required.
+      // Listing creates the session if needed and checks its command channel.
       assertChromeMcpCdpTransportAllowed(profile, getCdpReachabilityPolicy());
-      const { countChromeMcpTabs } = await getChromeMcpModule();
-      await countChromeMcpTabs(profile.name, profile, {
+      const { listChromeMcpTabs } = await getChromeMcpModule();
+      await listChromeMcpTabs(profile.name, profile, {
         ...(timeoutMs != null ? { timeoutMs } : {}),
         ...(options?.signal ? { signal: options.signal } : {}),
       });

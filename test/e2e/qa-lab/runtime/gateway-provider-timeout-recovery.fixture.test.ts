@@ -63,6 +63,7 @@ it("keeps bootstrap outside the hold deadline and reports progress with console 
       await setImmediate();
     },
   }));
+  // mock-isolation: Capture the fixture's Gateway lifecycle and RPCs without launching a child process.
   vi.doMock("../../../../extensions/qa-lab/api.js", () => ({
     createQaGatewayChild: () => ({
       start: async (options: { providerBaseUrl: string }) => {
@@ -75,6 +76,7 @@ it("keeps bootstrap outside the hold deadline and reports progress with console 
             }
             if (method === "chat.send") {
               requestAt = now;
+              // Keep loopback I/O on the event loop driven by the fixture's simulated clock.
               providerReply = new Promise<string>((resolve, reject) => {
                 providerRequest = request(
                   `${providerUrl}/responses`,
@@ -146,13 +148,10 @@ it("keeps bootstrap outside the hold deadline and reports progress with console 
     for (const [index, entry] of activeProgress.entries()) {
       expect(entry.at - (activeProgress[index - 1]?.at ?? requestAt)).toBeLessThanOrEqual(60_000);
     }
-    expect
-      .soft(
-        progress.some(({ text }) =>
-          text.includes('"phase":"provider-timeout-recovery-proof-complete"'),
-        ),
-      )
-      .toBe(true);
+    const completed = progress.some(({ text }) =>
+      text.includes('"phase":"provider-timeout-recovery-proof-complete"'),
+    );
+    expect.soft(completed).toBe(true);
   } finally {
     providerRequest?.destroy();
     for (const run of cleanup.splice(0).toReversed()) {

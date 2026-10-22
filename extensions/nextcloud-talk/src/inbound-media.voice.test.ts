@@ -3,11 +3,16 @@ import os from "node:os";
 import path from "node:path";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PluginRuntime, RuntimeEnv } from "../runtime-api.js";
-import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
+import type { PluginRuntime } from "../runtime-api.js";
+import {
+  createAllowlistedAccount as createAccount,
+  createAttachment,
+  createMessage as baseMessage,
+  createRuntimeEnv as runtimeEnv,
+} from "./inbound-media.test-fixtures.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";
 import { setNextcloudTalkRuntime } from "./runtime.js";
-import type { CoreConfig, NextcloudTalkInboundMessage } from "./types.js";
+import type { CoreConfig } from "./types.js";
 
 const {
   createChannelPairingControllerMock,
@@ -23,29 +28,23 @@ const {
 
 const resolveNextcloudTalkAuthenticatedMediaSourceMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../runtime-api.js", async () => {
-  const actual = await vi.importActual<typeof import("../runtime-api.js")>("../runtime-api.js");
-  return {
-    ...actual,
-    createChannelPairingController: createChannelPairingControllerMock,
-    resolveAllowlistProviderRuntimeGroupPolicy: resolveAllowlistProviderRuntimeGroupPolicyMock,
-    resolveDefaultGroupPolicy: resolveDefaultGroupPolicyMock,
-    warnMissingProviderGroupPolicyFallbackOnce: warnMissingProviderGroupPolicyFallbackOnceMock,
-  };
-});
+vi.mock("../runtime-api.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime-api.js")>()),
+  createChannelPairingController: createChannelPairingControllerMock,
+  resolveAllowlistProviderRuntimeGroupPolicy: resolveAllowlistProviderRuntimeGroupPolicyMock,
+  resolveDefaultGroupPolicy: resolveDefaultGroupPolicyMock,
+  warnMissingProviderGroupPolicyFallbackOnce: warnMissingProviderGroupPolicyFallbackOnceMock,
+}));
 
-vi.mock("./inbound-media.js", async () => {
-  const actual = await vi.importActual<typeof import("./inbound-media.js")>("./inbound-media.js");
-  return {
-    ...actual,
-    resolveNextcloudTalkAuthenticatedMediaSource: resolveNextcloudTalkAuthenticatedMediaSourceMock,
-  };
-});
+vi.mock("./inbound-media.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./inbound-media.js")>()),
+  resolveNextcloudTalkAuthenticatedMediaSource: resolveNextcloudTalkAuthenticatedMediaSourceMock,
+}));
 
-vi.mock("./room-info.js", async () => {
-  const actual = await vi.importActual<typeof import("./room-info.js")>("./room-info.js");
-  return { ...actual, resolveNextcloudTalkRoomKind: vi.fn(async () => "direct") };
-});
+vi.mock("./room-info.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./room-info.js")>()),
+  resolveNextcloudTalkRoomKind: vi.fn(async () => "direct"),
+}));
 
 function box(type: string, ...payloads: Buffer[]): Buffer {
   const payload = Buffer.concat(payloads);
@@ -55,28 +54,13 @@ function box(type: string, ...payloads: Buffer[]): Buffer {
   return Buffer.concat([header, payload]);
 }
 
-function handlerBox(handlerType: "soun" | "vide"): Buffer {
+function trackBox(handlerType: "soun" | "vide"): Buffer {
   const payload = Buffer.alloc(24);
   payload.write(handlerType, 8, 4, "ascii");
-  return box("hdlr", payload);
-}
-
-function sampleDescriptionBox(sampleEntryType: "mp4a" | "avc1"): Buffer {
   const header = Buffer.alloc(8);
   header.writeUInt32BE(1, 4);
-  return box("stsd", header, box(sampleEntryType));
-}
-
-function trackBox(handlerType: "soun" | "vide"): Buffer {
-  const sampleEntryType = handlerType === "soun" ? "mp4a" : "avc1";
-  return box(
-    "trak",
-    box(
-      "mdia",
-      handlerBox(handlerType),
-      box("minf", box("stbl", sampleDescriptionBox(sampleEntryType))),
-    ),
-  );
+  const description = box("stsd", header, box(handlerType === "soun" ? "mp4a" : "avc1"));
+  return box("trak", box("mdia", box("hdlr", payload), box("minf", box("stbl", description))));
 }
 
 function isoBmffFixture(...handlerTypes: Array<"soun" | "vide">): Buffer {
@@ -92,53 +76,16 @@ function isoBmffFixture(...handlerTypes: Array<"soun" | "vide">): Buffer {
   ]);
 }
 
-function installRuntime(saved: { id: string; path: string; size: number; contentType: string }) {
-  const coreRuntime = createPluginRuntimeMock();
-  coreRuntime.channel.media.saveRemoteMedia = vi.fn(async () => saved);
-  coreRuntime.channel.media.deleteMediaBuffer = vi.fn(async (id) => {
-    await fs.rm(path.join(path.dirname(saved.path), id));
-  });
-  setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
-  return coreRuntime;
-}
-
-function createAccount(): ResolvedNextcloudTalkAccount {
-  return {
-    accountId: "default",
-    enabled: true,
-    baseUrl: "https://cloud.example.com",
-    secret: "secret",
-    secretSource: "config",
-    config: {
-      dmPolicy: "allowlist",
-      allowFrom: ["user-1"],
-      mediaAllowFrom: ["user-1"],
-      groupPolicy: "allowlist",
-      groupAllowFrom: [],
-    },
-  };
-}
-
-function createMessage(fileName: string, mimeType: string, text = ""): NextcloudTalkInboundMessage {
-  return {
+function createMessage(fileName: string, mimeType: string, text = "") {
+  return baseMessage({
     messageId: "msg-voice",
-    roomToken: "room-1",
-    roomName: "Room 1",
-    senderId: "user-1",
-    senderName: "Alice",
     text,
-    mediaType: "text/plain",
-    timestamp: Date.now(),
-    isGroupChat: false,
-    attachment: {
-      fileId: "media-1",
+    attachment: createAttachment("media-1", {
       name: fileName,
       mimeType,
       declaredSizeBytes: 4_096,
-      shareUrl: "https://cloud.example.com/s/redacted-share-token",
-      hideDownload: false,
-    },
-  };
+    }),
+  });
 }
 
 function mockAuthenticatedSource(
@@ -158,10 +105,6 @@ function mockAuthenticatedSource(
   });
 }
 
-function runtimeEnv(): RuntimeEnv {
-  return { log: vi.fn(), error: vi.fn() } as unknown as RuntimeEnv;
-}
-
 function requireBuildContextCall(coreRuntime: ReturnType<typeof createPluginRuntimeMock>) {
   const call = (coreRuntime.channel.inbound.buildContext as ReturnType<typeof vi.fn>).mock.calls[0];
   if (!call) {
@@ -173,12 +116,31 @@ function requireBuildContextCall(coreRuntime: ReturnType<typeof createPluginRunt
 const config = { channels: { "nextcloud-talk": {} } } as CoreConfig;
 const tempDirs: string[] = [];
 
-async function writeFixture(fileName: string, contents: Buffer): Promise<string> {
+async function stage(fileName: string, fixture: Buffer, contentType: string) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "nextcloud-talk-voice-"));
   tempDirs.push(directory);
-  const filePath = path.join(directory, fileName);
-  await fs.writeFile(filePath, contents);
-  return filePath;
+  const stagedPath = path.join(directory, fileName);
+  await fs.writeFile(stagedPath, fixture);
+  const saved = { id: fileName, path: stagedPath, size: fixture.byteLength, contentType };
+  const coreRuntime = createPluginRuntimeMock();
+  coreRuntime.channel.media.saveRemoteMedia = vi.fn(async () => saved);
+  coreRuntime.channel.media.deleteMediaBuffer = vi.fn(async (id) => {
+    await fs.rm(path.join(directory, id));
+  });
+  setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
+  const deliver = (
+    mimeType = contentType,
+    text = "",
+    overrides: Partial<Parameters<typeof handleNextcloudTalkInbound>[0]> = {},
+  ) =>
+    handleNextcloudTalkInbound({
+      message: createMessage(fileName, mimeType, text),
+      account: createAccount(),
+      config,
+      runtime: runtimeEnv(),
+      ...overrides,
+    });
+  return { stagedPath, saved, coreRuntime, deliver };
 }
 
 describe("nextcloud-talk native voice media", () => {
@@ -197,9 +159,7 @@ describe("nextcloud-talk native voice media", () => {
 
   afterEach(async () => {
     await Promise.all(
-      tempDirs
-        .splice(0)
-        .map(async (directory) => await fs.rm(directory, { recursive: true, force: true })),
+      tempDirs.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })),
     );
   });
 
@@ -210,21 +170,10 @@ describe("nextcloud-talk native voice media", () => {
     "canonicalizes authenticated $label audio-only MP4 voice media for downstream speech",
     async ({ detectedType }) => {
       const fixture = isoBmffFixture("soun");
-      const stagedPath = await writeFixture("native-voice.mp3", fixture);
-      const coreRuntime = installRuntime({
-        id: "native-voice.mp3",
-        path: stagedPath,
-        size: fixture.byteLength,
-        contentType: detectedType,
-      });
+      const { coreRuntime, deliver } = await stage("native-voice.mp3", fixture, detectedType);
       mockAuthenticatedSource("native-voice.mp3", "voice");
 
-      await handleNextcloudTalkInbound({
-        message: createMessage("native-voice.mp3", "audio/mpeg"),
-        account: createAccount(),
-        config,
-        runtime: runtimeEnv(),
-      });
+      await deliver("audio/mpeg");
 
       const context = requireBuildContextCall(coreRuntime);
       expect(context.message).toMatchObject({
@@ -241,21 +190,10 @@ describe("nextcloud-talk native voice media", () => {
 
   it("preserves canonical desktop WAV native voice media and modality", async () => {
     const wav = Buffer.from("RIFF\u0000\u0000\u0000\u0000WAVEfmt ", "binary");
-    const stagedPath = await writeFixture("native-voice.wav", wav);
-    const coreRuntime = installRuntime({
-      id: "native-voice.wav",
-      path: stagedPath,
-      size: wav.byteLength,
-      contentType: "audio/wav",
-    });
+    const { stagedPath, coreRuntime, deliver } = await stage("native-voice.wav", wav, "audio/wav");
     mockAuthenticatedSource("native-voice.wav", "voice");
 
-    await handleNextcloudTalkInbound({
-      message: createMessage("native-voice.wav", "audio/wav"),
-      account: createAccount(),
-      config,
-      runtime: runtimeEnv(),
-    });
+    await deliver();
 
     expect(requireBuildContextCall(coreRuntime)).toMatchObject({
       message: { sourceModality: "voice" },
@@ -265,21 +203,14 @@ describe("nextcloud-talk native voice media", () => {
 
   it("labels ordinary audio as attachment audio without granting native voice semantics", async () => {
     const fixture = isoBmffFixture("soun");
-    const stagedPath = await writeFixture("attached-audio.m4a", fixture);
-    const coreRuntime = installRuntime({
-      id: "attached-audio.m4a",
-      path: stagedPath,
-      size: fixture.byteLength,
-      contentType: "audio/mp4",
-    });
+    const { stagedPath, coreRuntime, deliver } = await stage(
+      "attached-audio.m4a",
+      fixture,
+      "audio/mp4",
+    );
     mockAuthenticatedSource("attached-audio.m4a");
 
-    await handleNextcloudTalkInbound({
-      message: createMessage("attached-audio.m4a", "audio/mp4", "inspect this recording"),
-      account: createAccount(),
-      config,
-      runtime: runtimeEnv(),
-    });
+    await deliver("audio/mp4", "inspect this recording");
 
     expect(requireBuildContextCall(coreRuntime)).toMatchObject({
       message: {
@@ -294,21 +225,14 @@ describe("nextcloud-talk native voice media", () => {
 
   it("keeps genuine attached video on the video path", async () => {
     const fixture = isoBmffFixture("soun", "vide");
-    const stagedPath = await writeFixture("attached-video.mp4", fixture);
-    const coreRuntime = installRuntime({
-      id: "attached-video.mp4",
-      path: stagedPath,
-      size: fixture.byteLength,
-      contentType: "video/mp4",
-    });
+    const { stagedPath, coreRuntime, deliver } = await stage(
+      "attached-video.mp4",
+      fixture,
+      "video/mp4",
+    );
     mockAuthenticatedSource("attached-video.mp4");
 
-    await handleNextcloudTalkInbound({
-      message: createMessage("attached-video.mp4", "video/mp4"),
-      account: createAccount(),
-      config,
-      runtime: runtimeEnv(),
-    });
+    await deliver();
 
     const context = requireBuildContextCall(coreRuntime);
     expect(context.message).not.toHaveProperty("sourceModality");
@@ -319,21 +243,14 @@ describe("nextcloud-talk native voice media", () => {
     { label: "contains a video track", fixture: isoBmffFixture("soun", "vide") },
     { label: "has no verifiable audio track", fixture: isoBmffFixture() },
   ])("fails closed when an authenticated voice message $label", async ({ fixture }) => {
-    const stagedPath = await writeFixture("contradictory-voice.mp4", fixture);
-    const coreRuntime = installRuntime({
-      id: "contradictory-voice.mp4",
-      path: stagedPath,
-      size: fixture.byteLength,
-      contentType: "video/mp4",
-    });
+    const { stagedPath, coreRuntime, deliver } = await stage(
+      "contradictory-voice.mp4",
+      fixture,
+      "video/mp4",
+    );
     mockAuthenticatedSource("contradictory-voice.mp4", "voice", "audio/mp4");
 
-    await handleNextcloudTalkInbound({
-      message: createMessage("contradictory-voice.mp4", "video/mp4"),
-      account: createAccount(),
-      config,
-      runtime: runtimeEnv(),
-    });
+    await deliver();
 
     expect(coreRuntime.channel.media.deleteMediaBuffer).toHaveBeenCalledWith(
       "contradictory-voice.mp4",
@@ -349,32 +266,21 @@ describe("nextcloud-talk native voice media", () => {
 
   it("deletes the canonical media id when cancellation races native voice staging", async () => {
     const fixture = isoBmffFixture("soun");
-    const stagedPath = await writeFixture("cancelled-voice.mp3", fixture);
+    const { stagedPath, saved, coreRuntime, deliver } = await stage(
+      "cancelled-voice.mp3",
+      fixture,
+      "video/mp4",
+    );
     const abortController = new AbortController();
     const abortReason = new Error("ingress claim retired");
-    const coreRuntime = installRuntime({
-      id: "cancelled-voice.mp3",
-      path: stagedPath,
-      size: fixture.byteLength,
-      contentType: "video/mp4",
-    });
     coreRuntime.channel.media.saveRemoteMedia = vi.fn(async () => {
       abortController.abort(abortReason);
-      return {
-        id: "cancelled-voice.mp3",
-        path: stagedPath,
-        size: fixture.byteLength,
-        contentType: "video/mp4",
-      };
+      return saved;
     });
     mockAuthenticatedSource("cancelled-voice.mp3", "voice");
 
     await expect(
-      handleNextcloudTalkInbound({
-        message: createMessage("cancelled-voice.mp3", "audio/mpeg"),
-        account: createAccount(),
-        config,
-        runtime: runtimeEnv(),
+      deliver("audio/mpeg", "", {
         turnAdoptionLifecycle: {
           abortSignal: abortController.signal,
           onAdopted: vi.fn(),
@@ -395,23 +301,16 @@ describe("nextcloud-talk native voice media", () => {
 
   it("retires the original staged file when voice canonicalization cannot rename it", async () => {
     const fixture = isoBmffFixture("soun");
-    const stagedPath = await writeFixture("rename-failure.mp3", fixture);
+    const { stagedPath, coreRuntime, deliver } = await stage(
+      "rename-failure.mp3",
+      fixture,
+      "video/mp4",
+    );
     const canonicalPath = stagedPath.replace(/\.mp3$/u, ".m4a");
     await fs.mkdir(canonicalPath);
-    const coreRuntime = installRuntime({
-      id: path.basename(stagedPath),
-      path: stagedPath,
-      size: fixture.byteLength,
-      contentType: "video/mp4",
-    });
     mockAuthenticatedSource("rename-failure.mp3", "voice");
 
-    await handleNextcloudTalkInbound({
-      message: createMessage("rename-failure.mp3", "audio/mpeg", "inspect this"),
-      account: createAccount(),
-      config,
-      runtime: runtimeEnv(),
-    });
+    await deliver("audio/mpeg", "inspect this");
 
     await expect(fs.stat(stagedPath)).rejects.toMatchObject({ code: "ENOENT" });
     expect((await fs.stat(canonicalPath)).isDirectory()).toBe(true);
@@ -425,13 +324,11 @@ describe("nextcloud-talk native voice media", () => {
     "retires staged media when final %s preparation throws",
     async (failurePoint) => {
       const fixture = isoBmffFixture("soun");
-      const stagedPath = await writeFixture("pre-dispatch.m4a", fixture);
-      const coreRuntime = installRuntime({
-        id: path.basename(stagedPath),
-        path: stagedPath,
-        size: fixture.byteLength,
-        contentType: "audio/mp4",
-      });
+      const { stagedPath, coreRuntime, deliver } = await stage(
+        "pre-dispatch.m4a",
+        fixture,
+        "audio/mp4",
+      );
       const failure = new Error(`injected ${failurePoint} failure`);
       if (failurePoint === "authority") {
         const resolveStable = coreRuntime.channel.inbound.ingress.resolveStable;
@@ -448,14 +345,7 @@ describe("nextcloud-talk native voice media", () => {
       }
       mockAuthenticatedSource("pre-dispatch.m4a");
 
-      await expect(
-        handleNextcloudTalkInbound({
-          message: createMessage("pre-dispatch.m4a", "audio/mp4"),
-          account: createAccount(),
-          config,
-          runtime: runtimeEnv(),
-        }),
-      ).rejects.toBe(failure);
+      await expect(deliver()).rejects.toBe(failure);
 
       await expect(fs.stat(stagedPath)).rejects.toMatchObject({ code: "ENOENT" });
       expect(coreRuntime.channel.inbound.dispatch).not.toHaveBeenCalled();
@@ -464,17 +354,12 @@ describe("nextcloud-talk native voice media", () => {
 
   it("retires staged media if the sender is revoked after storage", async () => {
     const fixture = isoBmffFixture("soun");
-    const stagedPath = await writeFixture("revoked.m4a", fixture);
-    const saved = {
-      id: path.basename(stagedPath),
-      path: stagedPath,
-      size: fixture.byteLength,
-      contentType: "audio/mp4",
-    };
-    const coreRuntime = installRuntime(saved);
-    const account = createAccount();
-    account.config.dmPolicy = "pairing";
-    account.config.allowFrom = [];
+    const { stagedPath, saved, coreRuntime, deliver } = await stage(
+      "revoked.m4a",
+      fixture,
+      "audio/mp4",
+    );
+    const account = createAccount({ dmPolicy: "pairing", allowFrom: [] });
     let pairedSenders = ["user-1"];
     createChannelPairingControllerMock.mockReturnValue({
       readStoreForDmPolicy: vi.fn(async () => pairedSenders),
@@ -486,12 +371,7 @@ describe("nextcloud-talk native voice media", () => {
     });
     mockAuthenticatedSource("revoked.m4a");
 
-    await handleNextcloudTalkInbound({
-      message: createMessage("revoked.m4a", "audio/mp4"),
-      account,
-      config,
-      runtime: runtimeEnv(),
-    });
+    await deliver("audio/mp4", "", { account });
 
     await expect(fs.stat(stagedPath)).rejects.toMatchObject({ code: "ENOENT" });
     expect(coreRuntime.channel.inbound.dispatch).not.toHaveBeenCalled();
@@ -499,25 +379,12 @@ describe("nextcloud-talk native voice media", () => {
 
   it("does not retire media after handing it to the dispatcher even if dispatch rejects", async () => {
     const fixture = isoBmffFixture("soun");
-    const stagedPath = await writeFixture("adopted.m4a", fixture);
-    const coreRuntime = installRuntime({
-      id: path.basename(stagedPath),
-      path: stagedPath,
-      size: fixture.byteLength,
-      contentType: "audio/mp4",
-    });
+    const { stagedPath, coreRuntime, deliver } = await stage("adopted.m4a", fixture, "audio/mp4");
     const failure = new Error("dispatcher failed after accepting the context");
     vi.mocked(coreRuntime.channel.inbound.dispatch).mockRejectedValueOnce(failure);
     mockAuthenticatedSource("adopted.m4a");
 
-    await expect(
-      handleNextcloudTalkInbound({
-        message: createMessage("adopted.m4a", "audio/mp4"),
-        account: createAccount(),
-        config,
-        runtime: runtimeEnv(),
-      }),
-    ).rejects.toBe(failure);
+    await expect(deliver()).rejects.toBe(failure);
 
     await expect(fs.readFile(stagedPath)).resolves.toEqual(fixture);
     expect(coreRuntime.channel.media.deleteMediaBuffer).not.toHaveBeenCalled();

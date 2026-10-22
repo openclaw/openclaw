@@ -1,4 +1,5 @@
 import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
+import { formatAudioTranscripts } from "../../packages/media-understanding-common/src/format.js";
 // Audio preflight transcribes voice notes before mention checks and optionally
 // echoes the transcript back to the source chat.
 import type { RuntimeMsgContext as MsgContext } from "../auto-reply/templating.js";
@@ -16,18 +17,38 @@ import {
 } from "./runner.js";
 import type { MediaUnderstandingProvider } from "./types.js";
 
+type AudioPreflightParams = {
+  ctx: MsgContext;
+  cfg: OpenClawConfig;
+  assertCurrent?: () => void;
+  agentDir?: string;
+  workspaceDir?: string;
+  providers?: Record<string, MediaUnderstandingProvider>;
+  activeModel?: ActiveMediaModel;
+};
+
 /**
  * Transcribes the first audio attachment BEFORE mention checking.
  * This allows voice notes to be processed in group chats with requireMention: true.
  * Returns the transcript or undefined if transcription fails or no audio is found.
  */
-export async function transcribeFirstAudio(params: {
-  ctx: MsgContext;
-  cfg: OpenClawConfig;
-  agentDir?: string;
-  providers?: Record<string, MediaUnderstandingProvider>;
-  activeModel?: ActiveMediaModel;
-}): Promise<string | undefined> {
+export async function transcribeFirstAudio(
+  params: AudioPreflightParams,
+): Promise<string | undefined> {
+  return transcribeAudio(params, true);
+}
+
+/** Transcribes the configured audio selection before an internal user turn is staged. */
+export async function transcribeAudioAttachments(
+  params: AudioPreflightParams,
+): Promise<string | undefined> {
+  return transcribeAudio(params, false);
+}
+
+async function transcribeAudio(
+  params: AudioPreflightParams,
+  firstOnly: boolean,
+): Promise<string | undefined> {
   const { ctx, cfg } = params;
 
   const audioConfig = cfg.tools?.media?.audio;
@@ -35,16 +56,15 @@ export async function transcribeFirstAudio(params: {
     return undefined;
   }
 
-  const firstAudio = normalizeMediaAttachments(ctx).find(
-    (att) => isAudioAttachment(att) && !att.alreadyTranscribed,
-  );
+  const attachments = normalizeMediaAttachments(ctx);
+  const firstAudio = attachments.find((att) => isAudioAttachment(att) && !att.alreadyTranscribed);
 
   if (!firstAudio) {
     return undefined;
   }
 
   try {
-    const media = [firstAudio];
+    const media = firstOnly ? [firstAudio] : attachments;
     const { agentDir, providers, activeModel } = params;
     const localPathRoots = resolveMediaAttachmentLocalRoots({ cfg, ctx });
     const providerRegistry = buildProviderRegistry(providers, cfg);
@@ -52,25 +72,36 @@ export async function transcribeFirstAudio(params: {
       localPathRoots,
       ssrfPolicy: cfg.tools?.web?.fetch?.ssrfPolicy,
     });
-    let transcript: string | undefined;
+    let result: Awaited<ReturnType<typeof runCapability>>;
     try {
-      const result = await runCapability({
+      result = await runCapability({
         capability: "audio",
         cfg,
         ctx,
         attachments: cache,
         media,
         agentDir,
+        workspaceDir: params.workspaceDir,
+        assertCurrent: params.assertCurrent,
         providerRegistry,
         config: cfg.tools?.media?.audio,
         activeModel,
       });
-      transcript = result.outputs
-        .find((entry) => entry.kind === "audio.transcription")
-        ?.text?.trim();
     } finally {
       await cache.cleanup();
     }
+    if (!firstOnly) {
+      // Retain selected and dropped indexes even without usable speech: the
+      // later media pass must not repeat this completed selection budget.
+      ctx.MediaUnderstandingDecisions = [
+        ...(ctx.MediaUnderstandingDecisions ?? []),
+        result.decision,
+      ];
+    }
+    const audioOutputs = result.outputs.filter(
+      (entry) => entry.kind === "audio.transcription" && entry.text.trim(),
+    );
+    const transcript = formatAudioTranscripts(audioOutputs).trim();
     if (!transcript) {
       return undefined;
     }
@@ -87,11 +118,14 @@ export async function transcribeFirstAudio(params: {
     // Persist transcription state on the matching fact so later normalization
     // cannot shift or lose it through a parallel index list.
     const facts = normalizeMediaFacts(ctx.media);
-    const transcribedFact = facts[firstAudio.index];
-    if (transcribedFact) {
-      facts[firstAudio.index] = { ...transcribedFact, transcribed: true };
-      ctx.media = facts;
+    for (const output of audioOutputs) {
+      const index = firstOnly ? firstAudio.index : output.attachmentIndex;
+      const fact = facts[index];
+      if (fact) {
+        facts[index] = { ...fact, transcribed: true };
+      }
     }
+    ctx.media = facts;
 
     return transcript;
   } catch (err) {

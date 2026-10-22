@@ -1,11 +1,9 @@
-// Subagent registry persistence tests cover SQLite registry restore, child
-// session timing writes, and restart cleanup behavior.
 import { describe, expect, it, vi } from "vitest";
 import "./subagent-registry.mocks.shared.js";
 import "./subagent-registry.persistence.mocks.test-support.js";
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
-import { announceSpy, createSubagentPersistenceRuntime, useSubagentPersistenceFixture } from "./subagent-registry.persistence-fixture.test-support.js";
+import { activateSubagentPersistenceRegistry, announceSpy, createSubagentPersistenceRuntime, useSubagentPersistenceFixture } from "./subagent-registry.persistence-fixture.test-support.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../../config/config.js";
 import {
@@ -44,7 +42,6 @@ import {
 import { registerSubagentOrphanTaskCases } from "./subagent-registry.persistence.orphan.test-support.js";
 import type { SubagentRunFixture } from "./subagent-registry.persistence.test-support.js";
 import {
-  canonicalSubagentRunFixtures,
   createCanonicalSubagentRunFixture,
   expectDeferredSubagentAnnouncement,
   gateSubagentRequesterSettlement,
@@ -97,10 +94,7 @@ describe("subagent registry persistence", () => {
     return await writeSubagentSessionEntry({
       stateDir: fixture.stateDir,
       agentId,
-      sessionKey: params.sessionKey,
-      sessionId: params.sessionId,
-      updatedAt: params.updatedAt,
-      abortedLastRun: params.abortedLastRun,
+      ...params,
       defaultSessionId: `sess-${agentId}-${Date.now()}`,
     });
   };
@@ -131,11 +125,9 @@ describe("subagent registry persistence", () => {
     opts?: { seedChildSessions?: boolean },
   ) =>
     persistRuns(
-      [
-        ...canonicalSubagentRunFixtures(
-          new Map(Object.entries((persisted.runs ?? {}) as Record<string, SubagentRunFixture>)),
-        ).values(),
-      ],
+      Object.values((persisted.runs ?? {}) as Record<string, SubagentRunFixture>).map(
+        createCanonicalSubagentRunFixture,
+      ),
       opts?.seedChildSessions !== false,
     );
   const endedRun = (runId: string, overrides: Partial<SubagentRunFixture> = {}) => {
@@ -149,22 +141,30 @@ describe("subagent registry persistence", () => {
     await Promise.resolve();
   };
 
-  const waitForRegistryWork = async (predicate: () => boolean | Promise<boolean>) => {
-    await vi.waitFor(async () => expect(await predicate()).toBe(true), {
-      interval: 1,
-      timeout: 5_000,
-    });
-  };
+  const waitForRegistry = (assertion: () => void | Promise<void>) =>
+    vi.waitFor(assertion, { interval: 1, timeout: 5_000 });
+  const waitForRegistryWork = (predicate: () => boolean | Promise<boolean>) =>
+    waitForRegistry(async () => expect(await predicate()).toBe(true));
 
   const restartRegistry = async () => {
     await resetSubagentRegistryForTests({ persist: false });
     await initSubagentRegistry();
-    const recoveryRuntime = createSubagentPersistenceRuntime(callGateway);
-    const gateway = {
-      recoveryRuntime,
-      resolveGatewayContext: () => gateway as never,
+    await activateSubagentPersistenceRegistry({ activateSubagentRegistry }, callGateway);
+  };
+  const timingFixture = async (
+    name: string,
+    updatedAt: number,
+    overrides: Partial<SubagentRunFixture>,
+  ) => {
+    const childSessionKey = `agent:main:subagent:${name}`;
+    const session = { sessionId: `sess-${name}`, updatedAt };
+    const storePath = await writeChildSessionEntry({ sessionKey: childSessionKey, ...session });
+    return {
+      key: childSessionKey,
+      session,
+      storePath,
+      run: makeRun(`run-${name}`, { childSessionKey, ...overrides }),
     };
-    await activateSubagentRegistry(() => gateway as never);
   };
 
   it.each([false, true])(
@@ -173,38 +173,25 @@ describe("subagent registry persistence", () => {
       await fixture.allocateStateDir();
 
       const startedAt = Date.now();
-      const storePath = await writeChildSessionEntry({
-        sessionKey: "agent:main:subagent:stale-timing",
-        sessionId: "sess-stale-timing",
-        updatedAt: startedAt - 1,
+      const { run, storePath, key } = await timingFixture("stale-timing", startedAt - 1, {
+        createdAt: startedAt,
+        startedAt,
+        endedAt: startedAt + 500,
+        outcome: { status: "ok" },
       });
-      const write = persistSubagentSessionTiming(
-        makeRun("run-stale-timing", {
-          childSessionKey: "agent:main:subagent:stale-timing",
-          createdAt: startedAt,
-          execution: {
-            status: "terminal",
-            startedAt,
-            endedAt: startedAt + 500,
-            outcome: { status: "ok" },
-          },
-        }),
-        {
-          isCurrentGeneration: () => isCurrent,
-          assertCommitAllowed: () => {
-            throw new Error("timing commit denied");
-          },
+      const write = persistSubagentSessionTiming(run, {
+        isCurrentGeneration: () => isCurrent,
+        assertCommitAllowed: () => {
+          throw new Error("timing commit denied");
         },
-      );
+      });
       if (isCurrent) {
         await expect(write).rejects.toThrow("timing commit denied");
       } else {
         await expect(write).resolves.toBeUndefined();
       }
 
-      const persisted = (await readSubagentSessionStore(storePath))[
-        "agent:main:subagent:stale-timing"
-      ];
+      const persisted = (await readSubagentSessionStore(storePath))[key];
       expect(persisted).toMatchObject({
         sessionId: "sess-stale-timing",
         updatedAt: startedAt - 1,
@@ -220,14 +207,16 @@ describe("subagent registry persistence", () => {
 
     const startedAt = Date.now();
     const completedAt = startedAt + 500;
-    const storePath = await writeChildSessionEntry({
-      sessionKey: "agent:main:subagent:kill-race",
-      sessionId: "sess-kill-race",
-      updatedAt: completedAt,
+    const { run, storePath, key } = await timingFixture("kill-race", completedAt, {
+      createdAt: startedAt,
+      endedReason: "subagent-killed",
+      startedAt,
+      endedAt: completedAt + 1,
+      outcome: { status: "error", error: "manual kill" },
     });
     const store = await readSubagentSessionStore(storePath);
-    await replaceSessionEntry({ storePath, sessionKey: "agent:main:subagent:kill-race" }, {
-      ...store["agent:main:subagent:kill-race"],
+    await replaceSessionEntry({ storePath, sessionKey: key }, {
+      ...store[key],
       status: "done",
       startedAt,
       endedAt: completedAt,
@@ -235,21 +224,9 @@ describe("subagent registry persistence", () => {
       abortedLastRun: true,
     } as SessionEntry);
 
-    await persistSubagentSessionTiming(
-      makeRun("run-kill-race", {
-        childSessionKey: "agent:main:subagent:kill-race",
-        createdAt: startedAt,
-        endedReason: "subagent-killed",
-        execution: {
-          status: "terminal",
-          startedAt,
-          endedAt: completedAt + 1,
-          outcome: { status: "error", error: "manual kill" },
-        },
-      }),
-    );
+    await persistSubagentSessionTiming(run);
 
-    const persisted = (await readSubagentSessionStore(storePath))["agent:main:subagent:kill-race"];
+    const persisted = (await readSubagentSessionStore(storePath))[key];
     expect(persisted).toMatchObject({
       status: "done",
       startedAt,
@@ -263,14 +240,16 @@ describe("subagent registry persistence", () => {
     "preserves the retained session row when late timing settles during %s",
     async (kind) => {
       await fixture.allocateStateDir();
-      const childSessionKey = "agent:main:subagent:mutation-timing";
-      const session = { sessionId: "sess-mutation-timing", updatedAt: 999 };
-      const storePath = await writeChildSessionEntry({ sessionKey: childSessionKey, ...session });
-      const retained = (await readSubagentSessionStore(storePath))[childSessionKey];
+      const { key, session, storePath, run } = await timingFixture("mutation-timing", 999, {
+        startedAt: 1_000,
+        endedAt: 1_500,
+        outcome: { status: "ok" },
+      });
+      const retained = (await readSubagentSessionStore(storePath))[key];
       const current = await captureSessionEntryCurrentCheckAsyncInternal({
         agentId: "main",
         storePath,
-        sessionKey: childSessionKey,
+        sessionKey: key,
       });
       if (!current.entryCurrent || current.entryCurrent.source.path === storePath) {
         current.release();
@@ -279,7 +258,7 @@ describe("subagent registry persistence", () => {
       const entered = createDeferred();
       const released = createDeferred();
       const blocker = patchSessionEntryCore(
-        { storePath, sessionKey: childSessionKey },
+        { storePath, sessionKey: key },
         async () => {
           entered.resolve();
           await released.promise;
@@ -291,24 +270,16 @@ describe("subagent registry persistence", () => {
       try {
         await entered.promise;
         // Start the real timing writer before destructive ownership is acquired.
-        timing = persistSubagentSessionTiming(
-          makeRun("run-mutation-timing", {
-            childSessionKey,
-            startedAt: 1_000,
-            endedAt: 1_500,
-            outcome: { status: "ok" },
-          }),
-          { sessionEntryCurrent: current.entryCurrent },
-        );
+        timing = persistSubagentSessionTiming(run, { sessionEntryCurrent: current.entryCurrent });
         await runSessionMutation({
           scope: storePath,
-          identities: [childSessionKey, session.sessionId],
+          identities: [key, session.sessionId],
           kind,
           run: async () => {
             released.resolve();
             await blocker;
             await timing;
-            expect((await readSubagentSessionStore(storePath))[childSessionKey]).toEqual(retained);
+            expect((await readSubagentSessionStore(storePath))[key]).toEqual(retained);
           },
         });
       } finally {
@@ -327,11 +298,7 @@ describe("subagent registry persistence", () => {
     "persists terminal timing inside ordinary kill ownership (queued=%s)",
     async (queued) => {
       await fixture.allocateStateDir();
-      const childSessionKey = "agent:main:subagent:kill-timing";
-      const session = { sessionId: "sess-kill-timing", updatedAt: 999 };
-      const storePath = await writeChildSessionEntry({ sessionKey: childSessionKey, ...session });
-      const run = makeRun("run-kill-timing", {
-        childSessionKey,
+      const { key, session, storePath, run } = await timingFixture("kill-timing", 999, {
         collect: queued,
         startedAt: queued ? undefined : 1_000,
         endedAt: 1_500,
@@ -341,7 +308,7 @@ describe("subagent registry persistence", () => {
 
       await runSessionMutation({
         scope: storePath,
-        identities: [childSessionKey, session.sessionId],
+        identities: [key, session.sessionId],
         diagnosticLabel: "subagent-kill",
         run: () =>
           persistSubagentSessionTiming(run, {
@@ -352,7 +319,7 @@ describe("subagent registry persistence", () => {
           }),
       });
 
-      const persisted = (await readSubagentSessionStore(storePath))[childSessionKey];
+      const persisted = (await readSubagentSessionStore(storePath))[key];
       expect(persisted).toMatchObject({
         sessionId: session.sessionId,
         updatedAt: 999,
@@ -560,23 +527,14 @@ describe("subagent registry persistence", () => {
     let readiness: Promise<void> | undefined;
     try {
       await restartRegistry();
-      await vi.waitFor(
-        () => expect(announceSpy, "first announcement admitted").toHaveBeenCalledOnce(),
-        {
-          timeout: 5_000,
-          interval: 1,
-        },
+      await waitForRegistry(() =>
+        expect(announceSpy, "first announcement admitted").toHaveBeenCalledOnce(),
       );
-      readiness = vi
-        .waitFor(
-          () => {
-            expectDeferredSubagentAnnouncement(loadSubagentRegistryFromSqlite().get(runId), runId);
-          },
-          { timeout: 5_000, interval: 1 },
-        )
-        .then(() => {
-          retryReady = true;
-        });
+      readiness = waitForRegistry(() => {
+        expectDeferredSubagentAnnouncement(readPersistedRun(runId), runId);
+      }).then(() => {
+        retryReady = true;
+      });
       await vi.dynamicImportSettled();
       const held = loadSubagentRegistryFromSqlite().get(runId);
       expect(held?.cleanupHandled, "serialized lock is not retry readiness").toBe(false);
@@ -585,11 +543,9 @@ describe("subagent registry persistence", () => {
         "acknowledged runtime lock remains held; decoded durable row is restart-ready",
       ).toBe(true);
       expect(
-        held?.delivery?.attemptCount,
+        [held?.delivery?.attemptCount, held?.delivery?.payload, held?.delivery?.nextAttemptAt],
         "no deferral before announcement settles",
-      ).toBeUndefined();
-      expect(held?.delivery?.payload).toBeUndefined();
-      expect(held?.delivery?.nextAttemptAt).toBeUndefined();
+      ).toEqual([undefined, undefined, undefined]);
       expect(retryReady, "retry readiness must remain pending while announcement is held").toBe(
         false,
       );
@@ -601,12 +557,8 @@ describe("subagent registry persistence", () => {
       announceSpy.mockResolvedValueOnce("delivered");
       const beforeRetry = Date.now();
       await restartRegistry();
-      await vi.waitFor(
-        () => expect(settlement.run, "retry reached requester settlement").toHaveBeenCalledOnce(),
-        {
-          timeout: 5_000,
-          interval: 1,
-        },
+      await waitForRegistry(() =>
+        expect(settlement.run, "retry reached requester settlement").toHaveBeenCalledOnce(),
       );
       expect(announceSpy, "explicit retry delivered").toHaveBeenCalledTimes(2);
       const delivered = loadSubagentRegistryFromSqlite().get(runId);
@@ -748,7 +700,6 @@ describe("subagent registry persistence", () => {
     const now = Date.now();
     const entry = makeRun(runId, {
       createdAt: now,
-      startedAt: now,
       childSessionIdentity: {
         sessionId:
           change === "worker read failure"
@@ -863,16 +814,11 @@ describe("subagent registry persistence", () => {
       const expected = readPersistedRun(runId);
       if (change === "terminal capture refusal") {
         const failure = new Error("Synthetic cleanup capture refusal");
-        const capture = vi
-          .spyOn(stateContext, "captureOpenClawStateWorkerContext")
-          .mockImplementationOnce(() => {
-            throw failure;
-          });
-        try {
-          expect(() => resumeSubagentRun(runId)).toThrow(failure);
-        } finally {
-          capture.mockRestore();
-        }
+        using capture = vi.spyOn(stateContext, "captureOpenClawStateWorkerContext");
+        capture.mockImplementationOnce(() => {
+          throw failure;
+        });
+        expect(() => resumeSubagentRun(runId)).toThrow(failure);
       }
       if (admittedDrain) {
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -880,16 +826,11 @@ describe("subagent registry persistence", () => {
         const cleanup = vi
           .spyOn(announceCleanup, "startSubagentAnnounceCleanupFlow")
           .mockImplementationOnce((...args) => {
-            const capture = vi
-              .spyOn(stateContext, "captureOpenClawStateWorkerContext")
-              .mockImplementationOnce(() => {
-                throw new Error("Synthetic admitted cleanup capture refusal");
-              });
-            try {
-              return startCleanup(...args);
-            } finally {
-              capture.mockRestore();
-            }
+            using capture = vi.spyOn(stateContext, "captureOpenClawStateWorkerContext");
+            capture.mockImplementationOnce(() => {
+              throw new Error("Synthetic admitted cleanup capture refusal");
+            });
+            return startCleanup(...args);
           });
         restoreCleanup = () => cleanup.mockRestore();
         markGatewayRestartDraining();
@@ -1017,22 +958,18 @@ describe("subagent registry persistence", () => {
       sessionId: "sess-resume-guard",
       updatedAt: now,
     });
-    await addSubagentRunForTests({
-      runId,
-      childSessionKey,
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "resume orphan guard",
-      cleanup: "keep",
-      createdAt: now - 50,
-      startedAt: now - 25,
-      endedAt: now,
-      execution: { status: "terminal", startedAt: now - 25, endedAt: now },
-      completion: { required: false },
-      delivery: { status: "pending" },
-      suppressAnnounceReason: "steer-restart",
-      cleanupHandled: false,
-    });
+    await addSubagentRunForTests(
+      makeRun(runId, {
+        childSessionKey,
+        createdAt: now - 50,
+        startedAt: now - 25,
+        endedAt: now,
+        completion: { required: false },
+        delivery: { status: "pending" },
+        suppressAnnounceReason: "steer-restart",
+        cleanupHandled: false,
+      }),
+    );
     await removeChildSessionEntry(childSessionKey);
 
     resumeSubagentRun(runId);

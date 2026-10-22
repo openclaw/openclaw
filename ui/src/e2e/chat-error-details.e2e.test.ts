@@ -214,7 +214,15 @@ suite.define(() => {
         await copy.click();
         await polledClipboard(page).toBe(safeDiagnostic);
         expect(await details.isVisible()).toBe(true);
+        await summary.press("Enter");
+        await polledVisible(details).toBe(false);
         await expectMobileFit(page, alert);
+        await polledVisible(details).toBe(false);
+        await summary.press("Enter");
+        await polledVisible(details).toBe(true);
+        expect(await details.textContent()).toBe(safeDiagnostic);
+        await exactButton(alert, "Copy error").click();
+        await polledClipboard(page).toBe(safeDiagnostic);
         await summary.press("Enter");
         await polledVisible(details).toBe(false);
       });

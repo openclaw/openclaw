@@ -11,6 +11,7 @@ import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/
 import {
   hasSqliteWorkerOutcomeUnknown,
   SqliteWorkerError,
+  wrapSqliteWorkerError,
 } from "../../infra/sqlite-worker-contract.js";
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import { captureSessionMessageAdmission } from "./session-manager-message-admission.js";
@@ -92,7 +93,7 @@ export async function appendSessionManagerActor(input: {
     return finish(captured, new Error("Session actor reply contradicted its captured commit"));
   }
   if (outcome.kind === "unknown") {
-    const error = new SqliteWorkerError(outcome.error.message, "outcome-unknown");
+    const error = wrapSqliteWorkerError(outcome.error.message, "outcome-unknown", outcome.error);
     recordModelFallbackStop(error);
     throw error;
   }

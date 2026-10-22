@@ -28,13 +28,6 @@ export async function runDmThreadReplyOverrideScenario(context: MatrixQaScenario
     label: "DM thread override reply",
   });
   return {
-    artifacts: {
-      driverEventId: result.driverEventId,
-      reply: result.reply,
-      roomKey: MATRIX_QA_DRIVER_DM_ROOM_KEY,
-      token: result.token,
-      triggerBody: result.body,
-    },
     details: [
       `room key: ${MATRIX_QA_DRIVER_DM_ROOM_KEY}`,
       `room id: ${roomId}`,

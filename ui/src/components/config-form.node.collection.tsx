@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { For, Show, createMemo } from "solid-js";
+import { copyWithPathPatch } from "../lib/config-form-utils.ts";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
 import { ConfigFormArrayIdentity } from "./config-form-array-identity.ts";
 import {
@@ -8,7 +9,6 @@ import {
   type ConfigFormCollectionDraftCommit,
   type ConfigFormCollectionDraftProps,
 } from "./config-form-collection-draft.tsx";
-import { copyWithPathPatch } from "./config-form-copy-on-write.ts";
 import { arrayItemSchema } from "./config-form.array-items.ts";
 import {
   arrayConstraintCandidates,
@@ -238,7 +238,6 @@ function resolveArrayContent(params: ConfigNodeRenderParams, rows: ConfigFormArr
     itemSchemaAt,
     atomicCandidate,
     canAppend,
-    autoCandidate,
     draftId,
     draftProps,
     patchArrayItem,

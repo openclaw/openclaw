@@ -84,7 +84,6 @@ export async function restoreColdLoadWarmState(
   // Unload pagehide writers first; Playwright setStorageState would also clear the HTTP cache.
   await page.mainFrame().goto(resetUrl);
   await page.unroute(resetUrl);
-  await page.evaluate("globalThis.__name = (fn) => fn");
   await page.evaluate(
     async ({ storage: saved, url: deepLink }) => {
       const databases: Record<string, Record<string, unknown[]>> = {

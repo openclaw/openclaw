@@ -953,7 +953,7 @@ describe("gatherDaemonStatus", () => {
     const status = await gatherStatus({ probe: false, deep: true });
 
     expect(inspectWindowsGatewayFirewall).toHaveBeenCalledWith(
-      expect.objectContaining({ bind: "lan", mode: "quick", port: 19001 }),
+      expect.objectContaining({ bind: "lan", port: 19001 }),
     );
     expect(status.gateway?.windowsFirewall).toMatchObject({
       severity: "warning",
@@ -1086,9 +1086,6 @@ describe("gatherDaemonStatus", () => {
     resolveGatewayBindHost.mockImplementationOnce(async () => {
       throw new Error("uv_interface_addresses failed");
     });
-    pickPrimaryTailnetIPv4.mockImplementationOnce(() => {
-      throw new Error("uv_interface_addresses failed");
-    });
 
     const status = await gatherStatus();
 
@@ -1096,7 +1093,6 @@ describe("gatherDaemonStatus", () => {
     expect(status.gateway?.bindHost).toBe("127.0.0.1");
     expect(status.gateway?.probeUrl).toBe("wss://127.0.0.1:19001");
     expect(status.gateway?.probeNote).toContain("interface discovery failed");
-    expect(status.gateway?.probeNote).toContain("tailnet addresses");
   });
 
   registerStatusTimeoutTests({

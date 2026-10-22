@@ -44,7 +44,10 @@ import {
   resolveSandboxedSessionToolContext,
   resolveSessionToolAccess,
 } from "./sessions-access.js";
-import { readSessionCommunicationEndpoint } from "./sessions-send-communication-endpoint.js";
+import {
+  matchesSessionCommunicationParent,
+  readSessionCommunicationEndpoint,
+} from "./sessions-send-communication-endpoint.js";
 
 /** A current permission decision rejected delivery, rather than an unavailable dependency. */
 export class SessionCommunicationDeniedError extends Error {}
@@ -233,10 +236,13 @@ export async function prepareSessionsSendCommunication(params: {
         entry: undefined,
       });
       if (
-        !parent.entry ||
-        (child.entry?.parentSessionId && child.entry.parentSessionId !== parent.entry.sessionId)
+        !(await matchesSessionCommunicationParent(
+          parent,
+          child.entry?.parentSessionId,
+          assertSource,
+        ))
       ) {
-        throw new Error("The communication policy's parent session is no longer current.");
+        throw new Error("The child's parent session lineage changed; re-spawn the child.");
       }
       chain.push(parent);
     }
@@ -495,8 +501,11 @@ export async function prepareSessionsSendCommunication(params: {
         entry.sessionId !== transition.current.sessionId ||
         entry.lifecycleRevision !== transition.current.lifecycleRevision ||
         entry.lifecycleRevision !== expected.lifecycleRevision ||
-        communicationEntryBinding({ ...entry, sessionId: expected.sessionId }) !==
-          communicationEntryBinding(expected) ||
+        communicationEntryBinding({
+          ...entry,
+          sessionId: expected.sessionId,
+          previousSessionId: expected.previousSessionId,
+        }) !== communicationEntryBinding(expected) ||
         (expected.sessionId !== entry.sessionId &&
           (transition.previous?.sessionId !== expected.sessionId ||
             transition.previous.lifecycleRevision !== expected.lifecycleRevision))
@@ -509,7 +518,7 @@ export async function prepareSessionsSendCommunication(params: {
         if (communicationEndpointBinding(endpoint) !== previousBinding) {
           return endpoint;
         }
-        // The compaction owner alone authorizes this identity change. Other facts stay sticky.
+        // Only compaction can advance this identity and its predecessor; policy changes stay sticky.
         if (changedBindings.get(endpoint) === committedBinding) {
           changedBindings.delete(endpoint);
         }

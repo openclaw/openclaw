@@ -25,54 +25,6 @@ function largestFittingValue(min: number, max: number, fits: (value: number) => 
   return lo;
 }
 
-function buildSkillsLimitNote(params: {
-  truncated: boolean;
-  format: SkillsPromptFormat;
-  included: number;
-  total: number;
-}): string {
-  if (params.truncated) {
-    const compactDetails =
-      params.format.kind === "compact"
-        ? ` (compact format, ${params.format.descriptionMaxChars > 0 ? "descriptions shortened" : "descriptions omitted"})`
-        : "";
-    return `⚠️ Skills truncated: included ${params.included} of ${params.total}${compactDetails}. Run \`openclaw skills check\` to audit.`;
-  }
-  if (params.format.kind === "compact") {
-    const compactDetails =
-      params.format.descriptionMaxChars > 0 ? "descriptions shortened" : "descriptions omitted";
-    return `⚠️ Skills catalog using compact format (${compactDetails}). Run \`openclaw skills check\` to audit.`;
-  }
-  return "";
-}
-
-function buildRenderedSkillsPrompt(params: {
-  skills: Skill[];
-  total: number;
-  format: SkillsPromptFormat;
-  includeLimitNote?: boolean;
-}): string {
-  // resolveCodeModeSkills in src/agents/code-mode-skills.ts parses this exact format; update both together.
-  // The production-renderer parity test in src/agents/code-mode.skills.test.ts enforces this coupling.
-  const truncated = params.skills.length < params.total;
-  const limitNote =
-    params.includeLimitNote === false
-      ? ""
-      : buildSkillsLimitNote({
-          truncated,
-          format: params.format,
-          included: params.skills.length,
-          total: params.total,
-        });
-  const catalog =
-    params.format.kind === "compact"
-      ? formatSkillsCompactForPrompt(params.skills, {
-          descriptionMaxChars: params.format.descriptionMaxChars,
-        })
-      : formatSkillsForPromptCore(params.skills);
-  return [limitNote, catalog].filter(Boolean).join("\n");
-}
-
 type SkillsPromptParams = {
   skills: Skill[];
   maxSkillsInPrompt?: number;
@@ -105,8 +57,31 @@ export function prepareSkillsForPrompt(params: SkillsPromptParams): {
     format: SkillsPromptFormat,
     includeLimitNote = true,
   ): string | undefined => {
+    // resolveCodeModeSkills in src/agents/code-mode-skills.ts parses this exact format; update both together.
+    // The production-renderer parity test in src/agents/code-mode.skills.test.ts enforces this coupling.
+    const truncated = skills.length < total;
+    let limitNote = "";
+    if (includeLimitNote) {
+      if (truncated) {
+        const compactDetails =
+          format.kind === "compact"
+            ? ` (compact format, ${format.descriptionMaxChars > 0 ? "descriptions shortened" : "descriptions omitted"})`
+            : "";
+        limitNote = `⚠️ Skills truncated: included ${skills.length} of ${total}${compactDetails}. Run \`openclaw skills check\` to audit.`;
+      } else if (format.kind === "compact") {
+        const compactDetails =
+          format.descriptionMaxChars > 0 ? "descriptions shortened" : "descriptions omitted";
+        limitNote = `⚠️ Skills catalog using compact format (${compactDetails}). Run \`openclaw skills check\` to audit.`;
+      }
+    }
+    const catalog =
+      format.kind === "compact"
+        ? formatSkillsCompactForPrompt(skills, {
+            descriptionMaxChars: format.descriptionMaxChars,
+          })
+        : formatSkillsForPromptCore(skills);
     // Reuse the catalog and limit notice when the optional remote note does not fit.
-    const prompt = buildRenderedSkillsPrompt({ skills, total, format, includeLimitNote });
+    const prompt = [limitNote, catalog].filter(Boolean).join("\n");
     if (
       params.remoteNote &&
       params.remoteNote.length + prompt.length + (prompt ? 1 : 0) <= maxSkillsPromptChars

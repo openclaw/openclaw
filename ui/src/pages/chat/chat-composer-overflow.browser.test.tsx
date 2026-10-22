@@ -15,6 +15,7 @@ import type { ChatAttachmentControlsProps } from "./components/chat-attachment-c
 import { AttachmentPreview } from "./components/chat-attachments.tsx";
 import { ChatGoal } from "./components/chat-composer-goal.tsx";
 import { ComposerMenu } from "./components/chat-composer-menu.tsx";
+import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { resetChatComposerState } from "./components/chat-composer-state.ts";
 import type { ChatComposerProps } from "./components/chat-composer-types.ts";
 import { ChatComposer } from "./components/chat-composer.tsx";
@@ -49,11 +50,12 @@ describe("composer overflow presentation", () => {
 
   function ComposerFixture(props: ComposerFixtureProps) {
     const Provider = composerContextWrapper(container)!;
+    const questions = createComposerQuestions(props.input.paneId, () => props.input);
     return (
       <Provider>
         <ContentPresentation value={presented}>
           {props.thread ? <div class="chat-thread" /> : null}
-          <ChatComposer {...props.input} />
+          <ChatComposer {...props.input} questions={questions} />
         </ContentPresentation>
       </Provider>
     );
@@ -133,8 +135,7 @@ describe("composer overflow presentation", () => {
             baseEnabled: false,
             missingDeps: true,
           })),
-          skillsLoading: false,
-          skillsError: false,
+          skillsRead: null,
           mcpServers: [],
           toolsEffectiveResult: null,
           toolsEffectiveLoading: false,

@@ -24,14 +24,11 @@ export interface AppRegistrationResult {
 }
 
 interface InitResponse {
-  nonce: string;
   supported_auth_methods: string[];
 }
 
 interface RawBeginResponse {
   device_code: string;
-  verification_uri: string;
-  user_code: string;
   verification_uri_complete: string;
   interval: number;
   expire_in: number;
@@ -120,7 +117,6 @@ export async function beginAppRegistration(domain: FeishuDomain = "feishu") {
   return {
     deviceCode: res.device_code,
     qrUrl: qrUrl.toString(),
-    userCode: res.user_code,
     interval:
       finiteSecondsToTimerSafeMilliseconds(res.interval) === undefined
         ? DEFAULT_REGISTRATION_POLL_INTERVAL_SECONDS

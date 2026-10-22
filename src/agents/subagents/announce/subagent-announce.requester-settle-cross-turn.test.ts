@@ -3,10 +3,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../../config/runtime-snapshot.js";
-import {
-  buildScopedSubagentRunReadIndexFromRuns,
-  hasDescendantRunAwaitingSettleFromRuns,
-} from "../registry/subagent-registry-queries.js";
+import { buildScopedSubagentRunReadIndexFromRuns } from "../registry/subagent-registry-queries.js";
 import {
   registryRuntimeMock,
   readDescendantFacts,
@@ -77,14 +74,16 @@ it.each(["older batch", "cross-agent descendant", "paused member", "pending clea
     );
     readDescendantFacts.mockImplementation(async (params) => ({
       deliveryWaitUntil: now + 300_000,
-      unsettled: hasDescendantRunAwaitingSettleFromRuns(
+      unsettled: buildScopedSubagentRunReadIndexFromRuns(
         runs,
         params.requesterSessionKey,
-        params.settledEntry.runId,
         params.requesterAgentId,
         params.requesterStorePath,
-        params.settledBefore,
         params.rootRunIds,
+      ).hasDescendantRunAwaitingSettle(
+        params.requesterSessionKey,
+        params.settledEntry.runId,
+        params.settledBefore,
       ),
       active: buildScopedSubagentRunReadIndexFromRuns(
         runs,
@@ -128,7 +127,7 @@ it.each([
     status: "delivered",
     yielded: false,
     siblings: 2,
-    retained: true,
+    retained: false,
   },
   { name: "failed delivery", status: "failed", yielded: false, siblings: 1, retained: true },
   { name: "suspended delivery", status: "suspended", yielded: false, siblings: 1, retained: true },
@@ -162,14 +161,16 @@ it.each([
     const runs = new Map([...children, long].map((entry) => [entry.runId, entry]));
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([...runs.values()]);
     readDescendantFacts.mockImplementation(async (params) => ({
-      unsettled: hasDescendantRunAwaitingSettleFromRuns(
+      unsettled: buildScopedSubagentRunReadIndexFromRuns(
         runs,
         params.requesterSessionKey,
-        params.settledEntry.runId,
         params.requesterAgentId,
         params.requesterStorePath,
-        params.settledBefore,
         params.rootRunIds,
+      ).hasDescendantRunAwaitingSettle(
+        params.requesterSessionKey,
+        params.settledEntry.runId,
+        params.settledBefore,
       ),
       active: 1,
     }));

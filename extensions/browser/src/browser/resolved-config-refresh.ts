@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { loadBrowserConfigForRuntimeRefresh } from "./config-refresh-source.js";
 import { resolveBrowserConfig, resolveProfile, type ResolvedBrowserProfile } from "./config.js";
 import { beginProfileTransition, getProfileLifecycle } from "./server-context.lifecycle.js";
-import type { BrowserServerState, ProfileRuntimeState } from "./server-context.types.js";
+import type { BrowserServerState } from "./server-context.types.js";
 
 function changedProfileInvariants(
   current: ResolvedBrowserProfile,
@@ -41,28 +41,6 @@ function changedProfileInvariants(
     changed.push("mcpArgs");
   }
   return changed;
-}
-
-function queueRemovedProfileCleanup(params: {
-  current: BrowserServerState;
-  name: string;
-  runtime: ProfileRuntimeState;
-}) {
-  params.runtime.lastTargetId = null;
-  void beginProfileTransition({
-    state: params.current,
-    runtime: params.runtime,
-    reason: "profile removed from config",
-    terminal: "config-removed",
-    closeRelay: params.runtime.profile.driver === "extension",
-    exposeReason: true,
-  })
-    .then(() => {
-      if (params.current.profiles.get(params.name) === params.runtime) {
-        params.current.profiles.delete(params.name);
-      }
-    })
-    .catch(() => {});
 }
 
 function applyResolvedConfig(
@@ -130,7 +108,21 @@ function applyResolvedConfig(
       continue;
     }
     // Failed cleanup stays visible; an explicit stop or restart repairs it.
-    queueRemovedProfileCleanup({ current, name, runtime });
+    runtime.lastTargetId = null;
+    void beginProfileTransition({
+      state: current,
+      runtime,
+      reason: "profile removed from config",
+      terminal: "config-removed",
+      closeRelay: runtime.profile.driver === "extension",
+      exposeReason: true,
+    })
+      .then(() => {
+        if (current.profiles.get(name) === runtime) {
+          current.profiles.delete(name);
+        }
+      })
+      .catch(() => {});
   }
 }
 

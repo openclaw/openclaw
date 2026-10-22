@@ -3,7 +3,7 @@ import { createOverlay } from "../../components/overlay-lifecycle.ts";
 import { registerModalSurface } from "../../components/overlay-registry.ts";
 import { t } from "../../i18n/index.ts";
 import * as attachmentInputs from "../chat/components/chat-attachment-inputs.tsx";
-import type { ChatDetailPanel } from "../chat/components/chat-detail-panel.tsx";
+import type { ChatDetailPanel } from "../chat/components/chat-sidebar-view-types.ts";
 import { DirectDictationControl } from "../chat/composer-direct-dictation.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import type { NewSessionRouteData } from "./location.ts";
@@ -55,8 +55,10 @@ function message(page: NewSessionElement): string {
   return page.querySelector<HTMLTextAreaElement>(".new-session-page__message")?.value ?? "";
 }
 
-afterEach(() => {
+afterEach(async () => {
   document.querySelectorAll("openclaw-new-session-page").forEach((element) => element.remove());
+  // Keyboard intent prefetches custom elements; finish registration before the shared graph resets.
+  await vi.dynamicImportSettled();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   sessionStorage.clear();
@@ -190,6 +192,7 @@ describe("new session draft route ownership", () => {
         );
       }
       const page = await mount(routeData("research"));
+      await enterMessage(page, "Review the attachment");
       const original = "# Original pasted content\n  preserve indentation 漢字 😀\n".repeat(50);
       const fetchMock = vi
         .fn<typeof fetch>()
@@ -202,6 +205,7 @@ describe("new session draft route ownership", () => {
       page.querySelector("textarea")?.dispatchEvent(paste);
       expect(paste.defaultPrevented).toBe(true);
       await settle(page);
+      await vi.dynamicImportSettled();
       await expect
         .poll(() => page.querySelector("openclaw-chat-pasted-text .chat-attachment-file__open"))
         .not.toBeNull();

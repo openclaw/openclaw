@@ -7,6 +7,8 @@ import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
+import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import { formatBytes } from "../../../lib/agents/display.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
@@ -18,24 +20,9 @@ import { AttachmentPreviewSkeleton } from "./chat-attachment-card-solid.tsx";
 import { readAttachmentText } from "./chat-attachment-text-reader.ts";
 import { htmlPreviewElement, isHtmlDocument } from "./chat-html-preview.ts";
 
+registerEnglishCatalog(registerChatSessionEnglish);
+
 registerEnglishCatalog(registerFilePreviewEnglish);
-
-type HtmlPreviewProperties = Pick<
-  HTMLElementTagNameMap["openclaw-chat-html-preview"],
-  "html" | "sourceIdentity" | "sessionFileSource" | "title" | "embedSandboxMode"
->;
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-chat-html-preview": HTMLAttributes<
-        HTMLElementTagNameMap["openclaw-chat-html-preview"]
-      > & {
-        [Key in keyof HtmlPreviewProperties as `prop:${Key}`]?: HtmlPreviewProperties[Key];
-      };
-    }
-  }
-}
 
 function MarkdownAttachment(props: { text: string; label: string }) {
   let article!: HTMLElement;
@@ -66,6 +53,7 @@ function MarkdownAttachment(props: { text: string; label: string }) {
 }
 
 type TextAttachmentProps = {
+  mobile: boolean;
   plainText: boolean;
   actions: SolidJSX.Element;
   embedSandboxMode: EmbedSandboxMode;
@@ -75,23 +63,6 @@ type TextAttachmentProps = {
   mimeType: string;
   sizeBytes: number | undefined;
 };
-export function isTextAttachment(rawMimeType: string, filename: string): boolean {
-  const mimeType = rawMimeType.split(";", 1)[0]?.trim().toLowerCase() ?? "";
-  if (mimeType.startsWith("text/")) {
-    return true;
-  }
-  if (
-    /^application\/(?:(?:[\w.-]+\+)?(?:json|xml)|javascript|x-javascript|yaml|x-yaml)$/.test(
-      mimeType,
-    )
-  ) {
-    return true;
-  }
-  return (
-    (!mimeType || mimeType === "application/octet-stream") &&
-    /\.(?:txt|md|markdown|html?|log|csv|tsv|json|jsonl|xml|yaml|yml)$/i.test(filename)
-  );
-}
 
 function TextAttachment(props: TextAttachmentProps, host: SolidBridgeElement<TextAttachmentProps>) {
   host.style.display = "contents";
@@ -235,7 +206,11 @@ function TextAttachment(props: TextAttachmentProps, host: SolidBridgeElement<Tex
         }}
       </Show>
       <div class="sidebar-file-toolbar">
-        <span class="sidebar-file-toolbar__type" title={props.mimeType}>
+        <span
+          ref={createTextOverflow(() => props.mimeType)}
+          class="sidebar-file-toolbar__type"
+          title={props.mimeType}
+        >
           {props.mimeType || props.label.split(".").at(-1)}
         </span>
         {props.sizeBytes !== undefined && <span>{formatBytes(props.sizeBytes)}</span>}
@@ -269,16 +244,18 @@ function TextAttachment(props: TextAttachmentProps, host: SolidBridgeElement<Tex
                   : t("chat.detailPanel.viewRawText")}
             </button>
           )}
-          <a
-            class="rail-header__action"
-            href={props.src || undefined}
-            download={props.label}
-            target="_blank"
-            rel="noreferrer"
-            aria-label={t("chat.mediaPlayer.download", { filename: props.label })}
-          >
-            <Icon name="download" />
-          </a>
+          <Show when={!props.mobile}>
+            <a
+              class="rail-header__action"
+              href={props.src || undefined}
+              download={props.label}
+              target="_blank"
+              rel="noreferrer"
+              aria-label={t("chat.mediaPlayer.download", { filename: props.label })}
+            >
+              <Icon name="download" />
+            </a>
+          </Show>
         </span>
       </div>
       {failed() ? (
@@ -329,6 +306,7 @@ export const ChatTextAttachment = defineSolidBridge<TextAttachmentProps>(
   TextAttachment,
   {
     properties: {
+      mobile: { default: false },
       plainText: { default: false },
       actions: { default: undefined, attribute: false },
       embedSandboxMode: { default: "scripts" },

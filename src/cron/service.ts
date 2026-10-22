@@ -20,12 +20,12 @@ import {
   type CronRunMode,
   type CronUpdatePrecondition,
   type CronUpdateOptions,
-  type CronWakeMode,
   createCronServiceState,
 } from "./service/state.js";
-import type { CronJob, CronJobCreate, CronJobPatch } from "./types.js";
+import type { DeferredHookWake } from "./service/wake.js";
+import type { CronJob, CronJobCreate, CronJobPatch, CronStoredJob } from "./types.js";
 
-export type { CronEvent } from "./service/state.js";
+export type { CronEvent } from "./types.js";
 
 /** Public cron service facade that owns mutable scheduler state and delegates to locked ops. */
 export class CronService implements CronServiceContract {
@@ -196,16 +196,16 @@ export class CronService implements CronServiceContract {
     return await runOps.waitForManualRun(this.state, runId, timeoutMs, signal);
   }
 
-  getJob(id: string): CronJob | undefined {
+  getJob(id: string): CronStoredJob | undefined {
     return this.state.store?.jobs.find((job) => job.id === id);
   }
 
   /** In-memory job snapshot; undefined until the store is loaded. */
-  getLoadedJobs(): readonly CronJob[] | undefined {
+  getLoadedJobs(): readonly CronStoredJob[] | undefined {
     return this.state.store?.jobs;
   }
 
-  async readJob(id: string): Promise<CronJob | undefined> {
+  async readJob(id: string): Promise<CronStoredJob | undefined> {
     return await readOps.readJob(this.state, id);
   }
 
@@ -275,13 +275,38 @@ export class CronService implements CronServiceContract {
       : this.state.deps.defaultAgentId;
   }
 
-  wake(opts: {
-    mode: CronWakeMode;
-    text: string;
-    sessionKey?: string;
-    agentId?: string;
-    commitGuard?: () => void;
-  }) {
+  wake(opts: Parameters<CronServiceContract["wake"]>[0]) {
     return runOps.wakeNow(this.state, opts);
+  }
+
+  async deferHookWake(opts: Parameters<DeferredHookWake>[0]): ReturnType<DeferredHookWake> {
+    const generation = this.state.lifecycleGeneration;
+    const commitGuard = () => {
+      opts.commitGuard();
+      if (this.state.stopped || this.state.lifecycleGeneration !== generation) {
+        throw new Error("Scheduled Hook wake owner changed; retry the request");
+      }
+    };
+    commitGuard();
+    await this.list({ includeDisabled: true });
+    commitGuard();
+    let eventOutcome: "queued" | "coalesced" | undefined;
+    const result = await runOps.wakeNow(this.state, {
+      ...opts,
+      commitGuard,
+      mode: "next-heartbeat",
+      coalescing: {
+        onOutcome: (outcome) => {
+          eventOutcome = outcome;
+        },
+      },
+    });
+    if (!result.ok) {
+      return result;
+    }
+    if (!eventOutcome) {
+      throw new Error("Deferred Hook wake omitted its event admission outcome");
+    }
+    return { ok: true, eventOutcome };
   }
 }

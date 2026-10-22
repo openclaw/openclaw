@@ -4,12 +4,12 @@ import { buildConversationIdentity } from "../../config/sessions/conversation-id
 import {
   listConversations,
   readConversation,
-  registerConversationAddresses,
+  registerConversationAddresses as registerAddresses,
 } from "../../config/sessions/conversation-registry.js";
 import {
-  bindCurrentConversationRecordAsync,
-  listCurrentConversationBindingRecordsBySessionsAsync,
-  readCurrentConversationBindingSelectionAsync,
+  bindCurrentConversationRecordAsync as bind,
+  listCurrentConversationBindingRecordsBySessionsAsync as listBindings,
+  readCurrentConversationBindingSelectionAsync as selectBindings,
 } from "../outbound/current-conversation-bindings.js";
 import type { SessionBindingRecord } from "../outbound/session-binding.types.js";
 import {
@@ -39,7 +39,7 @@ describe
         return identity;
       });
       const scope = { agentId: "main", env: process.env };
-      await registerConversationAddresses(
+      await registerAddresses(
         scope,
         [...addresses, { ...addresses[0]!, label: "final first" }],
         100,
@@ -71,12 +71,12 @@ describe
         metadata: {},
       }));
       for (const record of records) {
-        await bindCurrentConversationRecordAsync({ record });
+        await bind({ record });
       }
       const [first, second] = records;
       assert(first && second);
       expect(
-        await readCurrentConversationBindingSelectionAsync([
+        await selectBindings([
           second.conversation,
           { ...first.conversation, conversationId: "missing" },
           first.conversation,
@@ -89,24 +89,15 @@ describe
         first.targetSessionKey,
         second.targetSessionKey,
       ];
-      expect(await listCurrentConversationBindingRecordsBySessionsAsync(targets)).toEqual([
-        [],
-        [],
-        [first],
-        [],
-      ]);
-      expect(
-        await listCurrentConversationBindingRecordsBySessionsAsync(targets, {
-          channel: "demo",
-          accountId: "default",
-        }),
-      ).toEqual([[], [], [first], []]);
-      expect(
-        await listCurrentConversationBindingRecordsBySessionsAsync(targets, {
-          channel: "demo",
-          accountId: "other",
-        }),
-      ).toEqual([[second], [], [], [second]]);
+      for (const [accountId, expected] of [
+        [undefined, [[], [], [first], []]],
+        ["default", [[], [], [first], []]],
+        ["other", [[second], [], [], [second]]],
+      ] as const) {
+        expect(
+          await listBindings(targets, accountId ? { channel: "demo", accountId } : undefined),
+        ).toEqual(expected);
+      }
     });
   },
 );

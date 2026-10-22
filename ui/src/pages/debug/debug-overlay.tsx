@@ -1,4 +1,4 @@
-import { createComponent, createSignal, onCleanup, onSettled, Show } from "solid-js";
+import { Errored, lazy, Loading, onSettled, Show } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import {
   clearLazyShellAction,
@@ -28,6 +28,9 @@ type Props = {
 type Methods = { open(mode: DebugOverlayMode): void; toggle(): void };
 
 const synchronizers = new WeakMap<HTMLElement, () => void>();
+const Content = lazy(() => import("./debug-overlay-content.ts"), {
+  export: "DebugOverlayContent",
+});
 
 function Overlay(props: Props, host: SolidBridgeElement<Props, Methods>) {
   // A bridge's provider ancestry is fixed for this renderer lifetime.
@@ -35,10 +38,7 @@ function Overlay(props: Props, host: SolidBridgeElement<Props, Methods>) {
   const close = () => {
     host.mode = "closed";
   };
-  const [Content, setContent] =
-    createSignal<typeof import("./debug-overlay-content.ts").DebugOverlayContent>();
-  const [error, setError] = createSignal<{ error: unknown; stale: boolean } | null>(null);
-  let disposed = false;
+  let contentLoaded = false;
   let request: { stale: boolean } | undefined;
   let recoveryActionPending = false;
   const clearRecoveryAction = () => {
@@ -57,10 +57,9 @@ function Overlay(props: Props, host: SolidBridgeElement<Props, Methods>) {
     request = undefined;
     clearRecoveryAction();
   };
-  async function load(recover = false) {
+  async function load(recover = false, reset?: () => void) {
     const current = { stale: recover };
     request = current;
-    setError(null);
     try {
       if (
         recover &&
@@ -81,19 +80,17 @@ function Overlay(props: Props, host: SolidBridgeElement<Props, Methods>) {
       if (request !== current) {
         return;
       }
-      const module = await import("./debug-overlay-content.ts");
-      // Registration survives dismissal; a later open reuses this lazy renderer.
-      if (!disposed) {
-        setContent(() => module.DebugOverlayContent);
-        onSettled(() => synchronizers.get(host)?.());
-      }
+      reset?.();
+      // Preloading retains registration after dismissal and retires reload intent.
+      await Content.preload();
+      contentLoaded = true;
       if (request === current) {
         cancel();
       }
     } catch (failure) {
       if (request === current) {
         current.stale = isStaleChunkImportError(failure);
-        setError({ error: failure, stale: current.stale });
+        // The rendered lazy component reports the failure through Errored.
       }
     }
   }
@@ -110,10 +107,9 @@ function Overlay(props: Props, host: SolidBridgeElement<Props, Methods>) {
     stopKeydown = undefined;
     if (host.mode === "closed") {
       cancel();
-      setError(null);
     } else {
       stopKeydown = listen(document, "keydown", keydown, true);
-      if (host.contentKey !== previousKey && !Content()) {
+      if (host.contentKey !== previousKey && !contentLoaded) {
         cancel();
         recoveryActionPending = persistLazyShellAction({ eventType: DEBUG_OVERLAY_REQUEST_EVENT });
         void load();
@@ -124,15 +120,14 @@ function Overlay(props: Props, host: SolidBridgeElement<Props, Methods>) {
   onSettled(() => {
     synchronizers.set(host, synchronize);
     synchronize();
-  });
-  onCleanup(() => {
-    synchronizers.delete(host);
-    stopKeydown?.();
-    disposed = true;
-    cancel();
-    if (!host.isConnected) {
-      close();
-    }
+    return () => {
+      synchronizers.delete(host);
+      stopKeydown?.();
+      cancel();
+      if (!host.isConnected) {
+        close();
+      }
+    };
   });
   return (
     <Show when={props.mode !== "closed"}>
@@ -143,44 +138,35 @@ function Overlay(props: Props, host: SolidBridgeElement<Props, Methods>) {
         }}
         onClose={close}
         body={
-          <Show
-            when={!error()}
-            fallback={
-              <LazyViewError
-                actionLabel={t("common.retry")}
-                error={error()?.error}
-                stale={error()?.stale}
-                subtitle={t("debug.overlay.title")}
-                onRetry={() => void load(error()?.stale)}
-              />
-            }
-          >
-            <Show
-              when={Content()}
-              keyed
-              fallback={
-                <Show when={props.mode === "minimized"} fallback={<DebugOverlayLoading />}>
-                  <div class="debug-overlay__compact-loading" role="status">
-                    {t("common.loading")}
-                  </div>
-                </Show>
-              }
-            >
-              {(component) => (
-                <Show when={props.contentKey + 1} keyed>
-                  {(_contentKey) =>
-                    createComponent(component, {
-                      get context() {
-                        return props.context ?? inherited;
-                      },
-                      get minimized() {
-                        return props.mode === "minimized";
-                      },
-                    })
+          <Show when={props.contentKey + 1} keyed>
+            {(_contentKey) => (
+              <Errored
+                fallback={(error, reset) => (
+                  <LazyViewError
+                    actionLabel={t("common.retry")}
+                    error={error()}
+                    stale={isStaleChunkImportError(error())}
+                    subtitle={t("debug.overlay.title")}
+                    onRetry={() => void load(isStaleChunkImportError(error()), reset)}
+                  />
+                )}
+              >
+                <Loading
+                  fallback={
+                    <Show when={props.mode === "minimized"} fallback={<DebugOverlayLoading />}>
+                      <div class="debug-overlay__compact-loading" role="status">
+                        {t("common.loading")}
+                      </div>
+                    </Show>
                   }
-                </Show>
-              )}
-            </Show>
+                >
+                  <Content
+                    context={props.context ?? inherited}
+                    minimized={props.mode === "minimized"}
+                  />
+                </Loading>
+              </Errored>
+            )}
           </Show>
         }
       />

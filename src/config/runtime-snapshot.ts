@@ -102,7 +102,6 @@ export type RuntimeConfigWriteNotification = {
   revision: number;
   fingerprint: string;
   sourceFingerprint: string | null;
-  writtenAtMs: number;
   afterWrite?: ConfigWriteAfterWrite;
   runtimeRefresh?: RuntimeConfigSnapshotRefreshOptions;
   preparedCandidate?: RuntimeConfigWritePreparedCandidate;
@@ -121,7 +120,6 @@ export type RuntimeConfigSnapshotMetadata = {
   revision: number;
   fingerprint: string;
   sourceFingerprint: string | null;
-  updatedAtMs: number;
 };
 
 let runtimeConfigSnapshot: OpenClawConfig | null = null;
@@ -223,7 +221,6 @@ function publishRuntimeConfigSnapshot(
     revision: ++runtimeConfigSnapshotRevision,
     fingerprint: configFact.fingerprint,
     sourceFingerprint: sourceConfig ? sourceFact.fingerprint : null,
-    updatedAtMs: Date.now(),
   };
   const scope = runtimeSessionPublicationChangeScope({
     previousRuntimeConfig: runtimeConfigSnapshot,

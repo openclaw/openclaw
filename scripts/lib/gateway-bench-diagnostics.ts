@@ -14,10 +14,12 @@ const CHANNELS = [
   "openclaw.session.write",
   "openclaw.session.list",
   "openclaw.worker.task",
+  "openclaw.agent-database.reservation",
   "openclaw.gateway.request.stages",
   "openclaw.git.operation",
   "openclaw.gateway.rpc",
 ] as const;
+const sources = CHANNELS.map((name) => [name, channel(name)] as const);
 const METRICS = [
   "elapsedMs",
   "durationMs",
@@ -155,15 +157,19 @@ export function startGatewayBenchDiagnostics() {
     // Offset by one because histograms accept only positive integers; zero stays zero.
     metric.histogram.record(Math.round(Math.min(value, MAX_DURATION_MS) * HISTOGRAM_SCALE) + 1);
   };
-  const subscriptions = CHANNELS.map((name) => {
-    const source = channel(name);
+  const subscriptions = sources.map(([name, source]) => {
     const listener = (message: unknown) => {
       // Node forwards subscriber throws to uncaughtException. Keep capture failures local.
       try {
         if (!isRecord(message)) {
           return;
         }
-        const operation = name === "openclaw.worker.task" ? message.worker : message.operation;
+        const operation =
+          name === "openclaw.worker.task"
+            ? message.worker
+            : name === "openclaw.agent-database.reservation"
+              ? (message.caller ?? message.operation)
+              : message.operation;
         if (typeof operation !== "string" || !/^[a-zA-Z0-9_.-]{1,160}$/.test(operation)) {
           return;
         }

@@ -10,6 +10,7 @@ import type {
   SessionTranscriptTurnMutationResult,
 } from "../config/sessions/goals-operations.types.js";
 import type { SessionInputLifecycleAdmission } from "../config/sessions/restart-resume.js";
+import type { SessionMessageRewriteResult } from "../config/sessions/session-message-rewrite.types.js";
 import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type {
   SessionTranscriptTurnExpectedState,
@@ -213,6 +214,11 @@ type UserTurnPersistenceOptions = {
   cwd?: string;
 };
 
+export type PreparedModelPromptProjection = {
+  intent: { anchor: TranscriptEntryAnchor; text: string };
+  onCommitted: (result: SessionMessageRewriteResult | null) => Promise<PersistedUserTurnMessage>;
+};
+
 export type UserTurnTranscriptRecorder = {
   readonly message: PersistedUserTurnMessage | undefined;
   resolveMessage: () => Promise<PersistedUserTurnMessage | undefined>;
@@ -253,6 +259,11 @@ export type UserTurnTranscriptRecorder = {
     text: string,
     assertCurrent: () => void,
   ) => Promise<PersistedUserTurnMessage>;
+  /** Prepare a projection for the carrier's actor commit without publishing it early. */
+  prepareModelPromptProjection?: (
+    text: string,
+    assertCurrent: () => void,
+  ) => Promise<PreparedModelPromptProjection | undefined>;
   getAdmissionReceipt: () => UserTurnTranscriptAdmissionReceipt | undefined;
   /** Persistence and `waitForRuntimePersistence` settle the handler's write and reject on its failure. */
   setAdmissionHandler?: (

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { assignSessionOwner, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { attributeDelegatedSessionCreator } from "../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
@@ -131,6 +132,84 @@ describe("creator namespace authorization", () => {
       }
     });
   });
+
+  it.each([true, false])(
+    "uses delegated attribution for discovery and creator rights, not the legacy actor or assignee (human: %s)",
+    async (hasHuman) => {
+      await withOpenClawTestState(
+        { scenario: "minimal", prepareProfileCatalog: true },
+        async () => {
+          const profiles = ["causal", "isolation", "assignee"].map((name) =>
+            ensureProfileForEmail(name + "@example.test"),
+          );
+          const [causal, isolation, assignee] = profiles;
+          using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+          const cfg: OpenClawConfig = {
+            gateway: {
+              roles: {
+                default: "reader",
+                definitions: {
+                  reader: {
+                    sessions: { others: "none" },
+                    agents: "*",
+                    scopes: ["operator.read", "operator.write"],
+                  },
+                },
+              },
+            },
+          };
+          setRuntimeConfigSnapshot(cfg);
+          const sessionKey = "agent:main:delegated-creator";
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey },
+            {
+              sessionId: "delegated-creator",
+              updatedAt: 1,
+              createdVia: "spawn",
+              visibility: "draft",
+              createdActor: attributeDelegatedSessionCreator(
+                { type: "human", source: "profile", id: isolation!.id },
+                hasHuman ? causal!.id : undefined,
+                "main",
+              ),
+            },
+          );
+          assignSessionOwner(
+            { agentId: "main", sessionKey },
+            {
+              owner: { type: "human", id: assignee!.id },
+              assignedBy: { type: "human", id: causal!.id },
+            },
+          );
+          const target = await resolveSessionSharingTargetAsync({ cfg, sessionKey });
+          if (!target) {
+            throw new Error("missing persisted delegated session");
+          }
+          for (const profile of profiles) {
+            const client = {
+              connect: { scopes: ["operator.read", "operator.write"] },
+              authenticatedUserProfile: { profileId: profile.id },
+            } as GatewayClient;
+            const expectedCreator = hasHuman && profile.id === causal!.id;
+            expect(resolveSessionSharingRole({ cfg, client, target, isMember: false })).toBe(
+              expectedCreator ? "owner" : "viewer",
+            );
+            expect(createSessionListEntryFilter({ cfg, client })?.(sessionKey, target.entry)).toBe(
+              expectedCreator,
+            );
+            expect(
+              await canReceivePreparedSessionEvent({
+                cfg,
+                client: client as never,
+                sessionKeys: [sessionKey],
+              }),
+            ).toBe(expectedCreator);
+          }
+          expect(target.entry.createdActor?.id).toBe(isolation!.id);
+        },
+      );
+    },
+  );
 
   it("resolves profile tombstones after warming event snapshots without rewriting creators", async () => {
     await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {

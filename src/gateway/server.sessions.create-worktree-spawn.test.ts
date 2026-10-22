@@ -337,6 +337,23 @@ test.each([
   },
 );
 
+test("worktree spawns inherit the managed parent when the default workspace is unavailable", async () => {
+  const { entry: parent } = await createManagedProjectParent(true);
+  const defaultWorkspace = path.join(state.root, "non-git-workspace");
+  await fs.rmdir(defaultWorkspace);
+  await fs.writeFile(defaultWorkspace, "unavailable workspace");
+
+  const child = await createChild();
+  expect(readEntry(child.key)).toMatchObject({
+    parentSessionId: parent.sessionId,
+    sandbox: "required",
+    worktree: { id: child.worktree.id, repoRoot: repository },
+  });
+  expect(child.worktree.path).not.toBe(parent.spawnedCwd);
+  expect(await readReadme(child.worktree.path)).toBe("selected-project\n");
+  expect(await fs.readFile(defaultWorkspace, "utf8")).toBe("unavailable workspace");
+});
+
 test("required project preparation isolates host filters without rejecting the registered source", async () => {
   await createManagedProjectParent(true);
   const marker = path.join(state.root, "host-filter-marker");

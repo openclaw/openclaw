@@ -135,7 +135,7 @@ describe("replaceDirectoryContents", () => {
 
     await replace(DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS);
 
-    await expectPathMissing(path.join(target, "Hooks"));
+    expect(await fs.readdir(target)).not.toContain("Hooks");
     expect(await fs.readFile(path.join(target, "safe.txt"), "utf8")).toBe("ok");
     await expectFiles(target, protectedFiles);
     for (const file of Object.keys(protectedFiles)) {

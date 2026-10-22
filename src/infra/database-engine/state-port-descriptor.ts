@@ -24,12 +24,7 @@ import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../sqlite-schem
 import { extractSqliteTableSchema } from "../sqlite-schema-sql.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import { openEngineStore } from "./open.js";
-import {
-  DatabasePortDataError,
-  inspectSqlitePortSchema,
-  type PortDescriptor,
-  type PortTable,
-} from "./port-descriptor.js";
+import { DatabasePortDataError, type PortDescriptor, type PortTable } from "./port-descriptor.js";
 
 export async function loadStatePortDescriptor(
   sourceVersion = OPENCLAW_STATE_SCHEMA_VERSION,
@@ -42,21 +37,18 @@ export async function loadStatePortDescriptor(
       return backup;
     }
     // v28 appends publication draft choices; v24-v26 additionally retain older indexes.
-    // Pin these predecessor shapes so later column changes need their own descriptor.
+    // v29 removes credential tables; v30 only fences automation policies.
     if (
       backup ||
-      OPENCLAW_STATE_SCHEMA_VERSION !== 29 ||
-      ![24, 25, 26, 27, 28].includes(sourceVersion)
+      OPENCLAW_STATE_SCHEMA_VERSION !== 30 ||
+      ![24, 25, 26, 27, 28, 29].includes(sourceVersion)
     ) {
       throw new DatabasePortDataError(
         `Missing shared-state PostgreSQL backup descriptor for version ${sourceVersion}`,
       );
     }
   }
-  const source =
-    sourceVersion !== OPENCLAW_STATE_SCHEMA_VERSION
-      ? statePostgresRuntime.clientCredentialSource
-      : undefined;
+  const source = sourceVersion < 29 ? statePostgresRuntime.clientCredentialSource : undefined;
   // The generated catalog owns these tagged facts; project only the copy fields.
   const isColumn = (
     fact: (typeof statePostgresRuntime.expectedCatalog)[number],
@@ -145,16 +137,14 @@ export async function loadStatePortDescriptor(
         );
       }
       assertOpenClawStateDatabaseForMaintenance(db, { pathname: "shared-state port source" });
-      const migrationRequired =
+      const needsPhaseColumn =
         tableHasColumn(db, "agent_deletion_journal", "agent_id") &&
         !tableHasColumn(db, "agent_deletion_journal", "phase");
-      const pendingColumns: Record<string, readonly string[]> = migrationRequired
+      const pendingColumns: Record<string, readonly string[]> = needsPhaseColumn
         ? { agent_deletion_journal: ["phase"] }
         : {};
-      if (migrationRequired) {
-        inspectSqlitePortSchema(db, descriptor, pendingColumns);
-      }
-      return { version, migrationRequired, pendingColumns };
+      // First-use columns are valid absent; porting completes them in its private copy.
+      return { version, migrationRequired: false, pendingColumns };
     },
     migrateSqliteSource(file, _version, assertCurrent) {
       using db = openNodeSqliteDatabase(file);

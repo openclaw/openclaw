@@ -31,7 +31,6 @@ function makeTask(overrides: Partial<MediaGenerationOperation>): MediaGeneration
     requesterSessionKey: "agent:main",
     task: "running task",
     status: "running",
-    createdAt: Date.now(),
     ...overrides,
   };
 }
@@ -47,7 +46,7 @@ function expectActiveTask(task: MediaGenerationOperation | undefined) {
   return task!;
 }
 
-function completedImage(name: string, createdAt: number, endedAt: number) {
+function completedImage(name: string, endedAt: number) {
   return makeTask({
     taskId: `task-${name}`,
     runId: `run-${name}`,
@@ -55,7 +54,6 @@ function completedImage(name: string, createdAt: number, endedAt: number) {
     task: `${name} prompt`,
     requestKey: `image-request:${name}`,
     status: "succeeded",
-    createdAt,
     endedAt,
     progressSummary: `Generated ${name} image`,
   });
@@ -118,8 +116,8 @@ describe("image generation task status", () => {
   it("preserves earlier recent request keys when another image request starts", async () => {
     const now = Date.now();
     mediaActivityMocks.listOperations.mockReturnValue([
-      completedImage("first", now - 30_000, now - 15_000),
-      completedImage("second", now - 20_000, now - 10_000),
+      completedImage("first", now - 15_000),
+      completedImage("second", now - 10_000),
     ]);
 
     expect(await findImageRequest("image-request:other")).toBeUndefined();
@@ -158,11 +156,11 @@ describe("image generation task status", () => {
     expect(await findImagePrompt("second prompt")).toBeUndefined();
   });
 
-  it("uses a retained completion after a long-running generation", async () => {
+  it("uses a retained completion", async () => {
     const now = Date.now();
     mediaActivityMocks.listOperations.mockReturnValue([
       {
-        ...completedImage("completed", now - 3 * 60_000, now - 1_000),
+        ...completedImage("completed", now - 1_000),
         task: "recent prompt",
         requestKey: "image-request:stale",
         progressSummary: "Generated 1 image",
@@ -179,9 +177,9 @@ describe("image generation task status", () => {
   it("does not reuse an older success after a newer matching request failed", async () => {
     const now = Date.now();
     mediaActivityMocks.listOperations.mockReturnValue([
-      completedImage("same", now - 30_000, now - 20_000),
+      completedImage("same", now - 20_000),
       {
-        ...completedImage("same", now - 10_000, now - 1_000),
+        ...completedImage("same", now - 1_000),
         taskId: "task-retry",
         runId: "run-retry",
         status: "failed",

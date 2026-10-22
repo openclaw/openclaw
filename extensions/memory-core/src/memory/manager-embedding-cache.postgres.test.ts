@@ -49,7 +49,7 @@ describe.skipIf(!connection)("PostgreSQL memory embedding cache", () => {
     write(() =>
       upsertMemoryEmbeddingCache({
         db: database,
-        cacheSize: countMemoryEmbeddingCache(database),
+        cacheSize: { size: countMemoryEmbeddingCache(database), exact: true },
         provider,
         providerKey: identity.providerKey,
         entries: () => rows,
@@ -143,7 +143,7 @@ describe.skipIf(!connection)("PostgreSQL memory embedding cache", () => {
       write(() => {
         upsertMemoryEmbeddingCache({
           db: database,
-          cacheSize: countMemoryEmbeddingCache(database),
+          cacheSize: { size: countMemoryEmbeddingCache(database), exact: true },
           provider,
           providerKey: identity.providerKey,
           entries: () => entries(129).map(({ hash }) => ({ hash, embedding: [-1, -1] })),
@@ -159,7 +159,7 @@ describe.skipIf(!connection)("PostgreSQL memory embedding cache", () => {
       write(() =>
         upsertMemoryEmbeddingCache({
           db: database,
-          cacheSize: countMemoryEmbeddingCache(database),
+          cacheSize: { size: countMemoryEmbeddingCache(database), exact: true },
           provider: { id, model: identity.model },
           providerKey: identity.providerKey,
           entries: () => [{ hash: "shared", embedding: [1, 2] }],
@@ -167,7 +167,10 @@ describe.skipIf(!connection)("PostgreSQL memory embedding cache", () => {
         }),
       );
     }
-    expect(write(() => pruneMemoryEmbeddingCache(database, 2, 1))).toBe(1);
+    expect(write(() => pruneMemoryEmbeddingCache(database, { size: 2, exact: true }, 1))).toEqual({
+      size: 1,
+      exact: true,
+    });
     withEngineStoreAdmission(() => {
       expect(db().prepare("SELECT provider, hash FROM memory_embedding_cache").all()).toEqual([
         { provider: "z", hash: "shared" },
@@ -181,8 +184,10 @@ describe.skipIf(!connection)("PostgreSQL memory embedding cache", () => {
     expect(read(rows.map(({ hash }) => hash))).toEqual(
       new Map(rows.map(({ hash, embedding }) => [hash, embedding])),
     );
-    const retained = write(() => pruneMemoryEmbeddingCache(database, 401, 300));
-    expect(retained).toBe(301);
+    const retained = write(() =>
+      pruneMemoryEmbeddingCache(database, { size: 401, exact: true }, 300),
+    );
+    expect(retained).toEqual({ size: 301, exact: true });
     expect(read(rows.map(({ hash }) => hash))).toEqual(
       new Map(rows.slice(100).map(({ hash, embedding }) => [hash, embedding])),
     );
@@ -206,7 +211,7 @@ describe.skipIf(!connection)("PostgreSQL memory embedding cache", () => {
       write(() =>
         upsertMemoryEmbeddingCache({
           db: database,
-          cacheSize: 0,
+          cacheSize: { size: 0, exact: false },
           provider: { id, model: "m" },
           providerKey,
           entries: () => [{ hash, embedding: [1, 2] }],
@@ -248,9 +253,13 @@ describe.skipIf(!connection)("PostgreSQL memory embedding cache", () => {
       ],
     );
     const preference = { identities: [{ provider: "openai", model: "m", providerKey: "k" }] };
-    expect(write(() => pruneMemoryEmbeddingCache(database, 7, 6, preference))).toBe(6);
+    expect(
+      write(() => pruneMemoryEmbeddingCache(database, { size: 7, exact: true }, 6, preference)),
+    ).toEqual({ size: 6, exact: true });
     expect(remaining()).not.toContain("orphan-older");
-    expect(write(() => pruneMemoryEmbeddingCache(database, 6, 4, preference))).toBe(4);
+    expect(
+      write(() => pruneMemoryEmbeddingCache(database, { size: 6, exact: true }, 4, preference)),
+    ).toEqual({ size: 4, exact: true });
     expect(remaining()).toEqual([
       "live-session",
       "orphan-other-key",
@@ -275,7 +284,7 @@ describe.skipIf(!connection)("PostgreSQL memory embedding cache", () => {
       write(() =>
         upsertMemoryEmbeddingCache({
           db: database,
-          cacheSize: 4,
+          cacheSize: { size: 4, exact: true },
           provider: { id: "openai", model: "m" },
           providerKey: "k",
           entries: () => [{ hash, embedding: [3, 4] }],

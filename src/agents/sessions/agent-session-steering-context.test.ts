@@ -1,10 +1,13 @@
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   createAssistantMessageEventStream,
   type Context,
   type Model,
 } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { readRuntimePromptMediaFacts } from "../../media/media-facts.js";
 import { buildInterSessionPromptContext } from "../../sessions/input-provenance.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
@@ -34,9 +37,9 @@ import {
 } from "./agent-session-loop-correctness.test-support.js";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
 import { agentSessionQueuePromptContext } from "./agent-session-prompting.js";
-import { createSyntheticSourceInfo } from "./source-info.js";
 
 registerAgentSessionLoopTestLifecycle();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type Session = Awaited<ReturnType<typeof createTestSession>>["session"];
 type BoundaryOptions = NonNullable<Parameters<typeof normalizeMessagesForLlmBoundary>[1]>;
@@ -162,9 +165,9 @@ async function withHeldPrompt<T>(
 it("orders operator context and renews runtime facts after a later extension message", async () => {
   const requests = captureResponses();
   const extensionMessage = extension("Hook context");
-  const loader = createResourceLoader(
-    new Map([["before_agent_start", [async () => ({ message: extensionMessage })]]]),
-  );
+  const loader = await createResourceLoader((api) => {
+    api.on("before_agent_start", async () => ({ message: extensionMessage }));
+  });
   const { session, sessionManager } = await createTestSession({ resourceLoader: loader });
   installPermissionPrompt(session);
   let queuedExtension = false;
@@ -382,18 +385,20 @@ it.each(
     const expandedPrompt = "Use the same color as before.";
     const useTemplate = mediaKind === "offloaded";
     const prompt = useTemplate ? "/reuse-color" : expandedPrompt;
-    const loader = createResourceLoader();
-    loader.getPrompts = () => ({
-      prompts: [
+    const root = tempDirs.make("openclaw-steering-prompts-");
+    const promptPath = join(root, "reuse-color.md");
+    writeFileSync(promptPath, `---\ndescription: Reuse the color\n---\n${expandedPrompt}`);
+    const loader = await createResourceLoader(undefined, {
+      cwd: root,
+      agentDir: join(root, "agent"),
+    });
+    loader.extendResources({
+      promptPaths: [
         {
-          name: "reuse-color",
-          description: "Reuse the color",
-          content: expandedPrompt,
-          sourceInfo: createSyntheticSourceInfo("<test-prompt>", { source: "temporary" }),
-          filePath: "/test/prompts/reuse-color.md",
+          path: promptPath,
+          metadata: { source: "temporary", scope: "temporary", origin: "top-level", baseDir: root },
         },
       ],
-      diagnostics: [],
     });
     const held = holdInitialRequest("Quoted reply received");
     const { requests } = held;

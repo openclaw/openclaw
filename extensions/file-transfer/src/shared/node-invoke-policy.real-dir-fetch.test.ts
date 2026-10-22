@@ -101,6 +101,24 @@ async function sourceFixture(filename: string, contents: string) {
 }
 
 describe.runIf(process.platform !== "win32")("file-transfer real dir.fetch policy", () => {
+  it("admits compressible directories within the compressed transfer budget", async () => {
+    const contents = "a".repeat(2 * 1024 * 1024);
+    const { tmpRoot, source } = await sourceFixture("repeated.txt", contents);
+    const maxBytes = 64 * 1024;
+    const { ctx, invokeNode } = createRealDirFetchContext({ approved: source, maxBytes });
+
+    const result = await policy.handle(ctx);
+
+    expect(invokeNode).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ ok: true });
+    const payload = requireRecord(requireRecord(result, "result").payload, "payload");
+    expect(payload).toMatchObject({ ok: true, path: source });
+    expect(payload.tarBytes).toBeGreaterThan(0);
+    expect(payload.tarBytes).toBeLessThanOrEqual(maxBytes);
+    const destDir = await extractFetchedArchive(payload, tmpRoot);
+    expect(await fs.readFile(path.join(destDir, "repeated.txt"), "utf8")).toBe(contents);
+  });
+
   it("rejects a retargeted literal grant before archive preflight I/O", async () => {
     const tmpRoot = tempDirs.make("file-transfer-policy-");
     const approved = path.join(tmpRoot, "approved");

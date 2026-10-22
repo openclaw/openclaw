@@ -1,5 +1,4 @@
 import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
-// Feishu tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
 import { FeishuChannelConfigSchema, FeishuConfigSchema } from "./config-schema.js";
 
@@ -19,10 +18,8 @@ const accountWebhookBase = {
   appSecret: "secret_main", // pragma: allowlist secret
 };
 
-function expectSchemaIssue(
-  result: ReturnType<typeof FeishuConfigSchema.safeParse>,
-  issuePath: string,
-) {
+function expectSchemaIssue(value: unknown, issuePath: string) {
+  const result = FeishuConfigSchema.safeParse(value);
   expect(result.success).toBe(false);
   if (!result.success) {
     expect(result.error.issues.map((issue) => issue.path.join("."))).toContain(issuePath);
@@ -31,82 +28,28 @@ function expectSchemaIssue(
 
 describe("FeishuConfigSchema webhook validation", () => {
   it("normalizes legacy groupPolicy allowall to open", () => {
-    const result = FeishuConfigSchema.parse({
-      groupPolicy: "allowall",
-    });
-
-    expect(result.groupPolicy).toBe("open");
+    expect(FeishuConfigSchema.parse({ groupPolicy: "allowall" }).groupPolicy).toBe("open");
   });
 
-  it("rejects top-level webhook mode without verificationToken", () => {
-    const result = FeishuConfigSchema.safeParse({
-      connectionMode: "webhook",
-      appId: "cli_top",
-      appSecret: "secret_top", // pragma: allowlist secret
-    });
-
-    expectSchemaIssue(result, "verificationToken");
-  });
-
-  it("rejects top-level webhook mode without encryptKey", () => {
-    // topLevelWebhookBase (see top of file) keeps the GHSA opengrep pattern
-    // from matching this negative fixture.
-    const result = FeishuConfigSchema.safeParse({
-      ...topLevelWebhookBase,
-      verificationToken: "token_top",
-    });
-
-    expectSchemaIssue(result, "encryptKey");
-  });
-
-  it("rejects account webhook mode without verificationToken", () => {
-    const result = FeishuConfigSchema.safeParse({
-      accounts: {
-        main: {
-          connectionMode: "webhook",
-          appId: "cli_main",
-          appSecret: "secret_main", // pragma: allowlist secret
-        },
-      },
-    });
-
-    expectSchemaIssue(result, "accounts.main.verificationToken");
-  });
-
-  it("rejects account webhook mode without encryptKey", () => {
-    // accountWebhookBase (see top of file) keeps the GHSA opengrep pattern
-    // from matching this negative fixture.
-    const result = FeishuConfigSchema.safeParse({
-      accounts: {
-        main: {
-          ...accountWebhookBase,
-          verificationToken: "token_main",
-        },
-      },
-    });
-
-    expectSchemaIssue(result, "accounts.main.encryptKey");
+  it.each([
+    [topLevelWebhookBase, "verificationToken"],
+    [{ ...topLevelWebhookBase, verificationToken: "token_top" }, "encryptKey"],
+    [{ accounts: { main: accountWebhookBase } }, "accounts.main.verificationToken"],
+    [
+      { accounts: { main: { ...accountWebhookBase, verificationToken: "token_main" } } },
+      "accounts.main.encryptKey",
+    ],
+  ] as const)("rejects webhook config %j without %s", (value, issuePath) => {
+    expectSchemaIssue(value, issuePath);
   });
 
   it("accepts SecretRef encryptKey in webhook mode", () => {
     const result = FeishuConfigSchema.safeParse({
       connectionMode: "webhook",
-      verificationToken: {
-        source: "env",
-        provider: "default",
-        id: "FEISHU_VERIFICATION_TOKEN",
-      },
-      encryptKey: {
-        source: "env",
-        provider: "default",
-        id: "FEISHU_ENCRYPT_KEY",
-      },
+      verificationToken: { source: "env", provider: "default", id: "FEISHU_VERIFICATION_TOKEN" },
+      encryptKey: { source: "env", provider: "default", id: "FEISHU_ENCRYPT_KEY" },
       appId: "cli_top",
-      appSecret: {
-        source: "env",
-        provider: "default",
-        id: "FEISHU_APP_SECRET",
-      },
+      appSecret: { source: "env", provider: "default", id: "FEISHU_APP_SECRET" },
     });
 
     expect(result.success).toBe(true);
@@ -150,16 +93,14 @@ describe("FeishuConfigSchema stickerSets", () => {
 
 describe("FeishuConfigSchema defaultAccount", () => {
   it("rejects defaultAccount when it does not match an account key", () => {
-    const result = FeishuConfigSchema.safeParse({
-      defaultAccount: "router-d",
-      accounts: {
-        backup: { appId: "cli_backup", appSecret: "secret_backup" }, // pragma: allowlist secret
+    expectSchemaIssue(
+      {
+        defaultAccount: "router-d",
+        accounts: {
+          backup: { appId: "cli_backup", appSecret: "secret_backup" }, // pragma: allowlist secret
+        },
       },
-    });
-
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.issues.map((issue) => issue.path.join("."))).toContain("defaultAccount");
-    }
+      "defaultAccount",
+    );
   });
 });

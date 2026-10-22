@@ -587,19 +587,8 @@ export function buildScopedSubagentRunReadIndexFromRuns<T extends SubagentRunRea
 export function hasDescendantRunAwaitingSettleFromRuns(
   runs: Map<string, SubagentRunRecord>,
   rootSessionKey: string,
-  excludeRunId?: string,
-  requesterAgentId?: string,
-  requesterStorePath?: string | null,
-  settledBefore?: number,
-  rootRunIds?: ReadonlySet<string>,
 ): boolean {
-  return buildScopedSubagentRunReadIndexFromRuns(
-    runs,
-    rootSessionKey,
-    requesterAgentId,
-    requesterStorePath,
-    rootRunIds,
-  ).hasDescendantRunAwaitingSettle(rootSessionKey, excludeRunId, settledBefore);
+  return buildSubagentRunReadIndexFromRuns({ runs }).hasDescendantRunAwaitingSettle(rootSessionKey);
 }
 
 export function listDescendantRunsForRequesterFromRuns(
@@ -607,4 +596,35 @@ export function listDescendantRunsForRequesterFromRuns(
   rootSessionKey: string,
 ): SubagentRunRecord[] {
   return buildSubagentRunReadIndexFromRuns({ runs }).listDescendantRunsForRequester(rootSessionKey);
+}
+
+export function resolveSwarmWaitOwnerSessionKeys(
+  getRunsForChildSession: (
+    childSessionKey: string,
+    childAgentId?: string,
+  ) => Iterable<SubagentRunRecord>,
+  requesterSessionKey: string,
+  requesterAgentId?: string,
+): string[] {
+  const ownerSessionKeys: string[] = [];
+  const visited: Array<{ childSessionKey: string; childAgentId?: string }> = [];
+  let currentSessionKey = requesterSessionKey.trim();
+  let currentAgentId = requesterAgentId;
+  while (
+    currentSessionKey &&
+    !visited.some((entry) =>
+      matchesSubagentChildSessionOwner(entry, currentSessionKey, currentAgentId),
+    )
+  ) {
+    visited.push({ childSessionKey: currentSessionKey, childAgentId: currentAgentId });
+    ownerSessionKeys.push(currentSessionKey);
+    const latestOwner = latestSubagentRun(
+      getRunsForChildSession(currentSessionKey, currentAgentId),
+    );
+    currentSessionKey =
+      latestOwner?.controllerSessionKey?.trim() || latestOwner?.requesterSessionKey.trim() || "";
+    currentAgentId =
+      parseAgentSessionKey(currentSessionKey)?.agentId ?? latestOwner?.requesterAgentId;
+  }
+  return ownerSessionKeys;
 }

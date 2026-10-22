@@ -10,6 +10,8 @@ import {
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import * as readOwner from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -563,5 +565,69 @@ it("queues a brief approval burst through shared input admission", async () => {
       status: "fulfilled",
       value: { outcome: "found", record: { status: "pending", decision: null } },
     });
+  }
+});
+
+it("commits verdicts during a terminal history read and rejects revoked read authority", async ({
+  signal,
+}) => {
+  const databaseOptions = options();
+  for (const id of ["earlier", "later"]) {
+    await store.insertOperatorApproval({ approval: approval(id), databaseOptions });
+  }
+  const ready = createDeferredCore();
+  const release = createDeferredCore();
+  const unblock = () => release.resolve();
+  signal.addEventListener("abort", unblock, { once: true });
+  const executeRead = readOwner.executeExistingOpenClawStateRead;
+  const observed = vi
+    .spyOn(readOwner, "executeExistingOpenClawStateRead")
+    .mockImplementationOnce(async (...args) => {
+      const result = await executeRead(...args);
+      expect(result).toMatchObject({ history: { records: [{ id: "earlier", status: "denied" }] } });
+      ready.resolve();
+      await release.promise;
+      return result;
+    });
+  const resolve = (id: string) =>
+    store.resolveOperatorApproval({
+      id,
+      decision: "deny",
+      resolver: { kind: "device", id: "reviewer" },
+      nowMs: 2000,
+      databaseOptions,
+    });
+  const earlier = resolve("earlier");
+  let current = true;
+  const history = store.listTerminalOperatorApprovals({
+    nowMs: 3000,
+    databaseOptions,
+    assertCurrent() {
+      if (!current) {
+        throw new Error("synthetic history authority revoked");
+      }
+    },
+  });
+  const result = history.then(
+    (value) => ({ value }),
+    (error: unknown) => {
+      ready.reject(error);
+      return { error };
+    },
+  );
+  try {
+    await ready.promise;
+    expect(await earlier).toMatchObject({ outcome: "resolved" });
+    expect(await resolve("later")).toMatchObject({ outcome: "resolved" });
+    current = false;
+    release.resolve();
+    expect(await result).toMatchObject({ error: new Error("synthetic history authority revoked") });
+    observed.mockRestore();
+    const fresh = await store.listTerminalOperatorApprovals({ nowMs: 3000, databaseOptions });
+    expect(fresh.records.map((record) => record.id)).toEqual(["later", "earlier"]);
+  } finally {
+    release.resolve();
+    signal.removeEventListener("abort", unblock);
+    await Promise.allSettled([earlier, result]);
   }
 });

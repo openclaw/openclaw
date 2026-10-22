@@ -6,6 +6,7 @@ import {
   measureDiagnosticsTimelineSpanSync,
 } from "../infra/diagnostics-timeline.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
 import { prepareBundledDiscoveryMode } from "./bundled-discovery-state.js";
 import {
   getCurrentPluginMetadataSnapshot,
@@ -67,21 +68,6 @@ export type {
 
 export { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-env.js";
 
-function freezeSnapshotValue<T>(value: T, seen = new WeakSet<object>()): T {
-  // Freeze plain facts once; internal Map/Set consumers honor their readonly types.
-  if (!value || typeof value !== "object" || Object.isFrozen(value)) {
-    return value;
-  }
-  if (seen.has(value)) {
-    return value;
-  }
-  seen.add(value);
-  for (const entry of Object.values(value)) {
-    freezeSnapshotValue(entry, seen);
-  }
-  return Object.freeze(value);
-}
-
 function indexesMatch(
   left: InstalledPluginIndex | undefined,
   right: InstalledPluginIndex | undefined,
@@ -95,11 +81,13 @@ function indexesMatch(
   );
 }
 
-/** Freezes prepared process-local facts; worker transfers must use restorePluginMetadataSnapshot. */
+/** Finalizes process-local facts; worker transfers must use restorePluginMetadataSnapshot. */
 export function finalizePluginMetadataSnapshot(
   snapshot: PluginMetadataSnapshot,
 ): PluginMetadataSnapshot {
-  freezeSnapshotValue(snapshot);
+  // Index freezing admits reusable facts; descriptive views rely on their readonly contract.
+  freezeTrustedJsonSnapshot(snapshot.index);
+  freezeTrustedJsonSnapshot(snapshot.registryIndex);
   bindPluginMetadataSnapshotCache(snapshot);
   const cache = getPluginMetadataSnapshotCache(snapshot);
   preparePluginNativeAdmissions(snapshot.index, cache);
@@ -107,7 +95,7 @@ export function finalizePluginMetadataSnapshot(
   return snapshot;
 }
 
-/** Restores process-local behavior and immutability after a snapshot crosses a worker boundary. */
+/** Restores process-local behavior and index ownership after a worker transfer. */
 export function restorePluginMetadataSnapshot(
   snapshot: Omit<PluginMetadataSnapshot, "normalizePluginId">,
 ): PluginMetadataSnapshot {
@@ -126,36 +114,25 @@ export function isPluginMetadataSnapshotCompatible(params: {
   >;
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  allowScopedSnapshot?: boolean;
-  pluginIds?: readonly string[];
   workspaceDir?: string;
-  index?: InstalledPluginIndex;
 }): boolean {
   const env = params.env ?? process.env;
   if (isCurrentPluginMetadataSnapshotRuntimeGeneration(params.snapshot)) {
     return true;
   }
-  const requestedPluginIds = normalizePluginIdScope(params.pluginIds);
-  const snapshotPluginIds = normalizePluginIdScope(params.snapshot.pluginIds);
-  const scopeMatches =
-    snapshotPluginIds === undefined ||
-    params.allowScopedSnapshot === true ||
-    (requestedPluginIds !== undefined &&
-      serializePluginIdScope(snapshotPluginIds) === serializePluginIdScope(requestedPluginIds));
   return (
-    scopeMatches &&
+    normalizePluginIdScope(params.snapshot.pluginIds) === undefined &&
     params.snapshot.policyHash === resolveInstalledPluginIndexPolicyHash(params.config, env) &&
     (!params.snapshot.configFingerprint ||
       params.snapshot.configFingerprint ===
         resolvePluginControlPlaneFingerprint({
           config: params.config,
           env,
-          index: params.index ?? params.snapshot.index,
+          index: params.snapshot.index,
           policyHash: params.snapshot.policyHash,
           workspaceDir: params.workspaceDir,
         })) &&
-    (params.snapshot.workspaceDir ?? "") === (params.workspaceDir ?? "") &&
-    indexesMatch(params.snapshot.index, params.index)
+    (params.snapshot.workspaceDir ?? "") === (params.workspaceDir ?? "")
   );
 }
 
@@ -210,10 +187,6 @@ function buildPluginMetadataOwnerMaps(
     }
   }
 
-  // These maps and arrays are private until this transfer to the snapshot.
-  for (const map of Object.values(owners)) {
-    map.forEach((pluginIds) => Object.freeze(pluginIds));
-  }
   const channelAccountKeyPolicies = new Map<
     string,
     NonNullable<PluginManifestRecord["channelAccountKeyPolicies"]>[string]
@@ -316,13 +289,13 @@ export function projectPluginMetadataSnapshot(
     return cached;
   }
   const selected = new Set(selectedIds);
-  const projected = freezeSnapshotValue({
+  const projected = {
     ...rebasePluginMetadataSnapshotManifestRegistry(snapshot, {
       plugins: snapshot.plugins.filter((plugin) => selected.has(plugin.id)),
       diagnostics: snapshot.manifestRegistry.diagnostics,
     }),
     pluginIds: selectedIds,
-  });
+  };
   bindPluginMetadataSnapshotCache(projected, cache);
   registerProviderPolicyOwnerIndexes(projected, cache);
   cache.metadata.projectionSources.set(projected, snapshot);

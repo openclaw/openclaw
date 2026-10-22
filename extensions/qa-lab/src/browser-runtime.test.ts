@@ -1,4 +1,3 @@
-// Qa Lab tests cover browser runtime plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -15,6 +14,18 @@ function createEnv() {
       call: vi.fn(async () => ({ ok: true })),
     },
   };
+}
+
+function expectRequest(
+  env: ReturnType<typeof createEnv>,
+  request: { method: string; path: string; query?: unknown; body?: unknown },
+  timeoutMs = 20_000,
+) {
+  expect(env.gateway.call).toHaveBeenCalledWith(
+    "browser.request",
+    { query: undefined, body: undefined, ...request, timeoutMs },
+    { timeoutMs },
+  );
 }
 
 describe("browser-runtime", () => {
@@ -63,21 +74,12 @@ describe("browser-runtime", () => {
       profile: "openclaw",
     });
 
-    expect(env.gateway.call).toHaveBeenCalledWith(
-      "browser.request",
-      {
-        method: "POST",
-        path: "/tabs/open",
-        query: {
-          profile: "openclaw",
-        },
-        body: {
-          url: "http://127.0.0.1:43124/control-ui/chat?session=test",
-        },
-        timeoutMs: 20_000,
-      },
-      { timeoutMs: 20_000 },
-    );
+    expectRequest(env, {
+      method: "POST",
+      path: "/tabs/open",
+      query: { profile: "openclaw" },
+      body: { url: "http://127.0.0.1:43124/control-ui/chat?session=test" },
+    });
   });
 
   it("captures snapshots with query options", async () => {
@@ -90,23 +92,17 @@ describe("browser-runtime", () => {
       maxChars: 4_000,
     });
 
-    expect(env.gateway.call).toHaveBeenCalledWith(
-      "browser.request",
-      {
-        method: "GET",
-        path: "/snapshot",
-        query: {
-          targetId: "tab-1",
-          format: "ai",
-          interactive: "true",
-          labels: "true",
-          maxChars: "4000",
-        },
-        body: undefined,
-        timeoutMs: 20_000,
+    expectRequest(env, {
+      method: "GET",
+      path: "/snapshot",
+      query: {
+        targetId: "tab-1",
+        format: "ai",
+        interactive: "true",
+        labels: "true",
+        maxChars: "4000",
       },
-      { timeoutMs: 20_000 },
-    );
+    });
   });
 
   it("runs browser act requests through /act", async () => {
@@ -123,23 +119,20 @@ describe("browser-runtime", () => {
       timeoutMs: 9_000,
     });
 
-    expect(env.gateway.call).toHaveBeenCalledWith(
-      "browser.request",
+    expectRequest(
+      env,
       {
         method: "POST",
         path: "/act",
-        query: {
-          profile: "openclaw",
-        },
+        query: { profile: "openclaw" },
         body: {
           kind: "type",
           ref: "12",
           text: "hello",
           submit: true,
         },
-        timeoutMs: 9_000,
       },
-      { timeoutMs: 9_000 },
+      9_000,
     );
   });
 
@@ -152,17 +145,7 @@ describe("browser-runtime", () => {
       timeoutMs: Number.MAX_SAFE_INTEGER,
     });
 
-    expect(env.gateway.call).toHaveBeenCalledWith(
-      "browser.request",
-      {
-        method: "GET",
-        path: "/snapshot",
-        query: undefined,
-        body: undefined,
-        timeoutMs: MAX_TIMER_TIMEOUT_MS,
-      },
-      { timeoutMs: MAX_TIMER_TIMEOUT_MS },
-    );
+    expectRequest(env, { method: "GET", path: "/snapshot" }, MAX_TIMER_TIMEOUT_MS);
   });
 
   it("waits until browser control reports a ready profile", async () => {
@@ -186,9 +169,7 @@ describe("browser-runtime", () => {
       {
         method: "GET",
         path: "/",
-        query: {
-          profile: "user",
-        },
+        query: { profile: "user" },
         body: undefined,
         timeoutMs: 5_000,
       },

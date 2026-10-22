@@ -8,7 +8,10 @@ import { readGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
 import { classifyPortListener } from "../../infra/ports-format.js";
 import { inspectPortUsage } from "../../infra/ports-inspect.js";
 import type { PortUsage } from "../../infra/ports-types.js";
-import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
+import {
+  hasCommandProcessCleanupError,
+  ignoreNonCleanupCommandError,
+} from "../../process/exec-result.js";
 import type { OpenClawStateSchemaReadAdmission } from "../../state/openclaw-state-db-contract.js";
 import type { GatewayRestartDeadline } from "./restart-health-deadline.js";
 import {
@@ -66,12 +69,7 @@ export async function inspectGatewayRestart(params: {
       const command = await read(
         "service-command",
         async () =>
-          (await params.service.readCommand?.(env).catch((error: unknown) => {
-            if (hasCommandProcessCleanupError(error)) {
-              throw error;
-            }
-            return null;
-          })) ?? null,
+          (await params.service.readCommand?.(env).catch(ignoreNonCleanupCommandError)) ?? null,
       );
       return resolveGatewayServiceProbeHosts({ env, command });
     }));
@@ -249,7 +247,6 @@ export async function inspectGatewayRestart(params: {
   }
   // Runtime identity remains required even with a separately configured UI root.
   if (expectedBuildId) {
-    snapshot.expectedBuildId = expectedBuildId;
     if (snapshot.gatewayBuildId !== expectedBuildId) {
       snapshot.healthy = false;
       if (snapshot.gatewayBuildId !== undefined) {

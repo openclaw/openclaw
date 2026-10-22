@@ -46,7 +46,6 @@ vi.mock("./sqlite-page-cache-residency.js", async (importOriginal) => ({
   readSqlitePageCacheResidency: () => ({
     scope: "file-sample" as const,
     sampledPages: 256,
-    residentPages: 0,
     residentRatio: 0,
     pageSize: 4096,
     sizeBytes: 0,

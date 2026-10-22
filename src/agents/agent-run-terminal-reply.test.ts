@@ -1,7 +1,54 @@
 import { describe, expect, it } from "vitest";
-import { prepareAgentRunTerminalReply } from "./agent-run-terminal-reply.js";
+import {
+  filterAgentRunTerminalPayloadsForPresentation,
+  prepareAgentRunTerminalReply,
+} from "./agent-run-terminal-reply.js";
 
 describe("prepareAgentRunTerminalReply", () => {
+  it.each([
+    {
+      name: "an acknowledgement-only message",
+      payload: { text: "HEARTBEAT_OK" },
+      isHeartbeatTrigger: false,
+      visible: false,
+    },
+    {
+      name: "visible text beside the acknowledgement",
+      payload: { text: "HEARTBEAT_OK Everything is ready." },
+      isHeartbeatTrigger: false,
+      visible: true,
+    },
+    {
+      name: "media beside the acknowledgement",
+      payload: { text: "HEARTBEAT_OK", mediaUrl: "https://example.invalid/chart.png" },
+      isHeartbeatTrigger: false,
+      visible: true,
+    },
+    {
+      name: "multiple media beside the acknowledgement",
+      payload: {
+        text: "HEARTBEAT_OK",
+        mediaUrl: "  ",
+        mediaUrls: ["  ", "https://example.invalid/chart.png"],
+      },
+      isHeartbeatTrigger: false,
+      visible: true,
+    },
+    {
+      name: "a real heartbeat acknowledgement",
+      payload: { text: "HEARTBEAT_OK" },
+      isHeartbeatTrigger: true,
+      visible: true,
+    },
+  ])("projects $name through message presentation", ({ payload, isHeartbeatTrigger, visible }) => {
+    expect(
+      filterAgentRunTerminalPayloadsForPresentation({
+        payloads: [payload],
+        isHeartbeatTrigger,
+      }),
+    ).toEqual(visible ? [payload] : []);
+  });
+
   it.each([
     ["answer\n\nNO_REPLY", "answer"],
     ["answer\r\n \tNO_REPLY \t\r\n\r\n", "answer"],

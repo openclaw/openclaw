@@ -24,7 +24,6 @@ export function admitMediaHandle<
       requesterSessionKey: handle.requesterSessionKey,
       requesterAgentId: handle.requesterAgentId,
       task: handle.taskLabel,
-      createdAt: Date.now(),
       status: "running",
     });
   }

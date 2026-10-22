@@ -10,7 +10,6 @@ describe("connection-local tracking installation", () => {
   it("skips absent trigger drops and preserves transcript writes after reinstall and rollback", () => {
     const database = openDatabase("CREATE TABLE original (session_id TEXT, id INTEGER)");
     const schema: SqliteTempTrackingSchema = {
-      kind: "transcript-index",
       statusTable: "local_status",
       pendingTable: "local_pending",
       pendingIndex: "local_pending_state",

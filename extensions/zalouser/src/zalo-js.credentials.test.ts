@@ -537,6 +537,22 @@ describe("zalouser credential persistence", () => {
     },
   );
 
+  it("retries a failed session restore and reuses the successful API", async () => {
+    const profile = "restore-retry";
+    const cookie = cookieJar("stored");
+    await seedCredentials(profile, storedCredentials(cookie));
+    const failure = new Error("Zalo login failed");
+    const api = createMockApi({ cookies: cookie });
+    const login = vi.fn().mockRejectedValueOnce(failure).mockResolvedValueOnce(api);
+    createZaloMock.mockResolvedValue({ login });
+
+    await expect(getZaloUserInfo(profile)).rejects.toBe(failure);
+    await expect(getZaloUserInfo(profile)).resolves.toMatchObject({ userId: "user-1" });
+    await expect(listZaloFriends(profile)).resolves.toEqual([]);
+    expect(login).toHaveBeenCalledTimes(2);
+    expect((await readCredentials(profile)).cookie).toEqual(cookie);
+  });
+
   it("does not let a superseded restore overwrite or invalidate a replacement session", async () => {
     const profile = "restore-logout";
     const cookie = cookieJar("stored");

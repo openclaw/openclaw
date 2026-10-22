@@ -151,116 +151,6 @@ async function verifyImageDecodability(buffer: Buffer): Promise<boolean> {
   }
 }
 
-async function resizeImageBase64IfNeeded(params: {
-  base64: string;
-  mimeType: string;
-  maxDimensionPx: number;
-  maxBytes: number;
-  label?: string;
-  fileName?: string;
-  verifyDecodability?: boolean;
-}): Promise<{
-  base64: string;
-  mimeType: string;
-}> {
-  // Only callers sanitizing persisted bytes verify them, and only those bytes repeat.
-  const cacheKey = params.verifyDecodability
-    ? `${createHash("sha256").update(params.base64).digest("base64url")}:${params.maxDimensionPx}:${params.maxBytes}`
-    : undefined;
-  const cached = cacheKey === undefined ? undefined : verifiedImageOutcomes.get(cacheKey);
-  if (cached !== undefined) {
-    return cached === null
-      ? { base64: params.base64, mimeType: params.mimeType }
-      : { base64: cached, mimeType: "image/jpeg" };
-  }
-  const buf = Buffer.from(params.base64, "base64");
-  const meta = readImageMetadataFromHeader(buf) ?? (await getImageMetadata(buf));
-  const overBytes = buf.byteLength > params.maxBytes;
-  const overDimensions =
-    meta !== null && (meta.width > params.maxDimensionPx || meta.height > params.maxDimensionPx);
-  if (imageWithinLimits(buf, meta, params.maxDimensionPx, params.maxBytes)) {
-    // An unavailable backend passes images through unverified; never record that.
-    if (cacheKey !== undefined && (await verifyImageDecodability(buf))) {
-      verifiedImageOutcomes.set(cacheKey, null);
-    }
-    return {
-      base64: params.base64,
-      mimeType: params.mimeType,
-    };
-  }
-
-  const maxDim = meta ? Math.max(meta.width, meta.height) : params.maxDimensionPx;
-  const sideStart = maxDim > 0 ? Math.min(params.maxDimensionPx, maxDim) : params.maxDimensionPx;
-  const sideGrid = buildImageResizeSideGrid(params.maxDimensionPx, sideStart);
-
-  const sourcePixels = meta ? `${meta.width}x${meta.height}px` : "unknown";
-  const sourceWithFile = params.fileName ? `${params.fileName} ${sourcePixels}` : sourcePixels;
-  const sourceDetails = {
-    label: params.label,
-    fileName: params.fileName,
-    sourceMimeType: params.mimeType,
-    sourceWidth: meta?.width,
-    sourceHeight: meta?.height,
-    sourceBytes: buf.byteLength,
-  };
-  let smallestSize: number | undefined;
-  for (const side of sideGrid) {
-    for (const quality of IMAGE_REDUCE_QUALITY_STEPS) {
-      const out = await resizeToJpeg({
-        buffer: buf,
-        maxSide: side,
-        quality,
-        withoutEnlargement: true,
-      });
-      if (smallestSize === undefined || out.byteLength < smallestSize) {
-        smallestSize = out.byteLength;
-      }
-      if (out.byteLength <= params.maxBytes) {
-        const byteReductionPct =
-          buf.byteLength > 0
-            ? Number((((buf.byteLength - out.byteLength) / buf.byteLength) * 100).toFixed(1))
-            : 0;
-        log.info(
-          `Image resized to fit limits: ${sourceWithFile} ${formatBytesShort(buf.byteLength)} -> ${formatBytesShort(out.byteLength)} (${byteReductionPct < 0 ? "+" : ""}${-byteReductionPct}%)`,
-          {
-            ...sourceDetails,
-            maxBytes: params.maxBytes,
-            maxDimensionPx: params.maxDimensionPx,
-            triggerOverBytes: overBytes,
-            triggerOverDimensions: overDimensions,
-            outputMimeType: "image/jpeg",
-            outputBytes: out.byteLength,
-            outputQuality: quality,
-            outputMaxSide: side,
-            byteReductionPct,
-          },
-        );
-        const base64 = out.toString("base64");
-        if (cacheKey !== undefined) {
-          verifiedImageOutcomes.set(cacheKey, base64);
-        }
-        return { base64, mimeType: "image/jpeg" };
-      }
-    }
-  }
-
-  const bestSize = smallestSize ?? buf.byteLength;
-  log.warn(
-    `Image resize failed to fit limits: ${sourceWithFile} best=${formatBytesShort(bestSize)} limit=${formatBytesShort(params.maxBytes)}`,
-    {
-      ...sourceDetails,
-      maxDimensionPx: params.maxDimensionPx,
-      maxBytes: params.maxBytes,
-      smallestCandidateBytes: bestSize,
-      triggerOverBytes: overBytes,
-      triggerOverDimensions: overDimensions,
-    },
-  );
-  throw new Error(
-    `Image could not be reduced below ${formatBytesShort(params.maxBytes)} (got ${formatBytesShort(bestSize)})`,
-  );
-}
-
 export async function sanitizeContentBlocksImages(
   blocks: ToolContentBlock[],
   label: string,
@@ -309,15 +199,110 @@ export async function sanitizeContentBlocksImages(
       const inferredMimeType = inferMimeTypeFromBase64(canonicalData);
       const mimeType = inferredMimeType ?? block.mimeType;
       const fileName = inferImageFileName({ block, label });
-      const resized = await resizeImageBase64IfNeeded({
-        base64: canonicalData,
-        mimeType,
-        maxDimensionPx,
-        maxBytes,
-        label,
-        fileName,
-        verifyDecodability: opts.verifyDecodability,
-      });
+      const verifyDecodability = opts.verifyDecodability;
+      const resized = await (async (): Promise<{ base64: string; mimeType: string }> => {
+        // Only callers sanitizing persisted bytes verify them, and only those bytes repeat.
+        const cacheKey = verifyDecodability
+          ? `${createHash("sha256").update(canonicalData).digest("base64url")}:${maxDimensionPx}:${maxBytes}`
+          : undefined;
+        const cached = cacheKey === undefined ? undefined : verifiedImageOutcomes.get(cacheKey);
+        if (cached !== undefined) {
+          return cached === null
+            ? { base64: canonicalData, mimeType }
+            : { base64: cached, mimeType: "image/jpeg" };
+        }
+        const buf = Buffer.from(canonicalData, "base64");
+        const meta = readImageMetadataFromHeader(buf) ?? (await getImageMetadata(buf));
+        const overBytes = buf.byteLength > maxBytes;
+        const overDimensions =
+          meta !== null && (meta.width > maxDimensionPx || meta.height > maxDimensionPx);
+        if (imageWithinLimits(buf, meta, maxDimensionPx, maxBytes)) {
+          // An unavailable backend passes images through unverified; never record that.
+          if (cacheKey !== undefined && (await verifyImageDecodability(buf))) {
+            verifiedImageOutcomes.set(cacheKey, null);
+          }
+          return {
+            base64: canonicalData,
+            mimeType,
+          };
+        }
+
+        const maxDim = meta ? Math.max(meta.width, meta.height) : maxDimensionPx;
+        const sideStart = maxDim > 0 ? Math.min(maxDimensionPx, maxDim) : maxDimensionPx;
+        const sideGrid = buildImageResizeSideGrid(maxDimensionPx, sideStart);
+
+        const sourcePixels = meta ? `${meta.width}x${meta.height}px` : "unknown";
+        const sourceWithFile = fileName ? `${fileName} ${sourcePixels}` : sourcePixels;
+        const sourceDetails = {
+          label,
+          fileName,
+          sourceMimeType: mimeType,
+          sourceWidth: meta?.width,
+          sourceHeight: meta?.height,
+          sourceBytes: buf.byteLength,
+        };
+        let smallestSize: number | undefined;
+        for (const side of sideGrid) {
+          for (const quality of IMAGE_REDUCE_QUALITY_STEPS) {
+            const candidateBuffer = await resizeToJpeg({
+              buffer: buf,
+              maxSide: side,
+              quality,
+              withoutEnlargement: true,
+            });
+            if (smallestSize === undefined || candidateBuffer.byteLength < smallestSize) {
+              smallestSize = candidateBuffer.byteLength;
+            }
+            if (candidateBuffer.byteLength <= maxBytes) {
+              const byteReductionPct =
+                buf.byteLength > 0
+                  ? Number(
+                      (
+                        ((buf.byteLength - candidateBuffer.byteLength) / buf.byteLength) *
+                        100
+                      ).toFixed(1),
+                    )
+                  : 0;
+              log.info(
+                `Image resized to fit limits: ${sourceWithFile} ${formatBytesShort(buf.byteLength)} -> ${formatBytesShort(candidateBuffer.byteLength)} (${byteReductionPct < 0 ? "+" : ""}${-byteReductionPct}%)`,
+                {
+                  ...sourceDetails,
+                  maxBytes,
+                  maxDimensionPx,
+                  triggerOverBytes: overBytes,
+                  triggerOverDimensions: overDimensions,
+                  outputMimeType: "image/jpeg",
+                  outputBytes: candidateBuffer.byteLength,
+                  outputQuality: quality,
+                  outputMaxSide: side,
+                  byteReductionPct,
+                },
+              );
+              const replacementBase64 = candidateBuffer.toString("base64");
+              if (cacheKey !== undefined) {
+                verifiedImageOutcomes.set(cacheKey, replacementBase64);
+              }
+              return { base64: replacementBase64, mimeType: "image/jpeg" };
+            }
+          }
+        }
+
+        const bestSize = smallestSize ?? buf.byteLength;
+        log.warn(
+          `Image resize failed to fit limits: ${sourceWithFile} best=${formatBytesShort(bestSize)} limit=${formatBytesShort(maxBytes)}`,
+          {
+            ...sourceDetails,
+            maxDimensionPx,
+            maxBytes,
+            smallestCandidateBytes: bestSize,
+            triggerOverBytes: overBytes,
+            triggerOverDimensions: overDimensions,
+          },
+        );
+        throw new Error(
+          `Image could not be reduced below ${formatBytesShort(maxBytes)} (got ${formatBytesShort(bestSize)})`,
+        );
+      })();
       out.push({
         ...block,
         data: resized.base64,

@@ -18,10 +18,8 @@ import {
 } from "../../agents/bash-process-registry.js";
 import { createLazyExecTool } from "../../agents/lazy-exec-tool.js";
 import { isAgentRunDirectAbortReason } from "../../agents/run-termination.js";
-import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
-import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
-import { enqueueSwarmRun, releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
+import { releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
@@ -63,15 +61,33 @@ import {
 } from "./chat.abort.test-helpers.js";
 
 const fixture = useChatAbortRegistryFixture();
-const writeSession = (sessionKey: string, sessionId: string) =>
-  writeSubagentSessionEntry({
-    stateDir: fixture.stateDir,
-    agentId: "main",
-    sessionKey,
-    defaultSessionId: sessionId,
-  });
+const { writeSession } = fixture;
 
 afterEach(() => resetPluginRuntimeStateForTest());
+
+function installNativeCancellation(
+  withDescendantCancellation: NonNullable<
+    ReturnType<
+      typeof createEmptyPluginRegistry
+    >["agentHarnesses"][number]["harness"]["withDescendantCancellation"]
+  >,
+) {
+  const registry = createEmptyPluginRegistry();
+  registry.agentHarnesses.push({
+    pluginId: "core",
+    source: "runtime",
+    harness: {
+      id: "native-cancellation-test",
+      label: "Native cancellation fixture",
+      supports: () => ({ supported: false }),
+      runAttempt: async () => {
+        throw new Error("No inference in cancellation proof");
+      },
+      withDescendantCancellation,
+    },
+  });
+  setActivePluginRegistry(registry);
+}
 
 describe("descendant cascade ownership", () => {
   it.for([
@@ -87,7 +103,7 @@ describe("descendant cascade ownership", () => {
       const runId = "late-partial-run";
       await writeSession(sessionKey, sessionId);
       const parent = createActiveRun(sessionKey, { sessionId, agentId: "main" });
-      const context = createChatAbortContext({ sources: new Map([[runId, parent]]) });
+      const context = createChatAbortContext({ sources: [[runId, parent]] });
       context.chatRunState.getOrCreate(runId).buffer = initialText;
       const entered = createDeferred();
       const proceed = createDeferred();
@@ -245,27 +261,14 @@ describe("descendant cascade ownership", () => {
         cancel: vi.fn(),
       })),
     );
-    const registry = createEmptyPluginRegistry();
-    registry.agentHarnesses.push({
-      pluginId: "core",
-      source: "runtime",
-      harness: {
-        id: "native-authorization-test",
-        label: "Native authorization fixture",
-        supports: () => ({ supported: false }),
-        runAttempt: async () => {
-          throw new Error("No inference in Stop proof");
-        },
-        withDescendantCancellation: (params, run) =>
-          run(async () => {
-            expect(params.requesterTurnRunId).toBeUndefined();
-            const selected = children.filter((child) => params.acceptsRequest(child.custody));
-            selected.forEach((child) => child.cancel());
-            return { killed: selected.length, cancelledRequesters: [] };
-          }),
-      },
-    });
-    setActivePluginRegistry(registry);
+    installNativeCancellation((params, run) =>
+      run(async () => {
+        expect(params.requesterTurnRunId).toBeUndefined();
+        const selected = children.filter((child) => params.acceptsRequest(child.custody));
+        selected.forEach((child) => child.cancel());
+        return { killed: selected.length, cancelledRequesters: [] };
+      }),
+    );
     const parent = createActiveRun(sessionKey, {
       sessionId: "main-session",
       agentId: "main",
@@ -274,7 +277,7 @@ describe("descendant cascade ownership", () => {
     const respond = await invokeChatAbortHandler({
       handler: (options) =>
         handleChatAbortRequestWithLifecycle(options, { cascadeDescendants: true }),
-      context: createChatAbortContext({ sources: new Map([["parent", parent]]) }),
+      context: createChatAbortContext({ sources: [["parent", parent]] }),
       request: { sessionKey, preserveSideRuns: true },
       client: { connId: "request-owner", connect: { scopes: ["operator.write"] } },
     });
@@ -410,27 +413,21 @@ describe("descendant cascade ownership", () => {
         requesterTurnRunId: string,
         start: () => Promise<void>,
       ) => {
-        await registerSubagentRun({
+        await fixture.registerRun({
           runId,
           childSessionKey,
           childAgentId: "main",
           sessionEntry: { sessionId: runId },
           requesterSessionKey: sessionKey,
-          requesterAgentId: "main",
           requesterTurnRunId,
-          requesterDisplayKey: sessionKey,
           task: "preserve exact requester ownership",
-          cleanup: "keep",
-          collect: true,
           queued: true,
         });
-        enqueueSwarmRun({
+        fixture.queueRun({
           groupId: "exec-continuation-ownership",
           runId,
-          maxConcurrent: 1,
           activeRunIds: ["held-continuation-capacity"],
           start,
-          onStartFailure: () => true,
         });
       };
       try {
@@ -458,11 +455,10 @@ describe("descendant cascade ownership", () => {
           owner: { connId: "request-owner" },
         });
         const context = createChatAbortContext({
-          sources: new Map([["later-human-request", laterRun]]),
+          sources: [["later-human-request", laterRun]],
         });
         const nativeEntered = createDeferred();
         const nativeSettled = createDeferred();
-        const registry = createEmptyPluginRegistry();
         const cancelNative = vi.fn(async () => {
           nativeEntered.resolve();
           await nativeSettled.promise;
@@ -471,30 +467,17 @@ describe("descendant cascade ownership", () => {
           }
           return { killed: 1, cancelledRequesters: [] };
         });
-        registry.agentHarnesses.push({
-          pluginId: "core",
-          source: "runtime",
-          harness: {
-            id: "native-cascade-test",
-            label: "Native cascade fixture",
-            supports: () => ({ supported: false }),
-            runAttempt: async () => {
-              throw new Error("No inference in cascade proof");
-            },
-            withDescendantCancellation: (params, run) => {
-              expect(params).toMatchObject({
-                agentId: "main",
-                sessionKey,
-                sessionId: "main-session",
-                requesterTurnRunId: "original-command-request",
-              });
-              expect(params.acceptsRequest(withExecRequestOwners({}, originalOwners))).toBe(true);
-              expect(params.acceptsRequest(withExecRequestOwners({}, laterOwners))).toBe(false);
-              return run(cancelNative);
-            },
-          },
+        installNativeCancellation((params, run) => {
+          expect(params).toMatchObject({
+            agentId: "main",
+            sessionKey,
+            sessionId: "main-session",
+            requesterTurnRunId: "original-command-request",
+          });
+          expect(params.acceptsRequest(withExecRequestOwners({}, originalOwners))).toBe(true);
+          expect(params.acceptsRequest(withExecRequestOwners({}, laterOwners))).toBe(false);
+          return run(cancelNative);
         });
-        setActivePluginRegistry(registry);
         const respond = vi.fn();
         const stopping = invokeChatAbortHandler({
           handler: handleChatAbortRequestWithLifecycle,
@@ -567,31 +550,25 @@ describe("descendant cascade ownership", () => {
     const childKey = "agent:main:subagent:retained-stop";
     await writeSession(sessionKey, "main-session");
     await writeSession(childKey, "retained-stop-child");
-    await registerSubagentRun({
+    await fixture.registerRun({
       runId: "retained-stop-child",
       childSessionKey: childKey,
       childAgentId: "main",
       sessionEntry: loadSessionEntry({ agentId: "main", sessionKey: childKey }),
       requesterSessionKey: sessionKey,
-      requesterAgentId: "main",
       requesterTurnRunId: "parent",
-      requesterDisplayKey: sessionKey,
       task: "retain original Stop authority",
-      cleanup: "keep",
-      collect: true,
       queued: true,
     });
     const started = createDeferred();
     const start = vi.fn(async () => {
       started.resolve();
     });
-    enqueueSwarmRun({
+    fixture.queueRun({
       groupId: "retained-stop",
       runId: "retained-stop-child",
-      maxConcurrent: 1,
       activeRunIds: ["held-capacity"],
       start,
-      onStartFailure: () => true,
     });
     let current = true;
     const parent = createActiveRun(sessionKey, {
@@ -604,7 +581,7 @@ describe("descendant cascade ownership", () => {
       current = false;
       turnAborted.resolve();
     });
-    const context = createChatAbortContext({ sources: new Map([["parent", parent]]) });
+    const context = createChatAbortContext({ sources: [["parent", parent]] });
     context.chatRunState.getOrCreate("parent").buffer = "cancelled parent partial";
     using persist = vi
       .spyOn(transcriptPersistence, "persistAbortedPartials")
@@ -831,23 +808,20 @@ describe("descendant cascade ownership", () => {
       );
     }
     const registerChild = () =>
-      registerSubagentRun({
+      fixture.registerRun({
         runId: "cascade-queued",
         childSessionKey: childKey,
         childAgentId: "main",
         sessionEntry: loadSessionEntry({ agentId: "main", sessionKey: childKey }),
         requesterSessionKey:
           kind === "late descendant" ? "agent:main:subagent:orchestrator" : sessionKey,
-        requesterAgentId: "main",
         requesterDisplayKey: sessionKey,
         task: "preserve exclusive ownership",
-        cleanup: "keep",
-        collect: true,
         queued: true,
       });
     if (kind === "late descendant") {
       await writeSession("agent:main:subagent:orchestrator", "orchestrator");
-      await registerSubagentRun({
+      await fixture.registerRun({
         runId: "orchestrator",
         childSessionKey: "agent:main:subagent:orchestrator",
         childAgentId: "main",
@@ -856,24 +830,18 @@ describe("descendant cascade ownership", () => {
           sessionKey: "agent:main:subagent:orchestrator",
         }),
         requesterSessionKey: sessionKey,
-        requesterAgentId: "main",
         requesterTurnRunId: "run-mine",
-        requesterDisplayKey: sessionKey,
         task: "live orchestrator",
-        cleanup: "keep",
-        collect: true,
       });
     } else {
       await registerChild();
     }
     const start = vi.fn(async () => {});
-    enqueueSwarmRun({
+    fixture.queueRun({
       groupId: "cascade-ownership",
       runId: "cascade-queued",
-      maxConcurrent: 1,
       activeRunIds: ["capacity"],
       start,
-      onStartFailure: () => true,
     });
     const entered = createDeferred();
     const proceed = createDeferred();

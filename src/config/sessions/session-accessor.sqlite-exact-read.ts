@@ -30,8 +30,7 @@ import {
   readSessionEntryByIdInDatabase,
   readSessionKeyBySessionIdInDatabase,
   readExactSessionEntryRow,
-  readSessionEntryRow,
-  readQualifiedSessionEntryRow,
+  readSessionEntrySelectionInDatabase,
 } from "./session-accessor.sqlite-entry-read.js";
 import {
   resolveSqliteScope,
@@ -195,13 +194,16 @@ export function resolveSessionEntry(
           const entry = options.readFacts(database, resolved.sessionKey, projection);
           selected = entry ? { entry, row: { session_key: resolved.sessionKey } } : undefined;
         } else {
-          selected =
-            options.keyFormat === "agent-qualified"
-              ? readQualifiedSessionEntryRow(database, resolved.agentId, resolved.sessionKey, {
-                  allowCanonicalMove: options.allowCanonicalMove,
-                  projection,
-                })
-              : readSessionEntryRow(database, resolved.sessionKey, projection);
+          selected = readSessionEntrySelectionInDatabase(
+            database,
+            resolved.agentId,
+            resolved.sessionKey,
+            {
+              keyFormat: options.keyFormat,
+              allowCanonicalMove: options.allowCanonicalMove,
+              projection,
+            },
+          );
         }
       } catch (error) {
         if (!options.onReadError) {

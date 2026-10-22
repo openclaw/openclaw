@@ -14,7 +14,10 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
-import { rewritePreparedTranscriptMessageAtAnchor } from "../config/sessions/session-message-rewrite.js";
+import {
+  capturePreparedTranscriptModelPromptProjection,
+  rewritePreparedTranscriptMessageAtAnchor,
+} from "../config/sessions/session-message-rewrite.js";
 import { transcriptMessage } from "../config/sessions/transcript-message.test-support.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
@@ -144,6 +147,16 @@ describe("user turn transcript persistence", () => {
         await recorder.waitForPendingInputSettlement?.();
         const replay = createUserTurnTranscriptRecorder({
           input: { text: input.text, idempotencyKey: input.idempotencyKey },
+          assertOriginalInputCommit: Object.assign(
+            () => {
+              throw new Error("Accepted input no longer belongs to its original source");
+            },
+            {
+              prepareSessionSourceScope: async () => {
+                throw new Error("Accepted input must not prepare its original source again");
+              },
+            },
+          ),
           trackInputCompletion: true,
           pendingInputRequestFingerprint: "authenticated-requester-custody",
           target,
@@ -337,7 +350,7 @@ describe("user turn transcript persistence", () => {
   });
 
   describe("createUserTurnTranscriptRecorder", () => {
-    it("captures the current stored message and reuses a projection written by another recorder", async () => {
+    it("adopts a prepared projection only after commitment and reuses it from another recorder", async () => {
       const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
       const input = userInput("original", "shared-projection");
       const first = record(input, target);
@@ -351,9 +364,29 @@ describe("user turn transcript persistence", () => {
         return { ...message, independentMetadata: "preserved" };
       });
 
-      const captured = await first.captureModelPromptProjection!("enriched", () => {});
+      const previous = first.getPersistedMessage?.();
+      const admission = first.getAdmissionReceipt();
+      const prepared = expectDefined(
+        await first.prepareModelPromptProjection!("enriched", () => {}),
+        "prepared projection",
+      );
+      expect(first.getPersistedMessage?.()).toBe(previous);
+      expect(first.getAdmissionReceipt()).toBe(admission);
+      expect(readModelPromptProjection((await readTranscriptMessages(target))[0])).toBeUndefined();
+
+      const committed = await capturePreparedTranscriptModelPromptProjection(
+        prepared.intent.anchor,
+        prepared.intent.text,
+        () => {},
+      );
+      const captured = await prepared.onCommitted(committed);
       expect(captured).toMatchObject({ content: "original", independentMetadata: "preserved" });
+      expect(readModelPromptProjection(previous)).toBeUndefined();
+      expect(first.getPersistedMessage?.()).toBe(captured);
+      expect(first.getAdmissionReceipt()?.generation).toBe(committed?.generation);
+      expect(await first.prepareModelPromptProjection!("enriched", () => {})).toBeUndefined();
       expect(await second.captureModelPromptProjection!("enriched", () => {})).toEqual(captured);
+      expect(second.getAdmissionReceipt()?.generation).toBe(committed?.generation);
       await expect(second.captureModelPromptProjection!("changed", () => {})).rejects.toThrow(
         "cannot be changed",
       );

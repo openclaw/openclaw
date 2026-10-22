@@ -19,7 +19,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
-import { loadAgentTrajectoryOperations } from "../state/openclaw-agent-execution-operations.js";
+import { createAgentWorkerTestLoaders } from "../state/openclaw-agent-execution-operations.test-support.js";
 import type { AgentWorkerOperationContext } from "../state/openclaw-agent-operation-context.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
@@ -141,7 +141,6 @@ it.each(["missing", "invalidated", "empty"] as const)(
           .where("session_key", "=", "agent:main:main"),
       );
     }
-    const operations = await loadAgentTrajectoryOperations();
     const context: AgentWorkerOperationContext = {
       options,
       open: () => database,
@@ -149,6 +148,7 @@ it.each(["missing", "invalidated", "empty"] as const)(
       writeTransaction: (operationLabel, _owner, write) =>
         runOpenClawAgentWriteTransaction(write, options, { operationLabel }),
     };
+    const operations = await createAgentWorkerTestLoaders(context)["trajectory.retention.delete"]();
     const observe = vi.spyOn(database.db, "exec");
     try {
       expect(

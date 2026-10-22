@@ -1748,7 +1748,7 @@ it("refuses maintenance while another owner still holds an agent database lease"
   const repair = vi.fn(async () => undefined);
   try {
     await expect(withMaintenance({ env }, repair)).rejects.toThrow(
-      "stop that process and rerun openclaw doctor --fix",
+      "stop the Gateway and other OpenClaw processes, or reboot, then rerun openclaw doctor --fix",
     );
     expect(repair).not.toHaveBeenCalled();
     expect(() => assertNoAgentLeases("worker-1", { env })).toThrow("database is still open");

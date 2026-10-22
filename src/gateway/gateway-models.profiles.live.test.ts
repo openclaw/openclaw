@@ -144,6 +144,11 @@ import {
   resolveGatewayLiveModelThinkingLevel,
   resolveGatewayLiveThinkingLevel,
 } from "./gateway-models.profiles.live.test-helpers.js";
+import {
+  assertOpenAIUltraWireEffort,
+  OPENAI_ULTRA_NORMAL_EFFORT,
+  type OpenAIUltraWireObservation,
+} from "./gateway-models.profiles.live.ultra-wire.test-helpers.js";
 import { restoreLiveEnv, snapshotLiveEnv } from "./live-env-test-helpers.js";
 import {
   hasExpectedSingleNonce,
@@ -4051,24 +4056,8 @@ type GatewayModelSuiteParams = {
   providerOverrides?: Record<string, ModelProviderConfig>;
 };
 
-type OpenAIUltraWireObservation = {
-  model?: string;
-  reasoningEffort?: string;
-  sessionsSpawn?: { strict?: boolean; categoryRequired: boolean };
-  requestIndex?: number;
-  traceparent?: string;
-  dispatch?: {
-    runId: string;
-    callId: string;
-    sessionId?: string;
-    sessionKey?: string;
-    isHeartbeat?: boolean;
-  } | null;
-};
-
 const OPENAI_ULTRA_WIRE_CAPTURE_LIMIT = 512;
 const OPENAI_ULTRA_UTILITY_MODEL = "openai/gpt-5.4-mini";
-const OPENAI_ULTRA_NORMAL_EFFORT = "medium";
 const openAIUltraRunsByClient = new WeakMap<GatewayClient, Map<string, string>>();
 
 function recordOpenAIUltraAdmission(client: GatewayClient, runId: string, sessionKey: string) {
@@ -4717,65 +4706,6 @@ function resolveOpenAIUltraUpstreamBaseUrl(params: {
     providerConfig?.baseUrl?.trim() ||
     OPENAI_LIVE_DEFAULT_BASE_URL
   );
-}
-
-function assertOpenAIUltraWireEffort(params: {
-  expectedModel: string;
-  observations: OpenAIUltraWireObservation[];
-  ultraRuns: ReadonlyMap<string, string>;
-}): number {
-  const matching = params.observations.filter((entry) => entry.model === params.expectedModel);
-  expect(
-    matching.length,
-    `expected captured OpenAI requests for ${params.expectedModel}; captured=${params.observations.length}`,
-  ).toBeGreaterThan(0);
-  const ultraSessions = new Set(params.ultraRuns.values());
-  const expectedEffort = ({ dispatch }: OpenAIUltraWireObservation) =>
-    dispatch?.isHeartbeat === true &&
-    !params.ultraRuns.has(dispatch.runId) &&
-    !ultraSessions.has(dispatch.sessionKey ?? "")
-      ? OPENAI_ULTRA_NORMAL_EFFORT
-      : "max";
-  const heartbeats = matching.filter(
-    (entry) => expectedEffort(entry) === OPENAI_ULTRA_NORMAL_EFFORT,
-  );
-  if (heartbeats.length) {
-    logProgress(
-      `[ultra] ${params.expectedModel}: independent_heartbeats=${heartbeats.length} first=${JSON.stringify(heartbeats.slice(0, 3))}`,
-    );
-  }
-  const violations = matching.flatMap((entry, index) =>
-    entry.reasoningEffort === expectedEffort(entry)
-      ? []
-      : [
-          {
-            ...entry,
-            requestIndex: entry.requestIndex ?? index + 1,
-            expectedEffort: expectedEffort(entry),
-          },
-        ],
-  );
-  const first = violations[0];
-  if (first) {
-    logProgress(
-      `[ultra] ${params.expectedModel}: violations=${violations.length}/${matching.length} first=${JSON.stringify(violations.slice(0, 3))}`,
-    );
-  }
-  expect(
-    matching.every((entry) => entry.reasoningEffort === expectedEffort(entry)),
-    `expected effort=${first?.expectedEffort ?? "max"} for ${params.expectedModel}; observed=${first?.reasoningEffort ?? "missing"} request=${first?.requestIndex} run=${first?.dispatch?.runId ?? "unknown"}; violations=${violations.length}/${matching.length}`,
-  ).toBe(true);
-  const spawnSchemas = [
-    ...new Set(
-      matching.flatMap((entry) =>
-        entry.sessionsSpawn ? [JSON.stringify(entry.sessionsSpawn)] : [],
-      ),
-    ),
-  ];
-  logProgress(
-    `[ultra] ${params.expectedModel}: checked=${matching.length} max=${matching.length - heartbeats.length} medium=${heartbeats.length} sessions_spawn wire schemas=${spawnSchemas.join(",")}`,
-  );
-  return matching.length;
 }
 
 type LiveModelRegistry = ModelRegistry;

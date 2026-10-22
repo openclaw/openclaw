@@ -11,7 +11,7 @@ import {
   readTranscriptEventId,
   readTranscriptEventMessage,
 } from "../config/sessions/session-accessor.sqlite-read.js";
-import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { findTranscriptEvent } from "../config/sessions/session-transcript-match.js";
 import type { SessionTranscriptAssistantMessage } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -72,6 +72,7 @@ export async function commitBackgroundResultToSession(params: {
   params.assertCurrent?.();
   return await runSessionMutation({
     diagnosticLabel: "background-result",
+    kind: "background-result",
     target: captureSessionTarget({
       storeScope: storePath,
       sessionKey,
@@ -83,97 +84,121 @@ export async function commitBackgroundResultToSession(params: {
     policy: "wait",
     run: async () => {
       params.assertCurrent?.();
-      const current = await readSessionEntryReadOnlyInWorker({
-        agentId: params.agentId,
-        sessionKey,
-        storePath,
-        readConsistency: "latest",
-      });
-      if (
-        current?.sessionId !== expectedSessionId ||
-        normalizeOptionalString(current.lifecycleRevision) !== expectedLifecycleRevision
-      ) {
-        return { ok: false, reason: `session rebound for sessionKey: ${sessionKey}` };
-      }
-      const unavailable = resolveSessionWorkStartError(sessionKey, current, {
-        expectedSessionId,
-        purpose: "accepted-result-settlement",
-      });
-      if (unavailable) {
-        return { ok: false, reason: unavailable };
-      }
-      const scope = {
-        agentId: params.agentId,
-        sessionKey,
-        sessionId: expectedSessionId,
-        storePath,
-      };
-      // A retry owns the original committed payload, including its managed-media IDs.
-      // Restaging media would conflict with the transcript's exact replay contract.
-      const prior = await findTranscriptEvent(scope, { kind: "idempotency", key: idempotencyKey });
-      const priorMessage = prior && readTranscriptEventMessage(prior.event);
-      const priorId = prior && readTranscriptEventId(prior.event);
-      if (prior && (!priorMessage || !priorId)) {
-        return { ok: false, reason: "background result transcript identity is unavailable" };
-      }
-      const displayContent = priorMessage
-        ? undefined
-        : (await params.prepareDisplayContent?.())?.map((block) => Object.assign({}, block));
-      const message = {
-        role: "assistant",
-        content: [{ type: "text", text }],
-        ...(displayContent ? { [ASSISTANT_DISPLAY_CONTENT_FIELD]: displayContent } : {}),
-        api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
-        provider: OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
-        model: AUTOMATION_RESULT_MODEL,
-        usage: makeZeroUsageSnapshot(),
-        stopReason: "stop",
-        timestamp: Date.now(),
-        idempotencyKey,
-        openclawAutomation: params.provenance,
-      } satisfies SessionTranscriptAssistantMessage & {
-        idempotencyKey: string;
-        openclawAutomation: BackgroundSessionResultProvenance;
-      };
-      params.assertCurrent?.();
-      const committed = await persistSessionTranscriptTurn(scope, {
-        cwd: current.spawnedCwd,
-        expectedSessionId,
-        expectedLifecycleRevision: expectedLifecycleRevision ?? null,
-        assertCurrent: () => {
+      return withSessionEntryReadOnlyInWorker<BackgroundSessionResultCommit>(
+        {
+          agentId: params.agentId,
+          sessionKey,
+          storePath,
+          readConsistency: "latest",
+        },
+        () => {
           params.assertCurrent?.();
           params.signal?.throwIfAborted();
         },
-        messages: [
-          {
-            message: priorMessage
-              ? { ...priorMessage, content: message.content, openclawAutomation: params.provenance }
-              : message,
-            idempotencyLookup: "scan",
-            ...(priorId
-              ? {
-                  eventId: priorId,
-                  predicate: {
-                    kind: "active-entry" as const,
-                    entryId: priorId,
-                    errorMessage: "background result no longer owns the active transcript",
-                  },
-                }
-              : {}),
-          },
-        ],
-        touchSessionEntry: true,
-        sessionLifecyclePatch: { lastInteractionAt: message.timestamp },
-        updateMode: "inline",
-        // A retry can finish media ownership after a committed append failed to publish.
-        publishWhen: params.prepareDisplayContent ? "always" : undefined,
-        config: params.config,
-        onMessageCommitted: params.onMessageCommitted,
-      });
-      const appended = committed.messages[0];
-      return appended
-        ? { ok: true }
-        : { ok: false, reason: committed.rejectedReason ?? "background result was not committed" };
+        async (read, owner) => {
+          if (!read.ok) {
+            throw read.error;
+          }
+          const current = read.value;
+          if (
+            current?.sessionId !== expectedSessionId ||
+            normalizeOptionalString(current.lifecycleRevision) !== expectedLifecycleRevision
+          ) {
+            return { ok: false, reason: `session rebound for sessionKey: ${sessionKey}` };
+          }
+          const unavailable = resolveSessionWorkStartError(sessionKey, current, {
+            expectedSessionId,
+            purpose: "accepted-result-settlement",
+          });
+          if (unavailable) {
+            return { ok: false, reason: unavailable };
+          }
+          const scope = {
+            agentId: params.agentId,
+            sessionKey,
+            sessionId: expectedSessionId,
+            storePath,
+          };
+          // A retry owns the original committed payload, including its managed-media IDs.
+          // Restaging media would conflict with the transcript's exact replay contract.
+          const prior = await findTranscriptEvent(scope, {
+            kind: "idempotency",
+            key: idempotencyKey,
+          });
+          const priorMessage = prior && readTranscriptEventMessage(prior.event);
+          const priorId = prior && readTranscriptEventId(prior.event);
+          if (prior && (!priorMessage || !priorId)) {
+            return { ok: false, reason: "background result transcript identity is unavailable" };
+          }
+          const displayContent = priorMessage
+            ? undefined
+            : (await params.prepareDisplayContent?.())?.map((block) => Object.assign({}, block));
+          const message = {
+            role: "assistant",
+            content: [{ type: "text", text }],
+            ...(displayContent ? { [ASSISTANT_DISPLAY_CONTENT_FIELD]: displayContent } : {}),
+            api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
+            provider: OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
+            model: AUTOMATION_RESULT_MODEL,
+            usage: makeZeroUsageSnapshot(),
+            stopReason: "stop",
+            timestamp: Date.now(),
+            idempotencyKey,
+            openclawAutomation: params.provenance,
+          } satisfies SessionTranscriptAssistantMessage & {
+            idempotencyKey: string;
+            openclawAutomation: BackgroundSessionResultProvenance;
+          };
+          owner.assertCurrent();
+          params.assertCurrent?.();
+          const committed = await persistSessionTranscriptTurn(scope, {
+            cwd: current.spawnedCwd,
+            expectedSessionId,
+            expectedLifecycleRevision: expectedLifecycleRevision ?? null,
+            assertCurrent: () => {
+              owner.assertCurrent();
+              params.assertCurrent?.();
+              params.signal?.throwIfAborted();
+            },
+            messages: [
+              {
+                message: priorMessage
+                  ? {
+                      ...priorMessage,
+                      content: message.content,
+                      openclawAutomation: params.provenance,
+                    }
+                  : message,
+                idempotencyLookup: "scan",
+                ...(priorId
+                  ? {
+                      eventId: priorId,
+                      predicate: {
+                        kind: "active-entry" as const,
+                        entryId: priorId,
+                        errorMessage: "background result no longer owns the active transcript",
+                      },
+                    }
+                  : {}),
+              },
+            ],
+            touchSessionEntry: true,
+            sessionLifecyclePatch: { lastInteractionAt: message.timestamp },
+            updateMode: "inline",
+            // A retry can finish media ownership after a committed append failed to publish.
+            publishWhen: params.prepareDisplayContent ? "always" : undefined,
+            config: params.config,
+            onMessageCommitted: params.onMessageCommitted,
+          });
+          const appended = committed.messages[0];
+          return appended
+            ? { ok: true }
+            : {
+                ok: false,
+                reason: committed.rejectedReason ?? "background result was not committed",
+              };
+        },
+      );
     },
   });
 }

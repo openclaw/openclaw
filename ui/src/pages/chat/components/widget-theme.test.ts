@@ -135,6 +135,7 @@ it("posts host variables mapped to widget tokens, dropping empty values", () => 
     },
     "*",
   ]);
+  expect(frame.style.colorScheme).toBe("light");
 });
 
 it("targets the exact origin for authenticated cross-origin embeds", () => {
@@ -153,6 +154,7 @@ it("targets the exact origin for authenticated cross-origin embeds", () => {
 });
 
 it("shares one token sample across frames and refreshes mounted widgets on root changes", async () => {
+  document.documentElement.dataset.themeMode = "light";
   const values = { "--bg": "#ffffff", "--accent": "#c41e30" };
   stubComputedStyles(values);
   const readStyles = vi.mocked(getComputedStyle);
@@ -173,6 +175,7 @@ it("shares one token sample across frames and refreshes mounted widgets on root 
 
   for (const frame of [chatFrame, boardFrame, shadowFrame]) {
     postWidgetTheme(frame);
+    expect(frame.style.colorScheme).toBe("light");
   }
   expect(readStyles).toHaveBeenCalledTimes(1);
   expectTheme(chatPost, { tokens: { surface: "#ffffff", accent: "#c41e30" } });
@@ -186,6 +189,8 @@ it("shares one token sample across frames and refreshes mounted widgets on root 
   await Promise.resolve();
   expectTheme(boardPost, darkTheme);
   expectTheme(shadowPost, darkTheme, "https://widget.example");
+  expect(boardFrame.style.colorScheme).toBe("dark");
+  expect(shadowFrame.style.colorScheme).toBe("dark");
 
   readStyles.mockClear();
   values["--accent"] = "#207d82";

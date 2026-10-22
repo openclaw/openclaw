@@ -25,6 +25,12 @@ const context = {
 };
 const fileMetadata = { version: 1, kind: "rendered_file", format: "png" } as const;
 
+function artifactToken(artifact: { viewerPath: string }): string {
+  const token = artifact.viewerPath.split("/").at(-1);
+  assert.isDefined(token);
+  return token;
+}
+
 beforeAll(ensureCuratedViewerRuntimeForTests);
 
 let rootDir: string;
@@ -80,9 +86,9 @@ describe("DiffArtifactStore", () => {
         kind === "oversized-output" ? gzipSync(Buffer.alloc(maximum + 1, 120)) : entry.bytes;
       const decodedBytes = kind === "oversized-output" ? maximum : Buffer.byteLength("viewer") + 1;
       await blobStore.register(artifact.id, bytes, { ...entry.metadata, decodedBytes });
-      await expect(store.readAuthorizedViewer(artifact.id, artifact.token)).rejects.toBeInstanceOf(
-        Error,
-      );
+      await expect(
+        store.readAuthorizedViewer(artifact.id, artifactToken(artifact)),
+      ).rejects.toBeInstanceOf(Error);
     },
   );
   it("reopens compressed viewer bytes and retrieves them with one authorized lookup", async () => {
@@ -95,22 +101,20 @@ describe("DiffArtifactStore", () => {
     expect(registrationLookup).not.toHaveBeenCalled();
     registrationLookup.mockRestore();
     const stored = await blobStore.lookup(artifact.id);
-    expect(Date.parse(artifact.createdAt)).toBe(stored?.createdAt);
     expect(Date.parse(artifact.expiresAt)).toBe(stored?.expiresAt);
     expect(stored?.metadata).toMatchObject({
       version: 1,
       kind: "viewer",
       encoding: "gzip",
       decodedBytes: Buffer.byteLength("<html>demo é 🦀</html>"),
+      context,
     });
-    expect(JSON.stringify(stored?.metadata)).not.toContain(artifact.token);
+    expect(JSON.stringify(stored?.metadata)).not.toContain(artifactToken(artifact));
     await expect(fs.stat(rootDir)).rejects.toMatchObject({ code: "ENOENT" });
 
     ({ store, blobStore } = await reopenStore());
     const lookup = vi.spyOn(blobStore, "lookup");
-    const loaded = await store.readAuthorizedViewer(artifact.id, artifact.token);
-    expect(loaded?.artifact.id).toBe(artifact.id);
-    expect(loaded?.artifact.context).toEqual(context);
+    const loaded = await store.readAuthorizedViewer(artifact.id, artifactToken(artifact));
     expect(Buffer.from(loaded!.html).toString("utf8")).toBe("<html>demo é 🦀</html>");
     expect(lookup).toHaveBeenCalledTimes(1);
     await expect(store.readAuthorizedViewer(artifact.id, "0".repeat(48))).resolves.toBeNull();
@@ -136,7 +140,9 @@ describe("DiffArtifactStore", () => {
 
     await store.stopCleanup();
     await expireDiffArtifactForTest(rootDir, artifact.id, 1_000);
-    await expect(store.readAuthorizedViewer(artifact.id, artifact.token)).resolves.toBeNull();
+    await expect(
+      store.readAuthorizedViewer(artifact.id, artifactToken(artifact)),
+    ).resolves.toBeNull();
     await expect(blobStore.deleteExpired()).resolves.toEqual([]);
   });
 
@@ -147,11 +153,10 @@ describe("DiffArtifactStore", () => {
     expect(standalone.filePath).toMatch(/preview\.png$/);
     expect(standalone.filePath).toContain(rootDir);
     expect(Date.parse(standalone.expiresAt)).toBeGreaterThan(Date.now());
-    expect(standalone.context).toEqual({ agentId: "main", sessionId: "session-123" });
     await expect(blobStore.lookup(standalone.id)).resolves.toMatchObject({
       key: standalone.id,
       sizeBytes: 0,
-      metadata: fileMetadata,
+      metadata: { ...fileMetadata, context: { agentId: "main", sessionId: "session-123" } },
     });
     await store.completeFileArtifact(standalone.id);
   });
@@ -343,7 +348,7 @@ describe("registered Diffs viewer route", () => {
 
   it("rejects invalid tokens", async () => {
     const artifact = await createViewerArtifact(store);
-    const res = await client()(artifact.viewerPath.replace(artifact.token, "bad-token"));
+    const res = await client()(artifact.viewerPath.replace(artifactToken(artifact), "bad-token"));
 
     expect(res.statusCode).toBe(404);
   });

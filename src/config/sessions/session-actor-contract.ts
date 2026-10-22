@@ -1,7 +1,9 @@
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import type { SessionActivitySummary } from "./activity-summary.js";
 import type { RestartRecoveryTerminalDeliveryClaim } from "./restart-recovery-receipt-state.js";
 import type { HarnessCompletionRecovery } from "./restart-recovery-types.js";
 import type { ConversationPublication } from "./session-accessor.sqlite-conversation-publication.js";
+import type { SessionActorTranscriptRow } from "./session-actor-bounded-history.js";
 import type { SessionActorDeliveryEvidence } from "./session-actor-delivery-evidence.types.js";
 import type {
   SessionActorAuthority,
@@ -34,6 +36,7 @@ import type { SessionPendingInputWorkerReceipt } from "./session-pending-input.t
 import type { SessionSourcePredicate } from "./session-source-authority.js";
 import type { SessionTranscriptAuthorityReceipt } from "./session-transcript-authority.types.js";
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
+import type { SessionMessageRewriteCommitted } from "./session-transcript-mutation.types.js";
 import type {
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
@@ -80,6 +83,8 @@ export type SessionActorAppend = (
   initialization?: SessionMetadataOperations["session.metadata.initialize"]["input"];
   /** Optional prepared session header, committed atomically before this append. */
   header?: SessionMetadataOperations["session.metadata.append"]["input"];
+  /** Final prompt text joins its runtime-context carrier at the same durable point. */
+  modelPromptProjection?: { anchor: TranscriptEntryAnchor; text: string };
 };
 
 /** The original snapshot preserves canonical adopted IDs, parents, bytes, and versions. */
@@ -95,6 +100,14 @@ export type SessionActorAppendCommitted = (
 ) & {
   initialEntry?: InitialSessionEntryCommit;
   header?: SessionMetadataOperations["session.metadata.append"]["output"];
+  modelPromptProjection?: {
+    result: NonNullable<SessionMessageRewriteCommitted["result"]> & {
+      message: PersistedUserTurnMessage;
+    };
+    before: SessionTranscriptContextVersion;
+    after: SessionTranscriptContextVersion;
+    rows: SessionActorTranscriptRow[];
+  };
 };
 
 export type SessionActorInputRecovery = {
@@ -294,7 +307,7 @@ export type SessionActorOutcome<Value> =
       kind: "unknown";
       target: SessionActorTarget;
       commandId: string;
-      error: { name: string; message: string };
+      error: { name: string; message: string; cause?: unknown };
     };
 
 export type SessionActorCommitObserver<Value> = {

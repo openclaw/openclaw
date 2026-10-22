@@ -22,7 +22,6 @@ import {
 } from "./openclaw-agent-db-lease.js";
 import { OPENCLAW_AGENT_FTS_SCHEMAS } from "./openclaw-agent-fts-schema.js";
 import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
-import type { WorkerOperations } from "./worker-operation-registry.js";
 
 type PreparationInput = Omit<
   Extract<SessionMaintenanceMetadataCommand, { kind: "maintenance-plan" }>,
@@ -216,7 +215,3 @@ export function createAgentDatabaseMaintenanceOwner(context: {
     },
   };
 }
-
-export type AgentDatabaseMaintenanceOperations = WorkerOperations<
-  ReturnType<typeof createAgentDatabaseMaintenanceOwner>["operations"]
->;

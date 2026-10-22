@@ -167,7 +167,7 @@ describe("Computer Use attempt startup", () => {
           cause: {
             status: {
               reason: "live_test_failed",
-              liveTest: { attempts: 2, durationMs: 120_000 },
+              liveTest: { attempts: 2 },
             },
           },
         });
@@ -195,6 +195,7 @@ async function statusProbe(
   elapsedByMethod: Record<string, number>,
   overrides: NonNullable<CodexPluginConfig["computerUse"]> = {},
 ) {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   let elapsedMs = 0;
   vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
   vi.spyOn(Date, "now").mockImplementation(() => elapsedMs);

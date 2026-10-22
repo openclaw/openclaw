@@ -9,6 +9,9 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { GatewayRequestError } from "../../../ui/src/api/gateway.ts";
 import {
   loadAgentFileContent,
+  overwriteAgentFile,
+  reloadAgentFile,
+  retainAgentFileDrafts,
   saveAgentFile,
   type AgentFilesState,
 } from "../../../ui/src/pages/agents/files.ts";
@@ -17,8 +20,8 @@ import { createSandbox } from "../../agents/sandbox/fs-bridge.test-helpers.js";
 import { createRemoteShellSandboxFsBridge } from "../../agents/sandbox/remote-fs-bridge.js";
 import { createLocalRemoteShellScriptRunner } from "../../agents/sandbox/remote-fs-bridge.test-helpers.js";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
+import { callAgentHandler } from "./agents-mutate.test-support.js";
 import { agentsHandlers } from "./agents.js";
-import type { RespondFn } from "./types.js";
 
 function hashContent(content: string): string {
   return createHash("sha256").update(content, "utf8").digest("hex");
@@ -69,13 +72,7 @@ function registerFileTests(storage: "local" | "remote") {
     method: "agents.files.list" | "agents.files.get" | "agents.files.set",
     params: Record<string, unknown>,
   ) {
-    const respond = vi.fn<RespondFn>();
-    await agentsHandlers[method]?.({
-      req: { type: "req", id: method, method, params: {} },
-      params,
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
+    const respond = await callAgentHandler(agentsHandlers[method]!, method, params, {
       context: {
         getRuntimeConfig: () => ({ agents: { defaults: { workspace } } }),
         broadcast,
@@ -179,6 +176,54 @@ function registerFileTests(storage: "local" | "remote") {
     expect(second.agentFileEditors[memory]?.draft).toBe(drafts[1]);
     expect(readFile()).toBe(drafts[0]);
   });
+
+  it.each(["existing", "missing", "matching draft"])(
+    "keeps a retained draft bound to its original workspace (%s)",
+    async (variant) => {
+      if (variant !== "missing") {
+        writeFile(original);
+      }
+      const originalStorage = storageDir;
+      const editor = await loadEditor(edited);
+      const retained = expectDefined(
+        retainAgentFileDrafts({ ...editor, agentFileActive: memory }),
+        "retained draft",
+      );
+      workspace = fs.realpathSync(tempDirs.make("openclaw-replacement-workspace-"));
+      storageDir = workspace;
+      const replacement = variant === "matching draft" ? edited : original;
+      if (variant !== "missing") {
+        writeFile(replacement);
+      }
+      editor.agentFileEditors = retained.editors;
+      expect(await loadAgentFileContent(editor, "main", memory)).toBe(true);
+
+      expect(await saveDraft(editor)).toBe(false);
+      expect(editor.agentFileConflict).toBe(memory);
+      expect(editor.agentFilesError).toContain("workspace changed");
+      expect(editor.agentFileEditors[memory]?.draft).toBe(edited);
+      expect(retainAgentFileDrafts({ ...editor, agentFileActive: memory })).not.toBeNull();
+      expect(
+        variant === "missing" ? fs.existsSync(path.join(storageDir, memory)) : readFile(),
+      ).toBe(variant === "missing" ? false : replacement);
+
+      if (variant === "missing") {
+        expect(await reloadAgentFile(editor, "main", memory)).toBe(true);
+        expect(editor.agentFileEditors[memory]?.draft).toBe("");
+        expect(fs.existsSync(path.join(storageDir, memory))).toBe(false);
+      } else {
+        expect(await overwriteAgentFile(editor, "main", memory, edited)).toBe(true);
+        expect(readFile()).toBe(edited);
+      }
+      expect(editor.agentFileConflict).toBeNull();
+      expect(editor.agentFilesError).toBeNull();
+      expect(
+        variant === "missing"
+          ? fs.existsSync(path.join(originalStorage, memory))
+          : fs.readFileSync(path.join(originalStorage, memory), "utf8"),
+      ).toBe(variant === "missing" ? false : original);
+    },
+  );
 
   it.runIf(storage === "remote")("rejects unsupported create, permits blind writes", async () => {
     const bridge = expectDefined(remoteBridge, "remote workspace fixture");

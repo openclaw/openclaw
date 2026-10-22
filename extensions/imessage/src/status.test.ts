@@ -198,9 +198,7 @@ describe("imessage setup status", () => {
     [true, undefined, "Using existing imsg at imsg; Homebrew does not manage this binary."],
   ] as const)("prepares imsg with detected=%s", async (detected, path, noteText) => {
     setupToolsMocks.detectBinary.mockResolvedValueOnce(detected);
-    installIMessageCliMock.mockResolvedValueOnce(
-      path ? { ok: true, cliPath: path, version: "0.13.0" } : { ok: true },
-    );
+    installIMessageCliMock.mockResolvedValueOnce(path ? { ok: true, cliPath: path } : { ok: true });
     const result = await prepareIMessage({
       platform: "darwin",
       ...(detected

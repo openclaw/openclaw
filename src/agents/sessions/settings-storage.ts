@@ -1,12 +1,8 @@
-import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
-import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
+import { readFileSync } from "node:fs";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { acquireFileLockSyncWithRetry } from "../../infra/file-lock-sync.js";
-import { resolveJsonSaveTarget } from "../../infra/json-file.js";
+import { hasErrnoCode } from "../../infra/errno.js";
 import type { ThinkingBudgets, Transport } from "../../llm/types.js";
-import { CONFIG_DIR_NAME } from "../package-metadata.js";
 
 interface CompactionSettings {
   enabled?: boolean; // default: true
@@ -113,117 +109,22 @@ export interface Settings {
 
 export type SettingsScope = "global" | "project";
 
-export const SETTINGS_SCOPES: SettingsScope[] = ["global", "project"];
-
-export interface SettingsStorage {
-  /** Pure scope reads; existing custom backends may serve reads through withLock. */
-  readSettingsScope?(scope: SettingsScope): string | undefined;
-  withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void;
-}
-
-export interface SettingsError {
-  scope: SettingsScope;
-  error: Error;
-}
-
-/** Read one scope without applying runtime-specific settings validation or defaults. */
-export function readSettingsScope(
-  storage: SettingsStorage,
-  scope: SettingsScope,
-): { settings: Settings; loadError: Error | null } {
+/** Read one settings file without applying runtime-specific validation or defaults. */
+export function readSettingsScope(path: string): { settings: Settings; loadError: Error | null } {
   try {
-    let content: string | undefined;
-    if (storage.readSettingsScope) {
-      content = storage.readSettingsScope(scope);
-    } else {
-      storage.withLock(scope, (current) => {
-        content = current;
-        return undefined;
-      });
-    }
+    const content = readFileSync(path, "utf-8");
     const settings: unknown = content ? JSON.parse(content) : {};
     if (!isRecord(settings)) {
       throw new TypeError("Session settings must be an object");
     }
     return { settings, loadError: null };
   } catch (error) {
+    if (hasErrnoCode(error, "ENOENT")) {
+      return { settings: {}, loadError: null };
+    }
     return {
       settings: {},
       loadError: toErrorObject(error, "Session settings could not be loaded"),
     };
-  }
-}
-
-export class FileSettingsStorage implements SettingsStorage {
-  private paths: Record<SettingsScope, string>;
-
-  constructor(cwd: string, agentDir: string) {
-    this.paths = {
-      global: join(agentDir, "settings.json"),
-      project: join(cwd, CONFIG_DIR_NAME, "settings.json"),
-    };
-  }
-
-  readSettingsScope(scope: SettingsScope): string | undefined {
-    const path = this.paths[scope];
-    // Observe ownership before absence: a first writer may commit between probes.
-    // Existing lock names and reclaim guards still go through the canonical lock checks.
-    if (
-      !lstatSync(`${path}.lock`, { throwIfNoEntry: false }) &&
-      !lstatSync(`${path}.lock.reclaim`, { throwIfNoEntry: false }) &&
-      !existsSync(path)
-    ) {
-      return undefined;
-    }
-    let content: string | undefined;
-    this.withLock(scope, (current) => {
-      content = current;
-      return undefined;
-    });
-    return content;
-  }
-
-  withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void {
-    const path = this.paths[scope];
-    // The canonical lock creates its parent before acquisition. First writers must
-    // read and derive their updates only after that shared ownership is established.
-    const release = acquireFileLockSyncWithRetry(path);
-    try {
-      const current = existsSync(path) ? readFileSync(path, "utf-8") : undefined;
-      const next = fn(current);
-      if (next !== undefined) {
-        const savePath = resolveJsonSaveTarget(path);
-        const saveDir = realpathSync(dirname(savePath));
-        const canonicalSavePath = join(saveDir, basename(savePath));
-
-        // The atomic helper enforces explicit modes. Carry the existing parent mode
-        // and Node's writeFile creation mode forward so replacement changes no permissions.
-        // Keep rename failures fail-closed: copy fallback can expose a partial destination.
-        replaceFileAtomicSync({
-          filePath: canonicalSavePath,
-          content: next,
-          dirMode: statSync(saveDir).mode & 0o7777,
-          mode: 0o666 & ~process.umask(),
-          preserveExistingMode: true,
-          tempPrefix: basename(canonicalSavePath),
-        });
-      }
-    } finally {
-      release();
-    }
-  }
-}
-
-export class InMemorySettingsStorage implements SettingsStorage {
-  private values: Record<SettingsScope, string | undefined> = {
-    global: undefined,
-    project: undefined,
-  };
-
-  withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void {
-    const next = fn(this.values[scope]);
-    if (next !== undefined) {
-      this.values[scope] = next;
-    }
   }
 }

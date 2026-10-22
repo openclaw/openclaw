@@ -11,6 +11,7 @@ import type {
 } from "../../packages/gateway-protocol/src/schema/claws.js";
 import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { mapNestedStrings } from "../shared/map-nested-strings.js";
 import { digestClawValue } from "./digest.js";
 import { clawActionNeedsEffect, projectClawAddActionEffect } from "./gateway-action-effects.js";
 import { projectClawAddScheduledJobs, projectClawConfiguredAccess } from "./gateway-disclosure.js";
@@ -34,13 +35,25 @@ function safeBlocker(diagnostic: Pick<ClawDiagnostic, "code" | "path">) {
   };
 }
 
-function safeAction(action: { kind: string; id: string; action: string; blocked: boolean }) {
+function safeAction(action: {
+  kind: string;
+  id: string;
+  action: string;
+  blocked: boolean;
+  reason?: string;
+}) {
   return {
     kind: action.kind,
     id: action.id,
     action: action.action,
     blocked: action.blocked,
     ...(action.blocked ? { reason: "Current OpenClaw state blocks this action." } : {}),
+    ...(!action.blocked &&
+    action.kind === "cronJob" &&
+    action.id.startsWith("$portable-heartbeat") &&
+    action.reason
+      ? { reason: action.reason }
+      : {}),
   };
 }
 
@@ -119,8 +132,8 @@ function sealClawLifecyclePlan(
 
 function canonicalizeClawSourcePlan(value: unknown, sourceRoot: string): unknown {
   const root = path.resolve(sourceRoot);
-  const visit = (current: unknown): unknown => {
-    if (typeof current === "string" && path.isAbsolute(current)) {
+  return mapNestedStrings(value, (current) => {
+    if (path.isAbsolute(current)) {
       const relative = path.relative(root, path.resolve(current));
       if (relative === "") {
         return "$CLAW_SOURCE";
@@ -134,15 +147,8 @@ function canonicalizeClawSourcePlan(value: unknown, sourceRoot: string): unknown
       }
       return current;
     }
-    if (Array.isArray(current)) {
-      return current.map(visit);
-    }
-    if (current && typeof current === "object") {
-      return Object.fromEntries(Object.entries(current).map(([key, entry]) => [key, visit(entry)]));
-    }
     return current;
-  };
-  return visit(value);
+  });
 }
 
 function sourceStablePlanIntegrity(plan: { planIntegrity: string }, sourceRoot: string): string {

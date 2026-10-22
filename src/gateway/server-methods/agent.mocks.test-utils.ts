@@ -199,7 +199,6 @@ vi.mock("../../config/sessions/session-accessor.js", async () => {
     recordSessionParticipant: mocks.recordSessionParticipant,
     listSessionParticipantsReadOnly: mocks.listSessionParticipantsReadOnly,
     hasSessionTranscriptEventsSync: mocks.hasSessionTranscriptEventsSync,
-    readTranscriptMutationStateSync: mocks.readTranscriptMutationStateSync,
   };
 });
 

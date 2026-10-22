@@ -149,14 +149,7 @@ it("rejects resource bounds before rubric hashing or provider execution", async 
       },
     ],
   });
-  setCurrentPluginMetadataSnapshotState(
-    snapshot,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    "gateway",
-  );
+  setCurrentPluginMetadataSnapshotState(snapshot, undefined, undefined, undefined, "gateway");
   const tool = requiredTool("main", {
     ...config,
     agents: { defaults: { decisionModel: "fixture/default@synthetic-profile" } },

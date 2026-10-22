@@ -3,7 +3,6 @@ import { executeWithCachedStatement } from "./kysely-sync-cache-state.js";
 import { normalizeSchemaSql, quoteSqliteIdentifier } from "./sqlite-schema-sql.js";
 
 export type SqliteTempTrackingSchema = {
-  kind: "transcript-index";
   statusTable: string;
   pendingTable: string;
   pendingIndex: string;

@@ -556,10 +556,14 @@ export function terminalEvent(identity: WorkerConnectionIdentity, overrides: Liv
 }
 
 export function successfulTranscriptCommit(entryId: string, beforeCommit?: () => Promise<unknown>) {
-  return vi.fn(async () => {
-    await beforeCommit?.();
-    return { ok: true as const, result: { entryIds: [entryId], newLeafId: entryId } };
-  });
+  return vi.fn<NonNullable<WorkerEnvironmentServiceOptions["applyTranscriptCommit"]>>(
+    async ({ onCommitted }) => {
+      await beforeCommit?.();
+      const outcome = { ok: true as const, result: { entryIds: [entryId], newLeafId: entryId } };
+      await onCommitted?.(outcome);
+      return outcome;
+    },
+  );
 }
 
 export function sequencedLiveEvents(ackedSeq = (seq: number) => seq) {

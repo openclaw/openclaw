@@ -23,6 +23,7 @@ export type UpdateDatabaseWriteReceipt = {
   unchanged: boolean;
   fromGenerations?: UpdateDatabaseGenerations;
   generations: UpdateDatabaseGenerations;
+  historicalScans?: import("./update-doctor-scan-receipts.js").UpdateDoctorHistoricalScans;
 };
 
 function readCommittedContent(

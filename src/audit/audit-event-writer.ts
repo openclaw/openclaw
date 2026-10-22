@@ -6,7 +6,11 @@ import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import type { AuditEventInput } from "./audit-event-types.js";
+import type {
+  AgentRunFinishedAuditEventInput,
+  AgentRunStartedAuditEventInput,
+  AuditEventInput,
+} from "./audit-event-types.js";
 import {
   formatAuditWriterError,
   formatAuditWriterRequestError,
@@ -31,6 +35,10 @@ type AuditMaintenanceAttempt = "settled" | "more" | "retry";
 export type AuditEventWriter = {
   ready: Promise<void>;
   record: (input: AuditEventInput) => boolean;
+  recordRun: (
+    start: AgentRunStartedAuditEventInput,
+    finish: AgentRunFinishedAuditEventInput,
+  ) => boolean;
   /** Reports only queue acceptance; persistence succeeds or fails asynchronously. */
   recordExecutionIdentity: (work: ExecutionIdentityAdmissionWork) => boolean;
   /** For decision owners without a native durable record; approvals must not use this path. */
@@ -54,6 +62,7 @@ export function createAuditEventWriter(options: {
   };
   const maxPending = Math.max(1, Math.floor(options.maxPending ?? MAX_PENDING_AUDIT_EVENTS));
   const queue: AuditWriterRequest[] = [];
+  let pendingRows = 0;
   let stopped = false;
   let draining = false;
   let shutdownExpired = false;
@@ -232,7 +241,9 @@ export function createAuditEventWriter(options: {
         retry = results.at(-1)?.status === "retry";
         const settled = results.length - (retry ? 1 : 0);
         // Release the whole settled prefix before an error observer can enqueue or throw.
-        queue.splice(0, settled);
+        for (const request of queue.splice(0, settled)) {
+          pendingRows -= request.type === "record-run" ? 2 : 1;
+        }
         if (settled > 0) {
           resetRetry();
         }
@@ -270,7 +281,8 @@ export function createAuditEventWriter(options: {
   schedule();
 
   const enqueue = (message: AuditWriterRequest): boolean => {
-    if (stopped || queue.length >= maxPending) {
+    const rows = message.type === "record-run" ? 2 : 1;
+    if (stopped || pendingRows + rows > maxPending) {
       if (!stopped) {
         fail(`audit event queue is full (${maxPending}); dropping metadata`);
       }
@@ -283,10 +295,11 @@ export function createAuditEventWriter(options: {
           : message;
       // Preserve the former Worker boundary's clone and prototype-stripping contract.
       queue.push(structuredClone(boundedMessage));
+      pendingRows += rows;
       schedule();
       return true;
     } catch (error) {
-      if (message.type !== "record-event") {
+      if (message.type !== "record-event" && message.type !== "record-run") {
         fail(
           message.type === "record-execution-identity"
             ? "audit execution identity envelope could not be queued"
@@ -302,6 +315,8 @@ export function createAuditEventWriter(options: {
   return {
     ready,
     record: (input) => enqueue({ type: "record-event", eventId: randomUUID(), input }),
+    recordRun: (start, finish) =>
+      enqueue({ type: "record-run", start, finish, eventIds: [randomUUID(), randomUUID()] }),
     recordExecutionIdentity: (work) => enqueue({ type: "record-execution-identity", work }),
     recordExecutionDecision: (receipt) => enqueue({ type: "record-execution-decision", receipt }),
     recordExecutionDecisionWork: (work) =>
@@ -319,6 +334,7 @@ export function createAuditEventWriter(options: {
           shutdownExpired = true;
           maintenancePending = false;
           queue.length = 0;
+          pendingRows = 0;
           if (scheduled) {
             clearImmediate(scheduled);
             scheduled = undefined;

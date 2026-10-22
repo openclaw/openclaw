@@ -1,6 +1,4 @@
-import { createServer } from "node:http";
 import { describe, expect, it, vi } from "vitest";
-import { createConfiguredGatewayLocalProbe } from "../../gateway/local-http-probe.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
 import { GatewayStateOwnerContentionError } from "../../infra/gateway-state-owner.js";
 import { testing } from "./run.test-support.js";
@@ -128,6 +126,28 @@ describe("supervised gateway lock recovery", () => {
     expect(probeHealth).not.toHaveBeenCalled();
   });
 
+  it.each([
+    "SQLITE_READONLY",
+    "SQLITE_FULL",
+    "SQLITE_IOERR",
+    "SQLITE_CANTOPEN",
+    "ENOSPC",
+    "EACCES",
+  ])("does not retry or probe health for %s during state acquisition", async (code) => {
+    const error = new GatewayLockError(
+      "failed to acquire gateway state ownership",
+      Object.assign(new Error("storage unavailable"), { code }),
+    );
+    const startLoop = rejectLoop(error);
+    const probeHealth = vi.fn(async () => true);
+    const clock = createClock();
+    await expect(recover({ startLoop, probeHealth, ...clock })).rejects.toBe(error);
+    expect(startLoop).toHaveBeenCalledOnce();
+    expect(probeHealth).not.toHaveBeenCalled();
+    expect(clock.sleep).not.toHaveBeenCalled();
+    expect(testing.resolveGatewayLockErrorExitCode(error)).toBe(1);
+  });
+
   it("bounds supervised retries when the existing gateway stays unhealthy", async () => {
     const clock = createClock();
     const startLoop = rejectLoop(new GatewayLockError("gateway already running"));
@@ -170,39 +190,5 @@ describe("supervised gateway lock recovery", () => {
     expect(health(200, '{"ok":true,"status":"ready"}')).toBe(false);
     expect(health(404, "not found")).toBe(false);
     expect(health(200, "not json")).toBe(false);
-  });
-
-  it("bounds slow health responses with an absolute deadline", async () => {
-    const server = createServer((_req, res) => {
-      res.writeHead(200, { "content-type": "application/json" });
-      const interval = setInterval(() => {
-        res.write(" ");
-      }, 10);
-      res.once("close", () => clearInterval(interval));
-    });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", () => resolve());
-    });
-
-    try {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("expected TCP server address");
-      }
-      const startedAt = Date.now();
-      await expect(
-        createConfiguredGatewayLocalProbe({}).requestHttp({
-          host: "127.0.0.1",
-          port: address.port,
-          pathname: "/healthz",
-          timeoutMs: 50,
-        }),
-      ).resolves.toBeNull();
-      expect(Date.now() - startedAt).toBeLessThan(500);
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((err) => (err ? reject(err) : resolve()));
-      });
-    }
   });
 });

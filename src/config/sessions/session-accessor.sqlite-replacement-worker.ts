@@ -600,6 +600,7 @@ export async function runSessionEntryWorkerMutation<T>(
           ),
         ),
         committed.conversationPublication,
+        committed.fullEntries,
       );
     },
     executionOptions.retainedExecution,

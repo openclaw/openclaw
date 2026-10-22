@@ -39,6 +39,7 @@ describe("mantis discord smoke runtime", () => {
   function mockDiscord({
     listedChannel = "1456744319972282449",
     channelGuild = "1456350064065904867",
+    reactionStatus = 204,
   } = {}) {
     fetchWithSsrFGuard.mockImplementation(
       async ({ url, init }: { url: string; init?: RequestInit }) => {
@@ -71,7 +72,9 @@ describe("mantis discord smoke runtime", () => {
           channelGuild === "1456350064065904867" &&
           method === "PUT" &&
           reactionPaths.includes(pathname)
-            ? new Response(null, { status: 204 })
+            ? reactionStatus === 204
+              ? new Response(null, { status: 204 })
+              : jsonResponse({ message: "Missing reaction permission" }, reactionStatus)
             : payload
               ? jsonResponse(payload)
               : jsonResponse({ message: `unexpected ${method} ${pathname}` }, 404);
@@ -157,6 +160,37 @@ describe("mantis discord smoke runtime", () => {
       }),
     );
   });
+
+  it.each([false, true])(
+    "retains a successful post when its reaction fails (redacted=%s)",
+    async (redactPublicMetadata) => {
+      mockDiscord({ reactionStatus: 403 });
+      const result = await runSmoke({
+        outputDir: ".artifacts/qa-e2e/mantis/reaction-failure",
+        redactPublicMetadata,
+      });
+
+      expect(result.status).toBe("fail");
+      const messageId = redactPublicMetadata ? "<redacted>" : "1500000000000000001";
+      const summaryText = await readText(result.summaryPath);
+      expect(JSON.parse(summaryText).message).toEqual({
+        id: messageId,
+        posted: true,
+        reactionAdded: false,
+      });
+      const reportText = await readText(result.reportPath);
+      expect(reportText).toContain(`- Posted message: ${messageId}`);
+      expect(reportText).toContain("- Added reaction: no");
+      expect(await readText(path.join(result.outputDir, "error.txt"))).toContain(
+        "Missing reaction permission",
+      );
+      expect(fetchGuardCallsWithMethod("POST")).toHaveLength(1);
+      expect(fetchGuardCallsWithMethod("PUT")).toHaveLength(1);
+      if (redactPublicMetadata) {
+        expect(summaryText + reportText).not.toContain("1500000000000000001");
+      }
+    },
+  );
 
   it("fails before calling Discord when required ids are missing", async () => {
     const result = await runSmoke({

@@ -68,6 +68,20 @@ function expiredApproval(): ExpiredApprovalSnapshot {
   } as ExpiredApprovalSnapshot;
 }
 
+function watcherApproval(operation: "add" | "update"): PendingApprovalSnapshot {
+  const approval = pendingApproval();
+  if (approval.presentation.kind !== "exec") {
+    throw new Error("Expected the exec fixture");
+  }
+  return {
+    ...approval,
+    presentation: {
+      ...approval.presentation,
+      streamProposal: { jobId: "watcher/alpha", name: "Build monitor", operation },
+    },
+  };
+}
+
 function pluginApproval(
   severity: NonNullable<PluginApprovalPresentation["severity"]> = "warning",
 ): PendingApprovalSnapshot {
@@ -239,6 +253,66 @@ describe("ApprovalPage", () => {
     expect(page.textContent).toContain("Waiting for your decision");
   });
 
+  it.each([
+    ["add", "Start watching"],
+    ["update", "Save watcher change"],
+  ] as const)(
+    "explains a watcher %s before recording its exact decision",
+    async (operation, label) => {
+      const pending = watcherApproval(operation);
+      const request = vi.fn(async (method: string): Promise<unknown> =>
+        method === "approval.get"
+          ? { approval: pending }
+          : {
+              applied: true,
+              approval: { ...allowedApproval(), presentation: pending.presentation },
+            },
+      );
+      const { page } = await createPage(request);
+      await settle(page);
+
+      expect(page.querySelector("h1")?.textContent).toContain("Build monitor");
+      expect(page.textContent).toContain("after you leave this chat, until stopped");
+      expect(page.textContent).toContain("restart automatically");
+      expect(page.querySelector('[data-decision="deny"]')?.textContent?.trim()).toBe("Cancel");
+      const allowButton = decision(page);
+      expect(allowButton.textContent?.trim()).toBe(label);
+      allowButton.click();
+      await settle(page);
+
+      expect(request).toHaveBeenCalledWith("approval.resolve", {
+        id: pending.id,
+        kind: "exec",
+        decision: "allow-once",
+      });
+      expect(page.querySelector(".approval-page__heading p")?.textContent).toContain(
+        "Approval alone does not confirm that the change was saved or the watcher started",
+      );
+    },
+  );
+
+  it("reloads a denied watcher change without claiming that the existing watcher stopped", async () => {
+    const pending = watcherApproval("update");
+    const request = vi.fn(async () => ({
+      approval: {
+        ...pending,
+        status: "denied",
+        decision: "deny",
+        reason: "user",
+        resolvedAtMs: 2_000,
+        resolver: { kind: "device", id: "reviewer-device" },
+      },
+    }));
+    const { page } = await createPage(request);
+    await settle(page);
+
+    expect(page.querySelector(".approval-page__heading p")?.textContent).toContain(
+      "It did not stop or change the existing watcher",
+    );
+    expect(page.querySelectorAll("[data-decision]")).toHaveLength(0);
+    expect(request).toHaveBeenCalledOnce();
+  });
+
   it("keeps a no-auth approval readable without enabling its decisions", async () => {
     const request = vi.fn(
       async (_method: string) => ({ approval: pendingApproval() }) satisfies ApprovalGetResult,
@@ -397,6 +471,32 @@ describe("ApprovalPage", () => {
     expect(text(page, "h1")).toBe("Resolved elsewhere");
     expect(page.textContent).toContain("Another surface or an earlier attempt");
   });
+
+  it.each([false, true])(
+    "renders a fail-closed timeout distinctly from another surface's decision (watcher=%s)",
+    async (watcher) => {
+      const pending = watcher ? watcherApproval("add") : pendingApproval();
+      const expired = { ...expiredApproval(), presentation: pending.presentation };
+      const request = vi.fn(async (method: string): Promise<unknown> =>
+        method === "approval.get"
+          ? ({ approval: pending } satisfies ApprovalGetResult)
+          : ({ applied: false, approval: expired } satisfies ApprovalResolveResult),
+      );
+      const { page } = await createPage(request);
+      await settle(page);
+
+      (page.querySelector('[data-decision="allow-once"]') as HTMLButtonElement).click();
+      await settle(page);
+
+      expect(page.querySelector("h1")?.textContent).toBe("Expired");
+      expect(page.textContent).toContain(
+        watcher
+          ? "This proposal did not create a watcher"
+          : "No decision arrived before the deadline",
+      );
+      expect(page.textContent).not.toContain("Another surface or an earlier attempt");
+    },
+  );
 
   it("fails closed when the Gateway returns a malformed projection", async () => {
     const request = vi.fn(async () => ({ approval: { status: "pending" } }));

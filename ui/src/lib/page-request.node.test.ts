@@ -1,74 +1,51 @@
 import { expect, it, vi } from "vitest";
 import { createPageRequest } from "./page-request.ts";
 
-it.each(["complete", "error"] as const)(
-  "surfaces a failed %s publisher after releasing the pending request",
-  async (outcome) => {
-    const requestError = new Error("Usage request failed");
-    const publicationError = new Error("Usage publication failed");
-    const publish = vi.fn(() => {
-      throw publicationError;
-    });
-    const notify = vi.fn();
-    const request = createPageRequest(notify, {
-      task: async () => {
-        if (outcome === "error") {
-          throw requestError;
-        }
-        return "usage";
-      },
-      onComplete: publish,
-      onError: publish,
-    });
+function fixture(complete?: (value: string) => void, error?: (error: unknown) => void) {
+  const onComplete = vi.fn(complete),
+    onError = vi.fn(error),
+    notify = vi.fn();
+  const task = vi.fn((value: Promise<string>, _options: { signal: AbortSignal }) => value);
+  const request = createPageRequest(notify, { task, onComplete, onError });
+  return { request, notify, task, onComplete, onError };
+}
 
-    const pending = request.run(undefined);
-    expect(request.pending).toBe(true);
-    await expect(pending).rejects.toBe(publicationError);
-    expect(publish).toHaveBeenCalledExactlyOnceWith(outcome === "error" ? requestError : "usage");
-    expect(request.pending).toBe(false);
-    expect(notify).toHaveBeenCalledTimes(2);
-  },
-);
-
-it("presents an ordinary request failure through the error publisher", async () => {
+it.each([
+  ["complete", true],
+  ["error", true],
+  ["error", false],
+] as const)("settles %s requests when publisher throws=%s", async (outcome, throws) => {
   const requestError = new Error("Usage request failed");
-  const notify = vi.fn();
-  const onComplete = vi.fn();
-  const onError = vi.fn();
-  const request = createPageRequest(notify, {
-    task: async () => {
-      throw requestError;
-    },
-    onComplete,
-    onError,
-  });
-
-  await expect(request.run(undefined)).resolves.toBeUndefined();
-  expect(onError).toHaveBeenCalledExactlyOnceWith(requestError);
-  expect(onComplete).not.toHaveBeenCalled();
+  const publicationError = new Error("Usage publication failed");
+  const fail = () => {
+    throw publicationError;
+  };
+  const publish = throws ? fail : undefined;
+  const { request, notify, onComplete, onError } = fixture(publish, publish);
+  const pending = request.run(
+    outcome === "error" ? Promise.reject(requestError) : Promise.resolve("usage"),
+  );
+  expect(request.pending).toBe(true);
+  await (throws
+    ? expect(pending).rejects.toBe(publicationError)
+    : expect(pending).resolves.toBeUndefined());
+  expect(outcome === "error" ? onError : onComplete).toHaveBeenCalledExactlyOnceWith(
+    outcome === "error" ? requestError : "usage",
+  );
+  expect(outcome === "error" ? onComplete : onError).not.toHaveBeenCalled();
   expect(request.pending).toBe(false);
   expect(notify).toHaveBeenCalledTimes(2);
 });
 
 it.each(["complete", "error"] as const)(
-  "does not publish a superseded %s or release its successor",
+  "ignores superseded %s without releasing its successor",
   async (outcome) => {
-    const first = Promise.withResolvers<string>();
-    const second = Promise.withResolvers<string>();
-    const signals: AbortSignal[] = [];
-    const onComplete = vi.fn();
-    const onError = vi.fn();
-    const request = createPageRequest(vi.fn(), {
-      task: (value: Promise<string>, { signal }) => {
-        signals.push(signal);
-        return value;
-      },
-      onComplete,
-      onError,
-    });
-    const retired = request.run(first.promise);
-    const latest = request.run(second.promise);
-    expect(signals[0]?.aborted).toBe(true);
+    const first = Promise.withResolvers<string>(),
+      second = Promise.withResolvers<string>();
+    const { request, task, onComplete, onError } = fixture();
+    const retired = request.run(first.promise),
+      latest = request.run(second.promise);
+    expect(task.mock.calls[0]?.[1].signal.aborted).toBe(true);
     if (outcome === "error") {
       first.reject(new Error("retired"));
     } else {
@@ -88,23 +65,15 @@ it.each(["complete", "error"] as const)(
 it("keeps a successor started by the completion publisher pending", async () => {
   const next = Promise.withResolvers<string>();
   let successor: Promise<void> | undefined;
-  const values: string[] = [];
-  const request = createPageRequest(vi.fn(), {
-    task: (value: Promise<string>) => value,
-    onComplete: (value) => {
-      values.push(value);
-      if (value === "first") {
-        successor = request.run(next.promise);
-      }
-    },
-    onError: (error) => {
-      throw error;
-    },
+  const { request, onComplete } = fixture((value) => {
+    if (value === "first") {
+      successor = request.run(next.promise);
+    }
   });
   await request.run(Promise.resolve("first"));
   expect(request.pending).toBe(true);
   next.resolve("second");
   await successor;
-  expect(values).toEqual(["first", "second"]);
+  expect(onComplete.mock.calls).toEqual([["first"], ["second"]]);
   expect(request.pending).toBe(false);
 });

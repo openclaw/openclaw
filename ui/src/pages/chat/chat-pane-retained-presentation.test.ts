@@ -539,7 +539,7 @@ describe("chat pane retained presentation lifecycle", () => {
       pane.chatState.attach(state);
       pane.active = true;
 
-      openSessionWorkspaceFile(state, { path: "README.md" });
+      const opening = openSessionWorkspaceFile(state, { path: "README.md" });
       expect(getFile).toHaveBeenCalledExactlyOnceWith(state.sessionKey, "README.md", {
         agentId: "main",
       });
@@ -565,7 +565,7 @@ describe("chat pane retained presentation lifecycle", () => {
           content: "This retired preview must not return.",
         },
       });
-      await file.promise;
+      await opening;
 
       expect(state.sidebarContent).toBeNull();
       expect(state.sessionWorkspaceState?.previews).toEqual([]);

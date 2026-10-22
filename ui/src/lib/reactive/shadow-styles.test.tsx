@@ -1,10 +1,10 @@
 /* @vitest-environment jsdom */
 
-import { createSignal, flush } from "solid-js";
-import { afterEach, expect, it, onTestFinished } from "vitest";
+import { createComponent, createSignal, flush } from "solid-js";
+import { expect, it, onTestFinished } from "vitest";
 import { PanelTabStrip } from "../../components/panel-tab-strip-solid.tsx";
-import { Tabs } from "../../components/solid/tabs.tsx";
-import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { Tabs, type TabsProps } from "../../components/solid/tabs.tsx";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import tabsStyles from "../../styles/tabs.css?inline";
 
 const items = [
@@ -12,44 +12,39 @@ const items = [
   { value: "second", label: "Second" },
 ];
 
-function shadowContainer() {
-  const host = document.createElement("div");
-  document.body.append(host);
+function shadowRoot() {
+  const host = document.body.appendChild(document.createElement("div"));
   const root = host.attachShadow({ mode: "open" });
-  const container = document.createElement("div");
-  root.append(container);
   onTestFinished(() => host.remove());
-  return { root, container };
+  return root;
+}
+
+function createTabsFixture(root?: ShadowRoot, props: () => Partial<TabsProps> = () => ({})) {
+  return mountSolid(() => <Tabs items={items} active={null} ariaLabel="Sections" {...props()} />, {
+    container: root?.appendChild(document.createElement("div")),
+  });
 }
 
 function styles(root: ParentNode) {
-  return [...root.querySelectorAll("style[data-openclaw-overlay-style]")].map(
-    (style) => style.textContent,
-  );
+  const sheets = root.querySelectorAll("style[data-openclaw-overlay-style]");
+  return Array.from(sheets, (style) => style.textContent);
 }
 
-afterEach(cleanupSolid);
-
 it("shares tab styles across components and releases them with the last consumer", () => {
-  const { root, container } = shadowContainer();
-  const panelContainer = document.createElement("div");
-  root.append(panelContainer);
-  const tabs = mountSolid(() => <Tabs items={items} active={null} ariaLabel="Sections" />, {
-    container,
-  });
+  const root = shadowRoot();
+  const tabs = createTabsFixture(root);
   const panel = mountSolid(
-    () => (
-      <PanelTabStrip
-        tabs={[{ id: "first", domId: "tab-first", label: "First", closeLabel: "Close first" }]}
-        activeId="first"
-        ariaControls="panel"
-        onSelect={() => {}}
-        onClose={() => {}}
-        onNew={() => {}}
-        newLabel="New tab"
-      />
-    ),
-    { container: panelContainer },
+    () =>
+      createComponent(PanelTabStrip, {
+        tabs: [{ id: "first", domId: "tab-first", label: "First", closeLabel: "Close first" }],
+        activeId: "first",
+        ariaControls: "panel",
+        newLabel: "New tab",
+        onSelect() {},
+        onClose() {},
+        onNew() {},
+      }),
+    { container: root.appendChild(document.createElement("div")) },
   );
   flush();
   expect(styles(root)).toEqual([tabsStyles]);
@@ -63,45 +58,41 @@ it("shares tab styles across components and releases them with the last consumer
 it.each(["items", "active"] as const)(
   "refreshes a moved tablist's shadow root when %s changes",
   (changed) => {
-    const original = shadowContainer();
-    const destination = shadowContainer();
+    const original = shadowRoot();
+    const destination = shadowRoot();
     const [currentItems, setItems] = createSignal(items);
     const [active, setActive] = createSignal("first");
     const view = mountSolid(
       () => <Tabs items={currentItems()} active={active()} ariaLabel="Sections" />,
-      { container: original.container },
+      { container: original.appendChild(document.createElement("div")) },
     );
     flush();
-    expect(styles(original.root)).toEqual([tabsStyles]);
+    expect(styles(original)).toEqual([tabsStyles]);
 
-    destination.root.append(view.container);
+    destination.append(view.container);
     if (changed === "items") {
       setItems([...items, { value: "third", label: "Third" }]);
     } else {
       setActive("second");
     }
     flush();
-    expect(styles(original.root)).toEqual([]);
-    expect(styles(destination.root)).toEqual([tabsStyles]);
+    expect(styles(original)).toEqual([]);
+    expect(styles(destination)).toEqual([tabsStyles]);
 
     view.unmount();
-    expect(styles(destination.root)).toEqual([]);
+    expect(styles(destination)).toEqual([]);
   },
 );
 
 it("replaces extra shadow styles without adding them to light DOM", () => {
-  const { root, container } = shadowContainer();
+  const root = shadowRoot();
   const firstStyle = ".first { color: red; }";
   const secondStyle = ".second { color: blue; }";
   const [extra, setExtra] = createSignal([firstStyle]);
-  const shadow = mountSolid(
-    () => <Tabs items={items} active={null} ariaLabel="Shadow sections" shadowStyles={extra()} />,
-    { container },
-  );
+  const props = () => ({ shadowStyles: extra() });
+  const shadow = createTabsFixture(root, props);
   const documentStyles = styles(document);
-  const light = mountSolid(() => (
-    <Tabs items={items} active={null} ariaLabel="Light sections" shadowStyles={extra()} />
-  ));
+  const light = createTabsFixture(undefined, props);
   flush();
   expect(styles(root)).toEqual([tabsStyles, firstStyle]);
   expect(styles(document)).toEqual(documentStyles);

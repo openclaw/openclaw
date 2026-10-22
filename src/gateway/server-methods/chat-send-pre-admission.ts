@@ -11,7 +11,6 @@ import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { createChatAbortOps } from "../chat-abort-ops.js";
 import { chatAbortMarkerTimestampMs } from "../server-chat-state.js";
-import { PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { withGatewaySessionEntry } from "../session-utils-store.js";
@@ -123,7 +122,6 @@ export function resolveChatSendRequestConflict(
     readPreRegisteredRun({
       key: session.pendingChatSendKey,
       entry: entries[1],
-      keyPrefix: PENDING_CHAT_SEND_DEDUPE_PREFIX,
     })?.payload.attemptId === ownPendingAttemptId;
   const retryEntries = ownPendingAttempt ? entries.slice(0, 1) : entries;
   if (
@@ -242,7 +240,6 @@ export function respondChatSendRetry(
   const pending = readPreRegisteredRun({
     key: pendingChatSendKey,
     entry: context.dedupe.get(pendingChatSendKey),
-    keyPrefix: PENDING_CHAT_SEND_DEDUPE_PREFIX,
   });
   if (pending || getRpcSourceForGateway(clientRunId, context.resolveGatewayContext)) {
     respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, {
@@ -567,7 +564,7 @@ export async function runChatSendPreAdmission(
   let durableEntry = entry;
   if (requiresReconciliation) {
     const { reconcileOrphanedGatewaySessionRecovery } =
-      await import("../session-recovery-service.js");
+      await import("../session-recovery-source.js");
     try {
       const recoveryEntry = entry;
       if (recoveryEntry) {

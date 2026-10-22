@@ -1,18 +1,38 @@
-import { expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
 import { inspectWindowsGatewayFirewall } from "./windows-gateway-firewall-diagnostics.js";
 
 type InspectOptions = Parameters<typeof inspectWindowsGatewayFirewall>[0];
-type FirewallCommandRunner = NonNullable<InspectOptions["runCommandWithTimeout"]>;
+type FirewallCommandRunner = typeof runCommandWithTimeout;
+
+vi.mock("../process/exec.js", { spy: true });
+
+beforeEach(() => {
+  vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+  vi.mocked(runCommandWithTimeout).mockReset();
+});
+afterEach(() => vi.restoreAllMocks());
+
+function commandResult(overrides: Partial<SpawnResult> = {}): SpawnResult {
+  return {
+    code: 0,
+    stdout: "",
+    stderr: "",
+    signal: null,
+    killed: false,
+    termination: "exit",
+    ...overrides,
+  };
+}
 
 function inspect(
   runner: FirewallCommandRunner,
-  options: Partial<Pick<InspectOptions, "bind" | "platform" | "mode" | "timeoutMs">> = {},
+  options: Partial<Pick<InspectOptions, "bind">> = {},
 ) {
+  vi.mocked(runCommandWithTimeout).mockImplementation(runner);
   return inspectWindowsGatewayFirewall({
     bind: "lan",
     port: 18789,
-    platform: "win32",
-    runCommandWithTimeout: runner,
     ...options,
   });
 }
@@ -66,10 +86,8 @@ const baseRule = {
 const ruleRow = (overrides: Partial<typeof baseRule> = {}) => ({ ...baseRule, ...overrides });
 
 async function classify(params: Parameters<typeof quickPayloadJson>[0]) {
-  const runner: FirewallCommandRunner = async () => ({
-    code: 0,
-    stdout: quickPayloadJson(params),
-  });
+  const runner: FirewallCommandRunner = async () =>
+    commandResult({ stdout: quickPayloadJson(params) });
   return await inspect(runner);
 }
 
@@ -79,7 +97,8 @@ it("skips non-Windows and non-LAN bindings", async () => {
     applies: false,
     code: "windows_firewall_not_applicable",
   });
-  await expect(inspect(runner, { platform: "darwin" })).resolves.toMatchObject({
+  vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+  await expect(inspect(runner)).resolves.toMatchObject({
     applies: false,
     code: "windows_firewall_not_applicable",
   });
@@ -175,17 +194,17 @@ it("reports unrestricted profiles before checking rules", async () => {
 it.each([
   [
     "a nonzero exit",
-    async () => ({ code: 1, stdout: quickPayloadJson() }),
+    async () => commandResult({ code: 1, stdout: quickPayloadJson() }),
     "OpenClaw could not quickly inspect Windows Firewall LAN Gateway policy.",
   ],
   [
     "truncated stderr",
-    async () => ({ code: 0, stdout: quickPayloadJson(), stderrTruncatedBytes: 1 }),
+    async () => commandResult({ stdout: quickPayloadJson(), stderrTruncatedBytes: 1 }),
     "OpenClaw could not quickly inspect Windows Firewall LAN Gateway policy.",
   ],
   [
     "malformed JSON",
-    async () => ({ code: 0, stdout: "{" }),
+    async () => commandResult({ stdout: "{" }),
     "OpenClaw could not parse Windows Firewall LAN Gateway policy.",
   ],
   [
@@ -217,14 +236,15 @@ it.each([
 );
 
 it("avoids follow-up probes for disabled local rules", async () => {
-  const runner = vi.fn<FirewallCommandRunner>(async () => ({
-    code: 0,
-    stdout: quickPayloadJson({
-      state: statePayload({ AllowLocalFirewallRules: "False" }, "NotConfigured"),
-      activeRules: [],
-      localRules: [],
+  const runner = vi.fn<FirewallCommandRunner>(async () =>
+    commandResult({
+      stdout: quickPayloadJson({
+        state: statePayload({ AllowLocalFirewallRules: "False" }, "NotConfigured"),
+        activeRules: [],
+        localRules: [],
+      }),
     }),
-  }));
+  );
   await expect(inspect(runner)).resolves.toMatchObject({
     code: "windows_firewall_local_rules_ignored",
   });
@@ -238,8 +258,7 @@ it("retains managed ActiveStore rules", async () => {
     expect(command).toContain("-ieq");
     expect(command).toContain("GroupPolicy");
     expect(command).toContain("MDM");
-    return {
-      code: 0,
+    return commandResult({
       stdout: quickPayloadJson({
         state: statePayload({ AllowLocalFirewallRules: "False" }, "NotConfigured"),
         activeRules: [
@@ -251,21 +270,11 @@ it("retains managed ActiveStore rules", async () => {
         ],
         localRules: [ruleRow({ DisplayName: "Ignored local allow" })],
       }),
-    };
+    });
   });
   await expect(inspect(runner)).resolves.toMatchObject({
     severity: "info",
     code: "windows_firewall_rule_present",
   });
   expect(runner).toHaveBeenCalledTimes(1);
-});
-
-it("honors timeout overrides for quick probing", async () => {
-  const runner = vi.fn<FirewallCommandRunner>(async () => ({
-    code: 0,
-    stdout: quickPayloadJson(),
-  }));
-  await inspect(runner, { mode: "quick", timeoutMs: 1234 });
-  expect(runner).toHaveBeenCalledTimes(1);
-  expect(runner.mock.calls[0]?.[1]).toMatchObject({ timeoutMs: 1234 });
 });

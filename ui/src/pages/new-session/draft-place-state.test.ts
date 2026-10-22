@@ -1,6 +1,7 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { WorktreesBranchesResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewayAgentRow } from "../../api/types.ts";
 import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
 import type { DraftCloudProfile } from "./discovery.ts";
@@ -474,13 +475,17 @@ describe("DraftPlaceState repository selection", () => {
     },
   );
 
-  it.each(["git", "unavailable", "rejected"] as const)(
+  it.each(["git", "unavailable", "rejected", "forbidden"] as const)(
     "keeps edited branch through %s reconnect",
     async (result) => {
-      const { state, request, persistPreference } = createRepositoryFixture({ workspaceGit: true });
+      const { state, request, persistPreference, readPreference } = createRepositoryFixture({
+        workspaceGit: true,
+      });
+      readPreference.mockReturnValue({ worktree: false });
       request.mockResolvedValue(GIT);
       state.adoptAgentDefaults();
       await repositoryReady(state);
+      state.selectWorktree(true);
       state.setBaseRef("my-branch");
       state.setWorktreeName("my-checkout");
 
@@ -490,13 +495,25 @@ describe("DraftPlaceState repository selection", () => {
       request.mockReturnValue(discovery.promise);
       state.adoptAgentDefaults();
       expect(state.baseRef).toBe("my-branch");
-      if (result === "rejected") {
+      if (result === "forbidden") {
+        discovery.reject(
+          new GatewayRequestError({ code: "FORBIDDEN", message: "missing scope: operator.write" }),
+        );
+      } else if (result === "rejected") {
         discovery.reject(new Error("Git unavailable"));
       } else {
         discovery.resolve({ ...GIT, repositoryStatus: result });
       }
-      await repositoryReady(state, result === "git" ? "git" : "unavailable");
-      expect(state).toMatchObject({ baseRef: "my-branch", worktreeName: "my-checkout" });
+      await repositoryReady(
+        state,
+        result === "git" ? "git" : result === "forbidden" ? "forbidden" : "unavailable",
+      );
+      expect(state).toMatchObject({
+        worktree: true,
+        baseRef: "my-branch",
+        worktreeName: "my-checkout",
+      });
+      expect(state.preferenceSelection().worktree).toBe(true);
 
       state.invalidateGatewayDiscovery(false);
       request.mockResolvedValue(GIT);
@@ -648,7 +665,9 @@ describe("DraftPlaceState repository selection", () => {
     await currentPublished;
     state.selectWorktree(true);
 
-    previous.reject(new Error("old repository unavailable"));
+    previous.reject(
+      new GatewayRequestError({ code: "FORBIDDEN", message: "missing scope: operator.write" }),
+    );
     await previous.promise.catch(() => undefined);
 
     expect(state.repository).toMatchObject({ kind: "git", repoRoot: "/new-repo" });

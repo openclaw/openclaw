@@ -2,7 +2,6 @@ import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
-import type { LiveModelCatalogFetchGuard } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-entry";
 import {
   buildFamilyForwardCompatModel,
@@ -139,10 +138,8 @@ const OPENAI_MANIFEST_PROVIDER = buildManifestModelProviderConfig({
 
 type BuildOpenAILiveProviderConfigParams = {
   apiKey: string;
-  baseUrl?: string;
+  baseUrl: string;
   discoveryApiKey?: string;
-  env?: Record<string, string | undefined>;
-  fetchGuard?: LiveModelCatalogFetchGuard;
 };
 
 function buildOpenAIManifestModelsForBaseUrl(baseUrl: string): ModelDefinitionConfig[] {
@@ -172,8 +169,7 @@ function buildOpenAIStaticPlatformProviderConfig(
 async function buildOpenAILiveProviderConfig(
   params: BuildOpenAILiveProviderConfigParams,
 ): Promise<OpenAILiveProviderCatalog> {
-  const baseUrl =
-    normalizeOptionalString(params.baseUrl) ?? resolveOpenAIDefaultBaseUrl(params.env);
+  const baseUrl = params.baseUrl;
   const fallback = buildOpenAIStaticPlatformProviderConfig(params.apiKey, baseUrl);
   if (!isOpenAIApiBaseUrl(baseUrl)) {
     return { provider: fallback };
@@ -213,7 +209,6 @@ async function buildOpenAILiveProviderConfig(
       models: catalogModels,
       apiKey: params.apiKey,
       discoveryApiKey: params.discoveryApiKey,
-      fetchGuard: params.fetchGuard,
       ttlMs: OPENAI_MODELS_CACHE_TTL_MS,
       auditContext: "openai-model-discovery",
     });
@@ -364,7 +359,6 @@ async function buildOpenAICodexLiveProviderConfig(params: {
   discoveryApiKey: string;
   accountId?: string;
   catalogContext?: OpenAICodexModelsEndpointContext;
-  fetchGuard?: LiveModelCatalogFetchGuard;
 }): Promise<OpenAILiveProviderCatalog> {
   const catalogRuntime = await import("openclaw/plugin-sdk/provider-catalog-live-runtime");
   const { getCachedLiveCatalogValue } = await import("openclaw/plugin-sdk/provider-catalog-shared");
@@ -385,7 +379,6 @@ async function buildOpenAICodexLiveProviderConfig(params: {
           providerId: PROVIDER_ID,
           endpoint,
           discoveryApiKey: params.discoveryApiKey,
-          fetchGuard: params.fetchGuard,
           signal,
           auditContext: "openai-model-discovery",
           readRows: readCodexModelRows,

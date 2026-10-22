@@ -9,6 +9,7 @@ type ElapsedTimeProps = {
   endMs?: number | null;
   minimumUnit?: "second" | "minute";
   singleUnit?: boolean;
+  includeSeconds?: boolean;
 };
 
 export function ElapsedTime(props: ElapsedTimeProps) {
@@ -28,6 +29,7 @@ export function ElapsedTime(props: ElapsedTimeProps) {
       ? formatDurationHuman(elapsedMs)
       : formatDurationCompact(
           props.minimumUnit === "minute" ? Math.floor(elapsedMs / 60_000) * 60_000 : elapsedMs,
+          { includeSeconds: props.includeSeconds },
         );
   });
   return (

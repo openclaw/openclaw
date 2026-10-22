@@ -1,3 +1,4 @@
+import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import type { FastMode, GatewayAgentRow } from "../../api/types.ts";
 import type { DurableDraftModelSelection } from "../../lib/chat/composer-draft-store.runtime.ts";
 import { normalizeThinkingOptionValue } from "../../lib/chat/thinking.ts";
@@ -82,18 +83,13 @@ export abstract class NewSessionModelSelection {
   thinkingLevel = "";
   fastMode: FastMode | undefined;
 
-  private readonly listeners = new Set<() => void>();
+  private readonly listeners = createChangeListeners();
   protected readonly notify = () => {
-    for (const listener of this.listeners) {
-      listener();
-    }
+    this.listeners.publish();
     this.changed();
   };
 
-  subscribe(listener: () => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
+  readonly subscribe = this.listeners.subscribe;
 
   constructor(
     private readonly onSelectionChange: ModelSelectionChange,

@@ -72,6 +72,9 @@ describe("explicit Codex plugin app refresh", () => {
 
     const cached = appCache.read({ key, request });
     expect(cached.state).toBe("stale");
-    expect(cached.snapshot).toEqual(previousSnapshot);
+    expect(cached.snapshot?.apps).toEqual(previousSnapshot.apps);
+    expect(cached.snapshot?.installedApps).toEqual(previousSnapshot.installedApps);
+    expect(cached.snapshot?.targetAppIds).toEqual(previousSnapshot.targetAppIds);
+    expect(cached.snapshot?.expiresAtMs).toBe(previousSnapshot.expiresAtMs);
   });
 });

@@ -1,15 +1,23 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import * as runtimeEnv from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { pollPendingIMessageApprovalReactions as poll } from "./approval-reaction-poller.js";
-import {
-  clearIMessageApprovalReactionTargetsForTest,
-  registerIMessageApprovalReactionTarget,
-  resolveIMessageApprovalReactionTargetWithPersistence,
-} from "./approval-reactions.js";
 import type { IMessageRpcClient } from "./client.js";
 import type { IMessagePayload } from "./monitor/types.js";
 import { resolvedApproval } from "./test-support/approval.js";
+
+let runtimeEnv: typeof import("openclaw/plugin-sdk/runtime-env");
+let poll: typeof import("./approval-reaction-poller.js").pollPendingIMessageApprovalReactions;
+let registerIMessageApprovalReactionTarget: typeof import("./approval-reactions.js").registerIMessageApprovalReactionTarget;
+let resolveIMessageApprovalReactionTargetWithPersistence: typeof import("./approval-reactions.js").resolveIMessageApprovalReactionTargetWithPersistence;
+
+beforeEach(async () => {
+  vi.resetModules();
+  runtimeEnv = await import("openclaw/plugin-sdk/runtime-env");
+  ({ pollPendingIMessageApprovalReactions: poll } = await import("./approval-reaction-poller.js"));
+  ({
+    registerIMessageApprovalReactionTarget,
+    resolveIMessageApprovalReactionTargetWithPersistence,
+  } = await import("./approval-reactions.js"));
+});
 
 const resolverMocks = vi.hoisted(() => ({ resolve: vi.fn() }));
 
@@ -136,7 +144,6 @@ describe("iMessage approval reaction poller", () => {
   }
 
   beforeEach(() => {
-    clearIMessageApprovalReactionTargetsForTest();
     accountSequence += 1;
     accountId = `test-${accountSequence}`;
     resolverMocks.resolve.mockReset().mockImplementation(resolvedApproval);

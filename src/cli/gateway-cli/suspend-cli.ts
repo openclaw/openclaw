@@ -16,8 +16,6 @@ type SuspendRpcCall = (method: string, opts: SuspendRpcOpts, params?: unknown) =
 type SuspendCliDeps = {
   callGateway: SuspendRpcCall;
   runtime: OutputRuntimeEnv;
-  nowMs?: () => number;
-  sleep?: (delayMs: number) => Promise<void>;
 };
 
 const MIN_SUSPEND_POLL_DELAY_MS = 50;
@@ -67,18 +65,16 @@ export async function runGatewaySuspend(
   },
   deps: SuspendCliDeps,
 ): Promise<void> {
-  const nowMs = deps.nowMs ?? Date.now;
-  const wait = deps.sleep ?? sleep;
   const requestId = resolveRequestId(options.requestId);
   const waitMs = parseWaitMs(options.waitSeconds);
-  const deadlineMs = waitMs === undefined ? undefined : nowMs() + waitMs;
+  const deadlineMs = waitMs === undefined ? undefined : Date.now() + waitMs;
   const maxAttempts = waitMs === undefined ? 1 : Math.ceil(waitMs / MIN_SUSPEND_POLL_DELAY_MS) + 1;
   let latest: GatewaySuspendPrepareResult | undefined;
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     // A sleep can overshoot the deadline; never issue a prepare that could
     // suspend the Gateway after the operator's advertised --wait window.
-    if (attempt > 0 && deadlineMs !== undefined && nowMs() >= deadlineMs) {
+    if (attempt > 0 && deadlineMs !== undefined && Date.now() >= deadlineMs) {
       break;
     }
     latest = (await deps.callGateway("gateway.suspend.prepare", options.rpcOpts, {
@@ -110,12 +106,12 @@ export async function runGatewaySuspend(
       break;
     }
 
-    const remainingMs = deadlineMs - nowMs();
+    const remainingMs = deadlineMs - Date.now();
     if (remainingMs <= 0) {
       break;
     }
     const delayMs = Math.min(remainingMs, Math.max(MIN_SUSPEND_POLL_DELAY_MS, latest.retryAfterMs));
-    await wait(delayMs);
+    await sleep(delayMs);
   }
 
   if (!latest || latest.status !== "busy") {
@@ -135,7 +131,7 @@ export async function runGatewaySuspend(
 
 export async function runGatewayResume(
   options: { rpcOpts: SuspendRpcOpts; suspensionId: string; json?: boolean },
-  deps: Pick<SuspendCliDeps, "callGateway" | "runtime">,
+  deps: SuspendCliDeps,
 ): Promise<void> {
   const result = (await deps.callGateway("gateway.suspend.resume", options.rpcOpts, {
     suspensionId: options.suspensionId,

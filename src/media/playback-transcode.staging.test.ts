@@ -5,15 +5,35 @@ import type { TempWorkspace, TempWorkspaceOptions } from "@openclaw/fs-safe/temp
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  observePlaybackSourceOpen,
   usePlaybackFixture,
-  settlePlaybackTranscodeJobsForTest as settleJobs,
-  waitForPlaybackTranscodeJobsForTest as waitForJobs,
+  waitForPlaybackSourceCleanup,
 } from "./playback-transcode.test-support.js";
 
-const { runFfmpeg, observeWorkspaceRoot } = vi.hoisted(() => ({
+const { runFfmpeg, playbackWarn, observeWorkspaceRoot } = vi.hoisted(() => ({
   runFfmpeg: vi.fn(),
+  playbackWarn: vi.fn(),
   observeWorkspaceRoot: vi.fn<(root: Root, workspace: TempWorkspace) => void>(),
 }));
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (...args: Parameters<typeof actual.createSubsystemLogger>) => {
+      const logger = actual.createSubsystemLogger(...args);
+      return args[0] === "media/playback" ? { ...logger, warn: playbackWarn } : logger;
+    },
+  };
+});
+vi.mock("../infra/fs-safe.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/fs-safe.js")>();
+  return {
+    ...actual,
+    openLocalFileSafely: (...args: Parameters<typeof actual.openLocalFileSafely>) =>
+      observePlaybackSourceOpen(actual.openLocalFileSafely(...args)),
+  };
+});
+
 vi.mock("@openclaw/fs-safe/temp", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@openclaw/fs-safe/temp")>();
   return {
@@ -47,6 +67,8 @@ const fixture = usePlaybackFixture("openclaw-playback-staging-", [
   "./ffmpeg-exec.js",
   "./media-probe.js",
   "@openclaw/fs-safe/temp",
+  "../infra/fs-safe.js",
+  "../logging/subsystem.js",
 ]);
 const { resolveTranscode, resolveMetadata } = fixture;
 
@@ -54,7 +76,7 @@ let quarantine: string | undefined;
 afterEach(async () => {
   __setFsSafeTestHooksForTest(undefined);
   observeWorkspaceRoot.mockReset();
-  await settleJobs();
+  await waitForPlaybackSourceCleanup();
   if (quarantine) {
     await fs.rm(quarantine, { recursive: true, force: true });
   }
@@ -63,6 +85,7 @@ afterEach(async () => {
 
 beforeEach(() => {
   runFfmpeg.mockReset();
+  playbackWarn.mockReset();
 });
 
 async function createSource(
@@ -78,7 +101,8 @@ async function createSource(
 
 async function transcode(source: Awaited<ReturnType<typeof createSource>>) {
   expect(await resolveTranscode(source)).toEqual({ kind: "preparing" });
-  return await waitForJobs("all");
+  await waitForPlaybackSourceCleanup();
+  return await resolveTranscode(source);
 }
 
 describe("playback input staging", () => {
@@ -103,7 +127,7 @@ describe("playback input staging", () => {
   });
 
   it.each(["grow", "truncate", "rewrite", "replace"] as const)(
-    "rejects a source that changes after open via %s before starting ffmpeg",
+    "falls back when the source changes after open via %s before starting ffmpeg",
     async (change) => {
       const source = await createSource(`changed-${change}.caf`);
       await expect(resolveMetadata(source)).resolves.toMatchObject({
@@ -135,8 +159,9 @@ describe("playback input staging", () => {
           }
         },
       });
-      await expect(transcode(source)).rejects.toThrow(
-        change === "grow" ? /exceeds limit/ : /changed|mismatch/,
+      await expect(transcode(source)).resolves.toEqual({ kind: "fallback" });
+      expect(playbackWarn).toHaveBeenCalledWith(
+        expect.stringMatching(change === "grow" ? /exceeds limit/ : /changed|mismatch/),
       );
       expect(changed).toBe(true);
       expect(runFfmpeg).not.toHaveBeenCalled();
@@ -144,7 +169,7 @@ describe("playback input staging", () => {
     },
   );
 
-  it("rejects a moved input that no longer names its staging descriptor", async () => {
+  it("falls back when a moved input no longer names its staging descriptor", async () => {
     const source = await createSource("replaced-staging.caf");
     let writer: FileHandle | undefined;
     let writerWasOpenAtMove = false;
@@ -172,9 +197,8 @@ describe("playback input staging", () => {
         replaced = true;
       };
     });
-    await expect(transcode(source)).rejects.toMatchObject({
-      message: expect.stringMatching(/changed|mismatch/),
-    });
+    await expect(transcode(source)).resolves.toEqual({ kind: "fallback" });
+    expect(playbackWarn).toHaveBeenCalledWith(expect.stringMatching(/changed|mismatch/));
     expect([writerWasOpenAtMove, replaced, writer?.fd]).toEqual([true, true, -1]);
     expect(runFfmpeg).not.toHaveBeenCalled();
   });
@@ -192,8 +216,9 @@ describe("playback input staging", () => {
       await fs.writeFile(args.at(-1) ?? "", "normalized-audio");
       return "";
     });
-    await expect(transcode(source)).rejects.toBe(cleanupError);
+    await transcode(source);
     expect(runFfmpeg).toHaveBeenCalledOnce();
+    expect(playbackWarn).toHaveBeenCalledWith(expect.stringContaining(cleanupError.message));
     expect(quarantine).toBeDefined();
     expect(await resolveTranscode(source)).toEqual({ kind: "fallback" });
   });

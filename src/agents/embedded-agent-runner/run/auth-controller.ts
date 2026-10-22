@@ -406,21 +406,19 @@ export function createEmbeddedRunAuthController(params: {
 
   const throwAuthProfileFailover = (failoverParams: {
     allInCooldown: boolean;
-    message?: string;
     error?: unknown;
   }): never => {
     const provider = params.provider;
     const modelId = params.modelId;
-    const messageForReason =
-      failoverParams.message?.trim() ||
-      (failoverParams.error ? formatErrorMessage(failoverParams.error).trim() : "");
+    const messageForReason = failoverParams.error
+      ? formatErrorMessage(failoverParams.error).trim()
+      : "";
     const code = failoverParams.error ? getFailoverErrorCode(failoverParams.error) : undefined;
     const reason = resolveAuthProfileFailoverReason({
       allInCooldown: failoverParams.allInCooldown,
       message: messageForReason,
     });
     const message =
-      failoverParams.message?.trim() ||
       (code === "selected_auth_profile_unavailable" ? messageForReason : undefined) ||
       renderAuthProfileFailoverCopy({
         reason,

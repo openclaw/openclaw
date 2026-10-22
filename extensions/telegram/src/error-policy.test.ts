@@ -1,4 +1,3 @@
-// Telegram tests cover error policy plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildTelegramErrorScopeKey,
@@ -8,6 +7,14 @@ import {
 
 let scopeSequence = 0;
 let accountId: string;
+
+function suppress(errorMessage: string) {
+  return shouldSuppressTelegramError({
+    scopeKey: buildTelegramErrorScopeKey({ accountId, chatId: 42 }),
+    cooldownMs: 1000,
+    errorMessage,
+  });
+}
 
 describe("telegram error policy", () => {
   beforeEach(() => {
@@ -34,62 +41,16 @@ describe("telegram error policy", () => {
   });
 
   it("keeps cooldowns per error message within the same scope", () => {
-    const scopeKey = buildTelegramErrorScopeKey({
-      accountId,
-      chatId: 42,
-    });
-
-    expect(
-      shouldSuppressTelegramError({
-        scopeKey,
-        cooldownMs: 1000,
-        errorMessage: "A",
-      }),
-    ).toBe(false);
-    expect(
-      shouldSuppressTelegramError({
-        scopeKey,
-        cooldownMs: 1000,
-        errorMessage: "B",
-      }),
-    ).toBe(false);
-    expect(
-      shouldSuppressTelegramError({
-        scopeKey,
-        cooldownMs: 1000,
-        errorMessage: "A",
-      }),
-    ).toBe(true);
+    expect(suppress("A")).toBe(false);
+    expect(suppress("B")).toBe(false);
+    expect(suppress("A")).toBe(true);
   });
 
   it("prunes expired cooldowns within a single scope", () => {
-    const scopeKey = buildTelegramErrorScopeKey({
-      accountId,
-      chatId: 42,
-    });
-
-    expect(
-      shouldSuppressTelegramError({
-        scopeKey,
-        cooldownMs: 1000,
-        errorMessage: "A",
-      }),
-    ).toBe(false);
+    expect(suppress("A")).toBe(false);
     vi.advanceTimersByTime(1001);
-    expect(
-      shouldSuppressTelegramError({
-        scopeKey,
-        cooldownMs: 1000,
-        errorMessage: "B",
-      }),
-    ).toBe(false);
-    expect(
-      shouldSuppressTelegramError({
-        scopeKey,
-        cooldownMs: 1000,
-        errorMessage: "A",
-      }),
-    ).toBe(false);
+    expect(suppress("B")).toBe(false);
+    expect(suppress("A")).toBe(false);
   });
 
   it("does not leak suppression across accounts or threads", () => {

@@ -27,6 +27,17 @@ export type ImageBlock = {
   height?: number;
 } & ({ url: string; artifactId?: string } | { url?: undefined; artifactId: string });
 
+/** Native admission and open actions shared with non-preview catalog rows. */
+export type MessageMediaAction = {
+  onOpen?: () => void;
+  onRetry?: () => void;
+  onAllow?: () => void;
+  onFocus?: () => void;
+  observeElement?: (element: Element | undefined) => void;
+  pending: boolean;
+  reason?: string;
+};
+
 export type ArtifactDownloadResolver = (
   params: {
     sessionKey: string;

@@ -12,7 +12,11 @@ Non-interactive helpers for `openclaw.json`: get/set/patch/unset a value by path
 `config set`, `config patch`, and `config unset` require the local Gateway to be
 stopped. These commands hold exclusive state ownership while publishing the file
 and its database metadata. Stop the Gateway through its service owner, wait for
-it to exit, then rerun the command.
+it to exit, then rerun the command. A running-owner refusal is an offline-only
+restriction, not an authentication failure. For online changes, use
+`openclaw gateway call config.patch` with a `raw` patch and the `hash` returned by
+`openclaw gateway call config.get` as `baseHash`; see
+[Config RPC](/gateway/configuration/config-rpc).
 
 <Note>
 When `OPENCLAW_CONFIG_READONLY=1` or `OPENCLAW_NIX_MODE=1`, OpenClaw treats `openclaw.json` as immutable. Read-only commands (`config get`, `config file`, `config schema`, `config validate`) still work; config writers refuse.
@@ -78,7 +82,7 @@ openclaw config schema --json
 openclaw config get browser.executablePath
 openclaw config set browser.executablePath "/usr/bin/google-chrome"
 openclaw config set browser.profiles.work '{"cdpPort":18801,"executablePath":"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"}' --strict-json --merge
-openclaw config set agents.defaults.heartbeat.every "2h"
+openclaw config set agents.defaults.userTimezone "Europe/Vienna"
 openclaw config set logging.audit.executionIdentity true
 openclaw config set 'agents.entries.main.tools.exec.node' "node-id-or-name"
 openclaw config set agents.defaults.models '{"openai/gpt-5.4":{}}' --strict-json --merge
@@ -198,6 +202,8 @@ machine-output spelling and keeps stdout reserved for the schema document.
 
 Schema refusals from `config set`, `config patch`, and `config unset` explain the affected setting and confirm that no settings were saved. Correct the reported value or use `openclaw config schema` to inspect supported settings, then retry. These refusals still exit with status 1. Explicit validation reports settings that need correction without changing the file; `config validate --json` retains its `valid: false`, `error`, and `issues` fields for scripts.
 
+Known retired core settings are reported before loading plugin migration diagnostics. Both `config get` and `config validate` include the `openclaw doctor --fix` repair hint. JSON errors keep their existing `error.message` and add the guidance in `repairHint`. Doctor still inspects all applicable core and plugin migrations when applying repairs.
+
 Config read failures name the file being read and preserve the underlying error. Resolve the reported file-access or runtime problem, then retry; a read failure alone does not mean the settings need repair.
 
 Human validation diagnostics quote literal record keys, such as `agents.defaults.models["provider/model.v1"].alias`, instead of displaying the dot inside a key as nested traversal. Numeric array positions use brackets, such as `agents.entries.main.skills[0]`. The `issues[].path` field in `config validate --json` keeps its existing dot-joined representation.
@@ -236,7 +242,7 @@ the provider docs and verify behavior on the selected runtime and provider.
 Values parse as JSON5 when possible; otherwise they are treated as raw strings. Use `--strict-json` to require standard JSON with no string fallback (JSON5-only syntax such as comments, trailing commas, or unquoted keys is then rejected). `--json` is a legacy alias for `--strict-json` on `config set`.
 
 ```bash
-openclaw config set agents.defaults.heartbeat.every "0m"
+openclaw config set agents.defaults.typingMode "never"
 openclaw config set gateway.port 19001 --strict-json
 openclaw config set channels.whatsapp.groups '{"*":{"requireMention":true}}' --strict-json
 ```

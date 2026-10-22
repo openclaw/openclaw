@@ -1,5 +1,4 @@
-// Parallels Smoke Model tests cover parallels smoke model script behavior.
-import { spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync, type SpawnSyncOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
 import {
   chmodSync,
@@ -95,30 +94,16 @@ const WRAPPERS = {
 const WINDOWS_PREPARE_WRAPPER = "scripts/e2e/parallels-windows-prepare.sh";
 
 const TS_PATHS = {
-  agentWorkspace: "scripts/e2e/parallels/agent-workspace.ts",
   common: "scripts/e2e/parallels/common.ts",
-  guestTransports: "scripts/e2e/parallels/guest-transports.ts",
-  hostCommand: "scripts/e2e/parallels/host-command.ts",
   hostServer: "scripts/e2e/parallels/host-server.ts",
   linux: "scripts/e2e/parallels/linux-smoke.ts",
-  macosDiscord: "scripts/e2e/parallels/macos-discord.ts",
   macos: "scripts/e2e/parallels/macos-smoke.ts",
-  npmUpdateScripts: "scripts/e2e/parallels/npm-update-scripts.ts",
   npmUpdate: "scripts/e2e/parallels/npm-update-smoke.ts",
-  packageArtifact: "scripts/e2e/parallels/package-artifact.ts",
   parallelsVm: "scripts/e2e/parallels/parallels-vm.ts",
-  phaseRunner: "scripts/e2e/parallels/phase-runner.ts",
-  powershell: "scripts/e2e/parallels/powershell.ts",
-  providerAuth: "scripts/e2e/parallels/provider-auth.ts",
-  snapshots: "scripts/e2e/parallels/snapshots.ts",
-  smokeCommon: "scripts/e2e/parallels/smoke-common.ts",
   windows: "scripts/e2e/parallels/windows-smoke.ts",
-  windowsGit: "scripts/e2e/parallels/windows-git.ts",
 };
 
-const TS_SOURCE = Object.fromEntries(
-  Object.entries(TS_PATHS).map(([name, filePath]) => [name, readFileSync(filePath, "utf8")]),
-) as Record<keyof typeof TS_PATHS, string>;
+const readScriptSource = (name: string) => readFileSync(`scripts/e2e/parallels/${name}.ts`, "utf8");
 
 const OS_TS_PATHS = [TS_PATHS.linux, TS_PATHS.macos, TS_PATHS.windows];
 const tempDirs: string[] = [];
@@ -134,6 +119,8 @@ afterAll(async () => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
   // A timed-out body's finally still needs the PID files while joining its native runner.
   await Promise.allSettled(pendingChildCompletions);
   cleanupTempDirs(tempDirs);
@@ -162,21 +149,16 @@ function fakePrlctlEnv(tempDir: string): Record<string, string> {
   return { NODE_OPTIONS: nodeOptions, PATH: pathValue, Path: pathValue };
 }
 
-function writeFakePrlctl(tempDir: string, posixScript: string, windowsBootstrap: string): void {
+function writeNodeFakePrlctl(tempDir: string, body: string): void {
+  const program = `const args = process.argv.slice(1);\n${body}`;
   const prlctlPath = join(tempDir, "prlctl");
-  writeFileSync(prlctlPath, posixScript);
+  writeFileSync(prlctlPath, `#!/usr/bin/env node\n${program}\n`);
   chmodSync(prlctlPath, 0o755);
   if (process.platform === "win32") {
     copyFileSync(testNodeExecPath, join(tempDir, "prlctl.exe"));
   }
-  writeFileSync(join(tempDir, "prlctl-bootstrap.mjs"), windowsBootstrap);
-}
-
-function writeNodeFakePrlctl(tempDir: string, body: string): void {
-  const program = `const args = process.argv.slice(1);\n${body}`;
-  writeFakePrlctl(
-    tempDir,
-    `#!/usr/bin/env node\n${program}\n`,
+  writeFileSync(
+    join(tempDir, "prlctl-bootstrap.mjs"),
     `import { basename } from "node:path"; if ([process.argv0, process.execPath].some((value) => basename(value).toLowerCase() === "prlctl.exe")) { ${program} }`,
   );
 }
@@ -222,17 +204,13 @@ function withFakeHostIpCommands<T>(
   );
 }
 
-function writeJsonFakePrlctl(tempDir: string, routes: Record<string, unknown>): void {
+function withJsonFakePrlctl<T>(routes: Record<string, unknown>, runTest: () => T): T {
+  const tempDir = makeTempDir(tempDirs, "openclaw-parallels-prlctl-");
   const routeJson = JSON.stringify(routes);
   writeNodeFakePrlctl(
     tempDir,
     `const routes = ${routeJson}; for (const [command, payload] of Object.entries(routes)) { if (args.some((arg) => arg.includes(command))) { console.log(JSON.stringify(payload)); process.exit(0); } } process.exit(1);`,
   );
-}
-
-function withJsonFakePrlctl<T>(routes: Record<string, unknown>, runTest: () => T): T {
-  const tempDir = makeTempDir(tempDirs, "openclaw-parallels-prlctl-");
-  writeJsonFakePrlctl(tempDir, routes);
   return withEnv(fakePrlctlEnv(tempDir), runTest);
 }
 
@@ -258,12 +236,8 @@ class FakeHostServerChild extends EventEmitter {
 }
 
 class ExhaustedCleanupPhaseRunner {
-  output = "";
   remainingTimeoutCalls = 0;
-
-  append(text: string): void {
-    this.output += text;
-  }
+  append(_text: string): void {}
 
   remainingTimeoutMs(fallbackMs?: number): number {
     this.remainingTimeoutCalls += 1;
@@ -326,6 +300,66 @@ function runNode(source: string, options: NonNullable<Parameters<typeof run>[2]>
   return run(testNodeExecPath, ["-e", source], options);
 }
 
+function runWindowsPrepare(
+  script: string,
+  args: string[] = [],
+  options: Pick<SpawnSyncOptions, "env" | "timeout"> = {},
+) {
+  return spawnSync("bash", ["-c", script, "bash", WINDOWS_PREPARE_WRAPPER, ...args], {
+    encoding: "utf8",
+    ...options,
+  });
+}
+
+function runMacosSmoke(
+  tempDir: string,
+  options: {
+    version: string;
+    artifactRoot: string;
+    env?: NodeJS.ProcessEnv;
+    timeout?: number;
+    runtimeArgs?: string[];
+  },
+) {
+  return spawnSync(
+    testNodeExecPath,
+    [
+      ...(options.runtimeArgs ?? ["--import", "tsx", TS_PATHS.macos]),
+      "--mode",
+      "upgrade",
+      "--latest-version",
+      options.version,
+      "--api-key-env",
+      "OPENCLAW_PARALLELS_TEST_KEY",
+      "--json",
+    ],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      timeout: options.timeout,
+      env: {
+        ...process.env,
+        ...fakePrlctlEnv(tempDir),
+        OPENCLAW_PARALLELS_ARTIFACT_ROOT: options.artifactRoot,
+        OPENCLAW_PARALLELS_TEST_KEY: "fixture",
+        ...options.env,
+      },
+    },
+  );
+}
+
+function runWindowsBackground(
+  options: Pick<Parameters<typeof runWindowsBackgroundPowerShell>[0], "runCommand" | "label"> &
+    Partial<Parameters<typeof runWindowsBackgroundPowerShell>[0]>,
+) {
+  return runWindowsBackgroundPowerShell({
+    script: "Write-Output ok",
+    timeoutMs: 720_000,
+    vmName: "Windows 11",
+    ...options,
+  });
+}
+
 type FakeCommandResult = { status: number; stderr: string; stdout: string };
 type FakePosixBackgroundOptions = {
   done?: FakeCommandResult;
@@ -339,28 +373,37 @@ function fakeResult(status = 0, stdout = "", stderr = ""): FakeCommandResult {
   return { status, stderr, stdout };
 }
 
-function createPosixBackgroundCommandFake(options: FakePosixBackgroundOptions): {
-  runCommand: ReturnType<typeof vi.fn>;
-  state: { cleanupPayload: string; cleanupRun: boolean; exitRead: boolean };
-} {
+const inheritedNames = ["constructor", "toString", "__proto__"];
+function inheritedCredentialEnv(): Record<string, string> {
+  const credentials = Object.create(null);
+  for (const name of inheritedNames) {
+    Object.defineProperty(credentials, name, { value: "inherited-secret" });
+  }
+  return Object.create(credentials);
+}
+
+function runFakePosixBackground(
+  fakeOptions: FakePosixBackgroundOptions,
+  options: { append?: (chunk: unknown) => void; script: string; timeoutMs?: number },
+) {
   const state = { cleanupPayload: "", cleanupRun: false, exitRead: false };
-  const exits = [...(options.exit ?? [])];
+  const exits = [...(fakeOptions.exit ?? [])];
   const runCommand = vi.fn(
     (_command: string, args: string[], runOptions?: { input?: string }): FakeCommandResult => {
       if (args[0] === "/bin/dd" && args[1]?.includes("/cleanup.sh")) {
         state.cleanupPayload = runOptions?.input ?? "";
       }
       if (args[0] === "node" && args[1]?.endsWith("/launcher.mjs")) {
-        return options.launch ?? fakeResult(0, "started\n");
+        return fakeOptions.launch ?? fakeResult(0, "started\n");
       }
       if (args[0] === "/bin/test" && args.at(-1)?.endsWith("/pid")) {
-        return options.pid ?? fakeResult();
+        return fakeOptions.pid ?? fakeResult();
       }
       if (args[0] === "/bin/test" && args.at(-1)?.endsWith("/done")) {
-        return options.done ?? fakeResult();
+        return fakeOptions.done ?? fakeResult();
       }
       if (args[0] === "/usr/bin/tail") {
-        return options.tail?.() ?? fakeResult();
+        return fakeOptions.tail?.() ?? fakeResult();
       }
       if (args[0] === "/bin/cat" && args.at(-1)?.endsWith("/exit")) {
         state.exitRead = true;
@@ -372,21 +415,13 @@ function createPosixBackgroundCommandFake(options: FakePosixBackgroundOptions): 
       return fakeResult(0, "started\n");
     },
   );
-  return { runCommand, state };
-}
-
-function runFakePosixBackground(
-  fakeOptions: FakePosixBackgroundOptions,
-  options: { append?: (chunk: unknown) => void; script: string; timeoutMs?: number },
-) {
-  const fake = createPosixBackgroundCommandFake(fakeOptions);
   return {
-    ...fake,
+    state,
     result: runPosixBackgroundShell({
       ...options,
       label: "macos update",
       pollIntervalMs: 1,
-      runCommand: fake.runCommand as unknown as typeof run,
+      runCommand: runCommand as unknown as typeof run,
       timeoutMs: options.timeoutMs ?? 5_000,
       transportArgs: (args) => args,
     }),
@@ -468,6 +503,24 @@ if (fs.readFileSync(owner, 'utf8') === String(process.pid)) {
   return preload;
 }
 
+function deadlineFixture(prefix: string, timeoutMs = 200) {
+  const tempDir = makeTempDir(tempDirs, prefix);
+  const grandchildPidPath = join(tempDir, "grandchild.pid");
+  const deadlineFile = join(tempDir, "deadline");
+  const preload = writeDrainDeadlinePreload(tempDir, timeoutMs);
+  return {
+    tempDir,
+    grandchildPidPath,
+    deadlineFile,
+    env: {
+      ...process.env,
+      READY_FILE: grandchildPidPath,
+      DEADLINE_FILE: deadlineFile,
+      NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require ${JSON.stringify(preload)}`,
+    },
+  };
+}
+
 const SIGNAL_GRANDCHILD_SCRIPT = `
 const { renameSync, writeFileSync } = require('node:fs');
 process.on('SIGTERM', () => {});
@@ -526,13 +579,9 @@ run(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(parentScrip
   return { grandchildPidPath, parentPidPath, readyPath, runner, ready, closed };
 }
 
-function forceKillSignaledFixture(
-  runnerPid: number,
-  grandchildPid: number,
-  processGroup: boolean,
-): void {
+function forceKillSignaledFixture(runnerPid: number, grandchildPid: number): void {
   if (runnerPid && isProcessAlive(runnerPid)) {
-    process.kill(processGroup ? -runnerPid : runnerPid, "SIGKILL");
+    process.kill(-runnerPid, "SIGKILL");
   }
   if (grandchildPid && isProcessAlive(grandchildPid)) {
     process.kill(grandchildPid, "SIGKILL");
@@ -540,29 +589,27 @@ function forceKillSignaledFixture(
 }
 
 describe("Parallels smoke model selection", () => {
-  const {
-    agentWorkspace: workspace,
-    guestTransports: transports,
-    hostServer,
-    linux,
-    macos,
-    macosDiscord: discord,
-    npmUpdate,
-    npmUpdateScripts,
-    packageArtifact,
-    parallelsVm,
-    phaseRunner,
-    powershell,
-    snapshots,
-    smokeCommon,
-    windows,
-    windowsGit,
-  } = TS_SOURCE;
+  const hostServer = readScriptSource("host-server");
+  const discord = readScriptSource("macos-discord");
+  const parallelsVm = readScriptSource("parallels-vm");
+  const phaseRunner = readScriptSource("phase-runner");
+  const snapshots = readScriptSource("snapshots");
+  const windowsGit = readScriptSource("windows-git");
   const windowsAgentTurn = windowsAgentTurnScript({
     command: "Invoke-OpenClaw @args",
     sessionId: "parallels-windows-smoke",
     retryOnCommandFailure: true,
   });
+  const workspace = readScriptSource("agent-workspace");
+  const transports = readScriptSource("guest-transports");
+  const linux = readScriptSource("linux-smoke");
+  const macos = readScriptSource("macos-smoke");
+  const npmUpdate = readScriptSource("npm-update-smoke");
+  const npmUpdateScripts = readScriptSource("npm-update-scripts");
+  const packageArtifact = readScriptSource("package-artifact");
+  const powershell = readScriptSource("powershell");
+  const smokeCommon = readScriptSource("smoke-common");
+  const windows = readScriptSource("windows-smoke");
 
   it("parses macOS dscl user homes with spaces on mounted volumes", () => {
     expect(parseMacosDsclUserHomeLine("clawuser /Volumes/Macintosh HD/Users/clawuser")).toEqual({
@@ -630,11 +677,8 @@ describe("Parallels smoke model selection", () => {
   ])(
     "%s enforces the Windows Node contract from %s after installation of %s",
     (command, initialVersion, installedVersion, installs, exitCode) => {
-      const result = spawnSync(
-        "bash",
-        [
-          "-c",
-          `set -euo pipefail
+      const result = runWindowsPrepare(
+        `set -euo pipefail
 OPENCLAW_PARALLELS_WINDOWS_LIBRARY_ONLY=1 source "$1"
 guest_version="$3"
 guest_user_cmd() {
@@ -659,13 +703,8 @@ installed_version="$4"
 run_windows_installer() { printf 'installed-node\\n'; guest_version="$installed_version"; }
 "$2"
 printf 'verified-node=%s\\n' "$guest_version"`,
-          "bash",
-          WINDOWS_PREPARE_WRAPPER,
-          command,
-          initialVersion,
-          installedVersion,
-        ],
-        { encoding: "utf8", timeout: 10_000 },
+        [command, initialVersion, installedVersion],
+        { timeout: 10_000 },
       );
 
       expect(result.status, result.stderr).toBe(exitCode);
@@ -685,20 +724,15 @@ printf 'verified-node=%s\\n' "$guest_version"`,
     const tempDir = makeTempDir(tempDirs, "openclaw-windows-restore-");
     const statePath = join(tempDir, "state");
     writeFileSync(statePath, "restoring");
-    const result = spawnSync(
-      "bash",
-      [
-        "-c",
-        `set -euo pipefail
+    const result = runWindowsPrepare(
+      `set -euo pipefail
 OPENCLAW_PARALLELS_WINDOWS_LIBRARY_ONLY=1 source "$1"
 vm_state() { cat "$VM_STATE_FILE"; }
 sleep() { printf stopped >"$VM_STATE_FILE"; }
 run_bounded() { printf 'invoked=%s\\n' "$*"; }
 ensure_vm_running`,
-        "bash",
-        WINDOWS_PREPARE_WRAPPER,
-      ],
-      { encoding: "utf8", env: { ...process.env, VM_STATE_FILE: statePath }, timeout: 10_000 },
+      [],
+      { env: { ...process.env, VM_STATE_FILE: statePath }, timeout: 10_000 },
     );
 
     expect(result.status, result.stderr).toBe(0);
@@ -907,15 +941,8 @@ ensure_vm_running`,
   });
 
   it("bounds Windows prerequisite metadata downloads", () => {
-    const result = spawnSync(
-      "bash",
-      [
-        "-c",
-        'OPENCLAW_PARALLELS_WINDOWS_LIBRARY_ONLY=1 source "$1"; curl() { printf "%s\\n" "$@"; }; fetch_host_metadata "https://example.test/metadata"',
-        "bash",
-        WINDOWS_PREPARE_WRAPPER,
-      ],
-      { encoding: "utf8" },
+    const result = runWindowsPrepare(
+      'OPENCLAW_PARALLELS_WINDOWS_LIBRARY_ONLY=1 source "$1"; curl() { printf "%s\\n" "$@"; }; fetch_host_metadata "https://example.test/metadata"',
     );
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout.trim().split("\n")).toEqual([
@@ -936,15 +963,10 @@ ensure_vm_running`,
     const tempDir = makeTempDir(tempDirs, "openclaw-windows-metadata-retry-");
     const callCount = join(tempDir, "curl-calls");
     writeFileSync(callCount, "0\n");
-    const retryResult = spawnSync(
-      "bash",
-      [
-        "-c",
-        `OPENCLAW_PARALLELS_WINDOWS_LIBRARY_ONLY=1 source "$1"; curl() { count="$(<"$CURL_CALL_COUNT")"; count=$((count + 1)); printf '%s\\n' "$count" >"$CURL_CALL_COUNT"; if [[ "$count" == "1" ]]; then printf 'partial-'; return 28; fi; printf 'complete'; }; sleep() { :; }; fetch_host_metadata "https://example.test/metadata"`,
-        "bash",
-        WINDOWS_PREPARE_WRAPPER,
-      ],
-      { encoding: "utf8", env: { ...process.env, CURL_CALL_COUNT: callCount } },
+    const retryResult = runWindowsPrepare(
+      `OPENCLAW_PARALLELS_WINDOWS_LIBRARY_ONLY=1 source "$1"; curl() { count="$(<"$CURL_CALL_COUNT")"; count=$((count + 1)); printf '%s\\n' "$count" >"$CURL_CALL_COUNT"; if [[ "$count" == "1" ]]; then printf 'partial-'; return 28; fi; printf 'complete'; }; sleep() { :; }; fetch_host_metadata "https://example.test/metadata"`,
+      [],
+      { env: { ...process.env, CURL_CALL_COUNT: callCount } },
     );
     expect(retryResult.status, retryResult.stderr).toBe(0);
     expect(retryResult.stdout).toBe("complete");
@@ -1011,35 +1033,16 @@ ensure_vm_running`,
     );
     chmodSync(fakePnpm, 0o755);
 
-    const result = spawnSync(
-      testNodeExecPath,
-      [
-        "--import",
-        "tsx",
-        TS_PATHS.macos,
-        "--mode",
-        "upgrade",
-        "--latest-version",
-        "2026.8.25",
-        "--api-key-env",
-        "OPENCLAW_PARALLELS_TEST_API_KEY",
-        "--json",
-      ],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          ...fakePrlctlEnv(tempDir),
-          "BASH_FUNC_ifconfig%%": "() { return 1; }",
-          OPENCLAW_PARALLELS_ARTIFACT_ROOT: join(tempDir, "artifacts"),
-          OPENCLAW_PARALLELS_SKIP_SNAPSHOT_RESTORE: "1",
-          OPENCLAW_PARALLELS_TEST_API_KEY: "fixture-not-a-real-credential",
-          TMPDIR: tempDir,
-          npm_execpath: fakePnpm,
-        },
+    const result = runMacosSmoke(tempDir, {
+      version: "2026.8.25",
+      artifactRoot: join(tempDir, "artifacts"),
+      env: {
+        "BASH_FUNC_ifconfig%%": "() { return 1; }",
+        OPENCLAW_PARALLELS_SKIP_SNAPSHOT_RESTORE: "1",
+        TMPDIR: tempDir,
+        npm_execpath: fakePnpm,
       },
-    );
+    });
 
     expect(result.stderr).toContain("upgrade.restore-snapshot");
     expect(result.stderr).toContain("upgrade.reset-state");
@@ -1087,9 +1090,9 @@ ensure_vm_running`,
       modelId: "openai/gpt-5.6-luna",
     });
 
+    expect(script).not.toContain("'openclaw-parallels-plugin-isolation.cjs'");
     expect(script).toContain("[guid]::NewGuid().ToString('N')");
     expect(script).toContain("openclaw-parallels-plugin-isolation-");
-    expect(script).not.toContain("'openclaw-parallels-plugin-isolation.cjs'");
     expect(script).toContain("try {");
     expect(script).toContain("} finally {");
     expect(script).toContain(
@@ -1109,7 +1112,7 @@ ensure_vm_running`,
   });
 
   it("keeps snapshot, host, package, and quote helpers shared", () => {
-    const common = TS_SOURCE.common;
+    const common = readScriptSource("common");
 
     const packageArtifactExports = new Set(
       (common.match(/export \{([^}]*)\} from "\.\/package-artifact\.ts";/)?.[1] ?? "")
@@ -1257,52 +1260,42 @@ ensure_vm_running`,
   it("keeps JSON-mode progress off stdout", async () => {
     const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    try {
-      await withProgressOnStderr(async () => {
-        const { say } = await import("../../scripts/e2e/parallels/common.ts");
-        say("progress");
-        process.stdout.write('{"ok":true}\n');
-      });
+    await withProgressOnStderr(async () => {
+      const { say } = await import("../../scripts/e2e/parallels/common.ts");
+      say("progress");
+      process.stdout.write('{"ok":true}\n');
+    });
 
-      expect(stdoutWrite).toHaveBeenCalledTimes(1);
-      expect(stdoutWrite).toHaveBeenCalledWith('{"ok":true}\n');
-      expect(JSON.parse(String(stdoutWrite.mock.calls[0]?.[0]))).toEqual({ ok: true });
-      expect(stderrWrite).toHaveBeenCalledWith("==> progress\n");
-    } finally {
-      stdoutWrite.mockRestore();
-      stderrWrite.mockRestore();
-    }
+    expect(stdoutWrite).toHaveBeenCalledTimes(1);
+    expect(stdoutWrite).toHaveBeenCalledWith('{"ok":true}\n');
+    expect(stderrWrite).toHaveBeenCalledWith("==> progress\n");
   });
 
   it.each(["running", "signaled"] as const)("stops a %s host artifact server", async (state) => {
     vi.useFakeTimers();
-    try {
-      const child = new FakeHostServerChild();
-      if (state === "signaled") {
-        child.exitWithSignal("SIGTERM");
-        await expect(hostServerTesting.stopHostServerChild(child as never)).resolves.toBe(true);
-        expect(child.signals).toEqual([]);
-        return;
-      }
-      const stop = hostServerTesting.stopHostServerChild(child as never);
-      expect(child.signals).toEqual(["SIGTERM"]);
-
-      await vi.advanceTimersByTimeAsync(2_000);
-      expect(child.signals).toEqual(["SIGTERM", "SIGKILL"]);
-
-      let resolved = false;
-      void stop.then(() => {
-        resolved = true;
-      });
-      await Promise.resolve();
-      expect(resolved).toBe(false);
-
-      child.exit();
-      await expect(stop).resolves.toBe(true);
-      expect(resolved).toBe(true);
-    } finally {
-      vi.useRealTimers();
+    const child = new FakeHostServerChild();
+    if (state === "signaled") {
+      child.exitWithSignal("SIGTERM");
+      await expect(hostServerTesting.stopHostServerChild(child as never)).resolves.toBe(true);
+      expect(child.signals).toEqual([]);
+      return;
     }
+    const stop = hostServerTesting.stopHostServerChild(child as never);
+    expect(child.signals).toEqual(["SIGTERM"]);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(child.signals).toEqual(["SIGTERM", "SIGKILL"]);
+
+    let resolved = false;
+    void stop.then(() => {
+      resolved = true;
+    });
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    child.exit();
+    await expect(stop).resolves.toBe(true);
+    expect(resolved).toBe(true);
   });
 
   it("uses a temporary npmrc file and cleans it after resolving the latest package version", () => {
@@ -1358,30 +1351,27 @@ kill -TERM "$$"`,
   );
 
   it("quotes shell args and resolves fuzzy snapshot hints through the shared TypeScript helper", () => {
+    const saved = (name: string, state = "poweroff", date?: string) => ({ name, state, date });
     const output = withJsonFakePrlctl(
       {
         "snapshot-list": {
-          "{older}": { name: "fresh", state: "running" },
-          "{wanted}": { name: "fresh-poweroff-2026-04-01", state: "poweroff" },
-          "{old-e2e}": {
-            name: "pre-openclaw-native-e2e-2026-03-12",
-            state: "poweroff",
-            date: "2026-03-12 22:32:24",
-          },
-          "{new-e2e}": {
-            name: "pre-openclaw-native-e2e-2026-07-26",
-            state: "poweroff",
-            date: "2026-07-26 11:52:02",
-          },
-          "{undated-first}": { name: "undated-family-1", state: "poweroff" },
-          "{dated-later}": {
-            name: "undated-family-2",
-            state: "poweroff",
-            date: "2026-07-26 11:52:02",
-          },
-          "{other}": { name: "unrelated", state: "poweroff" },
-          "{old-macos}": { name: "macOS 26.3.1 LATEST", state: "poweron" },
-          "{current-macos}": { name: "macOS 26.5", state: "poweron" },
+          "{older}": saved("fresh", "running"),
+          "{wanted}": saved("fresh-poweroff-2026-04-01"),
+          "{old-e2e}": saved(
+            "pre-openclaw-native-e2e-2026-03-12",
+            "poweroff",
+            "2026-03-12 22:32:24",
+          ),
+          "{new-e2e}": saved(
+            "pre-openclaw-native-e2e-2026-07-26",
+            "poweroff",
+            "2026-07-26 11:52:02",
+          ),
+          "{undated-first}": saved("undated-family-1"),
+          "{dated-later}": saved("undated-family-2", "poweroff", "2026-07-26 11:52:02"),
+          "{other}": saved("unrelated"),
+          "{old-macos}": saved("macOS 26.3.1 LATEST", "poweron"),
+          "{current-macos}": saved("macOS 26.5", "poweron"),
         },
       },
       () => {
@@ -1440,36 +1430,19 @@ if (commandArgs[0] === "list") {
 }`,
       );
 
-      const result = spawnSync(
-        testNodeExecPath,
-        [
-          // Darwin exercises the source-relative Python transport beside the script.
-          ...(process.platform === "darwin"
+      const result = runMacosSmoke(tempDir, {
+        version: "2026.1.1",
+        artifactRoot: tempDir,
+        timeout: 20_000,
+        // Darwin exercises the source-relative Python transport beside the script.
+        runtimeArgs:
+          process.platform === "darwin"
             ? ["--import", "tsx", TS_PATHS.macos]
             : resolveRuntimeWorkerArgv(
                 resolveRuntimeWorkerUrl(scriptProcessEntrypoints.macosSmoke),
                 testNodeExecPath,
-              )),
-          "--mode",
-          "upgrade",
-          "--latest-version",
-          "2026.1.1",
-          "--api-key-env",
-          "OPENCLAW_PARALLELS_TEST_KEY",
-          "--json",
-        ],
-        {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            ...fakePrlctlEnv(tempDir),
-            OPENCLAW_PARALLELS_ARTIFACT_ROOT: tempDir,
-            OPENCLAW_PARALLELS_TEST_KEY: "fixture",
-          },
-          timeout: 20_000,
-        },
-      );
+              ),
+      });
 
       expect(result.status, result.stderr).toBe(1);
       expect(result.stderr).toContain("macOS guest command failed with exit code 41");
@@ -1564,36 +1537,44 @@ if (commandArgs[0] === "list") {
     expect(readFileSync(statePath, "utf8")).toBe("running");
   });
 
-  it("resolves provider defaults and explicit model overrides", () => {
-    expect(
-      resolveParallelsProviderAuth({ provider: "openai" }, { OPENAI_API_KEY: "sk-openai" }),
-    ).toMatchObject({
-      auth: { apiKeyEnv: "OPENAI_API_KEY", modelId: "openai/gpt-5.6-luna" },
-      reason: null,
-      status: "ready",
-    });
-    expect(
-      resolveParallelsProviderAuth(
-        {
-          apiKeyEnv: "CUSTOM_ANTHROPIC_KEY",
-          provider: "anthropic",
-        },
-        {
-          CUSTOM_ANTHROPIC_KEY: "sk-anthropic",
-          OPENCLAW_PARALLELS_ANTHROPIC_MODEL: "  anthropic/custom  ",
-        },
-      ),
-    ).toMatchObject({
-      auth: { apiKeyEnv: "CUSTOM_ANTHROPIC_KEY", modelId: "  anthropic/custom  " },
-      reason: null,
-      status: "ready",
-    });
-    const inheritedCredentials = Object.create(null) as Record<string, string>;
-    for (const name of ["constructor", "toString", "__proto__"]) {
-      Object.defineProperty(inheritedCredentials, name, { value: "inherited-secret" });
-    }
-    const inheritedEnv = Object.create(inheritedCredentials) as Record<string, string>;
-    for (const apiKeyEnv of ["constructor", "toString", "__proto__"]) {
+  it.each(["openai", "anthropic"] as const)(
+    "resolves %s provider defaults and overrides",
+    (provider) => {
+      const anthropic = provider === "anthropic";
+      const apiKeyEnv = anthropic ? "CUSTOM_ANTHROPIC_KEY" : "OPENAI_API_KEY";
+      const modelId = anthropic ? "anthropic/custom" : "openai/gpt-5.6-luna";
+      const apiKeyValue = anthropic ? "sk-anthropic" : "sk-openai";
+      const options = { provider, ...(anthropic ? { apiKeyEnv } : {}) };
+      const env = {
+        [apiKeyEnv]: apiKeyValue,
+        ...(anthropic ? { OPENCLAW_PARALLELS_ANTHROPIC_MODEL: "  anthropic/custom  " } : {}),
+      };
+      expect(resolveParallelsProviderAuth(options, env)).toMatchObject({
+        auth: { apiKeyEnv, modelId: anthropic ? "  anthropic/custom  " : modelId },
+        reason: null,
+        status: "ready",
+      });
+      expect(
+        withEnv({ [apiKeyEnv]: apiKeyValue }, () =>
+          resolveProviderAuthDirect({
+            ...options,
+            ...(anthropic ? { modelId } : {}),
+          }),
+        ),
+      ).toEqual({
+        apiKeyEnv,
+        apiKeyValue,
+        authChoice: "apiKey",
+        authKeyFlag: `${provider}-api-key`,
+        modelId,
+        tokenProvider: provider,
+      });
+    },
+  );
+
+  it("does not accept inherited credentials", () => {
+    const inheritedEnv = inheritedCredentialEnv();
+    for (const apiKeyEnv of inheritedNames) {
       expect(
         resolveParallelsProviderAuth({ apiKeyEnv, provider: "openai" }, inheritedEnv),
       ).toMatchObject({
@@ -1602,19 +1583,9 @@ if (commandArgs[0] === "list") {
         status: "blocked",
       });
     }
-    expect(
-      withEnv({ OPENAI_API_KEY: "sk-openai" }, () =>
-        resolveProviderAuthDirect({ provider: "openai" }),
-      ),
-    ).toEqual({
-      apiKeyEnv: "OPENAI_API_KEY",
-      apiKeyValue: "sk-openai",
-      authChoice: "apiKey",
-      authKeyFlag: "openai-api-key",
-      modelId: "openai/gpt-5.6-luna",
-      tokenProvider: "openai",
-    });
+  });
 
+  it("resolves Windows-specific and explicit models before generic overrides", () => {
     const windowsEnv = {
       OPENAI_API_KEY: "sk-openai",
       OPENCLAW_PARALLELS_OPENAI_MODEL: "openai/generic",
@@ -1644,23 +1615,6 @@ if (commandArgs[0] === "list") {
         .modelId,
       withEnv(whitespaceEnv, () => resolveWindowsProviderAuth({ provider: "openai" }).modelId),
     ]).toEqual(["openai/gpt-5.6-luna", "openai/gpt-5.6-luna"]);
-
-    expect(
-      withEnv({ CUSTOM_ANTHROPIC_KEY: "sk-anthropic" }, () =>
-        resolveProviderAuthDirect({
-          apiKeyEnv: "CUSTOM_ANTHROPIC_KEY",
-          modelId: "anthropic/custom",
-          provider: "anthropic",
-        }),
-      ),
-    ).toEqual({
-      apiKeyEnv: "CUSTOM_ANTHROPIC_KEY",
-      apiKeyValue: "sk-anthropic",
-      authChoice: "apiKey",
-      authKeyFlag: "anthropic-api-key",
-      modelId: "anthropic/custom",
-      tokenProvider: "anthropic",
-    });
   });
 
   it("keeps prerequisite adapter failures sanitized and closed", () => {
@@ -1685,16 +1639,12 @@ if (commandArgs[0] === "list") {
       expect(output[0]).not.toContain("unsupported-secret");
     }
 
-    const inheritedCredentials = Object.create(null) as Record<string, string>;
-    for (const name of ["constructor", "toString", "__proto__"]) {
-      Object.defineProperty(inheritedCredentials, name, { value: "inherited-secret" });
-    }
-    for (const apiKeyEnv of ["constructor", "toString", "__proto__"]) {
+    for (const apiKeyEnv of inheritedNames) {
       const output: string[] = [];
       expect(
         runParallelsPrerequisiteEval(
           ["--prerequisite-check", "--json", "--api-key-env", apiKeyEnv],
-          Object.create(inheritedCredentials) as Record<string, string>,
+          inheritedCredentialEnv(),
           { write: (value) => output.push(value) },
         ),
       ).toBe(1);
@@ -1763,19 +1713,23 @@ if (commandArgs[0] === "list") {
       );
     }
     expect(smokeCommon).toContain("finalAssistant(Raw|Visible)Text");
-    expect(macos).toContain("modelProviderConfigBatchJson");
-    expect(macos).toContain("config set --batch-file");
-    expect(linux).toContain("modelProviderConfigBatchJson");
-    expect(linux).toContain("config set --batch-file");
+    for (const source of [macos, linux]) {
+      expect(source).toContain("modelProviderConfigBatchJson");
+      expect(source).toContain("config set --batch-file");
+    }
     expect(windows).toContain("windowsAgentTurnConfigPatchScript");
     expect(powershell).toContain("agents.defaults.skipBootstrap");
     expect(powershell).toContain("tools.profile");
     expect(powershell).toContain("replace(/^\\\\uFEFF/u");
-
     expect(npmUpdateScripts).toContain("posixAgentWorkspaceScript");
     expect(npmUpdateScripts).toContain("windowsAgentWorkspaceScript");
     expect(npmUpdateScripts).toContain("tools.profile");
     expect(npmUpdateScripts).toContain("--thinking off");
+    expect(npmUpdateScripts).toContain("posixAssertAgentOkScript");
+    expect(npmUpdateScripts).toContain("posixAgentTurnScript({");
+    expect(npmUpdateScripts).toContain("windowsAgentTurnConfigPatchScript");
+    expect(npmUpdateScripts).toContain("modelProviderConfigBatchJson");
+    expect(npmUpdateScripts).toContain("config set --batch-file");
     expect(
       windowsAgentTurnScript({
         command: "Invoke-OpenClaw @args",
@@ -1783,11 +1737,6 @@ if (commandArgs[0] === "list") {
         retryOnCommandFailure: false,
       }),
     ).toContain("finalAssistant(Raw|Visible)Text");
-    expect(npmUpdateScripts).toContain("posixAssertAgentOkScript");
-    expect(npmUpdateScripts).toContain("posixAgentTurnScript({");
-    expect(npmUpdateScripts).toContain("windowsAgentTurnConfigPatchScript");
-    expect(npmUpdateScripts).toContain("modelProviderConfigBatchJson");
-    expect(npmUpdateScripts).toContain("config set --batch-file");
   });
 
   it("clears phase timers and applies phase deadlines to guest commands", () => {
@@ -1871,30 +1820,26 @@ if (commandArgs[0] === "list") {
     const runDir = makeTempDir(tempDirs, "openclaw-parallels-phase-");
     const logPhaseRunner = new PhaseRunner(runDir, 128);
     const writes: string[] = [];
-    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+    vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
       writes.push(String(chunk));
       return true;
     });
 
-    try {
-      await expect(
-        logPhaseRunner.phase("noisy", 30, () => {
-          logPhaseRunner.append(`old-${"x".repeat(256)}`);
-          logPhaseRunner.append("recent failure");
-          throw new Error("phase failed");
-        }),
-      ).rejects.toThrow("phase failed");
+    await expect(
+      logPhaseRunner.phase("noisy", 30, () => {
+        logPhaseRunner.append(`old-${"x".repeat(256)}`);
+        logPhaseRunner.append("recent failure");
+        throw new Error("phase failed");
+      }),
+    ).rejects.toThrow("phase failed");
 
-      const logText = readFileSync(join(runDir, "noisy.log"), "utf8");
-      expect(logText).toContain("old-");
-      expect(logText).toContain("recent failure");
-      const stderr = writes.join("");
-      expect(stderr).toContain("phase log tail truncated");
-      expect(stderr).toContain("recent failure");
-      expect(stderr).not.toContain(`old-${"x".repeat(200)}`);
-    } finally {
-      stderrWrite.mockRestore();
-    }
+    const logText = readFileSync(join(runDir, "noisy.log"), "utf8");
+    expect(logText).toContain("old-");
+    expect(logText).toContain("recent failure");
+    const stderr = writes.join("");
+    expect(stderr).toContain("phase log tail truncated");
+    expect(stderr).toContain("recent failure");
+    expect(stderr).not.toContain(`old-${"x".repeat(200)}`);
   });
 
   it("clamps oversized phase timers before scheduling", async () => {
@@ -1902,17 +1847,13 @@ if (commandArgs[0] === "list") {
     const timerPhaseRunner = new PhaseRunner(runDir, 128);
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
 
-    try {
-      await expect(
-        timerPhaseRunner.phase("oversized", MAX_TIMER_TIMEOUT_SECONDS + 1, () => undefined),
-      ).resolves.toBeUndefined();
-      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
-      expect(readFileSync(join(runDir, "phase-timings.json"), "utf8")).toContain(
-        `"timeoutSeconds": ${MAX_TIMER_TIMEOUT_SECONDS + 1}`,
-      );
-    } finally {
-      setTimeoutSpy.mockRestore();
-    }
+    await expect(
+      timerPhaseRunner.phase("oversized", MAX_TIMER_TIMEOUT_SECONDS + 1, () => undefined),
+    ).resolves.toBeUndefined();
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    expect(readFileSync(join(runDir, "phase-timings.json"), "utf8")).toContain(
+      `"timeoutSeconds": ${MAX_TIMER_TIMEOUT_SECONDS + 1}`,
+    );
   });
 
   it("runs POSIX guest shell scripts with a normal install umask", () => {
@@ -1935,6 +1876,8 @@ if (commandArgs[0] === "list") {
     expect(windows).toContain("ensureGuestGit");
     expect(windows).toContain("fresh.ensure-git");
     expect(windows).toContain("upgrade.ensure-git");
+    expect(windows).toContain("Invoke-RestMethod -Uri");
+    expect(windows).toContain("-TimeoutSec 120");
     expect(combined).toContain("MinGit-");
     expect(combined).toContain("portable-git");
     expect(combined).toContain("where.exe git.exe");
@@ -1944,8 +1887,6 @@ if (commandArgs[0] === "list") {
     expect(
       combined.match(/curl\.exe -fsSL --connect-timeout 10 --max-time 120 --retry 2/g),
     ).toHaveLength(2);
-    expect(windows).toContain("Invoke-RestMethod -Uri");
-    expect(windows).toContain("-TimeoutSec 120");
     expect(windowsGit).toContain('if "-64-bit." in name:');
     expect(windowsGit).toContain('elif "-arm64." in name:');
   });
@@ -2076,15 +2017,14 @@ if (commandArgs[0] === "list") {
     let uploadedScript = "";
     const runCommand = (_command: string, _args: string[], options?: { input?: string }) => {
       uploadedScript = options?.input ?? "";
-      return { status: 1, stderr: "fixture upload failure", stdout: "" };
+      return fakeResult(1, "", "fixture upload failure");
     };
     await expect(
-      runWindowsBackgroundPowerShell({
+      runWindowsBackground({
         env: { NPM_CONFIG_REGISTRY: "http://192.0.2.2:48123/candidate's" },
         label: "environment proof",
         runCommand,
         script: "Write-Output $env:NPM_CONFIG_REGISTRY",
-        timeoutMs: 720_000,
         vmName: "Windows VM",
       }),
     ).rejects.toThrow("background script write failed");
@@ -2097,17 +2037,15 @@ if (commandArgs[0] === "list") {
     let calls = 0;
     const runCommand = vi.fn(() => {
       calls++;
-      return { status: 0, stderr: "", stdout: "" };
+      return fakeResult();
     });
 
     await expect(
-      runWindowsBackgroundPowerShell({
+      runWindowsBackground({
         label: "ambiguous launch",
         pollIntervalMs: 20,
         runCommand,
-        script: "Write-Output ok",
         timeoutMs: 90,
-        vmName: "Windows 11",
       }),
     ).rejects.toThrow("ambiguous launch background launch failed");
 
@@ -2115,20 +2053,18 @@ if (commandArgs[0] === "list") {
   });
 
   it("fails fast when a Windows Parallels VM stops during background work", async () => {
-    const runCommand = vi.fn(() => ({
-      status: 1,
-      stderr:
+    const runCommand = vi.fn(() =>
+      fakeResult(
+        1,
+        "",
         'Unable to perform the operation because "Windows 11" is not started. This operation can be performed for running virtual machines only.',
-      stdout: "",
-    }));
+      ),
+    );
 
     await expect(
-      runWindowsBackgroundPowerShell({
+      runWindowsBackground({
         label: "ref-onboard",
         runCommand,
-        script: "Write-Output ok",
-        timeoutMs: 720_000,
-        vmName: "Windows 11",
       }),
     ).rejects.toThrow("ref-onboard failed: Parallels VM stopped");
 
@@ -2141,27 +2077,24 @@ if (commandArgs[0] === "list") {
     const runCommand = vi.fn((_command: string, args: string[], options?: { input?: string }) => {
       const command = args.at(-1) ?? "";
       if (options?.input) {
-        return { status: 0, stderr: "", stdout: "" };
+        return fakeResult();
       }
       if (args.includes("--current-user")) {
-        return { status: 0, stderr: "", stdout: "started\n" };
+        return fakeResult(0, "started\n");
       }
       if (args.includes("cmd.exe") && command.includes("echo wait")) {
         donePolls++;
-        return { status: 124, stderr: "", stdout: "" };
+        return fakeResult(124);
       }
-      return { status: 0, stderr: "", stdout: "" };
+      return fakeResult();
     });
 
     await expect(
-      runWindowsBackgroundPowerShell({
+      runWindowsBackground({
         label: "ref-onboard",
         onLaunchRetry: (message) => retries.push(message),
         pollIntervalMs: 1,
         runCommand,
-        script: "Write-Output ok",
-        timeoutMs: 720_000,
-        vmName: "Windows 11",
       }),
     ).rejects.toThrow("ref-onboard done poll failed after 3 consecutive guest transport errors");
 
@@ -2192,22 +2125,19 @@ if (commandArgs[0] === "list") {
   it.runIf(process.platform !== "win32")(
     "lets timed host command descendants drain before force kill",
     () => {
-      const tempDir = makeTempDir(tempDirs, "openclaw-parallels-host-command-drain-");
+      const fixture = deadlineFixture("openclaw-parallels-host-command-drain-", 100);
+      const { tempDir, deadlineFile } = fixture;
       const readyFile = join(tempDir, "ready");
       const drainFile = join(tempDir, "drained");
-      const deadlineFile = join(tempDir, "deadline");
-      const preload = writeDrainDeadlinePreload(tempDir);
 
       // Force descendant startup past the deadline, then release the real timeout
       // callback only after signal handlers are installed. Cleanup timers stay real.
       const result = runNode(drainableProcessTreeScript(25), {
         check: false,
         env: {
-          ...process.env,
+          ...fixture.env,
           DRAIN_FILE: drainFile,
           READY_FILE: readyFile,
-          DEADLINE_FILE: deadlineFile,
-          NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require ${JSON.stringify(preload)}`,
         },
         timeoutMs: 100,
       });
@@ -2228,22 +2158,17 @@ if (commandArgs[0] === "list") {
   it.runIf(process.platform !== "win32")(
     "kills timed-out host command process groups",
     async ({ signal }) => {
-      const tempDir = makeTempDir(tempDirs, "openclaw-parallels-host-command-");
-      const grandchildPidPath = join(tempDir, "grandchild.pid");
-      const deadlineFile = join(tempDir, "deadline");
-      const preload = writeDrainDeadlinePreload(tempDir, 200);
+      const fixture = deadlineFixture("openclaw-parallels-host-command-");
+      const { tempDir, grandchildPidPath, deadlineFile } = fixture;
       let grandchildPid = 0;
 
       try {
         const result = runNode(SIGNAL_PARENT_SCRIPT, {
           check: false,
           env: {
-            ...process.env,
+            ...fixture.env,
             OPENCLAW_TEST_GRANDCHILD_PID: grandchildPidPath,
             OPENCLAW_TEST_READY_FILE: join(tempDir, "ready"),
-            READY_FILE: grandchildPidPath,
-            DEADLINE_FILE: deadlineFile,
-            NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require ${JSON.stringify(preload)}`,
           },
           timeoutMs: 200,
         });
@@ -2264,10 +2189,8 @@ if (commandArgs[0] === "list") {
   it.runIf(process.platform !== "win32")(
     "settles timed host commands when an escaped descendant retains child pipes",
     () => {
-      const tempDir = makeTempDir(tempDirs, "openclaw-parallels-host-command-pipes-");
-      const grandchildPidPath = join(tempDir, "grandchild.pid");
-      const deadlineFile = join(tempDir, "deadline");
-      const preload = writeDrainDeadlinePreload(tempDir, 200);
+      const fixture = deadlineFixture("openclaw-parallels-host-command-pipes-");
+      const { grandchildPidPath, deadlineFile } = fixture;
       let grandchildPid = 0;
       // Outlive the assertion bound, but self-clean if PID setup fails.
       const grandchildScript = "setTimeout(() => process.exit(0), 3_000);";
@@ -2291,11 +2214,8 @@ if (commandArgs[0] === "list") {
         const result = run(testNodeExecPath, ["-e", parentScript], {
           check: false,
           env: {
-            ...process.env,
+            ...fixture.env,
             GRANDCHILD_PID_PATH: grandchildPidPath,
-            READY_FILE: grandchildPidPath,
-            DEADLINE_FILE: deadlineFile,
-            NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require ${JSON.stringify(preload)}`,
           },
           // Let the command spawn its pipe holder before exercising timeout settlement.
           timeoutMs: 200,
@@ -2343,7 +2263,7 @@ if (commandArgs[0] === "list") {
         if (!grandchildPid && existsSync(fixture.grandchildPidPath)) {
           grandchildPid = Number.parseInt(readFileSync(fixture.grandchildPidPath, "utf8"), 10);
         }
-        forceKillSignaledFixture(runnerPid, grandchildPid, true);
+        forceKillSignaledFixture(runnerPid, grandchildPid);
         if (existsSync(fixture.parentPidPath)) {
           const parentPid = Number.parseInt(readFileSync(fixture.parentPidPath, "utf8"), 10);
           if (isProcessAlive(parentPid)) {
@@ -2459,30 +2379,25 @@ if (commandArgs[0] === "list") {
   });
 
   it("rejects loose Parallels numeric limits before starting smoke lanes", () => {
+    const envValue = <T>(name: string, value: string, read: () => T) =>
+      withEnv({ [`OPENCLAW_PARALLELS_${name}`]: value }, read);
+    const readRef = (value: string) =>
+      envValue("DEV_TARGET_REF", value, () =>
+        readGitCommitEnv("OPENCLAW_PARALLELS_DEV_TARGET_REF"),
+      );
     expect(
-      withEnv({ OPENCLAW_PARALLELS_MODEL_TIMEOUT_S: "1200" }, () =>
-        resolveParallelsModelTimeoutSeconds("linux"),
-      ),
+      envValue("MODEL_TIMEOUT_S", "1200", () => resolveParallelsModelTimeoutSeconds("linux")),
     ).toBe(1200);
     expect(
-      withEnv({ OPENCLAW_PARALLELS_NUMERIC_TEST: " 42 " }, () =>
+      envValue("NUMERIC_TEST", " 42 ", () =>
         readPositiveIntEnv("OPENCLAW_PARALLELS_NUMERIC_TEST", 7),
       ),
     ).toBe(42);
-    expect(
-      withEnv({ OPENCLAW_PARALLELS_DEV_TARGET_REF: ` ${"A".repeat(40)} ` }, () =>
-        readGitCommitEnv("OPENCLAW_PARALLELS_DEV_TARGET_REF"),
-      ),
-    ).toBe("a".repeat(40));
-    expect(
-      withEnv({ OPENCLAW_PARALLELS_DEV_TARGET_REF: " " }, () =>
-        readGitCommitEnv("OPENCLAW_PARALLELS_DEV_TARGET_REF"),
-      ),
-    ).toBeUndefined();
-
+    expect(readRef(` ${"A".repeat(40)} `)).toBe("a".repeat(40));
+    expect(readRef(" ")).toBeUndefined();
     expectFatalError(
       () =>
-        withEnv({ OPENCLAW_PARALLELS_MACOS_MODEL_TIMEOUT_S: "1800s" }, () =>
+        envValue("MACOS_MODEL_TIMEOUT_S", "1800s", () =>
           resolveParallelsModelTimeoutSeconds("macos"),
         ),
       "invalid OPENCLAW_PARALLELS_MACOS_MODEL_TIMEOUT_S: 1800s",
@@ -2508,10 +2423,7 @@ if (commandArgs[0] === "list") {
       );
     }
     expectFatalError(
-      () =>
-        withEnv({ OPENCLAW_PARALLELS_DEV_TARGET_REF: "main" }, () =>
-          readGitCommitEnv("OPENCLAW_PARALLELS_DEV_TARGET_REF"),
-        ),
+      () => readRef("main"),
       "invalid OPENCLAW_PARALLELS_DEV_TARGET_REF: expected a full 40-character commit SHA",
     );
     expectFatalError(
@@ -2534,69 +2446,53 @@ if (commandArgs[0] === "list") {
     );
   });
 
+  const targetSha = "a".repeat(40);
+  const devStatus = '"installKind": "git", "value": "dev"';
+  const pinnedStatus = `${devStatus}, "branch": "HEAD"`;
+  function devCase(
+    name: string,
+    options: {
+      status?: string;
+      target?: string;
+      head?: string;
+      reads?: number;
+      error?: string;
+    },
+  ) {
+    return { name, status: pinnedStatus, target: targetSha, head: "", reads: 0, ...options };
+  }
   it.each([
-    {
-      name: "unpinned main",
-      status: '"installKind": "git", "value": "dev", "branch": "main"',
-      target: undefined,
-      head: "",
-      reads: 0,
-    },
-    {
-      name: "pinned HEAD with banner and CRLF",
-      status: '"installKind": "git", "value": "dev", "branch": "HEAD"',
-      target: "a".repeat(40),
-      head: `checkout banner\r\n${"a".repeat(40)}\r\n`,
+    devCase("unpinned main", { status: `${devStatus}, "branch": "main"`, target: undefined }),
+    devCase("pinned HEAD with banner and CRLF", {
+      head: `checkout banner\r\n${targetSha}\r\n`,
       reads: 1,
-    },
-    {
-      name: "missing install kind before all other checks",
+    }),
+    devCase("missing install kind before all other checks", {
       status: "",
-      target: "a".repeat(40),
-      head: "",
-      reads: 0,
       error: 'dev update status missing "installKind": "git"',
-    },
-    {
-      name: "missing dev channel before branch and checkout",
+    }),
+    devCase("missing dev channel before branch and checkout", {
       status: '"installKind": "git"',
-      target: "a".repeat(40),
-      head: "",
-      reads: 0,
       error: 'dev update status missing "value": "dev"',
-    },
-    {
-      name: "missing pinned branch before checkout",
-      status: '"installKind": "git", "value": "dev"',
-      target: "a".repeat(40),
-      head: "",
-      reads: 0,
+    }),
+    devCase("missing pinned branch before checkout", {
+      status: devStatus,
       error: 'dev update status missing "branch": "HEAD"',
-    },
-    {
-      name: "wrong unpinned branch",
-      status: '"installKind": "git", "value": "dev", "branch": "HEAD"',
+    }),
+    devCase("wrong unpinned branch", {
       target: undefined,
-      head: "",
-      reads: 0,
       error: 'dev update status missing "branch": "main"',
-    },
-    {
-      name: "empty pinned checkout",
-      status: '"installKind": "git", "value": "dev", "branch": "HEAD"',
-      target: "a".repeat(40),
+    }),
+    devCase("empty pinned checkout", {
       head: "\r\n",
       reads: 1,
-      error: `dev update checkout head <empty> did not match ${"a".repeat(40)}`,
-    },
-    {
-      name: "mismatching pinned checkout",
-      status: '"installKind": "git", "value": "dev", "branch": "HEAD"',
-      target: "a".repeat(40),
+      error: `dev update checkout head <empty> did not match ${targetSha}`,
+    }),
+    devCase("mismatching pinned checkout", {
       head: "b".repeat(40),
       reads: 1,
-      error: `dev update checkout head ${"b".repeat(40)} did not match ${"a".repeat(40)}`,
-    },
+      error: `dev update checkout head ${"b".repeat(40)} did not match ${targetSha}`,
+    }),
   ])("validates dev updates: $name", ({ status, target, head, reads, error }) => {
     const readCheckoutHead = vi.fn(() => head);
     const verify = () => assertDevChannelUpdate(status, target, readCheckoutHead);

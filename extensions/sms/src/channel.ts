@@ -200,16 +200,6 @@ const smsSetupContract = defineChannelSetupContract({
   adapter: { applyAccountConfig: applySmsAccountConfig },
 });
 
-function resolveSmsTextChunkLimit(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  fallbackLimit?: number;
-}): number {
-  return (
-    resolveSmsAccount(params.cfg, params.accountId).textChunkLimit || params.fallbackLimit || 1500
-  );
-}
-
 async function sendSmsText(ctx: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -519,7 +509,8 @@ export const smsPlugin: ChannelPlugin<ResolvedSmsAccount, SmsProbe> = createChat
     chunker: chunkTextForOutbound,
     chunkerMode: "text",
     textChunkLimit: 1500,
-    resolveEffectiveTextChunkLimit: resolveSmsTextChunkLimit,
+    resolveEffectiveTextChunkLimit: ({ cfg, accountId }) =>
+      resolveSmsAccount(cfg, accountId).textChunkLimit,
     resolveTarget: ({ cfg, to, accountId }) => {
       const explicit = normalizeSmsPhoneNumber(to ?? "");
       if (explicit) {

@@ -150,11 +150,8 @@ describe("exec authorization planner", () => {
 
     expect(plan.ok).toBe(true);
     expect(
-      plan.groups.flatMap((group) =>
-        group.candidates.map((candidate) => candidate.sourceSegment.argv),
-      ),
-    ).toEqual([["whoami"], ["ls"]]);
-    expect(plan.groups.map((group) => group.opToNext ?? null)).toEqual(["&&", null]);
+      plan.groups.map((group) => group.candidates.map((candidate) => candidate.sourceSegment.argv)),
+    ).toEqual([[["whoami"]], [["ls"]]]);
     expect(
       plan.groups.flatMap((group) => group.candidates.map((candidate) => candidate.transport.kind)),
     ).toEqual(["shell-wrapper", "shell-wrapper"]);

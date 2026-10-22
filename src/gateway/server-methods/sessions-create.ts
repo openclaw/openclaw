@@ -25,7 +25,11 @@ import { buildDashboardSessionKey } from "../session-create-key.js";
 import { resolveSessionCreateCatalogSelectionError } from "../session-create-model-selection.js";
 import { createGatewaySession } from "../session-create-service.js";
 import type { PreparedGatewaySessionLifecycle } from "../session-create-service.types.js";
-import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
+import {
+  attributeAgentToolSessionCreation,
+  resolveOperatorSessionCreation,
+  validateAgentToolSessionCreation,
+} from "../session-creation-provenance.js";
 import { prepareSessionDeviceFolder } from "../session-device-folder.js";
 import {
   resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
@@ -135,37 +139,24 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const sessionCreation = await prepareSkillLibrarySessionCreation(
+    const preparedCreation = await prepareSkillLibrarySessionCreation(
       client,
       context.getRuntimeConfig,
       { ...creation, ...(p.surface ? { surface: p.surface } : {}) },
     );
     const toolRequester = client?.internal?.agentToolCaller;
     const agentCreated =
-      sessionCreation.via === "operator" && sessionCreation.requesterSessionKey !== undefined;
-    if (
-      agentCreated &&
-      (!toolRequester?.assertCurrent ||
-        toolRequester.sessionKey !== sessionCreation.requesterSessionKey ||
-        sessionCreation.actor?.type !== "human" ||
-        sessionCreation.actor.source !== "profile" ||
-        sessionCreation.actor.id !== client?.internal?.operatorRunAuthority?.profileId)
-    ) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.FORBIDDEN,
-          "Session creation requires a matching live operator tool caller",
-        ),
-      );
+      preparedCreation.via === "operator" && preparedCreation.requesterSessionKey !== undefined;
+    const creationError = validateAgentToolSessionCreation(client, preparedCreation);
+    if (creationError) {
+      respond(false, undefined, creationError);
       return;
     }
     const spawnRequesterSessionKey =
-      sessionCreation.via === "spawn"
-        ? normalizeOptionalString(sessionCreation.requesterSessionKey)
+      preparedCreation.via === "spawn"
+        ? normalizeOptionalString(preparedCreation.requesterSessionKey)
         : undefined;
-    const spawnError = validateSessionCreateSpawnRequest(sessionCreation, p);
+    const spawnError = validateSessionCreateSpawnRequest(preparedCreation, p);
     if (spawnError) {
       respond(false, undefined, spawnError);
       return;
@@ -183,6 +174,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     }
     const { personalModelSelection, personalAccountDefaults } = personalAccounts;
     const cfg = getCurrentConfig();
+    const sessionCreation = attributeAgentToolSessionCreation(preparedCreation, toolRequester);
     const authority = createAgentRuntimeAuthorityGuard(client, context, respond);
     const assertSessionCreateCurrent = Object.assign(
       bindGatewayDeviceRevocation(() => {
@@ -391,14 +383,13 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const sessionExecCwd = requestedExecNode ? requestedCwd : undefined;
     let sessionCwd = requestedExecNode ? undefined : (projectRoot ?? requestedCwd);
     let prepareLifecycle: Parameters<typeof createGatewaySession>[0]["prepareLifecycle"];
+    // Worktree creation validates its own source; the default may exist only on a worker.
     const preparedRoot =
-      repository || emptyWorkspace || deviceFolder
+      repository || emptyWorkspace || deviceFolder || p.worktree === true
         ? undefined
         : prepareSessionCreateFilesystemRoot({
             cfg,
-            enforceSandboxContainment: Boolean(
-              sessionCwd && !requestedExecNode && p.worktree !== true,
-            ),
+            enforceSandboxContainment: Boolean(sessionCwd && !requestedExecNode),
             requestedExecNode,
             requestedProjectId,
             sessionCwd,

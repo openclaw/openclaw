@@ -31,17 +31,15 @@ describe("talk handoff store", () => {
       createdAt: Date.parse("2026-05-05T12:00:00.000Z"),
       expiresAt: Date.parse("2026-05-05T12:00:05.000Z"),
     });
-    expect(handoff.room.activeClientId).toBeUndefined();
-    expect(Array.isArray(handoff.room.recentTalkEvents)).toBe(true);
-    expect(handoff.room.recentTalkEvents[0]).toMatchObject({
-      type: "session.started",
-      sessionId: `talk_${handoff.id}`,
-      transport: "managed-room",
-    });
     expect(handoff).not.toHaveProperty("tokenHash");
     if (record === undefined) {
       throw new Error("expected stored talk handoff record");
     }
+    expect(record.room.talk.recentEvents[0]).toMatchObject({
+      type: "session.started",
+      sessionId: `talk_${handoff.id}`,
+      transport: "managed-room",
+    });
     expect(record).not.toHaveProperty("token");
 
     vi.advanceTimersByTime(5001);

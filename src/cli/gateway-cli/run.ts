@@ -82,6 +82,7 @@ import { resolveGatewayPasswordOption, toOptionString } from "./run-option-value
 import type { GatewayRunOpts } from "./run-options.js";
 import type { GatewayRunRuntimeHooks } from "./runtime-hooks.js";
 import {
+  handleGatewayLockFailure,
   resolveGatewayStartupFailureExitCode,
   resolveGatewayStartupMaintenanceReason,
 } from "./startup-maintenance.js";
@@ -910,27 +911,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       throw err;
     }
     if (isGatewayLockError(err)) {
-      const errMessage = formatErrorMessage(err);
-      defaultRuntime.error(
-        `Gateway failed to start: ${errMessage}\nIf the gateway is supervised, stop it with: ${formatCliCommand("openclaw gateway stop")}`,
-      );
-      try {
-        const [{ formatPortDiagnostics }, { inspectPortUsage }] = await Promise.all([
-          import("../../infra/ports-format.js"),
-          import("../../infra/ports-inspect.js"),
-        ]);
-        const diagnostics = await inspectPortUsage(port);
-        if (diagnostics.status === "busy") {
-          for (const line of formatPortDiagnostics(diagnostics)) {
-            defaultRuntime.error(line);
-          }
-        }
-      } catch {
-        // ignore diagnostics failures
-      }
-      const { maybeExplainGatewayServiceStop } = await import("./shared.js");
-      await maybeExplainGatewayServiceStop();
-      defaultRuntime.exit(resolveGatewayLockErrorExitCode(err));
+      await handleGatewayLockFailure(err, port, resolveGatewayLockErrorExitCode(err));
       return;
     }
     if (isInvalidConfigError(err)) {

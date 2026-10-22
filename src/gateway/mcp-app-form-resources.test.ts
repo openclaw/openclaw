@@ -72,28 +72,23 @@ vi.mock("./server-methods/sessions-files.js", async (importOriginal) => ({
         entry: { sessionId: string; updatedAt: number };
       },
       assertCurrent: () => void,
+      readEntry: () => { sessionId: string; updatedAt: number },
     ) => Promise<unknown>,
-  ) =>
-    consume(
+  ) => {
+    const entry = { sessionId: "session-1", updatedAt: 0 };
+    return consume(
       {
         root: state.root,
         canonicalKey: params.sessionKey,
         agentId: params.agentId ?? "main",
         storePath: state.root,
         cfg,
-        entry: { sessionId: "session-1", updatedAt: 0 },
+        entry,
       },
       () => {},
-    ),
-}));
-vi.mock("../config/sessions/session-entry-read-facts.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../config/sessions/session-entry-read-facts.js")>()),
-  readRetainedSessionEntryFacts: (_database: unknown, request: { sessionKeys: string[] }) => ({
-    entries: request.sessionKeys.map((sessionKey) => ({
-      sessionKey,
-      entry: { sessionId: "session-1", updatedAt: 0 },
-    })),
-  }),
+      () => entry,
+    );
+  },
 }));
 vi.mock("../agents/agent-bundle-mcp-manager-api.js", () => ({
   peekSessionMcpRuntime: () => undefined,

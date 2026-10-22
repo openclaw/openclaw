@@ -105,6 +105,65 @@ describe("web-fetch-utils", () => {
     expect(htmlToMarkdown(html)).toEqual({ text, title });
   });
 
+  it("separates HTML table cells and preserves preformatted code whitespace", () => {
+    const html =
+      "<article><table><thead><tr><th>Region</th><th>Units</th><th>Change</th></tr></thead><tbody><tr><td>EMEA</td><td>120</td><td>15</td></tr><tr><td>APAC</td><td>98</td><td>7</td></tr></tbody></table><pre><code>def f(x):\n    if x:\n        return 1\n    return 0</code></pre><p>Done after the example code.</p></article>";
+    const rendered = htmlToMarkdown(html).text;
+
+    expect(rendered).toContain("Region | Units | Change");
+    expect(rendered).toContain("EMEA | 120 | 15");
+    expect(rendered).toContain("APAC | 98 | 7");
+    expect(rendered).toContain("```\ndef f(x):\n    if x:\n        return 1\n    return 0\n```");
+    expect(rendered).toMatch(/```\n\nDone after the example code\./);
+  });
+
+  it("uses a longer fence when preformatted HTML contains backticks", () => {
+    expect(htmlToMarkdown("<pre><code>```inside```</code></pre>").text).toBe(
+      "````\n```inside```\n````",
+    );
+  });
+
+  it("keeps links inside preformatted blocks literal in basic extraction", async () => {
+    const html =
+      '<pre>curl <a href="https://example.com">https://example.com\n  /path</a>\n  --header X</pre>';
+
+    expect(htmlToMarkdown(html).text).toBe(
+      "```\ncurl https://example.com\n  /path\n  --header X\n```",
+    );
+    await expect(extractText(html)).resolves.toBe(
+      "curl https://example.com\n  /path\n  --header X",
+    );
+  });
+
+  it("preserves entity-decoded prose that resembles preformatted markers", () => {
+    const malformed = "&lt;p>Keep&#0;openclaw-pre-bad&#0; tail&lt;/p><pre>x</pre>";
+    const validIndex = "&lt;p>Keep&#0;openclaw-pre-0&#0; tail&lt;/p><pre>x</pre>";
+
+    expect(htmlToMarkdown(malformed).text).toContain("Keep\u0000openclaw-pre-bad\u0000 tail");
+    expect(htmlToMarkdown(validIndex).text).toContain("Keep\u0000openclaw-pre-0\u0000 tail");
+    expect(htmlToMarkdown(validIndex).text).toContain("```\nx\n```");
+  });
+
+  it("keeps preformatted marker handling bounded for long NUL runs", () => {
+    const markerLikeProse = `\u0000openclaw-pre-${"\u0000".repeat(16_384)}`;
+    const rendered = htmlToMarkdown(`<p>${markerLikeProse}</p><pre>x</pre>`).text;
+
+    expect(rendered).toContain(markerLikeProse);
+    expect(rendered).toContain("```\nx\n```");
+  });
+
+  it("round-trips longer fences through basic HTML text extraction", async () => {
+    const marker = "`".repeat(3);
+    const code = `def summarize():
+    marker = "${marker}"
+    return marker`;
+    const html = `<article><table><thead><tr><th>Region</th><th>Units</th><th>Change</th></tr></thead><tbody><tr><td>EMEA</td><td>120</td><td>15</td></tr></tbody></table><pre><code>${code}</code></pre><p>Done after the example code.</p></article>`;
+
+    await expect(extractText(html)).resolves.toBe(
+      `Region | Units | Change\nEMEA | 120 | 15\n\ndef summarize():\n    marker = "${marker}"\n    return marker\n\nDone after the example code.`,
+    );
+  });
+
   it("resyncs raw-text openers from repeated unterminated quoted tags", () => {
     const payload = `${`<a title="x><script></script>`.repeat(1_000)}<p>Visible</p>`;
     const rendered = htmlToMarkdown(payload).text;

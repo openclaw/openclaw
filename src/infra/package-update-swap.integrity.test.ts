@@ -5,7 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { interceptPackageFileHashes } from "./package-update-integrity-hasher.test-support.js";
 import { PackageIntegrityTimeoutError } from "./package-update-integrity.js";
-import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
+import {
+  expectInstallation,
+  expectNoCalls,
+  expectVersion,
+  readText,
+  retain,
+} from "./package-update-swap.assertions.test-support.js";
 import { swapStagedPackageInstall } from "./package-update-swap.js";
 import {
   createPackageSwapFixture,
@@ -21,30 +27,8 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-const readText = (...parts: string[]) => fs.readFile(path.join(...parts), "utf8");
-
-async function expectVersion(root: string, version: string) {
-  expect(await readText(root, "package.json")).toContain(`"version":"${version}"`);
-}
-
-async function retain(params: Parameters<typeof swapStagedPackageInstall>[0]) {
-  let transaction: PackageUpdateTransaction | undefined;
-  const result = await swapStagedPackageInstall({
-    ...params,
-    onTransaction: (value) => {
-      transaction = value;
-    },
-  });
-  expect(result.status, result.step.stderrTail ?? "").toBe("committed");
-  if (!transaction) {
-    throw new Error("missing retained transaction");
-  }
-  return transaction;
-}
-
 async function expectCandidateIntact(packageRoot: string, launcher: string) {
-  await expectVersion(packageRoot, "2.0.0");
-  await expect(readText(launcher)).resolves.toBe("candidate launcher\n");
+  await expectInstallation(packageRoot, launcher, true);
 }
 
 async function createLinkedPackageSwapFixture(rootDir: string, relative = false) {
@@ -683,14 +667,17 @@ describe("retained npm package integrity", () => {
         { env: {}, stateDir: base },
       );
       expect(report.body).toContain("baseline-scan-failed");
-      expect(report.body).toContain(cause);
+      if (shape === "timed-out scan") {
+        expect(report.body).toContain(cause);
+      } else {
+        expect(report.body).not.toContain(cause);
+        expect(report.body).toContain("[redacted-diagnostic]");
+      }
       expect(report.body).not.toContain("identity fallback unavailable");
       expect(report.body).not.toContain(base);
       expect(result).toMatchObject({ packageRollbackVerified: false });
-      expect(beforeActivate).not.toHaveBeenCalled();
-      expect(onLiveMutation).not.toHaveBeenCalled();
-      await expectVersion(packageRoot, "1.0.0");
-      await expect(readText(launcher)).resolves.toBe("old launcher\n");
+      expectNoCalls(beforeActivate, onLiveMutation);
+      await expectInstallation(packageRoot, launcher);
     },
   );
 });

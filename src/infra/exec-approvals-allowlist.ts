@@ -346,7 +346,7 @@ function resolveShellWrapperScriptArgv(params: {
   const scriptBase = normalizeLowercaseStringOrEmpty(
     path.basename(params.shellScriptCandidatePath),
   );
-  const cwdBase = params.cwd && params.cwd.trim() ? params.cwd.trim() : process.cwd();
+  const cwdBase = params.cwd && params.cwd.trim() ? params.cwd : process.cwd();
   const resolveArgPath = (a: string): string => (path.isAbsolute(a) ? a : path.resolve(cwdBase, a));
   let idx = params.effectiveArgv.findIndex(
     (a) => resolveArgPath(a) === params.shellScriptCandidatePath,
@@ -1103,7 +1103,7 @@ function collectAllowAlwaysPatterns(
       });
       const argPattern = buildCwdBoundHashedArgPattern(
         scriptArgv,
-        params.cwd && params.cwd.trim() ? params.cwd.trim() : process.cwd(),
+        params.cwd && params.cwd.trim() ? params.cwd : process.cwd(),
         params.platform,
       );
       addAllowAlwaysPattern(out, scriptTrustPath, argPattern);

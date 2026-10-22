@@ -1,7 +1,8 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { issueFactoryGitHubProof } from "../factory-github-proof.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { coreGatewayHandlers } from "./core-handlers.js";
+import { expectRpcError } from "./rpc-response.test-support.js";
 import type { GatewayClient, GatewayRequestHandlerOptions } from "./types.js";
 
 vi.mock("../../agents/github-host-runtime.js", async (importOriginal) => ({
@@ -9,9 +10,13 @@ vi.mock("../../agents/github-host-runtime.js", async (importOriginal) => ({
   resolveGitHubHost: () => "example.ghe.com",
 }));
 
+const releases: Array<() => void> = [];
 afterEach(() => {
+  releases.splice(0).forEach((release) => release());
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
+beforeEach(() => vi.stubEnv("FACTORY_AUTH_MODE", "github"));
 
 const claim = {
   purpose: "session-item-read" as const,
@@ -25,24 +30,36 @@ const claim = {
   },
 };
 
-function brokerClient(overrides: Partial<GatewayClient> = {}): GatewayClient {
-  return {
-    connId: "broker-connection",
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "cli", version: "test", platform: "test", mode: "cli" },
-      role: "operator",
-      scopes: ["operator.admin"],
-    },
-    internal: {
-      isLocalClient: true,
-      authenticatedOperator: true,
-      operatorRoleActor: { kind: "system" },
-    },
-    ...overrides,
-  };
+function issue(assertCurrent = () => {}) {
+  const proof = issueFactoryGitHubProof({
+    actorId: 101,
+    profileId: "person-1",
+    claim,
+    assertCurrent,
+  });
+  releases.push(proof.release);
+  return proof;
 }
+
+function expectForbidden(respond: Awaited<ReturnType<typeof rpc>>) {
+  expectRpcError(respond, { code: "FORBIDDEN" });
+}
+
+const broker: GatewayClient = {
+  connId: "broker-connection",
+  connect: {
+    minProtocol: 1,
+    maxProtocol: 1,
+    client: { id: "cli", version: "test", platform: "test", mode: "cli" },
+    role: "operator",
+    scopes: ["operator.admin"],
+  },
+  internal: {
+    isLocalClient: true,
+    authenticatedOperator: true,
+    operatorRoleActor: { kind: "system" },
+  },
+};
 
 async function rpc(
   proof: string,
@@ -52,15 +69,11 @@ async function rpc(
   > = {},
 ) {
   const respond = vi.fn();
-  await coreGatewayHandlers["factory.githubPublication.redeem"]?.({
-    client: brokerClient(clientOverrides),
+  const method = "factory.githubPublication.redeem";
+  await coreGatewayHandlers[method]?.({
+    client: { ...broker, ...clientOverrides },
     context: createDirectChatContext({ isConnectionActive: () => true }),
-    req: {
-      type: "req",
-      id: "proof-request",
-      method: "factory.githubPublication.redeem",
-      params: { proof },
-    },
+    req: { type: "req", id: "proof-request", method },
     isWebchatConnect: () => false,
     params: { proof },
     respond,
@@ -71,141 +84,70 @@ async function rpc(
 }
 
 it("redeems the exact session read once through the registered direct private method", async () => {
-  vi.stubEnv("FACTORY_AUTH_MODE", "github");
-  const issued = issueFactoryGitHubProof({
-    actorId: 101,
-    profileId: "person-1",
-    claim,
-    assertCurrent: () => {},
-  });
-  const first = await rpc(issued.proof);
-  expect(first).toHaveBeenCalledWith(
+  const issued = issue();
+  expect(await rpc(issued.proof)).toHaveBeenCalledWith(
     true,
     expect.objectContaining({
-      purpose: "session-item-read",
+      ...claim,
       actorId: 101,
       actorPrincipal: "github:example.ghe.com:101",
       profileId: "person-1",
-      binding: claim.binding,
     }),
   );
-  expect(await rpc(issued.proof)).toHaveBeenCalledWith(
-    false,
-    undefined,
-    expect.objectContaining({ code: "FORBIDDEN" }),
-  );
+  expectForbidden(await rpc(issued.proof));
 });
 
 it("rejects public proxy connections and revoked original authority", async () => {
-  vi.stubEnv("FACTORY_AUTH_MODE", "github");
   let current = true;
-  const issued = issueFactoryGitHubProof({
-    actorId: 101,
-    profileId: "person-1",
-    claim,
-    assertCurrent: () => {
-      if (!current) {
-        throw new Error("Original caller revoked");
-      }
-    },
+  const issued = issue(() => {
+    if (!current) {
+      throw new Error("Original caller revoked");
+    }
   });
-  try {
-    expect(
-      await rpc(issued.proof, {
-        internal: { authenticatedOperator: true, operatorRoleActor: { kind: "system" } },
-      }),
-    ).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ code: "FORBIDDEN" }));
-    current = false;
-    expect(await rpc(issued.proof)).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "FORBIDDEN" }),
-    );
-    current = true;
-    expect(await rpc(issued.proof)).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "FORBIDDEN" }),
-    );
-  } finally {
-    issued.release();
-  }
+  expectForbidden(
+    await rpc(issued.proof, {
+      internal: { authenticatedOperator: true, operatorRoleActor: { kind: "system" } },
+    }),
+  );
+  current = false;
+  expectForbidden(await rpc(issued.proof));
+  current = true;
+  expectForbidden(await rpc(issued.proof));
 });
 
-it.each(["non-admin", "non-system", "retired", "aborted"] as const)(
+it.each([
+  ["non-admin", { connect: { ...broker.connect, scopes: ["operator.read"] } }, {}],
+  [
+    "non-system",
+    {
+      internal: {
+        ...broker.internal,
+        operatorRoleActor: { kind: "operator", profileId: "person-1" },
+      },
+    },
+    {},
+  ],
+  ["retired", {}, { hasCurrentClientAuthority: () => false }],
+  ["aborted", {}, { signal: AbortSignal.abort() }],
+] satisfies Array<[string, Partial<GatewayClient>, Parameters<typeof rpc>[2]]>)(
   "refuses broker redemption with %s authority without consuming the proof",
-  async (scenario) => {
-    vi.stubEnv("FACTORY_AUTH_MODE", "github");
-    const issued = issueFactoryGitHubProof({
-      actorId: 101,
-      profileId: "person-1",
-      claim,
-      assertCurrent() {},
-    });
-    try {
-      const client = brokerClient();
-      const request: Parameters<typeof rpc>[2] = {};
-      if (scenario === "non-admin") {
-        client.connect.scopes = ["operator.read"];
-      }
-      if (scenario === "non-system") {
-        client.internal = {
-          ...client.internal,
-          operatorRoleActor: { kind: "operator", profileId: "person-1" },
-        };
-      }
-      if (scenario === "retired") {
-        request.hasCurrentClientAuthority = () => false;
-      }
-      if (scenario === "aborted") {
-        request.signal = AbortSignal.abort();
-      }
-      expect(await rpc(issued.proof, client, request)).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "FORBIDDEN" }),
-      );
-      expect(issued.wasRedeemed()).toBe(false);
-      expect(await rpc(issued.proof)).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ actorId: 101 }),
-      );
-    } finally {
-      issued.release();
-    }
+  async (_scenario, client, request) => {
+    const issued = issue();
+    expectForbidden(await rpc(issued.proof, client, request));
+    expect(issued.wasRedeemed()).toBe(false);
+    expect(await rpc(issued.proof)).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ actorId: 101 }),
+    );
   },
 );
 
 it("expires and releases proofs before the private broker can redeem them", async () => {
-  vi.stubEnv("FACTORY_AUTH_MODE", "github");
-  const now = Date.now();
-  const clock = vi.spyOn(Date, "now").mockReturnValue(now);
-  try {
-    const expired = issueFactoryGitHubProof({
-      actorId: 101,
-      profileId: "person-1",
-      claim,
-      assertCurrent() {},
-    });
-    clock.mockReturnValue(now + 60_001);
-    expect(await rpc(expired.proof)).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "FORBIDDEN" }),
-    );
-    const released = issueFactoryGitHubProof({
-      actorId: 101,
-      profileId: "person-1",
-      claim,
-      assertCurrent() {},
-    });
-    released.release();
-    expect(await rpc(released.proof)).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "FORBIDDEN" }),
-    );
-  } finally {
-    clock.mockRestore();
-  }
+  const clock = vi.spyOn(Date, "now").mockReturnValue(0);
+  const expired = issue();
+  clock.mockReturnValue(60_001);
+  expectForbidden(await rpc(expired.proof));
+  const released = issue();
+  released.release();
+  expectForbidden(await rpc(released.proof));
 });

@@ -6,6 +6,7 @@ import { withTempDir } from "../test-utils/temp-dir.js";
 import * as commandResolution from "./exec-command-resolution.js";
 import {
   APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
+  buildSystemRunApprovalBinding,
   buildSystemRunApprovalEnvBinding,
   matchSystemRunApprovalBinding,
   prepareSystemRunMutableFileBinding,
@@ -71,7 +72,7 @@ describe("normalizeSystemRunApprovalPlan", () => {
         argv: ["bash", "-lc", "echo hi"],
         commandText: 'bash -lc "echo hi"',
         commandPreview: "echo hi",
-        cwd: "/tmp",
+        cwd: " /tmp ",
         agentId: "main",
         sessionKey: "agent:main:main",
         mutableFileOperand: {
@@ -218,6 +219,51 @@ describe("buildSystemRunApprovalEnvBinding", () => {
       envKeys: [],
     });
     expect(buildSystemRunApprovalEnvBinding({ bad: 1 })).toEqual({ envHash: null, envKeys: [] });
+  });
+});
+
+describe("buildSystemRunApprovalBinding", () => {
+  it("normalizes argv and metadata into a binding", () => {
+    const envBinding = buildSystemRunApprovalEnvBinding({
+      beta: "2",
+      alpha: "1",
+    });
+
+    expect(
+      buildSystemRunApprovalBinding({
+        argv: ["bash", "-lc", 12],
+        cwd: " /tmp ",
+        agentId: " main ",
+        sessionKey: " agent:main:main ",
+        env: {
+          beta: "2",
+          alpha: "1",
+        },
+      }),
+    ).toEqual({
+      binding: {
+        argv: ["bash", "-lc", "12"],
+        cwd: " /tmp ",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        envHash: envBinding.envHash,
+      },
+      envKeys: ["alpha", "beta"],
+    });
+  });
+
+  it("produces distinct bindings for whitespace-distinct cwd values", () => {
+    const withSpace = buildSystemRunApprovalBinding({
+      argv: ["echo", "hi"],
+      cwd: "/srv/data ",
+    });
+    const noSpace = buildSystemRunApprovalBinding({
+      argv: ["echo", "hi"],
+      cwd: "/srv/data",
+    });
+    expect(withSpace.binding.cwd).toBe("/srv/data ");
+    expect(noSpace.binding.cwd).toBe("/srv/data");
+    expect(withSpace.binding.cwd).not.toBe(noSpace.binding.cwd);
   });
 });
 

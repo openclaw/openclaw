@@ -1,4 +1,4 @@
-import { createMemo, createSignal, onCleanup, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, lazy, Loading, onSettled, Show } from "solid-js";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationContext } from "../app/context-types.ts";
 import type { ExecApprovalDecision } from "../app/exec-approval.ts";
@@ -23,7 +23,6 @@ import { Icon } from "./solid/icon.tsx";
 
 registerEnglishCatalog(registerSidebarAttentionEnglish);
 
-type PanelRenderer = typeof import("./sidebar-attention-panel.runtime.tsx").SidebarAttentionPanel;
 export type SidebarAttentionProps = {
   activeRouteId?: NavigationRouteId;
   onNavigate?: ApplicationContext["navigate"];
@@ -58,8 +57,10 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
   const [selectedTab, setSelectedTab] = createSignal<IssueTab>("all");
   const [overflowAbove, setOverflowAbove] = createSignal(false);
   const [overflowBelow, setOverflowBelow] = createSignal(false);
-  const [panelRenderer, setPanelRenderer] = createSignal<PanelRenderer | null>(null);
-  const panelLoad = createIdleImport(() => import("./sidebar-attention-panel.runtime.tsx"));
+  const Panel = lazy(() => import("./sidebar-attention-panel.runtime.tsx"), {
+    export: "SidebarAttentionPanel",
+  });
+  const panelLoad = createIdleImport(Panel.preload);
   let panelTrigger: { element: HTMLElement; scope: ReturnType<typeof routeScope> } | null = null;
   let list: HTMLDivElement | null = null;
   let panelFocus: SidebarAttentionFocus | null = null;
@@ -88,12 +89,6 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
       });
     }
   }
-  panelDismissals.set(host, () => {
-    const wasOpen = !disposed && panelOpen();
-    closePanel(false);
-    return wasOpen;
-  });
-
   const syncOverflowCue = (element: HTMLElement) => {
     setOverflowAbove(element.scrollTop > 2);
     setOverflowBelow(element.scrollHeight - element.scrollTop - element.clientHeight > 2);
@@ -115,14 +110,25 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
     }
     context.scopeUpgrade.activate(runtime.ScopeUpgradeOwner);
     const rect = trigger.getBoundingClientRect();
+    const rail = !trigger.closest(".shell--mobile-nav") ? trigger.closest(".sidebar-rail") : null;
     const width = Math.min(390, globalThis.innerWidth - 16);
-    const preferredLeft = rect.left + rect.width / 2 - width / 2;
+    const preferredLeft = rail
+      ? rail.getBoundingClientRect().right + 8
+      : rect.left + rect.width / 2 - width / 2;
     const left = Math.max(8, Math.min(preferredLeft, globalThis.innerWidth - width - 8));
-    setPanelRenderer(() => runtime.SidebarAttentionPanel);
     setPanelPosition(
       rect.top < globalThis.innerHeight / 2
-        ? { left, anchor: "top", top: Math.max(8, rect.bottom + 8) }
-        : { left, anchor: "bottom", bottom: Math.max(8, globalThis.innerHeight - rect.top + 8) },
+        ? { left, anchor: "top", top: Math.max(8, rail ? rect.top : rect.bottom + 8) }
+        : {
+            left,
+            anchor: "bottom",
+            bottom: Math.max(
+              8,
+              rail
+                ? globalThis.innerHeight - rect.bottom + 4
+                : globalThis.innerHeight - rect.top + 8,
+            ),
+          },
     );
     setSelectedTab("all");
     setPanelOpen(true);
@@ -225,14 +231,24 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
     });
   }
 
-  onCleanup(listen(document, "pointerdown", handleOutsideInteraction, true));
-  onCleanup(listen(document, "keydown", handleOutsideInteraction, true));
-  onCleanup(listen(window, "blur", handleWindowBlur));
-  onCleanup(() => {
-    disposed = true;
-    panelGeneration += 1;
-    panelDismissals.delete(host);
-    panelLoad.dispose();
+  onSettled(() => {
+    panelDismissals.set(host, () => {
+      const wasOpen = !disposed && panelOpen();
+      closePanel(false);
+      return wasOpen;
+    });
+    const stopPointer = listen(document, "pointerdown", handleOutsideInteraction, true);
+    const stopKeydown = listen(document, "keydown", handleOutsideInteraction, true);
+    const stopBlur = listen(window, "blur", handleWindowBlur);
+    return () => {
+      stopPointer();
+      stopKeydown();
+      stopBlur();
+      disposed = true;
+      panelGeneration += 1;
+      panelDismissals.delete(host);
+      panelLoad.dispose();
+    };
   });
 
   return (
@@ -267,8 +283,8 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
           </span>
         </Show>
       </button>
-      <Show when={panelOpen() && panelRenderer()} keyed>
-        {(Panel) => (
+      <Show when={panelOpen()}>
+        <Loading>
           <Panel
             entries={attention.read()}
             onApprovalDecision={(event, id, decision) => void decideApproval(event, id, decision)}
@@ -294,7 +310,7 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
             selectedTab={selectedTab()}
             watchUpdateProgress={props.watchUpdateProgress}
           />
-        )}
+        </Loading>
       </Show>
     </Show>
   );

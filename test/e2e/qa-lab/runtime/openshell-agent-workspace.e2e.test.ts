@@ -460,7 +460,6 @@ it.skipIf(process.platform === "win32" || !sandboxRoot)(
           nodeConfig: nodeConfig.config,
           pluginRuntime,
           capacity: 1,
-          capacityWaitMs: 0,
         });
         expect(node.identity.deviceId).toBe(identity.deviceId);
         const readConfig = async () =>

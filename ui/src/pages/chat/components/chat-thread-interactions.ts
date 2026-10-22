@@ -97,6 +97,7 @@ export type ChatThreadProps = Omit<
   ChatSendStatusActions &
   SubagentRoster & {
     applicationContext?: ApplicationContext;
+    onScrollPortRef?: (element: HTMLElement) => void | (() => void);
     messageReactions?: ReadonlyMap<string, MessageReactionSummary[]>;
     onReact?: (messageId: string, emoji: string, remove: boolean) => void;
     branding?: ThemeBranding;

@@ -5,7 +5,7 @@ import {
   captureSessionActorStorageOwner,
   readCapturedSessionActorEntry,
 } from "../../config/sessions/session-actor-storage-binding.js";
-import { projectPublicSessionEntry } from "../../config/sessions/session-entry-projection.js";
+import { projectExecutionSessionEntry } from "../../config/sessions/session-entry-projection.js";
 import {
   readSessionEntryReadOnlyInWorker,
   withSessionEntryReadOnlyInWorker,
@@ -577,7 +577,7 @@ export async function executeQueuedContextEngineCompaction(input: {
                 sessionFile: postCompactionSessionFile,
                 sessionTarget: postCompactionSessionTarget,
                 ...(successor.entry
-                  ? { sessionEntry: projectPublicSessionEntry(successor.entry) }
+                  ? { sessionEntry: projectExecutionSessionEntry(successor.entry) }
                   : {}),
                 runtimeModel: effectiveRuntimeModel,
                 contextEngine,

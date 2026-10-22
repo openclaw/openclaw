@@ -6,7 +6,6 @@ import { uniqueValues } from "@openclaw/normalization-core/string-normalization"
 import { Type, type TObject } from "typebox";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
-import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import type { AgentRuntimeMessageActionContext } from "../../gateway/message-action-turn-capability.js";
 import { MessageActionDeniedError } from "../../infra/outbound/message-action-denial.js";
 import { sourceDeliveryTargetsMatch } from "../../infra/outbound/source-delivery-plan.js";
@@ -119,7 +118,7 @@ export function enforceTrustedTurnExplicitAccount(params: {
 }
 
 export function enforceSourceReplyOnlyMessageAction(params: {
-  action: ChannelMessageActionName;
+  action: string;
   args: Record<string, unknown>;
   currentChannelProvider?: string;
   currentChannelId?: string;

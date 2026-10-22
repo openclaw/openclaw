@@ -697,6 +697,7 @@ describe("device pairing tokens", () => {
     const approved = await approveBootstrapDevicePairing(
       request.requestId,
       PAIRING_SETUP_BOOTSTRAP_PROFILE,
+      {},
       baseDir,
     );
     expect(approved).toMatchObject({ status: "approved" });
@@ -744,6 +745,7 @@ describe("device pairing tokens", () => {
     const approved = await approveBootstrapDevicePairing(
       request.requestId,
       PAIRING_SETUP_BOOTSTRAP_PROFILE,
+      {},
       baseDir,
     );
     expect(approved).toMatchObject({ status: "approved" });
@@ -783,6 +785,7 @@ describe("device pairing tokens", () => {
           "operator.write",
         ],
       },
+      {},
       baseDir,
     );
     expect(approved).toMatchObject({ status: "approved" });
@@ -809,7 +812,7 @@ describe("device pairing tokens", () => {
       scopes: ["operator.approvals", "operator.read", "operator.write"],
     };
     const first = await requestBootstrap(profile);
-    await approveBootstrapDevicePairing(first.request.requestId, profile, baseDir);
+    await approveBootstrapDevicePairing(first.request.requestId, profile, {}, baseDir);
     await mutatePairedDevice(baseDir, "device-1", (device) => {
       device.approvedScopes = ["operator.admin"];
       device.scopes = ["operator.admin"];
@@ -817,7 +820,7 @@ describe("device pairing tokens", () => {
 
     const repair = await requestBootstrap({ ...profile, publicKey: "rotated-public-key" });
     await expect(
-      approveBootstrapDevicePairing(repair.request.requestId, profile, baseDir),
+      approveBootstrapDevicePairing(repair.request.requestId, profile, {}, baseDir),
     ).resolves.toMatchObject({ status: "approved" });
 
     const paired = await getPairedDevice("device-1", baseDir);
@@ -915,6 +918,7 @@ describe("device pairing tokens", () => {
           : await approveBootstrapDevicePairing(
               requestId,
               PAIRING_SETUP_BOOTSTRAP_PROFILE,
+              {},
               baseDir,
             );
 

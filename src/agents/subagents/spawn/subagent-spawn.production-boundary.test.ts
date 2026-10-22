@@ -92,9 +92,10 @@ import {
   createSpawnOperatorSource,
   prepareIsolatedChildAdmissionProof,
   recordSpawnBoundaryFinal,
-  registerYieldedRequesterBatchCase,
 } from "./subagent-spawn.production-boundary.test-support.js";
+import { registerRecoverySpawnCases } from "./subagent-spawn.recovery.test-support.js";
 import { registerRequestCustodySpawnCases } from "./subagent-spawn.request-custody.test-support.js";
+import { registerYieldedRequesterBatchCase } from "./subagent-spawn.requester-yield.test-support.js";
 import { registerOperatorSpawnRollbackCases } from "./subagent-spawn.rollback.test-support.js";
 import { createSpawnBoundaryConfig, throwBoundFailures } from "./subagent-spawn.test-helpers.js";
 import { registerManagedWorktreeSpawnCases } from "./subagent-spawn.worktree.test-support.js";
@@ -224,6 +225,11 @@ async function createBoundParent(
     parentSessionKey,
     parentRunId,
     operatorAuthority,
+    // These guest scenarios start with an authenticated human request, not just
+    // an execution grant. Keep its causal facts separate from selected authority.
+    requesterOrigin: guestProfileId
+      ? { sessionKey: parentSessionKey, operatorProfileId: guestProfileId }
+      : undefined,
   });
 }
 
@@ -352,6 +358,12 @@ describe("recursive spawn production boundary", () => {
     throwBoundFailures,
     runEmbeddedAgent,
   };
+  registerRecoverySpawnCases({
+    ...boundSpawnFixture,
+    stateDir: () => stateDir,
+    waitForEmbeddedRun,
+    settleRootWork: (keepObserving) => settleRootWork(keepObserving),
+  });
   registerNativePluginSpawnCases({
     ...boundSpawnFixture,
     settleRootWork: (keepObserving) => settleRootWork(keepObserving),

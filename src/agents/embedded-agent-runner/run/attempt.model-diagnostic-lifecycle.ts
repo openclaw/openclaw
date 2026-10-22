@@ -1,4 +1,4 @@
-import { modelRequestBodyState } from "@openclaw/ai/internal/openai";
+import { modelRequestBodyState } from "@openclaw/ai/internal/model-request-body";
 import { withProviderAcceptanceObserver } from "@openclaw/ai/transports";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -36,6 +36,7 @@ import { emitDiagnosticsTimelineEvent } from "../../../infra/diagnostics-timelin
 import { withModelTransportContext } from "../../../llm/model-transport-context.js";
 import { createModelCallStreamProgressReporter } from "../../../logging/diagnostic-model-stream-progress.js";
 import type { DiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
+import { recordReasoningSuppressedDiagnostic } from "../../../logging/diagnostic-session-state.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
   PluginHookAgentContext,
@@ -377,6 +378,19 @@ export function createModelLifecycle(params: {
   signal?.addEventListener("abort", clearWait, { once: true });
   function emitModelCallEnded(failure: { error: unknown } | undefined): void {
     const { ownerGeneration, config } = params.ctx;
+    if (observer.state.reasoningSuppressed) {
+      const warning = recordReasoningSuppressedDiagnostic(
+        {
+          sessionKey: eventBase.sessionKey,
+          sessionId: eventBase.sessionId ?? (eventBase.sessionKey ? undefined : eventBase.runId),
+        },
+        eventBase.provider,
+        eventBase.model,
+      );
+      if (warning) {
+        log.warn(warning);
+      }
+    }
     if (observer.state.terminalEventEmitted) {
       return;
     }

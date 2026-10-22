@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { createServer as createHttpServer, type ServerResponse } from "node:http";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveBundleMcpServerInstructions } from "../agents/agent-bundle-mcp-instructions.js";
 import { withAgentQuestionAnswerAuthority } from "../agents/harness/host-private-capabilities.js";
 import { acknowledgeInternalToolResult } from "../agents/runtime/internal-hooks.js";
 import { withPreparedSessionCapabilityRead } from "../agents/subagents/spawn/subagent-session-store.js";
@@ -316,6 +317,9 @@ async function startMcpLoopbackServer(
                   ...(boundClientGrant?.skillLibraryAuthoring
                     ? { skillLibraryAuthoring: boundClientGrant.skillLibraryAuthoring }
                     : {}),
+                  ...(boundClientGrant?.bundledTools
+                    ? { bundledTools: boundClientGrant.bundledTools }
+                    : {}),
                 }),
             );
           } catch (error) {
@@ -352,6 +356,10 @@ async function startMcpLoopbackServer(
             stopKeepalive = keepMcpResponseAlive(res, "application/json", "\n");
           }
           const responses: object[] = [];
+          const serverInstructions = resolveBundleMcpServerInstructions(
+            boundClientGrant?.bundledTools,
+            new Set(scopedTools.toolSchema.map((entry) => entry.name)),
+          );
           for (const [messageIndex, message] of messages.entries()) {
             if (!isJsonRpcRequest(message)) {
               responses.push(
@@ -382,6 +390,7 @@ async function startMcpLoopbackServer(
                   message,
                   tools: scopedTools.tools,
                   toolSchema: scopedTools.toolSchema,
+                  ...(serverInstructions ? { serverInstructions } : {}),
                   hookContext: {
                     agentId: scopedTools.agentId,
                     config: cfg,

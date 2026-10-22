@@ -58,6 +58,18 @@ describe("renderAssistantRequestFailureCopy", () => {
     expect(copy).not.toMatch(/SQLite|openai\/test-model|I\/O/);
   });
 
+  it("gives the same reconciliation guidance in live replies and saved history", () => {
+    const assistant = makeAssistant({
+      ...target,
+      errorMessage: "Session actor requires reconciliation before another command",
+    });
+    const copy = formatUserFacingAssistantErrorText(assistant);
+    expect(copy).toContain("reopen the conversation");
+    expect(copy).toContain("restart OpenClaw");
+    expect(copy).not.toContain("Session actor");
+    expect(renderRecordedAssistantFailureCopy(assistant)).toBe(copy);
+  });
+
   it("renders loading facts consistently in live replies and saved history without provider prose", () => {
     const expected = String.raw`Could not load model "local\/model" with 49152 context tokens. Wait for loading to finish on the model server, then retry, or lower the model's configured context size.`;
     const assistant = loading({

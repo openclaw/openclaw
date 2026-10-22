@@ -237,6 +237,24 @@ export class ShellChromeOwner {
     }
   };
 
+  private finishNavigationMotion(): void {
+    // Finish only this invocation's navigation transitions after the DOM commit,
+    // before paint. CSS remains unchanged for the next click or reduced motion.
+    void this.host.updateComplete.then(() => {
+      const { shellElement, navDrawerElement, navBackdropElement } = this.host;
+      for (const element of [shellElement, navDrawerElement, navBackdropElement]) {
+        for (const animation of element?.getAnimations() ?? []) {
+          if (
+            animation instanceof CSSTransition &&
+            (element !== shellElement || animation.transitionProperty === "grid-template-columns")
+          ) {
+            animation.finish();
+          }
+        }
+      }
+    });
+  }
+
   /** Restore to the persistent rail view, or content when navigation is unavailable. */
   restoreFocusTo = (target: HTMLElement | null | undefined): void =>
     focusWithoutTooltip(
@@ -402,7 +420,13 @@ export class ShellChromeOwner {
       return;
     }
     if (host.navDrawerOpen && isMobileNavLayout()) {
+      const togglesSidebar =
+        !event.defaultPrevented &&
+        matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar, event);
       handleNavDrawerKeydown(host, event);
+      if (togglesSidebar) {
+        this.finishNavigationMotion();
+      }
       return;
     }
     // A replaced workspace can retain its palette ref after the DOM is detached.
@@ -466,6 +490,7 @@ export class ShellChromeOwner {
     if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar, event)) {
       event.preventDefault();
       this.toggleNavigationSurface();
+      this.finishNavigationMotion();
     }
   };
 

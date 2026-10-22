@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
+import { quotePowerShellArg } from "../cli/quote-cli-arg.js";
 import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
 import { quoteCmdScriptArg } from "../daemon/cmd-argv.js";
 import { resolveGatewayWindowsTaskName } from "../daemon/constants.js";
@@ -19,10 +20,6 @@ import { encodeWindowsLauncherScript } from "./windows-launcher-encoding.js";
 const TASK_STOP_WAIT_SECONDS = 180;
 const TASK_RESTART_RETRY_LIMIT = 12;
 const TASK_RESTART_RETRY_DELAY_SEC = 1;
-
-function quotePowerShellSingleQuotedLiteral(value: string): string {
-  return `'${value.replace(/'/g, "''")}'`;
-}
 
 export function relaunchGatewayScheduledTask(env: NodeJS.ProcessEnv = process.env): RestartAttempt {
   const taskName =
@@ -54,14 +51,14 @@ export function relaunchGatewayScheduledTask(env: NodeJS.ProcessEnv = process.en
     const observeReplacementCommand = [
       "$ErrorActionPreference = 'Stop'",
       `$deadline = [DateTime]::UtcNow.AddSeconds(${readinessWaitSeconds})`,
-      `$entry = [regex]::Escape(${quotePowerShellSingleQuotedLiteral(entryPath)})`,
+      `$entry = [regex]::Escape(${quotePowerShellArg(entryPath)})`,
       "$boundary = '[\\s' + [char]34 + ']'",
       "do {",
       `$listeners = @(Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue)`,
       "foreach ($listener in $listeners) {",
       `if ($listener.OwningProcess -eq ${process.pid}) { continue }`,
       "$candidate = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $listener.OwningProcess)",
-      `if ($candidate.ExecutablePath -eq ${quotePowerShellSingleQuotedLiteral(process.execPath)} -and $candidate.CommandLine -match ($boundary + $entry + $boundary) -and $candidate.CommandLine -match '(?:^|\\s)gateway(?:\\s|$)') {`,
+      `if ($candidate.ExecutablePath -eq ${quotePowerShellArg(process.execPath)} -and $candidate.CommandLine -match ($boundary + $entry + $boundary) -and $candidate.CommandLine -match '(?:^|\\s)gateway(?:\\s|$)') {`,
       `Write-Output ('openclaw restart observed source=windows-task-handoff port=${port} pid=' + $listener.OwningProcess)`,
       "exit 0",
       "}",

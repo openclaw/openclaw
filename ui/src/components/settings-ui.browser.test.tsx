@@ -1,11 +1,9 @@
 import { createSignal, flush } from "solid-js";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
-import {
-  SettingsSaveIndicator,
-  type SettingsSaveIndicatorProps,
-} from "./settings-save-indicator.tsx";
+import { saveIndicatorProps } from "./settings-save-indicator.test-support.ts";
+import { SettingsSaveIndicator } from "./settings-save-indicator.tsx";
 import { SettingsSegmented } from "./solid/settings-ui.tsx";
 import startupStyles from "../styles.css?inline";
 
@@ -51,103 +49,66 @@ it("animates Applying before lazy settings styles load", async () => {
   // Keep lazy route keyframes from masking a missing startup animation owner.
   const root = container.attachShadow({ mode: "open" });
   document.body.append(container);
-  let view: ReturnType<typeof mountSolid> | undefined;
-  try {
-    const target = root.appendChild(document.createElement("div"));
-    const indicatorProps = {
-      status: "idle",
-      lastError: null,
-      needsApply: true,
-      applying: true,
-      applyDisabled: false,
-      onRetry: vi.fn(),
-      onSave: vi.fn(),
-      onReload: vi.fn(),
-      onApply: vi.fn(),
-    } satisfies SettingsSaveIndicatorProps;
-    view = mountSolid(
-      () => (
-        <>
-          <style>{startupStyles}</style>
-          <SettingsSaveIndicator {...indicatorProps} />
-        </>
-      ),
-      { container: target },
-    );
-    await waitForSolid(() =>
-      expect(target.querySelector(".settings-save-indicator__spinner svg")).not.toBeNull(),
-    );
-    const spinner = target.querySelector<SVGElement>(".settings-save-indicator__spinner svg")!;
-    const animations = spinner.getAnimations();
-    expect(animations.length).toBeGreaterThan(0);
-    const animation = animations[0]!;
-    const duration = Number(animation.effect!.getComputedTiming().duration);
-    expect(duration).toBeGreaterThan(0);
-    animation.pause();
-    animation.currentTime = duration / 4;
-    const transform = new DOMMatrixReadOnly(getComputedStyle(spinner).transform);
-    expect(transform.a).toBeCloseTo(0);
-    expect(transform.b).toBeCloseTo(1);
-  } finally {
-    view?.unmount();
-    container.remove();
-  }
+  onTestFinished(() => container.remove());
+  const target = root.appendChild(document.createElement("div"));
+  mountSolid(
+    () => (
+      <>
+        <style>{startupStyles}</style>
+        <SettingsSaveIndicator {...saveIndicatorProps({ needsApply: true, applying: true })} />
+      </>
+    ),
+    { container: target },
+  );
+  await waitForSolid(() =>
+    expect(target.querySelector(".settings-save-indicator__spinner svg")).not.toBeNull(),
+  );
+  const spinner = target.querySelector<SVGElement>(".settings-save-indicator__spinner svg")!;
+  const animation = spinner.getAnimations()[0]!;
+  expect(animation).toBeDefined();
+  const duration = Number(animation.effect!.getComputedTiming().duration);
+  expect(duration).toBeGreaterThan(0);
+  animation.pause();
+  animation.currentTime = duration / 4;
+  const transform = new DOMMatrixReadOnly(getComputedStyle(spinner).transform);
+  expect(transform).toMatchObject({ a: expect.closeTo(0), b: expect.closeTo(1) });
 });
 
 it("restores segmented controls after fieldset busy state while preserving disabled options", () => {
   const onChange = vi.fn();
-  const view = mountRadioGroups(onChange);
-  const { container } = view;
-  const draw = (busy: boolean, disabled = false) => view.draw({ busy, disabled });
-  const disabledStates = () =>
-    [...container.querySelector('[role="radiogroup"]')!.querySelectorAll("input[type=radio]")].map(
-      (radio) => radio.matches(":disabled"),
-    );
-  try {
-    draw(false);
-    expect(disabledStates()).toEqual([false, false, true]);
-    draw(true);
-    expect(disabledStates()).toEqual([true, true, true]);
-    draw(true);
-    expect(disabledStates()).toEqual([true, true, true]);
-    container.querySelector<HTMLElement>('input[type=radio][value="second"]')?.click();
-    expect(onChange).not.toHaveBeenCalled();
-    draw(false);
-    expect(disabledStates()).toEqual([false, false, true]);
-    container.querySelector<HTMLElement>('input[type=radio][value="second"]')?.click();
-    expect(onChange).toHaveBeenCalledWith("second", expect.any(HTMLElement));
-    onChange.mockClear();
-    draw(true, true);
-    expect(disabledStates()).toEqual([true, true, true]);
-    draw(false, true);
-    expect(disabledStates()).toEqual([true, true, true]);
-    container.querySelector<HTMLElement>('input[type=radio][value="second"]')?.click();
-    expect(onChange).not.toHaveBeenCalled();
-    draw(false);
-    expect(disabledStates()).toEqual([false, false, true]);
-  } finally {
-    view.unmount();
-  }
+  const { container, draw } = mountRadioGroups(onChange);
+  const disabledStates = (busy: boolean, disabled = false) => {
+    draw({ busy, disabled });
+    return [
+      ...container.querySelector('[role="radiogroup"]')!.querySelectorAll("input[type=radio]"),
+    ].map((radio) => radio.matches(":disabled"));
+  };
+  expect(disabledStates(false)).toEqual([false, false, true]);
+  expect(disabledStates(true)).toEqual([true, true, true]);
+  expect(disabledStates(true)).toEqual([true, true, true]);
+  container.querySelector<HTMLElement>('input[type=radio][value="second"]')?.click();
+  expect(onChange).not.toHaveBeenCalled();
+  expect(disabledStates(false)).toEqual([false, false, true]);
+  container.querySelector<HTMLElement>('input[type=radio][value="second"]')?.click();
+  expect(onChange).toHaveBeenCalledWith("second", expect.any(HTMLElement));
+  onChange.mockClear();
+  expect(disabledStates(true, true)).toEqual([true, true, true]);
+  expect(disabledStates(false, true)).toEqual([true, true, true]);
+  container.querySelector<HTMLElement>('input[type=radio][value="second"]')?.click();
+  expect(onChange).not.toHaveBeenCalled();
+  expect(disabledStates(false)).toEqual([false, false, true]);
 });
 
 it("keeps externally updated radio selections checked and independent as options change", () => {
-  const view = mountRadioGroups();
-  const { container } = view;
-  const draw = (value: string, expanded = false) => view.draw({ value, expanded });
-  const selected = () =>
-    [...container.querySelectorAll('[role="radiogroup"]')].map((group) =>
+  const { container, draw } = mountRadioGroups();
+  const selected = (value: string, expanded = false) => {
+    draw({ value, expanded });
+    return [...container.querySelectorAll('[role="radiogroup"]')].map((group) =>
       [...group.querySelectorAll<HTMLInputElement>("input:checked")].map((input) => input.value),
     );
-  try {
-    draw("second");
-    expect(selected()).toEqual([["second"], ["second"]]);
-    draw("first");
-    expect(selected()).toEqual([["first"], ["second"]]);
-    draw("third", true);
-    expect(selected()).toEqual([["third"], ["second"]]);
-    draw("second", true);
-    expect(selected()).toEqual([["second"], ["second"]]);
-  } finally {
-    view.unmount();
-  }
+  };
+  expect(selected("second")).toEqual([["second"], ["second"]]);
+  expect(selected("first")).toEqual([["first"], ["second"]]);
+  expect(selected("third", true)).toEqual([["third"], ["second"]]);
+  expect(selected("second", true)).toEqual([["second"], ["second"]]);
 });

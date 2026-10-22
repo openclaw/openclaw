@@ -123,12 +123,7 @@ describe("trusted approval rewrite isolation", () => {
         expect(broker.listPending()).toHaveLength(0);
       } finally {
         broker.stop();
-        try {
-          await pending;
-        } finally {
-          setEmbeddedPluginApprovalBroker(null);
-          setEmbeddedMode(false);
-        }
+        await pending;
       }
     },
   );

@@ -3,10 +3,7 @@ import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaStream } from "openclaw/plugin-sdk/media-store";
 import { fetchWithRuntimeDispatcherOrMockedGlobal } from "openclaw/plugin-sdk/runtime-fetch";
 
-type DownloadResult = Pick<
-  Awaited<ReturnType<typeof saveMediaStream>>,
-  "path" | "contentType" | "size"
->;
+type DownloadResult = Pick<Awaited<ReturnType<typeof saveMediaStream>>, "path" | "contentType">;
 
 // LINE prepares inbound media asynchronously. Poll the content endpoint itself
 // because the transcoding-status endpoint does not cover every media type.
@@ -193,7 +190,6 @@ export async function downloadLineMedia(
     return {
       path: saved.path,
       contentType: saved.contentType,
-      size: saved.size,
     };
   } finally {
     clearTimeout(deadline);

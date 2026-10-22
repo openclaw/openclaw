@@ -13,7 +13,7 @@ import type { ClawHubRecommendation } from "../../../../src/shared/clawhub-recom
 import type { RunFailureNotice } from "../../../../src/shared/run-failure-notice.js";
 import type { SkillWorkshopChangeNotice } from "../../../../src/shared/skill-workshop-change-notice.js";
 import type { BrowserTabTarget } from "../../components/browser/browser-target.ts";
-import type { toolIcons } from "../../components/icons-tools.ts";
+import type { toolIconData } from "../../components/icon-data-tools.ts";
 import type { SenderIdentity } from "./sender-label.ts";
 
 export type { HumanMention };
@@ -224,7 +224,7 @@ export type ChatItem =
       key: string;
       text: string;
       timestamp: number;
-      icon?: keyof typeof toolIcons;
+      icon?: keyof typeof toolIconData;
       label?: string;
       startsTurn?: true;
       boundaryId?: string;
@@ -248,7 +248,7 @@ export type ChatItem =
       compactionId?: string;
       systemEvent?: "info";
       label: string;
-      icon?: keyof typeof toolIcons;
+      icon?: keyof typeof toolIconData;
       metric?: string;
       description?: string;
       timestamp: number;

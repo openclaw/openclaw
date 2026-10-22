@@ -577,7 +577,6 @@ describe("startGatewayService", () => {
     expect(result.outcome).toBe("repair-required");
     if (result.outcome === "repair-required") {
       expect(result.issues).toContainEqual({
-        code: "port-mismatch",
         message: "service port 18789 does not match current gateway config port 19001",
       });
     }
@@ -614,7 +613,6 @@ describe("startGatewayService", () => {
           outcome: "repair-required",
           issues: [
             {
-              code: `${kind}-program`,
               message: `service command points at a ${kind} path: ${program}`,
             },
           ],

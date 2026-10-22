@@ -2,7 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err, ok } from "@openclaw/normalization-core/result";
 import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
 import {
-  SqliteWorkerError,
+  wrapSqliteWorkerError,
   hasSqliteWorkerOutcomeUnknown,
 } from "../../infra/sqlite-worker-contract.js";
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
@@ -328,8 +328,12 @@ export async function runSessionEntryWorkerOperation<
           const outcome = await send().then(ok, err);
           let acknowledged = outcome.ok && matchesReceipt(outcome.value);
           let unknown = !outcome.ok && hasSqliteWorkerOutcomeUnknown(outcome.error);
+          let nativeSettlementFailure: unknown;
           if (settlement.admitted) {
-            await settlement.admitted.retained.settled;
+            const nativeSettlement = await settlement.admitted.retained.settled;
+            if (nativeSettlement.kind !== "completed") {
+              nativeSettlementFailure = nativeSettlement.error;
+            }
             acknowledged ||= matchesReceipt(settlement.admitted.admission.committed?.facts);
             unknown =
               settlement.admitted.admission.settlement?.kind !== "completed" ||
@@ -389,15 +393,14 @@ export async function runSessionEntryWorkerOperation<
             throw outcome.error;
           }
           if (unknown || !publishedResult) {
-            const error = new SqliteWorkerError(
+            throw wrapSqliteWorkerError(
               "Session patch has no confirmed native completion and commit receipt",
               "outcome-unknown",
+              publicationError,
+              params.nativeSettlement?.failure,
+              nativeSettlementFailure,
+              outcome.ok ? undefined : outcome.error,
             );
-            error.cause =
-              publicationError ??
-              params.nativeSettlement?.failure ??
-              (outcome.ok ? undefined : outcome.error);
-            throw error;
           }
           return publishedResult.value;
         }),
@@ -438,6 +441,7 @@ export async function runSessionEntryWorkerOperation<
             ),
           ),
           receipt.conversationPublication,
+          receipt.fullEntries,
         );
       }
     },

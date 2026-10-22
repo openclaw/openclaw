@@ -1,8 +1,10 @@
 import { readFile } from "node:fs/promises";
-import type { QaDockerRunCommand as RunCommand } from "openclaw/plugin-sdk/qa-runtime";
+import type {
+  QaDockerFetchLike as FetchLike,
+  QaDockerRunCommand as RunCommand,
+} from "openclaw/plugin-sdk/qa-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterAll, describe, expect, it, vi } from "vitest";
-import type { FetchLike } from "../../../docker-runtime.js";
 import {
   MATRIX_QA_CLEANUP_TIMEOUT_MS,
   isMatrixVersionsReachable as isMatrixVersionsReachableDefault,
@@ -255,16 +257,14 @@ describe("matrix harness runtime", () => {
     });
   });
 
-  it("cancels Matrix versions probe response bodies", async () => {
-    const cancel = vi.fn(awake);
-    const fetchImpl = vi.fn(async () => ({ ok: true, body: { cancel } }));
+  it("probes Matrix versions with a bounded request", async () => {
+    const fetchImpl = vi.fn(async () => ({ ok: true }));
 
     await expect(isMatrixVersionsReachable(host, fetchImpl)).resolves.toBe(true);
 
     expect(fetchImpl).toHaveBeenCalledWith(`${host}_matrix/client/versions`, {
       signal: expect.any(AbortSignal),
     });
-    expect(cancel).toHaveBeenCalledTimes(1);
   });
 
   it("cancels a stalled versions request when its deadline signal aborts", async () => {

@@ -124,6 +124,21 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
     expect(compile(source, path.join(path.dirname(file), `other.${kind}`))).toBe("");
   });
 
+  it("models named Solid lazy consumers without retaining a deleted loader", () => {
+    const source = `const SettingsSidebar = lazy(() => import("./settings-sidebar-shell.tsx"), {
+  export: "ShellSettingsSidebar",
+});`;
+    const read = vi.spyOn(fs, "readFileSync").mockReturnValue(source);
+    const compile = knipConfig.compilers.mjs;
+    expect(compile("// config", "config/knip-vite-consumers.mjs")).toContain(
+      'import { ShellSettingsSidebar as __solidLazy0 } from "../ui/src/components/settings-sidebar-shell.tsx";',
+    );
+    read.mockReturnValue("const SettingsSidebar = null;");
+    expect(compile("// config", "config/knip-vite-consumers.mjs")).not.toContain(
+      "ShellSettingsSidebar",
+    );
+  });
+
   it("models only Vite runner members consumed by the build", () => {
     const source = `const { module: routes } = await runnerImport<typeof import("./src/app-route-paths.ts")>(
   path.join(here, "src/app-route-paths.ts"), options);
@@ -138,6 +153,29 @@ const offlineShell = { routes: routes.APP_ROUTE_PATHS };`;
     );
     expect(compiled).not.toContain("APP_ROUTE_OFFLINE_PREFIXES");
     expect(compile(source, "config/unrelated.mjs")).toBe(source);
+  });
+
+  it("models the locale catalogue members consumed through Vite's runner", () => {
+    const source = `const { module, dependencies } = await runnerImport<
+  typeof import("../../scripts/lib/control-ui-i18n-catalog.ts")
+>(sourceCatalogPath, options);
+const startup = module.loadControlUiStartupCatalog();
+const catalog = module.loadControlUiSourceCatalog();`;
+    vi.spyOn(fs, "readFileSync").mockReturnValue(source);
+    expect(scriptRootWorkspace.entry).toContain("config/knip.config.ts!");
+    expect(scriptRootWorkspace.entry).toContain("config/knip-vite-consumers.mjs!");
+    const compile = knipConfig.compilers.mjs;
+    expect(compile("// config", "config/knip-vite-consumers.mjs")).toContain(
+      'import { loadControlUiStartupCatalog as __vite0_0, loadControlUiSourceCatalog as __vite0_1 } from "../scripts/lib/control-ui-i18n-catalog.ts";',
+    );
+    const withoutStartup = source.replace(
+      "const startup = module.loadControlUiStartupCatalog();",
+      "",
+    );
+    vi.mocked(fs.readFileSync).mockReturnValue(withoutStartup);
+    expect(compile("// config", "config/knip-vite-consumers.mjs")).not.toContain(
+      "loadControlUiStartupCatalog",
+    );
   });
 
   it("parses all compact export sections and expands symbol lists", () => {

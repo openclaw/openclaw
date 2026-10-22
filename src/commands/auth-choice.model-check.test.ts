@@ -81,7 +81,6 @@ describe("warnIfModelConfigLooksOff", () => {
       await resolveDefaultModelAuthStatus(config, { env: {}, pendingAuthProfiles }),
     ).toMatchObject({
       status: "ready",
-      hasAuth: true,
     });
     await warnIfModelConfigLooksOff(config, prompter, {
       env: {},
@@ -133,7 +132,6 @@ describe("warnIfModelConfigLooksOff", () => {
       await resolveDefaultModelAuthStatus(config, { env: { OPENAI_API_KEY: "api-key" } }),
     ).toMatchObject({
       status: "missing",
-      hasAuth: false,
       authRequirement: "subscription",
     });
 
@@ -147,7 +145,6 @@ describe("warnIfModelConfigLooksOff", () => {
     useSubscription();
     expect(await resolveDefaultModelAuthStatus(config)).toMatchObject({
       status: "ready",
-      hasAuth: true,
     });
   });
 
@@ -157,8 +154,6 @@ describe("warnIfModelConfigLooksOff", () => {
 
     expect(await resolveDefaultModelAuthStatus(config)).toMatchObject({
       status: "incompatible",
-      hasAuth: false,
-      code: "platform-only-model-on-chatgpt",
     });
     await warnIfModelConfigLooksOff(config, prompter);
 
@@ -177,7 +172,7 @@ describe("warnIfModelConfigLooksOff", () => {
     expect(catalogFacts.observedRoutes).toEqual([chatGPTRoute]);
     expect(
       await resolveDefaultModelAuthStatus(config, { observedRoutes: catalogFacts.observedRoutes }),
-    ).toMatchObject({ status: "ready", hasAuth: true });
+    ).toMatchObject({ status: "ready" });
   });
 
   it("matches shipped OpenAI aliases to their canonical catalog model", async () => {
@@ -191,7 +186,7 @@ describe("warnIfModelConfigLooksOff", () => {
         env: { OPENAI_API_KEY: "api-key" },
         observedRoutes: catalogFacts.observedRoutes,
       }),
-    ).toMatchObject({ status: "ready", hasAuth: true });
+    ).toMatchObject({ status: "ready" });
   });
 
   it("uses every physical route when the first route lacks compatible auth", async () => {
@@ -205,7 +200,7 @@ describe("warnIfModelConfigLooksOff", () => {
     expect(catalogFacts.observedRoutes).toEqual([platformRoute, chatGPTRoute]);
     expect(
       await resolveDefaultModelAuthStatus(config, { observedRoutes: catalogFacts.observedRoutes }),
-    ).toMatchObject({ status: "ready", hasAuth: true });
+    ).toMatchObject({ status: "ready" });
   });
 
   it("reports an unknown static transport as indeterminate instead of missing auth", async () => {
@@ -213,7 +208,6 @@ describe("warnIfModelConfigLooksOff", () => {
 
     expect(await resolveDefaultModelAuthStatus(config)).toMatchObject({
       status: "indeterminate",
-      hasAuth: false,
     });
     await warnIfModelConfigLooksOff(config, prompter);
 

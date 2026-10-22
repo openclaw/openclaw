@@ -1,6 +1,16 @@
 import { render, spread } from "@solidjs/web";
-import { createMemo, createSignal, For, onCleanup, runWithOwner, Show } from "solid-js";
+import {
+  createMemo,
+  createSignal,
+  Errored,
+  For,
+  Loading,
+  onCleanup,
+  runWithOwner,
+  Show,
+} from "solid-js";
 import type { GatewaySessionRow } from "../api/types.ts";
+import { registerChatComposerEnglish } from "../i18n/locales/en-chat-composer.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { presenceConnectionDescriptions } from "../lib/presence-connections.ts";
 import {
@@ -10,7 +20,7 @@ import {
   presenceUserLabel,
   type PresenceViewer,
 } from "../lib/presence-users.ts";
-import { getLocale, i18nRevision, t } from "../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, getLocale, i18nRevision, t } from "../lib/reactive/i18n.ts";
 import { createResizeObserver } from "../lib/reactive/observers.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import {
@@ -34,8 +44,10 @@ import {
 import { Icon } from "./solid/icon.tsx";
 import "./viewer-facepile.ts";
 
+registerEnglishCatalog(registerChatComposerEnglish);
+
 type ScopedSession = { row: GatewaySessionRow; agentId: string };
-type PersonCardInput = {
+export type PersonCardInput = {
   user: PresenceViewer;
   ariaName?: string;
   sessionData: PersonActivityData | undefined;
@@ -328,7 +340,15 @@ function PersonActivityCard(props: { input: PersonCardInput }) {
 }
 
 type CardStatus = { status: "loading" | "unavailable"; name: string };
-type CardValue = PersonCardInput | CardStatus;
+type ResolvedCard = PersonCardInput | CardStatus;
+type CardValue = ResolvedCard | { name: string; read: Promise<ResolvedCard> };
+
+function cardName(input: CardValue) {
+  return "user" in input
+    ? (input.ariaName ?? presenceUserLabel(input.user, t("presence.card.person")).name)
+    : input.name;
+}
+
 const cards = new WeakMap<
   HTMLElement,
   { update: (value: CardValue) => void; dispose: () => void }
@@ -349,50 +369,57 @@ export function updatePersonActivityCard(
     // The portal outlives the caller’s transient render scope.
     const dispose = runWithOwner(null, () =>
       render(() => {
+        function PersonCardContents(props: { input: ResolvedCard }) {
+          spread(
+            container,
+            () => ({ "aria-label": t("presence.card.ariaLabel", { name: cardName(props.input) }) }),
+            true,
+          );
+          return (
+            <Show
+              when={"status" in props.input ? undefined : props.input}
+              fallback={
+                <div class="person-reference__status" role="status">
+                  {"status" in props.input
+                    ? t(
+                        props.input.status === "loading"
+                          ? "common.loading"
+                          : "chat.mentions.unavailable",
+                      )
+                    : ""}
+                </div>
+              }
+            >
+              {(current) => <PersonActivityCard input={current()} />}
+            </Show>
+          );
+        }
         const [value, setValue] = createSignal<CardValue>(input, { ownedWrite: true });
+        const read = createMemo(() => {
+          const current = value();
+          return "read" in current ? current.read : current;
+        });
         cards.set(container, { update: setValue, dispose: () => dispose() });
         onCleanup(() => cards.delete(container));
-        spread(
-          container,
-          () => {
-            const current = value();
-            const name =
-              "status" in current
-                ? current.name
-                : (current.ariaName ??
-                  presenceUserLabel(current.user, t("presence.card.person")).name);
-            return { "aria-label": t("presence.card.ariaLabel", { name }) };
-          },
-          true,
-        );
         if (onPosition) {
           // Translated text can resize the retained card without another owner update.
           createResizeObserver(() => [container], onPosition);
         }
         return (
           <HovercardControlsContext value={controlsForHovercard(container)}>
-            <Show
-              when={(() => {
-                const current = value();
-                return "status" in current ? undefined : current;
-              })()}
+            <Errored
               fallback={
-                <div class="person-reference__status" role="status">
-                  {(() => {
-                    const current = value();
-                    return "status" in current
-                      ? t(
-                          current.status === "loading"
-                            ? "common.loading"
-                            : "chat.mentions.unavailable",
-                        )
-                      : "";
-                  })()}
-                </div>
+                <PersonCardContents input={{ status: "unavailable", name: cardName(value()) }} />
               }
             >
-              {(current) => <PersonActivityCard input={current()} />}
-            </Show>
+              <Loading
+                fallback={
+                  <PersonCardContents input={{ status: "loading", name: cardName(value()) }} />
+                }
+              >
+                <PersonCardContents input={read()} />
+              </Loading>
+            </Errored>
           </HovercardControlsContext>
         );
       }, container),

@@ -612,7 +612,7 @@ it.each(["current", "notification", "preflight", "both", "refused"] as const)(
     const unsubscribe = session.subscribe((event) => {
       if (
         event.type === "queue_update" &&
-        event.steering.includes("streamed prompt") &&
+        session.getSteeringMessages().includes("streamed prompt") &&
         (feedback === "notification" || feedback === "both")
       ) {
         throw notificationError;

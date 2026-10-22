@@ -29,6 +29,7 @@ import {
   tryClaimSessionControllerTask,
   type SessionControllerMailboxClaim,
 } from "../../sessions/session-controller.mailbox.js";
+import { hasReplySteeringRequesterMismatch } from "../../sessions/session-controller.message-join.js";
 import {
   captureReplyOperationSessionReader,
   getReplyOperationSessionReader,
@@ -48,7 +49,6 @@ import {
   executePreparedReplyAgentRun,
   prependCompactionNotices,
 } from "./agent-runner-execute.js";
-import { hasReplySteeringRequesterMismatch } from "./agent-runner-fallback-authority.js";
 import { createShouldEmitToolOutput, createShouldEmitToolResult } from "./agent-runner-helpers.js";
 import {
   prepareReplyRunOptions,
@@ -73,7 +73,7 @@ import { prepareReplyAgentTurn } from "./reply-agent-turn-preparation.js";
 import * as replyRunState from "./reply-operation-run-state.js";
 import { bindReplyOperationTyping } from "./reply-run-typing.js";
 import { bindReplySourceToFollowup, retireUnadoptedReplySource } from "./reply-source-binding.js";
-import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
+import { prepareReplyRunToolAuthority } from "./reply-tool-authority.js";
 import { runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission-lifecycle.js";
 import { resolveReplyTurnKind } from "./reply-turn-kind.js";
 import { createReplyTurnRotationEvidence } from "./reply-turn-rotation.js";
@@ -353,6 +353,7 @@ export async function runReplyAgent(
     ) {
       bindReplyOperationQueueDisposition(followupRun, replyOperationRunState);
       const result = await runActiveReplySteer({
+        steeringIntent: params.steeringIntent,
         followupRun,
         opts,
         providedReplyOperation: activeReplyOperation,
@@ -632,9 +633,9 @@ export async function runReplyAgent(
         throw turn.preflightError;
       }
       await replyOperation.bindToolAuthoritySnapshotAsync(
-        prepareReplyToolAuthority(
+        prepareReplyRunToolAuthority(
           followupRun,
-          undefined,
+          activeSessionEntry,
           captureReplyOperationSessionReader(replyOperation),
         ),
       );
@@ -700,6 +701,7 @@ export async function runReplyAgent(
         await cleanupReplyAgentRun({
           blockReplyPipeline,
           clearRestartRecoveryDeliveryClaim,
+          releaseSourceAdmission: turn.releaseSourceAdmission,
           isHeartbeat,
           providedReplyOperation: callerOwnedReplyOperation,
           queueKey,

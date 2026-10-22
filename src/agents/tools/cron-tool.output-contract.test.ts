@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Value } from "typebox/value";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { typeCheckSources } from "../../../test/helpers/typescript.js";
@@ -23,8 +24,10 @@ import {
   runUntilCompleted,
   waitUntilCompleted,
 } from "../code-mode.test-support.js";
+import { createToolSearchTools, TOOL_CALL_RAW_TOOL_NAME } from "../tool-search.js";
 import { createCronTool } from "./cron-tool.js";
 import * as gatewayModule from "./gateway.js";
+import { jsonResult } from "./tool-results.js";
 
 const job: CronJob = {
   id: "invoice-check",
@@ -85,7 +88,6 @@ function createCronService(storePath: string) {
     sessionStorePath: path.join(path.dirname(storePath), "sessions.json"),
     log: createNoopLogger(),
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
   });
 }
@@ -167,6 +169,10 @@ describe("automations output contract", () => {
     const tool = createCronTool();
     const result = await tool.execute("call-full", { action: "list" });
     expect(gatewayCall).toHaveBeenCalledTimes(2);
+    expect(result.details).toMatchObject({
+      includeDisabled: false,
+      inventoryHint: expect.stringContaining("Disabled automations are omitted"),
+    });
     expect(
       Value.Errors(expectDefined(tool.outputSchema, "automations output schema"), result.details),
     ).toEqual([]);
@@ -200,6 +206,65 @@ describe("automations output contract", () => {
     ).toEqual([]);
   });
 
+  it("preserves terminal approval outcomes through direct tools, Tool Search, and Code Mode", async () => {
+    onTestFinished(resetCodeModeTestState);
+    let refusal: Record<string, unknown>;
+    const gatewayCall = vi.fn().mockImplementation(async () => {
+      throw new GatewayClientRequestError({
+        code: "FORBIDDEN",
+        message: "Approval ended",
+        details: refusal,
+        retryable: false,
+      });
+    });
+    const gatewaySpy = vi.spyOn(gatewayModule, "callGatewayTool").mockImplementation(gatewayCall);
+    onTestFinished(() => gatewaySpy.mockRestore());
+    const tool = createCronTool();
+    const h = createCodeModeHarness();
+    applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, tool] });
+    const toolCall = expectDefined(
+      createToolSearchTools(h.ctx).find((entry) => entry.name === TOOL_CALL_RAW_TOOL_NAME),
+      "Tool Search call",
+    );
+    for (const outcome of ["operator-denied", "expired", "cancelled"] as const) {
+      for (const action of ["add", "update"] as const) {
+        refusal = {
+          code: "CRON_STREAM_APPROVAL_ENDED",
+          saved: false,
+          action,
+          approvalId: "cron-stream:output-contract",
+          outcome,
+          message: "The proposal was not saved. Wait for a new user instruction.",
+        };
+        const args =
+          action === "add"
+            ? { action, job: createJob }
+            : { action, jobId: job.id, job: { name: "Changed name" } };
+        const direct = await tool.execute("direct-refusal", args);
+        expect(direct.details).toEqual(refusal);
+        expect(
+          Value.Errors(expectDefined(tool.outputSchema, "output schema"), direct.details),
+        ).toEqual([]);
+        const searched = await toolCall.execute("searched-refusal", { id: "automations", args });
+        expect(searched.details).toMatchObject({ result: { details: refusal } });
+        const codeMode = await runUntilCompleted({
+          execTool: expectDefined(h.tools[0], "Code Mode exec"),
+          waitTool: expectDefined(h.tools[1], "Code Mode wait"),
+          code: `return await automations(${JSON.stringify(args)});`,
+        });
+        expect(codeMode).toMatchObject({ status: "completed", value: refusal });
+      }
+    }
+    // Similar error text cannot turn a validation failure into a native decision.
+    gatewayCall.mockRejectedValueOnce(
+      new GatewayClientRequestError({
+        code: "INVALID_REQUEST",
+        message: "An operator declined this watcher proposal.",
+      }),
+    );
+    await expect(tool.execute("invalid", { action: "add", job: createJob })).rejects.toThrow();
+  });
+
   it("composes action results through generated declarations and JavaScript", async () => {
     onTestFinished(resetCodeModeTestState);
     const { storePath } = await makeStorePath();
@@ -227,7 +292,72 @@ describe("automations output contract", () => {
     const gatewaySpy = vi.spyOn(gatewayModule, "callGatewayTool").mockImplementation(gatewayCall);
     onTestFinished(() => gatewaySpy.mockRestore());
     const tool = createCronTool();
+    const streamJob = {
+      ...job,
+      schedule: { kind: "stream", command: ["node", "events.mjs"] },
+      sessionTarget: "isolated",
+      payload: { kind: "agentTurn", message: "Summarize the output" },
+    };
+    const streamInput = {
+      name: streamJob.name,
+      schedule: streamJob.schedule,
+      sessionTarget: streamJob.sessionTarget,
+      payload: streamJob.payload,
+    };
+    const receipt = {
+      approvalId: "cron-stream:output-contract",
+      decision: "allow-once",
+      source: "operator",
+      message:
+        "A human operator approved this watcher and its automatic restarts. The approver's identity is not supplied.",
+    } as const;
+    const approvedResults = {
+      direct: { ...streamJob, streamExecutionApproval: receipt },
+      declarative: { created: true, job: streamJob, streamExecutionApproval: receipt },
+      update: { ...streamJob, streamExecutionApproval: receipt },
+    };
+    const execute = tool.execute;
+    // Approval integration owns receipt production. These accepted result samples
+    // exercise the strict model-facing schema and both result projections.
+    tool.execute = async (...args) => {
+      const input = args[1];
+      if (isRecord(input) && input.action === "add") {
+        return jsonResult(
+          isRecord(input.job) && input.job.declarationKey
+            ? approvedResults.declarative
+            : approvedResults.direct,
+        );
+      }
+      if (isRecord(input) && input.action === "update") {
+        return jsonResult(approvedResults.update);
+      }
+      return await execute(...args);
+    };
     applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, tool] });
+    const toolCall = expectDefined(
+      createToolSearchTools(h.ctx).find((entry) => entry.name === TOOL_CALL_RAW_TOOL_NAME),
+      "Tool Search call",
+    );
+    for (const [variant, args] of [
+      ["direct", { action: "add", job: streamInput }],
+      ["declarative", { action: "add", job: { ...streamInput, declarationKey: "watcher" } }],
+      ["update", { action: "update", jobId: job.id, job: { enabled: true } }],
+    ] as const) {
+      const result = await toolCall.execute(`approval-${variant}`, { id: "automations", args });
+      expect(result.details).toMatchObject({ result: { details: approvedResults[variant] } });
+      const content = expectDefined(result.content[0], "model-visible dispatch result");
+      if (content.type !== "text") {
+        throw new Error("Expected model-visible dispatch text");
+      }
+      const envelope = JSON.parse(content.text);
+      expect(envelope).toMatchObject({
+        tool: { name: "automations" },
+        result: { content: [{ type: "text", text: expect.any(String) }] },
+      });
+      expect(JSON.parse(envelope.result.content[0].text)).toMatchObject({
+        streamExecutionApproval: receipt,
+      });
+    }
     const result = await runUntilCompleted({
       execTool: expectDefined(h.tools[0], "Code Mode exec"),
       waitTool: expectDefined(h.tools[1], "Code Mode wait"),
@@ -238,6 +368,8 @@ describe("automations output contract", () => {
     const composition = `
 async function consume() {
   const listed = await automations({ action: "list" });
+  const includeDisabled = listed.includeDisabled;
+  const inventoryHint = listed.inventoryHint;
   const names = listed.jobs.map(job => job.name);
   const next = listed.nextOffset;
   const status = await automations({ action: "status" });
@@ -248,7 +380,13 @@ async function consume() {
   const scheduleErrorCount = details.state.scheduleErrorCount;
   const runs = await automations({ action: "runs", jobId: details.id });
   const summaries = runs.entries.map(entry => entry.summary);
-  return { names, next, enabled, jobCount, name, scheduleErrorCount, summaries };
+  const direct = await automations({ action: "add", job: ${JSON.stringify(streamInput)} });
+  const declarative = await automations({ action: "add", job: ${JSON.stringify({ ...streamInput, declarationKey: "watcher" })} });
+  const updated = await automations({ action: "update", jobId: "invoice-check", job: { enabled: true } });
+  return {
+    names, next, enabled, jobCount, name, scheduleErrorCount, summaries, includeDisabled, inventoryHint,
+    approvals: [direct, declarative, updated].map(result => "saved" in result ? undefined : result.streamExecutionApproval),
+  };
 }
 `;
     const fileName = "/automations-consumer.ts";
@@ -258,6 +396,8 @@ async function consume() {
       `
 async function checkContracts(action: "list" | "runs", input: Parameters<typeof automations>[0]) {
   const listed = await automations({ action: "list" });
+  const includeDisabled: boolean = listed.includeDisabled;
+  const inventoryHint: string = listed.inventoryHint;
   // @ts-expect-error Invented invoice fields are not part of an automation.
   listed.jobs[0].invoiceTotal;
   const removed = await automations({ action: "remove", jobId: "invoice-check" });
@@ -268,10 +408,25 @@ async function checkContracts(action: "list" | "runs", input: Parameters<typeof 
   const added = await automations({ action: "add", job: ${JSON.stringify(createJob)} });
   // @ts-expect-error Add can return a direct job or a convergence envelope.
   added.id;
+  if ("saved" in added) {
+    const saved: false = added.saved;
+    const outcome: "operator-denied" | "expired" | "cancelled" = added.outcome;
+    return;
+  }
   const addedJob = "job" in added ? added.job : added;
   const id: string = addedJob.id;
-  const updated = await automations({ action: "update", jobId: id, job: { enabled: false } });
-  const warning: string | undefined = updated.deliveryPreview?.detail;
+  const approval = added.streamExecutionApproval;
+  if (approval) {
+    const approvalId: string = approval.approvalId;
+    const decision: "allow-once" = approval.decision;
+    const source: "operator" = approval.source;
+    const attribution: string = approval.message;
+    // @ts-expect-error A successful stream receipt never represents a denial.
+    const denied: "deny" = approval.decision;
+  }
+  const updated = await automations({ action: "update", jobId: id, job: { enabled: true } });
+  const updateApproval: typeof approval = "saved" in updated ? undefined : updated.streamExecutionApproval;
+  const warning: string | undefined = "saved" in updated ? undefined : updated.deliveryPreview?.detail;
   const details = await automations({ action: "get", jobId: id });
   // @ts-expect-error Get does not return a write-time delivery preview.
   details.deliveryPreview;
@@ -300,12 +455,15 @@ async function checkContracts(action: "list" | "runs", input: Parameters<typeof 
       status: "completed",
       value: {
         names: [job.name],
+        includeDisabled: false,
+        inventoryHint: expect.stringContaining("get jobId"),
         next: null,
         enabled: true,
         jobCount: 1,
         name: job.name,
         scheduleErrorCount: 3,
         summaries: ["Three unpaid invoices"],
+        approvals: [receipt, receipt, receipt],
       },
     });
     expect(gatewayCall).toHaveBeenCalledTimes(4);

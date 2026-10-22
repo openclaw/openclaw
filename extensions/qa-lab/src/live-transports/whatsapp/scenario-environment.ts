@@ -29,7 +29,7 @@ export type WhatsAppQaScenarioEnvironment = {
   getDriver: () => WhatsAppQaDriverSession;
   replaceDriver: (driver: WhatsAppQaDriverSession) => Promise<void>;
   runtimeEnv: WhatsAppQaRuntimeEnv;
-  scenario: { id: string; timeoutMs: number; title: string };
+  scenario: { id: string; timeoutMs: number };
   sutAccountId: string;
 };
 
@@ -119,7 +119,6 @@ export function createWhatsAppQaScenarioEnvironment(params: {
         scenario: {
           id: input.scenarioId,
           timeoutMs: input.timeoutMs,
-          title: input.scenarioTitle,
         },
         sutAccountId: params.accountId,
       } satisfies WhatsAppQaScenarioEnvironment,

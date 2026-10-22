@@ -48,26 +48,27 @@ describe("Solid shell chrome", () => {
       />
     ));
     const topbar = view.container.querySelector<SolidBridgeElement<object>>("openclaw-app-topbar")!;
+    const update = async (write: () => void) => {
+      write();
+      flush();
+      await topbar.updateComplete;
+    };
     await topbar.updateComplete;
-    const drawer = view.container.querySelector<HTMLButtonElement>(".topbar-nav-toggle")!;
-    expect(view.container.querySelector<HTMLElement>("openclaw-app-topbar")?.style.display).toBe(
-      "contents",
-    );
-    expect(view.container.querySelector(".control-ui-environment-pill")).toBeNull();
-    expect(view.container.querySelector("img")?.getAttribute("src")).toBe(
+    const drawer = view.container.querySelector<HTMLElement>(".topbar-nav-toggle")!;
+    expect(topbar.style.display).toBe("contents");
+    expect(view.container.querySelector<HTMLElement>(".control-ui-environment-pill")).toBeNull();
+    expect(view.container.querySelector<HTMLElement>("img")?.getAttribute("src")).toBe(
       "/control/apple-touch-icon.png",
     );
     expect(drawer.getAttribute("aria-expanded")).toBe("false");
     drawer.click();
     expect(toggle).toHaveBeenCalledWith(drawer);
-    const search = view.container.querySelector<HTMLButtonElement>(".topbar-search")!;
+    const search = view.container.querySelector<HTMLElement>(".topbar-search")!;
     search.click();
     expect(palette).toHaveBeenCalledOnce();
 
-    setGatewayStatus({ kind: "offline", queuedCount: 2, onRetry: retry });
-    flush();
-    await topbar.updateComplete;
-    const statusLine = view.container.querySelector(".mobile-connection-status")!;
+    await update(() => setGatewayStatus({ kind: "offline", queuedCount: 2, onRetry: retry }));
+    const statusLine = view.container.querySelector<HTMLElement>(".mobile-connection-status")!;
     expect(statusLine.textContent).toBe("Disconnected · 2 queued");
     expect(statusLine.querySelector('[role="status"]')).toBeNull();
     expect(drawer.dataset.connectionStatus).toBe("offline");
@@ -75,9 +76,9 @@ describe("Solid shell chrome", () => {
     statusLine.querySelector<HTMLButtonElement>("button")!.click();
     expect(retry).toHaveBeenCalledOnce();
 
-    setGatewayStatus({ kind: "suspended", lastError: "Unavailable?token=mobile-secret" });
-    flush();
-    await topbar.updateComplete;
+    await update(() =>
+      setGatewayStatus({ kind: "suspended", lastError: "Unavailable?token=mobile-secret" }),
+    );
     const status = statusLine.querySelector<HTMLElement>(".gateway-status")!;
     expect(status.tabIndex).toBe(0);
     status.focus();
@@ -87,47 +88,39 @@ describe("Solid shell chrome", () => {
         ?.content,
     ).toBe("Unavailable?[redacted-credential]");
 
-    setGatewayStatus({ kind: "connected" });
-    flush();
-    await topbar.updateComplete;
-    expect(view.container.querySelector(".mobile-connection-status")).toBeNull();
+    await update(() => setGatewayStatus({ kind: "connected" }));
+    expect(view.container.querySelector<HTMLElement>(".mobile-connection-status")).toBeNull();
     expect(drawer.dataset.connectionStatus).toBe("connected");
 
-    setShowNewSessionAction(true);
-    flush();
-    await topbar.updateComplete;
-    const newSession = view.container.querySelector<HTMLAnchorElement>(
+    await update(() => setShowNewSessionAction(true));
+    const newSession = view.container.querySelector<HTMLElement>(
       ".topnav-shell__actions .header-new-session",
     )!;
     expect(newSession.getAttribute("href")).toBe("/control/new?agent=writer");
     newSession.click();
     expect(openSession).toHaveBeenCalledWith("writer", undefined);
     newSession.focus();
-    setEnvironment({ label: "edge", color: "amber" });
-    flush();
-    await topbar.updateComplete;
-    expect(view.container.querySelector(".header-new-session")).toBe(newSession);
+    await update(() => setEnvironment({ label: "edge", color: "amber" }));
+    expect(view.container.querySelector<HTMLElement>(".header-new-session")).toBe(newSession);
     expect(document.activeElement).toBe(newSession);
 
-    setShowNewSessionAction(false);
-    flush();
-    await topbar.updateComplete;
-    expect(view.container.querySelector(".header-new-session")).toBeNull();
-    expect(view.container.querySelector(".topbar-search")).toBe(search);
+    await update(() => setShowNewSessionAction(false));
+    expect(view.container.querySelector<HTMLElement>(".header-new-session")).toBeNull();
+    expect(view.container.querySelector<HTMLElement>(".topbar-search")).toBe(search);
 
     setEnvironment({ label: "edge", color: "amber" });
-    setOpen(true);
-    flush();
-    await topbar.updateComplete;
-    expect(view.container.querySelector(".control-ui-environment-pill")?.textContent).toBe("edge");
-    expect(view.container.querySelector(".topbar-nav-toggle")).toBe(drawer);
+    await update(() => setOpen(true));
+    expect(
+      view.container.querySelector<HTMLElement>(".control-ui-environment-pill")?.textContent,
+    ).toBe("edge");
+    expect(view.container.querySelector<HTMLElement>(".topbar-nav-toggle")).toBe(drawer);
     expect(drawer.getAttribute("aria-expanded")).toBe("true");
-    expect(view.container.querySelector('[slot="content"] kbd')?.textContent).toBe("⌘K");
+    expect(view.container.querySelector<HTMLElement>('[slot="content"] kbd')?.textContent).toBe(
+      "⌘K",
+    );
 
-    setEnvironment(null);
-    flush();
-    await topbar.updateComplete;
-    expect(view.container.querySelector(".control-ui-environment-pill")).toBeNull();
+    await update(() => setEnvironment(null));
+    expect(view.container.querySelector<HTMLElement>(".control-ui-environment-pill")).toBeNull();
   });
 
   it("releases topbar toggle registrations on repeated mount and unmount", async () => {
@@ -141,31 +134,27 @@ describe("Solid shell chrome", () => {
     view.container.addEventListener("openclaw-route-element", (event) =>
       elements.register(event as RouteElementEvent),
     );
-    try {
-      for (let mount = 0; mount < 2; mount += 1) {
-        setVisible(true);
-        flush();
-        const topbar =
-          view.container.querySelector<SolidBridgeElement<object>>("openclaw-app-topbar")!;
-        await topbar.updateComplete;
-        const toggle = view.container.querySelector<HTMLButtonElement>(".topbar-nav-toggle")!;
+    for (let mount = 0; mount < 2; mount += 1) {
+      setVisible(true);
+      flush();
+      const topbar =
+        view.container.querySelector<SolidBridgeElement<object>>("openclaw-app-topbar")!;
+      await topbar.updateComplete;
+      const toggle = view.container.querySelector<HTMLButtonElement>(".topbar-nav-toggle")!;
+      await waitForSolid(() =>
+        expect(elements.renderedElements(NAV_DRAWER_TOGGLE_REGISTRATION)).toEqual([toggle]),
+      );
+      setVisible(false);
+      flush();
+      // Reconnect the retired node so isConnected filtering cannot hide a leaked registration.
+      view.container.append(toggle);
+      try {
         await waitForSolid(() =>
-          expect(elements.renderedElements(NAV_DRAWER_TOGGLE_REGISTRATION)).toEqual([toggle]),
+          expect(elements.renderedElements(NAV_DRAWER_TOGGLE_REGISTRATION)).toEqual([]),
         );
-        setVisible(false);
-        flush();
-        // Reconnect the retired node so isConnected filtering cannot hide a leaked registration.
-        view.container.append(toggle);
-        try {
-          await waitForSolid(() =>
-            expect(elements.renderedElements(NAV_DRAWER_TOGGLE_REGISTRATION)).toEqual([]),
-          );
-        } finally {
-          toggle.remove();
-        }
+      } finally {
+        toggle.remove();
       }
-    } finally {
-      view.unmount();
     }
   });
 
@@ -196,7 +185,11 @@ describe("Solid shell chrome", () => {
     setHistoryOnly(true);
     flush();
     expect(view.container.querySelectorAll("button")).toHaveLength(2);
-    expect(view.container.querySelector(".macos-titlebar-controls__back")).toBe(backButton);
-    expect(view.container.querySelector(".macos-titlebar-controls__forward")).not.toBeNull();
+    expect(view.container.querySelector<HTMLElement>(".macos-titlebar-controls__back")).toBe(
+      backButton,
+    );
+    expect(
+      view.container.querySelector<HTMLElement>(".macos-titlebar-controls__forward"),
+    ).not.toBeNull();
   });
 });

@@ -23,13 +23,13 @@ import {
   sameRouteLocation,
   type RouteId,
 } from "./app-route-paths.ts";
-import type { SolidRouteProps } from "./app-route-types.ts";
+import type { SolidRouteProps } from "./app-route-types.tsx";
 import type { ApplicationContext } from "./app/context.ts";
 import { gatewayPresentationScope } from "./app/gateway-presentation-scope.ts";
 import { retryControlUiImport } from "./app/stale-chunk-reload.ts";
+import { i18n } from "./i18n/lib/translate.ts";
 import { page as aboutPage } from "./pages/about/route.ts";
 import { page as activityPage } from "./pages/activity/route.ts";
-import { page as agentsHomePage } from "./pages/agents-home/route.ts";
 import { page as agentsPage } from "./pages/agents/route.ts";
 import { page as approvalsPage } from "./pages/approvals/route.ts";
 import { page as appsPage } from "./pages/apps/route.ts";
@@ -40,7 +40,7 @@ import { page as clawsPage } from "./pages/claws/route.ts";
 import { page as cloudWorkersPage } from "./pages/cloud-workers/route.ts";
 import { pages as configPages } from "./pages/config/route.ts";
 import { page as connectionPage } from "./pages/connection/route.ts";
-import { page as cronPage } from "./pages/cron/route.ts";
+import { page as cronPage } from "./pages/cron/route.tsx";
 import { page as custodianPage } from "./pages/custodian/route.ts";
 import { page as dashboardsPage } from "./pages/dashboards/route.ts";
 import { page as debugPage } from "./pages/debug/route.ts";
@@ -98,7 +98,6 @@ const APP_ROUTE_TREE = [
   dashboardsPage,
   appsPage,
   portalsPage,
-  agentsHomePage,
   clawsPage,
   agentsPage,
   approvalsPage,
@@ -137,7 +136,12 @@ for (const route of APP_ROUTE_TREE as readonly AppRoute[]) {
   const loader = route.loader;
   appRoutes.push({
     ...route,
-    component: () => retryControlUiImport(route.component),
+    component: () =>
+      retryControlUiImport(async () => {
+        const module = await route.component();
+        await i18n.prepareLocale();
+        return module;
+      }),
     loader: loader
       ? (context, options) => retryControlUiImport(() => loader(context, options), options.signal)
       : undefined,

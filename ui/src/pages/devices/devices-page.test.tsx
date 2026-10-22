@@ -2,6 +2,7 @@
 
 import type { EnvironmentSummary, SystemInfoResult } from "@openclaw/gateway-protocol";
 import { expectDefined } from "@openclaw/normalization-core";
+import { getQueriesForElement } from "@solidjs/testing-library";
 import { createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -301,6 +302,13 @@ describe("DevicesPage gateway lifecycle", () => {
       vi.useRealTimers();
       vi.unstubAllGlobals();
     }
+  });
+
+  it("names the page with a level-one heading", () => {
+    const page = mountPage(gatewayFixture(gatewaySnapshot(clientFor().client)));
+    expect(
+      getQueriesForElement(page.container).getByRole("heading", { level: 1 }).textContent,
+    ).toBe("Devices");
   });
 
   it("preserves matching route data, then clears inventory on provider replacement", async () => {

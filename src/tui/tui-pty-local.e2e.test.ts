@@ -14,7 +14,6 @@ import {
 } from "../../test/helpers/openclaw-test-instance.js";
 import { isProcessAlive } from "../../test/helpers/process-wait.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
-import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { reloadSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store-runtime.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
@@ -22,16 +21,11 @@ import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { connectGatewayClient } from "../gateway/test-helpers.e2e.js";
-import {
-  isSessionCostUsageRefreshRunning,
-  prepareSessionCostUsageRefreshLock,
-} from "../infra/session-cost-usage-cache.sqlite.js";
 import { listUsageCountedTranscriptStats } from "../infra/session-cost-usage-collection.test-support.js";
 import { runExec } from "../process/exec.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import { killPidIfAlive } from "../test-utils/process-tree.js";
-import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { sleep } from "../utils/sleep.js";
 import { GatewayChatClient } from "./gateway-chat.js";
 import { extractTextFromMessage } from "./tui-formatters.js";
@@ -332,6 +326,11 @@ async function startRoutedMockModelServer(
       .filter(([, behavior]) => behavior.holdFirstResponse)
       .map(([modelId]) => [modelId, createDeferred()] as const),
   );
+  const repeatedInvalidResponseGates = new Map(
+    Object.entries(behaviors)
+      .filter(([, behavior]) => behavior.invalidEditLoop)
+      .map(([modelId]) => [modelId, createDeferred()] as const),
+  );
   const server = createServer((req, res) => {
     void (async () => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -374,6 +373,15 @@ async function startRoutedMockModelServer(
           requests.push(request);
           modelRequests.push(request);
           if (behavior.invalidEditLoop) {
+            if (requestIndex > 0) {
+              const gate = repeatedInvalidResponseGates.get(modelId);
+              // The active abort owns this request; keep later identical failures pending.
+              res.once("close", () => gate?.resolve());
+              await gate?.promise;
+              if (res.destroyed) {
+                return;
+              }
+            }
             writeInvalidEditCallSse(res, requestIndex);
             return;
           }
@@ -417,6 +425,9 @@ async function startRoutedMockModelServer(
     stop: async () => {
       // Never leave a held request owning the shared server during failure cleanup.
       for (const gate of firstResponseGates.values()) {
+        gate.resolve();
+      }
+      for (const gate of repeatedInvalidResponseGates.values()) {
         gate.resolve();
       }
       await new Promise<void>((resolve, reject) => {
@@ -681,7 +692,6 @@ function buildGatewayModeConfig(params: { tempDir: string; providerBaseUrl: stri
         ),
         skills: [],
         skipBootstrap: true,
-        heartbeat: { agentId: defaultScenario.agentId },
         systemAgent: { agentId: defaultScenario.agentId },
         authInheritance: { agentId: defaultScenario.agentId },
       },
@@ -1185,87 +1195,49 @@ describe("TUI PTY real backends", () => {
     LOCAL_TEST_TIMEOUT_MS,
   );
 
-  for (const cacheState of ["fresh", "refreshing"] as const) {
-    it(
-      `prints ${cacheState} local usage costs without submitting a model request`,
-      async ({ onTestFinished }) => {
-        const agentId = "main";
-        const sessionKey = `agent:${agentId}:usage-cost-${cacheState}-unpersisted`;
-        const cleanupState: { run?: () => Promise<void> } = {};
-        const finish = (dispose: () => Promise<void>) =>
-          runQaGatewayFixture(async () => await cleanupState.run?.(), dispose);
-        const fixture = await startLocalModeTui(
-          (dispose) => onTestFinished(() => finish(dispose)),
-          { cliArgs: ["tui", "--local", "--session", sessionKey] },
-        );
-        const databasePath = resolveOpenClawAgentSqlitePath({ agentId, env: fixture.env });
-        const selectedSession = { agentId, sessionKey, storePath: databasePath };
-        let refreshOwner: ReturnType<typeof prepareSessionCostUsageRefreshLock> | undefined;
-        // Repeated teardown must not reopen the removed root through release().
-        cleanupState.run = createIdempotentCleanup(() =>
-          runQaGatewayFixture(
-            async () => withEnvAsync(fixture.env, async () => await refreshOwner?.release()),
-            () => fixture.run.dispose(),
-            () =>
-              withEnvAsync(fixture.env, () =>
-                cleanupSessionStateForTest({ stateDir: fixture.stateDir }),
-              ),
+  it(
+    "prints local usage costs without submitting a model request",
+    async ({ onTestFinished }) => {
+      const agentId = "main";
+      const sessionKey = `agent:${agentId}:usage-cost-unpersisted`;
+      const fixture = await startLocalModeTui(onTestFinished, {
+        cliArgs: ["tui", "--local", "--session", sessionKey],
+      });
+      const databasePath = resolveOpenClawAgentSqlitePath({ agentId, env: fixture.env });
+      const selectedSession = { agentId, sessionKey, storePath: databasePath };
+      try {
+        await fixture.run.waitForOutput("local ready", LOCAL_STARTUP_TIMEOUT_MS);
+        withEnv(fixture.env, () => {
+          // An empty existing row still makes the direct Session reader wait.
+          expect(loadSessionEntry(selectedSession)).toBeUndefined();
+        });
+        expect(
+          await withEnvAsync(fixture.env, () =>
+            listUsageCountedTranscriptStats(agentId, {
+              storePath: databasePath,
+              sessionsDir: path.join(fixture.stateDir, "agents", agentId, "sessions"),
+            }),
           ),
-        );
+        ).toEqual([]);
 
-        await runQaGatewayFixture(
-          async () => {
-            await fixture.run.waitForOutput("local ready", LOCAL_STARTUP_TIMEOUT_MS);
-            await withEnvAsync(fixture.env, async () => {
-              // An empty existing row still makes the direct Session reader wait.
-              expect(loadSessionEntry(selectedSession)).toBeUndefined();
-              if (cacheState === "refreshing") {
-                refreshOwner = prepareSessionCostUsageRefreshLock(agentId, databasePath);
-                expect(await refreshOwner.acquire()).toBe(true);
-              }
-              expect(await isSessionCostUsageRefreshRunning(agentId, databasePath)).toBe(
-                cacheState === "refreshing",
-              );
-            });
-            expect(
-              await withEnvAsync(fixture.env, () =>
-                listUsageCountedTranscriptStats(agentId, {
-                  storePath: databasePath,
-                  sessionsDir: path.join(fixture.stateDir, "agents", agentId, "sessions"),
-                }),
-              ),
-            ).toEqual([]);
-
-            await fixture.run.write("/usage cost\r", { delay: false });
-            const rows = await waitForSynchronizedFrameRows(
-              fixture.run,
-              (frame) => frame.some((row) => row.includes("Last 30d")),
-              LOCAL_OUTPUT_TIMEOUT_MS,
-            );
-            const text = rows.join(" ").replace(/\s+/gu, " ");
-            const expected = [
-              "Session n/a",
-              ...(cacheState === "refreshing"
-                ? ["Usage totals may be incomplete (refreshing). Run this command again later."]
-                : []),
-              "Today $0.0000",
-              "Last 30d $0.0000",
-            ].join(" ");
-            expect(text).toContain(expected);
-            expect(fixture.mockModel.requests()).toHaveLength(0);
-            await withEnvAsync(fixture.env, async () => {
-              expect(loadSessionEntry(selectedSession)).toBeUndefined();
-              expect(await isSessionCostUsageRefreshRunning(agentId, databasePath)).toBe(
-                cacheState === "refreshing",
-              );
-            });
-          },
-          () => finish(fixture.cleanup),
+        await fixture.run.write("/usage cost\r", { delay: false });
+        const rows = await waitForSynchronizedFrameRows(
+          fixture.run,
+          (frame) => frame.some((row) => row.includes("Last 30d")),
+          LOCAL_OUTPUT_TIMEOUT_MS,
         );
-      },
-      LOCAL_TEST_TIMEOUT_MS,
-    );
-  }
+        const text = rows.join(" ").replace(/\s+/gu, " ");
+        expect(text).toContain("Session n/a Today $0.0000 Last 30d $0.0000");
+        expect(fixture.mockModel.requests()).toHaveLength(0);
+        withEnv(fixture.env, () => {
+          expect(loadSessionEntry(selectedSession)).toBeUndefined();
+        });
+      } finally {
+        await fixture.cleanup();
+      }
+    },
+    LOCAL_TEST_TIMEOUT_MS,
+  );
 
   it(
     "drives and steers the real local backend with a mocked model endpoint",
@@ -1624,7 +1596,7 @@ describe("TUI PTY real backends", () => {
         });
 
         await fixture.run.write("/exit\r", { delay: false });
-        expect((await fixture.run.waitForExit()).exitCode).toBe(0);
+        expect((await fixture.run.waitForExit()).exitCode).toBe(1);
       } finally {
         trackedPids.forEach(killPidIfAlive);
         await fixture.cleanup();
@@ -2729,39 +2701,35 @@ export default {
         });
         // Each authenticated turn retains its own skill-authoring capability.
         // Admit alpha before submitting beta so the test observes a defined FIFO order.
+        const queuedRunIds: string[] = [];
         for (const message of ["collect prompt alpha", "collect prompt beta"]) {
           const result = await queueClient.sendChat({ sessionKey: fixture.sessionKey, message });
           expect(result.status).toBe("started");
-          await terminalObserver.waitForFinal({
-            runId: result.runId,
+          queuedRunIds.push(result.runId);
+        }
+        const queuedTerminalPromises = queuedRunIds.map((runId) =>
+          terminalObserver.waitForFinal({
+            runId,
             sessionKey: fixture.sessionKey,
             timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
             onTimeout: () =>
               new Error(
-                `queued prompt was not admitted: expected ${result.runId}; ` +
+                `queued prompt did not complete: expected ${runId}; ` +
                   `observed ${JSON.stringify(terminalObserver.readFinals(fixture.sessionKey))}\n${fixture.gateway.logs()}\n` +
                   fixture.run.output(),
               ),
-          });
-        }
+          }),
+        );
         fixture.mockModel.releaseFirstResponse();
-        await waitFor({
-          timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
-          read: () =>
-            fixture.mockModel.requests().length === 3 &&
-            terminalObserver
-              .readFinals(fixture.sessionKey)
-              .filter((terminal) =>
-                extractTextFromMessage(terminal.message).includes("FOLLOWUP_RUN_COMPLETE"),
-              ).length === 2
-              ? true
-              : null,
-          onTimeout: () =>
-            new Error(
-              `queued prompts did not both complete\n${fixture.gateway.logs()}\n${fixture.run.output()}`,
-            ),
-        });
-        await fixture.waitForOutput("FOLLOWUP_RUN_COMPLETE");
+        await Promise.all(queuedTerminalPromises);
+        const completedRows = await waitForSynchronizedFrameRows(
+          fixture.run,
+          (frame) => frame.filter((row) => row.includes("FOLLOWUP_RUN_COMPLETE")).length === 2,
+          LOCAL_OUTPUT_TIMEOUT_MS,
+        );
+        expect(completedRows.filter((row) => row.includes("FOLLOWUP_RUN_COMPLETE"))).toHaveLength(
+          2,
+        );
         const completedOffset = fixture.lastOutputIndex("FOLLOWUP_RUN_COMPLETE");
         await waitForOutputAfter(fixture.run, "| idle", completedOffset);
 

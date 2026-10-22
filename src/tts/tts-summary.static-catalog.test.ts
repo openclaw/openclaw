@@ -1,6 +1,11 @@
 import { createServer } from "node:http";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import {
+  closeHttpServer,
+  listenLoopback,
+  readRequestText,
+} from "../../test/helpers/gateway-integration-fixtures.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -9,6 +14,9 @@ import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtur
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolveTtsConfig } from "./tts-settings.js";
+
+const sse = (type: string, fields = {}) =>
+  `event: ${type}\ndata: ${JSON.stringify({ type, ...fields })}\n\n`;
 
 afterEach(async () => {
   await resetPreparedModelRuntimeSnapshotsForTest();
@@ -53,67 +61,52 @@ it.each([
       async (state) => {
         const requests: string[] = [];
         const server = createServer((request, response) => {
-          let body = "";
-          request.setEncoding("utf8");
-          request.on("data", (chunk: string) => {
-            body += chunk;
-          });
-          request.on("end", () => {
-            const { model } = JSON.parse(body) as { model: string };
-            requests.push(model);
-            response.writeHead(200, { "content-type": "text/event-stream" });
-            const events = [
-              {
-                type: "message_start",
-                message: {
-                  id: "kimi-summary",
-                  type: "message",
-                  role: "assistant",
-                  model,
-                  content: [],
-                  stop_reason: null,
-                  stop_sequence: null,
-                  usage: { input_tokens: 1, output_tokens: 0 },
-                },
-              },
-              { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
-              {
-                type: "content_block_delta",
-                index: 0,
-                delta: { type: "text_delta", text: `Summary from ${model}.` },
-              },
-              { type: "content_block_stop", index: 0 },
-              {
-                type: "message_delta",
-                delta: { stop_reason: "end_turn", stop_sequence: null },
-                usage: { output_tokens: 6 },
-              },
-              { type: "message_stop" },
-            ];
-            response.end(
-              events
-                .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
-                .join(""),
-            );
-          });
+          void readRequestText(request)
+            .then((body) => {
+              const { model } = JSON.parse(body) as { model: string };
+              requests.push(model);
+              response.writeHead(200, { "content-type": "text/event-stream" });
+              const message = {
+                id: "kimi-summary",
+                type: "message",
+                role: "assistant",
+                model,
+                content: [],
+                stop_reason: null,
+                stop_sequence: null,
+                usage: { input_tokens: 1, output_tokens: 0 },
+              };
+              response.end(
+                [
+                  sse("message_start", { message }),
+                  sse("content_block_start", {
+                    index: 0,
+                    content_block: { type: "text", text: "" },
+                  }),
+                  sse("content_block_delta", {
+                    index: 0,
+                    delta: { type: "text_delta", text: `Summary from ${model}.` },
+                  }),
+                  sse("content_block_stop", { index: 0 }),
+                  sse("message_delta", {
+                    delta: { stop_reason: "end_turn", stop_sequence: null },
+                    usage: { output_tokens: 6 },
+                  }),
+                  sse("message_stop"),
+                ].join(""),
+              );
+            })
+            .catch((error: unknown) => {
+              response.destroy(error instanceof Error ? error : new Error(String(error)));
+            });
         });
-        await new Promise<void>((resolve, reject) => {
-          server.once("error", reject);
-          server.listen(0, "127.0.0.1", () => {
-            server.removeListener("error", reject);
-            resolve();
-          });
-        });
+        const baseUrl = await listenLoopback(server);
         try {
-          const address = server.address();
-          if (!address || typeof address === "string") {
-            throw new Error("Kimi summary fixture did not expose a TCP port");
-          }
           const nativeFetch = globalThis.fetch;
           vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
             const request = new Request(input, init);
             expect(request.url).toBe("https://api.kimi.com/coding/v1/messages");
-            return nativeFetch(`http://127.0.0.1:${address.port}/v1/messages`, {
+            return nativeFetch(`${baseUrl}/v1/messages`, {
               method: request.method,
               headers: request.headers,
               body: await request.arrayBuffer(),
@@ -164,10 +157,7 @@ it.each([
             model: override ? "kimi-for-coding" : expectedModel,
           });
         } finally {
-          server.closeAllConnections();
-          await new Promise<void>((resolve, reject) => {
-            server.close((error) => (error ? reject(error) : resolve()));
-          });
+          await closeHttpServer(server);
         }
       },
     );

@@ -1,95 +1,38 @@
 import { describe, expect, it, vi } from "vitest";
+import type { WorkerWorkspaceReconcileResult } from "./tunnel-contract.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 
-const emptyStaging = {
-  publishStagedResult: async () => {},
-  discardPreparedStagedResult: async () => {},
-};
+function fixture() {
+  const log: string[] = [];
+  const record = (event: string) => async () => {
+    log.push(event);
+  };
+  const reconciliation: WorkerWorkspaceReconcileResult = {
+    manifestRef: "sha256:" + "c".repeat(64),
+    changed: true,
+    verifyStable: record("remote"),
+    verifyLocalStable: record("local"),
+    applyPreparedStagedResult: record("apply-prepared"),
+    publishStagedResult: record("publish"),
+    discardPreparedStagedResult: record("discard-prepared"),
+  };
+  const finalize = (assertActive = async () => {}) =>
+    verifyReconciledWorkspaceFinal(reconciliation, { assertActive, resume: async () => {} });
+  return { log, reconciliation, finalize, record };
+}
 
 describe("final worker workspace fences", () => {
-  it.each([false, true])(
-    "fences unchanged local state during acceptance after renewal (local failure: %s)",
-    async (localFailure) => {
-      const log: string[] = [];
-      const finalize = verifyReconciledWorkspaceFinal(
-        {
-          ...emptyStaging,
-          manifestRef: "sha256:" + "a".repeat(64),
-          changed: false,
-          verifyStable: async () => {
-            log.push("remote");
-          },
-          verifyLocalStable: async () => {},
-          acceptUnchangedStagedResult: async () => {
-            log.push("local");
-            if (localFailure) {
-              throw new Error("local workspace changed");
-            }
-            log.push("accept");
-          },
-          publishStagedResult: async () => {
-            log.push("publish");
-          },
-          discardPreparedStagedResult: async () => {
-            log.push("discard");
-          },
-        },
-        {
-          assertActive: async () => {
-            log.push("renew");
-          },
-          resume: async () => {},
-        },
-      );
-      if (localFailure) {
-        await expect(finalize).rejects.toMatchObject({
-          message: "local workspace changed",
-          reclaimDisposition: "retry",
-        });
-        expect(log).toEqual(["renew", "remote", "local", "discard"]);
-      } else {
-        await finalize;
-        expect(log).toEqual(["renew", "remote", "local", "accept", "publish"]);
-      }
-    },
-  );
-
   it("rejects quiescence lost while the staged result is finalized", async () => {
-    const log: string[] = [];
+    const { log, finalize } = fixture();
     let quiescenceChecks = 0;
     await expect(
-      verifyReconciledWorkspaceFinal(
-        {
-          ...emptyStaging,
-          manifestRef: "sha256:" + "c".repeat(64),
-          changed: true,
-          verifyStable: async () => {
-            log.push("remote");
-          },
-          verifyLocalStable: async () => {
-            log.push("local");
-          },
-          applyPreparedStagedResult: async () => {
-            log.push("apply-prepared");
-          },
-          publishStagedResult: async () => {
-            log.push("publish");
-          },
-          discardPreparedStagedResult: async () => {
-            log.push("discard-prepared");
-          },
-        },
-        {
-          assertActive: async () => {
-            quiescenceChecks += 1;
-            log.push("quiescence");
-            if (quiescenceChecks === 2) {
-              throw new Error("quiescence expired during finalization");
-            }
-          },
-          resume: async () => {},
-        },
-      ),
+      finalize(async () => {
+        quiescenceChecks += 1;
+        log.push("quiescence");
+        if (quiescenceChecks === 2) {
+          throw new Error("quiescence expired during finalization");
+        }
+      }),
     ).rejects.toMatchObject({
       message: "quiescence expired during finalization",
       reclaimDisposition: "preserve-result",
@@ -107,28 +50,17 @@ describe("final worker workspace fences", () => {
   it("rejects a late write enrolled by the pre-apply renewal before applying", async () => {
     let remoteChanged = false;
     const apply = vi.fn(async () => {});
+    const { reconciliation, finalize } = fixture();
+    reconciliation.applyPreparedStagedResult = apply;
+    reconciliation.verifyStable = async () => {
+      if (remoteChanged) {
+        throw new Error("writer mutated before SIGSTOP");
+      }
+    };
     await expect(
-      verifyReconciledWorkspaceFinal(
-        {
-          ...emptyStaging,
-          manifestRef: "sha256:" + "c".repeat(64),
-          changed: true,
-          verifyStable: async () => {
-            if (remoteChanged) {
-              throw new Error("writer mutated before SIGSTOP");
-            }
-          },
-          verifyLocalStable: async () => {},
-          applyPreparedStagedResult: apply,
-          publishStagedResult: async () => {},
-        },
-        {
-          assertActive: async () => {
-            remoteChanged = true;
-          },
-          resume: async () => {},
-        },
-      ),
+      finalize(async () => {
+        remoteChanged = true;
+      }),
     ).rejects.toMatchObject({
       message: "writer mutated before SIGSTOP",
       reclaimDisposition: "retry",
@@ -137,36 +69,18 @@ describe("final worker workspace fences", () => {
   });
 
   it("discards a prepared result when the final remote fence fails", async () => {
-    const log: string[] = [];
+    const { log, reconciliation, finalize, record } = fixture();
     let applied = false;
-    await expect(
-      verifyReconciledWorkspaceFinal(
-        {
-          ...emptyStaging,
-          manifestRef: "sha256:" + "c".repeat(64),
-          changed: true,
-          verifyStable: async () => {
-            if (applied) {
-              throw new Error("late remote write");
-            }
-          },
-          verifyLocalStable: async () => {
-            log.push("local");
-          },
-          applyPreparedStagedResult: async () => {
-            log.push("apply-prepared");
-            applied = true;
-          },
-          publishStagedResult: async () => {
-            log.push("publish");
-          },
-          discardPreparedStagedResult: async () => {
-            log.push("discard-prepared");
-          },
-        },
-        { assertActive: async () => {}, resume: async () => {} },
-      ),
-    ).rejects.toThrow("late remote write");
+    reconciliation.verifyStable = async () => {
+      if (applied) {
+        throw new Error("late remote write");
+      }
+    };
+    reconciliation.applyPreparedStagedResult = async () => {
+      await record("apply-prepared")();
+      applied = true;
+    };
+    await expect(finalize()).rejects.toThrow("late remote write");
     expect(log).toEqual(["apply-prepared", "local", "discard-prepared"]);
   });
 
@@ -174,23 +88,12 @@ describe("final worker workspace fences", () => {
     const discard = vi.fn(async () => {
       throw new Error("candidate cleanup failed");
     });
-    await expect(
-      verifyReconciledWorkspaceFinal(
-        {
-          ...emptyStaging,
-          manifestRef: "sha256:" + "d".repeat(64),
-          changed: true,
-          verifyStable: async () => {},
-          verifyLocalStable: async () => {},
-          applyPreparedStagedResult: async () => {},
-          publishStagedResult: async () => {
-            throw new Error("publish failed");
-          },
-          discardPreparedStagedResult: discard,
-        },
-        { assertActive: async () => {}, resume: async () => {} },
-      ),
-    ).rejects.toThrow("publish failed");
+    const { reconciliation, finalize } = fixture();
+    reconciliation.discardPreparedStagedResult = discard;
+    reconciliation.publishStagedResult = async () => {
+      throw new Error("publish failed");
+    };
+    await expect(finalize()).rejects.toThrow("publish failed");
     expect(discard).toHaveBeenCalledOnce();
   });
 });

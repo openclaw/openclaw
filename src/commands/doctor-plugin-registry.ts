@@ -15,12 +15,15 @@ import {
   loadInstalledPluginIndexInstallRecords,
   loadInstalledPluginIndexInstallRecordsSync,
   removePluginInstallRecordFromRecords,
-  type InstalledPluginIndexRecordStoreOptions,
+  withoutPluginInstallRecords,
 } from "../plugins/installed-plugin-index-records.js";
 import { resolveInstalledPluginIndexStateDatabaseOptions } from "../plugins/installed-plugin-index-store-path.js";
+import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
+import type { InstalledPluginIndexStoreOptions } from "../plugins/installed-plugin-index-store.js";
 import {
   loadInstalledPluginIndex,
   type InstalledPluginIndex,
+  type LoadInstalledPluginIndexParams,
 } from "../plugins/installed-plugin-index.js";
 import { hasRetainedManagedNpmInstallMarker } from "../plugins/managed-npm-retention.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
@@ -51,13 +54,11 @@ import type { DoctorPrompter } from "./doctor-prompter.js";
 import {
   InvalidPluginInstallRecordStateError,
   migrateOfficialPluginInstallProvenance,
-  migratePluginRegistryForDoctor,
   preflightPluginRegistryDoctorMigration,
-  type PluginRegistryDoctorMigrationParams,
 } from "./doctor/shared/plugin-registry-migration.js";
 
-type PluginRegistryDoctorRepairParams = Omit<PluginRegistryDoctorMigrationParams, "config"> &
-  InstalledPluginIndexRecordStoreOptions & {
+type PluginRegistryDoctorRepairParams = Omit<LoadInstalledPluginIndexParams, "config"> &
+  InstalledPluginIndexStoreOptions & {
     config: OpenClawConfig;
     prompter: Pick<DoctorPrompter, "shouldRepair">;
   };
@@ -566,11 +567,15 @@ async function inspectOrRepairPluginRegistryState(
   let index: InstalledPluginIndex;
   const rebuilding = preflight.action !== "skip-existing";
   if (rebuilding) {
-    const result = await migratePluginRegistryForDoctor({ ...params, installRecords });
-    if (!result.migrated) {
-      return { config: params.config };
-    }
-    index = result.current;
+    index = {
+      ...loadInstalledPluginIndex({
+        ...params,
+        config: withoutPluginInstallRecords(params.config),
+        installRecords,
+      }),
+      refreshReason: "migration",
+    };
+    await writePersistedInstalledPluginIndex(index, params);
   } else {
     index = await refreshPluginRegistry({ ...params, reason: "migration", installRecords });
   }

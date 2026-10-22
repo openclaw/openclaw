@@ -60,6 +60,8 @@ function decodeSessionEntryCurrentFacts(
     lifecycleRevision: value.lifecycleRevision,
     lifecycleRunId: value.lifecycleRunId,
     activeWriterRunId: value.activeWriterRunId,
+    skillLibrarySelections: value.skillLibrarySelections,
+    executionPolicy: value.executionPolicy,
     ...(recovery
       ? {
           subagentRecovery: {

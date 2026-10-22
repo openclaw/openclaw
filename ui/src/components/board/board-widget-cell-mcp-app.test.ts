@@ -309,7 +309,6 @@ describe("board MCP App cell lifecycle", () => {
     const retired = deferred();
     const refreshWidgetAppView = vi.fn(async () => ({
       status: "stale" as const,
-      error: "lease rejected",
     }));
     const cell = await mount({ refreshWidgetAppView });
     await waitForApp(cell);
@@ -373,7 +372,6 @@ describe("board MCP App cell lifecycle", () => {
       20_000,
       vi.fn(async () => ({
         status: "stale" as const,
-        error: "temporary gateway failure",
       })),
     );
     await advance(cell, 5_000);

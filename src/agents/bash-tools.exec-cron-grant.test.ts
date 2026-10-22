@@ -258,7 +258,6 @@ async function prepareCronRun(mintGrant = true, expiresAtMs: number | null = nul
       cronEnabled: true,
       log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(),
     }),
     job,

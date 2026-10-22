@@ -124,7 +124,6 @@ async function refreshAuthStore(params: {
         env: params.env,
         ...(params.providerIds ? { externalCliProviderIds: params.providerIds } : {}),
         ...(params.profileIds ? { externalCliProfileIds: params.profileIds } : {}),
-        allowKeychainPrompt: false,
       }),
   );
   return { authStore, displayPath };

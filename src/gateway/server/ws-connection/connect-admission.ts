@@ -6,6 +6,7 @@ import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
   hasGatewayClientCap,
+  isNativeAppUiClient,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
 import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import {
@@ -42,7 +43,6 @@ import { parseGatewayRole } from "../../role-policy.js";
 import { authenticatedProfileUnavailableError } from "../../server-methods/gateway-client-identity.js";
 import { formatForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
-import { isNativeAppUiClient } from "./handshake-auth-helpers.js";
 import type {
   AuthenticatedGatewayConnect,
   GatewayConnectPhaseContext,

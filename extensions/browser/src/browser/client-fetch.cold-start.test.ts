@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { once } from "node:events";
+import { afterEach, expect, it, vi } from "vitest";
 import "./server-context.chrome-test-harness.js";
 import * as cdpHelpers from "./cdp.helpers.js";
 import { launchOpenClawChrome, isChromeReachable, isChromeCdpReady } from "./chrome.js";
@@ -13,6 +14,10 @@ const service = vi.hoisted(() => ({
   state: vi.fn(),
   readTabs: vi.fn(),
 }));
+const startBrowser = (signal?: AbortSignal) =>
+  fetchBrowserJson("/start", { method: "POST", timeoutMs: 20_000, signal });
+const readTabs = () => fetchBrowserJson("/tabs", { timeoutMs: 20_000 });
+const started = { ok: true, profile: "openclaw" };
 // mock-isolation: keep the service in memory; real startup installs host relays and credentials.
 vi.mock("../control-service.js", () => ({
   createBrowserControlContext: service.context,
@@ -24,8 +29,7 @@ vi.mock("../control-service.js", () => ({
 function setup() {
   vi.useFakeTimers();
   const state = makeBrowserServerState();
-  const context = createBrowserRouteContext({ getState: () => state });
-  service.context.mockReturnValue(context);
+  service.context.mockReturnValue(createBrowserRouteContext({ getState: () => state }));
   service.start.mockResolvedValue(state);
   service.state.mockReturnValue(state);
   service.readTabs.mockResolvedValue([]);
@@ -39,7 +43,12 @@ function setup() {
     entered.resolve();
     return await ready.promise;
   });
-  return { state, context, entered, ready, running };
+  const finishStartup = async () => {
+    await entered.promise;
+    await vi.advanceTimersByTimeAsync(31_000);
+    ready.resolve(running);
+  };
+  return { state, entered, finishStartup, running };
 }
 
 afterEach(() => {
@@ -48,92 +57,65 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("browser control cold start", () => {
-  it("waits beyond the action budget for startup and reuses the browser", async () => {
-    const { entered, ready, running, state } = setup();
-    const first = fetchBrowserJson("/start", { method: "POST", timeoutMs: 20_000 });
+it.each([false, true])(
+  "shares startup beyond the action budget; cancel first caller: %s",
+  async (cancel) => {
+    const { entered, finishStartup, state, running } = setup();
+    const caller = new AbortController();
+    const first = startBrowser(caller.signal);
     const result = first.catch((error: unknown) => error);
     await entered.promise;
-    const tabs = fetchBrowserJson("/tabs", { timeoutMs: 20_000 }).catch((error: unknown) => error);
-    await vi.advanceTimersByTimeAsync(31_000);
-    ready.resolve(running);
-    expect(await result).toEqual({ ok: true, profile: "openclaw" });
+    if (cancel) {
+      setTimeout(() => caller.abort(new Error("caller deadline expired")), 10_000);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await expect(first).rejects.toThrow("caller deadline expired");
+    }
+    const tabs = readTabs().catch((error: unknown) => error);
+    const next = cancel ? startBrowser() : result;
+    await finishStartup();
+    expect(await next).toEqual(started);
     expect(await tabs).toEqual({ running: true, tabs: [], canAutoResizeViewport: true });
-    await expect(
-      fetchBrowserJson("/start", { method: "POST", timeoutMs: 20_000 }),
-    ).resolves.toEqual({ ok: true, profile: "openclaw" });
+    await expect(startBrowser()).resolves.toEqual(started);
     expect(state.profiles.get("openclaw")?.running).toBe(running);
     expect(launchOpenClawChrome).toHaveBeenCalledOnce();
-  });
+  },
+);
 
-  it("abandons an expired caller without cancelling the shared launch", async () => {
-    const { entered, ready, running, state } = setup();
-    const caller = new AbortController();
-    const first = fetchBrowserJson("/start", {
-      method: "POST",
-      timeoutMs: 20_000,
-      signal: caller.signal,
-    });
-    const cancelled = expect(first).rejects.toThrow("caller deadline expired");
-    await entered.promise;
-    setTimeout(() => caller.abort(new Error("caller deadline expired")), 10_000);
-    await vi.advanceTimersByTimeAsync(10_000);
-    await cancelled;
-    const next = fetchBrowserJson("/start", { method: "POST", timeoutMs: 20_000 });
-    await vi.advanceTimersByTimeAsync(31_000);
-    ready.resolve(running);
-    await expect(next).resolves.toEqual({ ok: true, profile: "openclaw" });
-    expect(state.profiles.get("openclaw")?.running).toBe(running);
-    expect(launchOpenClawChrome).toHaveBeenCalledOnce();
+it("enforces the action deadline after startup completes", async () => {
+  const { finishStartup } = setup();
+  const start = startBrowser();
+  await finishStartup();
+  await start;
+  const reading = Promise.withResolvers<void>();
+  const tabList = Promise.withResolvers<[]>();
+  service.readTabs.mockImplementationOnce(() => {
+    reading.resolve();
+    return tabList.promise;
   });
+  const expired = expect(readTabs()).rejects.toThrow("timed out");
+  await reading.promise;
+  await vi.advanceTimersByTimeAsync(20_000);
+  tabList.resolve([]);
+  await expired;
+});
 
-  it("enforces the action deadline after startup completes", async () => {
-    const { entered, ready, running } = setup();
-    const start = fetchBrowserJson("/start", { method: "POST", timeoutMs: 20_000 });
-    await entered.promise;
-    await vi.advanceTimersByTimeAsync(31_000);
-    ready.resolve(running);
-    await start;
-    const reading = Promise.withResolvers<void>();
-    const tabList = Promise.withResolvers<[]>();
-    service.readTabs.mockImplementationOnce(() => {
-      reading.resolve();
-      return tabList.promise;
-    });
-    const tabs = fetchBrowserJson("/tabs", { timeoutMs: 20_000 });
-    const expired = expect(tabs).rejects.toThrow("timed out");
-    await reading.promise;
-    await vi.advanceTimersByTimeAsync(20_000);
-    tabList.resolve([]);
-    await expired;
+it("bounds a stuck launch with the service startup deadline", async () => {
+  const { entered, state } = setup();
+  vi.mocked(launchOpenClawChrome).mockImplementationOnce(async (_resolved, _profile, options) => {
+    const signal = options?.signal;
+    if (!signal) {
+      throw new Error("expected lifecycle-owned launch signal");
+    }
+    entered.resolve();
+    await once(signal, "abort");
+    const reason: unknown = signal.reason;
+    throw reason instanceof Error ? reason : new Error("Browser startup aborted");
   });
-
-  it("bounds a stuck launch with the service startup deadline", async () => {
-    const { entered, state } = setup();
-    vi.mocked(launchOpenClawChrome).mockImplementationOnce(async (_resolved, _profile, options) => {
-      const signal = options?.signal;
-      if (!signal) {
-        throw new Error("expected lifecycle-owned launch signal");
-      }
-      entered.resolve();
-      return await new Promise<RunningChrome>((_resolve, reject) => {
-        signal.addEventListener(
-          "abort",
-          () => {
-            const reason: unknown = signal.reason;
-            reject(reason instanceof Error ? reason : new Error("Browser startup aborted"));
-          },
-          { once: true },
-        );
-      });
-    });
-    const start = fetchBrowserJson("/start", { method: "POST", timeoutMs: 20_000 });
-    const expired = expect(start).rejects.toThrow(
-      'Browser startup for profile "openclaw" did not finish within 120000ms',
-    );
-    await entered.promise;
-    await vi.advanceTimersByTimeAsync(120_000);
-    await expired;
-    expect(state.profiles.get("openclaw")?.running).toBeNull();
-  });
+  const expired = expect(startBrowser()).rejects.toThrow(
+    'Browser startup for profile "openclaw" did not finish within 120000ms',
+  );
+  await entered.promise;
+  await vi.advanceTimersByTimeAsync(120_000);
+  await expired;
+  expect(state.profiles.get("openclaw")?.running).toBeNull();
 });

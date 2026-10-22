@@ -3,6 +3,7 @@ import type { AgentsListResult, GatewaySessionRow, SessionBranch } from "../../a
 import type { ApplicationChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
+import type { ApplicationOverlays } from "../../app/overlays-types.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import type {
   ChatAttachment,
@@ -32,11 +33,20 @@ export type ChatHistorySessions = Pick<SessionCapability, "captureReconcile">;
 
 export type ChatHistoryHost = ChatState & { sessions: ChatHistorySessions };
 
+export type SessionApprovalReplayState = {
+  client: GatewayBrowserClient | null;
+  connectionEpoch: number;
+  sessionKey: string;
+  agentId?: string;
+  complete: boolean;
+};
+
 export type ChatState = StreamCausalBoundaryState & {
   uploadConfig?: ApplicationConfigCapability;
   client: GatewayBrowserClient | null;
   connected: boolean;
   chatSubmissions?: ApplicationChatSubmissions;
+  reconcileApprovalTerminals?: ApplicationOverlays["reconcileApprovalTerminals"];
   hasPendingInitialTurn?: (sessionKey: string) => boolean;
   /** Monotonic owner epoch; reconnects can reuse the same client object. */
   connectionEpoch: number;
@@ -95,6 +105,7 @@ export type ChatState = StreamCausalBoundaryState & {
   chatSessionMessageSubscriptionRequestedKey?: string | null;
   chatSessionMessageSubscription?: SessionMessageSubscription | null;
   chatSessionApprovalQueue?: ExecApprovalRequest[];
+  chatSessionApprovalReplay?: SessionApprovalReplayState;
   chatBranches?: SessionBranch[];
   chatBranchesSessionKey?: string | null;
   chatBranchesConnectionEpoch?: number | null;

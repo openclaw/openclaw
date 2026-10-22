@@ -780,6 +780,17 @@ describe("devices inventory rendering", () => {
       ).toBe(label);
     }
   });
+
+  it("announces device and node list errors as alerts", () => {
+    const container = renderDevicesContainer({
+      devicesError: "Device list unavailable",
+      lastError: "Node list unavailable",
+    });
+
+    expect(
+      Array.from(container.querySelectorAll('[role="alert"]'), (alert) => alert.textContent),
+    ).toEqual(["Device list unavailable", "Node list unavailable"]);
+  });
 });
 
 describe("devices access gating", () => {

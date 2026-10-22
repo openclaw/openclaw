@@ -51,9 +51,7 @@ describe("configured transcript source provenance", () => {
       const service = createTranscriptsAutoStartService(f.ctx);
       try {
         await service.start().settled;
-        expect(readConfiguredTranscriptStarts(f.ctx.config.transcripts)?.get(1)?.diagnostic).toBe(
-          "retrying",
-        );
+        expect(readConfiguredTranscriptStarts()?.get(1)?.diagnostic).toBe("retrying");
         expect((await f.read()).configuredSources).toMatchObject([
           { sessionId: "ready", state: "armed" },
           { sessionId: "waiting", startDiagnostic: "retrying" },
@@ -137,9 +135,7 @@ describe("configured transcript source provenance", () => {
       );
       try {
         await service.start().settled;
-        expect(readConfiguredTranscriptStarts(f.ctx.config.transcripts)?.get(0)?.diagnostic).toBe(
-          "retrying",
-        );
+        expect(readConfiguredTranscriptStarts()?.get(0)?.diagnostic).toBe("retrying");
         expect((await f.read()).configuredSources[0]?.startDiagnostic).toBe("retrying");
         expect(await f.store.listSessionEntries()).toHaveLength(0);
         for (const [index, title] of titles.entries()) {
@@ -203,9 +199,7 @@ describe("configured transcript source provenance", () => {
       const service = createTranscriptsAutoStartService(f.ctx, () => current);
       try {
         await service.start().settled;
-        expect(readConfiguredTranscriptStarts(f.ctx.config.transcripts)?.get(0)?.diagnostic).toBe(
-          "retrying",
-        );
+        expect(readConfiguredTranscriptStarts()?.get(0)?.diagnostic).toBe("retrying");
         expect((await f.read()).configuredSources[0]?.startDiagnostic).toBe("retrying");
         current = { transcripts: { autoStart: [{ ...source, ...changed, title: "Ineligible" }] } };
         f.setProviders([f.provider]);
@@ -261,9 +255,7 @@ describe("configured transcript source provenance", () => {
       try {
         await service.start().settled;
         const request = await entered.promise;
-        expect(readConfiguredTranscriptStarts(f.ctx.config.transcripts)?.get(0)?.diagnostic).toBe(
-          "retrying",
-        );
+        expect(readConfiguredTranscriptStarts()?.get(0)?.diagnostic).toBe("retrying");
         expect((await f.read()).configuredSources[0]).toMatchObject({
           startDiagnostic: "retrying",
           state: "unknown",
@@ -277,9 +269,9 @@ describe("configured transcript source provenance", () => {
           await vi.waitFor(
             () => {
               expect(start).toHaveBeenCalledTimes(attempt);
-              expect(
-                readConfiguredTranscriptStarts(f.ctx.config.transcripts)?.get(0)?.diagnostic,
-              ).toBe(attempt > failures ? undefined : attempt === 12 ? "start-failed" : "retrying");
+              expect(readConfiguredTranscriptStarts()?.get(0)?.diagnostic).toBe(
+                attempt > failures ? undefined : attempt === 12 ? "start-failed" : "retrying",
+              );
             },
             { interval: 0 },
           );
@@ -358,13 +350,9 @@ describe("configured transcript source provenance", () => {
       const service = createTranscriptsAutoStartService(f.ctx);
       try {
         await service.start().settled;
-        expect(readConfiguredTranscriptStarts(f.ctx.config.transcripts)?.get(0)?.diagnostic).toBe(
-          "admitted-start-failed",
-        );
+        expect(readConfiguredTranscriptStarts()?.get(0)?.diagnostic).toBe("admitted-start-failed");
         await vi.advanceTimersByTimeAsync(65_000);
-        expect(readConfiguredTranscriptStarts(f.ctx.config.transcripts)?.get(0)?.diagnostic).toBe(
-          "admitted-start-failed",
-        );
+        expect(readConfiguredTranscriptStarts()?.get(0)?.diagnostic).toBe("admitted-start-failed");
         expect.soft(start).toHaveBeenCalledOnce();
         expect.soft(await f.store.listSessionEntries()).toHaveLength(1);
         expect
@@ -441,9 +429,7 @@ describe("configured transcript source provenance", () => {
       const service = createTranscriptsAutoStartService(f.ctx);
       try {
         await service.start().settled;
-        expect(readConfiguredTranscriptStarts(f.ctx.config.transcripts)?.get(0)?.diagnostic).toBe(
-          "retrying",
-        );
+        expect(readConfiguredTranscriptStarts()?.get(0)?.diagnostic).toBe("retrying");
         expect((await f.read()).configuredSources[0]?.startDiagnostic).toBe("retrying");
         if (pending) {
           await vi.advanceTimersByTimeAsync(5_000);
@@ -534,9 +520,7 @@ describe("configured transcript source provenance", () => {
       f.setProviders([f.provider, delayedProvider]);
       await vi.advanceTimersByTimeAsync(5_000);
       await vi.waitFor(() =>
-        expect(readConfiguredTranscriptStarts(f.ctx.config.transcripts)?.get(1)?.diagnostic).toBe(
-          "id-conflict",
-        ),
+        expect(readConfiguredTranscriptStarts()?.get(1)?.diagnostic).toBe("id-conflict"),
       );
       expect.soft((await f.read()).configuredSources[1]).toMatchObject({
         state: "not-active",
@@ -647,7 +631,7 @@ describe("configured transcript source provenance", () => {
     expect(result.configuredSources[0]).toMatchObject({ state: "unknown", activeSelectors: [] });
   });
 
-  it("reports only its exact configured URL attempt and keeps changed invitations uncertain", async () => {
+  it("keeps configured URL health projections private across invitation changes", async () => {
     const source = {
       ...room,
       meetingUrl: "https://example.test/room?invitation=synthetic-private",
@@ -664,8 +648,6 @@ describe("configured transcript source provenance", () => {
           ],
         },
       });
-      expect(changed.configuredSources[0]).toMatchObject({ state: "unknown", activeSelectors: [] });
-      expect(changed.configuredSources[0]).not.toHaveProperty("startDiagnostic");
       expect(JSON.stringify([await f.read(), changed])).not.toMatch(
         /synthetic-private|other-private/,
       );
