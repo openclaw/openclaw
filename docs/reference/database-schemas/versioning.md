@@ -900,6 +900,10 @@ integrity scan; the migration's source integrity admission runs a whole-database
 quick check plus full checks of affected tables, or a whole-database full check
 when `--full-integrity-check` is selected. AUTOINCREMENT, virtual/shadow tables, unsupported SQLite runtimes,
 or sources outside the active state directory fall back to full backups.
+Fresh credential capture also uses Doctor's full image when a legacy
+`sqlite_stat4` table cannot be recreated by the current runtime. The image must
+still contain the tables and rows being retired; a changed retry source preserves
+its original backup and reports a data-risk refusal instead of losing credentials.
 Historical migrations keep their full-file backup when no scoped backup is
 declared, while integrity admission uses the same quick-plus-affected-tables
 policy. Backup eligibility and integrity coverage are separate contracts.

@@ -125,16 +125,16 @@ export function startBrowserAuthRecovery(
                       : null}
               </p>
               <openclaw-modal-actions class="exec-approval-actions">
-                <button class="btn primary" onClick={() => void signIn()}>
-                  {t("connection.browserSignIn.action")}
+                <button class="btn" onClick={dismiss}>
+                  {t("connection.browserSignIn.dismiss")}
                 </button>
                 <Show when={view.openedSignIn}>
                   <button class="btn" disabled={view.pending} onClick={() => void check(true)}>
                     {t("connection.browserSignIn.checkAgain")}
                   </button>
                 </Show>
-                <button class="btn" onClick={dismiss}>
-                  {t("connection.browserSignIn.dismiss")}
+                <button class="btn primary" onClick={() => void signIn()}>
+                  {t("connection.browserSignIn.action")}
                 </button>
               </openclaw-modal-actions>
             </div>

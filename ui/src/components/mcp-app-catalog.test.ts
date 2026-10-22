@@ -562,6 +562,29 @@ describe("app launch catalog", () => {
     await waitForSolid(() => expect(catalog.textContent).toContain("Library"));
   });
 
+  it("names each app settings button after its app", async () => {
+    const request = vi.fn().mockResolvedValue({
+      servers: ["Parts", "Notes"].map((title) => ({
+        serverName: title.toLowerCase(),
+        label: `${title} plugin`,
+        settings: { readTool: "read", updateTool: "update" },
+        entrypoints: [
+          { title, toolName: "show", resourceUri: "ui://app/show", entrypoint: { type: "global" } },
+        ],
+      })),
+    } satisfies McpAppDiscoverResult);
+    const { element: catalog } = mountCatalog(discoveryContext(request).context, {
+      sessionKey: "agent:main:one",
+    });
+    await waitForSolid(() =>
+      expect(
+        [...catalog.querySelectorAll("button")]
+          .filter((button) => button.textContent === "App settings")
+          .map((button) => button.getAttribute("aria-label")),
+      ).toEqual(["App settings: Parts", "App settings: Notes"]),
+    );
+  });
+
   it("discovers again after creating a session while an earlier lookup is pending", async () => {
     const previous = createDeferred<McpAppDiscoverResult>();
     const current = createDeferred<McpAppDiscoverResult>();

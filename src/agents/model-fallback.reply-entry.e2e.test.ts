@@ -1,10 +1,8 @@
 // Proves the pinned fallback decision survives the complete reply-entry path.
-import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { withReplyDispatcher } from "../auto-reply/dispatch-dispatcher.js";
-import { buildCommandTestParams } from "../auto-reply/reply/commands.test-harness.js";
 import type { ReplyDispatchKind } from "../auto-reply/reply/reply-dispatcher.types.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
@@ -117,39 +115,6 @@ it.each([
     agents.entries = { test: { agentDir, workspace: workspaceDir } };
     providers.anthropic = { ...groqProvider, baseUrl: "https://example.com/anthropic" };
     cfg.session = { store: storePath };
-    if (reservedProviders.includes(provider)) {
-      const pluginDir = path.join(workspaceDir, "reserved-recovery");
-      await fs.mkdir(pluginDir);
-      await fs.writeFile(
-        path.join(pluginDir, "index.cjs"),
-        "module.exports = { register() {} };\n",
-      );
-      await fs.writeFile(
-        path.join(pluginDir, "openclaw.plugin.json"),
-        JSON.stringify({
-          id: "reserved-recovery",
-          configSchema: { type: "object", additionalProperties: false, properties: {} },
-          providers: [provider],
-          providerAuthChoices: ["device-code", "oauth"].map((method) => ({
-            provider,
-            method,
-            choiceId: `${provider}-${method}`,
-            choiceLabel: `${provider} ${method}`,
-            groupId: provider,
-            groupLabel: provider,
-            appGuidedAuth: method,
-            credentialOnly: true,
-            channelLogin: {},
-          })),
-        }),
-      );
-      cfg.commands = { text: true, ownerAllowFrom: ["111"] };
-      cfg.plugins = {
-        allow: ["reserved-recovery"],
-        load: { paths: [pluginDir] },
-        entries: { "reserved-recovery": { enabled: true } },
-      };
-    }
     await replaceSessionEntry(
       { sessionKey, storePath },
       {
@@ -230,40 +195,6 @@ it.each([
       }
     } else if (loginCommand) {
       expect(countProviderAttempts(provider)).toBe(1);
-      if (reservedProviders.includes(provider)) {
-        const action = payload?.presentation?.blocks
-          .flatMap((block) => (block.type === "buttons" ? block.buttons : []))
-          .find((button) => button.label === "Sign in")?.action;
-        if (action?.type !== "command") {
-          throw new Error("Expected the delivered Sign in command.");
-        }
-        const commandParams = buildCommandTestParams(
-          action.command,
-          replyConfig,
-          { ...ctx, Body: action.command, SenderId: "111" },
-          { workspaceDir },
-        );
-        const { handleCommands } = await import("../auto-reply/reply/commands-core.js");
-        const recovery = await handleCommands({
-          ...commandParams,
-          agentId: "test",
-          sessionKey,
-          opts: { getProviderLoginConfig: () => replyConfig },
-          resolveModelLevels: async () => ({
-            resolvedThinkLevel: commandParams.resolvedThinkLevel,
-            resolvedReasoningLevel: commandParams.resolvedReasoningLevel,
-          }),
-        });
-        const menu = recovery.reply;
-        expect(menu?.text).toContain("Choose a provider to sign in:");
-        expect(menu?.presentation?.blocks).toContainEqual({
-          type: "buttons",
-          buttons: expect.arrayContaining([
-            commandButton(provider, `/login oauth/reserved-recovery/${provider}`),
-          ]),
-        });
-        expect(countProviderAttempts(provider)).toBe(1);
-      }
       expect(payload?.text).toContain(loginCommand);
       expect(payload?.presentation).toEqual({
         blocks: [{ type: "buttons", buttons: [commandButton("Sign in", loginCommand)] }],

@@ -372,14 +372,13 @@ export function createSessionsPage(
   }
 
   function sessionAgentId(key: string, context = application): string | undefined {
-    const { agentId } = scopedAgentParamsForSession(
+    return scopedAgentParamsForSession(
       {
         assistantAgentId: context.agentSelection.state.selectedId,
         hello: context.gateway.snapshot.hello,
       },
       key,
-    );
-    return agentId;
+    ).agentId;
   }
 
   function sessionPathAgentId(key: string, context: ApplicationContext): string {
@@ -1302,9 +1301,11 @@ export function createSessionsPage(
     const personGroupingAvailable = (state.result?.owners?.length ?? 0) > 1;
     return {
       ...viewState,
-      loading: state.loading || details.loading(),
+      // The descriptor read belongs to the expanded slot, outside this aggregate snapshot.
+      detailsRead: details.read,
+      detailsReadKey: details.readKey,
+      onRetryDetails: details.retry,
       refreshDisabled: application.gateway.snapshot.phase !== "connected",
-      error: details.error() ?? state.error,
       basePath: application.basePath,
       agentId: resolveSessionNavigationAgentId(application),
       allAgentsScope: application.agentSelection.state.scopeId === null,

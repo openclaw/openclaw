@@ -51,7 +51,7 @@ async function installRenderProbe(page: Page) {
 }
 
 suite.define(() => {
-  it("prewarms session actions after a busy cold load without building unrelated menus or losing the draft", () =>
+  it("leaves session actions unbuilt after a busy cold load until opened without losing the draft", () =>
     suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 1440, height: 1000 } },
       async ({ page }) => {
@@ -190,9 +190,9 @@ suite.define(() => {
         await nextFrame(page);
         const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
         expect(pageErrors).toEqual([]);
-        await expect
-          .poll(() => pane.locator('openclaw-chat-header-session-menu [role^="menuitem"]').count())
-          .toBeGreaterThan(0);
+        expect(
+          await pane.locator('openclaw-chat-header-session-menu [role^="menuitem"]').count(),
+        ).toBe(0);
         expect(await pane.locator('[role="menu"][popover]:popover-open').count()).toBe(0);
         const measurement = await page.evaluate(() => {
           const items = Array.from(

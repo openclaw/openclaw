@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { files as fixtureFiles } from "./docs-fixture.test-support.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -36,17 +37,17 @@ const commitFiles = (...filenames: string[]): CommitFile[] =>
 function runScenario(options: Scenario) {
   const scenario = { mirror: baseSha, history: {}, grace: 60, active: 0, files: {}, ...options };
   const root = createTempDir("openclaw-docs-mirror-");
-  mkdirSync(path.join(root, ".github/workflows"), { recursive: true });
-  writeFileSync(
-    path.join(root, ".github/workflows/docs-sync-publish.yml"),
+  const { write, read } = fixtureFiles(root);
+  write(
+    ".github/workflows/docs-sync-publish.yml",
     scenario.workflow ??
       "on:\n  push:\n    paths:\n      - watched-docs/**\n      - scripts/publish-support.mjs\n",
   );
   const requestsPath = path.join(root, "requests.jsonl");
-  writeFileSync(requestsPath, "");
+  write("requests.jsonl", "");
   const preload = path.join(root, "github-fixture.mjs");
-  writeFileSync(
-    preload,
+  write(
+    "github-fixture.mjs",
     String.raw`import assert from "node:assert/strict";
 import fs from "node:fs";
 import net from "node:net";
@@ -121,7 +122,7 @@ globalThis.fetch = async (input, init = {}) => {
     },
   });
   expect(result.error).toBeUndefined();
-  const lines = readFileSync(requestsPath, "utf8").trim();
+  const lines = read("requests.jsonl").trim();
   const requests: Request[] = lines ? lines.split("\n").map((line) => JSON.parse(line)) : [];
   return { result, requests };
 }

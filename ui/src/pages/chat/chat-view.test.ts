@@ -2904,7 +2904,7 @@ describe("chat attachment picker", () => {
       preview.querySelector(".chat-attachment-file--video .chat-attachment-file__preview svg"),
     ).not.toBeNull();
     expect(preview.querySelector(".chat-attachment-file__preview img")).toBeNull();
-    expect(preview.querySelector(".chat-attachment-file__type")?.textContent).toBe("MP4");
+    expect(preview.querySelector(".chat-attachment-file__type")?.textContent).toBe("MP4 · 5 B");
   });
 });
 describe("chat welcome", () => {

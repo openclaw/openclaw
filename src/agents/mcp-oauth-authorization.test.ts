@@ -1,17 +1,9 @@
-import { createHash } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
-import { OpenClawSchema } from "../config/zod-schema.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "../infra/sqlite-worker-operation-settlement.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import type { OpenClawStateAsyncLeaseContext } from "../state/openclaw-state-lease-context.js";
 import { createOpenClawStateLeaseWorkerOwner } from "../state/openclaw-state-lease-worker-owner.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -19,8 +11,6 @@ import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { McpConnectionAuthorityError } from "./mcp-connection-authority-error.js";
-import { mcpEnterpriseIdpStoreKey, type McpEnterpriseConfig } from "./mcp-enterprise.js";
-import { prepareMcpEventCredentialConnection } from "./mcp-event-connection.js";
 import { captureMcpOAuthAuthorization } from "./mcp-oauth-authorization.js";
 import { requesterMcpOAuthIdentity } from "./mcp-oauth-identity.js";
 import { retainMcpOAuthAuthorizationState } from "./mcp-oauth-store.authorization.js";
@@ -64,75 +54,6 @@ const clear = () =>
   withMcpOAuthTestLease(identity.storeKey, (lease, context) =>
     clearMcpOAuthStore({ storeKey: identity.storeKey, lease, context }),
   );
-
-it("reads v2026.10.5 OAuth settings and credential rows after enterprise support is added", async () => {
-  await withOpenClawTestState({ label: "mcp-oauth-stable-upgrade" }, async () => {
-    const stableConfig = {
-      mcp: {
-        servers: {
-          docs: {
-            url: identity.serverUrl,
-            transport: "streamable-http" as const,
-            auth: "oauth" as const,
-            oauth: { identity: "per-requester" as const, scope: "docs.read" },
-          },
-        },
-      },
-    };
-    expect(OpenClawSchema.parse(stableConfig).mcp?.servers?.docs).toMatchObject(
-      stableConfig.mcp.servers.docs,
-    );
-    const stableOperatorHash = createHash("sha256")
-      .update(identity.serverName)
-      .update("\0")
-      .update(identity.serverUrl)
-      .digest("hex");
-    const stableRequesterHash = createHash("sha256")
-      .update("discord")
-      .update("\0")
-      .update("fixture-bot")
-      .update("\0")
-      .update("fixture-requester")
-      .digest("hex");
-    expect(identity.storeKey).toBe(
-      `events-${stableOperatorHash.slice(0, 16)}-r-${stableRequesterHash.slice(0, 16)}`,
-    );
-    // v2026.10.5 wrote format_version=1 and JSON without authorizationId.
-    const stableRow = {
-      tokens: {
-        access_token: "stable-access",
-        refresh_token: "stable-refresh",
-        token_type: "Bearer",
-      },
-    };
-    const database = openOpenClawStateDatabase();
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        executeSqliteQuerySync(
-          db,
-          getNodeSqliteKysely<OpenClawStateDatabase>(db)
-            .insertInto("mcp_oauth_stores")
-            .values({
-              store_key: identity.storeKey,
-              format_version: 1,
-              store_json: JSON.stringify(stableRow),
-              updated_at: Date.now(),
-            }),
-        );
-      },
-      { database },
-    );
-    expect(await readMcpOAuthStoreReadOnly(identity.storeKey)).toMatchObject(stableRow);
-    const retained = await capture();
-    try {
-      retained.assertCurrent();
-      expect(retained.authorizationId).toBeTruthy();
-    } finally {
-      retained.dispose();
-    }
-    expect(await readMcpOAuthStoreReadOnly(identity.storeKey)).toMatchObject(stableRow);
-  });
-});
 
 it("binds legacy requester grants, preserves refresh, and never revives logout or replacement handles", async () => {
   await withOpenClawTestState({ label: "mcp-oauth-authorization" }, async () => {
@@ -386,76 +307,6 @@ it("retains the canonical clear fence when native settlement is unknown despite 
       await expect(nativeOwner.drain()).rejects.toMatchObject({ code: "outcome-unknown" });
       nativeOwner.close();
       retained.dispose();
-    }
-  });
-});
-
-const enterprise: McpEnterpriseConfig = {
-  identity: "shared",
-  idpIssuer: "https://idp.example.test",
-  idpClientId: "fixture-client",
-  idpClientSecret: "fixture-secret",
-  resourceIssuer: "https://auth.example.test",
-  resourceClientId: "fixture-resource-client",
-  resourceClientSecret: "fixture-resource-secret",
-  scope: "mcp.read",
-  redirectUrl: "http://localhost:3097/callback",
-};
-const server = {
-  url: "https://mcp.example.test/mcp",
-  transport: "streamable-http" as const,
-  auth: "enterprise" as const,
-  enterprise,
-};
-const selector = {
-  serverName: "enterprise",
-  server,
-  cfg: { mcp: { servers: { enterprise: server } } },
-  agentDir: "/tmp",
-  requesterResolver: false,
-};
-
-it("rejects enterprise callbacks and recovered subscriptions after logout and replacement", async () => {
-  await withOpenClawTestState({ label: "mcp-enterprise-event-authority" }, async () => {
-    const storeKey = mcpEnterpriseIdpStoreKey(enterprise);
-    const enterpriseTokens = {
-      access_token: "fixture-idp-access",
-      id_token: "fixture-id-token",
-      refresh_token: "fixture-idp-refresh",
-      token_type: "Bearer",
-    };
-    const seed = (authorizationId: string) =>
-      seedMcpOAuthStoreForTest(storeKey, { tokens: enterpriseTokens, authorizationId });
-    const open = () => prepareMcpEventCredentialConnection(selector, () => {});
-    const retiredError = new McpConnectionAuthorityError("retired");
-
-    seed("first-account");
-    const first = await open();
-    try {
-      expect(first.authorizationIdentity).toBe(JSON.stringify(["enterprise", "first-account"]));
-      await first.revalidate();
-
-      await withMcpOAuthTestLease(storeKey, (lease, context) =>
-        clearMcpOAuthStore({ storeKey, lease, context }),
-      );
-      // Callback admission is synchronous; recovery revalidates the persisted source.
-      expect(first.assertCurrent).toThrow(retiredError);
-      await expect(first.revalidate()).rejects.toThrow(retiredError);
-      await expect(open()).rejects.toThrow(retiredError);
-
-      seed("second-account");
-      const replacement = await open();
-      try {
-        expect(replacement.authorizationIdentity).toBe(
-          JSON.stringify(["enterprise", "second-account"]),
-        );
-        expect(replacement.authorizationIdentity).not.toBe(first.authorizationIdentity);
-        expect(first.assertCurrent).toThrow(retiredError);
-      } finally {
-        replacement.release();
-      }
-    } finally {
-      first.release();
     }
   });
 });

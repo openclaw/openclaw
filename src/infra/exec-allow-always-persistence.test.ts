@@ -1,4 +1,3 @@
-// Tests shared allow-always persistence decisions for command authorization plans.
 import { describe, expect, it } from "vitest";
 import { resolveCommandResolutionFromArgv } from "./exec-approvals-analysis.js";
 import {
@@ -37,6 +36,17 @@ function expectOneShot(
   reason = "no-reusable-pattern",
 ) {
   expect(decision).toEqual({ kind: "one-shot", reasons: expect.arrayContaining([reason]) });
+}
+
+function expectOneShotApproval(
+  decision: ReturnType<typeof resolveAllowAlwaysPersistenceDecision>,
+  reason = "no-reusable-pattern",
+) {
+  expectOneShot(decision, reason);
+  expect(resolveExecApprovalAllowedDecisions({ allowAlwaysPersistence: decision })).toEqual([
+    "allow-once",
+    "deny",
+  ]);
 }
 
 function createPersistenceFixture(binaries: string[]) {
@@ -85,39 +95,18 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
     });
   });
 
-  it("keeps shell wrappers without reusable patterns one-shot", async () => {
-    const cwd = makeExecApprovalsTempDir();
-    const command = "sh -c './scripts/run.sh'";
-    const decision = await decideCommand(command, { cwd });
-
-    expectOneShot(decision);
-    expect(resolveExecApprovalAllowedDecisions({ allowAlwaysPersistence: decision })).toEqual([
-      "allow-once",
-      "deny",
-    ]);
-  });
-
-  it("keeps shell wrappers without approved cwd one-shot", async () => {
-    const command = "sh -c './scripts/run.sh'";
-    const decision = await decideCommand(command);
-
-    expectOneShot(decision);
-    expect(resolveExecApprovalAllowedDecisions({ allowAlwaysPersistence: decision })).toEqual([
-      "allow-once",
-      "deny",
-    ]);
+  it.each([true, false])("keeps script wrappers one-shot with approved cwd: %s", async (hasCwd) => {
+    expectOneShotApproval(
+      await decideCommand("sh -c './scripts/run.sh'", {
+        cwd: hasCwd ? makeExecApprovalsTempDir() : undefined,
+      }),
+    );
   });
 
   it.each(["bash --login -c 'echo ok'", "bash -i -c 'echo ok'"])(
     "keeps startup shell wrappers one-shot: %s",
     async (command) => {
-      const decision = await decideCommand(command);
-
-      expectOneShot(decision);
-      expect(resolveExecApprovalAllowedDecisions({ allowAlwaysPersistence: decision })).toEqual([
-        "allow-once",
-        "deny",
-      ]);
+      expectOneShotApproval(await decideCommand(command));
     },
   );
 
@@ -126,13 +115,7 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
     { command: 'sh -c "$SCRIPT"', reason: "runtime-payload" },
     { command: "sh -c '$0 \"$@\"' xargs echo SAFE", reason: "runtime-payload" },
   ] as const)("keeps $command allow-always approvals one-shot", async ({ command, reason }) => {
-    const decision = await decideCommand(command);
-
-    expectOneShot(decision, reason);
-    expect(resolveExecApprovalAllowedDecisions({ allowAlwaysPersistence: decision })).toEqual([
-      "allow-once",
-      "deny",
-    ]);
+    expectOneShotApproval(await decideCommand(command), reason);
   });
 
   it("keeps failed authorization plans one-shot even when fallback segments have patterns", async () => {
@@ -173,10 +156,6 @@ describe("resolveAllowAlwaysPersistenceDecision", () => {
       authorizationPlan: plan,
     });
 
-    expectOneShot(decision);
-    expect(resolveExecApprovalAllowedDecisions({ allowAlwaysPersistence: decision })).toEqual([
-      "allow-once",
-      "deny",
-    ]);
+    expectOneShotApproval(decision);
   });
 });

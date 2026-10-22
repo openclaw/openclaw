@@ -19,6 +19,7 @@ import type {
   CliBackendUserInputResult,
 } from "../../plugins/cli-backend.types.js";
 import type { RunExit, TerminationReason } from "../../process/supervisor/types.js";
+import { assertionSucceeds } from "../../shared/assertion.js";
 import { runWithAgentToolSourceExecutionScope } from "../agent-tool-source-execution-guard.js";
 import {
   recordAdjustedParamsForToolCall,
@@ -335,14 +336,7 @@ function createPluginUserInputHandler(params: {
             onPartialReply: run.onPartialReply,
           },
           signal,
-          isActive: () => {
-            try {
-              assertQuestionActive();
-              return true;
-            } catch {
-              return false;
-            }
-          },
+          isActive: () => assertionSucceeds(assertQuestionActive),
           questionId: request.toolCallId ? (batch) => `${request.toolCallId}:${batch}` : undefined,
         }),
       );
