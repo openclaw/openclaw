@@ -567,17 +567,19 @@ describe("CI changed Node test plan", () => {
     ]);
   });
 
-  it.each(["scripts/perf/idle-gateway-measure-preload.mjs", "src/example.test.js"])(
-    "retains the lint inventory through the actual PR-exempt planner for %s",
-    (changedPath) => {
-      const shards = createChangedNodeTestShards([changedPath], {
-        includePrExemptRuntimeTests: false,
-        includeReleaseOnlyRuntimeTests: false,
-      });
-      expect(shards).not.toBeNull();
-      expect(selectedFiles(shards)).toContain(lintSuppressionInventory);
-    },
-  );
+  it.each([
+    "scripts/perf/idle-gateway-measure-preload.mjs",
+    "src/example.test.js",
+    "src/.hidden.ts",
+    "extensions/xai/.boundary-stubs/example.d.ts",
+  ])("retains the lint inventory through the actual PR-exempt planner for %s", (changedPath) => {
+    const shards = createChangedNodeTestShards([changedPath], {
+      includePrExemptRuntimeTests: false,
+      includeReleaseOnlyRuntimeTests: false,
+    });
+    expect(shards).not.toBeNull();
+    expect(selectedFiles(shards)).toContain(lintSuppressionInventory);
+  });
 
   it.each([
     "scripts/perf/example.mts",

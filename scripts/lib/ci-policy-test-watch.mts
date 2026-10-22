@@ -59,8 +59,13 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   })),
   {
     testFile: "test/scripts/lint-suppressions.test.ts",
-    // The inventory includes JavaScript test suffixes that sourceOnly would exclude.
-    watchGlobs: ["{src,extensions,scripts,ui}/**/*.{ts,tsx,js,jsx,mjs,cjs}"],
+    // The inventory includes JavaScript test suffixes and dot-prefixed paths that
+    // sourceOnly and default globstar matching would exclude.
+    watchGlobs: [
+      "{src,extensions,scripts,ui}/**/*.{ts,tsx,js,jsx,mjs,cjs}",
+      "{src,extensions,scripts,ui}/**/.*.{ts,tsx,js,jsx,mjs,cjs}",
+      "{src,extensions,scripts,ui}/**/.*/**/{*,.*}.{ts,tsx,js,jsx,mjs,cjs}",
+    ],
   },
   {
     testFile: "test/vitest-pr-exempt-retention.test.ts",
