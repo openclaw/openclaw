@@ -368,7 +368,11 @@ export async function runActiveReplySteer(
       ),
       steeringMode: "all",
       isInboundUserMessage,
-      allowPendingUserInputAnswer: steeringAuthority.allowPendingUserInputAnswer,
+      // A bot sender never answers for a person, even while steering the run that asked.
+      allowPendingUserInputAnswer:
+        followupRun.run.senderIsBot === true
+          ? false
+          : steeringAuthority.allowPendingUserInputAnswer,
       terminalReplyExpectation: followupRun.run.terminalReplyExpectation,
       toolAuthorityFingerprint: steeringAuthority.toolAuthorityFingerprint,
       ...(steeringAuthority.collaborativeCaller

@@ -18,6 +18,21 @@ export type AgentHarnessUserInputPromptOptions = {
   secretWarning?: string;
   otherLabel?: string;
   presentation?: MessagePresentation;
+  /**
+   * The prompt goes to the agent's owner, whose typed reply cannot answer a
+   * question another sender's turn asked. It links to the question's Control
+   * UI page in place of a typed answer, keeps option buttons only when the
+   * owner's channel renders them, and asks for no reply.
+   */
+  ownerAnswer?: OwnerAnswerSurface;
+};
+
+/** How the owner answers a question routed to them. */
+export type OwnerAnswerSurface = {
+  /** The owner's channel renders question buttons. */
+  buttons: boolean;
+  /** The Control UI page that answers this question in any form. */
+  url: string;
 };
 
 export type RunAgentHarnessGatewayQuestionParams = {
@@ -27,9 +42,10 @@ export type RunAgentHarnessGatewayQuestionParams = {
   runId?: string;
   timeoutMs: number;
   gatewayCall?: AgentHarnessQuestionGatewayCall | AgentQuestionDispatcher;
-  delivery: Pick<EmbeddedRunAttemptParams, "onBlockReply" | "onPartialReply"> & {
-    hostCapabilities?: AgentHarnessHostCapabilities;
-  };
+  delivery: Pick<EmbeddedRunAttemptParams, "onBlockReply" | "onPartialReply"> &
+    Partial<Pick<EmbeddedRunAttemptParams, "senderIsBot">> & {
+      hostCapabilities?: AgentHarnessHostCapabilities;
+    };
   promptOptions?: AgentHarnessUserInputPromptOptions;
   signal?: AbortSignal;
   questionId?: string;
@@ -71,7 +87,7 @@ export function formatAgentHarnessUserInputPrompt(
         }`,
       );
     });
-    if (question.isOther) {
+    if (question.isOther && !options.ownerAnswer) {
       lines.push(options.otherLabel ?? "Other: reply with your own answer.");
     }
   });
@@ -98,10 +114,11 @@ function buildAgentHarnessQuestionPresentation(params: {
   questionId: string;
   questions: readonly AgentHarnessUserInputQuestion[];
   formatText?: (text: string) => string;
+  ownerAnswer?: OwnerAnswerSurface;
 }): MessagePresentation | undefined {
   // Button taps resolve atomically, so multi-question and multi-select records
   // remain text-only until partial answer state has one shared owner.
-  if (params.questions.length !== 1) {
+  if (params.questions.length !== 1 || params.ownerAnswer?.buttons === false) {
     return undefined;
   }
   const [question] = params.questions;
@@ -118,7 +135,7 @@ function buildAgentHarnessQuestionPresentation(params: {
         `- ${formatText(option.label)}${option.description ? `: ${formatText(option.description)}` : ""}`,
     ),
     "",
-    questionReplyGuidance(params.questions),
+    questionReplyGuidance(params.questions, params.ownerAnswer),
   ].join("\n");
   return {
     blocks: [
@@ -139,7 +156,15 @@ function buildAgentHarnessQuestionPresentation(params: {
               optionValue: option.value ?? option.label,
             },
           })),
-          ...(question.isOther
+          ...(params.ownerAnswer
+            ? [
+                {
+                  label: "Other answer",
+                  action: { type: "url" as const, url: params.ownerAnswer.url },
+                },
+              ]
+            : []),
+          ...(question.isOther && !params.ownerAnswer
             ? [
                 {
                   label: "Other…",
@@ -170,6 +195,7 @@ export function buildAgentHarnessQuestionPromptPayload(params: {
     buildAgentHarnessQuestionPresentation({
       ...params,
       formatText: params.options?.formatText,
+      ownerAnswer: params.options?.ownerAnswer,
     });
   const [question] = params.questions;
   const candidateOptionValues =
@@ -185,7 +211,7 @@ export function buildAgentHarnessQuestionPromptPayload(params: {
       ? candidateOptionValues
       : undefined;
   return markReplyPayloadForSourceSuppressionDelivery({
-    text: `${prompt}\n\n${questionReplyGuidance(params.questions)}`,
+    text: `${prompt}\n\n${questionReplyGuidance(params.questions, params.options?.ownerAnswer, presentation !== undefined)}`,
     ...(presentation ? { presentation, presentationTextMode: "fallback" as const } : {}),
     // Native callbacks need Gateway option order even when presentation controls are reordered.
     channelData: {
@@ -194,7 +220,14 @@ export function buildAgentHarnessQuestionPromptPayload(params: {
   });
 }
 
-function questionReplyGuidance(questions: readonly AgentHarnessUserInputQuestion[]): string {
+function questionReplyGuidance(
+  questions: readonly AgentHarnessUserInputQuestion[],
+  ownerAnswer?: OwnerAnswerSurface,
+  withButtons = true,
+): string {
+  if (ownerAnswer) {
+    return ownerAnswerGuidance(ownerAnswer, withButtons);
+  }
   if (questions.length !== 1) {
     return "Reply by number or question id. Use a declared option where choices are fixed.";
   }
@@ -208,6 +241,12 @@ function questionReplyGuidance(questions: readonly AgentHarnessUserInputQuestion
   return question.isOther
     ? "Reply with the number, the option text, or your own answer."
     : "Reply with the number or option text.";
+}
+
+function ownerAnswerGuidance(ownerAnswer: OwnerAnswerSurface, withButtons: boolean): string {
+  return withButtons && ownerAnswer.buttons
+    ? `Choose an option, or answer here: ${ownerAnswer.url}`
+    : `Answer here: ${ownerAnswer.url}`;
 }
 
 /** Delivers a gateway-backed question through the harness block-reply surface. */

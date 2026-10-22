@@ -338,10 +338,7 @@ function createPluginUserInputHandler(params: {
       const result = await withAgentQuestionAnswerAuthority(questionAuthority, () =>
         runStructuredInput({
           input: compileStructuredInputQuestions({
-            questions: request.questions.map((question) => ({
-              ...question,
-              isSecret: false,
-            })),
+            questions: request.questions.map((question) => ({ ...question, isSecret: false })),
             intro: request.intro?.trim() || "Agent needs input:",
           }),
           sessionKey: run.sessionKey ?? run.sessionId,
@@ -351,6 +348,7 @@ function createPluginUserInputHandler(params: {
           delivery: {
             onBlockReply: run.onBlockReply,
             onPartialReply: run.onPartialReply,
+            senderIsBot: run.senderIsBot,
           },
           signal,
           isActive: () => assertionSucceeds(assertQuestionActive),

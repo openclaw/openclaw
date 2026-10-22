@@ -36,6 +36,7 @@ export type AgentRunMessageContext = Pick<
   QueuedAgentRunParams,
   | "agentAccountId"
   | "senderIsOwner"
+  | "senderIsBot"
   | "gitContributorProfileId"
   | "sourceReplyDeliveryMode"
   | "taskSuggestionDeliveryMode"
