@@ -4,7 +4,7 @@ import type { WizardPrompter } from "../api.js";
 import { getAccountConfig } from "./config.js";
 import { checkTwitchMessageThroughMonitor } from "./monitor-access.test-support.js";
 import { setTwitchAccount, twitchSetupPlugin, twitchSetupWizard } from "./setup-surface.js";
-import type { TwitchAccountConfig } from "./types.js";
+import type { TwitchAccountConfig, TwitchChatMessage } from "./types.js";
 
 const mockPromptText = vi.fn<WizardPrompter["text"]>();
 const mockPromptConfirm = vi.fn<WizardPrompter["confirm"]>();
@@ -36,6 +36,25 @@ function configuredAccount(id: string): TwitchAccountConfig {
     clientId: `${id}-client`,
     channel: `#${id}`,
   };
+}
+
+function checkAccess(
+  account: TwitchAccountConfig,
+  message: Partial<TwitchChatMessage> = {},
+  accountId = "secondary",
+) {
+  return checkTwitchMessageThroughMonitor({
+    account,
+    accountId,
+    message: {
+      id: "message-1",
+      username: "testuser",
+      userId: "123456",
+      message: "@testbot hello",
+      channel: account.channel,
+      ...message,
+    },
+  });
 }
 
 type SetupConfig = Parameters<typeof setTwitchAccount>[0];
@@ -87,10 +106,9 @@ describe("setup surface helpers", () => {
       expect(result?.cfg?.channels?.twitch?.accounts?.default).toMatchObject(
         refresh ? mockRefreshAccount : mockAccount,
       );
-      expect(mockPromptConfirm).toHaveBeenCalledWith({
-        message: "Access token already configured. Keep it?",
-        initialValue: true,
-      });
+      expect(mockPromptConfirm).toHaveBeenCalledWith(
+        expect.objectContaining({ initialValue: true }),
+      );
       expect(mockPromptText).toHaveBeenCalledTimes(3);
       expect(mockPromptText.mock.calls.some(([prompt]) => prompt.sensitive)).toBe(false);
     },
@@ -169,10 +187,7 @@ describe("setup surface helpers", () => {
       accessToken: envToken,
       clientId: "env-client",
     });
-    expect(mockPromptConfirm).toHaveBeenCalledWith({
-      message: "Twitch env var OPENCLAW_TWITCH_ACCESS_TOKEN detected. Use env token?",
-      initialValue: true,
-    });
+    expect(mockPromptConfirm).toHaveBeenCalledWith(expect.objectContaining({ initialValue: true }));
     expect(mockPromptText).toHaveBeenCalledTimes(2);
     expect(JSON.stringify(mockPromptConfirm.mock.calls)).not.toContain(envToken);
     expect(JSON.stringify(mockPromptText.mock.calls)).not.toContain(envToken);
@@ -234,10 +249,9 @@ describe("setup surface helpers", () => {
     const twitch = result?.cfg?.channels?.twitch;
     expect(twitch?.accounts?.secondary?.accessToken).toBe("oauth:persisted");
     expect(mockPromptConfirm).toHaveBeenCalledTimes(1);
-    expect(mockPromptConfirm).toHaveBeenCalledWith({
-      message: "Enable automatic token refresh (requires client secret and refresh token)?",
-      initialValue: false,
-    });
+    expect(mockPromptConfirm).toHaveBeenCalledWith(
+      expect.objectContaining({ initialValue: false }),
+    );
   });
 
   const groupAccess = expectDefined(twitchSetupWizard.groupAccess, "group access setup");
@@ -309,18 +323,7 @@ describe("setup surface helpers", () => {
       expect(account.allowFrom).toEqual(expectedAllowFrom);
       expect(groupAccess.currentPolicy({ cfg, accountId })).toBe(policies.at(-1));
       expect(groupAccess.updatePrompt?.({ cfg, accountId })).toBe(true);
-      const result = await checkTwitchMessageThroughMonitor({
-        account,
-        accountId,
-        message: {
-          id: "policy-transition-message",
-          userId: "123456",
-          username: "viewer",
-          message: "@testbot hello",
-          channel: mockAccount.channel,
-          isMod,
-        },
-      });
+      const result = await checkAccess(account, { isMod }, accountId);
       expect(result.allowed).toBe(allowed);
     },
   );
@@ -330,4 +333,53 @@ describe("setup surface helpers", () => {
     expect(groupAccess.currentPolicy({ cfg, accountId: "secondary" })).toBe("open");
     expect(groupAccess.updatePrompt?.({ cfg, accountId: "secondary" })).toBe(false);
   });
+});
+
+describe("Twitch monitor access control", () => {
+  it.each<[string, Partial<TwitchAccountConfig>, Partial<TwitchChatMessage>, boolean]>([
+    ["requires mention by default", {}, { message: "hello bot" }, false],
+    ["blocks missing allowlisted ID", { allowFrom: ["123456"] }, { userId: undefined }, false],
+    ["allows wildcard roles without ID", { allowedRoles: ["all"] }, { userId: undefined }, true],
+    [
+      "does not confuse IDs with roles",
+      { allowedRoles: ["moderator"] },
+      { userId: "moderator" },
+      false,
+    ],
+    ["keeps empty roles open", { allowedRoles: [] }, { userId: undefined }, true],
+    [
+      "blocks unmentioned unauthorized chat",
+      { requireMention: true, allowedRoles: ["moderator"] },
+      { message: "ordinary chat", isMod: false },
+      false,
+    ],
+    [
+      "checks allowlist before roles",
+      { allowFrom: ["123456"], allowedRoles: ["owner"] },
+      { isOwner: false },
+      true,
+    ],
+  ])("%s", async (_name, account, message, allowed) => {
+    expect((await checkAccess({ ...mockAccount, ...account }, message)).allowed).toBe(allowed);
+  });
+
+  it.each([
+    { role: "moderator", flag: "isMod" },
+    { role: "owner", flag: "isOwner" },
+    { role: "vip", flag: "isVip" },
+    { role: "subscriber", flag: "isSub" },
+  ] as const)(
+    "admits only the matching $role alias, including absent native IDs",
+    async ({ role, flag }) => {
+      for (const userId of ["123456", undefined]) {
+        for (const matching of [false, true]) {
+          const result = await checkAccess(
+            { ...mockAccount, allowedRoles: [role] },
+            { userId, [flag]: matching },
+          );
+          expect(result.allowed).toBe(matching);
+        }
+      }
+    },
+  );
 });

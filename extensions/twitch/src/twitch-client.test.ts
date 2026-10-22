@@ -4,16 +4,18 @@ import { LogLevel, type ChatClientOptions } from "@twurple/chat";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as fetchRuntime from "openclaw/plugin-sdk/fetch-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  getClientManager,
+  getOrCreateClientManager,
+  removeClientManager,
+} from "./client-manager-registry.js";
+import { twitchOutbound } from "./outbound.js";
 import { probeTwitch } from "./probe.js";
+import { makeTwitchTestConfig } from "./test-fixtures.js";
 import { resolveTwitchToken } from "./token.js";
 import { TwitchClientManager } from "./twitch-client.js";
-import type {
-  ChannelAccountSnapshot,
-  ChannelLogSink,
-  TwitchAccountConfig,
-  TwitchChatMessage,
-} from "./types.js";
+import type { ChannelAccountSnapshot, ChannelLogSink, TwitchAccountConfig } from "./types.js";
 
 const mockConnect = vi.fn(() => {
   for (const handler of authSuccessHandlers) {
@@ -140,12 +142,17 @@ describe("TwitchClientManager", () => {
   function send(text = "Test message") {
     return manager.sendMessage(testAccount, "testchannel", text);
   }
-  function emit(index: number, text: string, id = text) {
+  function emit(
+    index: number,
+    text: string,
+    id = text,
+    userInfo: Partial<typeof defaultUserInfo> = {},
+  ) {
     expectDefined(messageHandlers[index], "message handler")(
       "#testchannel",
       "testuser",
       text,
-      ircMessage(id),
+      ircMessage(id, userInfo),
     );
   }
   function expectStatus(patch: Partial<ChannelAccountSnapshot>) {
@@ -156,6 +163,13 @@ describe("TwitchClientManager", () => {
     const authentication = createDeferred<AuthProvider>();
     mockManagedAuthProvider.mockImplementationOnce(() => authentication.promise);
     return { authentication, connection: manager.getClient(authAccount) };
+  }
+
+  async function pendingConnection() {
+    mockConnect.mockImplementationOnce(() => {});
+    const connection = manager.getClient(testAccount);
+    await Promise.resolve();
+    return { connection };
   }
 
   beforeEach(() => {
@@ -176,31 +190,30 @@ describe("TwitchClientManager", () => {
     const custom = expectDefined(options?.logger?.custom, "Twurple logger bridge");
     const log = typeof custom === "function" ? custom : custom.log;
     vi.clearAllMocks();
-    log(
-      LogLevel.ERROR,
+    const parseErrors = [
       "Error parsing message: line without command received: :synthetic-private-irc-line",
-    );
-    log(
-      LogLevel.ERROR,
       'Error parsing message: required parameter "channel" did not validate against channel validation: "synthetic-private-irc-parameter"',
-    );
-    log(LogLevel.CRITICAL, "connection failed");
-    log(LogLevel.ERROR, "Refreshing the access token failed: refresh rejected");
-    log(LogLevel.WARNING, "No valid token available; trying to refresh");
-    log(LogLevel.INFO, "Disconnected");
-    log(LogLevel.DEBUG, "diagnostic");
-    log(LogLevel.TRACE, "trace diagnostic");
-    expect(mockLogger.error.mock.calls).toEqual([
-      ["Twitch IRC message parsing failed"],
-      ["Twitch IRC message parsing failed"],
-      ["connection failed"],
-      ["Refreshing the access token failed: refresh rejected"],
-    ]);
-    expect(mockLogger.warn).toHaveBeenCalledExactlyOnceWith(
-      "No valid token available; trying to refresh",
-    );
-    expect(mockLogger.info).toHaveBeenCalledExactlyOnceWith("Disconnected");
-    expect(mockLogger.debug.mock.calls).toEqual([["diagnostic"], ["trace diagnostic"]]);
+    ];
+    for (const error of parseErrors) {
+      log(LogLevel.ERROR, error);
+    }
+    const diagnostics = [
+      [LogLevel.CRITICAL, "error", "connection failed"],
+      [LogLevel.ERROR, "error", "Refreshing the access token failed: refresh rejected"],
+      [LogLevel.WARNING, "warn", "No valid token available; trying to refresh"],
+      [LogLevel.INFO, "info", "Disconnected"],
+      [LogLevel.DEBUG, "debug", "diagnostic"],
+      [LogLevel.TRACE, "debug", "trace diagnostic"],
+    ] as const;
+    for (const [level, , message] of diagnostics) {
+      log(level, message);
+    }
+    for (const method of ["error", "warn", "info", "debug"] as const) {
+      expect(mockLogger[method].mock.calls).toEqual([
+        ...(method === "error" ? parseErrors.map(() => ["Twitch IRC message parsing failed"]) : []),
+        ...diagnostics.filter(([, sink]) => sink === method).map((entry) => [entry[2]]),
+      ]);
+    }
   });
 
   it("publishes ready and recovering from authentication and disconnect events", async () => {
@@ -215,10 +228,8 @@ describe("TwitchClientManager", () => {
   });
 
   it("deduplicates concurrent client creation for the same account", async () => {
-    mockConnect.mockImplementationOnce(() => {});
-    const first = manager.getClient(testAccount);
+    const { connection: first } = await pendingConnection();
     const second = manager.getClient(testAccount);
-    await Promise.resolve();
     expect(mockConnect).toHaveBeenCalledTimes(1);
     expect(authSuccessHandlers).toHaveLength(1);
     authSuccessHandlers[0]?.();
@@ -227,9 +238,7 @@ describe("TwitchClientManager", () => {
   });
 
   it("waits through authentication failure retry disconnects", async () => {
-    mockConnect.mockImplementationOnce(() => {});
-    const connection = manager.getClient(testAccount);
-    await Promise.resolve();
+    const { connection } = await pendingConnection();
     authFailureHandlers[0]?.("bad token", 1);
     let settled = false;
     const settle = () => {
@@ -251,9 +260,7 @@ describe("TwitchClientManager", () => {
   it.each(["manual", "all"] as const)(
     "cancels pending connections on %s disconnect",
     async (mode) => {
-      mockConnect.mockImplementationOnce(() => {});
-      const connection = manager.getClient(testAccount);
-      await Promise.resolve();
+      const { connection } = await pendingConnection();
       if (mode === "manual") {
         authFailureHandlers[0]?.("bad token", 1);
         disconnectHandlers[0]?.(true);
@@ -469,47 +476,41 @@ describe("TwitchClientManager", () => {
   });
 
   it("preserves message content and role flags without logging content", async () => {
-    let capturedMessage: TwitchChatMessage | undefined;
-    manager.onMessage((message) => {
-      capturedMessage = message;
-    });
+    const onMessage = vi.fn();
+    manager.onMessage(onMessage);
     await manager.getClient(testAccount);
-    const onMessageCallback = expectDefined(messageHandlers[0], "message handler");
     const messageText = "private-twitch-message\n🦞";
-    onMessageCallback(
-      "#testchannel",
-      "moduser",
-      messageText,
-      ircMessage("msg2", {
-        isMod: true,
-        isVip: true,
-        isSubscriber: true,
-        isBroadcaster: true,
-      }),
-    );
-    expect(capturedMessage).toMatchObject({
+    emit(0, messageText, "msg2", {
       isMod: true,
       isVip: true,
-      isSub: true,
-      isOwner: true,
-      message: messageText,
-      channel: "#testchannel",
+      isSubscriber: true,
+      isBroadcaster: true,
     });
+    expect(onMessage).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        isMod: true,
+        isVip: true,
+        isSub: true,
+        isOwner: true,
+        message: messageText,
+        channel: "#testchannel",
+      }),
+    );
     expect(mockLogger.debug.mock.calls.flat().join("\n")).not.toContain("private-twitch-message");
   });
 
   it("should handle multiple message handlers for different accounts", async () => {
-    const messages1: TwitchChatMessage[] = [];
-    const messages2: TwitchChatMessage[] = [];
+    const messages1 = vi.fn();
+    const messages2 = vi.fn();
     const otherManager = new TwitchClientManager(mockLogger);
-    manager.onMessage((msg) => messages1.push(msg));
-    otherManager.onMessage((msg) => messages2.push(msg));
+    manager.onMessage(messages1);
+    otherManager.onMessage(messages2);
     await manager.getClient(testAccount);
     await otherManager.getClient(testAccount2);
     emit(0, "msg1");
     emit(1, "msg2");
-    expect(messages1).toEqual([expect.objectContaining({ message: "msg1" })]);
-    expect(messages2).toEqual([expect.objectContaining({ message: "msg2" })]);
+    expect(messages1).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ message: "msg1" }));
+    expect(messages2).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ message: "msg2" }));
   });
 
   describe("probeTwitch", () => {
@@ -561,6 +562,79 @@ describe("TwitchClientManager", () => {
         "test-client-id",
         "test123456789",
       );
+    });
+  });
+
+  describe("client manager registry", () => {
+    const cfg = makeTwitchTestConfig(testAccount);
+    type Manager = ReturnType<typeof getOrCreateClientManager>;
+    async function attachTransport(owner: Manager) {
+      const client = await owner.getClient(testAccount, cfg, "default");
+      owner.onMessage(vi.fn());
+      return { quit: vi.spyOn(client, "quit"), say: vi.spyOn(client, "say") };
+    }
+    async function retireManager() {
+      const owner = getOrCreateClientManager("default", mockLogger);
+      const transport = await attachTransport(owner);
+      const cleanup = createDeferred<void>();
+      const disconnect = owner.disconnectAll.bind(owner);
+      const disconnectSpy = vi.spyOn(owner, "disconnectAll").mockImplementation(async () => {
+        await disconnect();
+        await cleanup.promise;
+      });
+      return { owner, transport, cleanup, disconnectSpy, removal: removeClientManager("default") };
+    }
+    let retired: Awaited<ReturnType<typeof retireManager>>;
+    beforeEach(async () => {
+      retired = await retireManager();
+    });
+    afterEach(async () => {
+      retired.cleanup.resolve();
+      await retired.removal.catch(() => undefined);
+      await removeClientManager("default");
+    });
+
+    it.each(["resolves", "rejects"] as const)(
+      "retires immediately and preserves replacements when cleanup %s",
+      async (outcome) => {
+        const { owner, transport, cleanup, removal, disconnectSpy } = retired;
+        expect(disconnectSpy).toHaveBeenCalledOnce();
+        expect(transport.quit).toHaveBeenCalledOnce();
+        expect(getClientManager("default")).toBeUndefined();
+        const replacement = getOrCreateClientManager("default", mockLogger);
+        expect(replacement).not.toBe(owner);
+        if (outcome === "rejects") {
+          const error = new Error("disconnect failed");
+          const rejected = expect(removal).rejects.toBe(error);
+          cleanup.reject(error);
+          await rejected;
+        } else {
+          cleanup.resolve();
+          await expect(removal).resolves.toBeUndefined();
+        }
+        expect(getClientManager("default")).toBe(replacement);
+      },
+    );
+
+    it("keeps outbound delivery off a retired manager and sends through its replacement", async () => {
+      const { owner, transport: first, cleanup, removal } = retired;
+      const reconnect = vi.spyOn(owner, "getClient");
+      const sendText = (text: string) =>
+        twitchOutbound.sendText!({ to: "#testchannel", text, cfg, accountId: "default" });
+      await expect(sendText("while retiring")).rejects.toThrow(
+        "Client manager not found for account: default. Please start the Twitch gateway first.",
+      );
+      expect(reconnect).not.toHaveBeenCalled();
+      expect(first.say).not.toHaveBeenCalled();
+      const replacement = getOrCreateClientManager("default", mockLogger);
+      const transport = await attachTransport(replacement);
+      const result = await sendText("after restart");
+      expect(result.messageId).toEqual(expect.any(String));
+      expect(result.receipt?.platformMessageIds).toEqual([result.messageId]);
+      expect(transport.say).toHaveBeenCalledWith("testchannel", "after restart");
+      cleanup.resolve();
+      await expect(removal).resolves.toBeUndefined();
+      expect(getClientManager("default")).toBe(replacement);
     });
   });
 });
