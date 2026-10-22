@@ -82,18 +82,6 @@ select.settings-select:not([multiple]) {
   flex-wrap: nowrap;
 }
 
-.settings-control__sr-label {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
 /* The parent selector also wins over the shared .btn hover/active chrome. */
 .settings-segmented > .settings-segmented__btn {
   display: inline-flex;

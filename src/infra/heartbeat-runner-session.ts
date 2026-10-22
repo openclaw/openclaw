@@ -1,21 +1,11 @@
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import {
-  canonicalizeMainSessionAlias,
-  resolveAgentMainSessionKey,
-} from "../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { readSessionEntryInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  isSubagentSessionKey,
-  normalizeAgentId,
-  resolveAgentIdFromSessionKey,
-  toAgentStoreSessionKey,
-} from "../routing/session-key.js";
-import { resolveMainScopedEventSessionKey } from "./event-session-routing.js";
+import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
 import type { HeartbeatConfig } from "./heartbeat-config.js";
+import { resolveHeartbeatSessionTarget } from "./heartbeat-session-target.js";
 
 function resolveHeartbeatSessionKey(
   cfg: OpenClawConfig,
@@ -25,75 +15,20 @@ function resolveHeartbeatSessionKey(
   env: NodeJS.ProcessEnv = process.env,
 ) {
   const sessionCfg = cfg.session;
-  const scope = sessionCfg?.scope ?? "per-sender";
   const resolvedAgentId = normalizeAgentId(agentId);
-  const mainSessionKey =
-    scope === "global" ? "global" : resolveAgentMainSessionKey({ cfg, agentId: resolvedAgentId });
   const storePath = resolveSessionStorePathCore(sessionCfg?.store, {
     // A literal `global` row is global only inside the selected agent's store.
     // Falling back here leaks the default agent's route into secondary heartbeats.
     agentId: resolvedAgentId,
     env,
   });
-  const selectSession = (sessionKey = mainSessionKey, suppressOriginatingContext = false) => ({
-    sessionKey,
+  return resolveHeartbeatSessionTarget(
+    cfg,
+    resolvedAgentId,
     storePath,
-    suppressOriginatingContext,
-  });
-
-  if (scope === "global") {
-    return selectSession();
-  }
-
-  const resolveCandidate = (requestKey: string) => {
-    const candidate = toAgentStoreSessionKey({
-      agentId: resolvedAgentId,
-      requestKey,
-      mainKey: cfg.session?.mainKey,
-    });
-    if (isSubagentSessionKey(candidate)) {
-      return undefined;
-    }
-    const canonical = canonicalizeMainSessionAlias({
-      cfg,
-      agentId: resolvedAgentId,
-      sessionKey: candidate,
-    });
-    return canonical !== "global" &&
-      !isSubagentSessionKey(canonical) &&
-      resolveAgentIdFromSessionKey(canonical) === resolvedAgentId
-      ? canonical
-      : undefined;
-  };
-
-  // Guard: never route heartbeats to subagent sessions, regardless of entry path.
-  const forced = forcedSessionKey?.trim();
-  if (forced && isSubagentSessionKey(forced)) {
-    return selectSession(mainSessionKey, true);
-  }
-
-  const forcedCanonical = forced ? resolveCandidate(forced) : undefined;
-  if (forcedCanonical) {
-    return selectSession(
-      resolveMainScopedEventSessionKey({
-        cfg,
-        sessionKey: forcedCanonical,
-        agentId: resolvedAgentId,
-      }) ?? forcedCanonical,
-    );
-  }
-
-  const trimmed = heartbeat?.session?.trim() ?? "";
-  if (!trimmed || isSubagentSessionKey(trimmed)) {
-    return selectSession();
-  }
-
-  const normalized = normalizeLowercaseStringOrEmpty(trimmed);
-  if (normalized === "main" || normalized === "global") {
-    return selectSession();
-  }
-
-  return selectSession(resolveCandidate(trimmed) || mainSessionKey);
+    heartbeat?.session,
+    forcedSessionKey,
+  );
 }
 
 /** The heartbeat's event queue session and its stored row. */

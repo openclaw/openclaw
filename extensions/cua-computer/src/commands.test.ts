@@ -76,14 +76,12 @@ describe("cua-computer provider", () => {
     expect(getDesktopState).not.toHaveBeenCalled();
   });
 
-  it("advertises the macOS mapping only with a valid atomic app-provided endpoint", () => {
+  it("advertises platform actions and validates the atomic macOS app-provided endpoint", () => {
     const { session } = driver();
     const endpoint = macOsEndpoint();
     const provider = createTestProvider(session, "darwin", endpoint);
 
     expect(provider.isAvailable()).toBe(true);
-    expect(provider.capabilities().actions).toContain("get_window_state");
-    expect(provider.capabilities().actions).not.toContain("left_mouse_down");
     expect(provider.capabilities().features).toEqual({
       recording: true,
       agentCursor: false,
@@ -95,8 +93,24 @@ describe("cua-computer provider", () => {
     expect(passive.isAvailable()).toBe(true);
     const declared = passive.capabilities();
     expect(passive.capabilities()).toEqual(declared);
-    expect(declared.actions).toContain("get_window_state");
     expect(createDriver).not.toHaveBeenCalled();
+
+    for (const platform of ["darwin", "linux", "win32"] as const) {
+      const actions = createTestProvider(session, platform, endpoint).capabilities().actions;
+      expect(actions).toEqual(
+        expect.arrayContaining([
+          "screenshot",
+          "get_window_state",
+          "browser_download",
+          "replay_trajectory",
+          "invoke_menu",
+        ]),
+      );
+      expect(actions).not.toContain("hold_key");
+      expect(actions).not.toContain("wait");
+      expect(actions.includes("left_mouse_down")).toBe(platform === "linux");
+      expect(actions.includes("left_mouse_up")).toBe(platform === "linux");
+    }
 
     for (const [label, env] of invalidMacOsEndpoints()) {
       expect(createTestProvider(session, "darwin", env).isAvailable(), label).toBe(false);
