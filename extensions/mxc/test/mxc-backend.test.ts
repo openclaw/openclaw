@@ -39,6 +39,7 @@ vi.mock("node:child_process", async (importOriginal) => ({
   execFileSync: vi.fn(),
 }));
 
+// mock-isolation: backend fixtures control command results without launching sandbox processes.
 vi.mock("openclaw/plugin-sdk/process-runtime", () => ({ runCommandBuffered: spawnCommandMock }));
 
 vi.mock("../src/binary-resolver.js", () => ({

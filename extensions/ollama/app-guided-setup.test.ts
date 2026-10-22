@@ -42,26 +42,30 @@ async function withOllamaServer(
   const inspected: string[] = [];
   const unexpected: string[] = [];
   await withServer(
-    async (request, response) => {
-      const body = await text(request);
-      response.setHeader("content-type", "application/json");
-      const send = (payload: unknown, status = 200) =>
-        response.writeHead(status).end(JSON.stringify(payload));
-      if (request.url === "/api/ps" || request.url === "/api/tags") {
-        const models = request.url === "/api/ps" ? options.loaded : options.models;
-        send({
-          models: (models ?? [selected]).map((model) =>
-            typeof model === "string" ? { name: model } : model,
-          ),
-        });
-      } else if (request.url === "/api/show") {
-        inspected.push((JSON.parse(body) as { model: string }).model);
-        options.onShow?.();
-        send(options.show ?? showInfo, options.showStatus ?? 200);
-      } else {
-        unexpected.push(request.url ?? "");
-        response.writeHead(404).end();
-      }
+    (request, response) => {
+      void (async () => {
+        const body = await text(request);
+        response.setHeader("content-type", "application/json");
+        const send = (payload: unknown, status = 200) =>
+          response.writeHead(status).end(JSON.stringify(payload));
+        if (request.url === "/api/ps" || request.url === "/api/tags") {
+          const models = request.url === "/api/ps" ? options.loaded : options.models;
+          send({
+            models: (models ?? [selected]).map((model) =>
+              typeof model === "string" ? { name: model } : model,
+            ),
+          });
+        } else if (request.url === "/api/show") {
+          inspected.push((JSON.parse(body) as { model: string }).model);
+          options.onShow?.();
+          send(options.show ?? showInfo, options.showStatus ?? 200);
+        } else {
+          unexpected.push(request.url ?? "");
+          response.writeHead(404).end();
+        }
+      })().catch((error: unknown) => {
+        response.destroy(error instanceof Error ? error : new Error(String(error)));
+      });
     },
     (baseUrl) => run(baseUrl, inspected),
   );

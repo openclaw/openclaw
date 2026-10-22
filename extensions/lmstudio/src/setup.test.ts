@@ -47,6 +47,7 @@ const modelRef = "lmstudio/qwen3-8b-instruct";
 const baseUrl = "http://localhost:1234/v1";
 const keyAuth = { api: "openai-completions" as const, apiKey: authEnv };
 
+// mock-isolation: setup fixtures control model discovery and loading without HTTP requests.
 vi.mock("./models.fetch.js", () => ({
   fetchLmstudioModels: (...args: unknown[]) => fetchModels(...args),
   discoverLmstudioModels: vi.fn(),

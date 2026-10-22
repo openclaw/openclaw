@@ -546,10 +546,10 @@ it.each([false, true])("defines captionless audio with group=%s", (group) => {
     mediaType: "audio/ogg; codecs=opus",
   });
   if (group) {
+    expect(run.quietMatchText).toBeUndefined();
     expect(run).toMatchObject({
       input: "",
       quietInput: "",
-      quietMatchText: undefined,
       matchText: "WHATSAPP_QA_GROUP_AUDIO_TRANSCRIPT_OK",
       sendMode: audio("whatsapp-qa-group-audio.ogg"),
       quietSendMode: audio("whatsapp-qa-group-audio-quiet.ogg"),
