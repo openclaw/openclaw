@@ -104,9 +104,6 @@ function createUsageDetailRequest<T>(
     get status() {
       return status;
     },
-    get loading() {
-      return pending !== null;
-    },
     get read() {
       return task.read;
     },

@@ -17,7 +17,6 @@ export type UsageAggregates = SessionsUsageResult["aggregates"];
 
 export type UsageContextDetail = {
   weight: UsageSessionEntry["contextWeight"];
-  loading: boolean;
   read: Promise<PageReadResult> | null;
   status: PanelRefreshStatus;
 };

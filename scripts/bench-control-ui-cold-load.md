@@ -49,6 +49,21 @@ Online measurements.
 keep its build identity equal to the checkout head. This preserves a baseline
 bundle while production sources are edited.
 
+For a boot-weight comparison, use `--bundle-dir <base> --compare-bundle-dir <head>
+--runs 20 --untraced --cold-http-cache`. The runs alternate builds and restore
+each build's own warm state. Every run records `presentation.firstNonemptyTranscriptMs`
+and `presentation.firstEnabledComposerMs` from visible DOM observed on animation
+frames; these are readiness observations, not compositor paint timestamps.
+Keep profiling and the optional warm-reload probes out of this timing run.
+Console progress contains readiness and host load; full RPC and resource records
+are serialized to `summary.json` after all runs, outside the preview-server workload.
+
+`pnpm ui:check-performance --module-attribution --dist <build>` ranks the top
+30 emitted JavaScript modules in each route's preload graph. Add `--json` for all
+modules and mapping coverage. It gzips source-mapped generated ranges independently,
+so those scores identify expensive modules but are not additive transfer costs;
+the existing shipped gzip sidecars remain the route budget authority.
+
 Every reload replays the warm visit's persisted sidebar and trimmed v8 transcript
 (after unloading the app), local storage and session storage; the HTTP cache stays warm.
 

@@ -442,6 +442,17 @@ export function selectApplicableRuntimeConfig(params: {
   return inputConfig;
 }
 
+/** Select current runtime values without rebinding an explicit scoped config. */
+export function selectLiveRuntimeConfig(inputConfig: OpenClawConfig): OpenClawConfig;
+export function selectLiveRuntimeConfig(inputConfig?: OpenClawConfig): OpenClawConfig | undefined;
+export function selectLiveRuntimeConfig(inputConfig?: OpenClawConfig): OpenClawConfig | undefined {
+  return selectApplicableRuntimeConfig({
+    inputConfig,
+    runtimeConfig: runtimeConfigSnapshot,
+    runtimeSourceConfig: runtimeConfigSourceSnapshot,
+  });
+}
+
 /** Bind a retained consumer to its current runtime owner while preserving scoped configs. */
 export function createRuntimeConfigReader(inputConfig: OpenClawConfig): () => OpenClawConfig {
   const origin = getRuntimeConfigCapture(inputConfig)?.origin ?? inputConfig;

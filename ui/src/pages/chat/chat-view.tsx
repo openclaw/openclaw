@@ -237,7 +237,6 @@ function ChatComposerView(input: ChatViewInput) {
         card && destinations?.onOpenProgress
           ? {
               card,
-              showInChat: true,
               sessionStatus: input.props.selectedSession?.status,
               startedAt: input.props.selectedSession?.startedAt,
               endedAt: input.props.selectedSession?.endedAt,

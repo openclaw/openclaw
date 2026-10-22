@@ -32,7 +32,7 @@
    only when supported by the selected instrumentation.
 4. **Verify capture.** Apply the main skill's artifact rules. Save per-step trace
    JSON, CPU profile, source-mapped hotspots, screenshot, status, and errors.
-   Label trace/profiler overhead. `control-ui-cold-load-probes.ts` records Solid
+   Label trace/profiler overhead. `ui/src/test-helpers/control-ui-cold-load-probes.ts` records Solid
    pane render passes, explicit lifecycle notifications, and message delivery;
    fine-grained bindings and page snapshot computations are outside those render
    counts. Disclose instrumentation and simulated delays.
