@@ -92,10 +92,6 @@ function ReadBoundary(props: {
   error?: JSX.Element;
   children?: JSX.Element;
 }) {
-  const ready = () => {
-    latest(props.read);
-    return null;
-  };
   return (
     <Show when={props.scope} keyed>
       {/* A value-taking child lets keyed Show replace the error scope. */}
@@ -117,7 +113,7 @@ function ReadBoundary(props: {
           }
         >
           <Loading fallback={props.loading ?? null}>
-            {ready()}
+            {(latest(props.read), null)}
             {props.children}
           </Loading>
         </Errored>

@@ -39,7 +39,12 @@ import { resolveChannelAuthorization } from "./authorization.js";
 import { resolveTlonCitations } from "./cites.js";
 import { fetchInitData } from "./discovery.js";
 import { createChannelHistoryCache, fetchThreadHistory } from "./history.js";
-import { createTlonIngressMonitor, type TlonIngressLifecycle } from "./ingress.js";
+import {
+  createTlonIngressMonitor,
+  decodeTlonChannelsEvent,
+  decodeTlonChatEvent,
+  type TlonIngressLifecycle,
+} from "./ingress.js";
 import { buildTlonInboundMediaPrompt, downloadMessageImages } from "./media.js";
 import { prepareTlonGroupAdmission } from "./mentions.js";
 import {
@@ -313,7 +318,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
     }
 
     if (isThreadReply && parentId && channelNest) {
-      const threadHistory = await fetchThreadHistory(api, channelNest, parentId, 20, runtime);
+      const threadHistory = await fetchThreadHistory(api, channelNest, parentId, runtime);
       if (threadHistory.length > 0) {
         const threadContext = threadHistory
           .slice(-10)
@@ -331,7 +336,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
 
     if (isGroup && channelNest && isSummarizationRequest(messageText)) {
       try {
-        const history = await channelHistory.getChannelHistory(api, channelNest, 50, runtime);
+        const history = await channelHistory.getChannelHistory(api, channelNest, runtime);
         if (history.length === 0) {
           const noHistoryMsg =
             "I couldn't fetch any messages for this channel. It might be empty or there might be a permissions issue.";
@@ -685,38 +690,11 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
     turnAdoptionLifecycle?: TlonIngressLifecycle,
   ) => {
     try {
-      const eventRecord = asRecord(event);
-      const nest = readString(eventRecord, "nest");
-      if (!nest) {
+      const message = decodeTlonChannelsEvent(event);
+      if (!message || !watchedChannels.has(message.nest)) {
         return;
       }
-
-      if (!watchedChannels.has(nest)) {
-        return;
-      }
-
-      const response = asRecord(eventRecord?.response);
-      if (!response) {
-        return;
-      }
-
-      const post = asRecord(response.post);
-      const rPost = asRecord(post?.["r-post"]);
-      const set = asRecord(rPost?.set);
-      const reply = asRecord(rPost?.reply);
-      const replyPayload = asRecord(reply?.["r-reply"]);
-      const replySet = asRecord(replyPayload?.set);
-      const essay = asRecord(set?.essay);
-      const memo = asRecord(replySet?.memo);
-      const content = memo ?? essay;
-      if (!content) {
-        return;
-      }
-      const isThreadReply = Boolean(memo);
-      const messageId = isThreadReply ? readString(reply, "id") : readString(post, "id");
-      if (!messageId) {
-        return;
-      }
+      const { nest, messageId, content, isThreadReply, messageSet } = message;
 
       const senderShip = normalizeShip(readString(content, "author") ?? "");
       if (!senderShip || senderShip === botShipName) {
@@ -756,7 +734,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
           botShipName,
           botNickname,
           rawText,
-          messageSeal: isThreadReply ? asRecord(replySet?.seal) : asRecord(set?.seal),
+          messageSeal: asRecord(messageSet?.seal),
           isThreadReply,
           hasParticipatedInThread: participatedThreads.has,
           getSettings: () => settingsState.currentSettings,
@@ -884,22 +862,11 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
         }
         return;
       }
-      const eventRecord = asRecord(event);
-      if (!eventRecord) {
+      const message = decodeTlonChatEvent(event);
+      if (!message) {
         return;
       }
-
-      const whom = eventRecord.whom; // DM partner ship or club ID
-      const messageId = readString(eventRecord, "id");
-      const response = asRecord(eventRecord.response);
-      if (!messageId || !response) {
-        return;
-      }
-
-      const essay = asRecord(asRecord(response.add)?.essay);
-      if (!essay) {
-        return;
-      }
+      const { whom, messageId, essay } = message;
 
       const authorShip = normalizeShip(readString(essay, "author") ?? "");
       const partnerShip = extractDmPartnerShip(whom);

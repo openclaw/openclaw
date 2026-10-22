@@ -343,6 +343,11 @@ without needing the broader `operator.write` scope. If the original grant has
 been revoked, recovery records an interruption and a notice in the session
 instead of repeatedly retrying the same input. Send a new authenticated message
 after access is restored to continue.
+If the recorded source no longer matches the session or interrupted input,
+recovery also retires that stale input with one local interruption notice.
+The incoming message can then continue normally without resetting the session.
+Pending replies, harness completions, and independent runs retain their existing
+recovery protection.
 Older interrupted turns without a recorded authorization source remain restricted;
 send a fresh authenticated message to continue privileged work. Session ownership
 or a saved display name never grants recovery permissions.

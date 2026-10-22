@@ -1,5 +1,39 @@
 # Team-shaped synthetic state
 
+## Gateway startup and restart acceptance
+
+Use `scripts/bench-gateway-startup.ts` and `scripts/bench-gateway-restart.ts`
+against an exact-head build and isolated synthetic state. Record the Node version,
+source SHA, workload case, host load, and build command. The `default` case is the
+primary workload; use `fiftyPlugins` to check plugin scaling when that owner changes.
+
+Keep fresh-process startup and in-process restart separate. Startup must reach
+HTTP readiness and successfully serve the benchmark's WebSocket session RPC;
+listening alone is insufficient. Restart must complete the supported restart
+signal and recover `/readyz`. Record completion, readiness, session RPC, downtime,
+process-tree CPU, peak RSS, and startup/restart trace phases where available.
+
+Before changing production code, count operations and capture a separate CPU
+profile of startup, including worker threads. Use the frozen SQL workload for
+boot, restart, and warmed-turn SQL statements, worker requests, and main-thread SQL.
+Do not compare profiled timings with unprofiled timings, or call moving work to a
+worker or after readiness a reduction in total work.
+
+For an A/B comparison, interleave at least five baseline and five candidate samples
+per workload (ABAB), with identical runtime, build mode, fixtures, and probe settings.
+Report median, p95, and min–max; report fresh startup separately from warm restart.
+Use the campaign's exclusive timing lock and start each timed sample only below
+its one-minute load limit. After a one-hour capacity wait, report operation counts
+and profile evidence with latency explicitly unmeasured.
+
+Accept a change only when it removes measured work and improves median readiness
+or CPU by at least 5%, without worsening another user-facing median or p95.
+Investigate smaller adverse differences instead of claiming equivalence from
+spread. A 20% regression in any cell stops the change. Boot/restart SQL and main
+SQL must hold or fall; warmed-turn SQL and requests must not increase.
+Migrations, credential custody, admission, and required integrity checks remain
+before the operations they protect.
+
 ## Diagnostic heap profile sanitization
 
 `diagnostic-profile-measure.ts` measures the production diagnostics owners on an

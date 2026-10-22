@@ -18,10 +18,10 @@ import {
   patchConfigHealthEntryToStore,
 } from "./io.health-state.js";
 import { createConfigIO } from "./io.js";
+import { promoteConfigSnapshotToLastKnownGoodCore } from "./io.observe-promotion.js";
 import {
   maybeRecoverSuspiciousConfigRead,
   maybeRecoverSuspiciousConfigReadSync,
-  promoteConfigSnapshotToLastKnownGoodCore,
   recoverConfigFromLastKnownGoodCore,
 } from "./io.observe-recovery.js";
 import {
@@ -233,6 +233,9 @@ describe("config observe recovery", () => {
   async function lastGoodCase() {
     const fixture = makeDeps(home);
     const snapshot = await makeSnapshot(fixture.configPath, recoverableCoreConfig);
+    snapshot.raw = `// Preserve authored JSON5 during last-good recovery.
+${snapshot.raw}`;
+    await fsp.writeFile(fixture.configPath, snapshot.raw);
     expect(await promoteConfigSnapshotToLastKnownGoodCore({ ...fixture, snapshot })).toBe(true);
     const brokenRaw = "{ gateway: { mode: 123 } }\n";
     await fsp.writeFile(fixture.configPath, brokenRaw);
@@ -360,11 +363,13 @@ describe("config observe recovery", () => {
   });
 
   it.each(["load", "snapshot"] as const)(
-    "%s recovery clears env vars from the discarded clobbered config",
+    "%s restores JSON5 backup bytes and clears discarded config env vars",
     async (method) => {
       const env: NodeJS.ProcessEnv = {};
       const { io, configPath } = createTestConfigIO(home, vi.fn(), { env });
       await seedConfigBackup(configPath, recoverableCoreConfig);
+      const backupRaw = '{ // Authored JSON5 backup\n gateway: { mode: "local", },\n}\n';
+      await fsp.writeFile(`${configPath}.bak`, backupRaw);
       await writeConfigRaw(configPath, {
         meta: { lastTouchedVersion: "2026.5.28" },
         env: { vars: { OPENCLAW_CLOBBER_ONLY: "bad" } },
@@ -375,6 +380,7 @@ describe("config observe recovery", () => {
           : (await io.readConfigFileSnapshot({ recoverSuspicious: true })).config;
       expect(config.gateway?.mode).toBe("local");
       expect(env.OPENCLAW_CLOBBER_ONLY).toBeUndefined();
+      await expectRaw(configPath, backupRaw);
     },
   );
 
@@ -754,7 +760,10 @@ describe("config observe recovery", () => {
     const { deps, configPath } = makeDeps(home);
     const original = await makeSnapshot(configPath, recoverableCoreConfig);
     expect(await promoteConfigSnapshotToLastKnownGoodCore({ deps, snapshot: original })).toBe(true);
-    const selected = await makeSnapshot(configPath, { gateway: { mode: "remote" } });
+    const selected = await makeSnapshot(configPath, {
+      ...recoverableCoreConfig,
+      gateway: { ...recoverableCoreConfig.gateway, mode: "remote" },
+    });
     const replacementRaw = '{"gateway":{"mode":"local","port":18721}}';
     const racingDeps = withAsyncFs(deps, {
       stat: (async (...args: Parameters<typeof fsp.stat>) => {

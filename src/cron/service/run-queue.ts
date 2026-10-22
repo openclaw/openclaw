@@ -326,6 +326,7 @@ export async function drainCronRunQueue(state: CronServiceState): Promise<void> 
             preparingAgentIds: preparingCronAgentIds(state.deps.env),
             requests: getCronRunQueueRequests(state, { includePendingEvents: true }),
             hostProcessId: currentPluginCommandHostProcessId(),
+            pluginCommandHosts: state.deps.resolvePluginCommandScheduleHosts?.(),
           },
         }),
       {

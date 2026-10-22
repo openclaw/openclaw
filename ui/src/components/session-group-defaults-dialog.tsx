@@ -32,7 +32,7 @@ import { Popover, type PopoverHandle } from "./solid/popover.tsx";
 registerEnglishCatalog(registerSessionOrganizationEnglish);
 registerEnglishCatalog(registerNewSessionSetupEnglish);
 
-export type SessionGroupDefaults = { cwd: string; worktree: boolean };
+type SessionGroupDefaults = { cwd: string; worktree: boolean };
 type RepositoryStatus = WorktreeRepositoryStatus | "checking" | "restricted";
 
 type Options = {

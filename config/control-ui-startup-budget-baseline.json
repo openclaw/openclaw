@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 325081,
-  "reason": "Solid 2 action/optimistic runtime adoption, W-SOLID2-RECIPES; offset tracked by HF-STARTUP-BUDGET",
-  "updatedAt": "2026-10-21"
+  "startupJsGzipBytes": 315737,
+  "reason": "Narrow New Session metadata imports after header deferral; preserve the stricter startup baseline",
+  "updatedAt": "2026-10-22"
 }

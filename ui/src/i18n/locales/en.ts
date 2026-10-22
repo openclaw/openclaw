@@ -171,6 +171,7 @@ export const en: TranslationMap & {
   commandPalette: TranslationMap;
   palette: TranslationMap & {
     placeholder: string;
+    attachmentPrompt: string;
     categories: TranslationMap & { navigation: string };
   };
   sessionsView: TranslationMap &
@@ -1067,11 +1068,6 @@ export const en: TranslationMap & {
     root: "<root>",
     itemCount: "[{count} item]",
     itemCountPlural: "[{count} items]",
-    form: "Form",
-    raw: "Raw",
-    formUnsafeTitle: "Form view can't safely edit some fields",
-    rawTitle: "Edit raw JSON/JSON5 config",
-    rawUnavailableTitle: "Raw mode unavailable for this snapshot",
     open: "Open",
     fileOpenedOnGateway: "Configuration file opened on Gateway host.",
     applying: "Applying…",
@@ -1098,11 +1094,8 @@ export const en: TranslationMap & {
     autoSaveConflict: "Settings changed elsewhere",
     retry: "Retry",
     applyChanges: "Apply changes",
-    rawDiscard: "Discard",
     reloadBlocked: "Finish saving or discard pending config changes before reloading.",
     rawDraftBlocksApply: "Save or discard edits in the Raw editor before applying changes.",
-    rawDraftPendingFormTitle:
-      "Unsaved raw config edits — save or discard them before switching to Form.",
     rawDraftBlocksFormEdit:
       "Unsaved raw config edits could not be parsed; resolve them in the Raw editor before changing settings.",
     rawDraftUnverified:
@@ -1110,7 +1103,6 @@ export const en: TranslationMap & {
     invalidConfig: "Your configuration is invalid. Some settings may not work as expected.",
     dismissWarning: "Don't remind again",
     viewPendingChangesRaw: "View pending changes",
-    rawDiffUnavailable: "Changes detected (JSON diff not available)",
     hideEnvValues: "Hide env values",
     revealEnvValues: "Reveal env values",
     peek: "Peek",
@@ -1119,7 +1111,6 @@ export const en: TranslationMap & {
     formUnsafeCountPlural: "{count} settings in this config can only be edited as text: {paths}",
     formUnsafeMore: "+{count} more",
     openRawEditor: "Open Raw editor",
-    rawConfig: "Raw config (JSON/JSON5)",
     secretCount: "{count} secret",
     secretCountPlural: "{count} secrets",
     redacted: "redacted",
@@ -1916,6 +1907,7 @@ export const en: TranslationMap & {
   commandPalette: {},
   palette: {
     placeholder: "Search or start a task…",
+    attachmentPrompt: "What would you like to do with these files?",
     categories: { navigation: "Navigation" },
   },
   dreaming: {},
@@ -2268,6 +2260,7 @@ export const en: TranslationMap & {
       source: "Show source",
       copySource: "Copy source",
       expand: "Expand diagram",
+      expandNamed: "Expand diagram: {title}",
       rendering: "Rendering diagram…",
       error: "This diagram could not be rendered. Check the source or simplify the diagram.",
       rendererError:
@@ -2437,6 +2430,7 @@ export const en: TranslationMap & {
       serverUpdatedTitle: "Server updated",
       serverUpdatedRefresh: "Refresh for full capabilities",
       threads: "Sessions",
+      pinned: "Pinned",
       otherSessions: "Other",
       groups: "Groups",
       coding: "Coding",

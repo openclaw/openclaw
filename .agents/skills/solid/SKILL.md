@@ -21,7 +21,7 @@ For async reads, mutations, keyed projections, lazy components, or coordinated l
 4. **One implementation per registered tag.** Native custom elements and Solid callers share one renderer through `defineSolidBridge` in `ui/src/lib/solid-bridge.ts`. Use its returned component in JSX so the host has one lifecycle owner. → [components](references/components.md)
 5. **One renderer per DOM region**, and one lifecycle owner per overlay surface. → [overlays](references/overlays.md)
 6. **Derive, don't synchronize.** `createMemo` before `createSignal`; no copies of owner state; no defensive guards for states the owner already excludes. Prefer smaller code with fewer owners.
-7. **Replace controller lifecycles at their owner.** Follow the [controller-to-Solid recipe](references/idioms.md#replace-rendering-controllers), including its worked example. Delete the class and host adapter wiring together; do not wrap a controller in revision signals as the final design.
+7. **Keep rendering controller lifecycles out.** Production Control UI rendering controllers and host-update contracts have been removed and are guarded. The [controller-to-Solid recipe](references/idioms.md#replace-rendering-controllers) explains the boundary for new integrations: plain domain owners retain authority; Solid owns presentation and lifecycle.
 
 ## Component skeleton
 

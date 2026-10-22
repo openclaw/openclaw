@@ -381,7 +381,6 @@ export function resolveGatewayPersonalToolParticipant(
   runtimeIdentity?: AgentRuntimeIdentity,
   options?: {
     requireSingleParticipant?: boolean;
-    allowTurnOwner?: () => boolean;
     allowMissingRegistry?: boolean;
   },
 ) {
@@ -389,7 +388,6 @@ export function resolveGatewayPersonalToolParticipant(
   if (caller?.personalToolParticipants) {
     return caller.personalToolParticipants.resolve(
       options?.requireSingleParticipant ? undefined : caller.personalToolUser,
-      options,
     );
   }
   if (caller?.personalToolUser !== undefined) {
@@ -400,7 +398,7 @@ export function resolveGatewayPersonalToolParticipant(
     if (!registered) {
       return undefined;
     }
-    const participant = registered.participants?.resolve(undefined, options);
+    const participant = registered.participants?.resolve();
     return (
       participant && {
         ...participant,

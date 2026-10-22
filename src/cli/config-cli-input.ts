@@ -15,9 +15,9 @@ import { SecretProviderSchema } from "../config/zod-schema.core.js";
 import { decodeUtf8Input } from "../infra/utf8-input.js";
 import {
   formatExecSecretRefIdValidationMessage,
+  isValidExecSecretRefId,
   isValidFileSecretRefId,
   isValidSecretProviderAlias,
-  validateExecSecretRefId,
 } from "../secrets/ref-contract.js";
 import { resolveConfigSecretTargetByPath } from "../secrets/target-registry.js";
 import {
@@ -121,7 +121,7 @@ function parseSecretRefBuilder(params: {
       `${params.fieldPrefix}.id must be an absolute JSON pointer (or "value" for singleValue mode).`,
     );
   }
-  if (source === "exec" && !validateExecSecretRefId(id).ok) {
+  if (source === "exec" && !isValidExecSecretRefId(id)) {
     throw new Error(formatExecSecretRefIdValidationMessage());
   }
   return { source, provider, id };

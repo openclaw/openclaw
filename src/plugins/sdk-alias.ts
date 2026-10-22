@@ -987,14 +987,12 @@ export function buildPluginLoaderAliasMap(
 }
 
 export function resolvePluginRuntimeModulePathWithDiagnostics(
-  params: LoaderModuleResolveParams = {},
+  params: Omit<LoaderModuleResolveParams, "cwd" | "moduleUrl"> = {},
 ): PluginRuntimeModuleResolution {
   const cache = getPluginCache().sdk.runtimeModules;
   const key = JSON.stringify([
     params.modulePath,
     params.argv1 ?? process.argv[1],
-    params.cwd,
-    params.moduleUrl,
     resolveDevSourceRootParam(params),
     params.pluginSdkResolution,
     process.cwd(),

@@ -121,6 +121,12 @@ The Gateway blocks writes that look like accidental clobbers - dropping the effe
 allows destructive changes. Mode checks resolve `$include` and environment references
 first. Missing `meta` is recorded as a write anomaly. Promotion to last-known-good is
 skipped when a candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
+Suspicious external reductions and stub-shaped snapshots also leave the trusted
+recovery copy unchanged during startup and hot reload. An ordinary accepted edit
+to an already-truncated file does not approve that earlier loss for replacing the
+backup, so Doctor can still restore the intact configuration.
+The health owner carries that anomaly across automatic metadata stamping and later
+reads; stamping a missing `meta` section does not restore the lost settings.
 
 ## Configuration pages
 

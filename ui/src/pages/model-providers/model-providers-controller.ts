@@ -605,14 +605,7 @@ export function createModelProviders(
       ...values,
       catalogReceipt: core.catalogReceipt,
       catalogDiscovering: core.catalogLoading || Boolean(catalog?.pendingProviders?.length),
-      // A provider row that reports its own failed discovery already explains the gap.
-      catalogDiscoveryError:
-        core.catalogLoading ||
-        cards.some(
-          (card) => card.catalogStatus === "unavailable" || card.catalogStatus === "auth-rejected",
-        )
-          ? null
-          : (core.catalogError ?? data.catalogError),
+      catalogDiscoveryError: core.catalogLoading ? null : (core.catalogError ?? data.catalogError),
       configBusy: modelProviderConfigBusy(context),
       canViewProfiles: profilesVisible,
       mutationBlockedReason: mutationBlockedReason(),

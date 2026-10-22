@@ -103,7 +103,9 @@ Commands requesting `runtimeCapabilities: ["subagents", "scheduledTurns"]` also
 declare `scheduledTurns` in `contracts.commandRuntimeCapabilities` and
 `contracts.sessionScheduledTurns: ["requester-command"]`. Probe
 `api.runtime.capabilities` for `command-scheduled-turns-v1` before registering
-such a command: hosts without it reject the registration. See
+such a command: hosts without it reject the registration. Hosts that also
+advertise `command-scheduled-turns-restart-v1` keep accepted schedules across a
+Gateway restart. See
 [requester-admitted scheduled commands](/plugins/sdk-runtime/background-work#requester-admitted-scheduled-commands).
 
 Runtime `api.registerTool(...)` registrations must match `contracts.tools`. Tool discovery uses this list to load only the plugin runtimes that can own the requested tools.

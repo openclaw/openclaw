@@ -19,7 +19,7 @@ import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerSystemsEnglish } from "../../i18n/locales/en-systems.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { formatByteSize, formatTimeAgo } from "../../lib/format.ts";
+import { formatResourceBytes as bytes, formatTimeAgo } from "../../lib/format.ts";
 import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
@@ -45,15 +45,6 @@ import {
 import "../../styles/systems.css";
 
 registerEnglishCatalog(registerSystemsEnglish);
-
-function bytes(value: number): string {
-  return formatByteSize(value, {
-    style: "legacy-binary",
-    separator: " ",
-    maxUnit: "tera",
-    fractionDigits: (size, unit) => (unit === "tera" || size < 10 ? 1 : 0),
-  });
-}
 
 function metricSamples(
   history: readonly SystemsTelemetrySample[],

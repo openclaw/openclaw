@@ -60,7 +60,7 @@ import {
   createScheduledGatewayRunner,
   fenceScheduledGatewayContextResolver,
 } from "./scheduled-run-gateway-context.js";
-import { createGatewayCronAgentJobRunner } from "./server-cron-agent-run.js";
+import { createGatewayCronAgentDeps } from "./server-cron-agent-run.js";
 import { finalizeCronCompletionAnnouncement, pickDefined } from "./server-cron-completion.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 import {
@@ -354,7 +354,7 @@ export function buildGatewayCronService(params: {
     const revision = ++legacyProjectionRevision;
     const cfg = getRuntimeConfig();
     try {
-      const jobs = await readHeartbeatSummarySnapshot(cfg);
+      const jobs = await readHeartbeatSummarySnapshot(cfg, storePath);
       if (
         legacyProjectionClosed ||
         revision !== legacyProjectionRevision ||
@@ -376,7 +376,7 @@ export function buildGatewayCronService(params: {
       await Promise.all([
         reconcileExitWatchers(),
         reconcileStreamWatchers(),
-        refreshLegacyMonitorProjection(),
+        started ? refreshLegacyMonitorProjection() : undefined,
       ]);
     },
     isExecutionIdle: (job, ownSessionKey, ownReplyOperation) => {
@@ -433,7 +433,7 @@ export function buildGatewayCronService(params: {
     runSchedulerOwned,
     enqueueSessionEvent,
     deferSessionEvent,
-    runIsolatedAgentJob: createGatewayCronAgentJobRunner({
+    ...createGatewayCronAgentDeps({
       deps: params.deps,
       storePath,
       resolveCronAgent,

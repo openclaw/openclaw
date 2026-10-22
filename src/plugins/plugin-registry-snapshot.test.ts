@@ -366,7 +366,6 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     await markRetainedManagedNpmInstall({
       packageDir: codexDir,
       pluginId: "codex",
-      retainedAt: "2026-06-21T00:00:00.000Z",
       reason: "test-retained-generation",
     });
     const staleIndex = loadInstalledPluginIndex({ config, env, stateDir, installRecords: {} });

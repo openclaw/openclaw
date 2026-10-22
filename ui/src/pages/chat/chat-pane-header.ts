@@ -54,7 +54,7 @@ import type {
   ChatPaneHeaderPresentation,
   ChatPaneHeaderProps,
 } from "./components/chat-pane-header.types.ts";
-import { canManageChatSessionSharing } from "./components/chat-session-sharing.solid.tsx";
+import { canManageChatSessionSharing } from "./components/chat-session-sharing-shared.tsx";
 import { hasDirectSessionRun } from "./run-lifecycle.ts";
 import {
   isSidebarSlotVisible,

@@ -174,7 +174,7 @@ function addLogoutTarget(
   existing.profileIds = [...new Set([...existing.profileIds, ...profileIds])];
 }
 
-export function collectProviderUsage(
+function collectProviderUsage(
   summary: UsageSummary | null,
 ): Map<string, { displayName: string; snapshot: ProviderUsageSnapshot }> {
   const result = new Map<string, { displayName: string; snapshot: ProviderUsageSnapshot }>();

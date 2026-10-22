@@ -41,13 +41,10 @@ import type { GatewayClient } from "./types.js";
 
 const mocks = vi.hoisted(() => ({ readMediaBuffer: vi.fn(), upstreamFork: vi.fn() }));
 
-// Queued sources stay idle: this boundary only cuts history and settles pending work.
+// mock-isolation: Queued sources stay idle while this boundary cuts history and settles work.
 vi.mock("../../auto-reply/reply/queue/drain.js", () => ({
   clearFollowupDrainCallback: vi.fn(),
   dropAbortedFollowups: () => {
-    throw new Error("Unexpected followup drain");
-  },
-  kickFollowupDrainIfIdle: () => {
     throw new Error("Unexpected followup drain");
   },
   rememberFollowupDrainCallback: () => {

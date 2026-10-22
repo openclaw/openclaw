@@ -134,7 +134,7 @@ const DOM_ISLANDS = new Set([
   "ui/src/components/link-reader-markdown.tsx", // parsed article HTML
   "ui/src/components/link-reader-panel-owner.ts", // rendered article anchors
   "ui/src/components/link-reader-prefetch-owner.ts", // rendered Markdown links
-  "ui/src/components/lobster-image.ts", // parsed sprite SVG
+  "ui/src/components/lobster-image.ts", // computed-style snapshot of trusted SVG artwork
   "ui/src/components/markdown-blocks-owner.ts",
   "ui/src/components/markdown-code-blocks.ts",
   "ui/src/components/markdown-mermaid.tsx",

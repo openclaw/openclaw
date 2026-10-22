@@ -182,10 +182,6 @@ export function ProfilePage() {
 
   const identityReceipt = createMemo(() => view().identityReceipt);
   const identityRead = createMemo(() => identityReceipt().result);
-  const readIdentity = () => {
-    latest(identityRead);
-    return null;
-  };
   const IdentityContent = (props: { pending: boolean }) => (
     <Show
       when={view().selfUser && view().ownProfile}
@@ -338,7 +334,7 @@ export function ProfilePage() {
               )}
             >
               <Loading on={latest(identityScope)} fallback={<IdentityContent pending={true} />}>
-                {readIdentity()}
+                {(latest(identityRead), null)}
                 <IdentityContent pending={isPending(identityRead)} />
               </Loading>
             </Errored>
