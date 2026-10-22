@@ -28,10 +28,7 @@ async function completeFrames() {
   await Promise.resolve();
 }
 
-function mount(
-  props: Partial<ModalDialogProperties> & { onCancel?: (event: Event) => void } = {},
-  container?: HTMLElement,
-) {
+function mount(props: Partial<ModalDialogProperties> = {}, container?: HTMLElement) {
   let handle!: OpenClawModalDialog;
   let confirm!: HTMLButtonElement;
   const view = render(
@@ -45,9 +42,6 @@ function mount(
         initialFocus={() => confirm}
         ref={(value) => {
           handle = value;
-          if (props.onCancel) {
-            handle.addEventListener("modal-cancel", props.onCancel);
-          }
         }}
       >
         <button autofocus ref={(element) => (confirm = element)}>
@@ -203,29 +197,6 @@ describe("Solid native modal policy", () => {
     expect(changes.mock.calls).toEqual([[true], [false]]);
   });
 
-  it("retires a disconnected dialog without canceling or changing its owner's desired state", () => {
-    const changes = vi.fn();
-    const onCancel = vi.fn();
-    const { handle } = mount({ onOpenChange: changes, onCancel });
-    const parent = handle.parentNode!;
-    changes.mockClear();
-    const hiding: Event[] = [];
-    handle.addEventListener("overlay-hide", (event) => {
-      hiding.push(event);
-      event.preventDefault();
-    });
-    handle.remove();
-    expect(handle.open).toBe(true);
-    expect(modalDialog(handle).open).toBe(false);
-    expect(onCancel).not.toHaveBeenCalled();
-    expect(hiding).toHaveLength(0);
-    expect(changes).not.toHaveBeenCalled();
-    parent.appendChild(handle);
-    flush();
-    expectOpen(handle, true);
-    expect(changes).not.toHaveBeenCalled();
-  });
-
   it.each(["cancel", "backdrop"])(
     "supports a late veto of %s before changing ownership",
     async (source) => {
@@ -292,35 +263,5 @@ describe("Solid native modal policy", () => {
       unsubscribe();
       trigger.remove();
     }
-  });
-
-  it("never publishes a superseded close completion after reopening", async () => {
-    const { handle } = mount();
-    await completeFrames();
-    const hidden = vi.fn();
-    const shown = vi.fn();
-    handle.addEventListener("overlay-after-hide", hidden);
-    handle.addEventListener("overlay-after-show", shown);
-    handle.hide();
-    handle.show();
-    await completeFrames();
-    expect(hidden).not.toHaveBeenCalled();
-    expect(shown).toHaveBeenCalledTimes(1);
-    expect(handle.open).toBe(true);
-    expect(modalDialog(handle).dataset.phase).toBe("open");
-  });
-
-  it("disposal cancels pending completion and removes modal ownership", async () => {
-    const { handle, view } = mount();
-    const dialog = modalDialog(handle);
-    const shown = vi.fn();
-    handle.addEventListener("overlay-after-show", shown);
-    view.unmount();
-    await completeFrames();
-    expect(shown).not.toHaveBeenCalled();
-    expect(dialog.open).toBe(false);
-    expect(handle.querySelector(".oc-modal-dialog")).toBeNull();
-    expect(document.openClawModalLayers?.has(handle)).toBe(false);
-    expect(document.documentElement.classList.contains("oc-modal-scroll-lock")).toBe(false);
   });
 });

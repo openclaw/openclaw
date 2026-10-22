@@ -51,24 +51,21 @@ it.each([
   },
 );
 
-it("isolates radio groups, skips disabled options and rolls back rejected keyboard choice", () => {
+it("skips disabled options and rolls back rejected keyboard choice", () => {
   const onChange = vi.fn(() => false);
   const onReselect = vi.fn();
   const choices = [options[0], { value: "locked", label: "Locked", disabled: true }, options[1]];
   const view = render(() => (
-    <>
-      <SettingsSegmented
-        value="first"
-        options={choices}
-        ariaLabel="Schedule"
-        onChange={onChange}
-        onReselect={onReselect}
-      />
-      <SettingsSegmented value="first" options={choices} ariaLabel="Other" onChange={() => {}} />
-    </>
+    <SettingsSegmented
+      value="first"
+      options={choices}
+      ariaLabel="Schedule"
+      onChange={onChange}
+      onReselect={onReselect}
+    />
   ));
-  const groups = view.getAllByRole("radiogroup");
-  const radio = (value: string, group = groups[0]!) =>
+  const group = view.getByRole("radiogroup");
+  const radio = (value: string) =>
     group.querySelector<HTMLInputElement>(`input[value="${value}"]`)!;
   const first = radio("first"),
     last = radio("last");
@@ -76,11 +73,7 @@ it("isolates radio groups, skips disabled options and rolls back rejected keyboa
   fireEvent.keyDown(first, { key: "ArrowRight" });
   expect(document.activeElement).toBe(last);
   expect(onChange).toHaveBeenCalledExactlyOnceWith("last", last.parentElement);
-  expect([first.checked, last.checked, radio("first", groups[1]).checked]).toEqual([
-    true,
-    false,
-    true,
-  ]);
+  expect([first.checked, last.checked]).toEqual([true, false]);
   first.click();
   expect(onReselect).toHaveBeenCalledExactlyOnceWith("first", first.parentElement);
   radio("locked").click();

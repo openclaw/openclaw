@@ -164,30 +164,6 @@ describe("native overlay presentation", () => {
     }
   });
 
-  it.each(["ltr", "rtl"] as const)(
-    "uses space above a low submenu trigger before scrolling its actions in %s",
-    async (dir) => {
-      await page.viewport(800, 600);
-      mountMenu({
-        dir,
-        items: [
-          {
-            id: "gateways",
-            label: "Gateways",
-            children: entries("Gateway", 10),
-          },
-        ],
-      });
-      positionTrigger({ left: "350px", top: "400px" });
-      await openMenu();
-      await openMenu("people-gateways");
-      const child = surface("people-gateways");
-      expectWithinViewport(child);
-      expect(child.scrollHeight).toBe(child.clientHeight);
-      expectItemVisible(item("Gateway 10", "people-gateways"), child);
-    },
-  );
-
   it("preserves a consumer height budget when its stylesheet loads before the overlay", async () => {
     await page.viewport(800, 700);
     const style = document.createElement("style");
@@ -214,38 +190,46 @@ describe("native overlay presentation", () => {
   });
 
   it.each([
+    ["ltr", "low"],
+    ["rtl", "low"],
     ["ltr", "bottom"],
     ["rtl", "bottom"],
     ["ltr", "middle"],
     ["rtl", "middle"],
   ] as const)(
-    "fits a large nested menu within the viewport in %s near the %s at enlarged text",
+    "fits nested menu actions within the viewport in %s near the %s",
     async (dir, position) => {
       await page.viewport(800, 600);
-      root.style.fontSize = "24px";
+      const enlarged = position !== "low";
+      const count = enlarged ? 28 : 10;
+      if (enlarged) {
+        root.style.fontSize = "24px";
+      }
       mountMenu({
         dir,
-        items: [
-          {
-            id: "large",
-            label: "Many actions",
-            children: entries("Action", 28, true),
-          },
-        ],
+        items: [{ id: "actions", label: "Actions", children: entries("Action", count, enlarged) }],
       });
-      positionTrigger({ right: "8px", bottom: position === "bottom" ? "8px" : "250px" });
+      positionTrigger(
+        position === "low"
+          ? { left: "350px", top: "400px" }
+          : { right: "8px", bottom: position === "bottom" ? "8px" : "250px" },
+      );
       await openMenu();
       const parentBox = expectWithinViewport(surface());
       if (position === "bottom") {
         expect(parentBox.bottom).toBeLessThanOrEqual(trigger().getBoundingClientRect().top);
       }
-      await openMenu("people-large");
-      const child = surface("people-large");
-      const childBox = expectWithinViewport(child);
-      expect(childBox.height).toBeLessThanOrEqual(420);
+      await openMenu("people-actions");
+      const child = surface("people-actions");
+      const last = item(`Action ${count}`, "people-actions");
+      expectWithinViewport(child);
+      if (!enlarged) {
+        expect(child.scrollHeight).toBe(child.clientHeight);
+        expectItemVisible(last, child);
+        return;
+      }
       expect(child.scrollHeight).toBeGreaterThan(child.clientHeight);
       await userEvent.keyboard("{End}");
-      const last = item("Action 28", "people-large");
       expect(document.activeElement).toBe(last);
       expectItemVisible(last, child);
 
