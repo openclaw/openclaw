@@ -21,6 +21,12 @@ describe("readWebProviderEnvValue", () => {
       "Bearer token value",
     );
   });
+
+  it("continues past normalized-empty values and keeps the first usable entry", () => {
+    const values = { EMPTY: " \0🙂 ", FIRST: " first ", SECOND: "second" };
+    expect(readWebProviderEnvValue(["MISSING", "EMPTY", "FIRST", "SECOND"], values)).toBe("first");
+    expect(readWebProviderEnvValue(["MISSING", "EMPTY"], values)).toBeUndefined();
+  });
 });
 
 describe("hasWebProviderEntryCredential", () => {
@@ -71,6 +77,18 @@ describe("hasWebProviderEntryCredential", () => {
 
   it("keeps non-reference config strings as literal credentials", () => {
     expect(hasCredential("literal-secret")).toBe(true);
+  });
+
+  it.each([
+    [" \0🙂 ", false],
+    [" café \r\n", true],
+  ] as const)("normalizes primary and fallback literals %j", (value, expected) => {
+    expect(hasCredential(value)).toBe(expected);
+    expect(
+      hasCredential(undefined, {
+        provider: { getConfiguredCredentialFallback: () => ({ value, path: "custom.apiKey" }) },
+      }),
+    ).toBe(expected);
   });
 
   it("accepts provider auth when no key is configured", () => {

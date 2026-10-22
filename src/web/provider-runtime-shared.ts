@@ -1,11 +1,8 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  coerceSecretRef,
-  isLegacySecretRefEnvMarker,
-  normalizeSecretInputString,
-} from "../config/types.secrets.js";
+import { coerceSecretRef, isLegacySecretRefEnvMarker } from "../config/types.secrets.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/web-provider-types.js";
-import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
+import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
+import { readParsedField } from "../utils/string-readers.js";
 
 type WebProviderConfigSource = {
   tools?: {
@@ -44,13 +41,7 @@ export function readWebProviderEnvValue(
   envVars: string[],
   processEnv: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
-  for (const envVar of envVars) {
-    const value = normalizeSecretInput(processEnv[envVar]);
-    if (value) {
-      return value;
-    }
-  }
-  return undefined;
+  return readParsedField(processEnv, envVars, normalizeOptionalSecretInput);
 }
 
 export function providerRequiresCredential(
@@ -76,9 +67,7 @@ export function hasWebProviderEntryCredential(params: {
   if (configuredRef && configuredRef.source !== "env") {
     return true;
   }
-  const fromConfig = configuredRef
-    ? ""
-    : normalizeSecretInput(normalizeSecretInputString(rawValue));
+  const fromConfig = configuredRef ? "" : normalizeOptionalSecretInput(rawValue);
   if (fromConfig) {
     return true;
   }
@@ -99,9 +88,7 @@ export function hasWebProviderEntryCredential(params: {
   if (fallbackRef && fallbackRef.source !== "env") {
     return true;
   }
-  const fallbackConfig = fallbackRef
-    ? ""
-    : normalizeSecretInput(normalizeSecretInputString(fallbackRawValue));
+  const fallbackConfig = fallbackRef ? "" : normalizeOptionalSecretInput(fallbackRawValue);
   if (fallbackConfig) {
     return true;
   }
