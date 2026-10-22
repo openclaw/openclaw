@@ -42,6 +42,23 @@ type OutboxKernelParams<Type extends keyof ContextEngineTurnOutboxWorkerOperatio
 const RECOVERED_TURN_MAX_EVENTS = 20_000;
 const RECOVERED_TURN_MAX_BYTES = 8 * 1024 * 1024;
 
+function parseContextEngineTurnOutboxPayload(
+  payloadJson: string,
+): ContextEngineTurnOutboxPayload | undefined {
+  try {
+    const payload: unknown = JSON.parse(payloadJson);
+    if (payload === null || typeof payload !== "object" || !("state" in payload)) {
+      return undefined;
+    }
+    const state = (payload as { state: unknown }).state;
+    return state === "accepted" || state === "admitted" || state === "ready" || state === "blocked"
+      ? (payload as ContextEngineTurnOutboxPayload)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function outboxPayloadRequiresAdvancement() {
   // Blocked rows are terminal audit evidence, not retryable work. Keep them
   // inspectable without letting them hold later same-session turns behind them.
@@ -280,8 +297,13 @@ export function recoverContextEngineTurnOutbox(params: {
   ).rows;
   let pending = false;
   for (const row of rows) {
-    // SAFETY: This module's typed writers own the persisted outbox payload union.
-    const payload = JSON.parse(row.payload_json) as ContextEngineTurnOutboxPayload;
+    const payload = parseContextEngineTurnOutboxPayload(row.payload_json);
+    if (!payload) {
+      params.warn(
+        `[context-engine] skipped corrupt turn advancement: ${row.advancement_key}: payload could not be decoded`,
+      );
+      continue;
+    }
     if (payload.state === "ready") {
       pending = true;
       continue;
