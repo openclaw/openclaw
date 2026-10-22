@@ -16,12 +16,7 @@ const mocks = vi.hoisted(() => ({
   dashboardCommand: vi.fn(),
   resetCommand: vi.fn(),
   uninstallCommand: vi.fn(),
-  runtime: {
-    log: vi.fn(),
-    error: vi.fn(),
-    writeJson: vi.fn(),
-    exit: vi.fn(),
-  },
+  runtime: { log: vi.fn(), error: vi.fn(), writeJson: vi.fn(), exit: vi.fn() },
   runDoctorLintCli: vi.fn(),
 }));
 
@@ -59,11 +54,9 @@ function jsonFailure(message: string) {
 }
 
 function expectDoctorOptions(options: object) {
-  expect(doctorCommand).toHaveBeenCalledExactlyOnceWith(
-    runtime,
-    expect.objectContaining(options),
-    undefined,
-  );
+  expect(doctorCommand.mock.calls).toEqual([
+    [runtime, expect.objectContaining(options), undefined],
+  ]);
   expectNoCalls(runDoctorLintCli);
   expect(runtime.exit).toHaveBeenCalledWith(0);
 }
@@ -144,10 +137,9 @@ describe("registered maintenance commands", () => {
       await runCli(
         `doctor --client-credentials ${repair} --non-interactive ${json ? "--json" : ""}`,
       );
-      expect(mocks.prepareStartupClientCredentials).toHaveBeenCalledExactlyOnceWith({
-        env: process.env,
-        runtime,
-      });
+      expect(mocks.prepareStartupClientCredentials.mock.calls).toEqual([
+        [{ env: process.env, runtime }],
+      ]);
       expectNoCalls(doctorCommand, runDoctorLintCli, runtime.log, runtime.error);
       if (json) {
         expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith({ ok: true });
@@ -238,6 +230,8 @@ describe("registered maintenance commands", () => {
     });
   });
 
+  const readOnlyConflict = (mode: string, option: string) =>
+    `doctor ${mode} runs read-only lint checks and cannot be combined with ${option}.`;
   const errors = {
     state: "doctor shared-state SQLite maintenance can only be combined with --json.",
     orphan:
@@ -246,14 +240,11 @@ describe("registered maintenance commands", () => {
       "doctor operations are mutually exclusive: choose one of --lint, --fix/--repair, --post-upgrade, --state-sqlite, or --session-sqlite.",
     github: "--github-issue requires --session-sqlite recover.",
     selectors: "doctor lint options require --lint. Use `openclaw doctor --lint ...`.",
-    repair:
-      "doctor --lint runs read-only lint checks and cannot be combined with --repair, --fix, or --force.",
-    yes: "doctor --lint runs read-only lint checks and cannot be combined with --yes.",
-    token:
-      "doctor --lint runs read-only lint checks and cannot be combined with --generate-gateway-token.",
-    session:
-      "doctor --lint runs read-only lint checks and cannot be combined with --session-sqlite recover.",
-    json: "doctor --json runs read-only lint checks and cannot be combined with --repair, --fix, or --force.",
+    repair: readOnlyConflict("--lint", "--repair, --fix, or --force"),
+    yes: readOnlyConflict("--lint", "--yes"),
+    token: readOnlyConflict("--lint", "--generate-gateway-token"),
+    session: readOnlyConflict("--lint", "--session-sqlite recover"),
+    json: readOnlyConflict("--json", "--repair, --fix, or --force"),
   };
   it.each([
     ["--state-sqlite compact --lint --json", "state", true],

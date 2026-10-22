@@ -51,7 +51,7 @@ vi.mock("../../state/local-onboarding-state.js", () => ({
 }));
 vi.mock("../../commands/onboard.js", () => ({ setupWizardCommand: wizard }));
 
-// mock-isolation: CLI parsing captures command dispatch without running onboarding, inference, or recommendation state.
+// mock-isolation: Capture dispatch without onboarding, inference, or recommendation state.
 vi.mock("../../commands/onboard-recommendations.js", () => ({
   acknowledgeOnboardRecommendationsCommand: acknowledge,
   onboardRecommendationsCommand: recommendations,
@@ -81,28 +81,30 @@ async function runCli(args: string[] | string, route: "onboard" | "setup" = "onb
   }
   await program.parseAsync([route, ...argv], { from: "user" });
 }
+function optionFailure(message: unknown) {
+  return { ok: false, error: { type: "cli_error", message }, phase: "options", message };
+}
 function optionsError(message: string) {
-  const error = { type: "cli_error", message };
-  return JSON.stringify({ ok: false, error, phase: "options", message }, null, 2);
+  return JSON.stringify(optionFailure(message), null, 2);
 }
 function expectCall(target: typeof wizard, ...args: unknown[]) {
-  expect(target).toHaveBeenCalledExactlyOnceWith(...args);
+  expect(target.mock.calls).toEqual([args]);
 }
 
 beforeEach(() => vi.resetAllMocks());
 
 it("passes a plugin's boolean consent flag without string coercion", async () => {
   await runCli(["--non-interactive", "--accept-risk", "--local-embedding-only"]);
-  expect(wizard).toHaveBeenCalledWith(
+  expect(wizard.mock.calls).toContainEqual([
     expect.objectContaining({ localEmbeddingOnly: true }),
     runtime,
-  );
+  ]);
 });
 it.each([
   ["recommendations --agent writer --json", recommendations, { agent: "writer", json: true }],
   ["recommendations acknowledge", acknowledge, { retry: undefined }],
 ] as const)("routes %s", async (args, target, options) => {
-  await runCli(args.split(" "));
+  await runCli(args);
   expectCall(target, options, runtime);
   expect(wizard).not.toHaveBeenCalled();
 });
@@ -160,22 +162,11 @@ it.each([
   const expected = partial ? expect.stringContaining(message) : message;
   expect(runtime.error).toHaveBeenCalledExactlyOnceWith(expected);
   expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
-  if (json && partial) {
-    expect(runtime.log).toHaveBeenCalledOnce();
-    expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
-      ok: false,
-      error: { type: "cli_error", message: expected },
-      phase: "options",
-      message: expected,
-    });
-  } else if (json) {
-    expect(runtime.log).toHaveBeenCalledExactlyOnceWith(optionsError(message));
-  } else {
-    expect(runtime.log).not.toHaveBeenCalled();
-  }
-  for (const command of [recommendations, acknowledge, refresh, wizard, systemAgent]) {
-    expect(command).not.toHaveBeenCalled();
-  }
+  const logs = runtime.log.mock.calls;
+  expect(partial ? logs.map(([value]) => JSON.parse(String(value))) : logs).toEqual(
+    json ? (partial ? [optionFailure(expected)] : [[optionsError(message)]]) : [],
+  );
+  expectNoCalls(recommendations, acknowledge, refresh, wizard, systemAgent);
 });
 
 it.each([
@@ -211,51 +202,43 @@ describe("setup routing", () => {
     expect(wizard).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(options), runtime);
     expect(systemAgent).not.toHaveBeenCalled();
   }
-  beforeEach(() => {
-    configSnapshot({}, false);
-  });
+  beforeEach(() => configSnapshot({}, false));
 
   it.each([
-    {
-      name: "pending inference",
-      sourceConfig: { agents: { defaults: { model: "acme/verified" } } },
-      pending: true,
-      onboarding: true,
-    },
-    {
-      name: "interrupted access selection",
-      sourceConfig: {
+    ["pending inference", { agents: { defaults: { model: "acme/verified" } } }, true, true],
+    [
+      "interrupted access selection",
+      {
         $schema: "https://openclaw.ai/config.json",
         meta: { updatedBy: "fixture" },
         wizard: { securityAcknowledgedAt: "2026-08-02T00:00:00.000Z", accessMode: "guarded" },
       },
-      onboarding: true,
-    },
-    {
-      name: "remote Gateway",
-      sourceConfig: { gateway: { mode: "remote" } },
-      pending: true,
-      onboarding: false,
-    },
-  ])("routes interactive setup for $name", async ({ name, sourceConfig, pending, onboarding }) => {
-    configSnapshot(sourceConfig);
-    onboardingState.mockResolvedValue(pending ? { status: "pending" } : undefined);
-    await withCliTty(true, async () => {
-      await runSetup([]);
-      expect(onboardingState.mock.calls).toEqual(
-        name === "pending inference" ? [["/tmp/openclaw.json", sourceConfig]] : [],
-      );
-      if (onboarding) {
-        expectWizard({ json: false });
-      } else {
-        expect(systemAgent).toHaveBeenCalledExactlyOnceWith(
-          { message: undefined, yes: false, json: false },
-          runtime,
+      false,
+      true,
+    ],
+    ["remote Gateway", { gateway: { mode: "remote" } }, true, false],
+  ] as const)(
+    "routes interactive setup for %s",
+    async (name, sourceConfig, pending, onboarding) => {
+      configSnapshot(sourceConfig);
+      onboardingState.mockResolvedValue(pending ? { status: "pending" } : undefined);
+      await withCliTty(true, async () => {
+        await runSetup([]);
+        expect(onboardingState.mock.calls).toEqual(
+          name === "pending inference" ? [["/tmp/openclaw.json", sourceConfig]] : [],
         );
-        expect(wizard).not.toHaveBeenCalled();
-      }
-    });
-  });
+        if (onboarding) {
+          expectWizard({ json: false });
+        } else {
+          expect(systemAgent).toHaveBeenCalledExactlyOnceWith(
+            { message: undefined, yes: false, json: false },
+            runtime,
+          );
+          expect(wizard).not.toHaveBeenCalled();
+        }
+      });
+    },
+  );
 
   it("routes JSON setup for an unconfigured system", async () => {
     await runSetup("--json");

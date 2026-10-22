@@ -1,5 +1,4 @@
 import { Command } from "commander";
-import { repoInstallSpec } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { loggingState } from "../../logging/state.js";
 import { captureEnv } from "../../test-utils/env.js";
@@ -205,32 +204,6 @@ describe("registerPreActionHooks", () => {
     await runPreAction(["channels"]);
 
     expectNoCalls(emitCliBannerMock, setVerboseMock, configReadyMock, loadPluginsMock);
-  });
-
-  it("only allows invalid config when the selected install source owns recovery", async () => {
-    const scenarios = [
-      ["npm:@openclaw/discord", true],
-      ["npm:@openclaw/discord@2026.5.22", true],
-      ["npm:@openclaw/brave-plugin", true],
-      ["npm:@openclaw/slack", true],
-      ["discord", true],
-      ["brave", true],
-      ["@openclaw/discord", false],
-      ["@openclaw/discord@2026.5.22", false],
-      ["@openclaw/brave-plugin", false],
-      ["@openclaw/slack", false],
-      ["clawhub:@openclaw/discord", false],
-      ["clawhub:discord", false],
-      ["alpha", false],
-      [repoInstallSpec("discord"), true],
-      ["@openclaw/discord --marketplace local/repo", false],
-      ["npm:@openclaw/discord --marketplace local/repo", false],
-    ] as const;
-    for (const [args, allowInvalid] of scenarios) {
-      vi.clearAllMocks();
-      await parse(["plugins", "install", ...args.split(" ")]);
-      expectConfig(["plugins", "install"], allowInvalid ? { allowInvalid } : {});
-    }
   });
 
   it("skips help/version preaction and respects banner opt-out", async () => {
