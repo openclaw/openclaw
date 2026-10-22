@@ -26,6 +26,7 @@ import goalStyles from "../../styles/chat/composer-progress.css?inline";
 import queueStyles from "../../styles/chat/composer-queue.css?inline";
 import composerSurfaceStyles from "../../styles/chat/composer-surface.css?inline";
 import composerStyles from "../../styles/chat/composer.css?inline";
+import componentStyles from "../../styles/components.css?inline";
 
 const attachments = Array.from({ length: 7 }, (_, index) => ({
   id: `overflow-${index}`,
@@ -91,6 +92,7 @@ describe("composer overflow presentation", () => {
     styles = document.createElement("style");
     styles.textContent = [
       baseStyles,
+      componentStyles,
       composerStyles,
       composerSurfaceStyles,
       contextStripStyles,
