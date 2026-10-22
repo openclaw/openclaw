@@ -3,6 +3,7 @@ import type { AddressInfo } from "node:net";
 import { assert, describe, expect, it } from "vitest";
 import { createBoundedMistralFetcher, streamMistral } from "./mistral.js";
 import { makeProviderModel } from "./provider-model.test-support.js";
+import { serializeSse } from "./provider-stream.test-support.js";
 
 const MAX = 16 * 1024 * 1024;
 const TOTAL = 18 * 1024 * 1024;
@@ -60,11 +61,7 @@ describe("Mistral bounded-stream-read real wire proof (loopback http.createServe
         let captured: unknown;
         const response = await fetcher(url);
         try {
-          assert(response.body);
-          const reader = response.body.getReader();
-          while (!(await reader.read()).done) {
-            /* drain until the cap rejects */
-          }
+          await response.arrayBuffer();
         } catch (err) {
           captured = err;
         }
@@ -128,24 +125,26 @@ async function streamMistralTerminalFixture(fixture: MistralTerminalFixture) {
       }));
       const write = (content: MistralTerminalFixture["text"], initial = false) =>
         response.write(
-          `data: ${JSON.stringify({
-            id: "mistral-terminal-owner-proof",
-            ...(initial ? { object: "chat.completion.chunk", created: 1 } : {}),
-            model: "mistral-large-latest",
-            choices: [
-              {
-                index: 0,
-                delta: {
-                  content: content ?? null,
-                  ...(initial && toolCalls ? { tool_calls: toolCalls } : {}),
+          serializeSse([
+            {
+              id: "mistral-terminal-owner-proof",
+              ...(initial ? { object: "chat.completion.chunk", created: 1 } : {}),
+              model: "mistral-large-latest",
+              choices: [
+                {
+                  index: 0,
+                  delta: {
+                    content: content ?? null,
+                    ...(initial && toolCalls ? { tool_calls: toolCalls } : {}),
+                  },
+                  finish_reason: fixture.finishReason,
                 },
-                finish_reason: fixture.finishReason,
-              },
-            ],
-            ...(initial
-              ? { usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 } }
-              : {}),
-          })}\n\n`,
+              ],
+              ...(initial
+                ? { usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 } }
+                : {}),
+            },
+          ]),
         );
       write(fixture.text, true);
       for (const content of fixture.followupTexts ?? []) {

@@ -61,11 +61,9 @@ describe("azure-openai-responses", () => {
       azureApiVersion: "2026-07-01-preview",
       azureResourceName: "configured-resource",
     }).result();
-    const requestUrl = requests[0]?.url;
-
-    expect(requestUrl?.origin).toBe("https://configured-resource.openai.azure.com");
-    expect(requestUrl?.pathname).toBe("/openai/v1/responses");
-    expect(requestUrl?.searchParams.get("api-version")).toBe("2026-07-01-preview");
+    expect(requests[0]?.url.href).toBe(
+      "https://configured-resource.openai.azure.com/openai/v1/responses?api-version=2026-07-01-preview",
+    );
   });
 
   it("sends a case-insensitively resolved deployment name", async () => {
@@ -98,11 +96,7 @@ describe("azure-openai-responses", () => {
     ).result();
     expect(requests).toHaveLength(1);
     expect(requests[0]?.body).toMatchObject({
-      tools: [
-        { type: "function", name: "computer" },
-        { type: "function", name: "exec" },
-        { type: "function", name: "wait" },
-      ],
+      tools: ["computer", "exec", "wait"].map((name) => ({ type: "function", name })),
     });
   });
 
@@ -127,8 +121,8 @@ describe("azure-openai-responses", () => {
         reasoning,
         temperature: 0.5,
       }).result();
-      expect(requests[0]?.body.reasoning?.effort).toBe(effort);
-      expect(requests[0]?.body.temperature).toBe(temperature);
+      const body = requests[0]?.body;
+      expect([body?.reasoning?.effort, body?.temperature]).toEqual([effort, temperature]);
     },
   );
 

@@ -334,13 +334,10 @@ describe("schema depth", () => {
 
   const objectSchema = (properties: Schema, strict = false) =>
     (strict ? closed : object)(properties);
-  function nestedSchema(depth: number, strict = false, leaf: Schema = { type: "string" }): Schema {
-    let schema = leaf;
-    for (let index = 0; index < depth; index++) {
-      schema = objectSchema({ next: schema }, strict);
-    }
-    return schema;
-  }
+  const nest = (depth: number, leaf: Schema, wrap: (child: Schema) => Schema): Schema =>
+    Array.from({ length: depth }).reduce<Schema>((child) => wrap(child), leaf);
+  const nestedSchema = (depth: number, strict = false, leaf: Schema = { type: "string" }) =>
+    nest(depth, leaf, (child) => objectSchema({ next: child }, strict));
 
   afterEach(() => configureAiTransportHost({}));
 
@@ -385,10 +382,7 @@ describe("schema depth", () => {
 
   it("counts map and composition containers once while preserving literal data and shallow aliases", () => {
     const shared = nestedSchema(3);
-    let nested: unknown = shared;
-    for (let index = 0; index < 5000; index++) {
-      nested = { allOf: [nested] };
-    }
+    const nested = nest(5000, shared, (child) => ({ allOf: [child] }));
     const schema = {
       type: "object",
       properties: { short: shared, long: nested },

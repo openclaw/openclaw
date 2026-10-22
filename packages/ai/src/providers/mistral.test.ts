@@ -2,9 +2,8 @@ import {
   contentChunkFromJSON,
   toolCallFromJSON,
   type ChatCompletionStreamRequest,
-  type ToolCall,
 } from "@mistralai/mistralai/models/components";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { configureAiTransportHost } from "../host.js";
 import { createAssistantOutput } from "../transports/assistant-output.js";
@@ -91,20 +90,14 @@ function makeHealthyTool(parameters: Record<string, unknown> = { type: "object",
   };
 }
 
-function parseMistralToolCall(value: unknown): ToolCall {
+function parseMistralToolCall(value: unknown) {
   const parsed = toolCallFromJSON(JSON.stringify(value));
-  if (!parsed.ok) {
-    throw new Error("Mistral SDK failed to parse tool-call fixture");
-  }
+  assert(parsed.ok, "Mistral SDK failed to parse tool-call fixture");
   return parsed.value;
 }
 
-function mistralEvents<T>(events: T[]) {
-  return {
-    async *[Symbol.asyncIterator]() {
-      yield* events;
-    },
-  };
+async function* mistralEvents<T>(events: T[]) {
+  yield* events;
 }
 
 function mistralEvent(content: unknown, extra: Record<string, unknown> = {}) {
@@ -126,7 +119,10 @@ function wireTool(
   return { ...identity, function: { name, arguments: args } };
 }
 
-function mistralToolStream(responseId: string, ...chunks: ToolCall[][]) {
+function mistralToolStream(
+  responseId: string,
+  ...chunks: ReturnType<typeof parseMistralToolCall>[][]
+) {
   return mistralEvents(
     chunks.map((toolCalls) =>
       mistralEvent(null, {
@@ -139,37 +135,18 @@ function mistralToolStream(responseId: string, ...chunks: ToolCall[][]) {
 
 type MistralTestOptions = NonNullable<Parameters<typeof streamMistral>[2]>;
 type SimpleMistralTestOptions = NonNullable<Parameters<typeof streamSimpleMistral>[2]>;
-type MistralPayload = Pick<
-  ChatCompletionStreamRequest,
-  "promptCacheKey" | "promptMode" | "reasoningEffort"
-> & {
-  messages: Array<{ role: string; content: string | Array<{ type: string; text?: string }> }>;
-  tools: Array<{ function: { name: string } }>;
-};
-const payload = () => mistralMockState.payloads[0] as MistralPayload;
+const payload = () => mistralMockState.payloads[0] as ChatCompletionStreamRequest;
 const toolMessage = () => payload().messages.find((message) => message.role === "tool");
 
-function runMistralFixture(
-  testContext: Context = context,
-  options: MistralTestOptions = {},
-  testModel = makeMistralModel(),
-) {
-  return streamMistral(testModel, testContext, {
-    apiKey: "sk-mistral-provider",
-    ...options,
-  }).result();
+function runner(stream: typeof streamMistral | typeof streamSimpleMistral) {
+  return (
+    testContext: Context = context,
+    options: MistralTestOptions & SimpleMistralTestOptions = {},
+    testModel = makeMistralModel(),
+  ) => stream(testModel, testContext, { apiKey: "sk-mistral-provider", ...options }).result();
 }
-
-function runSimpleMistralFixture(
-  testContext: Context = context,
-  options: SimpleMistralTestOptions = {},
-  testModel = makeMistralModel(),
-) {
-  return streamSimpleMistral(testModel, testContext, {
-    apiKey: "sk-mistral-provider",
-    ...options,
-  }).result();
-}
+const runMistralFixture = runner(streamMistral);
+const runSimpleMistralFixture = runner(streamSimpleMistral);
 
 async function runMistralToolFixture(
   responseId: string,
@@ -285,10 +262,10 @@ describe("Mistral provider", () => {
   it("cancels an unread Mistral stream when acceptance observation fails", async () => {
     mistralMockState.requestThroughHttpClient = true;
     const cancel = vi.fn(async () => undefined);
-    mistralMockState.streamResult = {
-      ...mistralEvents([mistralEvent("ok", { id: "resp-http-ack" })]),
-      cancel,
-    };
+    mistralMockState.streamResult = Object.assign(
+      mistralEvents([mistralEvent("ok", { id: "resp-http-ack" })]),
+      { cancel },
+    );
     configureAiTransportHost({
       buildModelFetch: () => async () => new Response("stream", { status: 200 }),
     });
@@ -395,7 +372,7 @@ describe("Mistral provider", () => {
     expect(JSON.stringify(mistralMockState.payloads[0])).toBe(
       JSON.stringify(mistralMockState.payloads[1]),
     );
-    expect(payload().tools.map((tool) => tool.function.name)).toEqual(["alpha_tool", "zeta_tool"]);
+    expect(payload().tools?.map((tool) => tool.function.name)).toEqual(["alpha_tool", "zeta_tool"]);
   });
 
   it("reports unreadable tool parameters beside a usable tool before sending", async () => {
@@ -544,9 +521,7 @@ describe("Mistral provider", () => {
     ];
     const chunks = thinkingParts.map((thinking) => {
       const parsed = contentChunkFromJSON(JSON.stringify({ type: "thinking", thinking }));
-      if (!parsed.ok) {
-        throw new Error("Mistral SDK failed to parse thinking fixture");
-      }
+      assert(parsed.ok, "Mistral SDK failed to parse thinking fixture");
       return parsed.value;
     });
     mistralMockState.streamResult = mistralEvents(
