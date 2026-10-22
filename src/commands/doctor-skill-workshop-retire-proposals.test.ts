@@ -374,9 +374,7 @@ it("keeps a legacy bundle whose rollback bytes are not valid UTF-8 out of the wo
     JSON.stringify({
       targetSkillFile: skillFile,
       previousContent: "before\n",
-      supportFiles: [
-        { path: "references/notes.md", existed: true, previousContent: "notés\n" },
-      ],
+      supportFiles: [{ path: "references/notes.md", existed: true, previousContent: "notés\n" }],
     }),
     "utf8",
   );
