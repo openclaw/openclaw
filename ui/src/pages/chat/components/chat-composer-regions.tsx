@@ -1,6 +1,6 @@
 import { createMemo, lazy, Loading, Show, untrack } from "solid-js";
 import { projectPresentation } from "../../../lib/reactive/presentation.ts";
-import { isChatRunWorking } from "./chat-composer-state.ts";
+import { isChatRunWorking } from "../chat-run-working.ts";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
 
 const ChatQueue = lazy(() => import("./chat-composer-queue.tsx"), {

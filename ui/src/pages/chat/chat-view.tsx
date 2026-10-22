@@ -19,6 +19,7 @@ import { scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
 import { PluginSurface } from "../../plugins/control-ui-view.solid.tsx";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatPendingInputs } from "./chat-pending-inputs.ts";
+import { hasTerminalRunStatus, isChatRunWorking } from "./chat-run-working.ts";
 import { forwardChatWheelToTranscript } from "./chat-scroll-input.ts";
 import { listSubagents } from "./chat-subagent-wait.ts";
 import { createChatViewFrame, type ChatProps, type ChatViewFrame } from "./chat-view-frame.ts";
@@ -34,11 +35,7 @@ import {
 } from "./components/chat-composer-question.tsx";
 import type { ComposerQuestions } from "./components/chat-composer-questions.ts";
 import { ComposerQueue } from "./components/chat-composer-regions.tsx";
-import {
-  getChatComposerState,
-  hasTerminalRunStatus,
-  isChatRunWorking,
-} from "./components/chat-composer-state.ts";
+import { getChatComposerState } from "./components/chat-composer-state.ts";
 import { ChatComposer } from "./components/chat-composer.tsx";
 import { ChatConversationHistoryError } from "./components/chat-conversation-history-error.tsx";
 import { ChatConversationMobile } from "./components/chat-conversation-presentation.ts";

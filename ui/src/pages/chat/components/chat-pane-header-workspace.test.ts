@@ -5,7 +5,7 @@ import { resolveSessionWorkspace } from "../../../lib/sessions/workspace.ts";
 import {
   canRevealSessionWorkspace,
   resolveChatPaneParentSession,
-} from "./chat-pane-header-identity.tsx";
+} from "../chat-pane-header-identity.ts";
 import {
   chatPaneHeaderSessionRow as row,
   mountChatPaneHeader,
