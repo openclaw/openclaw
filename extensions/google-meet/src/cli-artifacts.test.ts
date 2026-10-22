@@ -3,28 +3,24 @@ import {
   chmodSync,
   existsSync,
   mkdtempSync,
+  mkdirSync,
   readFileSync,
   readdirSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
+import fsp from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import JSZip from "jszip";
-import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { writeMeetExportBundle } from "./cli-export.js";
 import * as cli from "./test-support/cli-harness.js";
 
-async function runApiCommand(command: string, args: string[] = []) {
-  const stdout = cli.captureStdout();
-  try {
-    const auth = ["--access-token", "token", "--expires-at", String(Date.now() + 120_000)];
-    await cli.setupCli({}).parseAsync(["googlemeet", command, ...auth, ...args], { from: "user" });
-    return stdout;
-  } finally {
-    stdout.restore();
-  }
-}
+const { run, output, json } = cli.useCli();
+const runApiCommand = (command: string, args: string[] = []) =>
+  run([command, "--access-token", "token", "--expires-at", String(Date.now() + 120_000), ...args]);
 
 function runRecordCommand(command: string, args: string[] = []) {
   return runApiCommand(command, ["--conference-record", "rec-1", ...args]);
@@ -40,25 +36,21 @@ const bundleFiles = [
 ];
 
 let tempDir: string;
+let publicationDir: string;
 const readOutput = (name: string) => readFileSync(path.join(tempDir, name), "utf8");
 beforeEach(() => {
   tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-google-meet-artifacts-"));
+  publicationDir = path.join(tempDir, "bundle");
   cli.stubMeetArtifactsApi();
 });
 afterEach(() => {
-  vi.unstubAllGlobals();
   rmSync(tempDir, { recursive: true, force: true });
   rmSync(`${tempDir}.zip`, { force: true });
 });
 
-afterAll(() => {
-  vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
-  vi.resetModules();
-});
-
 it("prints artifacts and attendance output", async () => {
-  const artifactsStdout = await runRecordCommand("artifacts", ["--json"]);
-  expect(cli.parseStdoutJson(artifactsStdout)).toMatchObject({
+  await runRecordCommand("artifacts", ["--json"]);
+  expect(json()).toMatchObject({
     tokenSource: "cached-access-token",
     conferenceRecords: [{ name: "conferenceRecords/rec-1" }],
     artifacts: [
@@ -76,12 +68,10 @@ it("prints artifacts and attendance output", async () => {
     ],
   });
 
-  const attendanceStdout = await runRecordCommand("attendance");
-  expect(attendanceStdout.output()).toContain("attendance rows: 1");
-  expect(attendanceStdout.output()).toContain("participant: Alice");
-  expect(attendanceStdout.output()).toContain(
-    "conferenceRecords/rec-1/participants/p1/participantSessions/s1",
-  );
+  await runRecordCommand("attendance");
+  expect(output()).toContain("attendance rows: 1");
+  expect(output()).toContain("participant: Alice");
+  expect(output()).toContain("conferenceRecords/rec-1/participants/p1/participantSessions/s1");
 });
 
 it("ends an active conference for a Meet space", async () => {
@@ -101,11 +91,8 @@ it("ends an active conference for a Meet space", async () => {
   });
   vi.stubGlobal("fetch", fetchMock);
 
-  const stdout = await runApiCommand("end-active-conference", [
-    "https://meet.google.com/abc-defg-hij",
-    "--json",
-  ]);
-  expect(cli.parseStdoutJson(stdout)).toMatchObject({
+  await runApiCommand("end-active-conference", ["https://meet.google.com/abc-defg-hij", "--json"]);
+  expect(json()).toMatchObject({
     space: "spaces/space-resource-123",
     ended: true,
     tokenSource: "cached-access-token",
@@ -127,15 +114,13 @@ it("ends an active conference for a Meet space", async () => {
 
 it("rejects access policy flags when create would use browser fallback", async () => {
   await expect(
-    cli
-      .setupCli({
-        runtime: {
-          createViaBrowser: vi.fn(async () => {
-            throw new Error("browser fallback should not run");
-          }),
-        },
-      })
-      .parseAsync(["googlemeet", "create", "--access-type", "OPEN"], { from: "user" }),
+    run(["create", "--access-type", "OPEN"], {
+      runtime: {
+        createViaBrowser: vi.fn(async () => {
+          throw new Error("browser fallback should not run");
+        }),
+      },
+    }),
   ).rejects.toThrow("access policy options require OAuth/API room creation");
 });
 
@@ -145,17 +130,17 @@ it.each([
 ] satisfies Array<[string[], string]>)(
   "prints the latest conference record for %j",
   async (args, expected) => {
-    const stdout = await runApiCommand("latest", args);
-    expect(stdout.output()).toContain(expected);
-    expect(stdout.output()).toContain("conference record: conferenceRecords/rec-1");
+    await runApiCommand("latest", args);
+    expect(output()).toContain(expected);
+    expect(output()).toContain("conference record: conferenceRecords/rec-1");
   },
 );
 
 it("prints calendar event previews", async () => {
-  const stdout = await runApiCommand("calendar-events", ["--today"]);
-  expect(stdout.output()).toContain("meet events: 1");
-  expect(stdout.output()).toContain("* Project sync");
-  expect(stdout.output()).toContain("https://meet.google.com/abc-defg-hij");
+  await runApiCommand("calendar-events", ["--today"]);
+  expect(output()).toContain("meet events: 1");
+  expect(output()).toContain("* Project sync");
+  expect(output()).toContain("https://meet.google.com/abc-defg-hij");
 });
 
 it("rejects a fractional Meet API page size before fetching", async () => {
@@ -170,25 +155,18 @@ it("rejects a fractional Meet API page size before fetching", async () => {
 it("prints markdown artifact and attendance output", async () => {
   const outputPath = path.join(tempDir, "artifacts.md");
 
-  const artifactsStdout = await runRecordCommand("artifacts", [
-    "--format",
-    "markdown",
-    "--output",
-    outputPath,
-  ]);
+  await runRecordCommand("artifacts", ["--format", "markdown", "--output", outputPath]);
   const markdown = readFileSync(outputPath, "utf8");
-  expect(artifactsStdout.output()).toContain(`wrote: ${outputPath}`);
+  expect(output()).toContain(`wrote: ${outputPath}`);
   expect(markdown).toContain("# Google Meet Artifacts");
   expect(markdown).toContain("## conferenceRecords/rec-1");
   expect(markdown).toContain("### Transcript Entries: conferenceRecords/rec-1/transcripts/t1");
   expect(markdown).toContain("Hello from the transcript.");
 
-  const attendanceStdout = await runRecordCommand("attendance", ["--format", "markdown"]);
-  expect(attendanceStdout.output()).toContain("# Google Meet Attendance");
-  expect(attendanceStdout.output()).toContain("## Alice");
-  expect(attendanceStdout.output()).toContain(
-    "conferenceRecords/rec-1/participants/p1/participantSessions/s1",
-  );
+  await runRecordCommand("attendance", ["--format", "markdown"]);
+  expect(output()).toContain("# Google Meet Attendance");
+  expect(output()).toContain("## Alice");
+  expect(output()).toContain("conferenceRecords/rec-1/participants/p1/participantSessions/s1");
 });
 
 it.skipIf(process.platform === "win32")(
@@ -231,18 +209,13 @@ it.skipIf(process.platform === "win32")(
 
 it("quotes carriage returns in formula-neutralized CSV cells", async () => {
   cli.stubMeetArtifactsApi({ participantDisplayName: "\r=1+1" });
-  const stdout = await runRecordCommand("attendance", ["--format", "csv"]);
-  expect(stdout.output()).toContain('conferenceRecords/rec-1,"\'\r=1+1",users/alice');
+  await runRecordCommand("attendance", ["--format", "csv"]);
+  expect(output()).toContain('conferenceRecords/rec-1,"\'\r=1+1",users/alice');
 });
 
 it("writes an export bundle", async () => {
-  const stdout = await runRecordCommand("export", [
-    "--include-doc-bodies",
-    "--zip",
-    "--output",
-    tempDir,
-  ]);
-  expect(stdout.output()).toContain(`export: ${tempDir}`);
+  await runRecordCommand("export", ["--include-doc-bodies", "--zip", "--output", tempDir]);
+  expect(output()).toContain(`export: ${tempDir}`);
   expect(readOutput("summary.md")).toContain("# Google Meet Artifacts");
   expect(readOutput("attendance.csv")).toContain("conferenceRecords/rec-1,Alice,users/alice");
   expect(readOutput("transcript.md")).toContain("Hello from the transcript.");
@@ -285,13 +258,8 @@ it("includes artifact warnings in export summaries and manifests", async () => {
 it("prints a dry-run export manifest without writing files", async () => {
   const outputDir = path.join(tempDir, "bundle");
 
-  const stdout = await runRecordCommand("export", [
-    "--include-doc-bodies",
-    "--output",
-    outputDir,
-    "--dry-run",
-  ]);
-  const payload = JSON.parse(stdout.output());
+  await runRecordCommand("export", ["--include-doc-bodies", "--output", outputDir, "--dry-run"]);
+  const payload = JSON.parse(output());
   expect(payload).toMatchObject({
     dryRun: true,
     tokenSource: "cached-access-token",
@@ -305,16 +273,78 @@ it("prints a dry-run export manifest without writing files", async () => {
 });
 it("writes the artifact summary to --output", async () => {
   const outputPath = path.join(tempDir, "summary.txt");
-  const summary = (await runRecordCommand("artifacts", ["--format", "summary"])).output();
+  await runRecordCommand("artifacts", ["--format", "summary"]);
+  const summary = output();
   expect(summary).toContain("conference records: 1\n");
   expect(summary).toContain("token source: cached-access-token\n");
-  const written = await runRecordCommand("artifacts", [
-    "--format",
-    "summary",
-    "--output",
-    outputPath,
-  ]);
+  await runRecordCommand("artifacts", ["--format", "summary", "--output", outputPath]);
   expect(existsSync(outputPath)).toBe(true);
   expect(readFileSync(outputPath, "utf8")).toBe(summary);
-  expect(written.output()).toBe(`wrote: ${outputPath}\n`);
+  expect(output()).toBe(`wrote: ${outputPath}\n`);
 });
+
+const writeBundle = (outputDir: string, zip = false) =>
+  writeMeetExportBundle({
+    outputDir,
+    artifacts: { conferenceRecords: [], artifacts: [] },
+    attendance: { conferenceRecords: [], attendance: [] },
+    zip,
+  });
+
+it.each([false, true])(
+  "preserves the existing file on failed replacement (zip=%s)",
+  async (zip) => {
+    const filePath = zip ? `${publicationDir}.zip` : path.join(publicationDir, "summary.md");
+    const previous = zip
+      ? await new JSZip()
+          .file("previous.txt", "previous export")
+          .generateAsync({ type: "nodebuffer" })
+      : Buffer.from("previous summary\n");
+    if (!zip) {
+      mkdirSync(publicationDir);
+    }
+    writeFileSync(filePath, previous);
+    const realWriteFile = fsp.writeFile;
+    const write = vi.spyOn(fsp, "writeFile");
+    write[zip ? "mockImplementation" : "mockImplementationOnce"](async (...args) => {
+      const [file, data] = args;
+      if (!zip || Buffer.isBuffer(data)) {
+        expect(typeof file).toBe("string");
+        writeFileSync(file as string, "partial replacement");
+        throw new Error("injected write failure");
+      }
+      await Reflect.apply(realWriteFile, fsp, args);
+    });
+    await expect(writeBundle(publicationDir, zip)).rejects.toThrow("injected write failure");
+    expect(readFileSync(filePath)).toEqual(previous);
+    expect(readdirSync(zip ? tempDir : publicationDir).toSorted()).toEqual(
+      zip ? ["bundle", "bundle.zip"] : ["summary.md"],
+    );
+  },
+);
+
+it.each([
+  { label: "repeated native", trailingSeparators: path.sep.repeat(2) },
+  ...(process.platform === "win32"
+    ? [
+        { label: "repeated alternate", trailingSeparators: "//" },
+        { label: "mixed", trailingSeparators: "\\/" },
+      ]
+    : []),
+])(
+  "writes the ZIP beside an output directory with $label trailing separators",
+  async ({ trailingSeparators }) => {
+    const suppliedOutputDir = `${publicationDir}${trailingSeparators}`;
+    const zipPath = `${publicationDir}.zip`;
+    const result = await writeBundle(suppliedOutputDir, true);
+    const manifest = JSON.parse(
+      readFileSync(path.join(publicationDir, "manifest.json"), "utf8"),
+    ) as {
+      zipFile?: string;
+    };
+    expect(result).toMatchObject({ outputDir: suppliedOutputDir, zipFile: zipPath });
+    expect(manifest.zipFile).toBe(zipPath);
+    expect(existsSync(zipPath)).toBe(true);
+    expect(existsSync(path.join(publicationDir, ".zip"))).toBe(false);
+  },
+);

@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { spawn as spawnChildProcess, type ChildProcess } from "node:child_process";
 import { on, once } from "node:events";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -20,17 +21,6 @@ const spawnedChildren: ChildProcess[] = [];
 type MeetRealtimeAudioSpawn = NonNullable<
   Parameters<typeof createLocalMeetingRealtimeAudioTransport>[0]["spawn"]
 >;
-
-const GOOGLE_MEET_ENGINE_BINDINGS = {
-  platform: {
-    displayName: "Google Meet",
-    logScope: "[google-meet]",
-    sessionIdPrefix: "google-meet",
-  },
-  consultAgent: async () => ({ text: "" }),
-  tools: [],
-  handleToolCall: async () => {},
-};
 
 const makeLogger = () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() });
 
@@ -74,18 +64,6 @@ const mockTranscriptionSession = (connected = false) => ({
   isConnected: vi.fn(() => connected),
 });
 
-const transcriptionProvider = (
-  createSession: RealtimeTranscriptionProviderPlugin["createSession"],
-): RealtimeTranscriptionProviderPlugin => ({
-  id: "openai",
-  label: "OpenAI",
-  defaultModel: "gpt-4o-transcribe",
-  autoSelectOrder: 1,
-  resolveConfig: ({ rawConfig }) => rawConfig,
-  isConfigured: () => true,
-  createSession,
-});
-
 const mockVoiceBridge = () => ({
   ...mockTranscriptionSession(true),
   sendUserMessage: vi.fn(),
@@ -102,7 +80,14 @@ const engineOptions = (
   config,
   fullConfig: {},
   runtime: {} as never,
-  ...GOOGLE_MEET_ENGINE_BINDINGS,
+  platform: {
+    displayName: "Google Meet",
+    logScope: "[google-meet]",
+    sessionIdPrefix: "google-meet",
+  },
+  consultAgent: async () => ({ text: "" }),
+  tools: [],
+  handleToolCall: async () => {},
   meetingSessionId,
   logger: makeLogger(),
 });
@@ -201,7 +186,17 @@ function agentFixture(inputFails = false) {
       ...engineOptions(config, inputFails ? "meet-startup-failure" : "meet-1"),
       logger,
       transport,
-      providers: [transcriptionProvider(() => sttSession)],
+      providers: [
+        {
+          id: "openai",
+          label: "OpenAI",
+          defaultModel: "gpt-4o-transcribe",
+          autoSelectOrder: 1,
+          resolveConfig: ({ rawConfig }) => rawConfig,
+          isConfigured: () => true,
+          createSession: () => sttSession,
+        } satisfies RealtimeTranscriptionProviderPlugin,
+      ],
     });
   return { sttSession, logger, transport, start };
 }
@@ -231,9 +226,7 @@ it("stops the engine when input fails during provider setup", async () => {
     (error: unknown) => error,
   );
   const inputProcess = spawnedChildren[1];
-  if (!inputProcess) {
-    throw new Error("Expected Google Meet transport to spawn an input child process");
-  }
+  assert.ok(inputProcess, "Expected an input child process");
 
   await once(inputProcess, "error");
   await vi.waitFor(() => {
@@ -254,9 +247,7 @@ it("contains a forced local command-pair stdout stream error through bridge stop
   const { sttSession, logger, start } = agentFixture();
   const handle = await start();
   const [outputProcess, inputProcess] = spawnedChildren;
-  if (!inputProcess || !outputProcess) {
-    throw new Error("Expected Google Meet bridge to spawn input and output child processes");
-  }
+  assert.ok(inputProcess && outputProcess, "Expected input and output child processes");
   const inputClosed = once(inputProcess, "close");
   const outputClosed = once(outputProcess, "close");
   vi.spyOn(inputProcess, "kill");
@@ -284,9 +275,7 @@ it.skipIf(process.platform === "win32")(
     const bridgeScript = writeCommand(SIGTERM_RESISTANT_SCRIPT);
     const transport = createTransport(bridgeScript);
     const [outputProcess, inputProcess] = spawnedChildren;
-    if (!inputProcess || !outputProcess || !inputProcess.stderr || !outputProcess.stderr) {
-      throw new Error("Expected Google Meet bridge to spawn stderr-backed child processes");
-    }
+    assert.ok(inputProcess?.stderr && outputProcess?.stderr, "Expected stderr-backed children");
     await Promise.all([
       waitForBridgeReady(inputProcess.stderr, "capture", testSignal),
       waitForBridgeReady(outputProcess.stderr, "play", testSignal),

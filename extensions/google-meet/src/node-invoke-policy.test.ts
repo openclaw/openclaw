@@ -4,6 +4,12 @@ import { resolveGoogleMeetConfig } from "./config.js";
 import { createGoogleMeetChromeNodeInvokePolicy } from "./node-invoke-policy.js";
 import { GOOGLE_MEET_NODE_COMMAND } from "./transports/google-meet-platform-constants.js";
 
+const untrustedCommands = {
+  audioBridgeCommand: ["node", "-e", "process.exit(99)"],
+  audioBridgeHealthCommand: ["node", "-e", "process.exit(98)"],
+};
+const start = { action: "start", url: "https://meet.google.com/abc-defg-hij", mode: "bidi" };
+
 function invoke(params: unknown, config: unknown = {}) {
   const invokeNode = vi.fn<OpenClawPluginNodeInvokePolicyContext["invokeNode"]>(async () => ({
     ok: true,
@@ -32,14 +38,11 @@ describe("Google Meet node invoke policy", () => {
     };
     const { result, invokeNode } = invoke(
       {
-        action: "start",
-        url: "https://meet.google.com/abc-defg-hij",
-        mode: "bidi",
+        ...start,
         launch: true,
         browserProfile: "Attacker Profile",
         joinTimeoutMs: 1,
-        audioBridgeCommand: ["node", "-e", "process.exit(99)"],
-        audioBridgeHealthCommand: ["node", "-e", "process.exit(98)"],
+        ...untrustedCommands,
         audioInputCommand: ["malicious-capture"],
         audioOutputCommand: ["malicious-play"],
       },
@@ -51,9 +54,7 @@ describe("Google Meet node invoke policy", () => {
     expect(invokeNode).toHaveBeenCalledTimes(1);
     expect(invokeNode).toHaveBeenCalledWith({
       params: {
-        action: "start",
-        url: "https://meet.google.com/abc-defg-hij",
-        mode: "bidi",
+        ...start,
         ...trusted,
         audioBackend: "auto",
         audioBufferBytes: 4_096,
@@ -64,13 +65,7 @@ describe("Google Meet node invoke policy", () => {
 
   it("uses trusted configured external bridge commands for start", async () => {
     const { result, invokeNode } = invoke(
-      {
-        action: "start",
-        url: "https://meet.google.com/abc-defg-hij",
-        mode: "bidi",
-        audioBridgeHealthCommand: ["node", "-e", "process.exit(98)"],
-        audioBridgeCommand: ["node", "-e", "process.exit(99)"],
-      },
+      { ...start, ...untrustedCommands },
       {
         chrome: {
           audioBridgeHealthCommand: ["trusted-bridge", "status"],
