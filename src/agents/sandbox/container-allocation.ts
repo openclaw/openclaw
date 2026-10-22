@@ -14,7 +14,10 @@ import {
 } from "./podman-runtime.js";
 import { sanitizeExplicitSandboxEnvVars } from "./sanitize-env-vars.js";
 import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
-import { validateSandboxSecurity } from "./validate-sandbox-security.js";
+import {
+  validateSandboxCreateSecurity,
+  type SandboxCreateSecurityParams,
+} from "./validate-sandbox-security.js";
 import { SANDBOX_MOUNT_FORMAT_VERSION } from "./workspace-mounts.js";
 
 const log = createSubsystemLogger("docker");
@@ -51,21 +54,15 @@ function formatUlimitValue(
   return limits.length ? `${name}=${limits.join(":")}` : null;
 }
 
-export function buildSandboxCreateArgs(params: {
-  name: string;
-  cfg: SandboxDockerConfig;
-  scopeKey: string;
-  labels?: Record<string, string>;
-  configHash?: string;
-  bindSourceRoots?: string[];
-}) {
-  // Runtime security validation: blocks dangerous bind mounts, network modes, and profiles.
-  validateSandboxSecurity({
-    ...params.cfg,
-    allowedSourceRoots: params.bindSourceRoots,
-    allowSourcesOutsideAllowedRoots: params.cfg.dangerouslyAllowExternalBindSources === true,
-    allowReservedContainerTargets: params.cfg.dangerouslyAllowReservedContainerTargets === true,
-  });
+export function buildSandboxCreateArgs(
+  params: SandboxCreateSecurityParams & {
+    name: string;
+    scopeKey: string;
+    labels?: Record<string, string>;
+    configHash?: string;
+  },
+) {
+  validateSandboxCreateSecurity(params);
 
   const createdAtMs = Date.now();
   const args = ["create", "--name", params.name];

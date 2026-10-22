@@ -116,6 +116,7 @@ describe("validateBindMounts", () => {
   it("blocks dangerous bind source paths", () => {
     const cases = [
       ["host root mount", "/:/mnt/host", /blocked path "\/"/],
+      ["Windows drive root", "C:/:/mnt/drive", /covers blocked path "C:\/"/],
       ["etc mount", "/etc/passwd:/mnt/passwd:ro", /blocked path "\/etc"/],
       ["proc mount", "/proc:/proc:ro", /blocked path "\/proc"/],
       ["docker socket in /var/run", "/var/run/docker.sock:/var/run/docker.sock", /docker\.sock/],
@@ -128,7 +129,7 @@ describe("validateBindMounts", () => {
     for (const [label, bind, expected] of cases) {
       expect(() => validateBindMounts([bind]), label).toThrow(expected);
       expect(getBlockedBindReason(bind)?.kind).toBe(
-        label === "host root mount" ? "covers" : "targets",
+        label === "host root mount" || label === "Windows drive root" ? "covers" : "targets",
       );
     }
   });

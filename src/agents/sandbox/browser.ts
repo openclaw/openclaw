@@ -33,7 +33,10 @@ import {
   SANDBOX_DOCKER_CREATE_ARGS_EPOCH,
 } from "./constants.js";
 import { DOCKER_SANDBOX_ENGINE } from "./container-engine.js";
-import { handleHotSandboxConfigMismatch } from "./current-config.js";
+import {
+  assertChangedSandboxConfigAllowed,
+  handleHotSandboxConfigMismatch,
+} from "./current-config.js";
 import {
   buildSandboxCreateArgs,
   dockerContainerState,
@@ -274,6 +277,8 @@ async function ensureSandboxBrowserContainer(
     managedMounts: mountPlan.binds,
   });
 
+  // Creation and changed-config reuse judge binds against the same roots.
+  const bindSourceRoots = [params.workspaceDir, params.agentWorkspaceDir];
   const now = Date.now();
   let hasContainer = state.exists;
   let running = state.running;
@@ -300,6 +305,8 @@ async function ensureSandboxBrowserContainer(
     cdpAuthToken =
       (await readDockerContainerEnvVar(containerName, CDP_AUTH_TOKEN_ENV_KEY)) ?? undefined;
     params.assertCurrent?.();
+    // A container without the CDP relay token is removed under that auth contract before the
+    // changed-config security check; every container this code creates carries the token.
     if (!cdpAuthToken) {
       defaultRuntime.log(
         `Removing stale sandbox browser container ${containerName} because it lacks the current CDP relay auth contract; it will be recreated.`,
@@ -318,6 +325,14 @@ async function ensureSandboxBrowserContainer(
       currentHash = registryEntry?.configHash ?? null;
     }
     if (!currentHash || currentHash !== expectedHash) {
+      assertChangedSandboxConfigAllowed({
+        containerName,
+        cfg: browserDockerCfg,
+        bindSourceRoots,
+        browser: true,
+        scope: params.cfg.scope,
+        sessionKey: params.scopeKey,
+      });
       const lastUsedAtMs = registryEntry?.lastUsedAtMs;
       const isHot =
         running && (typeof lastUsedAtMs !== "number" || now - lastUsedAtMs < HOT_BROWSER_WINDOW_MS);
@@ -378,7 +393,7 @@ async function ensureSandboxBrowserContainer(
         "openclaw.browserConfigEpoch": SANDBOX_BROWSER_SECURITY_HASH_EPOCH,
       },
       configHash: expectedHash,
-      bindSourceRoots: [params.workspaceDir, params.agentWorkspaceDir],
+      bindSourceRoots,
     });
     for (const bind of mountPlan.skippedBinds) {
       defaultRuntime.log(

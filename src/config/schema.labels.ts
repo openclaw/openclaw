@@ -8,6 +8,7 @@ import { ENVIRONMENT_FIELD_LABELS } from "./schema.labels.environment.js";
 import { GITHUB_TOOL_FIELD_LABELS } from "./schema.labels.github.js";
 import { MESSAGE_FIELD_LABELS } from "./schema.labels.messages.js";
 import { MODEL_FIELD_LABELS } from "./schema.labels.models.js";
+import { SANDBOX_FIELD_LABELS } from "./schema.labels.sandbox.js";
 import { SESSION_FIELD_LABELS } from "./schema.labels.session.js";
 import { WORKSPACE_FIELD_LABELS } from "./schema.labels.workspace.js";
 import { META_FIELD_LABELS } from "./schema.meta.js";
@@ -369,11 +370,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.typingMode": "Typing Mode",
   "agents.defaults.typingIntervalSeconds": "Typing Interval (Seconds)",
   "agents.entries.*.typingMode": "Agent Typing Mode",
-  "agents.entries.*.sandbox.browser.network": "Agent Sandbox Browser Network",
-  "agents.entries.*.sandbox.browser.cdpSourceRange": "Agent Sandbox Browser CDP Source Range",
-  "agents.entries.*.sandbox.docker.dangerouslyAllowContainerNamespaceJoin":
-    "Agent Sandbox Docker Allow Container Namespace Join",
-  "agents.entries.*.sandbox.docker.gpus": "Agent Sandbox Docker GPUs",
+  ...SANDBOX_FIELD_LABELS,
   "agents.defaults.compaction": "Compaction",
   "agents.defaults.compaction.enabled": "Embedded Auto-Compaction",
   "agents.defaults.compaction.mode": "Compaction Mode",
@@ -413,11 +410,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.authInheritance.agentId": "Auth Inheritance Owner",
   "agents.defaults.sessionStore": "Legacy Session Store Target",
   "agents.defaults.sessionStore.agentId": "Legacy Session Store Owner",
-  "agents.defaults.sandbox.browser.network": "Sandbox Browser Network",
-  "agents.defaults.sandbox.browser.cdpSourceRange": "Sandbox Browser CDP Source Port Range",
-  "agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin":
-    "Sandbox Docker Allow Container Namespace Join",
-  "agents.defaults.sandbox.docker.gpus": "Sandbox Docker GPUs",
   commands: "Commands",
   "commands.native": "Native Commands",
   "commands.nativeSkills": "Native Skill Commands",

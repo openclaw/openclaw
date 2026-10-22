@@ -8,6 +8,7 @@ import { resolveAllowedModelRefCore } from "../../agents/model-selection-resolve
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
+import type { AgentSandboxConfig } from "../../config/types.agents-shared.js";
 import type { AgentEntryConfig } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MemorySearchConfig } from "../../config/types.tools.js";
@@ -207,10 +208,11 @@ describe("resolveCronAgentConfig preserves agent-aware config", () => {
         network: "none",
         dangerouslyAllowContainerNamespaceJoin: true,
         dangerouslyAllowExternalBindSources: true,
+        allowedBindSources: ["/srv/shared"],
       },
       browser: { enabled: true, autoStart: false },
       prune: { maxAgeDays: 7 },
-    } as const;
+    } satisfies AgentSandboxConfig;
     const sandbox = {
       docker: { image: "ghcr.io/openclaw/sandbox:custom" },
       browser: { image: "ghcr.io/openclaw/browser:custom" },

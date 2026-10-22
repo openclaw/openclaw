@@ -907,4 +907,43 @@ describe("sandbox browser lifecycle", () => {
     );
     expect(updateBrowserRegistry.mock.calls.at(-1)?.[1]).toBe(assertCurrent);
   });
+  it.each([true, false])(
+    "preserves the browser container and refuses it when its named root is revoked (hot=%s)",
+    async (hot) => {
+      const sharedDir = tempDirs.make("openclaw-browser-shared-");
+      const cfg = buildConfig(false);
+      cfg.docker.binds = [`${sharedDir}:/team:rw`];
+      const grantedHash = await computeTestBrowserHash({
+        cfg: { ...cfg, docker: { ...cfg.docker, allowedBindSources: [sharedDir] } },
+        createArgsEpoch: SANDBOX_DOCKER_CREATE_ARGS_EPOCH,
+      });
+      dockerMocks.dockerContainerState.mockResolvedValue({ exists: true, running: true });
+      dockerMocks.readDockerContainerEnvVar.mockResolvedValue("existing-cdp-token");
+      dockerMocks.readDockerContainerLabel.mockResolvedValue(grantedHash);
+      registryMocks.readBrowserRegistry.mockResolvedValue({
+        entries: [
+          {
+            containerName: "openclaw-sbx-browser-session-test-0661d10a",
+            sessionKey: "session:test",
+            createdAtMs: 1,
+            lastUsedAtMs: hot ? Date.now() : 0,
+            image: cfg.browser.image,
+            configHash: grantedHash,
+            cdpPort: 49100,
+          },
+        ],
+      });
+
+      await expect(
+        ensureTestSandboxBrowser({
+          scopeKey: "session:test",
+          workspaceDir: testWorkspaceDir,
+          agentWorkspaceDir: testWorkspaceDir,
+          cfg,
+        }),
+      ).rejects.toThrow(
+        /^Sandbox config changed for openclaw-sbx-browser-session-test-0661d10a; the existing container was preserved .* is outside allowed roots .* recreate: openclaw sandbox recreate --browser --session session:test$/,
+      );
+    },
+  );
 });
