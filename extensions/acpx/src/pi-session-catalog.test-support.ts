@@ -40,7 +40,7 @@ export const piMessage = (
 export const piJsonl = (entries: unknown[]) =>
   `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`;
 
-export function restorePiEnvironment(original: NodeJS.ProcessEnv) {
+function restorePiEnvironment(original: NodeJS.ProcessEnv) {
   for (const [key, value] of Object.entries(original)) {
     if (value === undefined) {
       delete process.env[key];
@@ -97,7 +97,7 @@ export function capturePiCatalog(
   return { provider: provider!, commands };
 }
 
-export function bindTestCatalogOwner(
+function bindTestCatalogOwner(
   provider: RegisteredSessionCatalogProvider,
 ): TestSessionCatalogProvider {
   const { continueSession, archive, openTerminal } = provider;
@@ -178,7 +178,7 @@ export async function createPiStoreFixture(
   return directory;
 }
 
-export async function installFakePiFixture(
+async function installFakePiFixture(
   temporaryDirectories: string[],
   originalPath: string | undefined,
 ): Promise<string> {
