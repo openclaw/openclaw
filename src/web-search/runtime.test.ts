@@ -27,9 +27,11 @@ const { ownerMock, pluginProvidersMock, runtimeProvidersMock } = vi.hoisted(() =
   pluginProvidersMock: vi.fn<typeof Providers.resolvePluginWebSearchProviders>(),
   runtimeProvidersMock: vi.fn<typeof Providers.resolveRuntimeWebSearchProviders>(),
 }));
+// mock-isolation: Synthetic manifest owners keep installed plugin state out of provider selection.
 vi.mock("../plugins/plugin-registry-contributions.js", () => ({
   resolveManifestContractOwnerPluginId: ownerMock,
 }));
+// mock-isolation: Fixture providers exercise search execution without loading installed plugins.
 vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: pluginProvidersMock,
   resolveRuntimeWebSearchProviders: runtimeProvidersMock,
