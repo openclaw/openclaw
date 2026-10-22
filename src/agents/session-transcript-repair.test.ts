@@ -283,20 +283,12 @@ describe("repairToolUseResultPairing prefers real result over synthetic error", 
     };
   }
 
-  function makeRealResult(toolCallId: string, text = "real output") {
-    return textToolResult(toolCallId, "read", text, { isError: false });
-  }
-
-  function makeAssistant(toolCallId: string) {
-    return sparseAssistant([toolCall(toolCallId)]);
-  }
-
   it("keeps the real result while dropping its synthetic predecessor and an orphan", () => {
     const input = castAgentMessages([
-      makeAssistant("call_1"),
+      sparseAssistant([toolCall("call_1")]),
       makeSyntheticResult("call_1"),
-      makeRealResult("call_orphan", "orphan"),
-      makeRealResult("call_1"),
+      textToolResult("call_orphan", "read", "orphan", { isError: false }),
+      textToolResult("call_1", "read", "real output", { isError: false }),
     ]);
 
     const result = repairToolUseResultPairing(input);
@@ -306,10 +298,10 @@ describe("repairToolUseResultPairing prefers real result over synthetic error", 
 
   it("late real result after another assistant turn replaces prior synthetic", () => {
     const input = castAgentMessages([
-      makeAssistant("call_1"),
+      sparseAssistant([toolCall("call_1")]),
       makeSyntheticResult("call_1"),
       sparseAssistant([toolCall("call_2", "write")]),
-      makeRealResult("call_1"),
+      textToolResult("call_1", "read", "real output", { isError: false }),
       textToolResult("call_2", "write", "second output", { isError: false }),
     ]);
 

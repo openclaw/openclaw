@@ -45,16 +45,16 @@ it("returns undefined for missing, empty, or non-text content", () => {
   expect(extractFirstTextBlock({ content: ["hello"] })).toBeUndefined();
   expect(extractFirstTextBlock({ content: [{ text: 1 }, { text: "later" }] })).toBeUndefined();
 });
-it("preserves boundary spacing when joining adjacent final_answer text blocks", () => {
+it("preserves boundary spacing when newline-joining adjacent final_answer text blocks", () => {
   expect(
     extractAssistantTextForPhase(
       assistant([
         phasedText("Hi ", "final_answer", "msg_final_1"),
         phasedText("there", "final_answer", "msg_final_2"),
       ]),
-      { phase: "final_answer", joinWith: "" },
+      { phase: "final_answer" },
     ),
-  ).toBe("Hi there");
+  ).toBe("Hi \nthere");
 });
 
 it.each<[string, unknown, string | undefined]>([

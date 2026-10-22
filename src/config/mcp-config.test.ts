@@ -15,38 +15,38 @@ function validationOk(raw: unknown) {
   return { ok: true as const, config: raw, warnings: [] };
 }
 
-const mockReadSourceConfigSnapshot = vi.hoisted(() => async () => {
-  const fsValue = await import("node:fs/promises");
-  const pathValue = await import("node:path");
-  const configPath = pathValue.join(process.env.OPENCLAW_STATE_DIR ?? "", "openclaw.json");
-  try {
-    const raw = await fsValue.readFile(configPath, "utf-8");
-    const parsed = JSON.parse(raw);
+const { mockReadSourceConfigSnapshot, mockReplaceConfigFile } = vi.hoisted(() => {
+  async function file() {
+    const fileSystem = await import("node:fs/promises");
+    const paths = await import("node:path");
     return {
-      valid: true,
-      path: configPath,
-      sourceConfig: parsed,
-      resolved: parsed,
-      hash: "test-hash",
-    };
-  } catch {
-    return {
-      valid: false,
-      path: configPath,
+      fileSystem,
+      configPath: paths.join(process.env.OPENCLAW_STATE_DIR ?? "", "openclaw.json"),
     };
   }
-});
-
-const mockReplaceConfigFile = vi.hoisted(
-  () =>
-    async ({ sourceConfig }: { sourceConfig: unknown }) => {
-      const fsLocal = await import("node:fs/promises");
-      const pathLocal = await import("node:path");
-      const configPath = pathLocal.join(process.env.OPENCLAW_STATE_DIR ?? "", "openclaw.json");
-      await fsLocal.writeFile(configPath, JSON.stringify(sourceConfig, null, 2), "utf-8");
+  return {
+    mockReadSourceConfigSnapshot: async () => {
+      const { fileSystem, configPath } = await file();
+      try {
+        const parsed = JSON.parse(await fileSystem.readFile(configPath, "utf-8"));
+        return {
+          valid: true,
+          path: configPath,
+          sourceConfig: parsed,
+          resolved: parsed,
+          hash: "test-hash",
+        };
+      } catch {
+        return { valid: false, path: configPath };
+      }
+    },
+    mockReplaceConfigFile: async ({ sourceConfig }: { sourceConfig: unknown }) => {
+      const { fileSystem, configPath } = await file();
+      await fileSystem.writeFile(configPath, JSON.stringify(sourceConfig, null, 2), "utf-8");
       return { nextConfig: sourceConfig };
     },
-);
+  };
+});
 
 vi.mock("./io.js", () => ({
   readSourceConfigSnapshot: mockReadSourceConfigSnapshot,
@@ -119,28 +119,24 @@ describe("config mcp config", () => {
     });
   });
 
-  it("does not overwrite an existing server in create-only mode", async () => {
-    await withMcpServers({ docs: stdio("node", "existing.mjs") }, async () => {
+  it.each([
+    ["create-only", { createOnly: true }, "already exists"],
+    ["stale owner", { expectedServer: stdio("node", "stale.mjs") }, "changed"],
+  ] as const)("does not overwrite a server for %s", async (_name, options, error) => {
+    const current = stdio("node", "current.mjs");
+    await withMcpServers({ docs: current }, async () => {
       const result = await setConfiguredMcpServer({
         name: "docs",
-        server: stdio("uvx", "docs-mcp"),
-        createOnly: true,
+        server: stdio("uvx", "docs@2"),
+        ...options,
       });
-
-      expect(result).toMatchObject({ ok: false, error: expect.stringContaining("already exists") });
-      expect((await readMcpServers()).docs).toEqual(stdio("node", "existing.mjs"));
+      expect(result).toMatchObject({ ok: false, error: expect.stringContaining(error) });
+      expect((await readMcpServers()).docs).toEqual(current);
     });
   });
 
   it("only replaces a server that still matches the expected config", async () => {
     await withMcpServers({ docs: stdio("node", "current.mjs") }, async () => {
-      const stale = await setConfiguredMcpServer({
-        name: "docs",
-        server: stdio("uvx", "docs@2"),
-        expectedServer: stdio("node", "stale.mjs"),
-      });
-      expect(stale).toMatchObject({ ok: false, error: expect.stringContaining("changed") });
-
       const replaced = await setConfiguredMcpServer({
         name: "docs",
         server: stdio("uvx", "docs@2"),
@@ -192,16 +188,14 @@ describe("config mcp config", () => {
       const setResult = await setConfiguredMcpServer({
         name: "billing",
         server: {
-          command: "uvx",
-          args: [
-            "billing-mcp",
-            "--api-key",
-            REDACTED_SENTINEL,
-            `--token=${REDACTED_SENTINEL}`,
-            REDACTED_SENTINEL,
-            "--region",
-            "us-east-1",
-          ],
+          ...billing,
+          args: billing.args.map((arg, index) =>
+            index === 2 || index === 4
+              ? REDACTED_SENTINEL
+              : index === 3
+                ? `--token=${REDACTED_SENTINEL}`
+                : arg,
+          ),
           headers: { Authorization: REDACTED_SENTINEL },
           env: { BILLING_TOKEN: REDACTED_SENTINEL },
         },

@@ -68,6 +68,7 @@ export type ModelProvidersViewProps = SharedModelProvidersProps & {
   catalogDiscovering: boolean;
   catalogDiscoveryError: string | null;
   providerDetailsReady?: boolean;
+  apiKeySaving?: Record<string, boolean>;
   installedAgents: JSX.Element | typeof undefined;
   providerScope?: JSX.Element;
   accountRecovery?: JSX.Element | typeof undefined;
@@ -93,8 +94,7 @@ function modelsText(card: ModelProviderCard): string | null {
       : t("modelProviders.models", { count: String(card.modelCount) });
 }
 
-function renderLocalCost(card: ModelProviderCard) {
-  const cost = card.localCost;
+function renderLocalCost(cost: ModelProviderCard["localCost"]) {
   const unavailable = cost?.usageReport?.state === "unavailable";
   if (!cost || (!unavailable && cost.totalTokens === 0 && cost.totalCost === 0)) {
     return undefined;
@@ -111,6 +111,16 @@ function renderLocalCost(card: ModelProviderCard) {
           messages: String(cost.messageCount),
         })}
       </div>
+    </div>
+  );
+}
+
+function renderGlobalUsage(usage: ModelProviderCard["usage"], loading: boolean) {
+  return usage ? (
+    renderProviderUsageDetails(usage)
+  ) : (
+    <div class="model-providers__no-stats">
+      {t(loading ? "common.loading" : "modelProviders.noStats")}
     </div>
   );
 }
@@ -204,7 +214,8 @@ function ApiKeyInput(props: {
 }
 
 function KeyEditor(props: ModelProvidersViewProps & { card: ModelProviderCard }) {
-  const busy = () => Boolean(props.busy[`key:${props.card.id}`]);
+  const busy = () =>
+    Boolean(props.apiKeySaving?.[`key:${props.card.id}`] || props.busy[`key:${props.card.id}`]);
   const authModeBlocked = () =>
     props.card.apiKeySupported === false ||
     Boolean(props.card.configAuthMode && props.card.configAuthMode !== "api-key");
@@ -239,7 +250,7 @@ function ProviderActions(props: ModelProvidersViewProps & { card: ModelProviderC
   const authModeBlocked = () =>
     Boolean(props.card.configAuthMode && props.card.configAuthMode !== "api-key");
   const keyDisabled = () =>
-    Boolean(props.busy[`key:${props.card.id}`]) ||
+    Boolean(props.apiKeySaving?.[`key:${props.card.id}`] || props.busy[`key:${props.card.id}`]) ||
     configMutationDisabled(props) ||
     authModeBlocked();
   const keyTitle = () =>
@@ -321,6 +332,9 @@ function ProviderActions(props: ModelProvidersViewProps & { card: ModelProviderC
 function ProviderRow(props: ModelProvidersViewProps & { card: ModelProviderCard }) {
   const card = () => props.card;
   const models = () => modelsText(card());
+  const usage = () => props.metrics.usage.value().get(card().id)?.snapshot ?? card().usage;
+  const plan = (value: ModelProviderCard["usage"]) =>
+    value?.plan ? <SettingsValue value={value.plan} /> : undefined;
   const message = () => props.messages[`key:${card().id}`] ?? props.messages[card().id];
   return (
     <div
@@ -339,7 +353,11 @@ function ProviderRow(props: ModelProvidersViewProps & { card: ModelProviderCard 
           </div>
         </div>
         <div class="settings-row__control">
-          {card().usage?.plan ? <SettingsValue value={card().usage?.plan} /> : undefined}
+          <Errored fallback={() => plan(card().usage)}>
+            <Loading on={props.metrics.usage.request()} fallback={plan(card().usage)}>
+              {plan(usage())}
+            </Loading>
+          </Errored>
           {renderProviderStatus(card())}
         </div>
       </div>
@@ -358,14 +376,19 @@ function ProviderRow(props: ModelProvidersViewProps & { card: ModelProviderCard 
         aria-busy={props.supplementalLoading ? "true" : "false"}
       >
         <div class="model-providers__global-metrics-title">{t("modelProviders.globalUsage")}</div>
-        {card().usage ? (
-          renderProviderUsageDetails(card().usage!)
-        ) : (
-          <div class="model-providers__no-stats">
-            {t(props.supplementalLoading ? "common.loading" : "modelProviders.noStats")}
-          </div>
-        )}
-        {renderLocalCost(card())}
+        <Errored fallback={() => renderGlobalUsage(card().usage, props.supplementalLoading)}>
+          <Loading
+            on={props.metrics.usage.request()}
+            fallback={renderGlobalUsage(card().usage, props.supplementalLoading)}
+          >
+            {renderGlobalUsage(usage(), props.supplementalLoading)}
+          </Loading>
+        </Errored>
+        <Errored fallback={() => renderLocalCost(card().localCost)}>
+          <Loading on={props.metrics.cost.request()} fallback={renderLocalCost(card().localCost)}>
+            {renderLocalCost(props.metrics.cost.value().get(card().id) ?? card().localCost)}
+          </Loading>
+        </Errored>
       </div>
       <ProviderActions {...props} /> <KeyEditor {...props} />
       {renderProbeResult(props.probeResults[card().id])} {renderMutationMessage(message())}
@@ -374,7 +397,7 @@ function ProviderRow(props: ModelProvidersViewProps & { card: ModelProviderCard 
 }
 
 function AddProvider(props: ModelProvidersViewProps) {
-  const busy = () => Boolean(props.busy.add);
+  const busy = () => Boolean(props.apiKeySaving?.add) || Boolean(props.busy.add);
   const disabled = () => configMutationDisabled(props) || busy();
   const provider = () =>
     props.unconfiguredProviders.find((entry) => entry.id === props.addProviderId);

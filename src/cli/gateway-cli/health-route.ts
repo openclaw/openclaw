@@ -9,34 +9,28 @@ type GatewayHealthJsonRouteArgs = {
   localPortOverride?: number;
 };
 
-async function resolveRouteRpcOptions(
-  args: GatewayHealthJsonRouteArgs,
-): Promise<GatewayHealthRpcOpts> {
-  if (args.localPortOverride === undefined) {
-    return args.rpc;
-  }
-  const { readNonObservingHealthConfig } = await import("../../commands/health.js");
-  const config = await readNonObservingHealthConfig();
-  return {
-    ...args.rpc,
-    localPortOverride: args.localPortOverride,
-    config: {
-      ...config,
-      gateway: {
-        ...config.gateway,
-        mode: "local",
-        port: args.localPortOverride,
-      },
-    },
-  };
-}
-
 /** Run the successful JSON path without loading text presentation modules. */
 export async function runGatewayHealthJsonRoute(
   args: GatewayHealthJsonRouteArgs,
   runtime: RuntimeEnv,
 ): Promise<void> {
-  const rpc = await resolveRouteRpcOptions(args);
+  let rpc = args.rpc;
+  if (args.localPortOverride !== undefined) {
+    const { readNonObservingHealthConfig } = await import("../../commands/health.js");
+    const config = await readNonObservingHealthConfig();
+    rpc = {
+      ...args.rpc,
+      localPortOverride: args.localPortOverride,
+      config: {
+        ...config,
+        gateway: {
+          ...config.gateway,
+          mode: "local",
+          port: args.localPortOverride,
+        },
+      },
+    };
+  }
   try {
     const { callGatewayFromCliWithTransport } = await import("../gateway-rpc.js");
     writeRuntimeJson(

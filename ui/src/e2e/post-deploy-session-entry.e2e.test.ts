@@ -1,7 +1,9 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { cp, mkdtemp, rm } from "node:fs/promises";
 import type { Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { chromium, type Browser, type Page, type Request } from "playwright";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../../src/config/runtime-snapshot.js";
@@ -62,8 +64,44 @@ describe("public-session post-deploy app handoff", () => {
 
   beforeAll(async () => {
     fixture = await mkdtemp(path.join(os.tmpdir(), "openclaw-post-deploy-entry-"));
-    for (const build of [buildA, buildB]) {
-      await buildProductionControlUiE2e(path.join(fixture, build), build);
+    await buildProductionControlUiE2e(path.join(fixture, buildA), buildA);
+    // Release identity lives in HTML and the worker; both builds use the same compiled source.
+    await cp(path.join(fixture, buildA), path.join(fixture, buildB), { recursive: true });
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      NODE_ENV: "production",
+      OPENCLAW_CONTROL_UI_BUILD_ID: buildB,
+    };
+    for (const key of Object.keys(env)) {
+      if (key.startsWith("VITEST")) {
+        delete env[key];
+      }
+    }
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "--input-type=module",
+        "--eval",
+        `const { refreshControlUiBuildOutput, resolveControlUiBuildInfo } =
+  await import(process.argv[1]);
+await refreshControlUiBuildOutput(process.argv[2], resolveControlUiBuildInfo());`,
+        new URL("../../vite.config.ts", import.meta.url).href,
+        path.join(fixture, buildB),
+      ],
+      {
+        cwd: fileURLToPath(new URL("../..", import.meta.url)),
+        encoding: "utf8",
+        env,
+        stdio: ["ignore", "inherit", "pipe"],
+        maxBuffer: 10 * 1024 * 1024,
+      },
+    );
+    if (result.status !== 0) {
+      throw new Error(
+        `Production Control UI identity refresh failed (exit ${result.status ?? "unknown"}):\n${result.stderr || result.error?.message || "See streamed build output above."}`,
+      );
     }
     state = await createOpenClawTestState({
       scenario: "minimal",

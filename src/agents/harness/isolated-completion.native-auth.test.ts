@@ -12,6 +12,7 @@ import {
   resetIsolatedCompletionTestState,
   nativeAuthPlan,
 } from "../isolated-completion.test-support.js";
+import type { PreparedAgentRuntimeAuthAttempt } from "../runtime-plan/prepare-auth.js";
 
 const { createPluginMetadataSnapshot, makeRegistry } =
   await import("../../config/plugin-auto-enable.test-helpers.js");
@@ -32,6 +33,17 @@ function registerReply(text: string) {
   const run = vi.fn(async () => reply(text));
   registerIsolatedHarness({ authBootstrap: "harness", runIsolatedCompletionV2: run });
   return run;
+}
+function prepareAttempts(...attempts: PreparedAgentRuntimeAuthAttempt[]) {
+  mocks.prepareAgentRuntimeAuth.mockReturnValueOnce({ plan: attempts[0]!.plan, attempts });
+}
+function tokenProfiles(...names: string[]) {
+  return Object.fromEntries(
+    names.map((name) => [
+      "openai:" + name,
+      { type: "token" as const, provider: "openai", token: name },
+    ]),
+  );
 }
 
 describe("runIsolatedCompletion native authorization", () => {
@@ -66,15 +78,15 @@ describe("runIsolatedCompletion native authorization", () => {
         forwardedAuthProfileId: "openai:key",
         modelRoute: {
           ...subscriptionPlan.modelRoute,
-          api: "openai-responses",
+          api: "openai-responses" as const,
           baseUrl: "https://api.openai.com/v1",
-          authRequirement: "api-key",
+          authRequirement: "api-key" as const,
         },
       };
       mocks.ensureAuthProfileStore.mockReturnValueOnce({
         version: 1,
         profiles: {
-          "openai:subscription": { type: "token", provider: "openai", token: "subscription" },
+          ...tokenProfiles("subscription"),
           "openai:key": { type: "api_key", provider: "openai", key: "key" },
         },
       });
@@ -86,25 +98,17 @@ describe("runIsolatedCompletion native authorization", () => {
           baseUrl: subscriptionPlan.modelRoute.baseUrl,
         },
       });
-      mocks.prepareAgentRuntimeAuth.mockReturnValueOnce({
-        plan: subscriptionPlan,
-        attempts: [
-          { kind: "profile", plan: subscriptionPlan, profileId: "openai:subscription" },
-          ...(apiSibling === "profile"
-            ? [{ kind: "profile", plan: apiPlan, profileId: "openai:key" }]
-            : []),
-          ...(apiSibling === "dependent-direct"
-            ? [
-                {
-                  kind: "direct",
-                  plan: { ...apiPlan, forwardedAuthProfileId: undefined },
-                  allowAuthProfileFallback: false,
-                  requiresPriorProfileAttempt: true,
-                },
-              ]
-            : []),
-        ],
-      });
+      prepareAttempts(
+        { kind: "profile", plan: subscriptionPlan, profileId: "openai:subscription" },
+        apiSibling === "profile"
+          ? { kind: "profile", plan: apiPlan, profileId: "openai:key" }
+          : {
+              kind: "direct",
+              plan: { ...apiPlan, forwardedAuthProfileId: undefined },
+              allowAuthProfileFallback: false,
+              requiresPriorProfileAttempt: true,
+            },
+      );
       const runIsolatedCompletionV2 = registerReply("API sibling reply");
       const pending = runIsolatedCompletion(isolatedRequest());
       if (apiSibling === "profile") {
@@ -129,32 +133,6 @@ describe("runIsolatedCompletion native authorization", () => {
     },
   );
 
-  it("clamps V2 output tokens to the resolved physical model limit", async () => {
-    mocks.resolveModelAsync.mockResolvedValueOnce({
-      model: {
-        provider: "openai",
-        id: "gpt-test",
-        api: "openai-chatgpt-responses",
-        baseUrl: nativeAuthPlan.modelRoute.baseUrl,
-        maxTokens: 1_024,
-      },
-    });
-    const runIsolatedCompletionV2 = registerReply("native result");
-
-    await runIsolatedCompletion({
-      ...isolatedRequest(),
-      outputTextPolicy: "strict-visible",
-      streamParams: { maxTokens: 4_096, temperature: 0.2 },
-    });
-
-    expect(runIsolatedCompletionV2).toHaveBeenCalledWith(
-      expect.objectContaining({
-        outputTextPolicy: "strict-visible",
-        streamParams: { maxTokens: 1_024, temperature: 0.2 },
-      }),
-    );
-  });
-
   it.each([false, true])("keeps harness fallback core-owned (retired: %s)", async (retired) => {
     let current = true;
     const expired = new Error("The completion owner retired.");
@@ -171,18 +149,12 @@ describe("runIsolatedCompletion native authorization", () => {
     };
     mocks.ensureAuthProfileStore.mockReturnValueOnce({
       version: 1,
-      profiles: {
-        "openai:first": { type: "token", provider: "openai", token: "first" },
-        "openai:backup": { type: "token", provider: "openai", token: "backup" },
-      },
+      profiles: tokenProfiles("first", "backup"),
     });
-    mocks.prepareAgentRuntimeAuth.mockReturnValueOnce({
-      plan: firstPlan,
-      attempts: [
-        { kind: "profile", plan: firstPlan, profileId: "openai:first" },
-        { kind: "profile", plan: backupPlan, profileId: "openai:backup" },
-      ],
-    });
+    prepareAttempts(
+      { kind: "profile", plan: firstPlan, profileId: "openai:first" },
+      { kind: "profile", plan: backupPlan, profileId: "openai:backup" },
+    );
     const runIsolatedCompletionV2 = vi
       .fn()
       .mockImplementationOnce(async () => {
@@ -228,6 +200,7 @@ describe("runIsolatedCompletion native authorization", () => {
     async (cooled) => {
       const profilePlan = {
         providerForAuth: "openai",
+        authProfileProviderForAuth: "openai",
         modelId: "gpt-test",
         harnessAuthProvider: "openai",
         forwardedAuthProfileId: "openai:first",
@@ -236,27 +209,30 @@ describe("runIsolatedCompletion native authorization", () => {
       };
       const directPlan = {
         providerForAuth: "openai",
+        authProfileProviderForAuth: "openai",
         modelId: "gpt-test",
         harnessAuthProvider: "openai",
-        modelRoute: { authRequirement: "api-key" as const },
+        modelRoute: {
+          ...nativeAuthPlan.modelRoute,
+          api: "openai-responses" as const,
+          baseUrl: "https://api.openai.com/v1",
+          authRequirement: "api-key" as const,
+        },
       };
       mocks.ensureAuthProfileStore.mockReturnValueOnce({
         version: 1,
-        profiles: { "openai:first": { type: "token", provider: "openai", token: "first" } },
+        profiles: tokenProfiles("first"),
         usageStats: cooled ? { "openai:first": { cooldownUntil: Date.now() + 60_000 } } : {},
       });
-      mocks.prepareAgentRuntimeAuth.mockReturnValueOnce({
-        plan: profilePlan,
-        attempts: [
-          { kind: "profile", plan: profilePlan, profileId: "openai:first" },
-          {
-            kind: "direct",
-            plan: directPlan,
-            allowAuthProfileFallback: false,
-            requiresPriorProfileAttempt: true,
-          },
-        ],
-      });
+      prepareAttempts(
+        { kind: "profile", plan: profilePlan, profileId: "openai:first" },
+        {
+          kind: "direct",
+          plan: directPlan,
+          allowAuthProfileFallback: false,
+          requiresPriorProfileAttempt: true,
+        },
+      );
       const runIsolatedCompletionV2 = vi
         .fn()
         .mockRejectedValueOnce(new Error("profile unavailable"))
@@ -316,7 +292,13 @@ describe("runIsolatedCompletion native authorization", () => {
       },
     });
     mocks.resolveModelAsync.mockResolvedValue({
-      model: { provider: "openai", id: "gpt-5.5", api: route.api, baseUrl: route.baseUrl },
+      model: {
+        provider: "openai",
+        id: "gpt-5.5",
+        api: route.api,
+        baseUrl: route.baseUrl,
+        maxTokens: 1_024,
+      },
     });
     const runIsolatedCompletionV2 = registerReply("prepared route result");
 
@@ -327,6 +309,8 @@ describe("runIsolatedCompletion native authorization", () => {
           ...isolatedRequest(),
           model: "gpt-5.5",
           authProfileId: profileId,
+          outputTextPolicy: "strict-visible",
+          streamParams: { maxTokens: 4_096, temperature: 0.2 },
         }),
       );
     } finally {
@@ -345,7 +329,11 @@ describe("runIsolatedCompletion native authorization", () => {
     expect(mocks.acquireAgentRunPreparedModelRuntime).toHaveBeenCalledOnce();
     expect(releaseRuntimeLease).toHaveBeenCalledOnce();
     expect(runIsolatedCompletionV2).toHaveBeenCalledWith(
-      expect.objectContaining({ authorization: expect.objectContaining({ owner: route.owner }) }),
+      expect.objectContaining({
+        authorization: expect.objectContaining({ owner: route.owner }),
+        outputTextPolicy: "strict-visible",
+        streamParams: { maxTokens: route.owner === "harness" ? 1_024 : 4_096, temperature: 0.2 },
+      }),
     );
   });
 });

@@ -274,7 +274,7 @@ describe("full-release-validation-at-sha", () => {
       "is not reachable from release branch",
     );
     expect(() => verify("release/2026.7.1", "2026.6.9")).toThrow(
-      "does not belong to release branch",
+      "does not belong to release branch release/2026.7.1; expected 2026.7.1 or a beta prerelease of it. Update package.json on release/2026.7.1 to the intended release version, commit and push the release branch, then rerun with the new candidate SHA.",
     );
     for (const version of ["2026.6.33", "2026.6.34", "2026.6.35"]) {
       expect(verify("extended-stable/2026.6.33", version)).toBe("extended-stable/2026.6.33");
@@ -289,7 +289,7 @@ describe("full-release-validation-at-sha", () => {
     );
     expect(() => verify("v2026.7.1-beta.5", "2026.7.1-beta.5")).toThrow("does not resolve");
     expect(() => verify("v2026.7.1-beta.5", "2026.7.1-beta.4", candidateSha)).toThrow(
-      "does not match release tag",
+      "does not match release tag v2026.7.1-beta.5. Prepare the candidate from a commit whose package.json version matches v2026.7.1-beta.5, push that tag, then rerun with its candidate SHA.",
     );
   });
 

@@ -973,7 +973,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
       reportWarning(
         `Failed to migrate auth profile JSON for ${shortenHomePath(candidate.authPath)}: ${String(err)}`,
         "import-failed",
-        "Keep the original JSON and recovery copy. Correct the reported source or database access error, then rerun openclaw doctor --fix. Use openclaw models status to identify credentials still requiring login.",
+        `Preserve the source and recovery copy. Restore valid UTF-8 JSON from a verified backup if unreadable; otherwise correct the reported source or database access error, then rerun ${formatCliCommand("openclaw doctor --fix")}. Use openclaw models status to identify credentials still requiring login.`,
         candidate.authPath,
       );
     } finally {
@@ -1594,7 +1594,7 @@ function recoverArchivedAuthProfileMappings(params: {
         ) {
           continue;
         }
-        const archivedStore = JSON.parse(sourceBytes.toString("utf8")) as unknown;
+        const archivedStore = parseAuthProfileMigrationSource({ sourceBytes, sourcePath });
         const sourceStore =
           coerceLegacyAuthProfileStore(archivedStore) ??
           coerceLegacyFlatAuthProfileStore(archivedStore);

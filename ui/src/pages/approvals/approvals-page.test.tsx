@@ -317,6 +317,44 @@ describe("ApprovalsPage", () => {
     },
   );
 
+  it("retains the grant row and releases failed revoke feedback before retry", async () => {
+    const failedRevoke = createDeferred<unknown>();
+    const retryRevoke = createDeferred<unknown>();
+    const revoke = replyOnce(failedRevoke.promise, retryRevoke.promise);
+    const { page } = createPage(
+      (method) =>
+        method === "exec.approval.grants.revoke" ? revoke() : Promise.resolve({ items: [] }),
+      undefined,
+      () => Promise.resolve(grantReply("Nightly backup")),
+    );
+    await waitForGrants(page, "Nightly backup");
+    const button = grantButton(page)!;
+    const row = button.closest("tr");
+    button.click();
+    button.click();
+    flush();
+    expect(revoke).toHaveBeenCalledOnce();
+    expect(button.disabled).toBe(true);
+    expect(button.textContent).toContain("Revoking");
+    expect(grantsText(page)).toContain("Until revoked");
+
+    failedRevoke.reject(new Error("Revoke failed"));
+    await waitForSolid(() => {
+      expect(page.querySelector('[role="alert"]')?.textContent).toContain("Revoke failed");
+      expect(button.disabled).toBe(false);
+      expect(button.textContent?.trim()).toBe("Revoke");
+    });
+    expect(grantButton(page)?.closest("tr")).toBe(row);
+
+    button.click();
+    flush();
+    expect(button.disabled).toBe(true);
+    retryRevoke.resolve({ outcome: "revoked" });
+    await waitForGrants(page, "Revoked");
+    expect(revoke).toHaveBeenCalledTimes(2);
+    expect(grantButton(page)).toBeNull();
+  });
+
   it("renders the standing-grant ledger and revokes through the gateway", async () => {
     const pendingRefresh = createDeferred<ExecApprovalGrantsListResult>();
     const grant = standingGrant("Nightly backup");

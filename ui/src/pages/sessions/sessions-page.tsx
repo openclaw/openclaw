@@ -94,7 +94,13 @@ export function SessionsPageContent(props: { page: SessionsPageOwner }) {
         {(current) => (
           <SessionManagementMenu
             {...current()}
-            onAction={(requested) => presentCommand(current().onAction(requested))}
+            onAction={(requested) => {
+              const completion = current().onAction(requested, presentCommand);
+              // Placement reports its admitted write after the chooser has completed.
+              if (requested.kind !== "move-session") {
+                presentCommand(completion);
+              }
+            }}
           />
         )}
       </Show>

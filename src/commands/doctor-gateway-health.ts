@@ -266,39 +266,11 @@ function isGatewayCallTimeout(message: string): boolean {
   return /^gateway timeout after \d+ms(?:\n|$)/.test(message);
 }
 
-function resolveGatewayDiagnosticsTimeouts(timeoutMs: number, statusElapsedMs: number) {
-  // Preserve five seconds of channel work, plus the measured round-trip and result-delivery margin.
-  const transportMs = Math.ceil(statusElapsedMs) + 1_000;
-  const diagnosticsTimeoutMs = Math.min(
-    30_000,
-    Math.max(timeoutMs, 5_000 + transportMs, Math.ceil(statusElapsedMs * 3)),
-  );
-  return {
-    diagnosticsTimeoutMs,
-    channelProbeTimeoutMs: Math.max(1, diagnosticsTimeoutMs - transportMs),
-  };
-}
-
 function isGatewayHealthAuthUnavailableError(error: unknown): boolean {
   return (
     isGatewayCredentialsRequiredError(error) ||
     isGatewaySecretRefUnavailableError(error) ||
     readMissingScopeError(error) !== null
-  );
-}
-
-function noteCliGatewayVersionSkew(status: StatusSummary | undefined): void {
-  const gatewayVersion = status?.runtimeVersion?.trim();
-  if (!gatewayVersion || gatewayVersion === VERSION) {
-    return;
-  }
-  note(
-    [
-      `This command is OpenClaw ${VERSION}; the running Gateway is OpenClaw ${gatewayVersion}.`,
-      "Check `openclaw --version`, `which openclaw`, and `openclaw gateway status --deep`.",
-      "If this mismatch is unexpected, update PATH so `openclaw` points to the version you want, or reinstall the Gateway service from that same OpenClaw install.",
-    ].join("\n"),
-    "OpenClaw version mismatch",
   );
 }
 
@@ -416,14 +388,27 @@ export async function checkGatewayHealth(params: {
       },
     });
     const statusElapsedMs = performance.now() - statusStartedAt;
-    const { diagnosticsTimeoutMs, channelProbeTimeoutMs } = resolveGatewayDiagnosticsTimeouts(
-      timeoutMs,
-      statusElapsedMs,
+    // Preserve five seconds of channel work, plus the measured round-trip and result-delivery margin.
+    const transportMs = Math.ceil(statusElapsedMs) + 1_000;
+    const diagnosticsTimeoutMs = Math.min(
+      30_000,
+      Math.max(timeoutMs, 5_000 + transportMs, Math.ceil(statusElapsedMs * 3)),
     );
+    const channelProbeTimeoutMs = Math.max(1, diagnosticsTimeoutMs - transportMs);
     const slowDiagnosticNote = (diagnostic: string) =>
       `Gateway answered status in ${formatDurationSeconds(statusElapsedMs)}; ${diagnostic} diagnostics did not finish within ${formatDurationSeconds(diagnosticsTimeoutMs)}. The host may be slow; this does not mark the Gateway unhealthy.`;
     healthOk = true;
-    noteCliGatewayVersionSkew(status);
+    const gatewayVersion = status?.runtimeVersion?.trim();
+    if (gatewayVersion && gatewayVersion !== VERSION) {
+      note(
+        [
+          `This command is OpenClaw ${VERSION}; the running Gateway is OpenClaw ${gatewayVersion}.`,
+          "Check `openclaw --version`, `which openclaw`, and `openclaw gateway status --deep`.",
+          "If this mismatch is unexpected, update PATH so `openclaw` points to the version you want, or reinstall the Gateway service from that same OpenClaw install.",
+        ].join("\n"),
+        "OpenClaw version mismatch",
+      );
+    }
     const noteWarning = (warning: string | undefined, title: string) => {
       if (warning) {
         report(sanitizeTerminalText(warning), title);
