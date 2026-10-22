@@ -1,7 +1,11 @@
 import type { ChannelInboundTurnPlan } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import type {
+  GetReplyOptions,
+  MsgContext,
+  ReplyDispatcher,
+} from "openclaw/plugin-sdk/reply-runtime";
 import { vi, type Mock } from "vitest";
 import type {
   createSignalPreparedDispatchRunner,
@@ -52,19 +56,16 @@ export function signalConversationTestModule(
 export type DispatchInboundMessageMockParams = {
   ctx: MsgContext;
   cfg?: OpenClawConfig;
-  dispatcher?: {
-    sendFinalReply: (payload: { text: string; isError?: boolean }) => void;
-    markComplete: () => void;
-    waitForIdle: () => Promise<void>;
-  };
-  replyOptions?: {
-    allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
-    allowToolLifecycleWhenProgressHidden?: boolean;
-    onReplyStart?: () => void | Promise<void>;
-    onToolStart?: (payload: { name?: string }) => boolean | void | Promise<boolean | void>;
-    onCompactionStart?: () => boolean | void | Promise<boolean | void>;
-    onCompactionEnd?: () => boolean | void | Promise<boolean | void>;
-  };
+  dispatcher?: Pick<ReplyDispatcher, "sendFinalReply" | "markComplete" | "waitForIdle">;
+  replyOptions?: Pick<
+    GetReplyOptions,
+    | "allowProgressCallbacksWhenSourceDeliverySuppressed"
+    | "allowToolLifecycleWhenProgressHidden"
+    | "onReplyStart"
+    | "onToolStart"
+    | "onCompactionStart"
+    | "onCompactionEnd"
+  >;
 };
 
 export function captureNextSignalDispatch(
