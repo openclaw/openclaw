@@ -29,8 +29,8 @@ const sessions = Array.from({ length: 32 }, (_, index) =>
 suite.define(() => {
   for (const mobile of [false, true]) {
     for (const mode of ["light", "dark"] as const) {
-      it(`keeps the ${mobile ? "mobile" : "desktop"} ${mode} card flush and dismissal persistent`, async () => {
-        await suite.withPage(
+      it(`keeps the ${mobile ? "mobile" : "desktop"} ${mode} card flush and dismissal persistent`, async () =>
+        suite.withPage(
           {
             viewport: mobile ? { width: 390, height: 844 } : { width: 1280, height: 900 },
             hasTouch: mobile,
@@ -214,13 +214,12 @@ suite.define(() => {
               );
             }
           },
-        );
-      });
+        ));
     }
   }
 
-  it("honors earlier dismissals and deployment policy when re-enabled", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+  it("honors earlier dismissals and deployment policy when re-enabled", async () =>
+    suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       await installMockGateway(page, { communityInvite: true });
       await page.addInitScript((key) => localStorage.setItem(key, "dismissed"), dismissalKey);
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
@@ -240,6 +239,5 @@ suite.define(() => {
       await page.reload();
       await page.locator(".sidebar-shell").waitFor();
       expect(await page.locator(".community-invite-card").count()).toBe(0);
-    });
-  });
+    }));
 });

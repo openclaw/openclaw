@@ -56,8 +56,8 @@ async function expectUnclipped(item: Locator) {
 }
 
 suite.define(() => {
-  it("keeps common actions visible with nine native gateways and opens an unclipped keyboard switcher", async () => {
-    await suite.withPage(
+  it("keeps common actions visible with nine native gateways and opens an unclipped keyboard switcher", async () =>
+    suite.withPage(
       { viewport: { width: 1280, height: 900 }, colorScheme: "dark", locale: "en-US" },
       async ({ page }) => {
         await page.addInitScript((initial) => {
@@ -179,17 +179,15 @@ suite.define(() => {
           { type: "open-settings" },
         ]);
       },
-    );
-  });
+    ));
 
-  it("keeps Get the apps available in a browser", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+  it("keeps Get the apps available in a browser", async () =>
+    suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       await installMockGateway(page, { sessions: [], historyMessages: [] });
       await page.goto(`${suite.server.baseUrl}new`);
       await waitForControlUiGatewayReady(page);
       const menu = await openMenu(page);
       await menu.locator('[data-value="command:apps"]').click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/apps");
-    });
-  });
+    }));
 });

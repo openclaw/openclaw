@@ -299,11 +299,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   ),
   pageWatch("ui/src/e2e/agent-selection-persistence.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/agent-switch-roster.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
-  pageWatch("ui/src/e2e/agents-set-default-persistence.e2e.test.ts", [
-    "agents-home",
-    "agents",
-    "config",
-  ]),
   pageWatch("ui/src/e2e/app-chrome-interaction.e2e.test.ts", ["chat", "config", "usage"]),
   pageWatch("ui/src/e2e/appearance-accent-selection.e2e.test.ts", ["config"]),
   pageWatch("ui/src/e2e/appearance-control-layout.e2e.test.ts", ["config"]),
@@ -330,7 +325,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["ui/src/components/assistant-panel-solid.tsx", "ui/src/pages/chat/chat-pane.ts"],
     ["ui/src/styles/assistant-panel.css"],
   ),
-  pageWatch("ui/src/e2e/attachment-file-styles.e2e.test.ts", ["chat"]),
   pageWatch(
     "ui/src/e2e/avatar-initial-emoji.e2e.test.ts",
     ["agents-home", "agents", "config", "usage"],
@@ -1171,11 +1165,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["ui/src/styles/sidebar-attention-floating.css"],
   ),
   pageWatch("ui/src/e2e/dynamic-route-loader-count.e2e.test.ts", ["plugins"]),
-  pageWatch(
-    "ui/src/e2e/favicon-status.e2e.test.ts",
-    ["chat"],
-    ["ui/src/pages/chat/chat-history-events.ts"],
-  ),
   pageWatch("ui/src/e2e/file-drop-guard.e2e.test.ts", ["chat"]),
   pageWatch(
     "ui/src/e2e/gateway-foreground-recovery.e2e.test.ts",
@@ -1201,7 +1190,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["ui/src/components/assistant-panel-content.ts", "ui/src/components/home-session-solid.tsx"],
     ["ui/src/styles/assistant-panel-content.css"],
   ),
-  pageWatch("ui/src/e2e/identity-config-refresh.e2e.test.ts", ["chat"]),
   pageWatch(
     "ui/src/e2e/inference-setup-gate.e2e.test.ts",
     ["chat", "config", "custodian", "model-providers", "new-session"],
@@ -1998,7 +1986,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["chat"],
     ["ui/src/pages/chat/components/chat-header-session-menu.ts"],
   ),
-  pageWatch("ui/src/e2e/spatial-fades.e2e.test.ts", ["chat"]),
   {
     testFile: "ui/src/e2e/stale-build-recovery.e2e.test.ts",
     ownerRoots: [
