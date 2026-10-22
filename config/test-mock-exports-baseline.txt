@@ -6992,8 +6992,6 @@
 ["src/utils/provider-utils.test.ts","../plugins/provider-runtime.js","281bf4466dd15fe3e09f49df3a85d1af081dcb4ce79c4e39923f1688b2896a84",1]
 ["src/version.test.ts","./infra/git-commit.js","c1efef5966e5f1d1b80ef8d9ad2bdbf30bc6b40aa45f2f3b076298aa2c89c0b9",1]
 ["src/web-fetch/content-extractors.runtime.test.ts","../plugins/web-content-extractors.runtime.js","1daaaf95ef2040a5b156f0578081b868334767bb42a83796a79a649eb9759576",1]
-["src/web-search/runtime-autodetect-order.test.ts","../plugins/plugin-registry-contributions.js","a23ad18fa4476482eb5c419b378cb171a2ce071054cd3a69c4a448c648fcb696",1]
-["src/web-search/runtime-autodetect-order.test.ts","../plugins/web-search-providers.runtime.js","3ca4d35eee44326e9eb00565bfa424ef97a9b62f7ff042099e9cddd13efa8a62",1]
 ["src/wizard/clack-prompter.test.ts","../../packages/terminal-core/src/note.js","3153d338132173ed1f91decfc0f8e34e0eb73e165f2b61c1844cdd82e771bbde",1]
 ["src/wizard/clack-prompter.test.ts","./clack-navigation-prompts.js","cf6c9d1b922006c5dd34acac16b2911db8bea97ca905b5177236bd0afdbb7cc3",1]
 ["src/wizard/setup.default-agent.test.ts","../commands/onboard-helpers.js","3efaa7e832c79e9e6644ec3d8c2b1d93c68c75c12cc597ee6243412e372dd677",1]
