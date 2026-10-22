@@ -598,13 +598,13 @@ async function runManagedMediaScenario() {
                 recapSessionMatches: state?.sessionKey === expectedSessionKey,
                 recapRunCleared: state?.chatRunId === null,
                 recapWorkingIndicatorCount:
-                  pane?.querySelectorAll(".chat-working-indicator").length,
-                recapPendingSendCount: state?.chatQueue.filter(
-                  (item) => item.sendState === "submitting" || item.sendState === "sending",
-                ).length,
-                recapPendingSendMatchesAssistant: state?.chatQueue.some(
-                  (item) => item.sendRunId === assistantRunId,
-                ),
+                  pane?.querySelectorAll(".chat-working-indicator").length ?? null,
+                recapPendingSendCount:
+                  state?.chatQueue.filter(
+                    (item) => item.sendState === "submitting" || item.sendState === "sending",
+                  ).length ?? null,
+                recapPendingSendMatchesAssistant:
+                  state?.chatQueue.some((item) => item.sendRunId === assistantRunId) ?? null,
                 recapCount: recaps.length,
                 recapVisibleCount: recaps.filter((element) =>
                   element.checkVisibility({ visibilityProperty: true }),
