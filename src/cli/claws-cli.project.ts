@@ -219,10 +219,12 @@ export async function runClawsDevCommand(
       plan,
     });
   } else {
-    runtime.log(`Claw dev preview: ${build.claw.name}@${build.claw.version}`);
+    runtime.log(
+      `Claw dev preview: ${sanitizeTerminalText(build.claw.name)}@${sanitizeTerminalText(build.claw.version)}`,
+    );
     runtime.log(`Artifact integrity: ${build.integrity}`);
-    runtime.log(`Agent: ${plan.agent.finalId}`);
-    runtime.log(`Workspace: ${plan.agent.workspace}`);
+    runtime.log(`Agent: ${sanitizeTerminalText(plan.agent.finalId)}`);
+    runtime.log(`Workspace: ${sanitizeTerminalText(plan.agent.workspace)}`);
     logClawAgentConfiguration(plan);
     runtime.log(`Actions: ${plan.summary.totalActions}`);
     runtime.log(`Capability escalations: ${plan.capabilityChanges.length}`);

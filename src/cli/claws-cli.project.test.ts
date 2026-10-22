@@ -79,23 +79,32 @@ describe("Claw project CLI", () => {
     expect(first.claw.packageRoot).toMatch(/^claw-artifact:sha256:/u);
   });
 
-  it("keeps terminal controls out of the human Claw project report", async () => {
-    // A checked-out Claw project can carry control characters in its directory and file names.
-    const root = join(tempDirs.make("openclaw-claw-controls-"), "author\x1b[2J\x07");
-    await runClawsCreateCommand(root, { name: "author-flow", json: true });
-    const excluded = "payload\x1b[2J\x07\n.bin";
-    await writeFile(join(root, excluded), "payload\n");
-    await runClawsValidateCommand(root, {});
-    const report = runtime.log.mock.calls.map(([value]) => String(value)).join(" | ");
-    expect(report).toContain("Package: author-flow@0.1.0");
-    expect(report).not.toMatch(/\p{Cc}/u);
-    expect(report).toContain("\\n");
+  // Windows rejects control characters in file names, so this fixture only runs on POSIX.
+  it.skipIf(process.platform === "win32")(
+    "keeps terminal controls out of the human Claw project report",
+    async () => {
+      // A checked-out Claw project can carry control characters in its directory and file names.
+      const root = join(tempDirs.make("openclaw-claw-controls-"), "author\x1b[2J\x07");
+      await runClawsCreateCommand(root, { name: "author-flow", json: true });
+      const excluded = "payload\x1b[2J\x07\n.bin";
+      await writeFile(join(root, excluded), "payload\n");
+      await runClawsValidateCommand(root, {});
+      await runClawsDevCommand(root, {
+        agentId: "author-flow-preview",
+        workspace: join(root, "preview-workspace"),
+      });
+      const report = runtime.log.mock.calls.map(([value]) => String(value)).join(" | ");
+      expect(report).toContain("Package: author-flow@0.1.0");
+      expect(report).toContain("Claw dev preview: author-flow@0.1.0");
+      expect(report).not.toMatch(/\p{Cc}/u);
+      expect(report).toContain("\\n");
 
-    await runClawsValidateCommand(root, { json: true });
-    const payload = payloads().at(-1) as { root: string; excludedPaths: string[] };
-    expect(payload.root).toContain("author\x1b[2J\x07");
-    expect(payload.excludedPaths).toContain(excluded);
-  });
+      await runClawsValidateCommand(root, { json: true });
+      const payload = payloads().at(-1) as { root: string; excludedPaths: string[] };
+      expect(payload.root).toContain("author\x1b[2J\x07");
+      expect(payload.excludedPaths).toContain(excluded);
+    },
+  );
 
   it("uses command-specific schemas for build and dev failures", async () => {
     const missing = join(tempDirs.make("openclaw-claw-errors-"), "missing");
