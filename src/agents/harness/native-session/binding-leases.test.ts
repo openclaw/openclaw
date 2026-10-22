@@ -508,9 +508,9 @@ function bindingStores(env: NodeJS.ProcessEnv) {
 it.each(["lease", "action"] as const)(
   "refuses a binding write when its prepared %s lineage changes after observation",
   async (changed) => {
-    await withOpenClawTestState({ label: "binding-worker-lineage" }, async (fixture) => {
-      const { owner, state, asyncState } = bindingStores(fixture.env);
-      const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: fixture.env });
+    await withOpenClawTestState({ label: "binding-worker-lineage" }, async ({ env }) => {
+      const { owner, state, asyncState } = bindingStores(env);
+      const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
       const scope = (kind: string) => ({
         agentId: "main",
         storePath,
@@ -569,8 +569,8 @@ it.each(["lease", "action"] as const)(
 it.each(["binding", "unicode-\ud800"])(
   "keeps %s native effect guards current from renewal, revocation, and unknown receipts",
   async (prefix) => {
-    await withOpenClawTestState({ label: "binding-worker-facts" }, async (fixture) => {
-      const { owner, asyncState } = bindingStores(fixture.env);
+    await withOpenClawTestState({ label: "binding-worker-facts" }, async ({ env }) => {
+      const { owner, asyncState } = bindingStores(env);
       for (const mutation of ["replace", "delete", "unknown"] as const) {
         const key = `${prefix}-${mutation}`;
         let retainedAssertion: (() => void) | undefined;
@@ -616,13 +616,10 @@ it.each(["binding", "unicode-\ud800"])(
 );
 
 it("allows host progress to release a competing writer before persisting the binding", async () => {
-  await withOpenClawTestState({ label: "binding-worker-contention" }, async (fixture) => {
-    const { owner, asyncState } = bindingStores(fixture.env);
+  await withOpenClawTestState({ label: "binding-worker-contention" }, async ({ env }) => {
+    const { owner, asyncState } = bindingStores(env);
     await asyncState.register("binding", { value: "before" });
-    const holder = holdStateDatabaseWriteTransaction(
-      resolveOpenClawStateSqlitePath(fixture.env),
-      1_000,
-    );
+    const holder = holdStateDatabaseWriteTransaction(resolveOpenClawStateSqlitePath(env), 1_000);
     let settled = false;
     let mutation: Promise<string | { error: unknown }> | undefined;
     let progressedBeforeSettlement = false;
@@ -651,8 +648,8 @@ it("allows host progress to release a competing writer before persisting the bin
 });
 
 it("refuses revocation at native commit without publishing a prepared binding", async () => {
-  await withOpenClawTestState({ label: "binding-worker-authority" }, async (fixture) => {
-    const { owner, asyncState } = bindingStores(fixture.env);
+  await withOpenClawTestState({ label: "binding-worker-authority" }, async ({ env }) => {
+    const { owner, asyncState } = bindingStores(env);
     await asyncState.register("binding", { value: "before" });
     let current = true;
     let prepared = false;
