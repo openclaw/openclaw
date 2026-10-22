@@ -379,7 +379,7 @@ function openFile(
         sessionFileSource: {
           sessionKey: result.sessionKey,
           agentId,
-          path: filePath,
+          path: actionPath,
           ...messageFile,
         },
         draftKey: [

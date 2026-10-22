@@ -35,7 +35,7 @@ describe("session workspace file reference resolution", () => {
       sessions: createSessionCapabilityFixture({ getFile, listFiles }),
     };
 
-    openSessionWorkspaceFile(state, { path: "REPORT.md" });
+    void openSessionWorkspaceFile(state, { path: "REPORT.md" });
 
     await vi.waitFor(() =>
       expect(state.sessionWorkspaceState?.previews.at(-1)?.content).toEqual({
@@ -109,7 +109,7 @@ describe("session workspace file reference resolution", () => {
       sessions: createSessionCapabilityFixture({ getFile, listFiles, setFile }),
     };
 
-    openSessionWorkspaceFile(state, { path: "ORGANIZATION_REPORT.md" });
+    void openSessionWorkspaceFile(state, { path: "ORGANIZATION_REPORT.md" });
 
     const sidebarContent = await loadedSidebarContent(state);
     expect(sidebarContent.kind).toBe("file");
@@ -206,7 +206,7 @@ describe("session workspace file reference resolution", () => {
       sessions: createSessionCapabilityFixture({ getFile, setFile }),
     };
 
-    openSessionWorkspaceFile(state, { path: requestPath });
+    void openSessionWorkspaceFile(state, { path: requestPath });
 
     const sidebarContent = await loadedSidebarContent(state);
     if (sidebarContent.kind !== "file" || !sidebarContent.edit) {
@@ -268,7 +268,7 @@ describe("session workspace file reference resolution", () => {
       sessions: createSessionCapabilityFixture({ getFile, listFiles }),
     };
 
-    openSessionWorkspaceFile(state, { path: "REPORT.md" });
+    void openSessionWorkspaceFile(state, { path: "REPORT.md" });
 
     const sidebarContent = await loadedSidebarContent(state);
     if (sidebarContent.kind !== "markdown") {
@@ -339,7 +339,7 @@ describe("session workspace file reference resolution", () => {
       sessions: createSessionCapabilityFixture({ getFile, listFiles }),
     };
 
-    openSessionWorkspaceFile(state, { path: "REPORT.md" });
+    void openSessionWorkspaceFile(state, { path: "REPORT.md" });
 
     await vi.waitFor(() =>
       expect(state.sessionWorkspaceState?.previews.at(-1)?.content?.kind).toBe("unavailable"),
@@ -370,7 +370,7 @@ describe("session workspace file reference resolution", () => {
       sessions: createSessionCapabilityFixture({ getFile, listFiles }),
     };
 
-    openSessionWorkspaceFile(state, { path: "labs/output/REPORT.md" });
+    void openSessionWorkspaceFile(state, { path: "labs/output/REPORT.md" });
 
     await vi.waitFor(() =>
       expect(state.sessionWorkspaceState?.previews.at(-1)?.content?.kind).toBe("unavailable"),
