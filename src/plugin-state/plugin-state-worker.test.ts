@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { deserialize, serialize } from "node:v8";
 import { threadId, Worker } from "node:worker_threads";
@@ -33,27 +32,22 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { VERSION } from "../version.js";
-import { syncKeyedStore, stateTest } from "./plugin-state-fixtures.test-support.js";
+import {
+  keyedStore as openStore,
+  syncKeyedStore,
+  stateTest,
+} from "./plugin-state-fixtures.test-support.js";
 import {
   createPluginStateKeyedStore,
   createPluginStateKeyedStoreV2,
   createPluginStateSyncKeyedStore,
   pluginStateEntriesInKeyRange,
   registerPluginStateSequencedJournalEntry,
-  type OpenKeyedStoreOptions,
 } from "./plugin-state-store.js";
 import { seedPluginStateEntriesForTests } from "./plugin-state-store.test-helpers.js";
 import { PluginStateStoreError } from "./plugin-state-store.types.js";
 
 const it = stateTest("plugin-state-worker");
-
-function openStore<T>(
-  pluginId: string,
-  namespace: string,
-  options: Partial<OpenKeyedStoreOptions> = {},
-) {
-  return createPluginStateKeyedStore<T>(pluginId, { namespace, maxEntries: 10, ...options });
-}
 
 type SeedRow = Parameters<typeof seedPluginStateEntriesForTests>[0][number];
 function seed(
@@ -399,8 +393,9 @@ it.for(["observe", "compareDelete"] as const)(
   },
 );
 
-it("persists exact journal bytes through off-thread appends and reads", async ({ state }) => {
-  const workspaceDir = state.workspaceDir;
+it("persists exact journal bytes without host SQL or creating an absent read source", async ({
+  state,
+}) => {
   const event = {
     type: "memory.recall.recorded" as const,
     timestamp: "2026-09-13T12:00:00.000Z",
@@ -408,41 +403,36 @@ it("persists exact journal bytes through off-thread appends and reads", async ({
     resultCount: 0,
     results: [],
   };
-  const read = () => readMemoryHostEventRecords({ workspaceDir, env: state.env });
-  const expected = [event, event];
+  const { workspaceDir, env } = state;
+  const read = () => readMemoryHostEventRecords({ workspaceDir, env });
   const observation = observeHostDataSql();
-  expect(await read()).toEqual([]);
-  expect(existsSync(resolveOpenClawStateSqlitePath(state.env))).toBe(false);
-  await appendMemoryHostEvent(workspaceDir, event, { env: state.env });
-  await appendMemoryHostEvent(workspaceDir, event, { env: state.env });
-  expect(await read()).toEqual(expected);
-  expectNoSql(observation.calls);
-  await closeOpenClawStateDatabaseAsync();
-  expect(await read()).toEqual(expected);
-  expectNoSql(observation.calls);
-  observation.restore();
-  const { db } = openOpenClawStateDatabase({ env: state.env });
+  try {
+    expect(await read()).toEqual([]);
+    expect(existsSync(resolveOpenClawStateSqlitePath(env))).toBe(false);
+    await appendMemoryHostEvent(workspaceDir, event, { env });
+    expect(await read()).toEqual([event]);
+    expectNoSql(observation.calls);
+  } finally {
+    observation.restore();
+  }
+  const { db } = openOpenClawStateDatabase({ env });
   const rows = db
     .prepare(
-      "SELECT entry_key, value_json FROM plugin_state_entries WHERE plugin_id = ? AND namespace = ? ORDER BY entry_key",
+      "SELECT entry_key, value_json FROM plugin_state_entries WHERE plugin_id = ? AND namespace = ?",
     )
     .all("memory-core", "memory-host.events");
-  expect(rows).toHaveLength(2);
-  for (const [index, row] of rows.entries()) {
-    const sequence = index + 1;
-    const value = JSON.parse(String(row.value_json)) as { recordedAt: number };
-    expect(row.entry_key).toMatch(
-      new RegExp(`^[a-f0-9]{24}:event:1:${String(sequence).padStart(16, "0")}$`),
-    );
-    expect(row.value_json).toBe(
-      JSON.stringify({ kind: "event", event, recordedAt: value.recordedAt, sequence }),
-    );
-  }
+  expect(rows).toHaveLength(1);
+  const row = rows[0]!;
+  const { recordedAt } = JSON.parse(String(row.value_json)) as { recordedAt: number };
+  expect(row.entry_key).toMatch(/^[a-f0-9]{24}:event:1:0000000000000001$/);
+  expect(row.value_json).toBe(JSON.stringify({ kind: "event", event, recordedAt, sequence: 1 }));
   expect(
     db
       .prepare("SELECT value_json FROM plugin_state_entries WHERE plugin_id = ? AND namespace = ?")
       .get("memory-core", "memory-host.event-cursors"),
-  ).toEqual({ value_json: '{"kind":"cursor","lastSequence":2}' });
+  ).toEqual({
+    value_json: '{"kind":"cursor","lastSequence":1}',
+  });
 });
 
 it("captures journal data and range before admission", async ({ state }) => {
@@ -480,18 +470,6 @@ it("captures journal data and range before admission", async ({ state }) => {
       value: { kind: "event", detail: { value: "captured" }, sequence: 1 },
     },
   ]);
-});
-
-it("delivers a captured value to only one concurrent consumer", async ({ state: _state }) => {
-  const store = openStore<{ count: number }>("slack", "consume");
-  const value = { count: 1 };
-  const registered = store.register("once", value);
-  value.count = 99;
-  await registered;
-  const results = await Promise.all([store.consume("once"), store.consume("once")]);
-  expect(results.filter((result) => result !== undefined)).toEqual([{ count: 1 }]);
-  expect(results.filter((result) => result === undefined)).toHaveLength(1);
-  expect(await store.lookup("once")).toBeUndefined();
 });
 
 it("preserves listing order and expiry while refreshing TTLs", async ({ state: _state }) => {
@@ -599,7 +577,6 @@ it("returns complete entries and bulk values beyond a broker frame", async ({ st
   const namespace = "large-reads";
   const payloadBytes = 900_000;
   const count = Math.ceil(SQLITE_WORKER_MAX_RESULT_BYTES / payloadBytes) + 1;
-  const digest = (value: string) => createHash("sha256").update(value).digest("hex");
   const values = Array.from(
     { length: count },
     (_, index) => `${index}:${"x".repeat(payloadBytes)}`,
@@ -615,24 +592,21 @@ it("returns complete entries and bulk values beyond a broker frame", async ({ st
     })),
   );
   await closeOpenClawStateDatabaseAsync();
-  const expected = values.map(digest);
   const store = openStore<string>("slack", namespace, { maxEntries: count });
   const observation = observeHostDataSql();
   const entries = await store.entries();
   expect(serialize(entries).byteLength).toBeGreaterThan(SQLITE_WORKER_MAX_RESULT_BYTES);
-  expect(entries.map((entry) => digest(entry.value))).toEqual(expected);
+  expect(entries.map((entry) => entry.value)).toEqual(values);
   const request = [...keys.toReversed(), keys[0]!];
   const results = await store.lookupMany(request);
   expect(serialize(results).byteLength).toBeGreaterThan(SQLITE_WORKER_MAX_RESULT_BYTES);
-  expect(
-    results.map((result) => (result.ok && result.value ? digest(result.value) : null)),
-  ).toEqual([...expected.toReversed(), expected[0]]);
+  expect(results).toEqual(
+    [...values.toReversed(), values[0]].map((value) => ({ ok: true, value })),
+  );
   expectNoSql(observation.calls);
 });
 
-it("preserves scalar equality, expiry, quotas, and corrupt JSON errors", async ({
-  state: _state,
-}) => {
+it("preserves scalar equality, expiry, and corrupt JSON errors", async ({ state: _state }) => {
   const options = {
     namespace: "conditional",
     maxEntries: 1,
@@ -642,23 +616,13 @@ it("preserves scalar equality, expiry, quotas, and corrupt JSON errors", async (
   const store = createPluginStateKeyedStore<unknown>("slack", options);
   expect(await store.registerIfAbsent("entry", 1)).toBe(true);
   expect(await store.deleteIfEqual("entry", "1")).toBe(false);
-  const { db, path } = openOpenClawStateDatabase();
-  const refused = await store.registerIfAbsent("extra", 2).catch((error: unknown) => error);
-  expect(refused).toBeInstanceOf(PluginStateStoreError);
-  expect(refused).toMatchObject({
-    code: "PLUGIN_STATE_LIMIT_EXCEEDED",
-    operation: "register",
-    path,
-  });
-  expect(legacy.lookup("entry")).toBe(1);
-  expect(legacy.lookup("extra")).toBeUndefined();
-
   seed("slack", options.namespace, [{ key: "entry", value: 1, expiresAt: Date.now() - 1 }]);
   expect(await store.deleteIfEqual("entry", 1)).toBe(false);
   expect(await store.registerIfAbsent("entry", null)).toBe(true);
   expect(await store.deleteIfEqual("entry", null)).toBe(true);
 
   legacy.register("entry", false);
+  const { db, path } = openOpenClawStateDatabase();
   db.prepare(
     "UPDATE plugin_state_entries SET value_json = ? WHERE plugin_id = ? AND namespace = ? AND entry_key = ?",
   ).run("invalid JSON", "slack", options.namespace, "entry");

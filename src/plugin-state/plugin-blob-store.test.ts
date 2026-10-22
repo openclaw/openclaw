@@ -31,6 +31,18 @@ function seedCorrupt(db: EngineConnection, createdAt: number, expiresAt: number 
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
   ).run("diffs", "artifacts", "corrupt", "{", Buffer.from([7]), createdAt, expiresAt);
 }
+const blobRows = (db: EngineConnection, select: string, filter = "", ...bindings: string[]) =>
+  db
+    .prepare(`SELECT ${select} FROM plugin_blob_entries
+    WHERE plugin_id = ? AND namespace = ? ${filter}`)
+    .all("diffs", "artifacts", ...bindings);
+const expired = (key: string, order: number, createdAt: number) => ({
+  key,
+  metadata: { order },
+  sizeBytes: 1,
+  createdAt,
+  expiresAt: createdAt + 10,
+});
 
 const bytes = (...values: number[]) => new Uint8Array(values);
 type BlobReader = Pick<PluginBlobStoreWithReceipts<unknown>, "lookup">;
@@ -115,26 +127,16 @@ describe("plugin-blob-store", () => {
     await store.register("one", bytes(1), { order: 1 }, { ttlMs: 10 });
     vi.setSystemTime(2_011);
     await store.register("two", bytes(2), { order: 2 }, { ttlMs: 10 });
-    await expect(store.deleteExpiredKey("one")).resolves.toEqual({
-      key: "one",
-      metadata: { order: 1 },
-      sizeBytes: 1,
-      createdAt: 2_000,
-      expiresAt: 2_010,
-    });
+    await expect(store.deleteExpiredKey("one")).resolves.toEqual(expired("one", 1, 2_000));
     await expect(store.deleteExpiredKey("two")).resolves.toBeUndefined();
     await expect(store.deleteExpired()).resolves.toEqual([]);
     await expectBlob(store, "two", { metadata: { order: 2 } });
     vi.setSystemTime(2_022);
-    await expect(store.deleteExpired()).resolves.toEqual([
-      { key: "two", metadata: { order: 2 }, sizeBytes: 1, createdAt: 2_011, expiresAt: 2_021 },
-    ]);
+    await expect(store.deleteExpired()).resolves.toEqual([expired("two", 2, 2_011)]);
     await expect(store.deleteExpired()).resolves.toEqual([]);
   });
 
-  it("counts expired rows toward physical limits without evicting cleanup metadata", async ({
-    state,
-  }) => {
+  it("counts expired rows without evicting cleanup metadata", async ({ state }) => {
     vi.useFakeTimers({ now: 2_500 });
 
     for (const [index, overflowPolicy] of (["reject-new", "evict-oldest"] as const).entries()) {
@@ -154,36 +156,30 @@ describe("plugin-blob-store", () => {
       }
     }
 
-    const replacingStore = kernel<{ path: string }>(state.env, {
+    const replacing = kernel<{ path: string }>(state.env, {
       namespace: "replacing",
       maxBytesPerEntry: 10,
       maxBytesPerNamespace: 10,
       overflowPolicy: "evict-oldest",
     });
-    await replacingStore.register(
-      "expired",
-      new Uint8Array(5),
-      { path: "replace-old" },
-      { ttlMs: 10 },
-    );
-    await replacingStore.register("target", new Uint8Array(4), { path: "target-old" });
+    await replacing.register("expired", new Uint8Array(5), { path: "replace-old" }, { ttlMs: 10 });
+    await replacing.register("target", new Uint8Array(4), { path: "target-old" });
     vi.setSystemTime(2_533);
 
-    await limit(replacingStore.register("target", new Uint8Array(6), { path: "target-new" }));
-    await expectBlob(replacingStore, "target", {
-      metadata: { path: "target-old" },
-      sizeBytes: 4,
-    });
-    await expect(replacingStore.deleteExpiredKey("expired")).resolves.toMatchObject({
+    await limit(replacing.register("target", new Uint8Array(6), { path: "target-new" }));
+    await expectBlob(replacing, "target", { metadata: { path: "target-old" }, sizeBytes: 4 });
+    await expect(replacing.deleteExpiredKey("expired")).resolves.toMatchObject({
       metadata: { path: "replace-old" },
     });
   });
 
   it("validates hard limits and consistent namespace options", async ({ state }) => {
     const store = open(state.env, { maxBytesPerEntry: 2 });
-    await expect(store.register("big", bytes(1, 2, 3), {})).rejects.toBeInstanceOf(
-      PluginBlobStoreError,
-    );
+    await store.register("stable", bytes(1, 2), { ok: true });
+    const rejected = store.register("stable", bytes(1, 2, 3), { ok: false });
+    await expect(rejected).rejects.toBeInstanceOf(PluginBlobStoreError);
+    await limit(rejected);
+    await expectBlob(store, "stable", { metadata: { ok: true }, bytes: bytes(1, 2) });
     expect(() => open(state.env, { maxBytesPerEntry: 3 })).toThrow(/incompatible options/);
   });
 
@@ -208,15 +204,19 @@ describe("plugin-blob-store", () => {
         await store.register("one", bytes(1, 2), { owner: "replacement" });
 
         const write = store.register("two", bytes(3), { owner: "two" });
-        if (overflowPolicy === "reject-new") {
+        const rejects = overflowPolicy === "reject-new";
+        if (rejects) {
           await limit(write);
-          await expectBlob(store, "one", { sizeBytes: 2, metadata: { owner: "replacement" } });
-          await expect(store.lookup("two")).resolves.toBeUndefined();
         } else {
           await expect(write).resolves.toBeUndefined();
-          await expect(store.lookup("one")).resolves.toBeUndefined();
-          await expectBlob(store, "two", { metadata: { owner: "two" } });
         }
+        await expect(
+          Promise.all([store.lookup("one"), store.lookup("two")]),
+        ).resolves.toMatchObject(
+          rejects
+            ? [{ sizeBytes: 2, metadata: { owner: "replacement" } }, undefined]
+            : [undefined, { metadata: { owner: "two" } }],
+        );
 
         await limit(emptyNamespace.register("blocked", bytes(4), { owner: "blocked" }));
         await expect(emptyNamespace.lookup("blocked")).resolves.toBeUndefined();
@@ -252,9 +252,7 @@ describe("plugin-blob-store", () => {
     await expectBlob(reopened, "same", { metadata: { owner: "diffs" }, bytes: bytes(1) });
   });
 
-  it("publishes persisted timestamps and refuses duplicate registration without replacing data", async ({
-    state,
-  }) => {
+  it("publishes timestamps and rejects duplicate registration", async ({ state }) => {
     const store = open<{ version: number }>(state.env);
     const expectStored = (receipt: object, byte: number, version: number) =>
       expect(store.lookup("stable")).resolves.toEqual({
@@ -290,9 +288,7 @@ describe("plugin-blob-store", () => {
     await expectStored(replacement, 4, 4);
   });
 
-  it("keeps an expired stable key occupied until the owner claims its metadata", async ({
-    state,
-  }) => {
+  it("keeps expired keys occupied until the owner claims metadata", async ({ state }) => {
     vi.useFakeTimers({ now: 4_000 });
 
     const store = kernel<{ path: string }>(state.env);
@@ -310,16 +306,8 @@ describe("plugin-blob-store", () => {
     await expectBlob(store, "stable", { metadata: { path: "new" }, bytes: bytes(2) });
   });
 
-  it("rolls back a rejected replacement and rejects corrupt metadata", async ({ state }) => {
-    const store = open<{ ok: boolean }>(state.env, {
-      maxBytesPerEntry: 3,
-      maxBytesPerNamespace: 3,
-      overflowPolicy: "reject-new",
-    });
-    await store.register("stable", bytes(1, 2), { ok: true });
-    await limit(store.register("stable", bytes(1, 2, 3, 4), { ok: false }));
-    await expectBlob(store, "stable", { metadata: { ok: true }, bytes: bytes(1, 2) });
-
+  it("rejects corrupt metadata", async ({ state }) => {
+    const store = open(state.env);
     const { db } = openOpenClawStateDatabase({ env: state.env });
     seedCorrupt(db, 1, null);
     await corrupt(store.lookup("corrupt"), "lookup");
@@ -336,24 +324,15 @@ describe("plugin-blob-store", () => {
 
     vi.setSystemTime(5_011);
     await corrupt(store.deleteExpired(), "sweep");
-    expect(
-      db
-        .prepare(
-          `SELECT entry_key FROM plugin_blob_entries
-             WHERE plugin_id = ? AND namespace = ? ORDER BY entry_key`,
-        )
-        .all("diffs", "artifacts"),
-    ).toEqual([{ entry_key: "corrupt" }, { entry_key: "valid" }]);
+    expect(blobRows(db, "entry_key", "ORDER BY entry_key")).toEqual([
+      { entry_key: "corrupt" },
+      { entry_key: "valid" },
+    ]);
 
     await corrupt(store.deleteExpiredKey("corrupt"), "sweep");
-    expect(
-      db
-        .prepare(
-          `SELECT COUNT(*) AS count FROM plugin_blob_entries
-             WHERE plugin_id = ? AND namespace = ? AND entry_key = ?`,
-        )
-        .get("diffs", "artifacts", "corrupt"),
-    ).toEqual({ count: 1 });
+    expect(blobRows(db, "COUNT(*) AS count", "AND entry_key = ?", "corrupt")).toEqual([
+      { count: 1 },
+    ]);
   });
 });
 

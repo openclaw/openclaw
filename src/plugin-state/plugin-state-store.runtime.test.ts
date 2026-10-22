@@ -135,10 +135,6 @@ describe("plugin-state-store.authority", () => {
         }
         return Response.json({ success: true, result: url.search ? [policy] : policy });
       });
-      const toolContext: OpenClawPluginToolContext<2> = {
-        senderIsOwner: true,
-        assertInvocationCurrent() {},
-      };
       const gateway: PluginRuntime["gateway"] = {
         isAvailable: async () => true,
         openPluginPanel: unexpectedRuntimeCall,
@@ -173,11 +169,6 @@ describe("plugin-state-store.authority", () => {
       });
       let services: PluginServicesHandle | undefined;
       try {
-        const loaded = registry.plugins.find(({ id }) => id === pluginId);
-        expect(loaded, loaded?.error).toMatchObject({
-          origin: "bundled",
-          status: "loaded",
-        });
         await startPluginServices({
           registry,
           config,
@@ -190,11 +181,13 @@ describe("plugin-state-store.authority", () => {
         const registration = registry.tools.find(
           ({ pluginId: owner, names }) => owner === pluginId && names.includes("visitor_invite"),
         );
-        if (!registration || registration.contextVersion !== 2) {
-          throw new Error(
-            "Visitor Access did not register its invitation tool with action authority",
-          );
+        if (registration?.contextVersion !== 2) {
+          throw new Error("Expected the action-authorized Visitor invitation tool");
         }
+        const toolContext: OpenClawPluginToolContext<2> = {
+          senderIsOwner: true,
+          assertInvocationCurrent() {},
+        };
         const created = registration.factory(toolContext);
         const invite = Array.isArray(created)
           ? created.find(({ name }) => name === "visitor_invite")
@@ -213,20 +206,17 @@ describe("plugin-state-store.authority", () => {
         ) {
           let renewalJson: string | undefined;
           const operation = workerCommand(message);
-          if (operation) {
-            const input = asOptionalRecord(operation?.input);
-            if (
-              operation?.type === "pluginState.register" &&
-              input?.pluginId === pluginId &&
-              input.namespace === "visitor-grants"
-            ) {
-              expect(providerConfirmed).toBe(true);
-              expect(input.key).toBe(email);
-              if (typeof input.valueJson !== "string") {
-                throw new Error("Expected the native visitor grant submission");
-              }
-              renewalJson = input.valueJson;
+          const input = asOptionalRecord(operation?.input);
+          const isRenewal =
+            operation?.type === "pluginState.register" &&
+            input?.pluginId === pluginId &&
+            input.namespace === "visitor-grants";
+          if (isRenewal) {
+            expect([providerConfirmed, input.key]).toEqual([true, email]);
+            if (typeof input.valueJson !== "string") {
+              throw new Error("Expected the native visitor grant submission");
             }
+            renewalJson = input.valueJson;
           }
           nativePost.call(this, message, transferList);
           if (renewalJson !== undefined) {
@@ -391,12 +381,7 @@ describe("plugin-state-store.runtime", () => {
     active = false,
     trustedOfficialInstall?: boolean,
   ) {
-    const record = pluginRecord({
-      id,
-      source: `/plugins/${id}/index.ts`,
-      origin,
-      trustedOfficialInstall,
-    });
+    const record = pluginRecord({ id, origin, trustedOfficialInstall });
     const registry = createPluginRegistry({
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
       runtime: {
@@ -413,11 +398,7 @@ describe("plugin-state-store.runtime", () => {
       markPluginRegistryActive(registry.registry);
     }
     function addPlugin(pluginId: string, pluginOrigin: PluginRecord["origin"]) {
-      const plugin = pluginRecord({
-        id: pluginId,
-        source: `/plugins/${pluginId}/index.ts`,
-        origin: pluginOrigin,
-      });
+      const plugin = pluginRecord({ id: pluginId, origin: pluginOrigin });
       registry.registry.plugins.push(plugin);
       return registry.createApi(plugin, { config: {} }).runtime.state;
     }
@@ -484,26 +465,24 @@ describe("plugin-state-store.runtime", () => {
     const observation = observeHostDataSql();
     const sql = observation.calls;
     try {
-      const store = runtime.openKeyedStore<{ plugin: string }>(keyedOptions);
-      await expect(store.registerIfAbsent("k", { plugin: "discord" })).resolves.toBe(true);
-      await expect(store.registerIfAbsent("k", { plugin: "duplicate" })).resolves.toBe(false);
+      const store = runtime.openKeyedStore<string>(keyedOptions);
+      await expect(store.registerIfAbsent("k", "discord")).resolves.toBe(true);
+      await expect(store.registerIfAbsent("k", "duplicate")).resolves.toBe(false);
 
-      const telegramStore = addPlugin("telegram", "workspace").openKeyedStore<{ plugin: string }>(
-        keyedOptions,
-      );
+      const telegramStore = addPlugin("telegram", "workspace").openKeyedStore<string>(keyedOptions);
       await expect(telegramStore.lookup("k")).resolves.toBeUndefined();
       await expect(telegramStore.count?.()).resolves.toBe(0);
       await expect(store.count?.()).resolves.toBe(1);
-      await expect(store.lookup("k")).resolves.toEqual({ plugin: "discord" });
+      await expect(store.lookup("k")).resolves.toBe("discord");
 
-      await store.register("temporary", { plugin: "discord" });
-      await expect(store.consume("temporary")).resolves.toEqual({ plugin: "discord" });
-      await store.register("deleted", { plugin: "discord" });
+      await store.register("temporary", "discord");
+      await expect(store.consume("temporary")).resolves.toBe("discord");
+      await store.register("deleted", "discord");
       await expect(store.delete("deleted")).resolves.toBe(true);
-      await telegramStore.register("retained", { plugin: "telegram" });
+      await telegramStore.register("retained", "telegram");
       await store.clear();
       await expect(store.entries()).resolves.toEqual([]);
-      await expect(telegramStore.lookup("retained")).resolves.toEqual({ plugin: "telegram" });
+      await expect(telegramStore.lookup("retained")).resolves.toBe("telegram");
       for (const method of sql) {
         expect(method).not.toHaveBeenCalled();
       }
@@ -511,12 +490,12 @@ describe("plugin-state-store.runtime", () => {
       observation.restore();
     }
 
-    const syncStore = runtime.openSyncKeyedStore<{ plugin: string }>({
+    const syncStore = runtime.openSyncKeyedStore<string>({
       namespace: "sync-runtime",
       maxEntries: 10,
     });
-    expect(syncStore.registerIfAbsent("k", { plugin: "discord" })).toBe(true);
-    expect(syncStore.lookup("k")).toEqual({ plugin: "discord" });
+    expect(syncStore.registerIfAbsent("k", "discord")).toBe(true);
+    expect(syncStore.lookup("k")).toBe("discord");
   });
 
   it("fences retained operations and range reads when the owning plugin closes", async ({

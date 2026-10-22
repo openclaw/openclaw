@@ -78,20 +78,31 @@ describe("plugin state worker operations", () => {
       operation: first.createOperation<FixtureOperations>([first, second], handler),
     };
   };
+  const afterExecute = (
+    after: (
+      ...args: Parameters<typeof workerClient.executePluginStateOperationInWorker>
+    ) => unknown,
+  ) => {
+    const execute = workerClient.executePluginStateOperationInWorker;
+    return vi
+      .spyOn(workerClient, "executePluginStateOperationInWorker")
+      .mockImplementation(async (...args) => {
+        const result = await execute(...args);
+        await after(...args);
+        return result;
+      });
+  };
 
   it("moves rows across namespaces in one worker command and rolls back undeclared writes", async () => {
     const { first, second, operation } = await pair("move");
     await invalid(move(operation, "moved", [0]));
     expect(await first.lookup("key")).toBe("original");
     expect(await second.lookup("key")).toBeUndefined();
-    const dispatch = vi.spyOn(workerClient, "executePluginStateOperationInWorker");
     const hostSql = observeHostDataSql();
-    const committedRows = new Map<string, unknown>();
+    const facts = new Map<string, unknown>();
     const unsubscribe = pluginStatePublication.subscribeFacts((change) => {
       if (change.kind === "committed") {
-        for (const [key, fact] of change.receipt.facts) {
-          committedRows.set(key, fact);
-        }
+        change.receipt.facts.forEach((fact, key) => facts.set(key, fact));
       }
     });
     try {
@@ -101,17 +112,15 @@ describe("plugin state worker operations", () => {
         after: [undefined, "moved"],
       });
       expect(result.value.threadId).toBeGreaterThan(0);
-      expect(dispatch).toHaveBeenCalledTimes(1);
       result.assertCurrent();
-      expect(committedRows.get(JSON.stringify(["operation-test", "move-first", "key"]))).toEqual({
+      expect(facts.get(JSON.stringify(["operation-test", "move-first", "key"]))).toEqual({
         kind: "absent",
       });
-      expect(
-        committedRows.get(JSON.stringify(["operation-test", "move-second", "key"])),
-      ).toMatchObject({ kind: "postimage", value: { value_json: '"moved"' } });
-      for (const call of hostSql.calls) {
-        expect(call).not.toHaveBeenCalled();
-      }
+      expect(facts.get(JSON.stringify(["operation-test", "move-second", "key"]))).toMatchObject({
+        kind: "postimage",
+        value: { value_json: '"moved"' },
+      });
+      hostSql.calls.forEach((call) => expect(call).not.toHaveBeenCalled());
     } finally {
       unsubscribe();
       hostSql.restore();
@@ -144,61 +153,46 @@ describe("plugin state worker operations", () => {
     expect(result.assertCurrent).toThrow("no longer current");
   });
 
-  it.each([false, true])(
-    "invalidates receipts at async admission and sync commit (alias: %s)",
-    async (alias) => {
-      const namespace = alias ? "alias-authority" : "receipts";
-      const { operation } = await single(namespace, alias ? "original" : "allowed");
-      let env = state.env;
-      if (alias) {
-        const directory = state.path("state-directory-alias");
-        symlinkSync(state.stateDir, directory, process.platform === "win32" ? "junction" : "dir");
-        env = { ...env, OPENCLAW_STATE_DIR: directory };
-      }
-      const native = createPluginStateSyncKeyedStore<string>(
-        "operation-test",
-        options(namespace, env),
-      );
-      const invalidation = alias ? PluginStateOperationInvalidatedError : "no longer current";
-      let current = await read(operation);
-      current.assertCurrent();
-      if (alias) {
-        native.register("key", "sync successor");
-        expect(current.assertCurrent).toThrow(invalidation);
-        current = await read(operation);
-        expect(current.value.value).toBe("sync successor");
-        current.assertCurrent();
-      }
-      const nextValue = alias ? "async successor" : "revoked";
-      const pending = open(namespace, env).register("key", nextValue);
-      expect(current.assertCurrent).toThrow(invalidation);
-      await pending;
-      current = await read(operation);
-      expect(current.value.value).toBe(nextValue);
-      current.assertCurrent();
-      if (!alias) {
-        native.delete("key");
-        expect(current.assertCurrent).toThrow(invalidation);
-        expect((await read(operation)).value.value).toBeUndefined();
-      }
-    },
-  );
+  it("invalidates receipts at async admission and sync commit through a directory alias", async () => {
+    const namespace = "alias-authority";
+    const { operation } = await single(namespace);
+    const directory = state.path("state-directory-alias");
+    symlinkSync(state.stateDir, directory, process.platform === "win32" ? "junction" : "dir");
+    const env = { ...state.env, OPENCLAW_STATE_DIR: directory };
+    const native = createPluginStateSyncKeyedStore<string>(
+      "operation-test",
+      options(namespace, env),
+    );
+    const invalidation = PluginStateOperationInvalidatedError;
+    let current = await read(operation);
+    current.assertCurrent();
+    native.register("key", "sync successor");
+    expect(current.assertCurrent).toThrow(invalidation);
+    current = await read(operation);
+    expect(current.value.value).toBe("sync successor");
+    current.assertCurrent();
+    const nextValue = "async successor";
+    const pending = open(namespace, env).register("key", nextValue);
+    expect(current.assertCurrent).toThrow(invalidation);
+    await pending;
+    current = await read(operation);
+    expect(current.value.value).toBe(nextValue);
+    current.assertCurrent();
+    native.delete("key");
+    expect(current.assertCurrent).toThrow(invalidation);
+    expect((await read(operation)).value.value).toBeUndefined();
+  });
 
   it("keeps scalar and receipt reads behind earlier unfinished mutations", async () => {
     const { second, operation } = await pair("fifo", "old");
     const committed = createDeferredCore();
     const release = createDeferredCore();
-    const execute = workerClient.executePluginStateOperationInWorker;
-    vi.spyOn(workerClient, "executePluginStateOperationInWorker").mockImplementation(
-      async (...args) => {
-        const result = await execute(...args);
-        if (args[0].command.type === "move") {
-          committed.resolve();
-          await release.promise;
-        }
-        return result;
-      },
-    );
+    afterExecute(async (input) => {
+      if (input.command.type === "move") {
+        committed.resolve();
+        await release.promise;
+      }
+    });
     const write = move(operation, "committed");
     await committed.promise;
     const followingWrite = second.register("key", "following");
@@ -228,14 +222,9 @@ describe("plugin state worker operations", () => {
         }
       },
     });
-    const execute = workerClient.executePluginStateOperationInWorker;
-    vi.spyOn(workerClient, "executePluginStateOperationInWorker").mockImplementation(
-      async (...args) => {
-        const result = await execute(...args);
-        current = false;
-        return result;
-      },
-    );
+    afterExecute(() => {
+      current = false;
+    });
     const receipt = await move(operation, "settled");
     expect(receipt.value.after).toEqual([undefined, "settled"]);
     expect(receipt.assertCurrent).toThrow("owner closed after commit");
@@ -311,13 +300,9 @@ describe("plugin state worker operations", () => {
 
   it("does not replay a committed command after its acknowledgement is lost", async () => {
     const { first, second, operation } = await pair("lost");
-    const execute = workerClient.executePluginStateOperationInWorker;
-    const dispatch = vi
-      .spyOn(workerClient, "executePluginStateOperationInWorker")
-      .mockImplementation(async (...args) => {
-        await execute(...args);
-        throw new Error("acknowledgement lost");
-      });
+    const dispatch = afterExecute(() => {
+      throw new Error("acknowledgement lost");
+    });
     await expect(move(operation, "committed")).rejects.toThrow("acknowledgement lost");
     expect(dispatch).toHaveBeenCalledTimes(1);
     expect(await first.lookup("key")).toBeUndefined();

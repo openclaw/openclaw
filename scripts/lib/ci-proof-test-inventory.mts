@@ -3415,7 +3415,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/plugin-sdk/tool-plugin.test.ts",
   "src/plugin-state/plugin-blob-store.admission.test.ts",
   "src/plugin-state/plugin-state-store.prepared.test.ts",
-  "src/plugin-state/plugin-state-store.retention.test.ts",
   "src/plugin-state/plugin-state-store.runtime.test.ts",
   "src/plugin-state/plugin-state-store.test.ts",
   "src/plugin-state/plugin-state-worker.test.ts",

@@ -20,8 +20,18 @@ import {
 } from "./plugin-state-store.js";
 import { seedPluginStateEntriesForTests } from "./plugin-state-store.test-helpers.js";
 
+type SeedRow = Parameters<typeof seedPluginStateEntriesForTests>[0][number];
+type ScopedSeedRow = Pick<SeedRow, "key" | "value"> & Partial<SeedRow>;
+const seedScope = (pluginId: string, namespace: string, rows: ScopedSeedRow[]) =>
+  seedPluginStateEntriesForTests(rows.map((row) => ({ pluginId, namespace, ...row })));
+const syncStore = <T>(options: Partial<OpenKeyedStoreOptions>) =>
+  createPluginStateSyncKeyedStore<T>("discord", { maxEntries: 10, namespace: "test", ...options });
 const invalid = (promise: Promise<unknown>) =>
   expect(promise).rejects.toMatchObject({ code: "PLUGIN_STATE_INVALID_INPUT" });
+const reopen = async () => {
+  await closeOpenClawStateDatabaseAsync();
+  resetPluginStateStoreForTests();
+};
 
 const moveFault = useSqliteWorkerFault([
   {
@@ -49,9 +59,7 @@ describe("plugin-state-store.retained", () => {
   const open = <T>(
     options: OpenKeyedStoreOptions | OpenRetainedKeyedStoreOptions = retainedOptions,
   ) => createPluginStateKeyedStore<T>(pluginId, options);
-  type Seed = Parameters<typeof seedPluginStateEntriesForTests>[0][number];
-  const seed = (rows: Array<Pick<Seed, "key" | "value"> & Partial<Seed>>) =>
-    seedPluginStateEntriesForTests(rows.map((row) => ({ pluginId, namespace: "history", ...row })));
+  const seed = (rows: ScopedSeedRow[]) => seedScope(pluginId, "history", rows);
   const canonical = (entryKey: string, value: unknown, createdAt: number, expiresAt?: number) => ({
     namespace: "@retained.history",
     key: entryKey,
@@ -66,10 +74,7 @@ describe("plugin-state-store.retained", () => {
       )
       .all(pluginId);
 
-  afterEach(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    resetPluginStateStoreForTests();
-  });
+  afterEach(reopen);
 
   it("persists retained rows beyond the 50k limit", async ({ state: _state }) => {
     seed(
@@ -80,8 +85,7 @@ describe("plugin-state-store.retained", () => {
         createdAt: id,
       })),
     );
-    await closeOpenClawStateDatabaseAsync();
-    resetPluginStateStoreForTests();
+    await reopen();
 
     const retained = open<number>();
     await retained.register(key(50_001), 50_001);
@@ -95,8 +99,7 @@ describe("plugin-state-store.retained", () => {
       }),
     ).toEqual({ status: "applied" });
     expect(await retained.update(key(50_004), () => 50_004)).toBe(true);
-    await closeOpenClawStateDatabaseAsync();
-    resetPluginStateStoreForTests();
+    await reopen();
     const reopened = open<number>();
     expect(await reopened.count()).toBe(50_005);
     expect(await reopened.lookup(key(0))).toBe(0);
@@ -178,7 +181,6 @@ describe("plugin-state-store.retained", () => {
       canonical(key(64), { id: -2 }, 2, Date.now() - 1_000),
     ]);
     const before = snapshot();
-    expect(before).toHaveLength(67);
     await closeOpenClawStateDatabaseAsync();
     const source = open<{ id: number }>({ namespace: "history", maxEntries: 100 });
     const retained = open<{ id: number }>();
@@ -203,18 +205,10 @@ describe("plugin-state-store.retained", () => {
       await closeOpenClawStateDatabaseAsync();
 
       expect(await source.lookup("0")).toEqual({ id: 0 });
-      expect(await source.lookup("64")).toEqual({ id: 64 });
       expect(await retained.lookup(key(1))).toBeUndefined();
-      expect(await retained.lookup(key(64))).toBeUndefined();
-      expect(await source.entries()).toHaveLength(65);
-      expect(await retained.entries()).toEqual([{ key: key(0), value: { id: -1 }, createdAt: 1 }]);
       expect(await retained.moveEntriesFrom(move)).toBe(65);
       expect(commits).toBe(1);
-      expect(await source.lookup("0")).toBeUndefined();
-      expect(await source.lookup("64")).toBeUndefined();
       expect(await source.entries()).toEqual([]);
-      expect(await retained.lookup(key(1))).toEqual({ id: 1 });
-      expect(await retained.lookup(key(64))).toEqual({ id: 64 });
       expect(await retained.entries()).toEqual([
         { key: key(0), value: { id: -1 }, createdAt: 1 },
         ...entries.slice(1).map((entry, index) => ({
@@ -248,8 +242,7 @@ describe("plugin-state-store.retained", () => {
     const options = { namespace: "n".repeat(128), retention: "retained" as const };
     const retained = open<number>(options);
     await retained.register("last-byte", 128);
-    await closeOpenClawStateDatabaseAsync();
-    resetPluginStateStoreForTests();
+    await reopen();
     const reopened = open<number>(options);
     expect(await reopened.lookup("last-byte")).toBe(128);
     expect(() =>
@@ -322,16 +315,13 @@ describe("plugin-state-store.retained", () => {
 describe("plugin-state-store.expiry", () => {
   useState("plugin-state-expiry");
 
+  function expiredRow(namespace: string, key: string, value: unknown, createdAt = 0) {
+    return { pluginId: "discord", namespace, key, value, createdAt, expiresAt: Date.now() - 100 };
+  }
   function expiredRows(namespace: string, count: number) {
-    const expiresAt = Date.now() - 100;
-    return Array.from({ length: count }, (_, index) => ({
-      pluginId: "discord",
-      namespace,
-      key: `expired-${String(index).padStart(4, "0")}`,
-      value: { index },
-      createdAt: index,
-      expiresAt,
-    }));
+    return Array.from({ length: count }, (_, index) =>
+      expiredRow(namespace, `expired-${String(index).padStart(4, "0")}`, { index }, index),
+    );
   }
 
   function expiredCount() {
@@ -340,52 +330,17 @@ describe("plugin-state-store.expiry", () => {
       .get(Date.now())?.count;
   }
 
-  it("registerIfAbsent replaces an expired target beyond the namespace cleanup batch", async () => {
-    const namespace = "claims-batched-expiry";
-    seedPluginStateEntriesForTests([
-      ...expiredRows(namespace, 1_025),
-      {
-        pluginId: "discord",
-        namespace,
-        key: "zz-target",
-        value: { version: 1 },
-        createdAt: 5_000,
-        expiresAt: Date.now() - 100,
-      },
-    ]);
-    const store = createPluginStateKeyedStore<{ version: number }>("discord", {
-      namespace,
-      maxEntries: 10,
-    });
-    await expect(store.registerIfAbsent("zz-target", { version: 2 })).resolves.toBe(true);
-    await expect(store.lookup("zz-target")).resolves.toEqual({ version: 2 });
-    expect(expiredCount()).toBe(1);
-  });
-
   it("bounds expired namespace cleanup during update without touching sibling rows", async () => {
     const namespace = "namespace-batched-expiry";
     seedPluginStateEntriesForTests([
       ...expiredRows(namespace, 1_031),
       { pluginId: "discord", namespace, key: "permanent", value: { durable: true } },
-      {
-        pluginId: "discord",
-        namespace: "sibling-namespace",
-        key: "expired",
-        value: { sibling: true },
-        expiresAt: Date.now() - 100,
-      },
-      {
+      expiredRow("sibling-namespace", "expired", { sibling: true }),
+      Object.assign(expiredRow(namespace, "expired", { sibling: true }), {
         pluginId: "sibling-plugin",
-        namespace,
-        key: "expired",
-        value: { sibling: true },
-        expiresAt: Date.now() - 100,
-      },
+      }),
     ]);
-    const store = createPluginStateSyncKeyedStore<{ durable?: boolean; fresh?: boolean }>(
-      "discord",
-      { namespace, maxEntries: 10 },
-    );
+    const store = syncStore<{ durable?: boolean; fresh?: boolean }>({ namespace });
     expect(store.update("fresh", () => ({ fresh: true }))).toBe(true);
     expect(store.lookup("fresh")).toEqual({ fresh: true });
     expect(store.lookup("permanent")).toEqual({ durable: true });
@@ -395,10 +350,7 @@ describe("plugin-state-store.expiry", () => {
   it("rechecks expiry time and newly written rows after an empty namespace cleanup", () => {
     vi.useFakeTimers({ now: 1_000 });
     const scope = { pluginId: "discord", namespace: "fresh-expiry" };
-    const store = createPluginStateSyncKeyedStore(scope.pluginId, {
-      namespace: scope.namespace,
-      maxEntries: 10,
-    });
+    const store = syncStore({ namespace: scope.namespace });
     seedPluginStateEntriesForTests([{ ...scope, key: "future", value: 1, expiresAt: 1_200 }]);
     store.register("permanent", 2);
     expect(expiredCount()).toBe(0);

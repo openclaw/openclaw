@@ -1321,7 +1321,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/plugin-state/plugin-blob-store.admission.test.ts",
   "src/plugin-state/plugin-state-store.test.ts",
   "src/plugin-state/plugin-state-store.retained.test.ts",
-  "src/plugin-state/plugin-state-store.retention.test.ts",
   "src/plugin-state/plugin-state-store.runtime.test.ts",
   "test/e2e/qa-lab/runtime/gateway-tls-pinning.test.ts",
   "src/plugin-state/plugin-state-operation.test.ts",
