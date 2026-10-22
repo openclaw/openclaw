@@ -37,7 +37,6 @@ function page(items: ReturnType<typeof item>[] = [], more?: string | true) {
 
 describe("listReactionsFeishu", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
     listMock.mockReset();
   });
 

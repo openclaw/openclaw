@@ -33,6 +33,8 @@ function mount(overrides: Partial<DetailProps>, setup?: (props: DetailProps) => 
     mutationBlockedReason: null,
     configBusy: false,
     configSchemaLoading: false,
+    configRead: undefined,
+    configSchemaRead: undefined,
     configError: null,
     canEditConfig: true,
     configValue: {},

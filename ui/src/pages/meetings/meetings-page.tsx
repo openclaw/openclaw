@@ -86,7 +86,7 @@ export function MeetingsPage(props: { routeSearch?: string }) {
   const projection = projectGateway(context.gateway);
   const gateway = createGatewayConnectionLifecycle(context.gateway.snapshot);
   let active = true;
-  const [drafts, setDrafts] = createSignal<Record<string, string>>({}, { ownedWrite: true });
+  const [drafts, setDrafts] = createStore<Record<string, string>>({});
   const [list, setList] = createSignal<TranscriptsListResult | null>(null, { ownedWrite: true });
   const [listDenial, setListDenial] = createSignal<unknown>(null, { ownedWrite: true });
   const [readerDenial, setReaderDenial] = createSignal<unknown>(null, { ownedWrite: true });
@@ -399,10 +399,11 @@ export function MeetingsPage(props: { routeSearch?: string }) {
 
   function navigate(patch: Record<string, string | null>) {
     // Clear/submit must also synchronize when the URL value was already equal.
-    setDrafts((current) => ({
-      ...current,
-      ...Object.fromEntries(Object.entries(patch).map(([key, value]) => [key, value ?? ""])),
-    }));
+    setDrafts((draft) => {
+      for (const [key, value] of Object.entries(patch)) {
+        draft[key] = value ?? "";
+      }
+    });
     context.navigate("meetings", {
       search: transcriptRouteSearch(routeSearch(), patch),
     });
@@ -533,18 +534,16 @@ export function MeetingsPage(props: { routeSearch?: string }) {
         setList(null);
       }
       if (previousSearch !== search) {
-        setDrafts((current) => {
-          const nextDrafts = { ...current };
+        setDrafts((draft) => {
           for (const key of [...TRANSCRIPT_FILTER_KEYS, "find"]) {
             if (
               previous.get(key) !== next.get(key) ||
               previousSearch === undefined ||
               (key === "find" && selectorChanged)
             ) {
-              nextDrafts[key] = next.get(key) ?? "";
+              draft[key] = next.get(key) ?? "";
             }
           }
-          return nextDrafts;
         });
       }
       if (selectorChanged || queryChanged) {
@@ -566,16 +565,20 @@ export function MeetingsPage(props: { routeSearch?: string }) {
       onSettled(focusCurrentTarget);
     },
   );
-  const timer = globalThis.setInterval(() => refreshLive(), 3_000);
-  const activate = () => refreshLive(true);
-  onCleanup(listen(document, "visibilitychange", activate));
-  onCleanup(listen(globalThis, "focus", activate));
-  onCleanup(() => {
-    active = false;
-    gateway.dispose();
-    cancelSummaryGeneration();
-    cancelExport();
-    globalThis.clearInterval(timer);
+  onSettled(() => {
+    const timer = globalThis.setInterval(() => refreshLive(), 3_000);
+    const activate = () => refreshLive(true);
+    const stopVisibility = listen(document, "visibilitychange", activate);
+    const stopFocus = listen(globalThis, "focus", activate);
+    return () => {
+      stopVisibility();
+      stopFocus();
+      active = false;
+      gateway.dispose();
+      cancelSummaryGeneration();
+      cancelExport();
+      globalThis.clearInterval(timer);
+    };
   });
 
   const activeReaderTask = () => (readerTab() === "summary" ? summaryTask : readerTask);
@@ -594,8 +597,12 @@ export function MeetingsPage(props: { routeSearch?: string }) {
         basePath={context.basePath}
         now={now()}
         search={routeSearch()}
-        drafts={drafts()}
-        onDraft={(key, value) => setDrafts((current) => ({ ...current, [key]: value }))}
+        drafts={drafts}
+        onDraft={(key, value) =>
+          setDrafts((draft) => {
+            draft[key] = value;
+          })
+        }
         connected={projection.read().snapshot.phase === "connected"}
         allowed={hasOperatorReadAccess(projection.read().snapshot.hello?.auth ?? null)}
         list={requestClient() ? list() : null}

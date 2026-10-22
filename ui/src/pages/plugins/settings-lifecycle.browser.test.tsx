@@ -28,6 +28,8 @@ it("retains focused lifecycle controls across settings reads and uses current mu
     canMutate: true,
     mutationBlockedReason: null,
     configBusy: false,
+    configRead: undefined,
+    configSchemaRead: undefined,
     configSchemaLoading: false,
     configError: null,
     canEditConfig: true,
