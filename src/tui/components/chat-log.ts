@@ -258,11 +258,10 @@ export class ChatLog extends Container {
   dismissPendingSystem(runId: string) {
     const existing = this.pendingSystemNotices.get(runId);
     if (!existing) {
-      return false;
+      return;
     }
     this.removeChild(existing);
     this.pendingSystemNotices.delete(runId);
-    return true;
   }
 
   addUser(text: string, options?: { messageId?: string; images?: readonly TuiImageSource[] }) {
@@ -357,11 +356,10 @@ export class ChatLog extends Container {
   dropPendingUser(runId: string) {
     const existing = this.pendingUsers.get(runId);
     if (!existing) {
-      return false;
+      return;
     }
     this.removeChild(existing.component);
     this.pendingUsers.delete(runId);
-    return true;
   }
 
   // Re-key in place: the gateway can assign its own runId after the optimistic
@@ -369,15 +367,14 @@ export class ChatLog extends Container {
   // row keeps its transcript position even if a reply already rendered below it.
   rekeyPendingUser(fromRunId: string, toRunId: string) {
     if (fromRunId === toRunId) {
-      return false;
+      return;
     }
     const existing = this.pendingUsers.get(fromRunId);
     if (!existing) {
-      return false;
+      return;
     }
     this.pendingUsers.delete(fromRunId);
     this.pendingUsers.set(toRunId, existing);
-    return true;
   }
 
   countPendingUsers() {
