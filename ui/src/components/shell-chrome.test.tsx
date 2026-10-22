@@ -45,9 +45,8 @@ describe("Solid shell chrome", () => {
         prop:onOpenPalette={palette}
       />
     ));
-    const find = <T extends HTMLElement = HTMLElement>(selector: string): T | null =>
-      view.container.querySelector<T>(selector);
-    const topbar = find<SolidBridgeElement<object>>("openclaw-app-topbar")!;
+    const find = (selector: string) => view.container.querySelector<HTMLElement>(selector);
+    const topbar = view.container.querySelector<SolidBridgeElement<object>>("openclaw-app-topbar")!;
     const update = async (write: () => void) => {
       write();
       flush();
@@ -82,8 +81,9 @@ describe("Solid shell chrome", () => {
     status.focus();
     expect(document.activeElement).toBe(status);
     expect(
-      find<HTMLElementTagNameMap["openclaw-tooltip"]>(".mobile-connection-status openclaw-tooltip")
-        ?.content,
+      view.container.querySelector<HTMLElementTagNameMap["openclaw-tooltip"]>(
+        ".mobile-connection-status openclaw-tooltip",
+      )?.content,
     ).toBe("Unavailable?[redacted-credential]");
 
     await update(() => setGatewayStatus({ kind: "connected" }));

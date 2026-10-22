@@ -31,7 +31,7 @@ it.each`
 });
 
 it("falls back to the current file directory when process.cwd is unavailable", () => {
-  vi.mocked(process.cwd).mockImplementation(() => {
+  vi.spyOn(process, "cwd").mockImplementation(() => {
     throw Object.assign(new Error("uv_cwd"), { code: "ENOENT", syscall: "uv_cwd" });
   });
   expect(detect({ argv: ["node", "/repo/dist/index.js"] })).toBe(true);
