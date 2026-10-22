@@ -415,7 +415,7 @@ extensions/matrix/src/matrix/monitor/verification-events.ts	5
 extensions/matrix/src/matrix/poll-summary.ts	1
 extensions/matrix/src/matrix/poll-types.ts	7
 extensions/matrix/src/matrix/probe.ts	1
-extensions/matrix/src/matrix/sdk.ts	8
+extensions/matrix/src/matrix/sdk.ts	6
 extensions/matrix/src/matrix/sdk/client-base.ts	1
 extensions/matrix/src/matrix/sdk/client-core.ts	14
 extensions/matrix/src/matrix/sdk/client-event-bridge.ts	1
@@ -1094,7 +1094,7 @@ src/agents/cli-runner/bundle-mcp-runtime.ts	1
 src/agents/cli-runner/bundle-mcp.ts	5
 src/agents/cli-runner/cli-backend-auth-policy.ts	1
 src/agents/cli-runner/cli-run-transcript.ts	1
-src/agents/cli-runner/execute-node-claude.ts	4
+src/agents/cli-runner/execute-node-claude.ts	3
 src/agents/cli-runner/execute.ts	2
 src/agents/cli-runner/prepare.ts	1
 src/agents/cli-runner/session-history.ts	1
@@ -1115,7 +1115,7 @@ src/agents/embedded-agent-helpers/bootstrap.ts	2
 src/agents/embedded-agent-helpers/images.ts	6
 src/agents/embedded-agent-helpers/openai.ts	11
 src/agents/embedded-agent-helpers/turns.ts	8
-src/agents/embedded-agent-live-edit-diff.ts	3
+src/agents/embedded-agent-live-edit-diff.ts	1
 src/agents/embedded-agent-messaging-extraction.ts	1
 src/agents/embedded-agent-messaging.ts	1
 src/agents/embedded-agent-runner/cache-ttl.ts	2
@@ -1299,7 +1299,7 @@ src/agents/tool-catalog.ts	1
 src/agents/tool-display-common.ts	1
 src/agents/tool-images.ts	2
 src/agents/tool-policy-shared.ts	1
-src/agents/tool-result-error.ts	3
+src/agents/tool-result-error.ts	2
 src/agents/tool-schema-hints.ts	1
 src/agents/tool-search-catalog.ts	2
 src/agents/tool-search-directory.ts	1
@@ -2368,7 +2368,6 @@ src/tui/tui-formatters.ts	2
 src/tui/tui-session-actions.ts	3
 src/tui/tui-session-events.ts	1
 src/tui/tui-session-projection.ts	2
-src/tui/tui-session-run-coordinator.ts	1
 src/tui/tui-task-suggestions.ts	6
 src/tui/tui.ts	2
 src/utils.ts	1

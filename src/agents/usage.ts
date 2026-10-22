@@ -4,6 +4,7 @@ import {
   asPositiveFiniteNumber,
 } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { createZeroUsage } from "../../packages/ai/src/utils/usage.js";
 import type { Usage } from "../llm/types.js";
 
 export type ContextUsage = NonNullable<Usage["contextUsage"]>;
@@ -83,20 +84,7 @@ export type OpenAiChatCompletionsUsage = ReturnType<typeof toOpenAiChatCompletio
 export type AssistantUsageSnapshot = Usage;
 
 export function makeZeroUsageSnapshot(): AssistantUsageSnapshot {
-  return {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 0,
-    cost: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      total: 0,
-    },
-  };
+  return createZeroUsage();
 }
 
 export function hasNonzeroUsage(usage?: NormalizedUsage | null): usage is NormalizedUsage {
