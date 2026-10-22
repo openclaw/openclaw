@@ -10,6 +10,7 @@ import {
   findToggleByLabel,
   getButtonByText,
   getElement,
+  openCronMenu,
   selectSegmented,
   renderCronView as renderView,
 } from "./view.test-support.ts";
@@ -415,5 +416,45 @@ describe("cron view editor", () => {
     expect(unit?.querySelector('[role="option"][data-value="seconds"]')).toBeInstanceOf(
       HTMLElement,
     );
+  });
+
+  it("allows ordinary migrated jobs to be edited, paused, cloned, and removed", async () => {
+    const job = createJob("migrated-checklist", {
+      payload: { kind: "agentTurn", message: "Review the checklist" },
+    });
+    const onRun = vi.fn();
+    const onToggle = vi.fn();
+    const onClone = vi.fn();
+    const onRemove = vi.fn();
+    const actions = { onRun, onToggle, onClone, onRemove };
+    const list = renderView({ jobs: [job], ...actions });
+    getElement(list, `[data-test-id="cron-row-run-${job.id}"]`, HTMLButtonElement).click();
+    expect(onRun).toHaveBeenCalledWith(job, "force");
+    const toggle = getElement(
+      list,
+      `[data-test-id="cron-row-toggle-${job.id}"] input`,
+      HTMLInputElement,
+    );
+    toggle.click();
+    expect(onToggle).toHaveBeenCalledWith(job, false);
+    await openCronMenu(list, ".cron-job-menu");
+    getElement(list, '[data-value="clone"]', HTMLButtonElement).click();
+    await waitForSolid(() => expect(onClone).toHaveBeenCalledWith(job));
+    const detail = renderView({
+      editingJob: job,
+      form: { ...DEFAULT_CRON_FORM, payloadKind: "agentTurn", payloadText: "Review the checklist" },
+      ...actions,
+    });
+    expect(getElement(detail, ".cron-editor", HTMLFieldSetElement).disabled).toBe(false);
+    expect(getElement(detail, testId("cron-submit"), HTMLButtonElement).disabled).toBe(false);
+    expect(detail.querySelector(testId("cron-toggle-enabled"))).not.toBeNull();
+    getElement(detail, testId("cron-run-now"), HTMLButtonElement).click();
+    expect(onRun).toHaveBeenLastCalledWith(job, "force");
+    await openCronMenu(detail, ".cron-job-menu");
+    getElement(detail, '[data-value="run-if-due"]', HTMLButtonElement).click();
+    await waitForSolid(() => expect(onRun).toHaveBeenLastCalledWith(job, "due"));
+    await openCronMenu(detail, ".cron-job-menu");
+    getElement(detail, '[data-value="remove"]', HTMLButtonElement).click();
+    await waitForSolid(() => expect(onRemove).toHaveBeenCalledWith(job));
   });
 });

@@ -66,13 +66,14 @@ function capture(
   registerLlamaCppMediaTool(api, { id: "llama-cpp", capabilities: ["image"], describeImage });
   const factory = registerTool.mock.calls[0]?.[0];
   assert(typeof factory === "function", "local_image factory was not registered");
-  const tool = factory({
+  const registered = factory({
     agentDir: "/agent",
     workspaceDir: "/workspace",
     fsPolicy: { workspaceOnly: true },
     ...ctx,
   });
-  assert(!Array.isArray(tool), "local_image must register one tool");
+  assert(!Array.isArray(registered), "local_image must register one tool");
+  const tool = registered;
   async function run(input: unknown = "fixture.png", signal?: AbortSignal) {
     assert(tool, "Expected the configured local_image tool");
     return await tool.execute("test", typeof input === "string" ? { path: input } : input, signal);
