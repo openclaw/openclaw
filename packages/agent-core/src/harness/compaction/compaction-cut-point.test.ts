@@ -49,6 +49,11 @@ function buildTranscriptWithToolResult(
 }
 
 describe("findCutPoint", () => {
+  const cut = (
+    entries: SessionTreeEntry[],
+    tokens = 100,
+    options?: Parameters<typeof findCutPoint>[4],
+  ) => findCutPoint(entries, 0, entries.length, tokens, options);
   function foregroundBudget(entries: SessionTreeEntry[]) {
     const maxTokens = entries
       .slice(2)
@@ -72,31 +77,18 @@ describe("findCutPoint", () => {
   const asynchronousExchange = (resultBeforeText = false) =>
     asynchronousMessages(resultBeforeText).map(messageEntry);
 
-  it("retains an async call whose result follows another assistant fragment", () => {
-    const entries = asynchronousExchange();
-    const result = findCutPoint(entries, 0, entries.length, 100);
-
-    expect(result).toMatchObject({ firstKeptEntryIndex: 1, isSplitTurn: true });
-  });
-
-  it("can summarize a completed tool exchange before the retained explanation", () => {
-    const entries = asynchronousExchange(true);
-
-    expect(findCutPoint(entries, 0, entries.length, 100).firstKeptEntryIndex).toBe(3);
-  });
-
-  it("summarizes the complete exchange when its call cannot fit the foreground budget", () => {
-    const entries = asynchronousExchange();
-    expect(
-      findCutPoint(entries, 0, entries.length, 100, foregroundBudget(entries)).firstKeptEntryIndex,
-    ).toBe(4);
-  });
-
-  it("refuses a foreground tail that can only fit an incomplete tool exchange", () => {
-    const entries = asynchronousExchange().slice(0, -1);
-    expect(
-      findCutPoint(entries, 0, entries.length, 100, foregroundBudget(entries)).firstKeptEntryIndex,
-    ).toBe(entries.length);
+  it.each([
+    ["late result", false, false, false, 1],
+    ["completed exchange before explanation", true, false, false, 3],
+    ["completed exchange exceeds budget", false, false, true, 4],
+    ["incomplete exchange exceeds budget", false, true, true, 4],
+  ] as const)("cuts an async tail with %s", (_name, resultFirst, incomplete, budgeted, kept) => {
+    const entries = asynchronousExchange(resultFirst).slice(0, incomplete ? -1 : undefined);
+    const result = cut(entries, 100, budgeted ? foregroundBudget(entries) : undefined);
+    expect(result.firstKeptEntryIndex).toBe(kept);
+    if (kept === 1) {
+      expect(result.isSplitTurn).toBe(true);
+    }
   });
 
   it("keeps an older call when a pending user message arrives before its result", () => {
@@ -104,10 +96,7 @@ describe("findCutPoint", () => {
     messages.splice(3, 0, userText("Please preserve this pending request.", 3));
     const entries = messages.map(messageEntry);
 
-    expect(
-      findCutPoint(entries, 0, entries.length, 1, { preserveFromEntryId: "entry-3" })
-        .firstKeptEntryIndex,
-    ).toBe(1);
+    expect(cut(entries, 1, { preserveFromEntryId: "entry-3" }).firstKeptEntryIndex).toBe(1);
   });
 
   it("does not pull a previous completed occurrence with a reused provider id into the tail", () => {
@@ -124,7 +113,7 @@ describe("findCutPoint", () => {
     );
     const entries = messages.map(messageEntry);
 
-    expect(findCutPoint(entries, 0, entries.length, 100).firstKeptEntryIndex).toBe(3);
+    expect(cut(entries).firstKeptEntryIndex).toBe(3);
   });
 
   it("keeps the real late result with the call whose synthetic result it replaces", () => {
@@ -136,7 +125,7 @@ describe("findCutPoint", () => {
     });
     const entries = messages.map(messageEntry);
 
-    expect(findCutPoint(entries, 0, entries.length, 100).firstKeptEntryIndex).toBe(1);
+    expect(cut(entries).firstKeptEntryIndex).toBe(1);
   });
 
   it("keeps overlapping asynchronous calls and out-of-order results in one retained group", () => {
@@ -149,7 +138,7 @@ describe("findCutPoint", () => {
     });
     const entries = messages.map(messageEntry);
 
-    expect(findCutPoint(entries, 0, entries.length, 100).firstKeptEntryIndex).toBe(1);
+    expect(cut(entries).firstKeptEntryIndex).toBe(1);
   });
 
   it("preserves the pending suffix before a foreground budget exists", () => {
@@ -160,16 +149,18 @@ describe("findCutPoint", () => {
       pending,
       messageEntry(userText("later admitted input", 4), 3),
     ];
-    expect(findCutPoint(entries, 0, entries.length, 1).firstKeptEntryIndex).toBe(3);
-    expect(
-      findCutPoint(entries, 0, entries.length, 1, { preserveFromEntryId: pending.id }),
-    ).toEqual({ firstKeptEntryIndex: 2, turnStartIndex: -1, isSplitTurn: false });
+    expect(cut(entries, 1).firstKeptEntryIndex).toBe(3);
+    expect(cut(entries, 1, { preserveFromEntryId: pending.id })).toEqual({
+      firstKeptEntryIndex: 2,
+      turnStartIndex: -1,
+      isSplitTurn: false,
+    });
   });
 
   it("trims the prefix instead of keeping the whole transcript", () => {
     const entries = buildTranscriptWithToolResult();
 
-    const result = findCutPoint(entries, 0, entries.length, KEEP_RECENT_TOKENS);
+    const result = cut(entries, KEEP_RECENT_TOKENS);
 
     expect(result.firstKeptEntryIndex).toBe(3);
   });
@@ -188,7 +179,7 @@ describe("findCutPoint", () => {
     const entries = buildTranscriptWithToolResult(trailing);
 
     expect(estimateTokens(trailing)).toBeGreaterThanOrEqual(KEEP_RECENT_TOKENS);
-    const result = findCutPoint(entries, 0, entries.length, KEEP_RECENT_TOKENS);
+    const result = cut(entries, KEEP_RECENT_TOKENS);
 
     expect(result.firstKeptEntryIndex).toBe(3);
   });

@@ -27,20 +27,19 @@ import {
   assistant,
   bash,
   compactWith,
+  compactionEntry,
   custom,
   decoratedResponse,
   responseStream,
+  makePreparation,
+  promptText,
   summarize,
   text,
   toolCall,
   toolResult,
   user,
+  userEntry,
 } from "./shard-fixtures.test-support.js";
-import { createFileOps } from "./utils.js";
-
-function userEntry(content: string, index: number) {
-  return createMessageEntry(user(content, index + 1), index);
-}
 
 function prepare(
   entries: SessionTreeEntry[],
@@ -60,24 +59,6 @@ function resetEntry(index: number, firstKeptEntryId?: string): SessionTreeEntry 
     timestamp: new Date(index + 1).toISOString(),
     reason: "new",
     ...(firstKeptEntryId ? { firstKeptEntryId } : {}),
-  };
-}
-
-function compactionEntry(
-  index: number,
-  summary: string,
-  firstKeptEntryId: string,
-  overrides: Partial<Extract<SessionTreeEntry, { type: "compaction" }>> = {},
-): SessionTreeEntry {
-  return {
-    type: "compaction",
-    id: `entry-${index}`,
-    parentId: `entry-${index - 1}`,
-    timestamp: new Date(index + 1).toISOString(),
-    summary,
-    firstKeptEntryId,
-    tokensBefore: 200_000,
-    ...overrides,
   };
 }
 
@@ -106,11 +87,7 @@ function createProjectedEntry(
 
 it("skips an invalid context window of zero", () => {
   expect(
-    shouldCompact(1, 0, {
-      enabled: true,
-      reserveTokens: 16_384,
-      keepRecentTokens: 20_000,
-    }),
+    shouldCompact(1, 0, { enabled: true, reserveTokens: 16_384, keepRecentTokens: 20_000 }),
   ).toBe(false);
 });
 
@@ -158,13 +135,9 @@ describe("calculateContextTokens", () => {
   it("does not scan past a zero unavailable context marker", () => {
     const messages: AgentMessage[] = [
       createAssistant("old cumulative turn", createUsage(950), 0),
-      {
-        ...createAssistant("usage unavailable", createUsage(0), 1),
-        usage: {
-          ...createUsage(0),
-          contextUsage: { state: "unavailable" },
-        },
-      },
+      assistant("usage unavailable", {
+        usage: { ...createUsage(0), contextUsage: { state: "unavailable" } },
+      }),
     ];
     const estimate = estimateContextTokens(messages);
 
@@ -188,19 +161,13 @@ describe("calculateContextTokens", () => {
 
   it.each(["all-zero", "sparse"] as const)("scans past an %s assistant tail", (kind) => {
     const validUsage = createUsage(20);
-    const sparseAssistant = {
-      role: "assistant",
-      content: [text("seeded without provider usage")],
-      api: "test-api",
-      provider: "test-provider",
-      model: "test-model",
-      stopReason: "stop",
+    const { usage: _usage, ...sparseAssistant } = assistant("seeded without provider usage", {
       timestamp: 2,
-    } as AgentMessage;
+    });
     const tail =
       kind === "all-zero"
         ? [user("continue", 2), createAssistant("partial", createUsage(0), 3)]
-        : [sparseAssistant];
+        : [sparseAssistant as AgentMessage];
     const messages = [createAssistant("complete", validUsage, 1), ...tail];
     expect(getLastAssistantUsage(messages.map(createMessageEntry))).toBe(validUsage);
     expect(estimateContextTokens(messages)).toMatchObject({ usageTokens: 20, lastUsageIndex: 0 });
@@ -470,11 +437,11 @@ describe("generateSummary progress updates", () => {
     const result = await summarize(
       [
         user("Check whether the release is approved."),
-        {
-          ...createAssistant("", createUsage(0), 2),
-          content: [{ type: "toolCall", id: "check", name: "verify", arguments: {} }],
+        assistant([toolCall("verify", {}, "check")], {
+          usage: createUsage(0),
+          timestamp: 2,
           stopReason: "toolUse",
-        },
+        }),
         toolResult("Verification FAILED: missing release approval.", {
           toolCallId: "check",
           toolName: "verify",
@@ -599,15 +566,7 @@ describe("split-turn compaction", () => {
       let active = 0;
       let maxActive = 0;
       const streamFn = vi.fn<StreamFn>((_model, context, options) => {
-        const message = context.messages[0];
-        if (message?.role !== "user") {
-          throw new Error("expected a user summary prompt");
-        }
-        prompts.push(
-          typeof message.content === "string"
-            ? message.content
-            : message.content.map((block) => (block.type === "text" ? block.text : "")).join(""),
-        );
+        prompts.push(promptText(context));
         outputBudgets.push(options?.maxTokens);
         active++;
         maxActive = Math.max(maxActive, active);
@@ -623,17 +582,10 @@ describe("split-turn compaction", () => {
         return stream;
       });
       const result = await compactWith(
-        {
-          firstKeptEntryId: "kept-entry",
-          messagesToSummarize: history
-            ? [{ role: "user", content: "history", timestamp: 1 }, runtimeContext]
-            : [],
+        makePreparation({
+          messagesToSummarize: history ? [user("history"), runtimeContext] : [],
           turnPrefixMessages: [user("prefix", 2), runtimeContext],
-          isSplitTurn: true,
-          tokensBefore: 100,
-          fileOps: createFileOps(),
-          settings: { enabled: true, reserveTokens: 1_000, keepRecentTokens: 100 },
-        },
+        }),
         model,
         {
           customInstructions: focus,
@@ -671,18 +623,15 @@ describe("compactWithoutSummary", () => {
   const filler = "Context for the split request. ".repeat(19);
   const sourceAsk = `${filler}Constraint: keep SOURCE-ASK-MIDDLE. ${filler}`.trim();
   it("keeps the loss notice, source ask, and unresolved request beside a constrained foreground budget", () => {
-    const result = compactWithoutSummary({
-      firstKeptEntryId: "kept-entry",
-      messagesToSummarize: [{ role: "user", content: "history", timestamp: 1 }],
-      turnPrefixMessages: [{ role: "user", content: sourceAsk, timestamp: 2 }],
-      isSplitTurn: true,
-      latestUnresolvedUserRequest: "finish the review",
-      previousSummary: "p".repeat(MAX_COMPACTION_SUMMARY_CHARS),
-      tokensBefore: 100,
-      fileOps: createFileOps(),
-      settings: { enabled: true, reserveTokens: 1_000, keepRecentTokens: 100 },
-      summaryTokenBudget: 450,
-    });
+    const result = compactWithoutSummary(
+      makePreparation({
+        messagesToSummarize: [user("history")],
+        turnPrefixMessages: [user(sourceAsk, 2)],
+        latestUnresolvedUserRequest: "finish the review",
+        previousSummary: "p".repeat(MAX_COMPACTION_SUMMARY_CHARS),
+        summaryTokenBudget: 450,
+      }),
+    );
 
     expect(result.ok).toBe(true);
     const summary = result.ok ? result.value.summary : "";

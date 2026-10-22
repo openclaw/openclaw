@@ -1,5 +1,5 @@
-import { assert, describe, expect, it, vi } from "vitest";
-import type { AssistantMessage, Model, StreamFn } from "../../llm.js";
+import { assert, describe, expect, it } from "vitest";
+import type { AssistantMessage, Model } from "../../llm.js";
 import type { AgentMessage } from "../../types.js";
 import type { SessionTreeEntry } from "../types.js";
 import { generateBranchSummary, prepareBranchEntries } from "./branch-summarization.js";
@@ -7,12 +7,15 @@ import { createCompactionModel, createMessageEntry } from "./compaction.test-sup
 import {
   assistant,
   bash,
+  captureStream,
+  compactionEntry,
+  custom,
   decoratedResponse,
-  responseStream,
   text as textBlock,
   toolCall,
   toolResult,
   user,
+  userEntry,
 } from "./shard-fixtures.test-support.js";
 
 function createModel(contextWindow: number, maxTokens = 8000): Model & { contextWindow: number } {
@@ -32,25 +35,9 @@ function createResponse(
 }
 
 function createCapturingStream(model: Model, responseContent?: AssistantMessage["content"]) {
-  let prompt = "";
-  let systemPrompt = "";
-  let maxOutputTokens: number | undefined;
-  const streamFn = vi.fn<StreamFn>((_model, context, options) => {
-    const userMessage = context.messages[0];
-    if (!userMessage || userMessage.role !== "user") {
-      throw new Error("expected a user message containing the branch summary prompt");
-    }
-    prompt =
-      typeof userMessage.content === "string"
-        ? userMessage.content
-        : userMessage.content.map((block) => (block.type === "text" ? block.text : "")).join("");
-    systemPrompt = context.systemPrompt ?? "";
-    maxOutputTokens = options?.maxTokens;
-    return responseStream(createResponse(model, responseContent));
-  });
+  const capture = captureStream(() => createResponse(model, responseContent));
   return {
-    streamFn,
-    readCapture: () => ({ prompt, systemPrompt, maxOutputTokens }),
+    ...capture,
     summarize: (
       entries: SessionTreeEntry[],
       options: Omit<
@@ -62,14 +49,10 @@ function createCapturingStream(model: Model, responseContent?: AssistantMessage[
         model,
         apiKey: "test-key",
         signal: new AbortController().signal,
-        streamFn,
+        streamFn: capture.streamFn,
         ...options,
       }),
   };
-}
-
-function userEntry(content: string, index: number) {
-  return createMessageEntry(user(content, index + 1), index);
 }
 
 function createLongBranchEntries(count: number): SessionTreeEntry[] {
@@ -95,16 +78,8 @@ describe("branch summarization", () => {
 
   it("rejects whitespace-only model output before creating a summary", async () => {
     const content: AssistantMessage["content"] = [{ type: "text", text: " \n\t " }];
-    const model = createModel(128_000);
-    const streamFn = vi.fn<StreamFn>(() => responseStream(createResponse(model, content)));
-    const entries = [userEntry("summarize this branch", 0)];
-
-    const result = await generateBranchSummary(entries, {
-      model,
-      apiKey: "test-key",
-      signal: new AbortController().signal,
-      streamFn,
-    });
+    const capture = createCapturingStream(createModel(128_000), content);
+    const result = await capture.summarize([userEntry("summarize this branch", 0)]);
 
     assert(!result.ok);
     expect(result.error).toMatchObject({
@@ -206,14 +181,11 @@ describe("branch summarization", () => {
       const excludedMessage: AgentMessage =
         kind === "shell"
           ? bash(`private output marker ${"x".repeat(80_000)}`, { timestamp: 2 })
-          : {
-              role: "custom",
+          : custom(`private output marker ${"x".repeat(80_000)}`, {
               customType: "openclaw.operator-activity",
-              content: `private output marker ${"x".repeat(80_000)}`,
-              display: true,
               timestamp: 2,
               excludeFromContext: true,
-            };
+            });
       const entries: SessionTreeEntry[] = [
         userEntry("important original request", 0),
         createMessageEntry(excludedMessage, 1),
@@ -276,39 +248,23 @@ describe("branch summarization", () => {
   });
 
   it.each([
-    {
-      name: "custom focus",
-      window: 8192,
-      cap: 8000,
-      count: 12,
-      absent: "turn-0",
-      output: 2048,
-      options: {
+    [
+      "custom focus",
+      8192,
+      8000,
+      12,
+      "turn-0",
+      2048,
+      {
         reserveTokens: 2048,
         customInstructions: `Preserve release blockers. ${"Keep relevant decisions. ".repeat(200)}`,
       },
-    },
-    {
-      name: "large usable reservation",
-      window: 8192,
-      cap: 8000,
-      count: 12,
-      absent: "turn-9",
-      output: 2048,
-      options: { reserveTokens: 6144 },
-    },
-    {
-      name: "narrow output cap",
-      window: 4096,
-      cap: 512,
-      count: 8,
-      absent: "turn-0",
-      output: 512,
-      options: {},
-    },
-  ])(
-    "bounds branch requests with $name",
-    async ({ window, cap, count, absent, output, options }) => {
+    ],
+    ["large usable reservation", 8192, 8000, 12, "turn-9", 2048, { reserveTokens: 6144 }],
+    ["narrow output cap", 4096, 512, 8, "turn-0", 512, {}],
+  ] as const)(
+    "bounds branch requests with %s",
+    async (_name, window, cap, count, absent, output, options) => {
       const capture = createCapturingStream(createModel(window, cap));
       expect((await capture.summarize(createLongBranchEntries(count), options)).ok).toBe(true);
       const { prompt, systemPrompt, maxOutputTokens } = capture.readCapture();
@@ -327,15 +283,7 @@ describe("branch summarization", () => {
     const capture = createCapturingStream(createModel(4096));
     const text = `Preserve this branch context. ${"x".repeat(15_000)}`;
     const entries: SessionTreeEntry[] = [
-      {
-        type: "compaction",
-        id: "entry-0",
-        parentId: null,
-        timestamp: new Date(1).toISOString(),
-        firstKeptEntryId: "earlier-entry",
-        summary: text,
-        tokensBefore: 20_000,
-      },
+      compactionEntry(0, text, "earlier-entry", { tokensBefore: 20_000 }),
     ];
     const original = JSON.stringify(entries);
 

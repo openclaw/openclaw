@@ -2,8 +2,73 @@ import { vi } from "vitest";
 import { createAssistantMessageEventStream } from "../../llm.js";
 import type { AssistantMessage, Message, Model, StreamFn } from "../../llm.js";
 import type { AgentMessage } from "../../types.js";
+import type { SessionTreeEntry } from "../types.js";
 import { compact, generateSummary } from "./compaction.js";
+import { createMessageEntry } from "./compaction.test-support.js";
 import type { SummarizationCompletionParams } from "./summarization-completion.js";
+import { createFileOps } from "./utils.js";
+
+export const userEntry = (content: string, index: number) =>
+  createMessageEntry(user(content, index + 1), index);
+
+export function compactionEntry(
+  index: number,
+  summary: string,
+  firstKeptEntryId: string,
+  overrides: Partial<Extract<SessionTreeEntry, { type: "compaction" }>> = {},
+): SessionTreeEntry {
+  return {
+    type: "compaction",
+    id: `entry-${index}`,
+    parentId: index ? `entry-${index - 1}` : null,
+    timestamp: new Date(index + 1).toISOString(),
+    summary,
+    firstKeptEntryId,
+    tokensBefore: 200_000,
+    ...overrides,
+  };
+}
+
+export function makePreparation(overrides: Partial<Parameters<typeof compact>[0]> = {}) {
+  return {
+    firstKeptEntryId: "kept-entry",
+    messagesToSummarize: [],
+    turnPrefixMessages: [],
+    isSplitTurn: true,
+    tokensBefore: 100,
+    fileOps: createFileOps(),
+    settings: { enabled: true, reserveTokens: 1_000, keepRecentTokens: 100 },
+    ...overrides,
+  };
+}
+
+export function promptText(context: Parameters<StreamFn>[1]) {
+  const message = context.messages[0];
+  if (message?.role !== "user") {
+    throw new Error("expected a user summary prompt");
+  }
+  return typeof message.content === "string"
+    ? message.content
+    : message.content.map((block) => (block.type === "text" ? block.text : "")).join("");
+}
+
+export function captureStream(reply: (model: Model, prompt: string) => AssistantMessage) {
+  const prompts: string[] = [];
+  let systemPrompt = "";
+  let maxOutputTokens: number | undefined;
+  const streamFn = vi.fn<StreamFn>((model, context, options) => {
+    const prompt = promptText(context);
+    prompts.push(prompt);
+    systemPrompt = context.systemPrompt ?? "";
+    maxOutputTokens = options?.maxTokens;
+    return responseStream(reply(model, prompt));
+  });
+  return {
+    streamFn,
+    prompts,
+    readCapture: () => ({ prompt: prompts.at(-1) ?? "", systemPrompt, maxOutputTokens }),
+  };
+}
 
 export const text = (value: string) => ({ type: "text" as const, text: value });
 
@@ -114,7 +179,7 @@ type SummaryOptions = Partial<
     SummarizationCompletionParams,
     "previousSummary" | "thinkingLevel" | "signal" | "streamFn" | "runtime"
   >
-> & { reserveTokens?: number };
+> & { reserveTokens?: number; summaryPrompt?: Parameters<typeof generateSummary>[11] };
 export function summarize(messages: AgentMessage[], model: Model, options: SummaryOptions = {}) {
   return generateSummary(
     messages,
@@ -128,6 +193,7 @@ export function summarize(messages: AgentMessage[], model: Model, options: Summa
     options.thinkingLevel,
     options.streamFn,
     options.runtime,
+    options.summaryPrompt,
   );
 }
 

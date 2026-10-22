@@ -4,11 +4,11 @@ import { createCompactionModel } from "./compaction.test-support.js";
 import {
   assistant,
   compactWith,
+  makePreparation,
   responseStream,
   summarize,
   user,
 } from "./shard-fixtures.test-support.js";
-import { createFileOps } from "./utils.js";
 
 describe("generateSummary output budget", () => {
   function createBudgetModel() {
@@ -42,15 +42,11 @@ describe("generateSummary output budget", () => {
       return observed;
     }
     const result = await compactWith(
-      {
-        firstKeptEntryId: "kept-entry",
+      makePreparation({
         messagesToSummarize: [user("history")],
         turnPrefixMessages: [user("prefix", 2)],
-        isSplitTurn: true,
-        tokensBefore: 100,
-        fileOps: createFileOps(),
         settings: { enabled: true, reserveTokens, keepRecentTokens: 100 },
-      },
+      }),
       model,
       { streamFn },
     );
@@ -58,30 +54,12 @@ describe("generateSummary output budget", () => {
     return observed;
   }
 
-  it("keeps raised-reserve authorization caller-owned", async () => {
-    const observed = await captureMaxTokens(80_000);
-
-    expect(observed).toEqual([64_000]);
-  });
-
-  it("leaves the agent runtime's default reserve path unchanged", async () => {
-    // The agent layer floors the reserve at 20_000, so this is the value ordinary
-    // compaction actually runs with. Its authorization must not move.
-    const observed = await captureMaxTokens(20_000);
-
-    expect(observed).toEqual([16_000]);
-  });
-
-  it("leaves the harness default reserve path unchanged", async () => {
-    // The harness default sits below the floor and must be equally untouched.
-    const observed = await captureMaxTokens(16_384);
-
-    expect(observed).toEqual([13_107]);
-  });
-
-  it("keeps split-turn authorization caller-owned", async () => {
-    const raised = await captureMaxTokens(80_000, true);
-
-    expect(raised).toEqual([64_000, 40_000]);
+  it.each([
+    [80_000, false, [64_000]],
+    [20_000, false, [16_000]], // Agent runtime floor.
+    [16_384, false, [13_107]], // Harness default.
+    [80_000, true, [64_000, 40_000]],
+  ] as const)("preserves caller-owned reserve %i (split: %s)", async (reserve, split, expected) => {
+    expect(await captureMaxTokens(reserve, split)).toEqual(expected);
   });
 });

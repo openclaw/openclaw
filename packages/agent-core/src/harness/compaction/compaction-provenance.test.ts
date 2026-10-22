@@ -1,14 +1,19 @@
 import { describe, expect, it } from "vitest";
-import type { StreamFn } from "../../llm.js";
 import type { AgentMessage } from "../../types.js";
 import { buildSessionContext } from "../session/session.js";
-import { generateSummary, prepareCompaction } from "./compaction.js";
+import { prepareCompaction } from "./compaction.js";
 import {
   createCompactionModel as createSummaryModel,
   createContextUsage,
   createMessageEntry as messageEntry,
 } from "./compaction.test-support.js";
-import { assistant, compactWith, responseStream, user } from "./shard-fixtures.test-support.js";
+import {
+  assistant,
+  captureStream,
+  compactWith,
+  summarize,
+  user,
+} from "./shard-fixtures.test-support.js";
 
 const assistantText = (text: string, timestamp: number) =>
   assistant(text, {
@@ -23,30 +28,17 @@ describe("compaction sender provenance", () => {
     { name: "turn-prefix", summaryPrompt: { kind: "turn-prefix" as const } },
   ])("applies attribution instructions to a $name summary prompt", async ({ summaryPrompt }) => {
     const model = createSummaryModel();
-    let systemPrompt = "";
-    const streamFn: StreamFn = (_model, context) => {
-      systemPrompt = context.systemPrompt ?? "";
-      return responseStream(assistantText("summary", 1));
-    };
-
-    const result = await generateSummary(
+    const capture = captureStream(() => assistantText("summary", 1));
+    const result = await summarize(
       [user("Alice owns this decision.", 1, { senderId: "alice" })],
       model,
-      1_000,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      streamFn,
-      undefined,
-      summaryPrompt,
+      { streamFn: capture.streamFn, summaryPrompt },
     );
-
     expect(result.ok).toBe(true);
-    expect(systemPrompt).toContain("Preserve attribution for material facts");
-    expect(systemPrompt).toContain("A user line without sender={...} is unattributed");
+    expect(capture.readCapture().systemPrompt).toContain("Preserve attribution for material facts");
+    expect(capture.readCapture().systemPrompt).toContain(
+      "A user line without sender={...} is unattributed",
+    );
   });
 
   it("carries sender provenance through prepareCompaction and compact into the session tree", async () => {

@@ -7,6 +7,8 @@ import {
 import {
   assistant,
   compactWith,
+  makePreparation,
+  promptText,
   responseStream,
   text,
   toolCall,
@@ -23,17 +25,7 @@ describe("split-turn compaction summary cap", () => {
     let prefixSummary = "prefix summary";
     const prompts: string[] = [];
     const streamFn = vi.fn<StreamFn>((_model, context) => {
-      const promptMessage = context.messages[0];
-      if (!promptMessage || promptMessage.role !== "user") {
-        throw new Error("expected a user message containing the split-turn prompt");
-      }
-      prompts.push(
-        typeof promptMessage.content === "string"
-          ? promptMessage.content
-          : promptMessage.content
-              .map((block) => (block.type === "text" ? block.text : ""))
-              .join(""),
-      );
+      prompts.push(promptText(context));
       return responseStream(assistant(prefixSummary, { usage: createUsage(0) }));
     });
     const fileOps = createFileOps();
@@ -49,10 +41,8 @@ describe("split-turn compaction summary cap", () => {
       budget?: { summaryTokenBudget: number; latestUnresolvedUserRequest: string },
     ) => {
       const result = await compactWith(
-        {
+        makePreparation({
           ...budget,
-          firstKeptEntryId: "kept-entry",
-          messagesToSummarize: [],
           turnPrefixMessages: [
             assistant(
               [
@@ -63,16 +53,13 @@ describe("split-turn compaction summary cap", () => {
               { usage: createUsage(1) },
             ),
           ],
-          isSplitTurn: true,
-          tokensBefore: 100,
           previousSummary,
           previousSummaryDetails: {
             readFiles: ["src/read.ts"],
             modifiedFiles: ["src/write.ts"],
           },
           fileOps,
-          settings: { enabled: true, reserveTokens: 1_000, keepRecentTokens: 100 },
-        },
+        }),
         model,
         { streamFn },
       );
