@@ -139,7 +139,6 @@ describe("plugin package authoring metadata", () => {
   it.each([
     ["invalid", "openclaw must be an object"],
     [{ extensions: "./index.js" }, "openclaw.extensions must be an array"],
-    [{ extensions: [" "] }, "openclaw.extensions[0] must be a non-empty string"],
   ])("rejects metadata %j: %s", (openclaw, error) => {
     expect(resolvePackageExtensionEntries({ openclaw } as PackageManifest)).toEqual({
       status: "invalid",

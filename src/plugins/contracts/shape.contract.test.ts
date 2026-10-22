@@ -4,6 +4,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { describe, expect, it } from "vitest";
 import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
+import { createWebSearchTestProvider } from "../../test-utils/web-provider-runtime.test-helpers.js";
 import { buildPluginShapeSummary } from "../inspect-shape.js";
 
 describe("plugin shape compatibility matrix", () => {
@@ -25,24 +26,13 @@ describe("plugin shape compatibility matrix", () => {
 
     register("hybrid-company", (api) => {
       api.registerProvider({ id: "hybrid-company", label: "Hybrid Company", auth: [] });
-      api.registerWebSearchProvider({
-        id: "hybrid-search",
-        label: "Hybrid Search",
-        hint: "Search the web",
-        envVars: ["HYBRID_SEARCH_KEY"],
-        placeholder: "hsk_...",
-        signupUrl: "https://example.com/signup",
-        credentialPath: "tools.web.search.hybrid-search.apiKey",
-        getCredentialValue: () => "hsk-test",
-        setCredentialValue(searchConfigTarget, value) {
-          searchConfigTarget.apiKey = value;
-        },
-        createTool: () => ({
-          description: "Hybrid search",
-          parameters: {},
-          execute: async () => ({}),
+      api.registerWebSearchProvider(
+        createWebSearchTestProvider({
+          pluginId: "hybrid-company",
+          id: "hybrid-search",
+          credentialPath: "tools.web.search.hybrid-search.apiKey",
         }),
-      });
+      );
     });
 
     register("channel-demo", (api) => {
