@@ -1,8 +1,9 @@
-import { createStore, lazy, Loading } from "solid-js";
+import { createStore, Errored, lazy, Loading } from "solid-js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { normalizeBasePath } from "../app-route-paths.ts";
 import { withPromiseModalHost } from "../components/promise-modal-host.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
+import { t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { notifyBrowserAuthRestored, bindBrowserHttpFailures } from "./browser-http.ts";
 import {
@@ -99,15 +100,41 @@ export function startBrowserAuthRecovery(
             draft.probeResult = probeResult;
           });
         return (
-          <Loading>
-            <RecoveryDialog
-              view={view}
-              readProbeResult={() => probeResult}
-              onSignIn={() => void signIn()}
-              onCheck={() => void check(true)}
-              onDismiss={dismiss}
-            />
-          </Loading>
+          <Errored
+            fallback={(_error, reset) => (
+              <openclaw-modal-dialog
+                label={t("connection.browserSignIn.title")}
+                description={t("connection.browserSignIn.description")}
+                onModal-cancel={dismiss}
+              >
+                <div class="exec-approval-card">
+                  <div class="exec-approval-title">{t("connection.browserSignIn.title")}</div>
+                  <p role="alert">{t("lazyView.errorTitle")}</p>
+                  <openclaw-modal-actions class="exec-approval-actions">
+                    <button class="btn" onClick={dismiss}>
+                      {t("connection.browserSignIn.dismiss")}
+                    </button>
+                    <button class="btn" onClick={() => reset()}>
+                      {t("common.retry")}
+                    </button>
+                    <button class="btn primary" onClick={() => void signIn()}>
+                      {t("connection.browserSignIn.action")}
+                    </button>
+                  </openclaw-modal-actions>
+                </div>
+              </openclaw-modal-dialog>
+            )}
+          >
+            <Loading>
+              <RecoveryDialog
+                view={view}
+                readProbeResult={() => probeResult}
+                onSignIn={() => void signIn()}
+                onCheck={() => void check(true)}
+                onDismiss={dismiss}
+              />
+            </Loading>
+          </Errored>
         );
       };
       dialog = { close: () => modal.finish(undefined), update: () => update?.() };

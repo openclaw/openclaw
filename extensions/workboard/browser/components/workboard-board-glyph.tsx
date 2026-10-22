@@ -1,5 +1,5 @@
 /** @jsxImportSource @solidjs/web */
-import type { WorkboardBoardSummary } from "../lib/workboard/index.ts";
+import type { WorkboardBoardSummary } from "../lib/workboard/types.ts";
 import { AppearanceGlyph } from "./host-components.tsx";
 
 export function WorkboardBoardGlyph(props: {

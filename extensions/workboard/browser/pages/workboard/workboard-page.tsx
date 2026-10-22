@@ -11,23 +11,25 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { workboardCardBoardId } from "../../lib/workboard/board-filter.ts";
 import { workboardBoardName } from "../../lib/workboard/board-presentation.ts";
 import type { WorkboardCapability } from "../../lib/workboard/capability.ts";
-import { workboardCardSessionKey } from "../../lib/workboard/card-state.ts";
+import { resetDraftState, workboardCardSessionKey } from "../../lib/workboard/card-state.ts";
 import {
   configureWorkboardLiveRefresh,
   handleWorkboardChanged,
-  loadWorkboard,
-  refreshWorkboard,
-  resetDraftState,
   resumeWorkboardLiveRefresh,
+} from "../../lib/workboard/live-refresh.ts";
+import { loadWorkboard, refreshWorkboard } from "../../lib/workboard/loading.ts";
+import {
+  invalidateWorkboardLoads,
   resetWorkboardConnectionState,
   stopWorkboardLiveRefresh,
+} from "../../lib/workboard/runtime.ts";
+import { createWorkboardSessionResolver } from "../../lib/workboard/session-resolution.ts";
+import {
+  WORKBOARD_CHANGED_EVENT,
+  type WorkboardBoardMetadata,
   type WorkboardCard,
   type WorkboardUiState,
-  WORKBOARD_CHANGED_EVENT,
-} from "../../lib/workboard/index.ts";
-import { invalidateWorkboardLoads } from "../../lib/workboard/runtime.ts";
-import { createWorkboardSessionResolver } from "../../lib/workboard/session-resolution.ts";
-import type { WorkboardBoardMetadata } from "../../lib/workboard/types.ts";
+} from "../../lib/workboard/types.ts";
 import {
   buildAgentFilterOptions,
   normalizeActiveAgentFilter,

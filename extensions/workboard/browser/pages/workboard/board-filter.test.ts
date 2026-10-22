@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { WorkboardBoardSummary, WorkboardCard } from "../../lib/workboard/index.ts";
+import type { WorkboardBoardSummary, WorkboardCard } from "../../lib/workboard/types.ts";
 import {
   buildBoardFilterOptions,
   matchesBoardFilter,
