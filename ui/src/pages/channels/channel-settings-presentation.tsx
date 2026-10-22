@@ -1,7 +1,7 @@
 import { formatInternationalPhoneNumberForDisplay } from "@openclaw/normalization-core/phone-presentation";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { render } from "@solidjs/web";
-import { createSignal, onCleanup, onSettled } from "solid-js";
+import { createStore, onSettled } from "solid-js";
 import type {
   ControlUiChannelSettingsContext,
   ControlUiChannelSettingsSnapshot,
@@ -66,9 +66,7 @@ export function createChannelSettingsPresentation(
   const entries = new Map<string, Entry>();
   const slots = new Map<string, HTMLElement>();
   // DOM visibility is presentation state; entry and request authority stay synchronous.
-  const [presented, setPresented] = createSignal<ReadonlySet<string>>(new Set(), {
-    ownedWrite: true,
-  });
+  const [presented, setPresented] = createStore<Record<string, boolean>>({});
   let disposed = false;
   const has = (channelId: string) =>
     controlUiPluginDistributions.some((distribution) =>
@@ -91,7 +89,7 @@ export function createChannelSettingsPresentation(
               message: props.channels.whatsappLoginMessage,
               qrDataUrl: props.channels.whatsappLoginQrDataUrl,
               connected: props.channels.whatsappLoginConnected,
-              busy: props.channels.whatsappBusy,
+              busy: props.mutationBusy?.whatsapp || props.channels.whatsappBusy,
             },
           }
         : {}),
@@ -272,14 +270,11 @@ export function createChannelSettingsPresentation(
                 login: {
                   async start(force: boolean) {
                     captureAction().assertCurrent();
-                    await channels.startWhatsApp(
-                      force,
-                      hooks.getProps().wizardHost.whatsappAccountId(),
-                    );
+                    await hooks.getProps().onWhatsAppStart(force);
                   },
                   async wait() {
                     captureAction().assertCurrent();
-                    await channels.waitWhatsApp(hooks.getProps().wizardHost.whatsappAccountId());
+                    await hooks.getProps().onWhatsAppWait();
                   },
                   captureLogout() {
                     const { assertCurrent } = captureAction();
@@ -299,7 +294,7 @@ export function createChannelSettingsPresentation(
                         ) {
                           return;
                         }
-                        await channels.logoutWhatsApp(account.accountId);
+                        await hooks.getProps().onWhatsAppLogout(account.accountId);
                       },
                     };
                   },
@@ -345,7 +340,7 @@ export function createChannelSettingsPresentation(
                     hooks.getProps().onShowAdvancedSettings(enabled);
                   },
                 }),
-                () => presented().has(channelId),
+                () => presented[channelId] === true,
               );
               return <ChannelConfig channelId={channelId} props={props()} />;
             }, container);
@@ -423,7 +418,7 @@ export function createChannelSettingsPresentation(
       retire(channelId);
     }
   }
-  onCleanup(() => {
+  onSettled(() => () => {
     disposed = true;
     slots.clear();
     reset();
@@ -434,12 +429,16 @@ export function createChannelSettingsPresentation(
     reset,
     attach(channelId: string, container: HTMLElement) {
       slots.set(channelId, container);
-      setPresented(new Set(slots.keys()));
+      setPresented((draft) => {
+        draft[channelId] = true;
+      });
       sync();
       return () => {
         if (slots.get(channelId) === container) {
           slots.delete(channelId);
-          setPresented(new Set(slots.keys()));
+          setPresented((draft) => {
+            delete draft[channelId];
+          });
           entries.get(channelId)?.node.remove();
           sync();
         }
@@ -455,9 +454,10 @@ export function ChannelSettingsSlot(props: {
   let container!: HTMLDivElement;
   const locale = projectI18n(i18n);
   onSettled(() => {
-    const detach = props.presentation.attach(props.channelId, container);
+    const presentation = props.presentation;
+    const detach = presentation.attach(props.channelId, container);
     // Locale receipts refresh the separately mounted channel settings presentation.
-    const stopLocale = locale.subscribe(() => props.presentation.sync());
+    const stopLocale = locale.subscribe(presentation.sync);
     return () => {
       stopLocale();
       detach();
