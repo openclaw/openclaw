@@ -4,7 +4,8 @@ import { channelTurnMocks } from "./run-channel-turn.test-support.js";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { bindTestChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createMockSubsystemLogger } from "../../../test/helpers/mock-subsystem-logger.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { noteDispatchProcessedOutcome } from "../../auto-reply/reply/dispatch-processed-outcome.js";
 import type { HistoryEntry } from "../../auto-reply/reply/history.types.js";
@@ -12,6 +13,22 @@ import type { DispatchReplyWithBufferedBlockDispatcher as Dispatch } from "../..
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { getReplySystemEventContext } from "../../auto-reply/reply/system-event-session-key.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
+import { withPluginServiceScheduler } from "../../plugins/service-scheduler-binding.js";
+import { createPluginServiceScheduler } from "../../plugins/service-scheduler.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import {
+  assertAgentDatabaseAdmitted as assertAdmitted,
+  readAgentDatabaseAdmissionRefusal as readRefusal,
+  recordAgentDatabaseAdmissions,
+} from "../../state/agent-database-admission.js";
+import { withAgentDatabaseStartupAdmission } from "../../state/agent-database-startup.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import type { OpenClawDatabaseSchemaPreflight as Preflight } from "../../state/openclaw-database-preflight.types.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../../test-utils/gateway-scheduler-clock.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   createChannelAdmissionAudit,
   consumeChannelAdmissionEvidence,
@@ -20,6 +37,7 @@ import {
 import { recordOutboundMessageIdentity } from "../message/outbound-echo.js";
 import {
   hasVisibleChannelTurnDispatch,
+  hasFinalChannelTurnDispatch,
   resolveChannelTurnDispatchCounts,
 } from "./dispatch-result.js";
 import { runPreparedChannelTurn } from "./execution.js";
@@ -45,18 +63,12 @@ import type {
 const subsystemWarn = vi.hoisted(() => vi.fn());
 
 vi.mock("../../logging/subsystem.js", async (importOriginal) => {
-  const makeLogger = (subsystem: string): import("../../logging/subsystem.js").SubsystemLogger => ({
-    subsystem,
-    isEnabled: () => true,
-    trace: vi.fn(),
-    debug: vi.fn(),
-    info: vi.fn(),
-    warn: subsystemWarn,
-    error: vi.fn(),
-    fatal: vi.fn(),
-    raw: vi.fn(),
-    child: (name: string) => makeLogger(`${subsystem}/${name}`),
-  });
+  const makeLogger = (subsystem: string): import("../../logging/subsystem.js").SubsystemLogger =>
+    createMockSubsystemLogger(subsystem, {
+      isEnabled: () => true,
+      warn: subsystemWarn,
+      child: (name: string) => makeLogger(`${subsystem}/${name}`),
+    });
   return {
     ...(await importOriginal<typeof import("../../logging/subsystem.js")>()),
     createSubsystemLogger: makeLogger,
@@ -66,8 +78,8 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
 const {
   emitMessageSent,
   readRecentUserAssistantTextForSession: readRecent,
-  recordInboundSessionCore,
-  dispatchReplyWithRoutedChannelDispatcherCore,
+  recordInboundSessionCore: recordCore,
+  dispatchReplyWithRoutedChannelDispatcherCore: dispatchCore,
 } = channelTurnMocks;
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -119,18 +131,46 @@ function routed(overrides: Partial<ChannelTurnPlan> = {}): ChannelTurnPlan {
     ...overrides,
   };
 }
-function run(adapter: RunChannelTurnParams<unknown>["adapter"]) {
+function runAdapter(adapter: RunChannelTurnParams<unknown>["adapter"]) {
   return runChannelTurn({ channel: "test", raw: {}, adapter });
 }
 const ingest = () => ({ id: "msg-1", rawText: "hello" });
+
+function createTurn(overrides: Partial<PreparedChannelTurn> = {}, observeOnly = false) {
+  const onFinalize = vi.fn();
+  const turn = prepared({
+    runDispatchLifecycle: { turnAdoptionLifecycle: undefined, onDispatchSkipped: vi.fn() },
+    ...overrides,
+  });
+  const runTurn = (
+    turnAdoptionLifecycle?: RunChannelTurnParams<unknown>["turnAdoptionLifecycle"],
+  ) =>
+    runChannelTurn({
+      channel: "test",
+      raw: {},
+      turnAdoptionLifecycle,
+      adapter: {
+        ingest: () => ({ id: "msg-1", rawText: "hello" }),
+        preflight: () =>
+          observeOnly ? { kind: "observeOnly", reason: "broadcast-observer" } : undefined,
+        resolveTurn: () => turn,
+        onFinalize,
+      },
+    });
+  const expectIdle = () => {
+    expect(turn.recordInboundSession).not.toHaveBeenCalled();
+    expect(turn.runDispatch).not.toHaveBeenCalled();
+  };
+  return { turn, run: runTurn, onFinalize, expectIdle };
+}
 
 describe("channel turn pipeline and finalization", () => {
   beforeEach(() => {
     storePath = path.join(tempDirs.make("openclaw-channel-turn-pipeline-"), "sessions.json");
     fixture.resetTurnState();
     readRecent.mockResolvedValue([]);
-    recordInboundSessionCore.mockResolvedValue(undefined);
-    dispatchReplyWithRoutedChannelDispatcherCore.mockImplementation(createDispatch());
+    recordCore.mockResolvedValue(undefined);
+    dispatchCore.mockImplementation(createDispatch());
   });
 
   afterEach(fixture.resetTurnLogger);
@@ -434,7 +474,7 @@ describe("channel turn pipeline and finalization", () => {
     expect((await runPreparedChannelTurn(turn)).dispatched).toBe(true);
     expect(history.historyMap.get("room")).toStrictEqual([]);
     history.historyMap.set("room", [{ sender: "Alice", body: "queued again" }]);
-    const result = await run({
+    const result = await runAdapter({
       ingest,
       resolveTurn: () => ({
         ...turn,
@@ -463,7 +503,7 @@ describe("channel turn pipeline and finalization", () => {
       conversationId: "thread-1",
       sourceId: "webhook-1",
     });
-    const result = await run({
+    const result = await runAdapter({
       ingest,
       resolveTurn: () =>
         fixture.assembledTurn(storePath, {
@@ -527,7 +567,7 @@ describe("channel turn pipeline and finalization", () => {
 
   it("handles non-turn event classes without resolving a turn", async () => {
     const resolveTurn = vi.fn();
-    const result = await run({
+    const result = await runAdapter({
       ingest,
       classify: () => ({ kind: "reaction", canStartAgentTurn: false }),
       resolveTurn,
@@ -543,7 +583,7 @@ describe("channel turn pipeline and finalization", () => {
     const historyMap = new Map<string, HistoryEntry[]>();
     const resolveTurn = vi.fn();
     const image = { path: "/tmp/a.png", contentType: "image/png", kind: "image" } as const;
-    const result = await run({
+    const result = await runAdapter({
       ingest: () => ({ id: "msg-1", timestamp: 1700000000000, rawText: "<media:image>" }),
       preflight: () => ({
         admission: { kind: "drop", reason: "missing-mention", recordHistory: true },
@@ -571,13 +611,13 @@ describe("channel turn pipeline and finalization", () => {
 
   it("runs observe-only turns through record, dispatch and finalize without visible delivery", async () => {
     const events: string[] = [];
-    dispatchReplyWithRoutedChannelDispatcherCore.mockImplementation(createDispatch(events));
-    recordInboundSessionCore.mockImplementation(async () => {
+    dispatchCore.mockImplementation(createDispatch(events));
+    recordCore.mockImplementation(async () => {
       events.push("record");
     });
     const deliver = vi.fn();
     const onFinalize = vi.fn();
-    const result = await run({
+    const result = await runAdapter({
       ingest,
       preflight: () => ({ kind: "observeOnly", reason: "broadcast-observer" }),
       resolveTurn: () =>
@@ -595,7 +635,7 @@ describe("channel turn pipeline and finalization", () => {
     expectDispatched(result);
     expect(result.admission).toEqual({ kind: "observeOnly", reason: "broadcast-observer" });
     expect(events).toEqual(["record", "dispatch"]);
-    expect(dispatchReplyWithRoutedChannelDispatcherCore).toHaveBeenCalledWith(
+    expect(dispatchCore).toHaveBeenCalledWith(
       expect.objectContaining({
         ctx: expect.objectContaining({ DmScope: "per-channel-peer" }),
         suppressOutboundHooks: true,
@@ -621,7 +661,7 @@ describe("channel turn pipeline and finalization", () => {
         channelId: "test",
         participantId: "person-1",
       });
-      await run({
+      await runAdapter({
         ingest,
         resolveTurn: () =>
           routed({
@@ -633,7 +673,7 @@ describe("channel turn pipeline and finalization", () => {
             ctxPayload: ctx,
           }),
       });
-      const dispatched = dispatchReplyWithRoutedChannelDispatcherCore.mock.calls[0]?.[0];
+      const dispatched = dispatchCore.mock.calls[0]?.[0];
       expect(dispatched?.ctx.DmScope).toBe("per-channel-peer");
       expect(
         consumeChannelAdmissionEvidence(readChannelContextAdmissionEvidence(dispatched?.ctx ?? {})),
@@ -647,10 +687,10 @@ describe("channel turn pipeline and finalization", () => {
     const history = pendingHistory();
     const onFinalize = vi.fn();
     const error = new Error("dispatch failed");
-    dispatchReplyWithRoutedChannelDispatcherCore.mockRejectedValueOnce(error);
-    await expect(run({ ingest, resolveTurn: () => routed({ history }), onFinalize })).rejects.toBe(
-      error,
-    );
+    dispatchCore.mockRejectedValueOnce(error);
+    await expect(
+      runAdapter({ ingest, resolveTurn: () => routed({ history }), onFinalize }),
+    ).rejects.toBe(error);
     expect(onFinalize).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         admission: { kind: "dispatch" },
@@ -660,4 +700,139 @@ describe("channel turn pipeline and finalization", () => {
     );
     expect(history.historyMap.get("room")).toStrictEqual([]);
   });
+  it("finalizes unowned adoption when the prepared lifecycle is missing", async () => {
+    const { turn, run, onFinalize, expectIdle } = createTurn();
+    Object.defineProperty(turn, "runDispatchLifecycle", { value: undefined });
+    await expect(run({ onAdopted: vi.fn(async () => undefined) })).rejects.toThrow(
+      "prepared turns must declare runDispatchLifecycle",
+    );
+    expectIdle();
+    expect(onFinalize.mock.calls[0]?.[0]).toMatchObject({
+      admission: { kind: "dispatch" },
+      dispatched: false,
+    });
+  });
+
+  it.each(["record", "dispatch"])("checks authority before %s", async (boundary) => {
+    const { turn, run } = createTurn();
+    let current = boundary === "dispatch";
+    const refusal = new Error("channel authority revoked");
+    turn.assertAuthority = () => {
+      if (!current) {
+        throw refusal;
+      }
+    };
+    turn.recordInboundSession = vi.fn(async () => {
+      current = false;
+    });
+
+    await expect(run()).rejects.toBe(refusal);
+
+    expect(turn.recordInboundSession).toHaveBeenCalledTimes(boundary === "record" ? 0 : 1);
+    expect(turn.runDispatch).not.toHaveBeenCalled();
+  });
+
+  it("settles prepared resources when observe-only suppresses dispatch", async () => {
+    const events: string[] = [];
+    const onDispatchSkipped = vi.fn(async () => {
+      events.push("cleanup");
+    });
+    const observed = { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+    const { turn, run, onFinalize } = createTurn(
+      {
+        recordInboundSession: createRecordInboundSession(events),
+        runDispatchLifecycle: { turnAdoptionLifecycle: undefined, onDispatchSkipped },
+        observeOnlyDispatchResult: observed,
+      },
+      true,
+    );
+    const result = await run();
+    expectDispatched(result);
+    expect(result.dispatchResult).toBe(observed);
+    expect(result.admission).toEqual({ kind: "observeOnly", reason: "broadcast-observer" });
+    expect(events).toEqual(["record", "cleanup"]);
+    expect(turn.runDispatch).not.toHaveBeenCalled();
+    expect(onDispatchSkipped).toHaveBeenCalledWith("observeOnly");
+    expect(hasFinalChannelTurnDispatch(result.dispatchResult)).toBe(false);
+    expect(onFinalize).toHaveBeenCalledExactlyOnceWith(result);
+  });
+
+  it.for(["admitted", "failed", "account-stopped", "gateway-stopped"] as const)(
+    "keeps replay behind its agent startup admission: %s",
+    async (outcome, { signal }) => {
+      await withOpenClawTestState({ label: "channel-turn-startup-admission" }, async (state) => {
+        await withAgentDatabaseStartupAdmission(async (admission) => {
+          const { env } = state;
+          const inspections = {
+            qa: createDeferredCore<Preflight>(),
+            other: createDeferredCore<Preflight>(),
+          };
+          const ready = { incompatible: [], indeterminate: [] };
+          const finishInspections = () =>
+            Object.values(inspections).forEach((item) => item.resolve(ready));
+          const refusals = admission.defer({
+            env,
+            inspections: Object.entries(inspections).map(([agentId, inspection]) => ({
+              target: { agentId, path: openOpenClawAgentDatabase({ agentId, env }).path },
+              result: inspection.promise,
+            })),
+            reason: "Gateway startup is preparing the agent",
+          });
+          recordAgentDatabaseAdmissions(refusals, { env, source: "startup" });
+          const lifetime = admission.adopt();
+          admission.activate({
+            isCurrent: () => true,
+            preparationReady: Promise.resolve(),
+            openAgent: async () => {},
+            migrateAgent: async () => {},
+            publishAgent: async () => {},
+          });
+          const gateway = createTestGatewayScheduler(createGatewaySchedulerClock(0).clock);
+          const { scheduler } = createPluginServiceScheduler(gateway);
+          const preDispatchFailure = vi.fn();
+          const log = vi.fn();
+          const sessionKey = "agent:qa:qa-channel:direct:peer";
+          const { turn: replay, expectIdle } = createTurn({
+            routeSessionKey: sessionKey,
+            storePath: state.statePath("agents", "qa", "sessions", "sessions.json"),
+            ctxPayload: createCtx({ AgentId: "qa", SessionKey: sessionKey }),
+            recordInboundSession: vi.fn(async () => assertAdmitted("qa", { env })),
+            onPreDispatchFailure: preDispatchFailure,
+            log,
+          });
+          const { recordInboundSession: record, runDispatch: dispatch } = replay;
+          const turn = withPluginServiceScheduler(scheduler, () => runPreparedChannelTurn(replay));
+          void turn.catch(() => {});
+          try {
+            expectIdle();
+            expect(log).toHaveBeenCalledWith(
+              expect.objectContaining({ reason: "agent-database-preparation-pending" }),
+            );
+            if (outcome === "admitted") {
+              inspections.qa.resolve(ready);
+              expect((await withinTest(turn, signal)).dispatched).toBe(true);
+              expect(record).toHaveBeenCalledOnce();
+              expect(dispatch).toHaveBeenCalledOnce();
+              expect(readRefusal("other", { env })?.code).toBe("agent-database-inspection-pending");
+            } else if (outcome === "failed") {
+              inspections.qa.reject(new Error("inspection failed"));
+              await expect(withinTest(turn, signal)).rejects.toThrow("inspection failed");
+              expect(dispatch).not.toHaveBeenCalled();
+              expect(preDispatchFailure).toHaveBeenCalledOnce();
+            } else {
+              const stopping = outcome === "account-stopped" ? scheduler.stop() : lifetime.stop();
+              await expect(withinTest(turn, signal)).rejects.toBeInstanceOf(Error);
+              expectIdle();
+              expect(preDispatchFailure).toHaveBeenCalledOnce();
+              finishInspections();
+              await stopping;
+            }
+          } finally {
+            finishInspections();
+            await Promise.allSettled([turn, lifetime.stop(), scheduler.stop(), gateway.stop()]);
+          }
+        });
+      });
+    },
+  );
 });

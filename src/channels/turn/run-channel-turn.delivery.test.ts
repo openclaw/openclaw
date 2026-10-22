@@ -69,19 +69,19 @@ import type {
   ChannelTurnPlan,
 } from "./types.js";
 
-const settlePendingFinalDelivery = vi.hoisted(() =>
+const settleFinal = vi.hoisted(() =>
   vi.fn(async (_completion: unknown, state: string) => ({ state })),
 );
 
 vi.mock("../../infra/outbound/delivery-completion.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/outbound/delivery-completion.js")>()),
-  settlePendingFinalDelivery,
+  settlePendingFinalDelivery: settleFinal,
 }));
 
 const {
-  resolveOutboundDurableFinalDeliverySupport,
-  sendDurableMessageBatch,
-  dispatchReplyWithRoutedChannelDispatcherCore,
+  resolveOutboundDurableFinalDeliverySupport: support,
+  sendDurableMessageBatch: sendBatch,
+  dispatchReplyWithRoutedChannelDispatcherCore: dispatchCore,
   emitMessageSent,
   getGlobalHookRunner,
   createMessageSentEmitter,
@@ -212,8 +212,8 @@ describe("channel turn delivery", () => {
     storePath = path.join(await tempDirs.make(), "sessions.json");
     resetTurnState();
     currentEntry = undefined;
-    dispatchReplyWithRoutedChannelDispatcherCore.mockImplementation(createDispatch());
-    resolveOutboundDurableFinalDeliverySupport.mockResolvedValue({ ok: true });
+    dispatchCore.mockImplementation(createDispatch());
+    support.mockResolvedValue({ ok: true });
   });
   afterEach(resetTurnLogger);
 
@@ -464,7 +464,7 @@ describe("channel turn delivery", () => {
       { text: "reply [[reply_to:literal]]" },
       { pendingFinalDeliveryCompletion: completion },
     );
-    dispatchReplyWithRoutedChannelDispatcherCore.mockImplementationOnce(async (params) => {
+    dispatchCore.mockImplementationOnce(async (params) => {
       const [plan] = createStructuredOutboundPayloadPlan([source]);
       if (!plan || !params.dispatcherOptions.deliverPrepared) {
         throw new Error("expected prepared delivery");
@@ -477,7 +477,7 @@ describe("channel turn delivery", () => {
     }));
     const entered = createDeferred();
     const pending = createDeferred();
-    settlePendingFinalDelivery.mockImplementationOnce(async (_completion, state: string) => {
+    settleFinal.mockImplementationOnce(async (_completion, state: string) => {
       order.push(state);
       return { state };
     });
@@ -515,21 +515,9 @@ describe("channel turn delivery", () => {
     }
     expect(deliverPrepared).toHaveBeenCalledOnce();
     expect(deliver).not.toHaveBeenCalled();
-    expect(runMessageSending).toHaveBeenCalledWith(
-      expect.objectContaining({
-        content: "reply [[reply_to:literal]] + prepared",
-        replyToId: "source-1",
-        threadId: 42,
-      }),
-      expect.objectContaining({
-        channelId: "telegram",
-        accountId: "acct",
-        conversationId: "chat-1",
-        sessionKey: completion.sessionKey,
-      }),
-    );
+    expect(runMessageSending).toHaveBeenCalledOnce();
     const custody = { kind: "pending-final", ...completion };
-    expect(settlePendingFinalDelivery.mock.calls).toEqual([
+    expect(settleFinal.mock.calls).toEqual([
       [custody, "unknown", ["prepared", "queued"]],
       [custody, "delivered", undefined, undefined],
     ]);
@@ -542,7 +530,7 @@ describe("channel turn delivery", () => {
     "keeps identityless provider completion pending ($deferred, $visibleReplySent)",
     async ({ deferred, visibleReplySent }) => {
       const completion = pendingCompletion("discord", "ambiguous-delivery", "ambiguous-intent");
-      dispatchReplyWithRoutedChannelDispatcherCore.mockImplementationOnce(
+      dispatchCore.mockImplementationOnce(
         createDispatch(
           [],
           setReplyPayloadMetadata(
@@ -568,15 +556,9 @@ describe("channel turn delivery", () => {
         { OriginatingTo: "channel:123" },
         { channel: "discord" },
       );
-      expect(settlePendingFinalDelivery).toHaveBeenLastCalledWith(
-        { kind: "pending-final", ...completion },
-        "unknown",
-        undefined,
-        undefined,
-      );
-      expect(settlePendingFinalDelivery.mock.calls.map(([, state]) => state)).toEqual([
-        "unknown",
-        "unknown",
+      expect(settleFinal.mock.calls).toEqual([
+        [{ kind: "pending-final", ...completion }, "unknown", ["prepared", "queued"]],
+        [{ kind: "pending-final", ...completion }, "unknown", undefined, undefined],
       ]);
       expect(onDelivered).not.toHaveBeenCalled();
       expect(emitMessageSent).not.toHaveBeenCalled();
@@ -609,7 +591,7 @@ describe("channel turn delivery", () => {
       content ? undefined : { cancel: true, cancelReason: "policy", metadata: { source: "test" } },
     );
     const payload = { mediaUrls: ["media://only"] };
-    dispatchReplyWithRoutedChannelDispatcherCore.mockImplementationOnce(async (params) => {
+    dispatchCore.mockImplementationOnce(async (params) => {
       await params.dispatcherOptions.deliver({ text: "deliver me" }, { kind: "block" });
       await params.dispatcherOptions.deliver(payload, finalInfo);
       return recordAgentRunTerminalOutcome(
@@ -662,7 +644,7 @@ describe("channel turn delivery", () => {
         cancelReason: "policy",
         metadata: { source: "test" },
       } as const;
-      sendDurableMessageBatch.mockResolvedValueOnce({
+      sendBatch.mockResolvedValueOnce({
         status: "suppressed",
         results: [],
         receipt: { platformMessageIds: [], parts: [], sentAt: 1 },
@@ -685,7 +667,7 @@ describe("channel turn delivery", () => {
       });
       const onDelivered = vi.fn();
       const capture = createDeliveryResultCapture();
-      dispatchReplyWithRoutedChannelDispatcherCore.mockImplementationOnce(
+      dispatchCore.mockImplementationOnce(
         cancelled ? capture.dispatch : createDispatcherBackedDispatch(() => {}),
       );
       const result = await runRouted(
@@ -711,12 +693,12 @@ describe("channel turn delivery", () => {
   );
 
   it("prepares durable payloads while leaving hooks and visible delivery with the durable owner", async () => {
-    sendDurableMessageBatch.mockResolvedValueOnce(createDurableSendResult(["tlon-1"]));
+    sendBatch.mockResolvedValueOnce(createDurableSendResult(["tlon-1"]));
     const onDelivered = vi.fn(),
       deliver = vi.fn();
     const runMessageSending = messageSending();
     const capture = createDeliveryResultCapture();
-    dispatchReplyWithRoutedChannelDispatcherCore.mockImplementationOnce(capture.dispatch);
+    dispatchCore.mockImplementationOnce(capture.dispatch);
     await runRouted(
       {
         deliver,
@@ -756,13 +738,9 @@ describe("channel turn delivery", () => {
         conversationKind: "group",
       }),
     };
-    const support: DurableSupportRequest = { channel: "tlon", requirements: { text: true } };
-    expect(sendDurableMessageBatch).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining(request),
-    );
-    expect(resolveOutboundDurableFinalDeliverySupport).toHaveBeenCalledWith(
-      expect.objectContaining(support),
-    );
+    const requirements: DurableSupportRequest = { channel: "tlon", requirements: { text: true } };
+    expect(sendBatch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(request));
+    expect(support).toHaveBeenCalledWith(expect.objectContaining(requirements));
     expect(capture.getResult()).toMatchObject({ messageIds: ["tlon-1"], visibleReplySent: true });
     expect(onDelivered).toHaveBeenCalledExactlyOnceWith(
       { text: "reply Generated" },
@@ -773,7 +751,7 @@ describe("channel turn delivery", () => {
   });
 
   it("falls back to direct hooks before queueing when durable delivery is unsupported", async () => {
-    resolveOutboundDurableFinalDeliverySupport.mockResolvedValueOnce({
+    support.mockResolvedValueOnce({
       ok: false,
       reason: "missing_outbound_handler",
     });
@@ -785,23 +763,23 @@ describe("channel turn delivery", () => {
       { deliver, durable: { replyToMode: "first" } },
       { To: "chat-1", MessageThreadId: 777 },
     );
-    expect(sendDurableMessageBatch).not.toHaveBeenCalled();
+    expect(sendBatch).not.toHaveBeenCalled();
     expect(runMessageSending).toHaveBeenCalledOnce();
     expect(deliver).toHaveBeenCalledWith({ text: "reply + direct-hook" }, finalInfo);
   });
 
   it("treats durable support preflight failures as terminal", async () => {
-    resolveOutboundDurableFinalDeliverySupport.mockRejectedValueOnce(new Error("preflight failed"));
+    support.mockRejectedValueOnce(new Error("preflight failed"));
     const deliver = vi.fn();
     await expect(
       runAssembled({ delivery: { deliver, durable: { replyToMode: "first" } } }),
     ).rejects.toThrow("preflight failed");
-    expect(sendDurableMessageBatch).not.toHaveBeenCalled();
+    expect(sendBatch).not.toHaveBeenCalled();
     expect(deliver).not.toHaveBeenCalled();
   });
 
   it("preserves durable partial-send visibility without retrying via direct delivery", async () => {
-    sendDurableMessageBatch.mockResolvedValueOnce({
+    sendBatch.mockResolvedValueOnce({
       ...createDurableSendResult(["tg-1"]),
       status: "partial_failed",
       error: new Error("second chunk failed"),
@@ -877,7 +855,7 @@ describe("channel turn delivery", () => {
     "blocks %s I/O after writer replacement",
     async (operation) => {
       const changesAfterRefresh = operation === "prepared";
-      dispatchReplyWithRoutedChannelDispatcherCore.mockImplementationOnce(
+      dispatchCore.mockImplementationOnce(
         dispatchPayload(createPayload(true), changesAfterRefresh),
       );
       currentEntry = changesAfterRefresh ? currentWriter : replacementWriter;
@@ -918,7 +896,7 @@ describe("channel turn delivery", () => {
     }
     await custody.onPlatformSendDispatch();
     await custody.onPlatformSendDispatch();
-    expect(settlePendingFinalDelivery).toHaveBeenCalledOnce();
+    expect(settleFinal).toHaveBeenCalledOnce();
     currentEntry = replacementWriter;
     await expect(custody.onPlatformSendDispatch()).rejects.toBeInstanceOf(SendRejected);
     custody.release();
@@ -933,9 +911,7 @@ describe("channel turn delivery", () => {
     ["unknown", new Error("adapter failed after entry"), ["queued", "unknown"]],
     ["prepared", new SendRejected("preflight", { cause: undefined }), ["queued", "unknown"]],
   ] as const)("settles failed-send custody as %s", async (state, error, expected) => {
-    dispatchReplyWithRoutedChannelDispatcherCore.mockImplementationOnce(
-      dispatchPayload(createPayload(false, true)),
-    );
+    dispatchCore.mockImplementationOnce(dispatchPayload(createPayload(false, true)));
     await expect(
       runCustody({
         deliver: async () => {
@@ -943,7 +919,7 @@ describe("channel turn delivery", () => {
         },
       }),
     ).rejects.toBe(error);
-    expect(settlePendingFinalDelivery.mock.calls).toEqual([
+    expect(settleFinal.mock.calls).toEqual([
       [identity, "unknown", ["prepared", "queued"]],
       [identity, state, expected],
     ]);

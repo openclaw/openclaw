@@ -1,20 +1,20 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  resolveOutboundDurableFinalDeliverySupport: vi.fn(),
-  sendDurableMessageBatch: vi.fn(),
-  sendStructuredDurableMessageBatch: vi.fn(),
+  support: vi.fn(),
+  send: vi.fn(),
+  sendPrepared: vi.fn(),
 }));
 
 vi.mock("../../infra/outbound/deliver.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/outbound/deliver.js")>()),
-  resolveOutboundDurableFinalDeliverySupport: mocks.resolveOutboundDurableFinalDeliverySupport,
+  resolveOutboundDurableFinalDeliverySupport: mocks.support,
 }));
 
 vi.mock("../message/send.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../message/send.js")>()),
-  sendDurableMessageBatchCore: mocks.sendDurableMessageBatch,
-  sendStructuredDurableMessageBatchCore: mocks.sendStructuredDurableMessageBatch,
+  sendDurableMessageBatchCore: mocks.send,
+  sendStructuredDurableMessageBatchCore: mocks.sendPrepared,
 }));
 
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
@@ -72,10 +72,10 @@ function expectOnlyCall(mock: Mock, fields: object) {
 describe("durable inbound reply delivery", () => {
   beforeEach(() => {
     Object.values(mocks).forEach((mock) => mock.mockReset());
-    mocks.resolveOutboundDurableFinalDeliverySupport.mockResolvedValue({ ok: true });
+    mocks.support.mockResolvedValue({ ok: true });
     const result = { status: "sent", receipt };
-    mocks.sendDurableMessageBatch.mockResolvedValue(result);
-    mocks.sendStructuredDurableMessageBatch.mockResolvedValue(result);
+    mocks.send.mockResolvedValue(result);
+    mocks.sendPrepared.mockResolvedValue(result);
   });
 
   it.each([
@@ -122,7 +122,7 @@ describe("durable inbound reply delivery", () => {
       replyToMode: mode,
       ctxPayload: { ...context, ReplyToId: "ambient-target" },
     });
-    expectOnlyCall(mocks.sendStructuredDurableMessageBatch, {
+    expectOnlyCall(mocks.sendPrepared, {
       replyToId: mode === "first" ? null : "hook-target",
     });
   });
@@ -152,12 +152,8 @@ describe("durable inbound reply delivery", () => {
         ? deliverStructuredInboundReplyWithMessageSendContextCore({ ...params, plan })
         : deliverInboundReplyWithMessageSendContextCore(params));
       expect(result.status).toBe("handled_visible");
-      const send = prepared
-        ? mocks.sendStructuredDurableMessageBatch
-        : mocks.sendDurableMessageBatch;
-      const unused = prepared
-        ? mocks.sendDurableMessageBatch
-        : mocks.sendStructuredDurableMessageBatch;
+      const send = prepared ? mocks.sendPrepared : mocks.send;
+      const unused = prepared ? mocks.send : mocks.sendPrepared;
       expect(unused).not.toHaveBeenCalled();
       expectOnlyCall(send, {
         ...(prepared
@@ -171,7 +167,7 @@ describe("durable inbound reply delivery", () => {
         executionIdentityToken,
       });
       if (!prepared) {
-        expectOnlyCall(mocks.resolveOutboundDurableFinalDeliverySupport, {
+        expectOnlyCall(mocks.support, {
           requirements: { text: true, messageSendingHooks: true },
         });
         expect(send.mock.calls[0]?.[0].requireUnknownSendReconciliation).toBeUndefined();
@@ -182,8 +178,8 @@ describe("durable inbound reply delivery", () => {
   it("uses required durability when a caller explicitly requires unknown-send reconciliation", async () => {
     const requirements = { text: true, reconcileUnknownSend: true };
     await deliver({ requiredCapabilities: requirements });
-    expectOnlyCall(mocks.resolveOutboundDurableFinalDeliverySupport, { requirements });
-    expectOnlyCall(mocks.sendDurableMessageBatch, {
+    expectOnlyCall(mocks.support, { requirements });
+    expectOnlyCall(mocks.send, {
       durability: "required",
       requireUnknownSendReconciliation: true,
     });
@@ -196,7 +192,7 @@ describe("durable inbound reply delivery", () => {
       retryable: false,
     }),
   ])("reports durable partial send failures as failed delivery (%s)", async (error) => {
-    mocks.sendDurableMessageBatch.mockResolvedValueOnce({
+    mocks.send.mockResolvedValueOnce({
       status: "partial_failed",
       results: [{ channel: "telegram", messageId: "m1", meta: { visibleText: "accepted prefix" } }],
       receipt,
@@ -255,7 +251,7 @@ describe("durable inbound reply delivery", () => {
   ])(
     "keeps a $label failure non-visible and preserves its retry contract",
     async ({ error, sentBeforeError }) => {
-      mocks.sendDurableMessageBatch.mockResolvedValueOnce({ status: "failed", error });
+      mocks.send.mockResolvedValueOnce({ status: "failed", error });
       const result = await deliver();
       expect(result).toEqual({
         status: "failed",
