@@ -1,6 +1,6 @@
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { openResolvedImage } from "./chat-message-image-open.ts";
+import { openResolvedImage } from "./chat-image-open.ts";
 
 export function isImageLightboxEvent(event: Event): boolean {
   return event

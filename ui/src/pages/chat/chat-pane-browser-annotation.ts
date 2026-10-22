@@ -1,7 +1,7 @@
 import type {
   BrowserAnnotationDraft,
   BrowserAnnotationEvent,
-} from "../../components/browser/browser-annotation.ts";
+} from "../../components/browser/browser-annotation-events.ts";
 import { showToast } from "../../lib/toast.ts";
 import { uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { canAdmitBrowserAnnotation } from "./browser-annotation-admission.ts";

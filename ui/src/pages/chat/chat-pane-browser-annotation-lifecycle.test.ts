@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 /* @vitest-environment-options {"url":"http://chat-pane-browser-annotation-lifecycle.test/"} */
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
-import type { BrowserAnnotationDraft } from "../../components/browser/browser-annotation.ts";
+import type { BrowserAnnotationDraft } from "../../components/browser/browser-annotation-events.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store-scope.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";

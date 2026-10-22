@@ -4,7 +4,7 @@ import { expect, it, vi } from "vitest";
 import type {
   BrowserAnnotationDraft,
   BrowserAnnotationEvent,
-} from "../../components/browser/browser-annotation.ts";
+} from "../../components/browser/browser-annotation-events.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import * as toast from "../../lib/toast.ts";
 import { canAdmitBrowserAnnotation } from "./browser-annotation-admission.ts";

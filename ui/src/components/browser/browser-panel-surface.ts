@@ -1,9 +1,9 @@
 import { t } from "../../i18n/index.ts";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import { listen } from "../../lib/reactive/listener.ts";
+import type { BrowserAnnotationDispatchResult } from "./browser-annotation-events.ts";
 import {
   buildBrowserAnnotationContent,
-  type BrowserAnnotationDispatchResult,
   composeAnnotatedImage,
   dispatchBrowserAnnotation,
   paintAnnotations,

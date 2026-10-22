@@ -1,6 +1,12 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { t } from "../../i18n/index.ts";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
+import {
+  BROWSER_ANNOTATION_EVENT,
+  type BrowserAnnotationDraft,
+  type BrowserAnnotationDispatchResult,
+  type BrowserAnnotationEvent,
+} from "./browser-annotation-events.ts";
 import type { BrowserInspectedNode } from "./browser-client.ts";
 import type { BrowserTabTarget } from "./browser-target.ts";
 
@@ -13,28 +19,6 @@ export type AnnotationStroke = { points: AnnotationPoint[] };
 
 /** Axis-aligned box in normalized [0..1] screenshot coordinates. */
 export type AnnotationRegion = { x: number; y: number; width: number; height: number };
-
-/** Payload delivered to the active chat pane when an annotation is sent. */
-export type BrowserAnnotationDraft = {
-  modelContext: string;
-  card: {
-    title: string;
-    displayUrl: string;
-    markedRegionCount: number;
-    inspectedElement: boolean;
-  };
-  /** PNG data URL of the screenshot with the markup composited in. */
-  dataUrl: string;
-  fileName: string;
-};
-
-export type BrowserAnnotationDispatchResult = "accepted" | "rejected" | "unhandled";
-export type BrowserAnnotationEvent = CustomEvent<BrowserAnnotationDraft> & {
-  /** Synchronous consumer rejection keeps capture state retryable in the browser panel. */
-  rejection?: "limit";
-};
-
-export const BROWSER_ANNOTATION_EVENT = "openclaw:browser-annotation";
 
 /**
  * Hands an annotation to whichever chat pane is active. The result distinguishes

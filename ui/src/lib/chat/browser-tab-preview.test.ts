@@ -125,11 +125,15 @@ describe("browser tab previews", () => {
   it("shares captures, serializes new revisions, and reads bytes only over HTTP", async () => {
     const params = screenshotClient();
     const deferred = createDeferred<{ path: string }>();
-    params.request.mockReturnValueOnce(deferred.promise);
+    const started = createDeferred();
+    params.request.mockImplementationOnce(() => {
+      started.resolve();
+      return deferred.promise;
+    });
     const first = loadBrowserTabThumbnail({ ...params, revision: "one" });
     expect(loadBrowserTabThumbnail({ ...params, revision: "one" })).toBe(first);
-    await Promise.resolve();
     const second = loadBrowserTabThumbnail({ ...params, revision: "two" });
+    await started.promise;
     expect(params.request).toHaveBeenCalledTimes(1);
     deferred.resolve({ path: "/tmp/first.png" });
     expect(await first).toBe("data:image/png;base64,c2hvdA==");

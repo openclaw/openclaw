@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { BrowserAnnotationDraft } from "./browser-annotation.ts";
+import type { BrowserAnnotationDraft } from "./browser-annotation-events.ts";
 import { setupAnnotationCapture } from "./browser-panel-capture.test-support.ts";
 import { createView } from "./browser-panel-controller-test-support.ts";
 import {
