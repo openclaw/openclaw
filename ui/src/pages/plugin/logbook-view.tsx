@@ -21,6 +21,7 @@ import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatTimeMs } from "../../lib/format.ts";
 import { projectI18n, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import "../../styles/logbook.css";
+import { createLogbookActions, type LogbookActions } from "./logbook-actions.ts";
 import { createLogbook, localDayKey, shiftDay, type LogbookModel } from "./logbook-state.ts";
 import type { LogbookCardPayload, LogbookStatusPayload, LogbookUiState } from "./logbook-types.ts";
 
@@ -28,6 +29,8 @@ registerEnglishCatalog(registerLogbookEnglish);
 
 export type LogbookProps = {
   initialClient: GatewayBrowserClient | null;
+  // Return the same promise until the route or connection lifetime retires.
+  getRetired: () => Promise<void>;
 };
 
 /** Stable category hue so colors stay consistent across renders and days. */
@@ -257,24 +260,24 @@ function Stats(props: { state: () => LogbookUiState }) {
   );
 }
 
-function Standup(props: { model: LogbookModel }) {
+function Standup(props: { model: LogbookModel; actions: LogbookActions }) {
   return (
     <section class="card logbook-side__card">
       <div class="logbook-side__card-header">
         <div class="card-title">{t("logbook.standup.title")}</div>
         <ActionButton
-          disabled={props.model.state.standupLoading}
-          onClick={() => void props.model.standup(props.model.state.standup !== null)}
+          disabled={props.actions.standupPending() || props.model.state.standupLoading}
+          onClick={() => void props.actions.createStandup(props.actions.standup() !== null)}
         >
-          {props.model.state.standupLoading
+          {props.actions.standupPending() || props.model.state.standupLoading
             ? t("common.loading")
-            : props.model.state.standup
+            : props.actions.standup()
               ? t("logbook.standup.refresh")
               : t("logbook.standup.generate")}
         </ActionButton>
       </div>
       <Show
-        when={props.model.state.standup}
+        when={props.actions.standup()}
         fallback={<div class="card-sub">{t("logbook.standup.empty")}</div>}
       >
         {(standup) => (
@@ -289,7 +292,7 @@ function Standup(props: { model: LogbookModel }) {
   );
 }
 
-function Ask(props: { model: LogbookModel }) {
+function Ask(props: { model: LogbookModel; actions: LogbookActions }) {
   const [question, setQuestion] = createSignal("");
   return (
     <section class="card logbook-side__card">
@@ -298,7 +301,7 @@ function Ask(props: { model: LogbookModel }) {
         class="logbook-ask__form"
         onSubmit={(event) => {
           event.preventDefault();
-          void props.model.ask(question());
+          void props.actions.ask(question());
         }}
       >
         <input
@@ -310,12 +313,17 @@ function Ask(props: { model: LogbookModel }) {
             setQuestion(event.currentTarget.value);
           }}
         />
-        <ActionButton type="submit" disabled={props.model.state.askLoading}>
-          {props.model.state.askLoading ? t("common.loading") : t("logbook.ask.submit")}
+        <ActionButton
+          type="submit"
+          disabled={props.actions.askPending() || props.model.state.askLoading}
+        >
+          {props.actions.askPending() || props.model.state.askLoading
+            ? t("common.loading")
+            : t("logbook.ask.submit")}
         </ActionButton>
       </form>
-      <Show when={props.model.state.askAnswer}>
-        <p class="logbook-ask__answer">{props.model.state.askAnswer}</p>
+      <Show when={props.actions.answer()}>
+        <p class="logbook-ask__answer">{props.actions.answer()}</p>
       </Show>
     </section>
   );
@@ -330,6 +338,7 @@ export function Logbook(props: LogbookProps) {
   // PluginPage's keyed host keeps this client fixed until the model is disposed.
   const initialClient = props.initialClient;
   const model = createLogbook(initialClient);
+  const actions = createLogbookActions(model, () => props.getRetired());
   const state = () => model.state;
   const day = createMemo(() => state().day);
   const [completion, setCompletion] = createSignal<Promise<void>>();
@@ -370,19 +379,24 @@ export function Logbook(props: LogbookProps) {
             </ActionButton>
           </Show>
         </div>
-        <Show when={state().status}>{(status) => <StatusChips status={status()} />}</Show>
+        <Show when={actions.status()}>{(status) => <StatusChips status={status()} />}</Show>
         <div class="logbook__actions">
-          <Show when={state().status}>
+          <Show when={actions.status()}>
             {(status) => (
               <ActionButton
-                disabled={state().actionPending || !status().captureEnabled}
-                onClick={() => void model.setCapturePaused(!state().status?.capturePaused)}
+                disabled={
+                  actions.actionPending() || state().actionPending || !status().captureEnabled
+                }
+                onClick={() => void actions.setCapturePaused(!actions.status()?.capturePaused)}
               >
                 {t(status().capturePaused ? "logbook.actions.resume" : "logbook.actions.pause")}
               </ActionButton>
             )}
           </Show>
-          <ActionButton onClick={() => void model.analyze()} disabled={state().actionPending}>
+          <ActionButton
+            onClick={() => void actions.analyze()}
+            disabled={actions.actionPending() || state().actionPending}
+          >
             {t("logbook.actions.analyzeNow")}
           </ActionButton>
           <ActionButton onClick={() => void load()} disabled={state().loading}>
@@ -446,8 +460,8 @@ export function Logbook(props: LogbookProps) {
         </div>
         <aside class="logbook__side">
           <Stats state={state} />
-          <Standup model={model} />
-          <Ask model={model} />
+          <Standup model={model} actions={actions} />
+          <Ask model={model} actions={actions} />
         </aside>
       </div>
     </section>

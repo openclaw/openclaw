@@ -1,8 +1,10 @@
 import type { ClawDraftReviewItem } from "@openclaw/gateway-protocol";
-import { createMemo, For, Show } from "solid-js";
+import { action, createMemo, createOptimistic, For, onSettled, Show } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectOwner, type SourceProjection } from "../../lib/reactive/projection.ts";
+import { showToast } from "../../lib/toast.ts";
 import { clawCreatorFlow, type ClawCreatorFlow } from "./creator-flow.ts";
 import "../../styles/claw-creator.css";
 
@@ -21,6 +23,7 @@ function OptionalSection(props: {
   view: CreatorView;
   kind: ClawDraftReviewItem["kind"];
   title: string;
+  publishing: boolean;
 }) {
   const items = () =>
     props.view.read().review?.items.filter((item) => item.kind === props.kind) ?? [];
@@ -41,7 +44,7 @@ function OptionalSection(props: {
                 <input
                   type="checkbox"
                   checked={included(item())}
-                  disabled={props.view.read().busy === "publishing"}
+                  disabled={props.publishing}
                   onChange={(event) => {
                     const choices = props.view.read().choices;
                     if (!choices) {
@@ -74,6 +77,24 @@ function ClawReviewDialog(props: { flow: ClawCreatorFlow; view: CreatorView }) {
   const state = () => props.view.read();
   const review = () => state().review!;
   const choices = () => state().choices;
+  const [publishing, setPublishing] = createOptimistic(false);
+  const busy = () => publishing() || state().busy === "publishing";
+  const presentPublish = action(function* (pending: Promise<void>, retired: Promise<void>) {
+    setPublishing(true);
+    try {
+      // Closing or leaving releases presentation; the owner still records the write outcome.
+      yield Promise.race([pending, retired]);
+    } catch (error) {
+      showToast({ message: formatUiError(error) });
+    }
+  });
+  async function publish() {
+    const retired = props.flow.presentationLifetime.promise;
+    const pending = props.flow.publish();
+    // Let the owner's synchronous admission land before the action joins the transition.
+    await Promise.resolve();
+    await presentPublish(pending, retired);
+  }
   return (
     <openclaw-modal-dialog
       label={t("clawsDraft.reviewTitle")}
@@ -131,7 +152,13 @@ function ClawReviewDialog(props: { flow: ClawCreatorFlow; view: CreatorView }) {
         </section>
         <For each={sections}>
           {([kind, titleKey]) => (
-            <OptionalSection flow={props.flow} view={props.view} kind={kind} title={t(titleKey)} />
+            <OptionalSection
+              flow={props.flow}
+              view={props.view}
+              kind={kind}
+              title={t(titleKey)}
+              publishing={busy()}
+            />
           )}
         </For>
         <section class="claw-creator__section">
@@ -174,14 +201,14 @@ function ClawReviewDialog(props: { flow: ClawCreatorFlow; view: CreatorView }) {
           <button
             type="button"
             class="btn primary"
-            disabled={!state().reviewCurrent || state().busy !== null}
-            aria-busy={state().busy === "publishing" ? "true" : undefined}
-            onClick={() => void props.flow.publish()}
+            disabled={busy() || !state().reviewCurrent || state().busy !== null}
+            aria-busy={busy() ? "true" : undefined}
+            onClick={() => void publish()}
           >
-            <Show when={state().busy === "publishing"}>
+            <Show when={busy()}>
               <span class="btn__spinner" aria-hidden="true" />
             </Show>
-            {t(state().busy === "publishing" ? "clawsDraft.publishing" : "clawsDraft.publish")}
+            {t(busy() ? "clawsDraft.publishing" : "clawsDraft.publish")}
           </button>
         </openclaw-modal-actions>
       </div>
@@ -196,6 +223,16 @@ export function ClawCreatorReview(props: { context: ApplicationContext }) {
   });
   const flow = () => current().flow;
   const view = () => current().view;
+  onSettled(() => {
+    const context = props.context;
+    const owner = clawCreatorFlow(context);
+    const pathname = context.router.getState().location.pathname;
+    return context.router.subscribe(() => {
+      if (context.router.getState().location.pathname !== pathname) {
+        owner.retirePresentation();
+      }
+    });
+  });
   return (
     <>
       <Show when={view().read().modalOpen && view().read().review}>
@@ -203,10 +240,10 @@ export function ClawCreatorReview(props: { context: ApplicationContext }) {
       </Show>
       <Show
         when={
-          view().read().error &&
           view().read().hasActiveDraft &&
           !view().read().modalOpen &&
-          !view().read().publication
+          !view().read().publication &&
+          view().read().error
         }
       >
         {(error) => (
@@ -218,7 +255,14 @@ export function ClawCreatorReview(props: { context: ApplicationContext }) {
           </div>
         )}
       </Show>
-      <Show when={view().read().review && !view().read().modalOpen && !view().read().publication}>
+      <Show
+        when={
+          view().read().review &&
+          !view().read().modalOpen &&
+          !view().read().publication &&
+          !view().read().error
+        }
+      >
         <button class="claw-creator__reopen btn btn--sm" onClick={() => flow().reopen()}>
           {t("clawsDraft.reopen")}
         </button>

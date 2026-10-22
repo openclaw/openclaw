@@ -44,11 +44,15 @@ const job = (id: string, overrides?: Partial<CronJob>) => queueJob(id, now, over
 const store = (label: string, jobs: CronJob[]) =>
   queueStore(fixture.statePath("cron", `${label}.json`), jobs, now, () => context);
 const scheduled = (storeKey: string, current: CronJob) => scheduledAt(storeKey, current, now);
+async function scheduledQueue(id: string, overrides?: Partial<CronJob>) {
+  const current = job(id, overrides);
+  const queue = await store(id, [current]);
+  return { current, queue, request: scheduled(queue.storeKey, current) };
+}
 
 it("keeps the first execution link across binding retries without changing the run claim", async () => {
-  const current = job("execution-link");
-  const queue = await store("execution-link", [current]);
-  await queue.request([scheduled(queue.storeKey, current)]);
+  const { queue, request } = await scheduledQueue("execution-link");
+  await queue.request([request]);
   const activated = await queue.drain();
   expect(activated.launches).toHaveLength(1);
   const receipt = activated.launches[0]!.runReceipt;
@@ -109,9 +113,7 @@ it("advances a consumed scheduled slot without reclaiming its terminal receipt",
 });
 
 it("returns durable receipt handles across queued edits and records disabled requests under their public ID", async () => {
-  const original = job("edited");
-  const queue = await store("edit", [original]);
-  const request = scheduled(queue.storeKey, original);
+  const { current: original, queue, request } = await scheduledQueue("edited");
   const claimed = (await queue.request([request])).accepted[0]!;
   expect(await queue.readReceipt(claimed.runReceipt)).toEqual(claimed.runReceipt);
   const edited = await queue.update(original.id, {
@@ -219,9 +221,10 @@ it("launches explicit force on a disabled job and retains a consumed exit event 
 });
 
 it("recovers a timed request without replaying active work or reconstructing a lost manual payload", async () => {
-  const timedJob = job("recover", { schedule: { kind: "at", at: new Date(now).toISOString() } });
-  const queue = await store("recover", [timedJob]);
-  const requested = (await queue.request([scheduled(queue.storeKey, timedJob)])).accepted[0]!;
+  const { queue, request } = await scheduledQueue("recover", {
+    schedule: { kind: "at", at: new Date(now).toISOString() },
+  });
+  const requested = (await queue.request([request])).accepted[0]!;
   expect((await queue.recover()).jobs[0]?.state.queuedAtMs).toBe(now);
   const active = (await queue.drain()).launches[0]!;
   expect(active.runReceipt.receiptId).toBe(requested.runReceipt.receiptId);
@@ -254,9 +257,7 @@ it("recovers a timed request without replaying active work or reconstructing a l
 it.each(["request", "cancellation"] as const)(
   "recovers a committed %s after losing its worker reply without replay",
   async (phase) => {
-    const current = job(`lost-${phase}`);
-    const queue = await store(`lost-${phase}`, [current]);
-    const request = scheduled(queue.storeKey, current);
+    const { queue, request } = await scheduledQueue(`lost-${phase}`);
     if (phase === "cancellation") {
       await queue.request([request]);
     }
@@ -285,24 +286,19 @@ it.each(["request", "cancellation"] as const)(
       expect((await queue.read()).jobs[0]?.state.queuedAtMs).toBeUndefined();
       expect((await queue.drain()).launches).toEqual([]);
       const history = await queue.history();
-      expect(history.entries).toHaveLength(1);
-      expect(history.entries[0]?.status).toBe("skipped");
+      expect(history.entries).toMatchObject([{ status: "skipped" }]);
     }
   },
 );
 
 it("cancels a removed queued job and rejects a plan made before its definition changed", async () => {
-  const current = job("removed");
-  const queue = await store("removed", [current]);
-  const request = scheduled(queue.storeKey, current);
+  const { current, queue, request } = await scheduledQueue("removed");
   await queue.request([request]);
   await queue.remove(current.id);
   expect((await queue.drain([request])).skipped[0]?.runReceipt.receiptId).toBe(request.receiptId);
   expect((await queue.drain()).launches).toEqual([]);
-  const changed = job("changed");
-  const stale = await store("stale-plan", [changed]);
+  const { current: changed, queue: stale, request: staleRequest } = await scheduledQueue("changed");
   await stale.update(changed.id, { enabled: false });
-  const staleRequest = scheduled(stale.storeKey, changed);
   expect((await stale.request([staleRequest])).rejected).toEqual(
     rejected(staleRequest, "job-ineligible"),
   );

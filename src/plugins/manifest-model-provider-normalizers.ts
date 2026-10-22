@@ -1,6 +1,7 @@
 import { normalizeModelPricingProvider } from "@openclaw/model-catalog-core/model-catalog-pricing";
 import { normalizeModelCatalogProviderId } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { asSafeIntegerInRange } from "../../packages/normalization-core/src/number-coercion.js";
+import { omitUndefinedFields } from "../../packages/normalization-core/src/record-coerce.js";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import {
   normalizeOptionalTrimmedStringList,
@@ -12,7 +13,6 @@ import {
   normalizeManifestObjectList,
   normalizeManifestStringRecord,
   normalizeNamedMetadataRecord,
-  omitUndefinedManifestFields,
   optionalManifestFields,
 } from "./manifest-capability-normalizers.js";
 import type {
@@ -150,7 +150,7 @@ export function normalizeManifestProviderEndpoints(
     if (!hosts && !hostSuffixes && !baseUrls) {
       return undefined;
     }
-    return omitUndefinedManifestFields({
+    return omitUndefinedFields({
       endpointClass,
       hosts,
       hostSuffixes,
@@ -202,7 +202,7 @@ export function normalizeManifestSecretProviderIntegrations(
     const passEnv = normalizeTrimmedStringList(rawIntegration.passEnv)
       .filter((entry) => ENV_SECRET_REF_ID_RE.test(entry))
       .slice(0, MAX_SECRET_PROVIDER_EXEC_PASS_ENV);
-    return omitUndefinedManifestFields<PluginManifestSecretProviderIntegration>({
+    return omitUndefinedFields<PluginManifestSecretProviderIntegration>({
       providerAlias: normalizeOptionalString(rawIntegration.providerAlias),
       displayName: normalizeOptionalString(rawIntegration.displayName),
       description: normalizeOptionalString(rawIntegration.description),
