@@ -22,6 +22,7 @@ import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
 import { parseConfigValue } from "../auto-reply/reply/config-value.js";
 import { renderEnvTemplateToken, scanEnvTemplateTokens } from "../config/env-substitution.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
+import { redactMcpServersForDisplay } from "../config/mcp-display-redaction.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { executableFileExists, safeStat } from "../infra/path-existence.js";
@@ -633,7 +634,7 @@ export function registerMcpCli(program: Command) {
     .action(async (opts: { json?: boolean }) => {
       const loaded = await loadMcpConfig(opts);
       if (opts.json) {
-        defaultRuntime.writeJson(loaded.mcpServers);
+        defaultRuntime.writeJson(redactMcpServersForDisplay(loaded.mcpServers));
         return;
       }
       const entries = Object.entries(loaded.mcpServers).toSorted(([a], [b]) => a.localeCompare(b));
@@ -664,7 +665,10 @@ export function registerMcpCli(program: Command) {
     .option("--json", "Print JSON")
     .action(async (name: string | undefined, opts: { json?: boolean }) => {
       const loaded = await loadMcpConfig(opts);
-      const value = name ? requireMcpServer(loaded, name, opts) : loaded.mcpServers;
+      // Inspection output is often pasted or captured by agents; never print usable credentials.
+      const value = name
+        ? redactMcpServersForDisplay({ [name]: requireMcpServer(loaded, name, opts) })[name]
+        : redactMcpServersForDisplay(loaded.mcpServers);
       if (!opts.json) {
         defaultRuntime.log(
           name

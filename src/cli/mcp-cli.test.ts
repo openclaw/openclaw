@@ -4,6 +4,8 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
 import { setConfiguredMcpServer } from "../agents/mcp-config-mutation.js";
+import { listConfiguredMcpServers } from "../config/mcp-config.js";
+import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
 import { createTempHomeEnv } from "../test-utils/temp-home.js";
 import {
   cleanupMcpCliTestState,
@@ -156,7 +158,7 @@ it("adds a configured MCP server from flags without replacing operator knobs", a
   expect(await readServer()).toEqual({
     url: "https://mcp.example.com/mcp",
     transport: "streamable-http",
-    headers: { Authorization: "Bearer token" },
+    headers: { Authorization: REDACTED_SENTINEL },
     auth: "oauth",
     oauth: { scope: "docs.read" },
     toolFilter: { include: ["search", "read_*"] },
@@ -165,6 +167,8 @@ it("adds a configured MCP server from flags without replacing operator knobs", a
     supportsParallelToolCalls: true,
     codex: { defaultToolsApprovalMode: "approve" },
   });
+  const saved = await listConfiguredMcpServers();
+  expect(saved.ok && saved.mcpServers.docs?.headers).toEqual({ Authorization: "Bearer token" });
 });
 
 it.each([
@@ -361,6 +365,52 @@ it("redacts stdio argv credentials from MCP status output", async () => {
   expect(verboseOutput).toContain("launch: node server.mjs --api-key *** --token=***");
   expect(verboseOutput).not.toContain("test-api-key");
   expect(verboseOutput).not.toContain("test-token");
+});
+
+it("redacts credentials from MCP list and show output without changing saved values", async () => {
+  vi.stubEnv("MCP_EXAMPLE_TOKEN", "env-token-not-real");
+  const remote = {
+    url: "https://mcp.example.com/mcp",
+    transport: "streamable-http",
+    headers: { Authorization: "Bearer ${MCP_EXAMPLE_TOKEN}", "X-Api-Key": "header-key-not-real" },
+  };
+  const local = {
+    command: "npx",
+    args: ["some-mcp", "--api-key", "argv-key-not-real"],
+    env: { SERVICE_TOKEN: "env-value-not-real" },
+  };
+  await setServer(remote, "remote");
+  await setServer(local, "local");
+  const secrets = [
+    "env-token-not-real",
+    "header-key-not-real",
+    "argv-key-not-real",
+    "env-value-not-real",
+  ];
+
+  for (const args of [
+    ["list", "--json"],
+    ["show", "--json"],
+    ["show"],
+    ["show", "remote", "--json"],
+    ["show", "local"],
+  ]) {
+    mockLog.mockClear();
+    await mcp(...args);
+    const output = logOutput();
+    for (const secret of secrets) {
+      expect(output, args.join(" ")).not.toContain(secret);
+    }
+  }
+  expect(await readServer("remote")).toEqual({
+    ...remote,
+    headers: { Authorization: REDACTED_SENTINEL, "X-Api-Key": REDACTED_SENTINEL },
+  });
+  expect((await readServer("local")).args).toEqual(["some-mcp", "--api-key", REDACTED_SENTINEL]);
+
+  const saved = await listConfiguredMcpServers();
+  expect(saved.ok && saved.mcpServers.remote?.headers?.["X-Api-Key"]).toBe("header-key-not-real");
+  expect(saved.ok && saved.mcpServers.local).toMatchObject(local);
 });
 
 it("reports MCP doctor setup errors and sensitive literals", async () => {
