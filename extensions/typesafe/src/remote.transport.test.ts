@@ -91,9 +91,7 @@ const received: Array<{
   body: unknown;
 }> = [];
 let redirect: string | undefined;
-let responseModel: string | undefined;
-let escapeResponse = false;
-let responsePayload: object | undefined;
+let responsePayload: string;
 let fixture: Awaited<ReturnType<typeof listen<ReturnType<typeof createServer>>>>;
 let baseUrl: string;
 let pinnedAddress = "10.123.0.5";
@@ -116,12 +114,7 @@ beforeAll(async () => {
             response.end();
           } else {
             response.setHeader("content-type", "application/json");
-            const payload = JSON.stringify(
-              responsePayload ?? { ...answer, model: responseModel ?? answer.model },
-            );
-            response.end(
-              escapeResponse ? payload.replaceAll("-", String.fromCharCode(92) + "u002d") : payload,
-            );
+            response.end(responsePayload);
           }
         });
       },
@@ -145,9 +138,7 @@ afterAll(async () => {
 beforeEach(() => {
   received.length = 0;
   redirect = undefined;
-  responseModel = undefined;
-  escapeResponse = false;
-  responsePayload = undefined;
+  responsePayload = JSON.stringify(answer);
   pinnedAddress = "10.123.0.5";
   vi.mocked(lookup).mockReset();
   vi.mocked(lookup).mockResolvedValue([{ address: "10.123.0.5", family: 4 }]);
@@ -205,11 +196,13 @@ async function expectUnavailable(
   expect(received).toHaveLength(requests);
 }
 const tls = { ca: PROXY_FIXTURE_CERTIFICATE };
-function requestAuth(mode: "authorization-bearer" | "header", value: string) {
-  return mode === "authorization-bearer"
-    ? { mode, token: value }
-    : { mode, headerName: "X-Server-Key", value, prefix: "Token " };
-}
+const bearer = (token: string) => ({ mode: "authorization-bearer" as const, token });
+const header = (value: string) => ({
+  mode: "header" as const,
+  headerName: "X-Server-Key",
+  value,
+  prefix: "Token ",
+});
 
 it.each([false, true])(
   "uses models.providers.typesafe for private HTTPS with apiKey=%s",
@@ -251,42 +244,40 @@ it("uses the common private-network opt-out and explicit opt-in", async () => {
   expect(received).toHaveLength(1);
 });
 
-it.each(["bearer", "header-auth", "request-headers"] as const)(
-  "applies %s after provider header defaults",
-  async (mode) => {
-    const headers = {
-      Authorization: "Bearer synthetic-override",
-      "X-API-Key": "synthetic-replacement",
-    };
-    const request: NonNullable<ModelProviderConfig["request"]> =
-      mode === "bearer"
-        ? { tls, auth: { mode: "authorization-bearer", token: "synthetic-override" } }
-        : mode === "header-auth"
-          ? {
-              tls,
-              auth: { mode: "header", headerName: "X-API-Key", value: "synthetic-replacement" },
-            }
-          : { tls, headers };
-    await expect(
-      evaluate({
-        ...(mode === "bearer" ? { baseUrl: baseUrl + "/v1/" } : {}),
-        apiKey: "synthetic-default",
-        headers: {
-          authorization: "Bearer synthetic-stale",
-          ...(mode === "bearer" ? {} : { "x-api-key": "synthetic-stale-header" }),
-        },
-        request,
-      }),
-    ).resolves.toMatchObject({ status: "ok" });
-    expect(received).toMatchObject([
-      {
-        url: "/v1/systemone",
-        authorization: mode === "header-auth" ? undefined : "Bearer synthetic-override",
-        ...(mode === "bearer" ? {} : { apiKey: "synthetic-replacement" }),
-      },
-    ]);
+it.each([
+  { mode: "bearer", request: { auth: bearer("synthetic-override") } },
+  {
+    mode: "header-auth",
+    request: {
+      auth: { mode: "header" as const, headerName: "X-API-Key", value: "synthetic-replacement" },
+    },
   },
-);
+  {
+    mode: "request-headers",
+    request: {
+      headers: { Authorization: "Bearer synthetic-override", "X-API-Key": "synthetic-replacement" },
+    },
+  },
+])("applies $mode after provider header defaults", async ({ mode, request }) => {
+  await expect(
+    evaluate({
+      ...(mode === "bearer" ? { baseUrl: baseUrl + "/v1/" } : {}),
+      apiKey: "synthetic-default",
+      headers: {
+        authorization: "Bearer synthetic-stale",
+        ...(mode === "bearer" ? {} : { "x-api-key": "synthetic-stale-header" }),
+      },
+      request: { tls, ...request },
+    }),
+  ).resolves.toMatchObject({ status: "ok" });
+  expect(received).toMatchObject([
+    {
+      url: "/v1/systemone",
+      authorization: mode === "header-auth" ? undefined : "Bearer synthetic-override",
+      ...(mode === "bearer" ? {} : { apiKey: "synthetic-replacement" }),
+    },
+  ]);
+});
 
 it.each(["untrusted certificate", "hostname mismatch", "insecure override"])(
   "preserves shared TLS verification: %s",
@@ -398,44 +389,39 @@ it.each(["127.0.0.1", "169.254.169.254", "0.0.0.0"])(
   },
 );
 
+const reflected = "synthetic-request-token";
+const reflectedHeaders = { "X-API-Key": reflected };
 it.each([
-  ["authorization-bearer", false],
-  ["header", false],
-  ["authorization-bearer", true],
-  ["header", true],
-] as const)(
-  "rejects reflected shared %s credentials with JSON escaping=%s",
-  async (mode, escaped) => {
-    responseModel = "synthetic-request-token";
-    escapeResponse = escaped;
-    const result = await evaluate({ request: { tls, auth: requestAuth(mode, responseModel) } });
-    expect(result).toEqual({ status: "unavailable", reason: "invalid-response" });
-    expect(JSON.stringify(result)).not.toContain(responseModel);
+  { name: "bearer", config: { request: { tls, auth: bearer(reflected) } }, escaped: false },
+  { name: "header", config: { request: { tls, auth: header(reflected) } }, escaped: false },
+  { name: "escaped bearer", config: { request: { tls, auth: bearer(reflected) } }, escaped: true },
+  { name: "escaped header", config: { request: { tls, auth: header(reflected) } }, escaped: true },
+  { name: "provider headers", config: { headers: reflectedHeaders }, escaped: true },
+  {
+    name: "request headers",
+    config: { request: { tls, headers: reflectedHeaders } },
+    escaped: true,
   },
-);
-
-it.each(["provider", "request"] as const)(
-  "rejects credentials reflected from configured %s headers",
-  async (owner) => {
-    responseModel = "synthetic-configured-header-key";
-    escapeResponse = true;
-    const headers = { "X-API-Key": responseModel };
-    const result = await evaluate(
-      owner === "provider" ? { headers } : { request: { tls, headers } },
-    );
+])("rejects reflected $name credentials", async ({ name, config, escaped }) => {
+  responsePayload = JSON.stringify({ ...answer, model: reflected });
+  if (escaped) {
+    responsePayload = responsePayload.replaceAll("-", "\\u002d");
+  }
+  const result = await evaluate(config);
+  expect(result).toEqual({ status: "unavailable", reason: "invalid-response" });
+  expect(JSON.stringify(result)).not.toContain(reflected);
+  if (name.endsWith("headers")) {
     expect(received).toHaveLength(1);
-    expect(received[0]?.apiKey).toBe(responseModel);
-    expect(result).toEqual({ status: "unavailable", reason: "invalid-response" });
-    expect(JSON.stringify(result)).not.toContain(responseModel);
-  },
-);
+    expect(received[0]?.apiKey).toBe(reflected);
+  }
+});
 
 it.each(["authorization-bearer", "header"] as const)(
   "fails closed instead of sending anonymous requests for empty %s auth",
   async (mode) => {
     const auth =
       mode === "authorization-bearer"
-        ? { mode, token: "" }
+        ? bearer("")
         : { mode, headerName: "X-Server-Key", value: "" };
     await expectUnavailable(evaluate({ request: { auth } }), "credentials-unavailable");
     expect(lookup).not.toHaveBeenCalled();
@@ -449,12 +435,12 @@ it.each([false, true])(
       state: "synthetic",
       questions: { q: { type: "score" as const, criteria: ["Bearer demo", "Routine"] } },
     };
-    responsePayload = {
+    responsePayload = JSON.stringify({
       ...answer,
       answers: {
         q: scoreAnswer(0, { 0: 1, 1: 0 }, { 0: "Bearer demo", 1: "Routine" }, 1),
       },
-    };
+    });
     const result = await provider(
       settings(authenticated ? { apiKey: "synthetic-server-key" } : {}),
     ).evaluate(score, context());

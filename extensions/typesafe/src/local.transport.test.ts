@@ -122,24 +122,13 @@ it.each([-1, "15"])("rejects invalid local latency metadata %s", async (latency_
   await expect(evaluate(input, runtimeConfig({ baseUrl }))).rejects.toThrow("invalid response");
 });
 
-it.each([false, true])(
-  "accepts metadata with hosted=%s and ignores stale local keys",
-  async (hosted) => {
-    const fetch = mockResponse(localAnswer);
-    const hostedInput = { ...wireInput, model: "jev-latest" };
-    const config = { ...runtimeConfig(hosted ? {} : { baseUrl }), apiKey: "hosted-secret" };
-    await expect(evaluate(hosted ? hostedInput : input, config)).resolves.toHaveProperty(
-      "evaluation.model",
-      "kev-latest",
-    );
-    expect(fetch.mock.calls[0]?.[0]).toBe(
-      hosted ? "https://api.typesafe.ai/v1/systemone" : `${baseUrl}/v1/systemone`,
-    );
-    expect(new Headers(fetch.mock.calls[0]?.[1]?.headers).get("authorization")).toBe(
-      hosted ? "Bearer hosted-secret" : null,
-    );
-  },
-);
+it("ignores a stale hosted key passed directly to the local client", async () => {
+  const fetch = mockResponse(localAnswer);
+  await expect(
+    evaluate(input, { ...runtimeConfig({ baseUrl }), apiKey: "hosted-secret" }),
+  ).resolves.toHaveProperty("evaluation.model", "kev-latest");
+  expect(new Headers(fetch.mock.calls[0]?.[1]?.headers).get("authorization")).toBeNull();
+});
 
 it.each(["127.0.0.1", "localhost", "[::1]"])("reuses local %s sockets", async (hostname) => {
   const received: { url?: string; authorization?: string; host?: string; body: string }[] = [];
