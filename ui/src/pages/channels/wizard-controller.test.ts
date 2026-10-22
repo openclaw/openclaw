@@ -188,25 +188,20 @@ it("surfaces validation errors on the re-emitted step", async () => {
 });
 
 it.each([
-  {
-    name: "expired session",
-    error: new GatewayRequestError({
+  [
+    "expired session",
+    new GatewayRequestError({
       code: "INVALID_REQUEST",
       message: "wizard not found",
       details: { code: "WIZARD_NOT_FOUND" },
     }),
-    message: "Setup expired. Close and restart setup.",
-    cancellable: false,
-  },
-  {
-    name: "generic request error",
-    error: new Error("wizard unavailable"),
-    message: "wizard unavailable",
-    cancellable: true,
-  },
-])(
-  "reports $name without replay and preserves its cancellation policy",
-  async ({ error, message, cancellable }) => {
+    "Setup expired. Close and restart setup.",
+    false,
+  ],
+  ["generic request error", new Error("wizard unavailable"), "wizard unavailable", true],
+] as const)(
+  "reports %s without replay and preserves its cancellation policy",
+  async (_name, error, message, cancellable) => {
     const { controller, request } = scripted(
       ["wizard.start", running(tokenStep, "s1")],
       ["wizard.next", error],
@@ -325,26 +320,26 @@ it("does not cancel a terminal start result that arrives after the local timeout
 });
 
 it.each([
-  {
-    name: "gateway-reported channels",
-    initial: null,
-    answer: "whatsapp",
-    result: done(["telegram", "whatsapp"], structuredClone(completedAccounts)),
-    expected: {
+  [
+    "gateway-reported channels",
+    null,
+    "whatsapp",
+    done(["telegram", "whatsapp"], structuredClone(completedAccounts)),
+    {
       phase: "done",
       channel: "telegram",
       channels: ["telegram", "whatsapp"],
       accounts: completedAccounts,
     },
-  },
-  {
-    name: "no configured channels",
-    initial: "whatsapp",
-    answer: "__skip__",
-    result: { done: true, status: "done" },
-    expected: { phase: "done", channel: "whatsapp", channels: [], accounts: [] },
-  },
-])("completes with $name", async ({ initial, answer, result, expected }) => {
+  ],
+  [
+    "no configured channels",
+    "whatsapp",
+    "__skip__",
+    { done: true, status: "done" },
+    { phase: "done", channel: "whatsapp", channels: [], accounts: [] },
+  ],
+] as const)("completes with %s", async (_name, initial, answer, result, expected) => {
   const { controller } = scripted(
     ["wizard.start", running(selectStep, "s1")],
     ["wizard.next", result],

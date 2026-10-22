@@ -6,6 +6,26 @@ import { createInitialConfigState } from "../../lib/config/config-state-model.ts
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import type { ChannelsProps } from "./view.types.ts";
 
+export function channelSnapshot(
+  channels: ChannelsStatusSnapshot["channels"] = {},
+  overrides: Partial<ChannelsStatusSnapshot> = {},
+): ChannelsStatusSnapshot {
+  return {
+    ts: 1,
+    channelOrder: Object.keys(channels),
+    channelLabels: Object.fromEntries(Object.keys(channels).map((id) => [id, id])),
+    channels,
+    channelAccounts: {},
+    channelDefaultAccountId: {},
+    ...overrides,
+  };
+}
+
+export const text = (root: ParentNode, selector: string) =>
+  root.querySelector(selector)?.textContent?.trim();
+export const texts = (root: ParentNode, selector: string) =>
+  Array.from(root.querySelectorAll(selector), (node) => node.textContent?.trim());
+
 export type ChannelsViewTestOverrides = Partial<
   Omit<ChannelsProps, "channels" | "config" | "presentation" | "wizardHost">
 > & {
@@ -111,13 +131,13 @@ const mountedViews = new Map<
 export function renderChannelView<T extends object>(
   component: (props: T) => JSX.Element,
   props: T,
-  container: HTMLElement,
-): void {
+  container: HTMLElement = document.createElement("div"),
+): HTMLElement {
   const current = mountedViews.get(container);
   if (current?.component === component) {
     current.update(props);
     flush();
-    return;
+    return container;
   }
   current?.dispose();
   const [read, write] = createSignal<object>(props, { equals: false });
@@ -131,6 +151,7 @@ export function renderChannelView<T extends object>(
   const { unmount: dispose } = mountSolid(() => component(reactiveProps), { container });
   mountedViews.set(container, { component, update: (next) => write(() => next), dispose });
   flush();
+  return container;
 }
 
 export function disposeChannelViews(): void {

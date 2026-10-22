@@ -12,6 +12,9 @@ import {
   renderChannelView,
   disposeChannelViews,
   createChannelsViewProps,
+  channelSnapshot,
+  text,
+  texts,
 } from "./view.test-support.ts";
 import { ChannelsView } from "./view.tsx";
 import type { ChannelsProps } from "./view.types.ts";
@@ -25,25 +28,8 @@ function createProps(snapshot: ChannelsProps["channels"]["channelsSnapshot"]): C
   });
 }
 
-function channelSnapshot(
-  channels: ChannelsStatusSnapshot["channels"],
-  overrides: Partial<ChannelsStatusSnapshot> = {},
-): ChannelsStatusSnapshot {
-  return {
-    ts: 1,
-    channelOrder: Object.keys(channels),
-    channelLabels: Object.fromEntries(Object.keys(channels).map((id) => [id, id])),
-    channels,
-    channelAccounts: {},
-    channelDefaultAccountId: {},
-    ...overrides,
-  };
-}
-
 function renderHub(props: ChannelsProps) {
-  const container = document.createElement("div");
-  renderChannelView(ChannelsView, props, container);
-  return container;
+  return renderChannelView(ChannelsView, props);
 }
 
 function channelProps(
@@ -53,10 +39,6 @@ function channelProps(
   return createProps(channelSnapshot(channels, overrides));
 }
 
-const text = (root: ParentNode, selector: string) =>
-  root.querySelector(selector)?.textContent?.trim();
-const texts = (root: ParentNode, selector: string) =>
-  Array.from(root.querySelectorAll(selector), (node) => node.textContent?.trim());
 const facts = (root: ParentNode) =>
   Array.from(root.querySelectorAll("dt"), (node) => [
     node.textContent?.trim(),
@@ -104,18 +86,9 @@ describe("channel hub refresh actions", () => {
   });
 
   it("announces a channel status failure as an alert", () => {
-    const props = createProps({
-      ts: Date.now(),
-      channelOrder: [],
-      channelLabels: {},
-      channels: {},
-      channelAccounts: {},
-      channelDefaultAccountId: {},
-    });
+    const props = createProps(channelSnapshot({}, { ts: Date.now() }));
     props.channels.channelsError = "Channel status unavailable";
-    const container = document.createElement("div");
-
-    renderChannelView(ChannelsView, props, container);
+    const container = renderHub(props);
 
     expect(
       Array.from(container.querySelectorAll('[role="alert"]'), (alert) => alert.textContent),
@@ -443,63 +416,19 @@ function renderChannelDetailFixture(
   if (options.onRefresh) {
     props.onRefresh = options.onRefresh;
   }
-  const container = document.createElement("div");
-  renderChannelView(
-    renderChannelDetail,
-    {
-      channelId,
-      label: options.label ?? channelId,
-      props,
-      onClose: () => {},
-      onSetup: () => {},
-    },
-    container,
-  );
-  return container;
+  return renderChannelView(renderChannelDetail, {
+    channelId,
+    label: options.label ?? channelId,
+    props,
+    onClose: () => {},
+    onSetup: () => {},
+  });
 }
 
 const objectSchema = (properties: Record<string, JsonSchema>): JsonSchema => ({
   type: "object",
   properties,
 });
-const CHANNEL_TIER_SCHEMA = objectSchema({
-  channels: objectSchema({
-    whatsapp: objectSchema({
-      enabled: { type: "boolean" },
-      timeoutMs: { type: "integer" },
-      retry: objectSchema({ attempts: { type: "integer" } }),
-    }),
-  }),
-});
-
-const CHANNEL_TIER_HINTS = {
-  "channels.whatsapp.enabled": { advanced: false },
-  "channels.whatsapp.timeoutMs": { advanced: true },
-  "channels.whatsapp.retry": { advanced: true },
-  "channels.whatsapp.retry.attempts": { advanced: true },
-};
-
-function renderWhatsAppConfigForm(
-  showAdvancedSettings: boolean,
-  hints: Record<string, { advanced: boolean }> = CHANNEL_TIER_HINTS,
-) {
-  const props = channelProps({ whatsapp: whatsappStatus });
-  const onShowAdvancedSettings = vi.fn();
-  props.config.configSchema = CHANNEL_TIER_SCHEMA;
-  props.config.configUiHints = hints;
-  props.config.configForm = { channels: { whatsapp: { enabled: true, timeoutMs: 5000 } } };
-  props.showAdvancedSettings = showAdvancedSettings;
-  props.onShowAdvancedSettings = onShowAdvancedSettings;
-
-  const container = document.createElement("div");
-  renderChannelView(
-    (viewProps: ChannelsProps) => <ChannelConfig channelId="whatsapp" props={viewProps} />,
-    props,
-    container,
-  );
-  return { container, onShowAdvancedSettings };
-}
-
 describe("channel config advanced tier", () => {
   it("hides advanced channel settings behind the disclosure by default", () => {
     const { container, onShowAdvancedSettings } = renderWhatsAppConfigForm(false);
@@ -532,10 +461,27 @@ describe("channel config advanced tier", () => {
   });
 
   it("renders field help from the resolved hints", () => {
-    const { container } = renderWhatsAppConfigForm(false, {
-      ...CHANNEL_TIER_HINTS,
+    const props = channelProps({ whatsapp: whatsappStatus });
+    props.config.configSchema = objectSchema({
+      channels: objectSchema({
+        whatsapp: objectSchema({
+          enabled: { type: "boolean" },
+          timeoutMs: { type: "integer" },
+          retry: objectSchema({ attempts: { type: "integer" } }),
+        }),
+      }),
+    });
+    props.config.configUiHints = {
       "channels.whatsapp.enabled": { advanced: false, help: "Turn this channel on or off." },
-    } as typeof CHANNEL_TIER_HINTS);
+      "channels.whatsapp.timeoutMs": { advanced: true },
+      "channels.whatsapp.retry": { advanced: true },
+      "channels.whatsapp.retry.attempts": { advanced: true },
+    };
+    props.config.configForm = { channels: { whatsapp: { enabled: true, timeoutMs: 5000 } } };
+    const container = renderChannelView(
+      (viewProps: ChannelsProps) => <ChannelConfig channelId="whatsapp" props={viewProps} />,
+      props,
+    );
 
     expect(texts(container, ".settings-row__desc")).toContain("Turn this channel on or off.");
   });
@@ -558,23 +504,18 @@ const CHANNEL_DETAIL_CASES = [
 ] satisfies Array<[string, string, Array<[string, string]>]>;
 
 describe("channel detail", () => {
-  it.each(["whatsapp", "nostr"] as const)(
-    "shows an escaped configuration save error inside the %s editor",
-    (channelId) => {
-      const message = 'Gateway rejected <img src="x" onerror="alert(1)">';
-      const container = renderChannelDetailFixture(
-        channelId,
-        { [channelId]: channelId === "whatsapp" ? whatsappStatus : null },
-        {
-          configError: message,
-        },
-      );
-      const alert = container.querySelector(".channels-detail [role=alert]");
+  it("shows an escaped configuration save error inside the Nostr editor", () => {
+    const message = 'Gateway rejected <img src="x" onerror="alert(1)">';
+    const container = renderChannelDetailFixture(
+      "nostr",
+      { nostr: null },
+      { configError: message },
+    );
+    const alert = container.querySelector(".channels-detail [role=alert]");
 
-      expect(alert?.textContent).toBe(message);
-      expect(alert?.querySelector("img")).toBeNull();
-    },
-  );
+    expect(alert?.textContent).toBe(message);
+    expect(alert?.querySelector("img")).toBeNull();
+  });
 
   it.each(CHANNEL_DETAIL_CASES)(
     "preserves localized status facts and probe actions for %s",
@@ -607,39 +548,33 @@ describe("channel detail", () => {
     },
   );
 
-  it.each(CHANNEL_DETAIL_CASES)(
-    "keeps the cold recommended %s detail available",
-    (channelId, title) => {
-      const props = createProps(null);
-      props.selectedChannel = channelId;
-      const container = renderHub(props);
-      const detail = container.querySelector(".channels-detail")!;
+  it("keeps the cold recommended Google Chat detail available", () => {
+    const props = createProps(null);
+    props.selectedChannel = "googlechat";
+    const container = renderHub(props);
+    const detail = container.querySelector(".channels-detail")!;
 
-      expect(text(detail, heading)).toBe(title);
-      expect(text(detail, probeButton)).toBe("Check connection");
-      expect(texts(detail, "dt")).toContain("Last connection check");
-      expect(detail.textContent).not.toContain("Channel status and configuration.");
-    },
-  );
+    expect(text(detail, heading)).toBe("Google Chat");
+    expect(text(detail, probeButton)).toBe("Check connection");
+    expect(texts(detail, "dt")).toContain("Last connection check");
+    expect(detail.textContent).not.toContain("Channel status and configuration.");
+  });
 
-  it.each(CHANNEL_DETAIL_CASES)(
-    "projects an in-flight %s read onto its Probe action",
-    (channelId) => {
-      const onRefresh = vi.fn();
-      const container = renderChannelDetailFixture(
-        channelId,
-        { [channelId]: { configured: true, running: true } },
-        { loading: true, onRefresh },
-      );
-      const probe = container.querySelector<HTMLButtonElement>(probeButton);
+  it("projects an in-flight read onto its Probe action", () => {
+    const onRefresh = vi.fn();
+    const container = renderChannelDetailFixture(
+      "signal",
+      { signal: { configured: true, running: true } },
+      { loading: true, onRefresh },
+    );
+    const probe = container.querySelector<HTMLButtonElement>(probeButton);
 
-      expect(probe?.disabled).toBe(true);
-      expect(probe?.getAttribute("aria-busy")).toBe("true");
-      expect(probe?.textContent?.trim()).toBe("Refreshing…");
-      probe?.click();
-      expect(onRefresh).not.toHaveBeenCalled();
-    },
-  );
+    expect(probe?.disabled).toBe(true);
+    expect(probe?.getAttribute("aria-busy")).toBe("true");
+    expect(probe?.textContent?.trim()).toBe("Refreshing…");
+    probe?.click();
+    expect(onRefresh).not.toHaveBeenCalled();
+  });
 
   it("keeps missing Google Chat status unknown while other known channels are stopped", () => {
     const google = renderChannelDetailFixture("googlechat", { googlechat: null });

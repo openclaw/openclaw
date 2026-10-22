@@ -19,6 +19,7 @@ import { updatePickers } from "../../test-helpers/select-picker.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { ChannelsPage } from "./channels-page.tsx";
 import { pairingSnapshot } from "./pairing.test-support.ts";
+import { channelSnapshot as snapshotFor } from "./view.test-support.ts";
 
 const packaged = vi.hoisted(() => [] as ControlUiPluginDistribution[]);
 vi.mock("../../plugins/control-ui-distribution.ts", async (importOriginal) => ({
@@ -29,17 +30,8 @@ vi.mock("../../plugins/control-ui-distribution.ts", async (importOriginal) => ({
 const mountedPages = new Map<HTMLElement, () => void>();
 const sources: Array<Pick<ApplicationContext, "runtimeConfig" | "channels">> = [];
 
-const channelSnapshot = (
-  overrides: Partial<ChannelsStatusSnapshot> = {},
-): ChannelsStatusSnapshot => ({
-  ts: 0,
-  channelOrder: [],
-  channelLabels: {},
-  channels: {},
-  channelAccounts: {},
-  channelDefaultAccountId: {},
-  ...overrides,
-});
+const channelSnapshot = (overrides: Partial<ChannelsStatusSnapshot> = {}) =>
+  snapshotFor({}, { ts: 0, ...overrides });
 
 function channelStatus(id: string, label: string, configured = false, description?: string) {
   return channelSnapshot({

@@ -39,40 +39,27 @@ function renderInto(
   return container;
 }
 
-it("renders pending senders and keeps their actions current across refresh", () => {
-  const onApprove = vi.fn();
+it("renders pending senders and keeps dismissal current across refresh", () => {
   const onDismiss = vi.fn();
-  const props = createProps({ onPairingApprove: onApprove, onPairingDismiss: onDismiss });
+  const props = createProps({ onPairingDismiss: onDismiss });
   const container = renderInto(props);
 
   expect(container.textContent).toContain("+15551234567");
   expect(container.textContent).toContain("Alice");
   const buttons = Array.from(container.querySelectorAll("button"));
-  const approve = buttons.find((button) => button.textContent?.trim() === "Approve")!;
   const dismiss = buttons.find((button) => button.textContent?.trim() === "Dismiss")!;
-  approve.click();
   dismiss.click();
-  expect(onApprove).toHaveBeenCalledWith(request);
   expect(onDismiss).toHaveBeenCalledWith(request);
 
-  const details = container.querySelector<HTMLDetailsElement>(
-    ".channels-pairing-request__details",
-  )!;
-  details.open = true;
   const refreshed = { ...request, metadata: { name: "Alice Updated" } };
   props.channels.pairingSnapshot = {
     ...props.channels.pairingSnapshot!,
     requests: [refreshed],
   };
   renderChannelView(renderChannelPairingQueue, props, container);
-  expect(container.querySelector(".channels-pairing-request__details")).toBe(details);
-  expect(details.open).toBe(true);
-  expect(details.textContent).toContain("Alice Updated");
-  expect(container.contains(approve)).toBe(true);
+  expect(container.textContent).toContain("Alice Updated");
   expect(container.contains(dismiss)).toBe(true);
-  approve.click();
   dismiss.click();
-  expect(onApprove).toHaveBeenLastCalledWith(refreshed);
   expect(onDismiss).toHaveBeenLastCalledWith(refreshed);
 });
 

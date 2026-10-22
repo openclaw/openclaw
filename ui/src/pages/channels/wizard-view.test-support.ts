@@ -5,6 +5,7 @@ import {
   createChannelsViewProps,
   disposeChannelViews,
   renderChannelView,
+  channelSnapshot,
 } from "./view.test-support.ts";
 import { ChannelsView } from "./view.tsx";
 import type { ChannelWizardState } from "./wizard-runner.ts";
@@ -61,14 +62,10 @@ export function renderWizard(wizard: ChannelWizardState, overrides: Partial<Wiza
     Object.assign(props, patch);
     const channel = props.wizard.phase === "idle" ? null : props.wizard.channel;
     const view = createChannelsViewProps(
-      {
-        ts: 1,
-        channelOrder: [],
-        channelLabels: channel ? { [channel]: props.channelLabel(channel) } : {},
-        channels: {},
-        channelAccounts: {},
-        channelDefaultAccountId: {},
-      },
+      channelSnapshot(
+        {},
+        { channelLabels: channel ? { [channel]: props.channelLabel(channel) } : {} },
+      ),
       null,
       {
         channels: {
