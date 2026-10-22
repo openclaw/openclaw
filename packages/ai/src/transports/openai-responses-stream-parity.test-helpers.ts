@@ -184,7 +184,7 @@ export const thinkingBlock = (thinking: string, encrypted = false) => ({
   encrypted,
 });
 
-export function expected(
+function expected(
   responseId: string | null,
   events: ProcessResult["events"],
   content: ProcessResult["content"],

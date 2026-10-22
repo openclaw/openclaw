@@ -2530,7 +2530,6 @@
 ["src/agents/tools/web-fetch.provider-fallback.test.ts","../../secrets/runtime-state.js","a58bcb02dad14eff5f2c4acb4df610fdd782d3d552689614648f22e16deb5545",1]
 ["src/agents/tools/web-fetch.provider-fallback.test.ts","../../secrets/runtime-web-tools-state.js","72018c99fd672d6128bbab9684916083b08f5356af6b81457f7ec5c3691c4a60",1]
 ["src/agents/tools/web-fetch.provider-fallback.test.ts","../../web-fetch/runtime.js","55ebb32125a931a64ca5c93d89ed31a134fb6f54f3617a60d146a6efc924d191",1]
-["src/agents/tools/web-fetch.test-mocks.ts","../../web-fetch/content-extractors.runtime.js","33b0566e759836c3e3d77448d16795ab706af170e7a987994eebf73978a81015",1]
 ["src/agents/tools/web-guarded-fetch.test.ts","../../infra/net/fetch-guard.js","d9c88a148c68aaddef8e87ca9e8389367686f8ab5b6c48107701b600f5bd82fa",1]
 ["src/agents/tools/web-search.late-bind.test.ts","../../secrets/runtime-state.js","99698e86d03a92d4df23811a1e3ef8bf479674c80ca2a82aff678b63d6ef7488",1]
 ["src/agents/tools/web-search.late-bind.test.ts","../../secrets/runtime-web-tools-state.js","b4aa57f35d3b7468331f2144a3b687e8057c7d29b46ff7c3b12d8d73517ecbd1",1]
