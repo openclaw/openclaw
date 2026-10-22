@@ -9,16 +9,10 @@ import { showInputDialog } from "./input-dialog.ts";
 
 let restoreDialogPolyfill: () => void;
 
-function findButton(label: string): HTMLButtonElement {
-  const button = [...document.body.querySelectorAll("button")].find(
+const findButton = (label: string) =>
+  [...document.body.querySelectorAll("button")].find(
     (candidate) => candidate.textContent?.trim() === label,
-  );
-  if (!(button instanceof HTMLButtonElement)) {
-    throw new Error(`Expected ${label} button`);
-  }
-  return button;
-}
-
+  )!;
 const dialogInput = () =>
   document.body.querySelector<HTMLInputElement>('openclaw-modal-dialog input[name="value"]')!;
 const dialog = () => document.body.querySelector("openclaw-modal-dialog");
@@ -57,20 +51,14 @@ describe("showInputDialog", () => {
     restoreDialogPolyfill();
   });
 
-  it("treats modal dismissal as cancellation", async () => {
-    const { closed, modal } = await open({ title: "Rename session" });
-
-    modal.dispatchEvent(new CustomEvent("modal-cancel"));
-
-    await expect(closed).resolves.toBeNull();
-  });
-
-  it("removes the dialog and cancels when its owner aborts", async () => {
+  it.each(["dismissal", "owner abort"])("cancels and removes the dialog on %s", async (reason) => {
     const controller = new AbortController();
-    const { closed } = await open({ title: "Rename session", signal: controller.signal });
-
-    controller.abort();
-
+    const { closed, modal } = await open({ title: "Rename session", signal: controller.signal });
+    if (reason === "dismissal") {
+      modal.dispatchEvent(new CustomEvent("modal-cancel"));
+    } else {
+      controller.abort();
+    }
     await expect(closed).resolves.toBeNull();
     expect(dialog()).toBeNull();
   });
@@ -148,12 +136,8 @@ describe("showInputDialog", () => {
   });
 
   it("submits once while an attempt is in flight and blocks dismissal until it settles", async () => {
-    let settle!: (message: string | null) => void;
-    const submit = vi.fn().mockReturnValue(
-      new Promise<string | null>((resolve) => {
-        settle = resolve;
-      }),
-    );
+    const pending = Promise.withResolvers<string | null>();
+    const submit = vi.fn().mockReturnValue(pending.promise);
     const { closed, modal } = await open({ ...REQUIRED, submit });
 
     await type("Client work");
@@ -168,7 +152,7 @@ describe("showInputDialog", () => {
     expect(cancelEvent.defaultPrevented).toBe(true);
     expect(dialog()).not.toBeNull();
 
-    settle(null);
+    pending.resolve(null);
     await closed;
     expect(dialog()).toBeNull();
   });
@@ -223,8 +207,7 @@ describe("showInputDialog", () => {
       await waitForSolid(() => expect(document.body.textContent).toContain("gateway exploded"));
 
       expect(submit).toHaveBeenCalledOnce();
-      expect(dialogInput().disabled).toBe(false);
-      expect(dialogInput().value).toBe("Client work");
+      expect(dialogInput()).toMatchObject({ disabled: false, value: "Client work" });
       expect(findButton("Create group").disabled).toBe(false);
       expect(document.activeElement).toBe(dialogInput());
 

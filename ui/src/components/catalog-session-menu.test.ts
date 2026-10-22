@@ -4,6 +4,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import "./catalog-session-menu-solid.tsx";
 
+const item = (menu: Element, action: string) =>
+  menu.querySelector<HTMLButtonElement>(`[data-value="${action}"]`)!;
+const panel = (menu: Element) => menu.querySelector<HTMLElement>('[role="menu"]')!;
+
 async function mountMenu(
   props: Partial<HTMLElementTagNameMap["openclaw-catalog-session-menu"]> = {},
 ) {
@@ -14,26 +18,9 @@ async function mountMenu(
   return menu;
 }
 
-function escapeMenu(target = document.activeElement) {
-  target?.dispatchEvent(
-    new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
-  );
-}
-
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
-});
-
-it("renders an anchored native menu and focuses the first item", async () => {
-  const menu = await mountMenu({ lastActive: "57d" });
-  const panel = menu.querySelector<HTMLElement>('[role="menu"]');
-  const items = [...menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
-
-  await waitForSolid(() => expect(document.activeElement).toBe(items[0]));
-  expect(panel?.matches(":popover-open")).toBe(true);
-  expect(items.map((item) => item.dataset.value)).toEqual(["viewer", "terminal"]);
-  expect(menu.querySelector(".session-menu__info")?.textContent?.trim()).toBe("Last active 57d");
 });
 
 it.each(["terminal", "viewer"] as const)(
@@ -55,7 +42,7 @@ it.each(["terminal", "viewer"] as const)(
       },
       onClose,
     });
-    menu.querySelector<HTMLButtonElement>(`[data-value="${action}"]`)!.click();
+    item(menu, action).click();
 
     await waitForSolid(() => expect(order).toEqual([action, "close"]));
     expect(onClose).toHaveBeenCalledOnce();
@@ -68,16 +55,23 @@ it.each(["terminal", "viewer"] as const)(
   },
 );
 
-it("disables terminal selection with the unavailable reason", async () => {
+it("opens and focuses the native menu while keeping unavailable terminal selection disabled", async () => {
   const onAction = vi.fn();
-  const menu = await mountMenu({ terminalDisabled: true, onAction });
-  const terminal = menu.querySelector<HTMLButtonElement>('[data-value="terminal"]');
-
+  const menu = await mountMenu({ lastActive: "57d", terminalDisabled: true, onAction });
+  const terminal = item(menu, "terminal");
+  await waitForSolid(() => expect(document.activeElement).toBe(item(menu, "viewer")));
+  expect(panel(menu).matches(":popover-open")).toBe(true);
+  expect(
+    [...menu.querySelectorAll<HTMLElement>('[role="menuitem"]')].map(
+      (entry) => entry.dataset.value,
+    ),
+  ).toEqual(["viewer", "terminal"]);
+  expect(menu.querySelector(".session-menu__info")?.textContent?.trim()).toBe("Last active 57d");
   expect(terminal).toMatchObject({
     disabled: true,
     title: "Terminal opening is unavailable for this session.",
   });
-  terminal?.click();
+  terminal.click();
   expect(onAction).not.toHaveBeenCalled();
 });
 
@@ -87,11 +81,9 @@ it.each([false, true])("returns focus on Escape (replacement trigger: %s)", asyn
   document.body.append(trigger);
   trigger.focus();
   const menu = await mountMenu({ trigger, onClose });
-  await waitForSolid(() =>
-    expect(document.activeElement).toBe(menu.querySelector('[data-value="viewer"]')),
-  );
+  const viewer = item(menu, "viewer");
+  await waitForSolid(() => expect(document.activeElement).toBe(viewer));
 
-  const item = document.activeElement;
   let returnTarget = trigger;
   if (replace) {
     returnTarget = document.createElement("button");
@@ -100,9 +92,11 @@ it.each([false, true])("returns focus on Escape (replacement trigger: %s)", asyn
     menu.trigger = returnTarget;
     await waitForSolid(() => expect(menu.trigger).toBe(returnTarget));
   }
-  escapeMenu(item);
+  viewer.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+  );
   expect(onClose).toHaveBeenCalledOnce();
   expect(document.activeElement).toBe(returnTarget);
-  expect(menu.querySelector('[data-value="viewer"]')).toBe(item);
-  expect(menu.querySelector('[role="menu"]')?.matches(":popover-open")).toBe(false);
+  expect(item(menu, "viewer")).toBe(viewer);
+  expect(panel(menu).matches(":popover-open")).toBe(false);
 });

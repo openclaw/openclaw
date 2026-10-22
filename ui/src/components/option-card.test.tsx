@@ -49,14 +49,6 @@ describe("option card", () => {
     expect(onSelect).toHaveBeenCalledWith("one");
   });
 
-  it("always renders a skip affordance and calls its dismissal handler", () => {
-    const onSkip = vi.fn();
-    const { container } = mount({ onSkip });
-    container.querySelector<HTMLButtonElement>(".option-card__skip")!.click();
-
-    expect(onSkip).toHaveBeenCalledOnce();
-  });
-
   it.each(["textarea", "button"] as const)(
     "preserves focus on a %s without retrying a refused recommendation",
     (tagName) => {

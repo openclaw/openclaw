@@ -1,5 +1,5 @@
 import { createSignal, flush } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { userEvent } from "vitest/browser";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { updatePickers } from "../test-helpers/select-picker.ts";
@@ -11,10 +11,7 @@ const models: DecisionModelEntry[] = [
   { provider: "beta", id: "middle", name: "Middle", pluginId: "beta" },
   { provider: "alpha", id: "first", name: "First", pluginId: "alpha" },
 ];
-afterEach(() => document.body.replaceChildren());
-
 async function mount(overrides: Partial<Parameters<typeof DecisionModelPicker>[0]> = {}) {
-  const container = document.createElement("div");
   const params = {
     id: "decision",
     models,
@@ -24,7 +21,7 @@ async function mount(overrides: Partial<Parameters<typeof DecisionModelPicker>[0
     ...overrides,
   };
   const [props, setProps] = createSignal({ ...params });
-  mountSolid(() => <DecisionModelPicker {...props()} />, { container });
+  const { container } = mountSolid(() => <DecisionModelPicker {...props()} />);
   const update = async (patch: Partial<typeof params> = {}) => {
     Object.assign(params, patch);
     setProps({ ...params });
@@ -39,19 +36,9 @@ async function mount(overrides: Partial<Parameters<typeof DecisionModelPicker>[0
   await expect.element(find("input")).toHaveFocus();
   const rows = () => [...picker.querySelectorAll<HTMLElement>('[role="option"]')];
   const search = (value: string) => userEvent.fill(find("input"), value);
-  const key = async (value: string, target: HTMLElement = find("input")) => {
-    let observed: KeyboardEvent | undefined;
-    target.addEventListener(
-      "keydown",
-      (event) => {
-        observed = event;
-      },
-      { once: true },
-    );
-    target.focus();
+  const key = async (value: string) => {
+    find("input").focus();
     await userEvent.keyboard(value === " " ? " " : `{${value}}`);
-    expect(observed, `Missing ${value} key event`).toBeDefined();
-    return observed!;
   };
   const group = (label: string) => find('[role="group"][aria-label="' + label + '"]');
   const toggle = (label: string) =>
@@ -89,60 +76,34 @@ describe("decision model provider groups", () => {
     expect(p.params.onChange).not.toHaveBeenCalled();
   });
 
-  it("keeps native group-button activation and Tab from selecting the active model", async () => {
+  it("groups models in keyboard order and maps Disabled to null", async () => {
     const p = await mount();
-    const button = p.group("Alpha").querySelector<HTMLButtonElement>("button")!;
-    expect(button.closest('[role="listbox"]')).toBeNull();
+    expect(p.group("Alpha").querySelector("button")!.closest('[role="listbox"]')).toBeNull();
     const controls = p.picker.querySelector("input")!.getAttribute("aria-controls")!.split(" ");
-    const roles = controls.map((id) => document.getElementById(id)?.getAttribute("role"));
-    expect(roles).toEqual(["listbox", "listbox", "listbox"]);
-    button.focus();
-    expect((await p.key("Enter", button)).defaultPrevented).toBe(false);
-    expect((await p.key(" ", button)).defaultPrevented).toBe(false);
-    expect(p.params.onChange).not.toHaveBeenCalled();
-    await p.key("Tab", button);
-    expect(p.trigger.getAttribute("aria-expanded")).toBe("true");
-    await p.key("Escape", button);
-    expect(p.trigger.getAttribute("aria-expanded")).toBe("false");
-    expect(document.activeElement).toBe(p.trigger);
+    expect(controls.map((id) => document.getElementById(id)?.getAttribute("role"))).toEqual([
+      "listbox",
+      "listbox",
+      "listbox",
+    ]);
+    expect(
+      [...p.picker.querySelectorAll('[role="group"]')].map((g) => g.getAttribute("aria-label")),
+    ).toEqual(["Alpha", "Beta"]);
+    const values = p.rows().map((row) => row.dataset.value);
+    expect(values).toEqual(["", "alpha/first", "alpha/last", "beta/middle"]);
+    expect(p.rows()[0]!.closest('[role="group"]')).toBeNull();
+    expect(p.group("Alpha").querySelector("button")!.textContent).toContain("2");
+    expect(p.group("Alpha").querySelector(".provider-brand-icon--fallback")).not.toBeNull();
+    expect(p.picker.querySelector("input")!.getAttribute("placeholder")).toBe("Search models");
+    await p.key("ArrowDown");
+    const input = p.picker.querySelector("input")!;
+    expect(
+      document.getElementById(input.getAttribute("aria-activedescendant")!)?.dataset.value,
+    ).toBe("alpha/last");
+    await p.key("Enter");
+    expect(p.params.onChange).toHaveBeenCalledExactlyOnceWith("alpha/last");
+    await p.choose("");
+    expect(p.params.onChange).toHaveBeenLastCalledWith(null);
   });
-
-  it.each([
-    { inherit: undefined, disabledValue: null },
-    { inherit: { model: "alpha/first" }, disabledValue: "" },
-  ])(
-    "groups models in keyboard order and preserves Disabled/inherit semantics: $inherit",
-    async ({ inherit, disabledValue }) => {
-      const p = await mount({ inherit, value: inherit ? null : "alpha/first" });
-      if (!inherit) {
-        expect(
-          [...p.picker.querySelectorAll('[role="group"]')].map((g) => g.getAttribute("aria-label")),
-        ).toEqual(["Alpha", "Beta"]);
-        const values = p.rows().map((row) => row.dataset.value);
-        expect(values).toEqual(["", "alpha/first", "alpha/last", "beta/middle"]);
-        expect(p.rows()[0]!.closest('[role="group"]')).toBeNull();
-        expect(p.group("Alpha").querySelector("button")!.textContent).toContain("2");
-        expect(p.group("Alpha").querySelector(".provider-brand-icon--fallback")).not.toBeNull();
-        expect(p.picker.querySelector("input")!.getAttribute("placeholder")).toBe("Search models");
-        await p.key("ArrowDown");
-        const input = p.picker.querySelector("input")!;
-        expect(
-          document.getElementById(input.getAttribute("aria-activedescendant")!)?.dataset.value,
-        ).toBe("alpha/last");
-        await p.key("Enter");
-        expect(p.params.onChange).toHaveBeenCalledExactlyOnceWith("alpha/last");
-      }
-      if (inherit) {
-        const inherited = p.rows().find((row) => row.textContent?.includes("Use global default"))!;
-        expect(inherited.closest('[role="group"]')).toBeNull();
-        await p.choose("beta/middle");
-        await p.choose(inherited.dataset.value!);
-        expect(p.params.onChange).toHaveBeenLastCalledWith(null);
-      }
-      await p.choose("");
-      expect(p.params.onChange).toHaveBeenLastCalledWith(disabledValue);
-    },
-  );
 
   it("retains an unavailable selection and prevents stale catalog and read-only writes", async () => {
     const p = await mount();

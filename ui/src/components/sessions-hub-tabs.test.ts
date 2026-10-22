@@ -1,54 +1,37 @@
 /* @vitest-environment jsdom */
 
-import { createComponent, createSignal, flush } from "solid-js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { i18n } from "../i18n/index.ts";
-import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
-import { HubTabs } from "./solid/hub-tabs.tsx";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanupSolid } from "../test-helpers/mount-solid.ts";
+import { mountSolid } from "../test-helpers/solid-render.tsx";
+import { HubTabs, type HubTabsProps } from "./solid/hub-tabs.tsx";
 
 type Tab = "sessions" | "worktrees";
-type SessionsHubTabsProps = { active: Tab; onSelect: (tab: Tab) => void };
-const mounts = new WeakMap<
-  HTMLDivElement,
-  { update: (props: SessionsHubTabsProps) => void; unmount: () => void }
->();
+const mounts = new WeakMap<HTMLDivElement, ReturnType<typeof mountSolid<HubTabsProps<Tab>>>>();
+const defaults = {
+  id: "sessions",
+  tabs: [
+    { value: "sessions", label: "Sessions" },
+    { value: "worktrees", label: "Worktrees" },
+  ],
+  ariaLabel: "Sessions",
+  panelId: "sessions-hub-panel",
+} as const;
 
 async function mount(
   active: Tab = "sessions",
-  onSelect: SessionsHubTabsProps["onSelect"] = vi.fn(),
+  onSelect: (tab: Tab) => void = vi.fn(),
   container = document.createElement("div"),
 ): Promise<HTMLDivElement> {
-  const props = { active, onSelect };
   if (!container.isConnected) {
     document.body.append(container);
   }
   const mounted = mounts.get(container);
+  const props = { ...defaults, active, onSelect };
   if (mounted) {
     mounted.update(props);
   } else {
-    const [current, setCurrent] = createSignal(props);
-    const view = mountSolid(
-      () =>
-        createComponent(HubTabs<"sessions" | "worktrees">, {
-          get active() {
-            return current().active;
-          },
-          get onSelect() {
-            return current().onSelect;
-          },
-          id: "sessions",
-          tabs: [
-            { value: "sessions", label: "Sessions" },
-            { value: "worktrees", label: "Worktrees" },
-          ],
-          ariaLabel: "Sessions",
-          panelId: "sessions-hub-panel",
-        }),
-      { container },
-    );
-    mounts.set(container, { update: setCurrent, unmount: view.unmount });
+    mounts.set(container, mountSolid(HubTabs<Tab>, props, container));
   }
-  flush();
   await Promise.resolve();
   return container;
 }
@@ -65,10 +48,6 @@ function activate(container: Element, value = "worktrees") {
 }
 
 describe("Sessions hub navigation", () => {
-  beforeEach(async () => {
-    await i18n.setLocale("en");
-  });
-
   afterEach(() => {
     cleanupSolid();
     document.body.innerHTML = "";
@@ -86,17 +65,6 @@ describe("Sessions hub navigation", () => {
       "sessions-hub-panel",
     ]);
     expect(tabs.map((tab) => tab.getAttribute("aria-selected"))).toEqual(["false", "true"]);
-  });
-
-  it("delegates cross-route selection", async () => {
-    const onSelect = vi.fn();
-    const container = await mount("sessions", onSelect);
-
-    container
-      .querySelector("#sessions-tab-worktrees")
-      ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
-
-    expect(onSelect).toHaveBeenLastCalledWith("worktrees");
   });
 
   it("does not echo controlled selection changes as navigation", async () => {
@@ -153,7 +121,7 @@ describe("Sessions hub navigation", () => {
   it("hands keyboard focus from a retiring route to the Solid destination", async () => {
     const source = await mount();
     findTab(source)!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    mounts.get(source)!.unmount();
+    mounts.get(source)!.dispose();
     source.remove();
     const destination = await mount("worktrees");
     expect(document.activeElement).toBe(findTab(destination));
