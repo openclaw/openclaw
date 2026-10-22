@@ -7,6 +7,7 @@ import { withEnv } from "./test-utils/env.js";
 import {
   VERSION,
   readBuildIdFromBuildInfoForModuleUrl,
+  readBuiltAtFromBuildInfoForModuleUrl,
   readVersionFromBuildInfoForModuleUrl,
   resolveCompatibilityHostVersion,
   readVersionFromPackageJsonForModuleUrl,
@@ -45,6 +46,19 @@ describe("version resolution", () => {
     const oversized = await versionFixture({ "build-info.json": { buildId: "x".repeat(97) } });
     expect(readBuildIdFromBuildInfoForModuleUrl(valid)).toBe("build-a");
     expect(readBuildIdFromBuildInfoForModuleUrl(oversized)).toBeNull();
+  });
+
+  it("reads build time from artifact metadata without inventing missing provenance", async () => {
+    const valid = await versionFixture({
+      "build-info.json": { builtAt: "2026-10-21T11:55:00Z" },
+    });
+    const invalid = await versionFixture({ "build-info.json": { builtAt: "not-a-date" } });
+    const missing = await versionFixture({
+      "package.json": { name: "openclaw", version: "1.0.0" },
+    });
+    expect(readBuiltAtFromBuildInfoForModuleUrl(valid)).toBe("2026-10-21T11:55:00.000Z");
+    expect(readBuiltAtFromBuildInfoForModuleUrl(invalid)).toBeNull();
+    expect(readBuiltAtFromBuildInfoForModuleUrl(missing)).toBeNull();
   });
 
   it("continues past an oversized build id to the next candidate", async () => {

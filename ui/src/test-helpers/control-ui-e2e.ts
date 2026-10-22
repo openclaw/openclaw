@@ -307,6 +307,8 @@ export type ControlUiMockGatewayScenario = {
   updateSchedule?: UpdateScheduleState | null;
   controlUiBuildSource?: "bundled" | "configured";
   serverVersion?: string;
+  serverCommit?: string;
+  serverBuiltAt?: string;
   deviceToken?: string;
   authMethod?: HelloOk["auth"]["method"];
   authMode?: HelloOk["snapshot"]["authMode"] | null;
@@ -817,6 +819,8 @@ function normalizeScenario(
     updateSchedule: scenario.updateSchedule ?? null,
     controlUiBuildSource: scenario.controlUiBuildSource ?? "bundled",
     serverVersion: scenario.serverVersion?.trim() || sharedBuildInfo?.version || "e2e",
+    serverCommit: scenario.serverCommit ?? "",
+    serverBuiltAt: scenario.serverBuiltAt ?? "",
     deviceToken: scenario.deviceToken?.trim() || "e2e-device-token",
     authMethod: scenario.authMethod ?? "token",
     authMode: scenario.authMode ?? null,
@@ -1702,6 +1706,8 @@ function installControlUiMockGateway(
             controlUiBuildSource: scenario.controlUiBuildSource,
             connId: "control-ui-e2e",
             version: scenario.serverVersion,
+            ...(scenario.serverCommit ? { commit: scenario.serverCommit } : {}),
+            ...(scenario.serverBuiltAt ? { builtAt: scenario.serverBuiltAt } : {}),
           },
           policy: {
             maxPayload: scenario.maxPayload,

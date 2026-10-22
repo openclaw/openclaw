@@ -74,6 +74,8 @@ export function AboutPage() {
         <AboutView
           buildInfo={CONTROL_UI_BUILD_INFO}
           gatewayVersion={gatewayVersion()}
+          gatewayCommit={gateway().read().snapshot.hello?.server?.commit ?? null}
+          gatewayBuiltAt={gateway().read().snapshot.hello?.server?.builtAt ?? null}
           copyState={copyState()}
           onCopyCommit={() => void copyCommit()}
           clawdWaving={clawdWaving()}

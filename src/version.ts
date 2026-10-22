@@ -20,7 +20,7 @@ const BUILD_INFO_CANDIDATES = [
 function readStringFromJsonCandidates(
   moduleUrl: string,
   candidates: readonly string[],
-  field: "version" | "buildId",
+  field: "version" | "buildId" | "builtAt",
   requirePackageName = false,
 ): string | null {
   try {
@@ -31,9 +31,13 @@ function readStringFromJsonCandidates(
           name?: unknown;
           version?: unknown;
           buildId?: unknown;
+          builtAt?: unknown;
         };
         const value = normalizeOptionalString(parsed[field]);
         if (!value || (field === "buildId" && value.length > 96)) {
+          continue;
+        }
+        if (field === "builtAt" && !Number.isFinite(Date.parse(value))) {
           continue;
         }
         if (requirePackageName && parsed.name !== CORE_PACKAGE_NAME) {
@@ -70,6 +74,11 @@ export function readVersionFromBuildInfoForModuleUrl(moduleUrl: string): string 
 
 export function readBuildIdFromBuildInfoForModuleUrl(moduleUrl: string): string | null {
   return readStringFromJsonCandidates(moduleUrl, BUILD_INFO_CANDIDATES, "buildId");
+}
+
+export function readBuiltAtFromBuildInfoForModuleUrl(moduleUrl: string): string | null {
+  const value = readStringFromJsonCandidates(moduleUrl, BUILD_INFO_CANDIDATES, "builtAt");
+  return value ? new Date(value).toISOString() : null;
 }
 
 export function resolveVersionFromModuleUrl(moduleUrl: string): string | null {
@@ -143,6 +152,7 @@ export function resolveRuntimeServiceVersion(
 // checkout update cannot change the identity reported by the running service.
 const RUNTIME_SERVICE_BUILD_ID = readBuildIdFromBuildInfoForModuleUrl(import.meta.url);
 const RUNTIME_SERVICE_COMMIT = resolveLoadedCommitHash({ moduleUrl: import.meta.url });
+const RUNTIME_SERVICE_BUILT_AT = readBuiltAtFromBuildInfoForModuleUrl(import.meta.url);
 
 export function resolveRuntimeServiceBuildId(): string | null {
   return RUNTIME_SERVICE_BUILD_ID;
@@ -150,6 +160,10 @@ export function resolveRuntimeServiceBuildId(): string | null {
 
 export function resolveRuntimeServiceCommit(): string | null {
   return RUNTIME_SERVICE_COMMIT;
+}
+
+export function resolveRuntimeServiceBuiltAt(): string | null {
+  return RUNTIME_SERVICE_BUILT_AT;
 }
 
 export function resolveCompatibilityHostVersion(

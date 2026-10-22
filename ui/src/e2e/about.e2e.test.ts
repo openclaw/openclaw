@@ -1,6 +1,8 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import {
   expectAttribute,
@@ -188,10 +190,14 @@ suite.define(() => {
     },
   );
 
-  it("shows browser artifact identity separately from the Gateway version", async () => {
+  it("shows browser and Gateway build identity separately for a member", async () => {
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
-    await installMockGateway(page);
+    const gateway = await installMockGateway(page, {
+      operatorScopes: ["operator.sessions.read", "operator.sessions.write"],
+      serverCommit: "abcdef0",
+      serverBuiltAt: "2026-10-21T11:55:00.000Z",
+    });
 
     try {
       const response = await page.goto(`${suite.server.baseUrl}settings/about`);
@@ -231,6 +237,23 @@ suite.define(() => {
       const gatewayRow = page.locator(".settings-row", { hasText: "Connected Gateway version" });
       await expectText(gatewayRow).toContain("e2e");
       await expectText(gatewayRow).toContain("separate from this Control UI build");
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        const surface = page.locator("openclaw-about-page");
+        const frame = await takeControlUiScreenshotFrame(page, surface, [strip, gatewayRow], {
+          animations: "disabled",
+          viewport: { width: 1280, height: 1100 },
+        });
+        await writeFile(path.join(suite.artifactDir, "about-gateway-build.png"), frame.png);
+        console.log(`About proof: ${suite.artifactDir}`);
+      }
+      const gatewayCommit = page.locator(".settings-row", { hasText: "Gateway commit" });
+      await expectText(gatewayCommit.locator("code")).toBe("abcdef0");
+      const gatewayBuilt = page.locator(".settings-row", { hasText: "Gateway built" });
+      await expectAttribute(gatewayBuilt.locator("time"), "datetime").toBe(
+        "2026-10-21T11:55:00.000Z",
+      );
+      expect(await gateway.getRequests("system.info")).toHaveLength(0);
+      expect(await gateway.getRequests("update.status")).toHaveLength(0);
 
       const clawd = page.getByRole("button", { name: "Wave hello to Clawd" });
       // CLAWD_WAVE_MS clears the class after 1400ms, so click and read it in one browser step.
