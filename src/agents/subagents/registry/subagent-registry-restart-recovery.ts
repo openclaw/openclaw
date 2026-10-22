@@ -470,6 +470,11 @@ export async function recoverInterruptedSubagentRow(
           maxMessages: 20,
           maxBytes: 256 * 1024,
         });
+        if (messages.length === 0) {
+          throw new Error(
+            "Child transcript is missing; restore it before resuming subagent recovery",
+          );
+        }
         const execPolicy = await resolveExecDefaultsAsync({ cfg, ...scope });
         const fullAccess =
           execPolicy.mode === "full" &&

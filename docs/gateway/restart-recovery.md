@@ -1284,6 +1284,8 @@ turn a child into a main-session replay candidate. The subagent registry owns
 continuation in the same child session, using fresh agent admission and the
 original operator's current permissions. Its final result follows the normal
 completion path even when the parent has already ended its own turn.
+If the retained child transcript is empty or missing, automatic recovery stays
+pending and logs a warning; restore that transcript before resuming recovery.
 Explicit Stop, cancellation, and replaced child sessions do not resume.
 Runs without verifiable session ownership or restorable operator authority settle
 through their normal interruption path for the parent to inspect.

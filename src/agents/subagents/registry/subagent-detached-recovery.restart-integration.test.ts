@@ -48,9 +48,13 @@ import {
 describe("detached subagent restart recovery", () => {
   const fixture = useSubagentRestartRecoveryFixture({ reuseDatabaseWorkers: true });
   const { dispatchAgent, gatewayRuntime } = fixture;
-  it.each([false, true])(
-    "restores detached child restart custody (verified child: %s)",
-    async (verified) => {
+  it.each([
+    { verified: false, transcript: true },
+    { verified: true, transcript: true },
+    { verified: true, transcript: false },
+  ])(
+    "restores detached child restart custody (verified: $verified, transcript: $transcript)",
+    async ({ verified, transcript }) => {
       await resetSubagentRegistryForTests({ persist: false });
       const events = await vi.importActual<typeof import("../../../infra/agent-events.js")>(
         "../../../infra/agent-events.js",
@@ -87,10 +91,15 @@ describe("detached subagent restart recovery", () => {
             : {}),
         },
       );
-      await appendTranscriptMessage(
-        { agentId: "main", sessionKey: childSessionKey, sessionId: "warm-restart-child-session" },
-        { cwd: fixture.stateDir, message: { role: "user", content: "Finish the detached task." } },
-      );
+      if (transcript) {
+        await appendTranscriptMessage(
+          { agentId: "main", sessionKey: childSessionKey, sessionId: "warm-restart-child-session" },
+          {
+            cwd: fixture.stateDir,
+            message: { role: "user", content: "Finish the detached task." },
+          },
+        );
+      }
       const predecessor = makeRunRecord({
         runId,
         childSessionKey,
@@ -223,6 +232,16 @@ describe("detached subagent restart recovery", () => {
       await testing.sweepOnceForTests();
 
       const successor = await getSubagentRunByChildSessionKey(childSessionKey);
+      if (!transcript) {
+        expect(dispatchAgent).not.toHaveBeenCalled();
+        expect(successor).toMatchObject({
+          runId,
+          execution: { status: "interrupted", interruptionReason: "gateway-restart" },
+        });
+        expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+        replacementOpen = false;
+        return;
+      }
       if (verified) {
         expect(dispatchAgent).toHaveBeenCalledOnce();
         expect(successor).toMatchObject({
