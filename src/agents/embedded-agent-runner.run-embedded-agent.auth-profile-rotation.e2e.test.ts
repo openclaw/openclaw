@@ -528,7 +528,7 @@ describe("runEmbeddedAgent auth profile rotation", () => {
 
     expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
     const usageStats = await readUsageStats(agentDir);
-    expect(typeof usageStats["openai:p1"]?.cooldownUntil).toBe("number");
+    expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
     expect(usageStats["openai:p2"]?.lastUsed).not.toBe(2);
   });
 
@@ -629,7 +629,7 @@ describe("runEmbeddedAgent auth profile rotation", () => {
         "openai:p1": {
           lastUsed: 1,
           ...unavailable,
-          ...(billing && !probe ? { failureCounts: { rate_limit: 4 } } : {}),
+          ...(billing && !probe ? { failureCounts: { billing: 4 } } : {}),
         },
         "openai:p2": { lastUsed: 2, ...unavailable },
       },

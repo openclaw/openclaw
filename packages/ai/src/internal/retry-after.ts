@@ -36,6 +36,25 @@ function ownDataValue(value: unknown, key: string): unknown {
     : undefined;
 }
 
+// OpenAI and Anthropic publish each bucket's remaining capacity and full-refill time.
+const QUOTA_RESET_HEADERS = [
+  ...["tokens", "requests", "project-tokens"].map((dimension) => ({
+    remaining: `x-ratelimit-remaining-${dimension}`,
+    reset: `x-ratelimit-reset-${dimension}`,
+    parseResetSeconds: parseQuotaResetSeconds,
+  })),
+  ...["requests", "tokens", "input-tokens", "output-tokens"].map((dimension) => ({
+    remaining: `anthropic-ratelimit-${dimension}-remaining`,
+    reset: `anthropic-ratelimit-${dimension}-reset`,
+    parseResetSeconds: parseRfc3339ResetSeconds,
+  })),
+];
+const TIMING_HEADER_NAMES = new Set([
+  "retry-after",
+  "retry-after-ms",
+  ...QUOTA_RESET_HEADERS.flatMap(({ remaining, reset }) => [remaining, reset]),
+]);
+
 /** Reads only retry timing metadata, without invoking provider getters or serialization hooks. */
 export function parseRetryAfterHeadersSeconds(
   headers: unknown,
@@ -48,29 +67,19 @@ export function parseRetryAfterHeadersSeconds(
   try {
     let entries: Array<[string, unknown]>;
     try {
-      entries = [
-        "retry-after",
-        "retry-after-ms",
-        "x-ratelimit-remaining-tokens",
-        "x-ratelimit-reset-tokens",
-        "x-ratelimit-remaining-requests",
-        "x-ratelimit-reset-requests",
-        "x-ratelimit-remaining-project-tokens",
-        "x-ratelimit-reset-project-tokens",
-      ].map<[string, unknown]>((key) => [key, Headers.prototype.get.call(headers, key)]);
+      entries = [...TIMING_HEADER_NAMES].map<[string, unknown]>((key) => [
+        key,
+        Headers.prototype.get.call(headers, key),
+      ]);
     } catch {
       entries = Object.getOwnPropertyNames(headers).flatMap<[string, unknown]>((key) => {
         const name = key.toLowerCase();
-        return name === "retry-after" ||
-          name === "retry-after-ms" ||
-          /^x-ratelimit-(?:remaining|reset)-(?:tokens|requests|project-tokens)$/.test(name)
-          ? [[name, ownDataValue(headers, key)]]
-          : [];
+        return TIMING_HEADER_NAMES.has(name) ? [[name, ownDataValue(headers, key)]] : [];
       });
     }
     let floor: number | undefined;
     for (const [key, value] of entries) {
-      if (key.startsWith("x-ratelimit-")) {
+      if (key !== "retry-after" && key !== "retry-after-ms") {
         continue;
       }
       const text =
@@ -94,12 +103,17 @@ export function parseRetryAfterHeadersSeconds(
         floor = Math.max(floor ?? 0, seconds);
       }
     }
-    // Reset headers describe a full quota refill, not a wait for every request.
-    // Only a rejected request with an exhausted matching bucket establishes a floor.
-    if (status === 429) {
+    // An explicit retry instruction is the provider's answer for this request.
+    // Reset headers describe a full quota refill, so they apply only without one,
+    // and only for a rejected request whose matching bucket is exhausted.
+    if (floor === undefined && status === 429) {
       const values = new Map(entries);
-      for (const dimension of ["tokens", "requests", "project-tokens"]) {
-        const remaining = values.get(`x-ratelimit-remaining-${dimension}`);
+      for (const {
+        remaining: remainingKey,
+        reset: resetKey,
+        parseResetSeconds,
+      } of QUOTA_RESET_HEADERS) {
+        const remaining = values.get(remainingKey);
         const numericRemaining =
           typeof remaining === "number"
             ? remaining
@@ -109,8 +123,8 @@ export function parseRetryAfterHeadersSeconds(
         if (!Number.isFinite(numericRemaining) || numericRemaining > 0) {
           continue;
         }
-        const reset = values.get(`x-ratelimit-reset-${dimension}`);
-        const seconds = typeof reset === "string" ? parseQuotaResetSeconds(reset) : undefined;
+        const reset = values.get(resetKey);
+        const seconds = typeof reset === "string" ? parseResetSeconds(reset, nowMs) : undefined;
         if (seconds !== undefined) {
           floor = Math.max(floor ?? 0, seconds);
         }
@@ -120,6 +134,15 @@ export function parseRetryAfterHeadersSeconds(
   } catch {
     return undefined;
   }
+}
+
+/** Anthropic reports bucket resets as RFC 3339 instants. */
+function parseRfc3339ResetSeconds(value: string, nowMs: number): number | undefined {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value)) {
+    return undefined;
+  }
+  const resetAtMs = Date.parse(value);
+  return Number.isFinite(resetAtMs) ? Math.max(0, (resetAtMs - nowMs) / 1000) : undefined;
 }
 
 function parseQuotaResetSeconds(value: string): number | undefined {

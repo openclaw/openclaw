@@ -33,6 +33,8 @@ type ProviderFault =
   | { status: 429; window: "short" | "long" }
   // Anthropic's header-only session-window shape (#148558/#143274).
   | { status: 429; window: "header-floor"; retryAfterSeconds: number; maxRetryDelayMs: number }
+  // A rate limit that rotates at once, so only the prompt or assistant failure writer records it.
+  | { status: 429; window: "rotate"; stage: "prompt" | "assistant"; message: string }
   | { status: 500 }
   | { status: "context_overflow" };
 
@@ -185,6 +187,14 @@ function makeAttemptForFault(
         errorType: "rate_limit_error",
         errorBody: JSON.stringify({ headers: { "retry-after": String(fault.retryAfterSeconds) } }),
       }),
+    });
+  }
+  if (fault.status === 429 && fault.window === "rotate") {
+    return makeEmbeddedRunnerAttempt({
+      providerRetryMaxRetries: 0,
+      ...(fault.stage === "prompt"
+        ? { terminal: { kind: "failed", source: "prompt", error: new Error(fault.message) } }
+        : { lastAssistant: assistant({ stopReason: "error", errorMessage: fault.message }) }),
     });
   }
   if (fault.status === 500) {
@@ -487,7 +497,9 @@ it.each([false, true])("walks the mixed fault chain (exhausted=%s)", async (exha
         ["groq", "mock-3", "groq:p1"],
       ]);
       expect(retryDelays()).toEqual([1_000, 2_000, 4_000]);
-      expect(usageStats["openai:p1"]?.cooldownReason).toBe("rate_limit");
+      // The usage-limit 429 carried no provider timing: rotate now, without a cooldown.
+      expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
+      expect(usageStats["openai:p1"]?.lastRateLimitAt).toEqual(expect.any(Number));
       expect(usageStats["openai:p2"]?.cooldownReason).toMatch(/^auth/);
       if (exhausted) {
         const error = expectError(raw);
@@ -521,7 +533,7 @@ it.each([false, true])("walks the mixed fault chain (exhausted=%s)", async (exha
           ],
         });
         expect(outcome.result.payloads?.[0]?.text).toContain("fallback chain ok");
-        expect(usageStats["openai:p1"]?.failureCounts?.rate_limit).toBe(1);
+        expect(usageStats["openai:p1"]?.failureCounts).toBeUndefined();
         expect(usageStats["openai:p2"]?.failureCounts?.auth).toBe(1);
         expect(usageStats["groq:p1"]?.cooldownUntil).toBeUndefined();
       }
@@ -562,6 +574,43 @@ it.each(["model fallback", "auth profile", "exhausted profiles"] as const)(
         if (exhausted) {
           expect(usageStats["openai:p2"]?.cooldownReason).toBe("rate_limit");
         }
+      },
+    );
+  },
+);
+
+it.each([
+  ["assistant", "429 Too Many Requests: rate limit reached; Retry-After: 90 seconds", 90_000],
+  ["prompt", "429 Too Many Requests: rate limit reached, retry after 45s", 45_000],
+  ["assistant", "429 Too Many Requests: rate limit reached", undefined],
+  ["prompt", "429 Too Many Requests: rate limit reached", undefined],
+] as const)(
+  "rotates after a %s rate limit and cools down only for provider timing (%s)",
+  async (stage, message, retryAfterMs) => {
+    await withFaults(
+      `rotate-${stage}-${retryAfterMs ?? "untimed"}`,
+      [
+        { status: 429, window: "rotate", stage, message },
+        { status: 200, text: "backup ok" },
+      ],
+      { openai: 2 },
+      [],
+      ({ outcome, observations, usageStats, startedAt }) => {
+        expect(attemptRoutes(observations)).toEqual([
+          ["openai", "mock-1", "openai:p1"],
+          ["openai", "mock-1", "openai:p2"],
+        ]);
+        expect(expectResult(outcome).result.payloads?.[0]?.text).toBe("backup ok");
+        const failed = usageStats["openai:p1"];
+        expect(failed?.lastRateLimitAt).toEqual(expect.any(Number));
+        expect(failed?.failureCounts).toBeUndefined();
+        if (retryAfterMs === undefined) {
+          expect(failed?.cooldownUntil).toBeUndefined();
+          return;
+        }
+        expect(failed).toMatchObject({ cooldownReason: "rate_limit", cooldownModel: "mock-1" });
+        expect(failed?.cooldownUntil).toBeGreaterThanOrEqual(startedAt + retryAfterMs);
+        expect(failed?.cooldownUntil).toBeLessThanOrEqual(Date.now() + retryAfterMs);
       },
     );
   },

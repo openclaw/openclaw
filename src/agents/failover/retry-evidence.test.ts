@@ -37,6 +37,25 @@ describe("resolveRetryAfterMs", () => {
       expect(classifyRateLimitWindow(message, NOW_MS)).toEqual({ kind: "long" });
     }
   });
+
+  it("reads Google RetryInfo delays from projected Gemini errors", () => {
+    const body = (retryDelay: string) =>
+      `429: ${JSON.stringify({
+        error: {
+          code: 429,
+          message: "You exceeded your current quota. Please retry in 32.578767138s.",
+          status: "RESOURCE_EXHAUSTED",
+          details: [
+            { "@type": "type.googleapis.com/google.rpc.QuotaFailure", violations: [] },
+            { "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay },
+          ],
+        },
+      })}`;
+    expect(resolveRetryAfterMs(body("32s"), NOW_MS)).toBe(32_000);
+    expect(resolveRetryAfterMs(body("1.5s"), NOW_MS)).toBe(1_500);
+    expect(classifyRateLimitWindow(body("3600s"), NOW_MS)).toEqual({ kind: "long" });
+    expect(resolveRetryAfterMs(body("soon"), NOW_MS)).toBeUndefined();
+  });
 });
 
 describe("classifyRateLimitWindow", () => {

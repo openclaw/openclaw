@@ -38,6 +38,9 @@ const SHORT_WINDOW_RATE_LIMIT_RE =
 const RETRY_AFTER_VALUE_RE =
   /\b(?:retry[- ]after\b\s*:?\s*(?:in\b\s*)?|(?:please\s+)?try again in\s+)([^\r\n;]+)/i;
 const RETRY_AFTER_NUMBER_RE = /^(\d+(?:\.\d+)?|Infinity)\s*([a-z]+)?\b/i;
+// google.rpc.RetryInfo serializes its protobuf Duration as decimal seconds.
+const GOOGLE_RETRY_INFO_DELAY_RE =
+  /"@type"\s*:\s*"type\.googleapis\.com\/google\.rpc\.RetryInfo"\s*,\s*"retryDelay"\s*:\s*"(\d+(?:\.\d{1,9})?)s"/g;
 const RETRY_AFTER_UNIT_MS = new Map<string, number>(
   (
     [
@@ -125,6 +128,9 @@ function retryTextSeconds(message: string | undefined, nowMs: number): number | 
     if (seconds !== undefined) {
       floor = Math.max(floor ?? 0, seconds);
     }
+  }
+  for (const match of message?.matchAll(GOOGLE_RETRY_INFO_DELAY_RE) ?? []) {
+    floor = Math.max(floor ?? 0, Number(match[1]));
   }
   return floor;
 }

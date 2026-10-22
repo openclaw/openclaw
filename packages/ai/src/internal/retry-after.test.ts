@@ -10,6 +10,10 @@ const quotaHeaders = (dimension: string, remaining: string, reset: string) => ({
   [`x-ratelimit-remaining-${dimension}`]: remaining,
   [`x-ratelimit-reset-${dimension}`]: reset,
 });
+const anthropicQuotaHeaders = (dimension: string, remaining: string, reset: string) => ({
+  [`anthropic-ratelimit-${dimension}-remaining`]: remaining,
+  [`anthropic-ratelimit-${dimension}-reset`]: reset,
+});
 
 describe("retry header floors", () => {
   it.each<[Record<string, string | number>, number | undefined]>([
@@ -27,7 +31,13 @@ describe("retry header floors", () => {
     [quotaHeaders("tokens", "1", "1m"), undefined],
     [{ "x-ratelimit-reset-tokens": "1m" }, undefined],
     [quotaHeaders("tokens", "0", "tomorrow"), undefined],
-    [{ "retry-after": "7", ...quotaHeaders("tokens", "0", "9s") }, 9],
+    // An explicit retry instruction outranks a bucket's full-refill time.
+    [{ "retry-after": "7", ...quotaHeaders("tokens", "0", "9s") }, 7],
+    [anthropicQuotaHeaders("output-tokens", "0", "1994-11-06T08:49:42Z"), 12],
+    [anthropicQuotaHeaders("requests", "0", "1994-11-06T08:49:31.5Z"), 1.5],
+    [anthropicQuotaHeaders("tokens", "12", "1994-11-06T08:49:42Z"), undefined],
+    [anthropicQuotaHeaders("input-tokens", "0", "later"), undefined],
+    [{ "retry-after": "3", ...anthropicQuotaHeaders("tokens", "0", "1994-11-06T08:50:30Z") }, 3],
   ])("keeps the greatest valid native and record floor: %j", (headers, expected) => {
     const native = new Headers(Object.entries(headers).map(([key, value]) => [key, String(value)]));
     for (const source of [headers, native]) {

@@ -68,19 +68,21 @@ describe("projectProviderError", () => {
   );
 
   it.each([
-    { status: 429, remaining: "0", retryAfterMs: 62_500 },
-    { status: 429, remaining: "1", retryAfterMs: 7_000 },
-    { status: 503, remaining: "0", retryAfterMs: 7_000 },
+    // An explicit retry instruction outranks the bucket's full-refill time.
+    { status: 429, remaining: "0", retryAfter: "7", retryAfterMs: 7_000 },
+    { status: 429, remaining: "0", retryAfter: undefined, retryAfterMs: 62_500 },
+    { status: 429, remaining: "1", retryAfter: "7", retryAfterMs: 7_000 },
+    { status: 503, remaining: "0", retryAfter: "7", retryAfterMs: 7_000 },
   ])(
-    "projects native quota headers before redaction: $status/$remaining",
-    ({ status, remaining, retryAfterMs }) => {
+    "projects native quota headers before redaction: $status/$remaining/$retryAfter",
+    ({ status, remaining, retryAfter, retryAfterMs }) => {
       const projection = projectProviderError(
         new APIError(
           status,
           { message: "rate limited" },
           undefined,
           new Headers({
-            "retry-after": "7",
+            ...(retryAfter ? { "retry-after": retryAfter } : {}),
             "x-ratelimit-remaining-tokens": remaining,
             "x-ratelimit-reset-tokens": "1m2.5s",
             authorization: "Bearer synthetic-credential",
