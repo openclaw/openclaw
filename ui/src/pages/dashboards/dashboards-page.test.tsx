@@ -137,7 +137,9 @@ describe("DashboardsPage", () => {
   it("keeps the gallery skeleton through a held first read and an error retry", async () => {
     let pending = Promise.withResolvers<SessionsListResult>();
     const client = createTestGatewayClient(async (method, params) => {
-      if (method === "sessions.subscribe") return { subscribed: true };
+      if (method === "sessions.subscribe") {
+        return { subscribed: true };
+      }
       if (method === "sessions.list") {
         return Reflect.get(params ?? {}, "hasBoard") ? pending.promise : sessionsResult([]);
       }

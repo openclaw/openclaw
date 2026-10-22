@@ -42,7 +42,7 @@ export function DashboardsPage(props: DashboardsPageProps) {
       // Wake unresolved reads from the owner's next publication, without another request.
       const previous = publication;
       publication = Promise.withResolvers<void>();
-      setNextPublication(publication.promise);
+      void setNextPublication(publication.promise);
       previous.resolve();
       const snapshot = context.sessions.listSnapshot(scope);
       if (snapshot.pagination?.hasMore && !snapshot.loading && !snapshot.error) {
