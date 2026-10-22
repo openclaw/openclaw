@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createMemoryCoreTestHarness } from "../test-helpers.js";
-import { mergeHybridResults } from "./hybrid.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -33,46 +32,26 @@ async function workspaceFiles(files: string[], ageDays: number) {
 }
 
 describe("temporal decay", () => {
-  it("uses indexed remote mtimes in hybrid ranking while retaining evergreen and dated paths", async () => {
-    const paths = ["imports/note.md", "MEMORY.md", "memory/2026-02-09.md"];
-    const results = await mergeHybridResults({
-      vector: paths.map((filePath) => ({
-        id: filePath,
-        path: filePath,
-        startLine: 1,
-        endLine: 1,
-        source: "memory",
-        vectorScore: 1,
-        snippet: "host content",
-      })),
-      keyword: [],
-      vectorWeight: 1,
-      textWeight: 0,
-      mmr: { enabled: false, lambda: 0.7 },
-      temporalDecay: { enabled: true, halfLifeDays: 30 },
-      nowMs: NOW_MS,
-      memorySourceMtimes: new Map(paths.map((filePath) => [filePath, NOW_MS - 30 * DAY_MS])),
-    });
-    expect(results.find((entry) => entry.path === "imports/note.md")?.score).toBeCloseTo(0.5);
-    expect(results.find((entry) => entry.path === "MEMORY.md")?.score).toBe(1);
-    expect(results.find((entry) => entry.path === "memory/2026-02-09.md")?.score).toBeGreaterThan(
-      0.9,
-    );
-  });
-
   it.each([
     ["notes/topic.md", 30, 1, undefined, false, 0.5],
     ["reference/topic.md", 300, 0.8, "reference", false, 0.8],
     ["memory/2026-01-11.md", 0, 1, "memory", false, 0.5],
     ["memory/2026-01-11.md", 0, 1, "memory", true, 0.5],
+    ["MEMORY.md", 90, 1, undefined, false, 1],
   ] as const)(
     "ranks %s with mtime age %s and score %s under %s policy (absolute=%s)",
     async (file, age, score, extra, absolute, expected) => {
       const dir = await workspaceFiles([file], age);
+      const filePath = absolute ? path.join(dir, file) : file;
       const decayed = await decay({
-        results: [memoryEntry(absolute ? path.join(dir, file) : file, score)],
+        results: [memoryEntry(filePath, score)],
         workspaceDir: dir,
         extraPaths: extra ? [{ path: extra, evergreen: true }] : undefined,
+        // Canonical dates and evergreen roots must win over conflicting indexed mtimes.
+        memorySourceMtimes:
+          file.startsWith("memory/") || file === "MEMORY.md"
+            ? new Map([[filePath, NOW_MS - 90 * DAY_MS]])
+            : undefined,
       });
       expect(decayed[0]?.score).toBeCloseTo(expected, 2);
     },
