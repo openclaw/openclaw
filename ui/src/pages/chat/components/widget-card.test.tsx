@@ -21,6 +21,7 @@ import { createSolidApplicationContextProvider } from "../../../test-helpers/sol
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { SidebarPanel } from "./chat-sidebar-content.tsx";
 import { ToolPreview } from "./widget-card-view.tsx";
+import { ToolPreview as DeferredToolPreview } from "./widget-card.ts";
 import * as widgetExport from "./widget-export.ts";
 
 const canvasPreview = {
@@ -185,7 +186,7 @@ describe("widget-card", () => {
         () => {
           const gateway = projectGateway(fixture.gateway);
           return surface !== "sidebar" ? (
-            <ToolPreview
+            <DeferredToolPreview
               preview={documentPreview("cv_retained", {
                 sandbox: surface === "strict transcript" ? "strict" : "scripts",
               })}
