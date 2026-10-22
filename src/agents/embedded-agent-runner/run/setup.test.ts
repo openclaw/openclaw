@@ -54,7 +54,7 @@ function modelConfig(
 function expectBudget(
   result: ReturnType<typeof resolveEmbeddedRuntimeModelPolicy>,
   tokens: number,
-  source: "resolved-v1" | undefined = undefined,
+  source?: "resolved-v1",
 ) {
   expect(result).toMatchObject({
     contextTokenBudget: tokens,

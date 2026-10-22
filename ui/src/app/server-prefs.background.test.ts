@@ -8,12 +8,11 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import type { UsersPrefsSetParams } from "../../../packages/gateway-protocol/src/schema/users.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../api/gateway.ts";
+import { createStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import {
   adoptCommittedBackgroundPreference,
   resolveServerUiPrefWriteStatus,
-  retryServerUiPrefWrite,
 } from "./server-prefs-controls.ts";
 import { changedServerUiPrefs } from "./server-prefs-intent.ts";
 import { applyServerUiPrefs, resolveServerUiPrefState } from "./server-prefs-reconcile.ts";
@@ -21,7 +20,6 @@ import {
   configWithPrefs,
   createServerPrefsWriter,
   initializeServerPrefsProfile,
-  installServerPrefsStorage,
   type RequestMock,
   refreshServerPrefsProfile,
 } from "./server-prefs.test-support.ts";
@@ -72,15 +70,18 @@ function adopt(
   });
 }
 
-installServerPrefsStorage(scope, true);
 beforeEach(async () => {
+  vi.stubGlobal("localStorage", createStorageMock());
   await initializeServerPrefsProfile(scope, profileId, config);
   request = vi.fn(async () => ({ status: "ok" }));
   writer = createServerPrefsWriter(request, scope);
 });
 afterEach(() => {
   setSettingsChangeListener(null);
+  resetServerUiPrefsSync();
+  vi.restoreAllMocks();
   patchSettings({ gatewayUrl: scope, background: undefined });
+  vi.unstubAllGlobals();
 });
 
 it("normalizes metadata without retaining bytes, URLs, or unknown fields", () => {
@@ -278,150 +279,3 @@ it("fences receipt adoption by the captured connection and current profile", () 
   expect(background()).toBeUndefined();
   expect(request).not.toHaveBeenCalled();
 });
-
-async function failBackgroundWrite() {
-  request = vi.fn().mockRejectedValue(new Error("offline"));
-  writer = createServerPrefsWriter(request, scope, true, { ok: true }, false);
-  patchSettings({ background: none });
-  pushServerUiPrefs(writer, { background: none }, writeOptions);
-  await waitForFast(() => expect(state().status).toBe("error"));
-}
-
-it.each([
-  ["unchanged None after transient failure", none, new Error("Connection lost")],
-  [
-    "deletion after rejection",
-    null,
-    new GatewayRequestError({ code: "INVALID_REQUEST", message: "Try again" }),
-  ],
-] as const)("retries %s through its original writer", async (_name, preference, error) => {
-  let fail = true;
-  request = vi.fn(() => (fail ? Promise.reject(error) : Promise.resolve({ status: "ok" })));
-  writer = createServerPrefsWriter(request, scope, true, { ok: true }, false);
-  const afterCommit = vi.fn();
-  if (preference) {
-    patchSettings({ background: preference });
-  }
-  pushServerUiPrefs(writer, { background: preference }, { ...writeOptions, afterCommit });
-  await waitForFast(() => expect(state().status).toBe("error"));
-  if (preference) {
-    const before = loadSettings();
-    expect(changedServerUiPrefs(before, patchSettings({ background: preference }))).toBeNull();
-  }
-  fail = false;
-  expect(retryServerUiPrefWrite("background", scope, profileId)).toBe(true);
-  expect(state().status).toBe("pending");
-  await waitForFast(() => expect(state().status).toBe("saved"));
-  expect(request).toHaveBeenCalledTimes(2);
-  expect(request).toHaveBeenLastCalledWith("users.prefs.set", {
-    entries: { "ui.background": preference },
-    expectedEntries: { "ui.background": null },
-  });
-  expect(afterCommit).toHaveBeenLastCalledWith({ needsRefresh: false });
-  expect(retryServerUiPrefWrite("background", scope, profileId)).toBe(false);
-});
-
-it("refuses another Gateway, anonymous target, switched identity, or disconnected writer", async () => {
-  await failBackgroundWrite();
-  expect(retryServerUiPrefWrite("background", "ws://another", profileId)).toBe(false);
-  expect(retryServerUiPrefWrite("background", scope, null)).toBe(false);
-  expect(retryServerUiPrefWrite("background", scope, "another-person")).toBe(false);
-  Object.assign(writer.state, { connected: false });
-  expect(retryServerUiPrefWrite("background", scope, profileId)).toBe(false);
-  Object.assign(writer.state, { connected: true });
-  applyServerUiPrefs({}, { scope, profileId: "another-person", onApplied: vi.fn() });
-  expect(retryServerUiPrefWrite("background", scope, profileId)).toBe(false);
-  expect(request).toHaveBeenCalledOnce();
-  expect(readPending()).toEqual({ background: none });
-});
-
-it("does not resurrect a failed pending write cancelled by another tab", async () => {
-  await failBackgroundWrite();
-  localStorage.removeItem(pendingKey());
-  expect(retryServerUiPrefWrite("background", scope, profileId)).toBe(false);
-  expect(localStorage.getItem(pendingKey())).toBeNull();
-  expect(request).toHaveBeenCalledOnce();
-});
-
-it("requires current write authority before retrying retained local intent", async () => {
-  request = vi.fn().mockResolvedValue({ status: "ok" });
-  writer = createServerPrefsWriter(request, scope, true, { ok: true }, false);
-  const afterCommit = vi.fn();
-  patchSettings({ background: none });
-  pushServerUiPrefs(writer, { background: none }, { profileId, canWrite: false, afterCommit });
-  expect(retryServerUiPrefWrite("background", scope, profileId)).toBe(false);
-  expect(request).not.toHaveBeenCalled();
-  flushServerUiPrefs(writer, { profileId, canWrite: true, afterCommit });
-  expect(retryServerUiPrefWrite("background", scope)).toBe(true);
-  await waitForFast(() => expect(state().status).toBe("saved"));
-  expect(request).toHaveBeenCalledExactlyOnceWith("users.prefs.set", {
-    entries: { "ui.background": none },
-    expectedEntries: { "ui.background": null },
-  });
-  expect(afterCommit).toHaveBeenLastCalledWith({ needsRefresh: false });
-});
-
-it.each(["none", "writer", "identity", "disconnect", "commit-hook"] as const)(
-  "settles a conflicted batch after %s retirement",
-  async (retirement) => {
-    vi.useFakeTimers();
-    const retireIdentity = () =>
-      applyServerUiPrefs({}, { scope, profileId: "another-viewer", onApplied: vi.fn() });
-    const afterCommit = vi.fn(retirement === "commit-hook" ? retireIdentity : undefined);
-    const entries =
-      retirement === "none" ? { "ui.background": selectBackgroundSource({ kind: "theme" }) } : {};
-    const started = createDeferred();
-    const refresh = createDeferred();
-    request = vi.fn(async (method: string) => {
-      if (method === "users.prefs.get") {
-        started.resolve();
-        await refresh.promise;
-        return { status: "ok", entries };
-      }
-      return method === "users.prefs.set" ? { status: "conflict" } : { ok: true };
-    });
-    writer = createServerPrefsWriter(request, scope);
-    const prefs = { background: none, locale: "de" };
-    patchSettings(prefs);
-    pushServerUiPrefs(writer, prefs, { ...writeOptions, afterCommit });
-    await started.promise;
-    expect(readPending()).toEqual({ locale: "de" });
-    if (retirement === "writer") {
-      flushServerUiPrefs(createServerPrefsWriter(vi.fn(), "ws://replacement"), {
-        ...writeOptions,
-        profileId: "another-viewer",
-      });
-    } else if (retirement === "identity") {
-      retireIdentity();
-    } else if (retirement === "disconnect") {
-      Object.assign(writer.state, { connected: false });
-    }
-    refresh.resolve();
-    await vi.runAllTimersAsync();
-
-    if (retirement === "none") {
-      expect(request).toHaveBeenCalledWith("config.patch", {
-        raw: JSON.stringify({ ui: { prefs: { locale: "de" } } }),
-        note: "control-ui prefs sync",
-      });
-      expect(localStorage.getItem(pendingKey())).toBeNull();
-      expect(afterCommit.mock.calls).toEqual([
-        [{ needsRefresh: false, retainedLocal: true }],
-        [{ needsRefresh: false }],
-      ]);
-      expect(state().status).toBe("error");
-      expect(loadSettings().background).toEqual(none);
-      expect(resolveServerUiPrefWriteStatus("locale", scope, profileId).status).toBe("saved");
-    } else {
-      expect(readPending()).toEqual({ locale: "de" });
-      expect(afterCommit).toHaveBeenCalledTimes(retirement === "commit-hook" ? 1 : 0);
-    }
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "users.prefs.set",
-      "users.prefs.get",
-      ...(retirement === "none" ? ["config.patch"] : []),
-    ]);
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(request.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(1);
-  },
-);

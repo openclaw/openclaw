@@ -227,13 +227,20 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await resetCodeModeTestState()
-    .finally(() => disposeAllSessionMcpRuntimes())
-    .finally(() => state?.cleanup())
-    .finally(() => {
-      messageActionRunnerSpy?.mockRestore();
-      messageActionRunnerSpy = undefined;
-    });
+  try {
+    await resetCodeModeTestState();
+  } finally {
+    try {
+      await disposeAllSessionMcpRuntimes();
+    } finally {
+      try {
+        await state?.cleanup();
+      } finally {
+        messageActionRunnerSpy?.mockRestore();
+        messageActionRunnerSpy = undefined;
+      }
+    }
+  }
 });
 
 describe("ordinary source reply across deferred plugin refresh", () => {

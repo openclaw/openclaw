@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { markAuthProfileSuccess } from "../auth-profiles.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "../auth-profiles/path-resolve.native.js";
 import {
   clearAllRuntimeAuthMaterializations,
@@ -7,9 +8,30 @@ import {
 } from "../auth-profiles/runtime-materializations.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import { copyAttemptDeliveryState } from "./run/attempt-delivery-state.js";
-import { reportEmbeddedRunSuccessfulAuthBinding } from "./run/auth-profile-success.js";
+import {
+  markEmbeddedRunAuthProfileSuccess,
+  reportEmbeddedRunSuccessfulAuthBinding,
+} from "./run/auth-profile-success.js";
 
-vi.mock("../auth-profiles.js", () => ({ markAuthProfileSuccess: vi.fn() }));
+vi.mock("../auth-profiles.js", () => ({
+  markAuthProfileSuccess: vi.fn(),
+}));
+
+const mockedMarkAuthProfileSuccess = vi.mocked(markAuthProfileSuccess);
+
+it("does not wait for post-run success bookkeeping", () => {
+  mockedMarkAuthProfileSuccess.mockReset().mockReturnValueOnce(new Promise<void>(() => {}));
+  expect(
+    markEmbeddedRunAuthProfileSuccess({
+      profileId: "openai:test-profile",
+      profileStore: { version: 1, profiles: {} },
+      provider: "openai",
+      runId: "run-1",
+      sessionId: "session-1",
+    }),
+  ).toBeUndefined();
+  expect(mockedMarkAuthProfileSuccess).toHaveBeenCalledOnce();
+});
 
 describe("reportEmbeddedRunSuccessfulAuthBinding", () => {
   beforeEach(() => {
