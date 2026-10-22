@@ -305,3 +305,20 @@ it.each(["personal", "confirmation"] as const)(
     expect(nativeAction).toHaveBeenCalledOnce();
   },
 );
+
+it.each([false, true])("labels publication reads as Loading (recovery=%s)", (recovery) => {
+  const onPublish = vi.fn();
+  const draw = (activity: GitHubPublicationView["activity"]) =>
+    paintEnvironment({
+      pullRequests: [],
+      status: "ready",
+      onDismiss: () => {},
+      branch: sessionBranch(),
+      publication: publication({ activity, locked: recovery, onPublish }),
+    });
+  draw("read");
+  expect(publish()?.textContent?.trim()).toBe("Loading…");
+  draw("publish");
+  expect(publish()?.textContent?.trim()).toBe("Creating…");
+  expect(onPublish).not.toHaveBeenCalled();
+});

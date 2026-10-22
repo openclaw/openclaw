@@ -218,8 +218,9 @@ function PublicationButton(props: {
     const selection = publicationButtonSelection(publication);
     const busy = activity !== null;
     const pendingLabel =
-      props.pendingLabel ??
-      t(activity === "read" ? "common.loading" : "chat.pullRequests.publishing");
+      activity === "read"
+        ? t("common.loading")
+        : (props.pendingLabel ?? t("chat.pullRequests.publishing"));
     if (result?.status === "failed") {
       return {
         click: publication.onNewAction,

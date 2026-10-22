@@ -184,7 +184,11 @@ export function ChatBranchActions(props: {
                 <Icon name="alertTriangle" class="chat-pr__publication-warning" />
               </Show>
               {publication().activity !== null
-                ? t("chat.pullRequests.creating")
+                ? t(
+                    publication().activity === "read"
+                      ? "common.loading"
+                      : "chat.pullRequests.creating",
+                  )
                 : publication().locked || publication().result?.status === "failed"
                   ? t("common.retry")
                   : publication().result

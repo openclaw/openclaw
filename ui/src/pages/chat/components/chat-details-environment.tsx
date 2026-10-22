@@ -1,21 +1,24 @@
 import type { JSX } from "@solidjs/web";
 import { Show, onSettled, createMemo, createSignal, merge } from "solid-js";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
+import { SessionGitDiff } from "../../../components/session-git-diff.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createDocumentVisibility } from "../../../lib/reactive/platform.ts";
+import { ChatBranchActions } from "./chat-branch-actions.tsx";
 import { getContextNoticeViewModel } from "./chat-composer-context.tsx";
 import { ChatDetailsContextContent, ChatDetailsContextSummary } from "./chat-details-context.tsx";
 import {
   animateDetailsDesktopEntrance,
   ChatDetailsDesktopSection,
 } from "./chat-details-desktop-section.tsx";
-import "./chat-details-environment-desktop.css";
 import type { ChatDetailsEnvironmentDesktopProps, ChatDetailsProps } from "./chat-details-types.ts";
+import "./chat-details-environment-desktop.css";
 import { ChatPanePlacement, createChatMachinePresentation } from "./chat-pane-placement.tsx";
+import { retainedPublication, showWorkRow } from "./chat-pull-requests.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -44,8 +47,11 @@ export function EnvironmentAction(props: {
   );
 }
 
-export function EnvironmentChangeCounts(props: { result: SessionsDiffResult; mobile?: boolean }) {
-  const binaryFiles = createMemo(() => props.result.files.filter((file) => file.binary).length);
+export function hasEnvironmentTextChanges(result?: { additions?: number; deletions?: number }) {
+  return (result?.additions ?? 0) > 0 || (result?.deletions ?? 0) > 0;
+}
+
+export function EnvironmentChangeCounts(props: { result: SessionsDiffResult }) {
   return (
     <span class="chat-environment__counts">
       <Show when={props.result.additions > 0}>
@@ -53,22 +59,6 @@ export function EnvironmentChangeCounts(props: { result: SessionsDiffResult; mob
       </Show>
       <Show when={props.result.deletions > 0}>
         <span class="chat-environment__removed">−{props.result.deletions}</span>
-      </Show>
-      <Show when={binaryFiles() > 0}>
-        <span
-          title={props.mobile ? undefined : t("chat.sessionDiff.binaryFile")}
-          aria-label={t("chat.sessionDiff.binaryFile")}
-        >
-          {binaryFiles()} <Icon name="file" />
-        </span>
-      </Show>
-      <Show when={props.result.truncated}>
-        <span
-          title={props.mobile ? undefined : t("chat.sessionDiff.truncatedResult")}
-          aria-label={t("chat.sessionDiff.truncatedResult")}
-        >
-          …
-        </span>
       </Show>
     </span>
   );
@@ -112,10 +102,37 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
   }
   const changes = () => {
     const result = props.uncommitted;
-    return result && !result.unavailableReason && result.files.length > 0 ? result : undefined;
+    return result && !result.unavailableReason && hasEnvironmentTextChanges(result)
+      ? result
+      : undefined;
+  };
+  const published = () => props.work?.publication?.result?.status === "published";
+  const work = () => {
+    const candidate = props.work;
+    if (!candidate || published()) {
+      return undefined;
+    }
+    const publication = candidate.publication;
+    return showWorkRow(candidate) ||
+      (retainedPublication(publication) &&
+        (publication?.result?.status !== "published" || publication.error))
+      ? candidate
+      : undefined;
+  };
+  const branchName = () => workspace()?.branch ?? work()?.branch?.branch;
+  const diff = () => {
+    const result = published() ? undefined : (work()?.branch ?? changes());
+    return result && hasEnvironmentTextChanges(result) ? result : undefined;
   };
   const hasContent = createMemo(() =>
-    Boolean(machineMenu() || host() || workspace()?.branch || session()?.worktree || changes()),
+    Boolean(
+      machineMenu() ||
+      host() ||
+      branchName() ||
+      work() ||
+      session()?.worktree ||
+      (!published() && changes()),
+    ),
   );
   // Capture cache availability before the first asynchronous arrival.
   const [initiallyEmpty] = createSignal<boolean>((previous) => previous ?? !hasContent());
@@ -217,27 +234,60 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
                   />
                 </div>
               </Show>
-              <Show when={workspace()?.branch}>
-                {(branch) => (
-                  <div class="chat-details__row chat-environment__row" title={branch()}>
-                    <Icon name="gitBranch" />
-                    <span ref={createTextOverflow(branch)}>{branch()}</span>
+              <Show when={branchName() || work()}>
+                <div class="chat-environment__branch">
+                  <div class="chat-details__row chat-environment__row" title={branchName()}>
+                    <Icon name={branchName() ? "gitBranch" : "gitPullRequest"} />
+                    <span
+                      ref={createTextOverflow(branchName)}
+                      class="chat-environment__branch-name"
+                    >
+                      {branchName() ?? t("chat.pullRequests.publishPr")}
+                    </span>
                     <Show when={session()?.worktree}>
                       <small class="chat-details__badge">{t("chat.sessionDetails.worktree")}</small>
                     </Show>
                   </div>
-                )}
+                  <Show when={diff() || work()}>
+                    <div class="chat-environment__branch-controls">
+                      <Show when={diff()}>
+                        {(value) => (
+                          <SessionGitDiff
+                            classPrefix="chat-pr"
+                            item={value()}
+                            onOpen={
+                              work()?.branch ? work()?.onOpenSessionDiff : props.onOpenUncommitted
+                            }
+                          />
+                        )}
+                      </Show>
+                      <Show when={work()}>
+                        {(value) => (
+                          <ChatBranchActions
+                            branch={value().branch}
+                            branchName={branchName() ?? t("chat.pullRequests.publishPr")}
+                            status={value().status}
+                            publication={value().publication}
+                            presented={props.presented && expanded()}
+                            onDismiss={value().onDismissBranch}
+                          />
+                        )}
+                      </Show>
+                    </div>
+                  </Show>
+                </div>
               </Show>
-              <Show when={session()?.worktree && !workspace()?.branch}>
+              <Show when={session()?.worktree && !branchName()}>
                 <div class="chat-details__row chat-environment__row chat-environment__worktree">
                   <Icon name="folder" />
                   <span>{t("chat.sessionDetails.worktree")}</span>
                 </div>
               </Show>
-              <Show when={changes()}>
+              <Show when={!published() && !branchName() && !work() && changes()}>
                 <div class="chat-details__row chat-environment__row">
-                  <EnvironmentAction presented={props.presented} onOpen={props.onOpenUncommitted}>
-                    {() => (
+                  <Show
+                    when={props.onOpenUncommitted ?? props.work?.onOpenSessionDiff}
+                    fallback={
                       <>
                         <Icon name="diff" />
                         <span>{t("chat.sessionDetails.changes")}</span>
@@ -245,8 +295,25 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
                           {(result) => <EnvironmentChangeCounts result={result()} />}
                         </Show>
                       </>
-                    )}
-                  </EnvironmentAction>
+                    }
+                  >
+                    <button
+                      class="chat-environment__action"
+                      type="button"
+                      onClick={() => {
+                        if (props.presented) {
+                          (props.onOpenUncommitted ?? props.work?.onOpenSessionDiff)?.();
+                        }
+                      }}
+                    >
+                      <Icon name="diff" />
+                      <span>{t("chat.sessionDetails.changes")}</span>
+                      <Show when={changes()}>
+                        {(result) => <EnvironmentChangeCounts result={result()} />}
+                      </Show>
+                      <Icon name="chevronRight" />
+                    </button>
+                  </Show>
                 </div>
               </Show>
             </ChatDetailsDesktopSection>
