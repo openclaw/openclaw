@@ -8,7 +8,7 @@
 // failure in place. It is mounted on `document.body`, outside the shell, so the
 // Gateway restart that tears down the connection cannot unmount it.
 import { render } from "@solidjs/web";
-import { createMemo, createStore, Errored, For, Loading, Show } from "solid-js";
+import { createMemo, createStore, Errored, For, isPending, Loading, Show } from "solid-js";
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import { isReportableUpdateRun } from "../../../src/shared/update-outcome.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
@@ -184,7 +184,6 @@ export async function confirmAndStartUpdateRuntime(
         working,
         finished,
         failed,
-        checkingStatus,
         statusRead,
         readError,
         showRecovery,
@@ -208,6 +207,12 @@ export async function confirmAndStartUpdateRuntime(
       dispose = render(() => {
         // Run and schedule records retain the identity published by their owner.
         const [view, setView] = createStore(snapshot, { shallow: true });
+        // Controls retain their idle read while each status receipt gets its own boundary.
+        const statusCompletion = createMemo(() => {
+          const read = view.statusRead;
+          return read && "promise" in read ? read.promise : "idle";
+        });
+        const statusPending = () => isPending(statusCompletion);
         let cancelButton!: HTMLButtonElement;
         let closeButton: HTMLButtonElement | undefined;
         updateView = (next) => setView(() => next);
@@ -257,7 +262,7 @@ export async function confirmAndStartUpdateRuntime(
                           {(status) => (
                             <>
                               {statusMessage(status() === "success")}
-                              <Show when={view.details && view.confirmed && !view.checkingStatus}>
+                              <Show when={view.details && view.confirmed && !statusPending()}>
                                 <div class="exec-approval-command mono update-confirmation-details">
                                   <div>{view.details}</div>
                                   <UpdateGitRevisions
@@ -295,11 +300,11 @@ export async function confirmAndStartUpdateRuntime(
                       </button>
                       <button
                         type="button"
-                        class={["btn danger", { "btn--busy": view.working || view.checkingStatus }]}
-                        disabled={view.working || view.checkingStatus}
+                        class={["btn danger", { "btn--busy": view.working || statusPending() }]}
+                        disabled={view.working || statusPending()}
                         onClick={() => void confirm()}
                       >
-                        {view.checkingStatus ? (
+                        {statusPending() ? (
                           t("updates.dialog.checkingStatus")
                         ) : view.working ? (
                           <>
@@ -339,11 +344,11 @@ export async function confirmAndStartUpdateRuntime(
                   <Show when={view.showRecovery && params.onCheckStatus}>
                     <button
                       type="button"
-                      class={["btn", { "btn--busy": view.checkingStatus }]}
-                      disabled={view.checkingStatus || view.disconnected}
+                      class={["btn", { "btn--busy": statusPending() }]}
+                      disabled={statusPending() || view.disconnected}
                       onClick={() => void checkStatus()}
                     >
-                      {view.checkingStatus ? (
+                      {statusPending() ? (
                         <>
                           <span class="btn__spinner" aria-hidden="true" />
                           {t("updates.dialog.checkingStatus")}
@@ -357,7 +362,7 @@ export async function confirmAndStartUpdateRuntime(
                     <button
                       type="button"
                       class="btn primary"
-                      disabled={view.checkingStatus || view.disconnected}
+                      disabled={statusPending() || view.disconnected}
                       onClick={() => void retry()}
                     >
                       {t("updates.dialog.retryUpdate")}

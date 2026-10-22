@@ -99,7 +99,7 @@ async function rescueChild(pidPath: string, signal: AbortSignal) {
   const pid = existsSync(pidPath) ? Number(readFileSync(pidPath, "utf8")) : 0;
   if (pid && isProcessAlive(pid)) {
     process.kill(pid, "SIGKILL");
-    await waitForProcessState(() => !isPidAlive(pid), `process still alive: ${pid}`, signal);
+    await waitForProcessState(() => !isProcessAlive(pid), `process still alive: ${pid}`, signal);
   }
 }
 

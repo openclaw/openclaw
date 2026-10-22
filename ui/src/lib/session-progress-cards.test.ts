@@ -121,6 +121,30 @@ describe("session progress card lifetimes", () => {
 });
 
 describe("session progress card read recovery", () => {
+  it("publishes admitted read completion without starting another request", async () => {
+    const { gateway, request } = createGateway();
+    const response = createDeferred<{ card: null }>();
+    request.mockReturnValue(response.promise);
+    const store = sessionProgressCardsForGateway(gateway);
+    const observed: Array<Promise<unknown> | undefined> = [];
+    const stop = store.subscribe(() => observed.push(store.getReadCompletion(target)));
+    const owner = {};
+    onTestFinished(() => {
+      store.unwatch(owner);
+      stop();
+    });
+    store.watch(owner, [target]);
+    const completion = store.getReadCompletion(target);
+    expect(completion).toBeDefined();
+    expect(observed).toContain(completion);
+    expect(request).toHaveBeenCalledTimes(1);
+    response.resolve({ card: null });
+    await expect(completion).resolves.toBeNull();
+    expect(store.getReadCompletion(target)).toBeUndefined();
+    expect(observed.at(-1)).toBeUndefined();
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
   it.each(["initial", "empty", "card"] as const)(
     "recovers a failed read without new agent work (%s)",
     async (state) => {

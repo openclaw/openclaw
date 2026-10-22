@@ -62,9 +62,6 @@ export function resolveNextcloudTalkRoomMatch(params: {
 
   return {
     roomConfig,
-    wildcardConfig: match.wildcardEntry,
-    roomKey: match.matchKey ?? match.key,
-    matchSource: match.matchSource,
     allowed,
     allowlistConfigured,
   };

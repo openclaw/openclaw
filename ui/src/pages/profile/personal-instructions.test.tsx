@@ -300,7 +300,11 @@ it("preserves newer draft edits after returning to an agent with a pending save"
   await waitForSolid(() => expect(element.querySelector("textarea")?.value).toBe(file.content));
   await input(element, "First edit");
   button(element, "Save").click();
-  await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
+  await waitForSolid(() => {
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(element.querySelector('[aria-busy="true"]')).not.toBeNull();
+    expect(button(element, "Saving…")).toMatchObject({ disabled: true });
+  });
   selection.set("other");
   await waitForSolid(() =>
     expect(element.querySelector("textarea")?.value).toBe("Other instructions"),
@@ -338,7 +342,11 @@ it("shows a pending save failure after returning to its agent without losing new
   const { element, selection } = await loaded(request);
   await input(element, "First edit");
   button(element, "Save").click();
-  await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
+  await waitForSolid(() => {
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(element.querySelector('[aria-busy="true"]')).not.toBeNull();
+    expect(button(element, "Saving…")).toMatchObject({ disabled: true });
+  });
   selection.set("other");
   await waitForSolid(() =>
     expect(element.querySelector("textarea")?.value).toBe("Other instructions"),

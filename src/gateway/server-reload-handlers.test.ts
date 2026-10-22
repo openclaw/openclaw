@@ -23,7 +23,7 @@ import {
   type PersistedPluginModelCatalog,
 } from "../agents/plugin-model-catalog.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
-import { prepareConfigRuntimeEnv } from "../config/config-env-vars.js";
+import { applyConfigEnvVars, prepareConfigRuntimeEnv } from "../config/config-env-vars.js";
 import type { ConfigWriteNotification } from "../config/config.js";
 import { applyModelDefaults } from "../config/defaults.js";
 import {
@@ -4268,11 +4268,11 @@ describe("gateway plugin hot reload handlers", () => {
       ...nextConfig,
       env: initialConfig.env,
     } satisfies OpenClawConfig;
+    applyConfigEnvVars(initialConfig, targetEnv, { lowerPrecedenceEnv: initialConfig.env.vars });
     const runtimeEnv = prepareConfigRuntimeEnv({
       previousConfig: initialConfig,
       nextConfig,
       env: targetEnv,
-      previousOwnedEnv: { [envKey]: "old" },
     });
     const events: string[] = [];
     const rebuiltCronState = makeRebuiltCron({

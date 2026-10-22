@@ -1,21 +1,16 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../../../config/runtime-snapshot.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import * as runtimeConfig from "../../../config/runtime-snapshot.js";
 import { resetGatewayWorkAdmission } from "../../../process/gateway-work-admission.js";
-import {
-  SUBAGENT_ENDED_REASON_ERROR,
-  SUBAGENT_ENDED_REASON_KILLED,
-} from "./subagent-lifecycle-events.js";
+import * as ended from "./subagent-lifecycle-events.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import {
   createLifecycleControllerFixture,
   createRunEntry,
   mutateLifecycleRun,
   readLifecycleRun,
+  type RunEntryOverrides,
 } from "./subagent-registry-lifecycle-controller.test-support.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import type { SubagentCompletionRequest } from "./subagent-registry.types.js";
 
 vi.mock("./subagent-registry-helpers.js", { spy: true });
 vi.mock("../../agent-bundle-mcp-tools.js", async (importOriginal) => ({
@@ -25,17 +20,16 @@ vi.mock("../../agent-bundle-mcp-tools.js", async (importOriginal) => ({
 
 beforeEach(() => {
   resetGatewayWorkAdmission();
-  // Completion captures session-store watcher paths from the prepared runtime config.
-  setRuntimeConfigSnapshot({});
+  // Completion captures watcher paths from the prepared runtime config.
+  runtimeConfig.setRuntimeConfigSnapshot({});
   vi.mocked(persistSubagentSessionTiming).mockResolvedValue(undefined);
 });
+afterEach(runtimeConfig.clearRuntimeConfigSnapshot);
 
-afterEach(() => {
-  clearRuntimeConfigSnapshot();
-});
-
-const createController = (entry: SubagentRunRecord) =>
-  createLifecycleControllerFixture(
+const failedOutcome = { status: "error", error: "no continuation can reach this run" } as const;
+function fixture(overrides: RunEntryOverrides = {}) {
+  const entry = createRunEntry({ endedAt: 4_000, pauseReason: "sessions_yield", ...overrides });
+  const controller = createLifecycleControllerFixture(
     { entry },
     {
       callGateway: async () => {
@@ -45,110 +39,74 @@ const createController = (entry: SubagentRunRecord) =>
       ownersByEntry: new Map(),
     },
   );
+  const complete = (request: Omit<Partial<SubagentCompletionRequest>, "runId"> = {}) =>
+    controller.completeSubagentRun({
+      runId: entry.runId,
+      endedAt: 4_000,
+      outcome: failedOutcome,
+      reason: ended.SUBAGENT_ENDED_REASON_ERROR,
+      triggerCleanup: false,
+      settleYielded: true,
+      ...request,
+    });
+  return { entry, controller, complete, read: () => readLifecycleRun(entry) };
+}
 
-const request = (entry: SubagentRunRecord, overrides: { settleYielded?: true } = {}) => ({
-  runId: entry.runId,
-  endedAt: 4_000,
-  outcome: { status: "error" as const, error: "no continuation can reach this run" },
-  reason: SUBAGENT_ENDED_REASON_ERROR,
-  triggerCleanup: false,
-  ...overrides,
+it("completes a yielded row only when the request opts in", async () => {
+  const { complete, read } = fixture();
+  await complete({ settleYielded: undefined });
+  expect(read().pauseReason).toBe("sessions_yield");
+  expect(read().execution.outcome).toBeUndefined();
+  await complete();
+  expect(read().pauseReason).toBeUndefined();
+  expect(read().execution.outcome).toMatchObject(failedOutcome);
 });
 
-describe("settling a yielded run through the completion owner", () => {
-  it("completes a yielded row only when the request opts in", async () => {
-    const entry = createRunEntry({ endedAt: 4_000, pauseReason: "sessions_yield" });
-    const controller = createController(entry);
-
-    await controller.completeSubagentRun(request(entry));
-    expect(readLifecycleRun(entry)).toMatchObject({ pauseReason: "sessions_yield" });
-    expect(readLifecycleRun(entry).execution.outcome).toBeUndefined();
-
-    await controller.completeSubagentRun(request(entry, { settleYielded: true }));
-    expect(readLifecycleRun(entry).pauseReason).toBeUndefined();
-    expect(readLifecycleRun(entry).execution.outcome).toMatchObject({
-      status: "error",
-      error: "no continuation can reach this run",
-    });
+it.each([true, false])("ignores a resumed row (snapshot=%s)", async (withSnapshot) => {
+  const { entry, complete, read } = fixture();
+  const staleSnapshot = structuredClone(entry);
+  await mutateLifecycleRun(entry, (draft) => {
+    draft.pauseReason = undefined;
+    draft.execution = { status: "running", startedAt: 5_000 };
   });
+  await complete(withSnapshot ? { expectedEntry: staleSnapshot } : {});
+  expect(read().pauseReason).toBeUndefined();
+  expect(read().execution).toMatchObject({ status: "running", startedAt: 5_000 });
+  expect(read().execution.outcome).toBeUndefined();
+});
 
-  it.each([
-    { label: "the sweeper's stale snapshot", withSnapshot: true },
-    { label: "no snapshot, so only the in-mutation check applies", withSnapshot: false },
-  ])(
-    "leaves a row that a continuation already resumed untouched ($label)",
-    async ({ withSnapshot }) => {
-      // The sweeper read the row while it was yielded; a continuation resumed it before the
-      // settle request reached the mutation.
-      const entry = createRunEntry({ endedAt: 4_000, pauseReason: "sessions_yield" });
-      const staleSnapshot = structuredClone(entry);
-      const controller = createController(entry);
-      await mutateLifecycleRun(entry, (draft) => {
-        draft.pauseReason = undefined;
-        draft.execution = { status: "running", startedAt: 5_000 };
-      });
+it("leaves an already finished row untouched by a late settle request", async () => {
+  const { complete, read } = fixture({ pauseReason: undefined, outcome: { status: "ok" } });
+  await complete();
+  expect(read().execution.outcome).toEqual({ status: "ok" });
+});
 
-      await controller.completeSubagentRun({
-        ...request(entry, { settleYielded: true }),
-        ...(withSnapshot ? { expectedEntry: staleSnapshot } : {}),
-      });
-
-      expect(readLifecycleRun(entry).pauseReason).toBeUndefined();
-      expect(readLifecycleRun(entry).execution).toMatchObject({
-        status: "running",
-        startedAt: 5_000,
-      });
-      expect(readLifecycleRun(entry).execution.outcome).toBeUndefined();
-    },
-  );
-
-  it("leaves a row that already finished untouched when a settle request arrives late", async () => {
-    const entry = createRunEntry({ endedAt: 4_000, outcome: { status: "ok" } });
-    const controller = createController(entry);
-
-    await controller.completeSubagentRun(request(entry, { settleYielded: true }));
-
-    expect(readLifecycleRun(entry).execution.outcome).toEqual({ status: "ok" });
+it("keeps a kill claim published while the settle request is preparing", async () => {
+  const { entry, controller, complete, read } = fixture();
+  const claim = { requestedAt: 6_000, reason: "operator requested stop" };
+  const sweeperSnapshot = read();
+  // The claim lands after the sweeper read, while completion waits for its lock.
+  const acquireLock = controller.acquireTerminalCompletionLock.bind(controller);
+  using lock = vi.spyOn(controller, "acquireTerminalCompletionLock");
+  lock.mockImplementationOnce(async (runId) => {
+    await mutateLifecycleRun(entry, (draft) => {
+      draft.killIntent = claim;
+    });
+    return acquireLock(runId);
   });
-
-  it("keeps a kill claim published while the settle request is still preparing", async () => {
-    const entry = createRunEntry({ endedAt: 4_000, pauseReason: "sessions_yield" });
-    const controller = createController(entry);
-    const claim = { requestedAt: 6_000, reason: "operator requested stop" };
-    const sweeperSnapshot = readLifecycleRun(entry);
-    // The sweeper read the row unclaimed; the claim lands while the settle request waits for the
-    // terminal completion lock, before it reaches its mutation. The claim keeps the pause reason.
-    const acquireLock = controller.acquireTerminalCompletionLock.bind(controller);
-    let published = false;
-    vi.spyOn(controller, "acquireTerminalCompletionLock").mockImplementationOnce(async (runId) => {
-      published = true;
-      await mutateLifecycleRun(entry, (draft) => {
-        draft.killIntent = claim;
-      });
-      return acquireLock(runId);
-    });
-
-    await controller.completeSubagentRun({
-      ...request(entry, { settleYielded: true }),
-      expectedEntry: sweeperSnapshot,
-    });
-
-    expect(published).toBe(true);
-    expect(readLifecycleRun(entry).killIntent).toEqual(claim);
-    expect(readLifecycleRun(entry).pauseReason).toBe("sessions_yield");
-    expect(readLifecycleRun(entry).execution.outcome).toBeUndefined();
-
-    await controller.completeSubagentRun({
-      runId: entry.runId,
-      endedAt: 7_000,
-      outcome: { status: "error", error: claim.reason },
-      reason: SUBAGENT_ENDED_REASON_KILLED,
-      triggerCleanup: false,
-    });
-    expect(readLifecycleRun(entry)).toMatchObject({ endedReason: SUBAGENT_ENDED_REASON_KILLED });
-    expect(readLifecycleRun(entry).execution.outcome).toMatchObject({
-      status: "error",
-      error: claim.reason,
-    });
+  await complete({ expectedEntry: sweeperSnapshot });
+  expect(lock).toHaveBeenCalledOnce();
+  expect(read().killIntent).toEqual(claim);
+  expect(read().pauseReason).toBe("sessions_yield");
+  expect(read().execution.outcome).toBeUndefined();
+  await complete({
+    endedAt: 7_000,
+    outcome: { status: "error", error: claim.reason },
+    reason: ended.SUBAGENT_ENDED_REASON_KILLED,
+    settleYielded: undefined,
+  });
+  expect(read()).toMatchObject({
+    endedReason: ended.SUBAGENT_ENDED_REASON_KILLED,
+    execution: { outcome: { status: "error", error: claim.reason } },
   });
 });

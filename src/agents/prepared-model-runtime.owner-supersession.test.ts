@@ -52,10 +52,10 @@ const { mocks } = fixture;
 function holdNextCatalogWrite() {
   const started = createDeferred();
   const release = createDeferred();
-  mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, agentDir) => {
+  mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, _agentDir) => {
     started.resolve();
     await release.promise;
-    return { agentDir: String(agentDir), wrote: false };
+    return {};
   });
   return { started, release };
 }
@@ -609,7 +609,7 @@ it("stops a superseded same-directory batch before another catalog write", async
       staleWriteStarted.resolve();
       await releaseStaleWriteGate.promise;
     }
-    return { agentDir: fixture.state.agentDir("shared-catalog-agent-dir"), wrote: false };
+    return {};
   });
 
   await using work = pendingWork(releaseStaleWriteGate);

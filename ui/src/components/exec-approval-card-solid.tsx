@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { For, Show, createMemo, createSignal, onSettled } from "solid-js";
+import { For, Show, createMemo, onSettled } from "solid-js";
 import { formatApprovalDisplayPath } from "../../../src/infra/approval-display-paths.ts";
 import { normalizeCommandSpans } from "../../../src/shared/exec-approval-command-spans.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
@@ -19,6 +19,12 @@ import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import type { JSX as SolidJSX } from "../types/solid-elements.d.ts";
+import {
+  ApprovalCountdown,
+  approvalRemainingLabel,
+  useApprovalClock,
+} from "./approval-countdown.tsx";
+import { createApprovalDecisionPresentation } from "./approval-decision-presentation.ts";
 import { sidebarAttentionFocusRef } from "./sidebar-attention-focus.ts";
 import { Icon } from "./solid/icon.tsx";
 import { useScrollState } from "./solid/scroll-state.ts";
@@ -63,6 +69,7 @@ export type ExecApprovalCardProps = {
   queueCount?: number;
   renderPendingQueue?: () => SolidJSX.Element;
   onDecision: (approvalId: string, decision: ExecApprovalDecision) => void | Promise<void>;
+  onDecisionReady?: (decide: ExecApprovalCardProps["onDecision"], deciding: () => boolean) => void;
 };
 
 export type SidebarApprovalRowProps = {
@@ -76,58 +83,6 @@ export type SidebarApprovalRowProps = {
   onDecision: (event: Event, approvalId: string, decision: ExecApprovalDecision) => void;
   onOpenSession?: (event: MouseEvent) => void;
 };
-
-export function approvalRemainingLabel(expiresAtMs: number, nowMs: number): string {
-  return expiresAtMs > nowMs
-    ? t("execApproval.expiresIn", { time: formatCountdown(expiresAtMs, nowMs, true) })
-    : t("execApproval.expired");
-}
-
-function useApprovalClock(onTick?: (nowMs: number) => void) {
-  const [now, setNow] = createSignal(Date.now());
-  onSettled(() => {
-    const timer = setInterval(() => {
-      const time = Date.now();
-      setNow(time);
-      onTick?.(time);
-    }, 1_000);
-    return () => clearInterval(timer);
-  });
-  return now;
-}
-
-export function ApprovalCountdown(
-  props: Pick<
-    SolidJSX.HTMLAttributes<HTMLElement>,
-    "class" | "role" | "aria-label" | "aria-hidden" | "title"
-  > & { expiresAtMs: number; compact?: boolean },
-) {
-  let host: HTMLElement | undefined;
-  const now = useApprovalClock((time) => {
-    if (!props.compact) {
-      host
-        ?.closest("openclaw-modal-dialog")
-        ?.setAttribute("description", approvalRemainingLabel(props.expiresAtMs, time));
-    }
-  });
-  return (
-    <openclaw-approval-countdown
-      ref={(element) => {
-        host = element;
-      }}
-      style={{ display: "contents" }}
-      class={props.class}
-      role={props.role}
-      aria-label={props["aria-label"]}
-      aria-hidden={props["aria-hidden"]}
-      title={props.title}
-    >
-      {props.compact
-        ? formatCountdown(props.expiresAtMs, now(), true)
-        : approvalRemainingLabel(props.expiresAtMs, now())}
-    </openclaw-approval-countdown>
-  );
-}
 
 function renderMetaRow(label: string, value?: string | null, opts?: { path?: boolean }) {
   if (!value) {
@@ -508,7 +463,12 @@ export function SidebarApprovalRow(props: SidebarApprovalRowProps) {
   );
 }
 
-function ExecApprovalCardContent(props: ExecApprovalCardProps) {
+function ExecApprovalCardContent(
+  props: ExecApprovalCardProps & {
+    deciding: () => boolean;
+    decide: ExecApprovalCardProps["onDecision"];
+  },
+) {
   const active = createMemo(() => props.approval);
   const mobile = createMemo(
     () => props.presentation === "mobile" && props.variant === "inline" && active().kind === "exec",
@@ -639,13 +599,13 @@ function ExecApprovalCardContent(props: ExecApprovalCardProps) {
             ]}
             type="button"
             aria-label={label()}
-            disabled={!props.connected || props.busy || !props.canGrant}
+            disabled={!props.connected || props.deciding() || props.busy || !props.canGrant}
             title={
               props.variant === "modal" && props.connected && props.canGrant
                 ? `${label()} (${decisionShortcut(decision)})`
                 : label()
             }
-            onClick={() => void props.onDecision(active().id, decision)}
+            onClick={() => void props.decide(active().id, decision)}
           >
             <span>{label()}</span>
           </button>
@@ -679,11 +639,50 @@ function ExecApprovalCardContent(props: ExecApprovalCardProps) {
   );
 }
 
+const decisionLifetimes = new WeakMap<
+  HTMLElement,
+  { retire: () => void; update: (props: ExecApprovalCardProps | undefined) => void }
+>();
+
 export const ExecApprovalCard = defineSolidBridge<{ props?: ExecApprovalCardProps }>(
   "openclaw-exec-approval-card",
   (props, host) => {
     host.style.display = "contents";
-    return <>{props.props && <ExecApprovalCardContent {...props.props} />}</>;
+    const presentation = createApprovalDecisionPresentation();
+    let approvalId = props.props?.approval.id;
+    decisionLifetimes.set(host, {
+      retire: presentation.retire,
+      update(next) {
+        if (next?.approval.id !== approvalId || !next?.busy || !next.connected || !next.canGrant) {
+          presentation.retire();
+        }
+        approvalId = next?.approval.id;
+      },
+    });
+    const decide: ExecApprovalCardProps["onDecision"] = (id, decision) =>
+      presentation.run(props.props?.onDecision(id, decision));
+    onSettled(() => {
+      props.props?.onDecisionReady?.(decide, presentation.deciding);
+      return () => {
+        presentation.retire();
+        decisionLifetimes.delete(host);
+      };
+    });
+    return (
+      <>
+        {props.props && (
+          <ExecApprovalCardContent
+            {...props.props}
+            deciding={presentation.deciding}
+            decide={decide}
+          />
+        )}
+      </>
+    );
   },
-  { properties: { props: { default: undefined, attribute: false } } },
+  {
+    properties: { props: { default: undefined, attribute: false } },
+    propertyChanged: (host) => decisionLifetimes.get(host)?.update(host.props),
+    disconnected: (host) => decisionLifetimes.get(host)?.retire(),
+  },
 );

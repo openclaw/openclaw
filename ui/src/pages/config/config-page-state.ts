@@ -10,7 +10,7 @@ import type * as Push from "../../../../packages/gateway-protocol/src/schema/pus
 import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { titleForRoute } from "../../app-navigation.ts";
-import { pathForRoute } from "../../app-route-paths.ts";
+import { pathForRoute, sameRouteLocation } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { resetServerUiPref, selectThemeSettings } from "../../app/server-prefs-controls.ts";
@@ -909,11 +909,7 @@ export function createConfigPage(
     subscriptions.push(
       context.router.subscribe(() => {
         const next = context.router.getState().location;
-        if (
-          next.pathname !== location.pathname ||
-          next.search !== location.search ||
-          next.hash !== location.hash
-        ) {
+        if (!sameRouteLocation(next, location)) {
           location = next;
           retireCommands();
         }

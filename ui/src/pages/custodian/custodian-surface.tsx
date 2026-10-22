@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, For, latest, onSettled, Show } from "solid-js";
+import { createEffect, createMemo, Errored, For, latest, Loading, onSettled, Show } from "solid-js";
 import { SYSTEM_AGENT_ID } from "../../../../src/system-agent/agent-id.js";
 import { MarkdownBlocks } from "../../components/markdown-blocks-owner.ts";
 import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blocks.ts";
@@ -41,7 +41,7 @@ import { MessageGroup } from "../chat/components/chat-message-group-view.tsx";
 import { createCustodianActions, type CustodianActions } from "./custodian-actions.ts";
 import { CustodianAlertCard } from "./custodian-alert-card.tsx";
 import { custodianAlertStore } from "./custodian-alert-store.ts";
-import { CustodianChannelOnboardingNudge, CustodianEventNudgeView } from "./custodian-nudge.tsx";
+import { CustodianEventNudgeView } from "./custodian-nudge.tsx";
 import { custodianSessionStore, type CustodianSessionStore } from "./custodian-session-store.ts";
 import { CustodianSetupCard } from "./custodian-setup-card.tsx";
 import {
@@ -174,10 +174,7 @@ export type CustodianSurfaceProps = {
   actions?: CustodianActions;
   onboarding: boolean;
   newAgentIntent: boolean;
-  showChannelOnboardingNudge: boolean;
-  channelOnboardingError: string | null;
-  channelOnboardingRetrying: boolean;
-  onRetryChannelOnboarding: () => void;
+  channelOnboardingContent: JSX.Element;
   compact: boolean;
   historyContent: JSX.Element;
 };
@@ -197,6 +194,16 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
   const eventNudge = createMemo(() => {
     const source = store();
     return source.eventNudgePending ? null : source.eventNudge;
+  });
+  const transcriptStatus = createMemo(() => {
+    const transcript = store().transcript;
+    const completion = transcript.completion ?? Promise.resolve(transcript.status);
+    return completion.then((status) => {
+      if (status.error) {
+        throw new Error(status.error);
+      }
+      return status;
+    });
   });
   const currentAlert = createMemo(() => {
     // Alert admission derives from the session's current authority as well as the alert store.
@@ -344,6 +351,13 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
       <CustodianSetupCard store={store()} actions={actions().setup} />
     </Show>
   );
+  const transcriptNotice = (status: CustodianSessionStore["transcript"]["status"]) => (
+    <PanelRefreshStatus
+      status={status}
+      // oxlint-disable-next-line solid/no-react-specific-props -- Shared status component names its CSS class prop className.
+      className="custodian__transcript-status"
+    />
+  );
   return (
     <Show
       when={!store().setupRequired && !store().autoSetup.blocksGreeting}
@@ -396,18 +410,7 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
         >
           {setupCard()}
           {alertCard()}
-          <Show when={props.channelOnboardingError || props.showChannelOnboardingNudge}>
-            <CustodianChannelOnboardingNudge
-              error={Boolean(props.channelOnboardingError)}
-              retrying={props.channelOnboardingRetrying}
-              onAction={() =>
-                props.channelOnboardingError
-                  ? props.onRetryChannelOnboarding()
-                  : store().openChannelsFromOnboarding()
-              }
-              onDismiss={() => store().dismissChannelOnboardingNudge()}
-            />
-          </Show>
+          {props.channelOnboardingContent}
           {/* Independent health events stay visible while a user turn is pending. */}
           <Show when={!props.onboarding ? latest(eventNudge) : null}>
             {(nudge) => (
@@ -484,11 +487,14 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
               <span>{t("custodian.connectionChanged")}</span>
             </div>
           </Show>
-          <PanelRefreshStatus
-            status={store().transcript.status}
-            // oxlint-disable-next-line solid/no-react-specific-props -- Shared status component names its CSS class prop className.
-            className="custodian__transcript-status"
-          />
+          <Loading
+            on={store().transcript.completion}
+            fallback={transcriptNotice(store().transcript.status)}
+          >
+            <Errored fallback={(_error) => transcriptNotice(store().transcript.status)}>
+              {transcriptNotice(transcriptStatus())}
+            </Errored>
+          </Loading>
           <Show
             when={
               store().error &&
@@ -592,10 +598,7 @@ export const CustodianSurface = defineSolidBridge<CustodianSurfaceProps>(
       actions: { default: undefined, attribute: false },
       onboarding: { default: false, attribute: false },
       newAgentIntent: { default: false, attribute: false },
-      showChannelOnboardingNudge: { default: false, attribute: false },
-      channelOnboardingError: { default: null, attribute: false },
-      channelOnboardingRetrying: { default: false, attribute: false },
-      onRetryChannelOnboarding: { default: () => undefined, attribute: false },
+      channelOnboardingContent: { default: undefined, attribute: false },
       compact: { default: false, attribute: false },
       historyContent: { default: undefined, attribute: false },
     },

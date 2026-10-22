@@ -107,12 +107,8 @@ exit 1
     executable(join(bin, `sha${algorithm}sum`), `#!/bin/sh\nexec shasum -a ${algorithm} "$@"\n`);
   }
   let script = source
-    .replaceAll("/usr/bin/curl", join(bin, "curl"))
-    .replaceAll("/usr/bin/git", join(bin, "git"))
-    .replaceAll("/usr/bin/uname", join(bin, "uname"))
-    .replaceAll("/usr/bin/sha", join(bin, "sha"))
-    .replaceAll("/usr/bin/mkdir", "/bin/mkdir")
-    .replaceAll("/usr/bin/ln", "/bin/ln")
+    .replaceAll(/\/usr\/bin\/(curl|git|uname|sha)/gu, (_, binary: string) => join(bin, binary))
+    .replaceAll(/\/usr\/bin\/(mkdir|ln)/gu, "/bin/$1")
     .replaceAll("/usr/local/bin", bin)
     .replaceAll("sudo ", `${JSON.stringify(join(bin, "sudo"))} `)
     .replace(

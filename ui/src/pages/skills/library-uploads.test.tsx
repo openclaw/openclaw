@@ -8,6 +8,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/schema/skill-library.ts";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { createApplicationConfigCapability } from "../../app/config.ts";
+import { registerSkillsBrowserEnglish } from "../../i18n/locales/en-skills-browser.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
@@ -18,6 +19,8 @@ import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createSkillLibrary } from "./library-state.ts";
 import { SkillLibrary, SkillLibraryDialogs } from "./library-view.tsx";
 import { connectedGateway, libraryEntry, libraryList, requestFor } from "./skills.test-support.ts";
+
+registerSkillsBrowserEnglish();
 
 function harness() {
   const request = requestFor();
@@ -141,6 +144,203 @@ it("retires an old library detail failure when the connection is replaced", asyn
   expect(request).toHaveBeenCalledTimes(2);
 });
 
+it.each(
+  (["disable", "share"] as const).flatMap((action) =>
+    (["success", "error"] as const).map((outcome) => ({ action, outcome })),
+  ),
+)(
+  "retains the library editor and reconciles a held $action after $outcome",
+  async ({ action, outcome }) => {
+    onTestFinished(installDialogPolyfill());
+    const { library, request, read, draft } = await openSkill();
+    library.edit((state) => {
+      state.list = { ...state.list!, entries: [read.entry] };
+    });
+    const mutation = createDeferred<SkillsLibraryReceipt>();
+    const reload = createDeferred<SkillsLibraryListResult>();
+    request.mockReturnValueOnce(mutation.promise).mockReturnValueOnce(reload.promise);
+    const mounted = mountSolid(() => <SkillLibrary library={library} navigationActions={null} />);
+    flush();
+    await waitForFast(() =>
+      expect(mounted.container.querySelector(".settings-row")).not.toBeNull(),
+    );
+    const dialog = mounted.container.querySelector(".skill-reader-dialog")!;
+    const { dialog: nativeDialog } = await getRenderedModalDialog(mounted.container);
+    const row = mounted.container.querySelector(".settings-row")!;
+    const button = (label: string) =>
+      [...dialog.querySelectorAll<HTMLButtonElement>("button")].find(
+        (candidate) => candidate.textContent?.trim() === label,
+      )!;
+    const before = action === "disable" ? "Disable" : "Share with team";
+    const after = action === "disable" ? "Enable" : "Make private";
+    button(before).click();
+    await waitForFast(() => {
+      expect(button(after).disabled).toBe(true);
+      expect(row.textContent).toContain(action === "disable" ? "Disabled" : "Shared with team");
+      expect(nativeDialog.open).toBe(true);
+    });
+    expect(draft.entry!.enabled).toBe(true);
+    expect(draft.entry!.shared).toBe(false);
+    expect(request).toHaveBeenNthCalledWith(2, "skills.library.mutate", {
+      skillId: read.entry.skillId,
+      expectedRevision: read.entry.revision,
+      action,
+    });
+    if (outcome === "error") {
+      mutation.reject(new Error("Synthetic rejected library update"));
+      await waitForFast(() => {
+        expect(button(before).disabled).toBe(false);
+        expect(row.textContent).toContain(action === "disable" ? "Enabled" : "Private");
+        expect(dialog.textContent).toContain("Synthetic rejected library update");
+      });
+      expect(request).toHaveBeenCalledTimes(2);
+    } else {
+      const receipt = savedReceipt(read);
+      if (action === "disable") {
+        receipt.entry.enabled = false;
+      } else {
+        receipt.entry.shared = true;
+      }
+      mutation.resolve(receipt);
+      await waitForFast(() => expect(request).toHaveBeenCalledTimes(3));
+      expect(button(after).disabled).toBe(true);
+      reload.resolve({ ...libraryList(false), entries: [receipt.entry] });
+      await waitForFast(() => {
+        expect(button(after).disabled).toBe(false);
+        expect(draft.entry!.revision).toBe(receipt.entry.revision);
+      });
+    }
+    expect(mounted.container.querySelector(".skill-reader-dialog")).toBe(dialog);
+    expect(mounted.container.querySelector(".settings-row")).toBe(row);
+  },
+);
+
+it("keeps removal confirmation outside mutation presentation", async () => {
+  const { library, request } = await openSkill();
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  const mounted = mountSolid(() => <SkillLibraryDialogs library={library} />);
+  flush();
+  const remove = [...mounted.container.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent?.trim() === "Remove skill",
+  )!;
+  remove.click();
+  flush();
+  expect(confirm).toHaveBeenCalledTimes(1);
+  expect(remove.disabled).toBe(false);
+  expect(library.state.busy).toBe(false);
+  expect(request).toHaveBeenCalledTimes(1);
+});
+
+it("settles an admitted save when its caller retires before the first presentation settle", async () => {
+  const { library, request, read } = await openSkill();
+  const pending = createDeferred<SkillsLibraryReceipt>();
+  request.mockReturnValueOnce(pending.promise).mockResolvedValueOnce(libraryList(false));
+  const operation = createRoot((dispose) => {
+    const saving = library.save();
+    library.retire();
+    dispose();
+    return saving;
+  });
+  const completed = vi.fn();
+  void operation.then(completed);
+  pending.resolve(savedReceipt(read));
+  await waitForFast(() => expect(completed).toHaveBeenCalledTimes(1));
+  expect(library.state.busy).toBe(false);
+  expect(library.state.draft?.entry?.revision).toBe("b".repeat(64));
+});
+
+it("releases retired saving presentation and preserves a same-key successor draft", async () => {
+  const { library, request, connection, read } = await openSkill();
+  const pending = createDeferred<SkillsLibraryReceipt>();
+  request.mockReturnValueOnce(pending.promise);
+  const mounted = mountSolid(() => <SkillLibraryDialogs library={library} />);
+  flush();
+  const operation = library.save();
+  await waitForFast(() => expect(library.saving()).toBe(true));
+  connection.publish({ ...connection.gateway.snapshot, phase: "reconnecting" });
+  library.reset();
+  await waitForFast(() => {
+    expect(library.saving()).toBe(false);
+    expect(mounted.container.querySelector(".skill-reader-dialog")).toBeNull();
+  });
+  const successor = {
+    ...read,
+    entry: { ...read.entry, revision: "c".repeat(64) },
+    content: "# Same skill on the current connection",
+  };
+  connection.publish({ ...connection.gateway.snapshot, phase: "connected" });
+  request.mockResolvedValueOnce(successor);
+  await library.open(read.entry.skillId);
+  await waitForFast(() => {
+    expect(library.saving()).toBe(false);
+    expect(mounted.container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(
+      successor.content,
+    );
+  });
+  pending.resolve(savedReceipt(read));
+  await operation;
+  expect(library.state).toMatchObject({
+    list: null,
+    draft: { entry: successor.entry, content: successor.content },
+    busy: false,
+    error: null,
+  });
+  expect(request).toHaveBeenCalledTimes(3);
+});
+
+it.each(["files", "clawhub"])(
+  "keeps %s import presentation locked through owner settlement",
+  async (kind) => {
+    const { library, request } = harness();
+    library.setImportOpen(true);
+    library.state.importSlug = "imported-skill";
+    if (kind === "clawhub") {
+      library.state.importSource = { slug: "@fixture/calendar" };
+    }
+    const mounted = mountSolid(() => <SkillLibrary library={library} navigationActions={null} />);
+    flush();
+    const dialog = mounted.container.querySelector(".skill-reader-dialog")!;
+    const submit = dialog.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+    const reading = createDeferred<ArrayBuffer>();
+    const imported = createDeferred<SkillsLibraryReceipt>();
+    const reload = createDeferred<SkillsLibraryListResult>();
+    if (kind === "clawhub") {
+      request.mockReturnValueOnce(imported.promise).mockReturnValueOnce(reload.promise);
+    }
+    const operation =
+      kind === "files"
+        ? library.importFiles([fileWithReader("SKILL.md", () => reading.promise)])
+        : library.importClawHub("imported-skill", "@fixture/calendar");
+    await waitForFast(() => {
+      expect(submit.disabled).toBe(true);
+      expect(submit.textContent).toContain("Loading");
+    });
+    if (kind === "files") {
+      reading.resolve(new TextEncoder().encode("# Imported skill").buffer);
+    } else {
+      const receipt = savedReceipt(existingSkill());
+      imported.resolve(receipt);
+      await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+      const create = [...mounted.container.querySelectorAll<HTMLButtonElement>("button")].find(
+        (button) => button.textContent?.trim() === "Create skill",
+      )!;
+      expect(create.disabled).toBe(true);
+      reload.resolve({ ...libraryList(false), entries: [receipt.entry] });
+    }
+    await operation;
+    await waitForFast(() => {
+      expect(mounted.container.querySelector('[name="library-import-slug"]')).toBeNull();
+      if (kind === "files") {
+        expect(
+          mounted.container.querySelector<HTMLTextAreaElement>('[name="library-content"]')?.value,
+        ).toBe("# Imported skill");
+      } else {
+        expect(mounted.container.textContent).toContain("existing-skill");
+      }
+    });
+    expect(request).toHaveBeenCalledTimes(kind === "files" ? 0 : 2);
+  },
+);
 it("disables import while disconnected without losing the local selection", () => {
   const { library, connection } = harness();
   library.setImportOpen(true);

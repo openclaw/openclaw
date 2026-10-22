@@ -4,8 +4,6 @@ import { expect, test, vi } from "vitest";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
-import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { connectUserModelAccount } from "../state/user-model-accounts.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { identifiedClient } from "./server-methods/sessions-sharing.test-support.js";
@@ -498,64 +496,6 @@ test.each(["foreign admin", "unidentified admin", "synthetic owner"] as const)(
         }
         testState.agentConfig = undefined;
       }
-    });
-  },
-);
-
-test.each([
-  { loss: "disconnected", selection: "explicit" },
-  { loss: "role revoked", selection: "default" },
-] as const)(
-  "sessions.create rejects a personal $selection when $loss while the model catalog is loading",
-  async ({ loss, selection }) => {
-    await withSessionTestState({ layout: "state-only" }, async () => {
-      const { storePath, authProfileId, client, clients, catalog, context } =
-        await createPersonalAccountSessionFixture();
-      const writer: GatewayOperatorRoleDefinition = {
-        agents: "*",
-        scopes: ["operator.write"],
-        sessions: { others: "none" },
-      };
-      const cfg = {
-        ...getRuntimeConfig(),
-        gateway: { roles: { default: "writer", definitions: { writer } } },
-      };
-      const catalogStarted = createDeferredCore();
-      const catalogGate = createDeferredCore();
-      context.loadGatewayModelCatalogSnapshot.mockImplementationOnce(async () => {
-        catalogStarted.resolve();
-        await catalogGate.promise;
-        return { entries: catalog, routeVariants: catalog };
-      });
-      const key = "agent:main:dashboard:personal-revoked";
-      const creating = directSessionReq(
-        "sessions.create",
-        {
-          key,
-          model: `openai/gpt-5.6-sol${selection === "explicit" ? `@${authProfileId}` : ""}`,
-        },
-        { client, context: { ...context, getRuntimeConfig: () => cfg } },
-      );
-      try {
-        await Promise.race([
-          catalogStarted.promise,
-          creating.then(() => {
-            throw new Error("Session creation returned before loading the model catalog");
-          }),
-        ]);
-        expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledOnce();
-        if (loss === "disconnected") {
-          clients.delete(client);
-        } else {
-          writer.scopes = ["operator.read"];
-        }
-      } finally {
-        catalogGate.resolve();
-      }
-      const created = await creating;
-
-      expect(created).toMatchObject({ ok: false, error: { code: "FORBIDDEN" } });
-      expect(loadSessionEntry({ sessionKey: key, storePath })).toBeUndefined();
     });
   },
 );

@@ -1,8 +1,9 @@
 export class ClawMigrationError extends Error {
+  readonly path = "$.agents.defaults";
+
   constructor(
     readonly code: string,
     message: string,
-    readonly path = "$",
   ) {
     super(message);
     this.name = "ClawMigrationError";

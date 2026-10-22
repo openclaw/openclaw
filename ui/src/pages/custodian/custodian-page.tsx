@@ -1,5 +1,14 @@
 import type { SystemChangesListResult } from "@openclaw/gateway-protocol";
-import { createMemo, createSignal, onSettled, Show } from "solid-js";
+import {
+  createMemo,
+  createSignal,
+  Errored,
+  isPending,
+  latest,
+  Loading,
+  onSettled,
+  Show,
+} from "solid-js";
 import "../../components/openclaw-mascot.ts";
 import type { SidebarAttentionElementAttributes } from "../../components/sidebar-attention-element.ts";
 import { channelSnapshotHasActiveChannel } from "../../lib/channels/index.ts";
@@ -14,6 +23,7 @@ import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-brid
 import "../../styles/custodian.css";
 import { createCustodianActions } from "./custodian-actions.ts";
 import { CustodianChangeHistory, type HistorySnapshot } from "./custodian-history.tsx";
+import { CustodianChannelOnboardingNudge } from "./custodian-nudge.tsx";
 import { custodianSessionStore, type CustodianSessionStore } from "./custodian-session-store.ts";
 import { CustodianSurface } from "./custodian-surface.tsx";
 import type { CustodianRouteData } from "./route.tsx";
@@ -150,24 +160,70 @@ function CustodianPageContent(props: Props, host: SolidBridgeElement<Props>) {
       });
     setHistoryReceipt({ owner, reset, result: completion });
   }
-  const channelStatusError = () =>
-    props.onboarding && !store.read().channelOnboardingNudgeClosed && channels.read().connected
-      ? channels.read().channelsError
-      : null;
-  const showChannelOnboardingNudge = () => {
+  const channelResult = createMemo(() => {
     const state = channels.read();
+    const receipt = state.channelsRead;
     const snapshot = state.channelsSnapshot;
-    return (
-      props.onboarding &&
-      !store.read().channelOnboardingNudgeClosed &&
-      state.connected &&
-      !state.channelsLoading &&
-      channelStatusError() === null &&
-      snapshot !== null &&
-      snapshot.partial !== true &&
-      !channelSnapshotHasActiveChannel(snapshot)
-    );
-  };
+    const completion = receipt?.completion ?? Promise.resolve(state.channelsError);
+    return completion.then((error) => ({
+      error,
+      snapshot: receipt ? state.channelsSnapshot : snapshot,
+    }));
+  });
+  const channelSnapshot = createMemo(() => {
+    const result = latest(channelResult);
+    if (result.error) {
+      throw new Error(result.error);
+    }
+    return result.snapshot;
+  });
+  const channelError = (retrying: boolean, retry: () => void) => (
+    <CustodianChannelOnboardingNudge
+      error
+      retrying={retrying}
+      onAction={retry}
+      onDismiss={() => props.store.dismissChannelOnboardingNudge()}
+    />
+  );
+  const PendingChannelInventory = () => (
+    <Show when={channels.read().channelsError}>{channelError(true, () => {})}</Show>
+  );
+  const ChannelOnboarding = () => (
+    <Show
+      when={
+        props.onboarding && !store.read().channelOnboardingNudgeClosed && channels.read().connected
+      }
+    >
+      <Loading fallback={<PendingChannelInventory />}>
+        {/* Retained errors must not hide the pending reconnect or retry state. */}
+        <Show when={!isPending(channelResult)} fallback={<PendingChannelInventory />}>
+          <Errored
+            fallback={(_error, reset) =>
+              channelError(false, () => {
+                void context.channels.refresh(false);
+                reset();
+              })
+            }
+          >
+            <Show
+              when={
+                channelSnapshot() !== null &&
+                channelSnapshot()?.partial !== true &&
+                !channelSnapshotHasActiveChannel(channelSnapshot())
+              }
+            >
+              <CustodianChannelOnboardingNudge
+                error={false}
+                retrying={false}
+                onAction={() => props.store.openChannelsFromOnboarding()}
+                onDismiss={() => props.store.dismissChannelOnboardingNudge()}
+              />
+            </Show>
+          </Errored>
+        </Show>
+      </Loading>
+    </Show>
+  );
   return (
     <section
       class={[
@@ -225,10 +281,7 @@ function CustodianPageContent(props: Props, host: SolidBridgeElement<Props>) {
         actions={presentation.actions}
         onboarding={props.onboarding}
         newAgentIntent={props.newAgentIntent}
-        showChannelOnboardingNudge={showChannelOnboardingNudge()}
-        channelOnboardingError={channelStatusError()}
-        channelOnboardingRetrying={channels.read().channelsLoading}
-        onRetryChannelOnboarding={() => void context.channels.refresh(false)}
+        channelOnboardingContent={<ChannelOnboarding />}
         historyContent={
           <Show when={historyOpen() && historyAvailable()}>
             <CustodianChangeHistory
@@ -253,9 +306,7 @@ export const CustodianPage = defineSolidBridge<Props>(
       store: { default: custodianSessionStore, attribute: false },
     },
     propertyChanged: (host, key) => {
-      if (key !== "newAgentIntent") {
-        propertyReceipts.get(host)?.(key);
-      }
+      propertyReceipts.get(host)?.(key);
     },
   },
 );

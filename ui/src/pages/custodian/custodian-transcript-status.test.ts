@@ -114,6 +114,29 @@ it("waits for pending history failure before recovery", async () => {
   expect(historyCalls()).toBe(3);
 });
 
+it("releases a retired history read before its transport settles", async () => {
+  const pending = deferred<ReturnType<typeof history>>();
+  const { request } = historyRequest(
+    (call) => (call === 1 ? history("Earlier history") : pending.promise),
+    (params) => chatReply(params?.message ? "New turn completed" : "Ready"),
+  );
+  const { page } = await mountTranscript(request);
+  await waitForFast(() => expect(page.textContent).toContain("Ready"));
+  const refresh = page.store.refreshTranscriptIfIdle();
+  await waitForFast(() => expect(page.store.transcript.refreshing).toBe(true));
+  const input = page.querySelector<HTMLTextAreaElement>("textarea")!;
+  input.value = "Continue while history is pending";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  await page.updateComplete;
+  page.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
+  await waitForFast(() => expect(page.textContent).toContain("New turn completed"));
+  expect(page.store.transcript.refreshing).toBe(false);
+  pending.resolve(history("Retired history"));
+  await refresh;
+  await page.updateComplete;
+  expect(page.textContent).not.toContain("Retired history");
+});
+
 it("retries reconnect hydration once per availability edge", async () => {
   const { request, historyCalls } = historyRequest((call) => {
     if (call === 2) {

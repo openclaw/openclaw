@@ -29,12 +29,10 @@ vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
 
 vi.mock("openclaw/plugin-sdk/provider-web-search", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-web-search")>()),
-  DEFAULT_CACHE_TTL_MINUTES: 5,
   normalizeCacheKey: (k: string) => k,
   postTrustedWebToolsJson,
   readCache: () => undefined,
   readCachedSearchPayload: () => undefined,
-  resolveCacheTtlMs: () => 300_000,
   writeCache,
   writeCachedSearchPayload: writeCache,
 }));

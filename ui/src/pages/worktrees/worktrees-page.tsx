@@ -29,6 +29,7 @@ import {
   resolveSessionPreferredFaceForKey,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
+import { sessionHubTabs } from "../sessions/session-hub-tabs.ts";
 import { WorktreesModel } from "./worktrees-model.ts";
 import "../../styles/settings.css";
 import "../../styles/hub-tabs.css";
@@ -135,20 +136,7 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
     <>
       <HubPageHeader<"sessions" | "worktrees">
         active="worktrees"
-        tabs={{
-          id: "sessions",
-          items: [
-            { value: "sessions", label: t("tabs.sessions") },
-            { value: "worktrees", label: t("tabs.worktrees") },
-          ],
-          ariaLabel: t("sessionsPage.hubTablistLabel"),
-          panelId: "sessions-hub-panel",
-          onSelect: (value) => {
-            if (value === "sessions") {
-              model.context.navigate("sessions");
-            }
-          },
-        }}
+        tabs={sessionHubTabs("worktrees", (tab) => model.context.navigate(tab))}
         docsUrl={WORKTREES_DOCS_URL}
         class="sessions-hub-header"
       />

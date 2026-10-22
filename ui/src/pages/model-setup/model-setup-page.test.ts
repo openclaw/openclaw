@@ -22,6 +22,8 @@ import {
   candidate,
   callsFor,
   mockRequests,
+  answerWizard,
+  requestParameters,
 } from "./model-setup-first-run.test-support.ts";
 import {
   createContext,
@@ -263,7 +265,7 @@ describe("ModelSetupPage catalog icons", () => {
         });
       }
       if (method === "wizard.cancel") {
-        return {};
+        return { status: "running" };
       }
       if (method === "openclaw.setup.detect") {
         return configuredDetection("provider/model");
@@ -286,6 +288,8 @@ describe("ModelSetupPage catalog icons", () => {
 
     pageButton(page, "openclaw-modal-dialog .btn")?.click();
     await page.updateComplete;
+    await waitForText(page, "finishing");
+    expect(page.querySelector(".wizard-step__progress")).not.toBeNull();
     await Promise.resolve();
     expect(order).not.toContain("competing-mutation");
 
@@ -293,6 +297,65 @@ describe("ModelSetupPage catalog icons", () => {
     await competingMutation;
     expect(order.indexOf("competing-mutation")).toBeGreaterThan(order.indexOf("config.get"));
     runtimeConfig.dispose();
+  });
+
+  it("keeps wizard input busy through reconciliation and retains a rejected draft", async () => {
+    const startEntered = createDeferred();
+    const releaseStart = createDeferred();
+    const initialRefresh = createDeferred();
+    const answerRefresh = createDeferred();
+    let refreshes = 0;
+    const { context, client, request } = createFirstRunContext(undefined, () =>
+      ++refreshes === 1 ? initialRefresh.promise : answerRefresh.promise,
+    );
+    const step = { id: "provider-key", type: "text" as const, message: "Provider key" };
+    mockRequests(request, {
+      "openclaw.setup.auth.start": async () => {
+        startEntered.resolve();
+        await releaseStart.promise;
+        return { sessionId: "wizard-session", done: false, status: "running" };
+      },
+      "wizard.next": (params) => ({
+        ...runningStep(step),
+        ...("answer" in requestParameters(params)
+          ? { error: "Try a different provider key." }
+          : {}),
+      }),
+    });
+    const { page } = await mountSettings(context, client, {
+      authOptions: [authOption("provider-auth")],
+    });
+    authButton(page, "provider-auth")!.click();
+    await startEntered.promise;
+    await waitForFast(() =>
+      expect(page.querySelector<HTMLDialogElement>("openclaw-modal-dialog dialog")?.open).toBe(
+        true,
+      ),
+    );
+    releaseStart.resolve();
+    await waitForText(page, "Provider key");
+    const input = page.querySelector<HTMLInputElement>("#model-setup-wizard-text-input")!;
+    await waitForFast(() => {
+      expect(input.disabled).toBe(true);
+      expect(page.querySelector<HTMLDialogElement>("openclaw-modal-dialog dialog")?.open).toBe(
+        true,
+      );
+    });
+    initialRefresh.resolve();
+    await waitForFast(() => expect(input.disabled).toBe(false));
+
+    await answerWizard(page, "draft-key");
+    await waitForText(page, "Try a different provider key.");
+    expect(page.querySelector("#model-setup-wizard-text-input")).toBe(input);
+    expect(input.value).toBe("draft-key");
+    expect(input.disabled).toBe(true);
+    page
+      .querySelector<HTMLFormElement>("openclaw-modal-dialog form")!
+      .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    expect(callsFor(request, "wizard.next")).toHaveLength(2);
+    answerRefresh.resolve();
+    await waitForFast(() => expect(input.disabled).toBe(false));
+    expect(input.value).toBe("draft-key");
   });
 
   it("does not activate a stale candidate through a replacement connection", async () => {

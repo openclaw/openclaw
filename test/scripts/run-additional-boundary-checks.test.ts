@@ -3,7 +3,6 @@ import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   BOUNDARY_CHECKS,
@@ -25,6 +24,12 @@ import {
 } from "../helpers/fixture-receipts.js";
 import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
 import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
+import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
+import {
+  fixtureReadyBeforeSettlement,
+  isProcessPresent as isProcessAlive,
+  waitForProcessObservation,
+} from "./run-process.test-support.js";
 
 let receipts: FixtureReceiptChannel;
 beforeAll(async () => {
@@ -33,21 +38,6 @@ beforeAll(async () => {
 afterAll(async () => {
   await receipts.close();
 });
-
-async function fixtureReadyBeforeSettlement(file: string, operation: PromiseLike<unknown>) {
-  // The fixture records readiness before sending; completion and receipts use different pipes.
-  const recorded = () => fs.existsSync(file) && fs.readFileSync(file, "utf8").length > 0;
-  const verify = (error: unknown) => {
-    if (!recorded()) {
-      throw error;
-    }
-  };
-  const settled = Promise.resolve(operation).then(
-    () => verify(new Error(`timeout waiting for ${file}`)),
-    verify,
-  );
-  await Promise.race([receipts.waitFor(file, "ready"), settled]);
-}
 
 function runCli(...args: string[]) {
   return spawnSync(
@@ -78,15 +68,6 @@ function runNodeCheck(
   });
 }
 
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function killRecordedChild(pid: number | undefined, pidFile: string) {
   const childPid =
     pid ?? (fs.existsSync(pidFile) ? Number(fs.readFileSync(pidFile, "utf8")) : undefined);
@@ -102,14 +83,13 @@ function isProcessZombie(pid: number): boolean {
   return result.status === 0 && result.stdout.trim().startsWith("Z");
 }
 
-// Group teardown can finish at zombie state; this assertion additionally requires OS reaping.
-async function waitForDescendantReaped(pid: number, signal: AbortSignal): Promise<void> {
-  while (isProcessAlive(pid)) {
-    await waitForProcessTick(5, undefined, { signal }).catch((cause: unknown) => {
-      throw new Error(`process still alive: ${pid}`, { cause });
-    });
-  }
-}
+const waitForReady = (file: string, operation: PromiseLike<unknown>) =>
+  fixtureReadyBeforeSettlement(
+    receipts,
+    file,
+    operation,
+    () => fs.existsSync(file) && fs.readFileSync(file, "utf8").length > 0,
+  );
 
 describe("run-additional-boundary-checks", () => {
   it("normalizes concurrency input", () => {
@@ -328,65 +308,48 @@ describe("run-additional-boundary-checks", () => {
       let childPid: number | undefined;
       let releaseAndWait: (() => ReturnType<typeof runSingleCheck>) | undefined;
       let completion!: ReturnType<typeof runSingleCheck>;
-      const errors: unknown[] = [];
-      try {
-        const childScript = [
-          "import fs from 'node:fs';",
-          fixtureReceiptClientSource(receipts.endpoint),
-          "process.on('SIGTERM', () => {});",
-          "setInterval(() => {}, 1000);",
-          "fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_PID + '.tmp', String(process.pid));",
-          "fs.renameSync(process.env.OPENCLAW_TEST_CHILD_PID + '.tmp', process.env.OPENCLAW_TEST_CHILD_PID);",
-          "sendReceipt(process.env.OPENCLAW_TEST_CHILD_PID, 'ready');",
-        ].join("\n");
-        const parentScript = [
-          "const { spawn } = require('node:child_process');",
-          `spawn(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
-          "setInterval(() => {}, 1000);",
-        ].join("");
+      await runQaGatewayFixture(
+        async () => {
+          const childScript = [
+            "import fs from 'node:fs';",
+            fixtureReceiptClientSource(receipts.endpoint),
+            "process.on('SIGTERM', () => {});",
+            "setInterval(() => {}, 1000);",
+            "fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_PID + '.tmp', String(process.pid));",
+            "fs.renameSync(process.env.OPENCLAW_TEST_CHILD_PID + '.tmp', process.env.OPENCLAW_TEST_CHILD_PID);",
+            "sendReceipt(process.env.OPENCLAW_TEST_CHILD_PID, 'ready');",
+          ].join("\n");
+          const parentScript = [
+            "const { spawn } = require('node:child_process');",
+            `spawn(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
+            "setInterval(() => {}, 1000);",
+          ].join("");
 
-        releaseAndWait = startProcessWatchdogFixture(
-          () =>
-            (completion = runNodeCheck("wrapper-exits", parentScript, {
-              checkTimeoutMs: 100,
-              env: { ...process.env, OPENCLAW_TEST_CHILD_PID: childPidPath },
-            })),
-        );
+          releaseAndWait = startProcessWatchdogFixture(
+            () =>
+              (completion = runNodeCheck("wrapper-exits", parentScript, {
+                checkTimeoutMs: 100,
+                env: { ...process.env, OPENCLAW_TEST_CHILD_PID: childPidPath },
+              })),
+          );
 
-        await withinTest(fixtureReadyBeforeSettlement(childPidPath, completion), signal);
-        childPid = Number(fs.readFileSync(childPidPath, "utf8"));
-        expect(isProcessAlive(childPid)).toBe(true);
-        const result = await withinTest(releaseAndWait(), signal);
+          await withinTest(waitForReady(childPidPath, completion), signal);
+          childPid = Number(fs.readFileSync(childPidPath, "utf8"));
+          expect(isProcessAlive(childPid)).toBe(true);
+          const result = await withinTest(releaseAndWait(), signal);
 
-        expect(result).toMatchObject({ code: 1, timedOut: true });
-        await waitForDescendantReaped(childPid, signal);
-      } catch (error) {
-        errors.push(error);
-      } finally {
-        try {
-          await releaseAndWait?.();
-        } catch (error) {
-          if (!errors.includes(error)) {
-            errors.push(error);
-          }
-        }
-        try {
-          killRecordedChild(childPid, childPidPath);
-        } catch (error) {
-          errors.push(error);
-        }
-        try {
-          fs.rmSync(tempDir, { force: true, recursive: true });
-        } catch (error) {
-          errors.push(error);
-        }
-      }
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if (errors.length > 1) {
-        throw new AggregateError(errors, "Boundary timeout fixture failed", { cause: errors[0] });
-      }
+          expect(result).toMatchObject({ code: 1, timedOut: true });
+          const pid = childPid;
+          await waitForProcessObservation(
+            () => !isProcessAlive(pid),
+            `process ${pid} reaping`,
+            signal,
+          );
+        },
+        () => releaseAndWait?.(),
+        () => killRecordedChild(childPid, childPidPath),
+        () => fs.rmSync(tempDir, { force: true, recursive: true }),
+      );
     },
   );
 
@@ -450,7 +413,7 @@ await completion;
         });
         closed = once(runner, "close");
 
-        await withinTest(fixtureReadyBeforeSettlement(readyPath, closed), signal);
+        await withinTest(waitForReady(readyPath, closed), signal);
         childPid = Number(fs.readFileSync(childPidPath, "utf8"));
         expect(Number.isInteger(childPid)).toBe(true);
         expect(isProcessAlive(childPid)).toBe(true);

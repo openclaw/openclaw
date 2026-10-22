@@ -1,4 +1,3 @@
-import { performance } from "node:perf_hooks";
 import { expect, test, vi } from "vitest";
 import {
   deleteSessionEntryLifecycle,
@@ -20,6 +19,7 @@ test("project recents do not enumerate unrelated sessions after projection hydra
   let projection: Awaited<ReturnType<typeof createSessionRowProjection>> | undefined;
   try {
     const profile = ensureProfileForEmail("recents@example.test");
+    const actor = { type: "human" as const, source: "profile" as const, id: profile.id };
     const now = Date.now();
     const unrelated = 4_096;
     const marker = "agent:main:unrelated-0";
@@ -36,11 +36,7 @@ test("project recents do not enumerate unrelated sessions after projection hydra
               sessionId: key,
               updatedAt: now - index,
               archivedAt: now,
-              createdActor: {
-                type: "human",
-                source: "profile",
-                id: foreign ? "other" : profile.id,
-              },
+              createdActor: foreign ? { ...actor, id: "other" } : actor,
               spawnedCwd: foreign ? "/work/foreign" : `/work/recent-${Math.max(0, own - 24)}`,
             },
             { canonicalPreviousEntry: null, previousEntry: null },
@@ -65,8 +61,11 @@ test("project recents do not enumerate unrelated sessions after projection hydra
       folder: `/work/recent-${index}`,
       displayName: `recent-${index}`,
     }));
+    const expectRecents = async (recents = expected) => {
+      expect(await request()).toMatchObject({ ok: true, payload: { recents } });
+    };
     for (let index = 0; index < 2; index++) {
-      expect(await request()).toMatchObject({ ok: true, payload: { recents: expected } });
+      await expectRecents();
     }
     const originalEntries = Object.entries;
     let enumerated = 0;
@@ -77,26 +76,13 @@ test("project recents do not enumerate unrelated sessions after projection hydra
       }
       return entries;
     });
-    const elapsed: number[] = [];
     try {
       for (let index = 0; index < 7; index++) {
-        const start = performance.now();
-        const result = await request();
-        elapsed.push(performance.now() - start);
-        expect(result).toMatchObject({ ok: true, payload: { recents: expected } });
+        await expectRecents();
       }
     } finally {
       enumeration.mockRestore();
     }
-    console.info(
-      JSON.stringify({
-        boundary: "projects.list",
-        unrelated,
-        iterations: elapsed.length,
-        medianMs: elapsed.toSorted((a, b) => a - b)[3],
-        globallyEnumeratedRowsPerRequest: enumerated / elapsed.length,
-      }),
-    );
     expect(enumerated).toBe(0);
 
     const changed = "agent:main:recent-0";
@@ -104,7 +90,7 @@ test("project recents do not enumerate unrelated sessions after projection hydra
       sessionId: changed,
       updatedAt: now + 1,
       archivedAt: now,
-      createdActor: { type: "human" as const, source: "profile" as const, id: profile.id },
+      createdActor: actor,
       spawnedCwd: "/work/moved",
     };
     // A receipt without a postimage must reenter the existing exact-key worker admission.
@@ -120,15 +106,10 @@ test("project recents do not enumerate unrelated sessions after projection hydra
       scope: "session-entry",
       factsInvalidated: true,
     });
-    expect(await request()).toMatchObject({
-      ok: true,
-      payload: {
-        recents: [
-          { kind: "folder", folder: "/work/moved", displayName: "moved" },
-          ...expected.slice(0, 7),
-        ],
-      },
-    });
+    await expectRecents([
+      { kind: "folder", folder: "/work/moved", displayName: "moved" },
+      ...expected.slice(0, 7),
+    ]);
     replaceSessionEntrySync(
       { agentId: "main", sessionKey: changed },
       {
@@ -137,7 +118,7 @@ test("project recents do not enumerate unrelated sessions after projection hydra
         spawnedCwd: "/work/recent-0",
       },
     );
-    expect(await request()).toMatchObject({ ok: true, payload: { recents: expected } });
+    await expectRecents();
     const removed = "agent:main:recent-31";
     await deleteSessionEntryLifecycle({
       agentId: "main",
@@ -145,7 +126,7 @@ test("project recents do not enumerate unrelated sessions after projection hydra
       archiveTranscript: false,
       target: { canonicalKey: removed, storeKeys: [removed] },
     });
-    expect(await request()).toMatchObject({ ok: true, payload: { recents: expected.slice(0, 7) } });
+    await expectRecents(expected.slice(0, 7));
   } finally {
     projection?.dispose();
     release();

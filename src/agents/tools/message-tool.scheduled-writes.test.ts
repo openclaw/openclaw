@@ -9,6 +9,7 @@ import * as messageActionRunner from "../../infra/outbound/message-action-runner
 import * as plugins from "../../plugins/runtime.js";
 import * as fixtures from "../../test-utils/channel-plugins.js";
 import { createMessageTool, createMessageToolAsync } from "./message-tool-execution.js";
+import { resolvedMessageSecrets } from "./message-tool-execution.test-support.js";
 
 const target = "channel:100000000000000001";
 const identity = { agentId: "main", runId: "scheduled-message-run" };
@@ -172,12 +173,7 @@ it.each([
   vi.spyOn(commandSecretGateway, "resolveCommandSecretRefsViaGateway").mockImplementation(
     async ({ config: resolvedConfig, allowedPaths }) => {
       secretScopes.push(allowedPaths);
-      return {
-        resolvedConfig,
-        diagnostics: [],
-        targetStatesByPath: {},
-        hadUnresolvedTargets: false,
-      };
+      return resolvedMessageSecrets(resolvedConfig);
     },
   );
   vi.spyOn(messageActionRunner, "runMessageAction").mockImplementation(

@@ -284,10 +284,10 @@ describe("prepared model runtime config stamps", () => {
     await publish(initialConfig);
     const finishAuthRefreshGate = createDeferred();
     const authRefreshStarted = createDeferred();
-    mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, agentDir) => {
+    mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, _agentDir) => {
       authRefreshStarted.resolve();
       await finishAuthRefreshGate.promise;
-      return { agentDir: String(agentDir), wrote: false };
+      return {};
     });
 
     try {

@@ -625,6 +625,7 @@ describe("workspace file tabs", () => {
     const getFile = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(retry.promise);
     state.sessions.getFile = getFile;
     const panel = document.createElement("openclaw-chat-files-panel");
+    panel.presentation = "desktop";
     const sync = () => {
       const workspace = getSessionWorkspace(state);
       panel.previews = workspace.previews;
@@ -644,6 +645,15 @@ describe("workspace file tabs", () => {
     first.reject(new Error("temporary failure"));
     await waitForSolid(() => expect(panel.textContent).toContain("temporary failure"));
     expect(preview.content.kind).toBe("unavailable");
+    const paths = [...panel.querySelectorAll<HTMLElement>(".sidebar-file-view__path")];
+    expect(paths).toHaveLength(2);
+    panel.previews = [{ ...preview, label: "renamed.txt" }];
+    await panel.updateComplete;
+    expect([...panel.querySelectorAll(".sidebar-file-view__path")]).toEqual(paths);
+    expect(paths.map((path) => [path.textContent, path.title])).toEqual([
+      ["renamed.txt", "renamed.txt"],
+      ["renamed.txt", "renamed.txt"],
+    ]);
     void openSessionWorkspaceFile(state, { path: "retry.txt" });
     retry.resolve(textResponse(state, "retry.txt", "Ready"));
     await waitForSolid(() => expect(panel.textContent).toContain("Ready"));

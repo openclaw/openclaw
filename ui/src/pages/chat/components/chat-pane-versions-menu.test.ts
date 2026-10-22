@@ -3,7 +3,11 @@ import { createComponent, createSignal, flush, merge } from "solid-js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { mountChatPaneHeader, openNativeMenu } from "./chat-pane-header.test-support.ts";
+import {
+  mountChatPaneHeader,
+  openNativeMenu,
+  selectNativeMenu,
+} from "./chat-pane-header.test-support.ts";
 import {
   ChatSessionVersionsMobile,
   type ChatSessionVersionsMobileProps,
@@ -76,6 +80,32 @@ it("disables branch switching while the agent is working", async () => {
   container.querySelector<HTMLButtonElement>('[data-value="other"]')?.click();
   await Promise.resolve();
   expect(props.onBranchSelect).not.toHaveBeenCalled();
+});
+
+it.each([false, true])("keeps version choices live with merged chrome %s", async (mergedChrome) => {
+  const first = vi.fn();
+  const next = vi.fn();
+  const active = { leafEntryId: "active", headline: "Current", messageCount: 1, active: true };
+  const { container, update } = mountChatPaneHeader(containers, {
+    mergedChrome,
+    branches: [active, { ...active, leafEntryId: "before", active: false }],
+    onBranchSelect: first,
+  });
+  const menu = container.querySelector(".chat-pane__branches-menu")!;
+  await openNativeMenu(menu);
+  update({
+    branches: [active, { ...active, leafEntryId: "after", headline: "Updated", active: false }],
+    onBranchSelect: next,
+    branchSwitchDisabledReason: "Busy",
+  });
+  expect(container.querySelector(".chat-pane__branches-menu")).toBe(menu);
+  expect(menu.querySelector('[data-value="before"]')).toBeNull();
+  expect(menu.querySelector('[data-value="after"]')?.textContent).toContain("Updated");
+  expect(menu.querySelector<HTMLButtonElement>(".oc-menu-trigger")?.disabled).toBe(true);
+  update({ branchSwitchDisabledReason: null });
+  await selectNativeMenu(menu, "after");
+  expect(next).toHaveBeenCalledExactlyOnceWith("after");
+  expect(first).not.toHaveBeenCalled();
 });
 
 it("keeps mobile order and selection authoritative across active-first receipts, and resets on scope change", () => {

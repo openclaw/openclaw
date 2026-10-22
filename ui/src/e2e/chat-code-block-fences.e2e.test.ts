@@ -209,6 +209,9 @@ suite.define(() => {
         ).join("\n");
       await emitDelta(gateway, runId, initial, initial);
       const wrapper = page.locator(".chat-bubble.streaming .code-block-wrapper");
+      const code = wrapper.locator("code.language-ts");
+      expect(await code.locator("span").count()).toBe(0);
+      expect(await code.getAttribute("class")).not.toContain("hljs");
       const expand = wrapper.locator(".code-block-expand");
       await expand.focus();
       await page.keyboard.press("Enter");
@@ -239,6 +242,10 @@ suite.define(() => {
         .toContain("More checks.");
       expect(await composer.evaluate((element) => element === document.activeElement)).toBe(true);
       expect(await wrapper.getAttribute("class")).toContain("is-wrapped");
+      await polledAttribute(code, "class").toContain("hljs");
+      expect(await code.locator("span").count()).toBeGreaterThan(0);
+      await gateway.emitChatFinal({ runId, text: initial + suffix + " More checks." });
+      await expect.poll(() => page.locator(".chat-thread code.language-ts.hljs").count()).toBe(1);
     });
   });
 
@@ -324,29 +331,6 @@ suite.define(() => {
           .toContain("*first\n\nsecond\n");
       },
     );
-  });
-
-  it("highlights a streamed code fence only after its closing marker arrives", async () => {
-    await suite.withPage(desktop, async ({ page }) => {
-      const gateway = await installMockGateway(page);
-
-      const runId = await startRun(page, gateway, "show TypeScript");
-      const openFence = "```ts\nconst value = 1 < 2;";
-      await emitDelta(gateway, runId, openFence, openFence, Date.now());
-      const streamingCode = page.locator(".chat-bubble.streaming code.language-ts");
-      await expect.poll(() => streamingCode.textContent()).toContain("const value = 1 < 2;");
-      expect(await streamingCode.locator("span").count()).toBe(0);
-      expect(await streamingCode.evaluate((code) => code.classList.contains("hljs"))).toBe(false);
-      expect(await page.locator(".chat-bubble.streaming .code-block-copy").count()).toBe(1);
-
-      const completedFence = `${openFence}\n\`\`\``;
-      await emitDelta(gateway, runId, completedFence, "\n```", Date.now());
-      await polledAttribute(streamingCode, "class").toContain("hljs");
-      expect(await streamingCode.locator("span").count()).toBeGreaterThan(0);
-
-      await gateway.emitChatFinal({ runId, text: completedFence });
-      await expect.poll(() => page.locator(".chat-thread code.language-ts.hljs").count()).toBe(1);
-    });
   });
 
   it("releases hidden transcript observations and resumes them on the retained code", async () => {

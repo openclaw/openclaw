@@ -23,6 +23,7 @@ function createSetupRequest<Args, Result>(
   onComplete?: (result: Result) => boolean | void,
 ) {
   let controller: AbortController | undefined;
+  // Request primitives also retire when their owner is disposed before its first settle.
   onCleanup(() => {
     const retired = controller;
     controller = undefined;

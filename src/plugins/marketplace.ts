@@ -664,30 +664,6 @@ function parseMarketplaceContentLength(raw: string): number {
   return size;
 }
 
-async function* marketplaceResponseChunks(
-  body: ReadableStream<Uint8Array>,
-): AsyncIterable<Uint8Array> {
-  const reader = body.getReader();
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        return;
-      }
-      if (!value?.length) {
-        continue;
-      }
-
-      yield value;
-    }
-  } finally {
-    await reader.cancel().catch(() => undefined);
-    try {
-      reader.releaseLock();
-    } catch {}
-  }
-}
-
 async function downloadUrlToTempFile(
   url: string,
   timeoutMs?: number,
@@ -743,7 +719,7 @@ async function downloadUrlToTempFile(
       const createdWorkspace = workspace;
       const targetPath = workspace.path(fileName);
       const destination = await fsRoot(workspace.dir);
-      await destination.create(fileName, marketplaceResponseChunks(response.body), {
+      await destination.create(fileName, response.body, {
         maxBytes: MAX_MARKETPLACE_ARCHIVE_BYTES,
         mode: 0o666 & ~process.umask(),
         durable: false,

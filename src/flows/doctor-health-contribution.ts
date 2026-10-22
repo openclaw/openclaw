@@ -139,6 +139,18 @@ export function recordDoctorHealthWarnings(
   );
 }
 
+export function reportDoctorHealthFinding(
+  ctx: Pick<DoctorHealthFlowContext, "runtime" | "healthFindings" | "updateWarnings">,
+  finding: HealthFinding,
+): void {
+  recordDoctorHealthWarnings(
+    ctx,
+    [finding],
+    finding.severity === "error" ? [`${finding.checkId}: ${finding.message}`] : [],
+  );
+  renderStructuredHealthFindings(ctx, [finding]);
+}
+
 export function renderStructuredHealthFindings(
   ctx: Pick<DoctorHealthFlowContext, "runtime" | "healthFindings">,
   findings: readonly HealthFinding[],

@@ -227,15 +227,12 @@ async function installClawPackagesUnlocked(
 
       const preflight = await preflightPluginInstall({
         clawhubPackage: pkg.ref,
-        rawSpec: `clawhub:${pkg.ref}@${pkg.version}`,
         expectedVersion: pkg.version,
       });
       assertCurrent();
       if (!preflight.ok) {
         throw new Error(
-          preflight.code === "plugin_version_conflict"
-            ? `Plugin ${pkg.ref}@${pkg.version} conflicts with installed version ${preflight.installedVersion}.`
-            : preflight.error,
+          `Plugin ${pkg.ref}@${pkg.version} conflicts with installed version ${preflight.installedVersion}.`,
         );
       }
       if (preflight.action !== pkg.ownerAction) {

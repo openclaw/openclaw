@@ -281,7 +281,6 @@ export function resolveInitialDoctorHealthContributions(params: {
           }
           const { maybeRunConfiguredPluginInstallReleaseStep } =
             await import("../commands/doctor/shared/release-configured-plugin-installs.js");
-          const { note } = await import("../../packages/terminal-core/src/note.js");
           const { VERSION } = await import("../version.js");
           const result = await maybeRunConfiguredPluginInstallReleaseStep({
             cfg: ctx.cfg,
@@ -295,7 +294,7 @@ export function resolveInitialDoctorHealthContributions(params: {
           if (result.postInstallDoctorResult) {
             ctx.postInstallDoctorResult = result.postInstallDoctorResult;
           }
-          noteDoctorRepairResult(result, note);
+          noteDoctorRepairResult(result);
           if (!result.touchedConfig) {
             return;
           }

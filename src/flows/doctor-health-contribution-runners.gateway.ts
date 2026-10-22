@@ -9,6 +9,7 @@ import { resolveDoctorMode } from "./doctor-health-contribution-utils.js";
 import {
   renderStructuredHealthFindings,
   recordDoctorHealthWarnings,
+  reportDoctorHealthFinding,
 } from "./doctor-health-contribution.js";
 import { resolveDoctorWorkspaceSuggestionScopes } from "./doctor-workspace-suggestion-scopes.js";
 
@@ -72,14 +73,7 @@ export async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Pr
     ctx.prompter,
     {
       allowExecSecretRefs: ctx.options.allowExec === true,
-      onFinding: (finding) => {
-        recordDoctorHealthWarnings(
-          ctx,
-          [finding],
-          finding.severity === "error" ? [`${finding.checkId}: ${finding.message}`] : [],
-        );
-        renderStructuredHealthFindings(ctx, [finding]);
-      },
+      onFinding: (finding) => reportDoctorHealthFinding(ctx, finding),
       writeConfig: (nextConfig) => writeDoctorGatewayConfig(ctx, nextConfig),
     },
   );
@@ -112,14 +106,7 @@ export async function runSecurityHealth(ctx: DoctorHealthFlowContext): Promise<v
   await noteInstallPolicyHealth(ctx.cfg, {
     deep: ctx.options.deep === true,
     env: ctx.env,
-    onFinding: (finding) => {
-      recordDoctorHealthWarnings(
-        ctx,
-        [finding],
-        finding.severity === "error" ? [`${finding.checkId}: ${finding.message}`] : [],
-      );
-      renderStructuredHealthFindings(ctx, [finding]);
-    },
+    onFinding: (finding) => reportDoctorHealthFinding(ctx, finding),
   });
 }
 

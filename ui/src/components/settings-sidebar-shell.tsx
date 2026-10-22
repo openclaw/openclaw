@@ -1,4 +1,5 @@
 import { createMemo, onSettled } from "solid-js";
+import { sameRouteLocation } from "../app-route-paths.ts";
 import type { ShellViewHost } from "../app/app-shell-view-state.ts";
 import { currentConfigConnectionEpoch } from "../lib/config/config-state-model.ts";
 import { listen } from "../lib/reactive/listener.ts";
@@ -25,11 +26,7 @@ export function ShellSettingsSidebar(props: {
     // Owner notifications release actions before a held transition can park cleanup.
     const stopRoute = context.router.subscribe(() => {
       const next = context.router.getState().location;
-      if (
-        next.pathname !== location.pathname ||
-        next.search !== location.search ||
-        next.hash !== location.hash
-      ) {
+      if (!sameRouteLocation(next, location)) {
         location = next;
         retireCommands();
       }

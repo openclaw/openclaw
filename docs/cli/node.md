@@ -257,6 +257,12 @@ Service commands accept `--json` for machine-readable output.
 managed node service is installed; run `openclaw node install` first. Stopping
 an absent service remains a successful no-op.
 
+Profile node commands leave conflicting Gateway service definitions unchanged.
+On Linux, a profile's node name can match another profile's legacy Gateway name
+(for example, profile `work` uses `openclaw-node-work.service`). If a command
+reports that the selected service is not a node service, move the conflicting
+Gateway service to its current name before installing or managing the node.
+
 The node host retries Gateway restart and network closes in-process. If the
 Gateway reports a terminal token/password/bootstrap auth pause, the node host
 logs the close detail and exits non-zero so launchd/systemd/Task Scheduler can

@@ -9,6 +9,11 @@ read_when:
 `openclaw doctor --fix` owns the persistent file-to-SQLite migrations. This page
 describes each migration source and what to do when one stays blocked.
 
+Within a repair run, Doctor reuses a successful preflight scan while the config
+and plugin inventory remain unchanged. If either changes or migrations remain
+unresolved, Doctor scans again without repeating preflight's detection notices
+or warnings.
+
 After an interrupted legacy session import, rerun `openclaw doctor --fix` against
 the same state directory. Doctor compares retained transcripts with the importer's
 repaired representation, including legacy provider names and duplicate session

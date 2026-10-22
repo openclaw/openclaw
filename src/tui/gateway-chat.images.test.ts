@@ -13,6 +13,7 @@ import {
   type MockInstance,
 } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import { GatewayClient } from "../gateway/client.js";
 import { readImageMetadataFromHeader, resizeToJpeg } from "../media/image-ops.js";
@@ -204,6 +205,18 @@ it.each([
 it("honors cancellation before sending a request", async () => {
   await expect(load(photo, { signal: AbortSignal.abort() })).rejects.toThrow();
   expect(requests).toHaveLength(0);
+});
+
+it("rejects chunked image overflow and closes the native response", async ({ signal }) => {
+  const closed = createDeferred();
+  handler = (_req, res) => {
+    res.once("close", () => closed.resolve());
+    res.writeHead(200, { "content-type": "image/jpeg" });
+    res.write(Buffer.alloc(TUI_IMAGE_MAX_BYTES + 1));
+  };
+  await expect(load()).rejects.toThrow("Image exceeds the preview byte limit");
+  await withinTest(closed.promise, signal);
+  expect(requests).toHaveLength(1);
 });
 
 it.each([

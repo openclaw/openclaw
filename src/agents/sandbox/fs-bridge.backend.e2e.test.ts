@@ -1,14 +1,10 @@
-import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type {
-  SandboxBackendHandle,
-  SandboxBackendCommandParams,
-  SandboxBackendCommandResult,
-} from "./backend-handle.types.js";
+import type { SandboxBackendHandle } from "./backend-handle.types.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
+import { createLocalRemoteShellScriptRunner } from "./remote-fs-bridge.test-helpers.js";
 import { createSandboxTestContext } from "./test-fixtures.js";
 
 let stateDir: string;
@@ -36,10 +32,9 @@ function createBridge(workspaceAccess: "rw" | "ro" | "none" = "rw") {
       env,
       stdinMode: "pipe-closed",
     }),
-    runShellCommand: async (params) => {
-      scripts.push(params.script);
-      return runLocalShellCommand(params);
-    },
+    runShellCommand: createLocalRemoteShellScriptRunner({
+      onCommand: ({ script }) => scripts.push(script),
+    }),
   };
   const sandbox = createSandboxTestContext({
     overrides: {
@@ -60,64 +55,6 @@ async function expectContents(relativePath: string, contents: string) {
 async function expectMissing(relativePath: string) {
   await expect(fs.stat(path.join(workspaceDir, relativePath))).rejects.toMatchObject({
     code: "ENOENT",
-  });
-}
-
-async function runLocalShellCommand(
-  params: SandboxBackendCommandParams,
-): Promise<SandboxBackendCommandResult> {
-  // This backend shim executes the exact shell script the fs bridge emits, so
-  // failures prove the generated POSIX script rather than a mocked Docker call.
-  return await new Promise<SandboxBackendCommandResult>((resolve, reject) => {
-    const child = spawn(
-      "sh",
-      ["-c", params.script, "openclaw-sandbox-fs", ...(params.args ?? [])],
-      {
-        stdio: ["pipe", "pipe", "pipe"],
-      },
-    );
-
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: Buffer[] = [];
-    let aborted = false;
-
-    const onAbort = () => {
-      if (aborted) {
-        return;
-      }
-      aborted = true;
-      child.kill("SIGTERM");
-    };
-    params.signal?.addEventListener("abort", onAbort);
-
-    child.stdout?.on("data", (chunk) => {
-      stdoutChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    });
-    child.stderr?.on("data", (chunk) => {
-      stderrChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    });
-
-    child.on("error", reject);
-    child.on("close", (code) => {
-      params.signal?.removeEventListener("abort", onAbort);
-      if (aborted || params.signal?.aborted) {
-        reject(Object.assign(new Error("Aborted"), { name: "AbortError" }));
-        return;
-      }
-
-      const result = {
-        stdout: Buffer.concat(stdoutChunks),
-        stderr: Buffer.concat(stderrChunks),
-        code: code ?? 0,
-      };
-      if (result.code !== 0 && !params.allowFailure) {
-        reject(new Error(result.stderr.toString("utf8").trim() || `shell exited ${result.code}`));
-        return;
-      }
-      resolve(result);
-    });
-
-    child.stdin?.end(params.stdin);
   });
 }
 
@@ -223,13 +160,17 @@ describe.runIf(process.platform !== "win32")("sandbox fs bridge local backend e2
       filePath: "alias/note.txt",
       action: "write",
     });
-    expect(writeTarget.pinnedPath).toBe(path.join(realDir, "note.txt"));
-    expect(writeTarget.policyPath).toBe(path.join(realDir, "note.txt"));
-    await bridge.writeFile({
-      filePath: "alias/note.txt",
-      data: "pinned-write",
-      pinnedPath: writeTarget.pinnedPath,
+    expect(writeTarget).toEqual({
+      pinnedPath: path.join(realDir, "note.txt"),
+      policyPath: path.join(realDir, "note.txt"),
     });
+    await expect(
+      bridge.createFileExclusive!({
+        filePath: "alias/note.txt",
+        data: "pinned-write",
+        pinnedPath: writeTarget.pinnedPath,
+      }),
+    ).resolves.toBe("created");
     await expectContents("real/note.txt", "pinned-write");
 
     // Post-authorization alias swap: the pinned write cannot be redirected.

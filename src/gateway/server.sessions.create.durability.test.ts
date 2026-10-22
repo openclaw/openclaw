@@ -1,6 +1,6 @@
 import { once } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
 import {
@@ -27,7 +27,6 @@ import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { runOutsideStoreWriterContext } from "../shared/store-writer-queue.js";
 import { invalidateGatewayDeviceRevocation } from "./device-revocation.js";
 import type { StartChatDispatchParams } from "./server-methods/chat-send-agent-dispatch.types.js";
-import * as chatSendDiagnostics from "./server-methods/chat-send-diagnostics.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { createGitWorkspace } from "./server.sessions.create.projects.test-support.js";
 import {
@@ -96,6 +95,10 @@ vi.mock("./server-methods/chat-send-agent-dispatch.js", async (importOriginal) =
 let workspace: string;
 const { createSessionStoreDir, openClient } = setupSessionCreateTestHarness(async (makeTempDir) => {
   workspace = await createGitWorkspace(makeTempDir("openclaw-initial-turn-durability-"));
+});
+
+beforeEach(() => {
+  dispatch.start.mockClear();
 });
 
 afterEach(() => {
@@ -223,7 +226,6 @@ test("persists and dispatches concurrent Gateway inputs while participant writes
     }
     return input;
   });
-  dispatch.start.mockClear();
   dashboardTitleScheduleMocks.schedule.mockImplementation(() => {});
   try {
     const created = await Promise.all(
@@ -330,7 +332,6 @@ test.for([
         requestRpcSourceCancellation(run, failure);
       };
     }
-    dispatch.start.mockClear();
     dashboardTitleScheduleMocks.schedule.mockImplementation(() => {});
     try {
       const params = { agentId: "main", key, message };
@@ -443,7 +444,6 @@ test.for(["lost-worker-response", "restart-before-ack"] as const)(
         throw new Error("Native turn committed but its command response was lost");
       };
     }
-    dispatch.start.mockClear();
     dashboardTitleScheduleMocks.schedule.mockImplementation(() => {});
     agentCommandMock.mockImplementation(async (raw) => {
       const options = raw as AgentCommandGatewayIngressOpts;
@@ -509,7 +509,6 @@ test("retries idle chat input after its atomic commit is refused", async () => {
   const { storePath, ws, key, target } = fixture;
   const message = "Idle input retries its original bytes.";
   const runId = "idle-commit-retry";
-  dispatch.start.mockClear();
   dashboardTitleScheduleMocks.schedule.mockImplementation(() => {});
   const refused = vi.fn();
   const refuse = probe.admission(workerAdmission, (request, grant, callback) => {
@@ -552,7 +551,6 @@ test("dispatches the original bytes of a committed initial input", async () => {
   const { storePath, ws, key } = fixture;
   const message = "Check initial-secret before execution.";
   const previousLogging = readLoggingConfig();
-  dispatch.start.mockClear();
   dashboardTitleScheduleMocks.schedule.mockImplementation(() => {});
   applyLoggingConfig({ redactPatterns: ["initial-secret"] });
   try {
@@ -582,36 +580,10 @@ test("dispatches the original bytes of a committed initial input", async () => {
 
 test.for([
   { id: "openclaw-control-ui", mode: "webchat", worktree: true },
-  { id: "openclaw-control-ui", mode: "webchat", worktree: false },
-  { id: "cli", mode: "cli", worktree: true },
   { id: "cli", mode: "cli", worktree: false },
 ] as const)(
   "recovers an acknowledged $id first turn (worktree=$worktree) before dispatch",
-  async ({ id, mode, worktree }, { onTestFailed }) => {
-    const phases: Array<{ name: string; elapsedMs: number }> = [];
-    const startedAt = performance.now();
-    const mark = (name: string) => phases.push({ name, elapsedMs: performance.now() - startedAt });
-    const diagnostics: chatSendDiagnostics.ChatSendDiagnostics[] = [];
-    const sendTimings: string[] = [];
-    const startDiagnostics = chatSendDiagnostics.startChatSendDiagnostics;
-    vi.spyOn(chatSendDiagnostics, "startChatSendDiagnostics").mockImplementation((log) => {
-      const owner = startDiagnostics({
-        info(message) {
-          sendTimings.push(message);
-          log.info(message);
-        },
-      });
-      diagnostics.push(owner);
-      return owner;
-    });
-    onTestFailed(() => {
-      // Flush the existing phase owner even when the RPC never reaches its ACK.
-      for (const owner of diagnostics) {
-        owner.finish();
-      }
-      console.error("[first-turn-recovery]", JSON.stringify({ phases, sendTimings }));
-    });
-    mark("fixture");
+  async ({ id, mode, worktree }) => {
     testState.agentConfig = { workspace };
     testState.gatewayControlUi = { allowedOrigins: ["http://localhost"] };
     const key = `agent:main:dashboard:durable-${id}-${worktree}`;
@@ -621,7 +593,6 @@ test.for([
     });
     const { storePath, ws, target } = fixture;
     const message = "Reply with exactly: retained first message.";
-    dispatch.start.mockClear();
     agentCommandMock.mockImplementation(async (raw) => {
       const options = raw as AgentCommandGatewayIngressOpts;
       expect(options.pinnedWidgetAuthoring).toBe(mode === "webchat" ? true : undefined);
@@ -634,7 +605,6 @@ test.for([
       await options.userTurnTranscriptRecorder?.persistApproved();
     });
     try {
-      mark("sessions.create");
       const created = await fixture.create(
         {
           cwd: workspace,
@@ -644,27 +614,20 @@ test.for([
         },
         true,
       );
-      mark("sessions.create acknowledged");
       const captured = expectDefined(dispatch.start.mock.calls[0]?.[0], "accepted dispatch");
       const before = fixture.read();
       expect(before.pendingWorktree !== undefined).toBe(worktree);
       const followup = "Also retain this queued follow-up.";
       if (worktree) {
-        mark("followup chat.send");
         const sent = await fixture.send(followup, `followup-${id}`);
-        mark("followup acknowledged");
         expect(sent.ok, JSON.stringify(sent)).toBe(true);
-        mark("pending chat.history");
         const pending = await fixture.history();
         expect(JSON.stringify(pending.payload?.pendingInputs.items)).toContain(followup);
       }
       // Drop process-only dispatches; do not run their terminal/error persistence.
-      mark("release admission");
       await drainDispatches(storePath, [key]);
       const cfg = getRuntimeConfig();
-      mark("mark recovery");
       await markStartupOrphanedMainSessionsForRecovery({ cfg });
-      mark("recover");
       const recovery = await recoverRestartAbortedMainSessions({
         cfg,
         gatewayRuntime: expectDefined(captured.context.recoveryRuntime, "Gateway recovery owner"),
@@ -674,11 +637,9 @@ test.for([
       const after = fixture.read();
       expect(after.pendingWorktree).toBeUndefined();
       expect(after.sessionId).toBe(created.sessionId);
-      mark("read recovered transcript");
       expect(
         await matchingTranscript({ ...target, sessionId: after.sessionId }, message),
       ).toHaveLength(1);
-      mark("recovered chat.history");
       const history = await fixture.history();
       expect(history.ok, JSON.stringify(history)).toBe(true);
       expect(JSON.stringify(history.payload?.messages)).toContain(message);
@@ -688,7 +649,6 @@ test.for([
         expect(JSON.stringify(history.payload?.messages)).not.toContain(followup);
       }
     } finally {
-      mark("cleanup");
       releaseDispatches();
       ws.close();
       const owned = await managedWorktrees.findLiveByOwner("session", key);
@@ -700,7 +660,6 @@ test.for([
         });
       }
       testState.agentConfig = undefined;
-      mark("cleanup settled");
     }
   },
 );

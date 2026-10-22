@@ -960,8 +960,6 @@ src/infra/exec-allowlist-pattern.ts
 src/infra/exec-approval-action.types.ts
 src/infra/exec-approvals-core.ts
 src/infra/exec-command-resolution.ts
-src/infra/exec-safe-bin-policy-profiles.ts
-src/infra/exec-safe-bin-policy-validator.ts
 src/infra/exec-safe-bin-policy.ts
 src/infra/exec-safe-bin-semantics.ts
 src/infra/exec-safe-bin-trust.ts

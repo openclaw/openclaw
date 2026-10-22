@@ -138,7 +138,6 @@ export function createGitHubOAuthRecord(params: {
   tokens: GitHubOAuthTokenPair;
   now: number;
   pendingInitial?: GitHubOAuthPendingInitial;
-  pendingRefresh?: true;
 }): GitHubOAuthRecord {
   return {
     version: 1,
@@ -153,7 +152,6 @@ export function createGitHubOAuthRecord(params: {
     scopes: params.tokens.scopes,
     createdAtMs: params.now,
     ...(params.pendingInitial ? { pendingInitial: params.pendingInitial } : {}),
-    ...(params.pendingRefresh ? { pendingRefresh: true } : {}),
   };
 }
 

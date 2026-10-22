@@ -232,6 +232,23 @@ it.each(["client", "account", "recovery"] as const)(
   },
 );
 
+it("shows the loading notice for a new portal target while reconnecting", async () => {
+  const other = { ...portal, id: "other", title: "Other application" };
+  const source = createContext(["portal.list"], async () => ({ portals: [portal, other] }));
+  const { page } = await mountPage(source.context);
+  await waitForFrame(page);
+  const hello = source.context.gateway.snapshot.hello;
+  source.updateSnapshot({ phase: "reconnecting", hello: null });
+  await page.updateComplete;
+  toggle(page, { portalId: other.id });
+  await waitForText(page, "Loading portals");
+  expect(frameOf(page)).toBeNull();
+  expect(probePortalReachable).toHaveBeenCalledOnce();
+  source.updateSnapshot({ phase: "connected", hello });
+  await waitForTitle(page, other.title);
+  expect(probePortalReachable).toHaveBeenCalledTimes(2);
+});
+
 it("refreshes the embedded frame and keeps Portal actions scoped across desktop and mobile", async () => {
   let listed: PortalSummary[] = [portal];
   const methods = ["portal.list", "portal.close"];
@@ -357,6 +374,27 @@ it("waits for machine startup and an explicitly opened app", async () => {
   toggle(page, { portalId: portal.id });
   await waitForTitle(page, "Seeded app");
   expect(page.requestedEnvironmentId).toBeNull();
+});
+
+it("shows environment read failure and pending retry before the accepted status", async () => {
+  const first = createDeferred<EnvironmentSummary>();
+  const retry = createDeferred<EnvironmentSummary>();
+  const source = createContext(["environments.status"], async () => retry.promise);
+  source.request.mockReturnValueOnce(first.promise);
+  const { page } = await mountPage(source.context, undefined, "pending-machine");
+  await waitForText(page, "Starting your machine");
+  first.reject(new Error("Synthetic environment unavailable"));
+  await waitForText(page, "Synthetic environment unavailable");
+  const retryButton = [...page.querySelectorAll("button")].find(
+    (button) => button.textContent === "Retry",
+  )!;
+  retryButton.click();
+  await waitForSolid(() => expect(callsTo(source, "environments.status")).toHaveLength(2));
+  await waitForText(page, "Starting your machine");
+  expect(page.textContent).not.toContain("Synthetic environment unavailable");
+  retry.resolve(machine("pending-machine", "available"));
+  await waitForText(page, "Waiting for your application");
+  expect(page.querySelector("iframe")).toBeNull();
 });
 
 it("loads only the final environment from same-turn target writes", async () => {
@@ -508,7 +546,8 @@ it("requires write access instead of opening a portal without credentials", asyn
 });
 
 it("shows an unreachable notice without mounting the iframe and retries", async () => {
-  probePortalReachable.mockResolvedValueOnce("unreachable").mockResolvedValueOnce("reachable");
+  const pending = createDeferred<PortalReachability>();
+  probePortalReachable.mockResolvedValueOnce("unreachable").mockReturnValueOnce(pending.promise);
   const source = closeContext({ closed: true });
   const { page } = await mountPage(source.context);
   await waitForText(page, "Portal not reachable from this browser");
@@ -520,6 +559,10 @@ it("shows an unreachable notice without mounting the iframe and retries", async 
   );
   expect(retry).toBeDefined();
   retry?.click();
+  await waitForText(page, "Loading portal");
+  expect(page.textContent).not.toContain("Portal not reachable from this browser");
+  expect(frameOf(page)).toBeNull();
+  pending.resolve("reachable");
   await waitForFrame(page);
   expect(probePortalReachable).toHaveBeenCalledTimes(2);
 });

@@ -1,5 +1,6 @@
 import { isUtf8 } from "node:buffer";
 import fs from "node:fs/promises";
+import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { FsSafeError, readRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import {
@@ -148,17 +149,11 @@ function createActionsInputTooLargeError(source: string, cause?: unknown): FsSaf
 }
 
 async function readStdinText(): Promise<string> {
-  const chunks: Buffer[] = [];
-  let total = 0;
-  for await (const chunk of process.stdin) {
-    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    total += buf.length;
-    if (total > ACTIONS_INPUT_MAX_BYTES) {
-      throw createActionsInputTooLargeError("--actions-file - stdin");
-    }
-    chunks.push(buf);
-  }
-  return decodeJsonInput(Buffer.concat(chunks), "--actions-file - stdin");
+  const bytes = await readByteStreamWithLimit(process.stdin, {
+    maxBytes: ACTIONS_INPUT_MAX_BYTES,
+    onOverflow: () => createActionsInputTooLargeError("--actions-file - stdin"),
+  });
+  return decodeJsonInput(bytes, "--actions-file - stdin");
 }
 
 export async function readActionsPayload(opts: {

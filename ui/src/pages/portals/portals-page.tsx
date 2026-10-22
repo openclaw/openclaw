@@ -26,6 +26,7 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { showToast } from "../../lib/toast.ts";
+import { PendingEnvironment, PortalProbeLoading } from "./portals-read-states.tsx";
 import { createPortals, type PortalsModel, type PortalsPresentation } from "./portals-state.ts";
 import "../../styles/session-panel-rail.css";
 import "./portals.css";
@@ -170,6 +171,13 @@ function PortalPreview(props: {
   const frameKey = () => `${props.portal.id}\u0000${portalUrl()}`;
   const probeStatus = () =>
     state().portalProbeState?.key === frameKey() ? state().portalProbeState!.status : "probing";
+  const probeRead = createMemo(() => {
+    const probe = state().portalProbeState;
+    return probe?.key === frameKey() ? probe : undefined;
+  });
+  const probeReady = createMemo(async () => {
+    await probeRead()?.result;
+  });
   const noticeKey = () =>
     probeStatus() === "new-tab-required"
       ? "newTabRequired"
@@ -327,13 +335,13 @@ function PortalPreview(props: {
             {state().error}
           </div>
         </Show>
-        <Show
-          when={probeStatus() === "probing"}
-          fallback={
+        <Show when={probeRead()} fallback={<PortalProbeLoading />}>
+          <Loading on={probeRead()} fallback={<PortalProbeLoading />}>
+            {probeReady()}
             <Show
               when={needsNotice()}
               fallback={
-                <Show when={frameKey()} keyed>
+                <Show when={probeRead()} keyed>
                   {(_frameKey) => (
                     <iframe
                       class="portals-preview__frame"
@@ -404,11 +412,7 @@ function PortalPreview(props: {
                 />
               </Show>
             </Show>
-          }
-        >
-          <div class="portals-empty portals-preview__state" role="status" aria-live="polite">
-            <div class="portals-empty__title">{t("portalsPage.loading")}</div>
-          </div>
+          </Loading>
         </Show>
       </Show>
     </section>
@@ -507,19 +511,19 @@ export function PortalContent(props: { model: PortalsModel; mobile?: boolean }) 
     }
     return null;
   };
-  const environment = () =>
-    state().pendingEnvironment?.id === state().pendingEnvironmentId
-      ? state().pendingEnvironment
-      : null;
-  const environmentError = () =>
-    state().environmentFailure?.environmentId === state().pendingEnvironmentId
-      ? state().environmentFailure!.message
-      : null;
-  const failed = () =>
-    environmentError() ||
-    (environment() &&
-      environment()!.status !== "starting" &&
-      environment()!.status !== "available");
+  const environmentReceipt = createMemo(() => state().environmentRead);
+  const environmentReady = createMemo(async () => {
+    const read = environmentReceipt();
+    const model = props.model;
+    await read.result;
+    const current = model.state();
+    if (
+      current.environmentRead === read &&
+      current.environmentFailure?.environmentId === current.pendingEnvironmentId
+    ) {
+      throw new Error(current.environmentFailure.message);
+    }
+  });
   const selectedPortal = createMemo(() =>
     state().portals.find(
       (portal) =>
@@ -599,29 +603,23 @@ export function PortalContent(props: { model: PortalsModel; mobile?: boolean }) 
         </Show>
       }
     >
-      <section class="portals-empty" role="status" aria-live="polite">
-        <div class="portals-empty__title">
-          {t(
-            failed()
-              ? "portalsPage.environmentUnavailable"
-              : environment()?.status === "available"
-                ? "portalsPage.waitingForApp"
-                : "portalsPage.environmentStarting",
+      <Loading on={environmentReceipt()} fallback={<PendingEnvironment model={props.model} />}>
+        <Errored
+          fallback={(error, reset) => (
+            <PendingEnvironment
+              model={props.model}
+              error={formatUiError(error())}
+              retry={() => {
+                void props.model.loadPendingEnvironment();
+                reset();
+              }}
+            />
           )}
-        </div>
-        <Show when={environmentError() || environment()?.worker?.error}>
-          <p>{environmentError() ?? environment()?.worker?.error}</p>
-        </Show>
-        <Show when={failed()}>
-          <button
-            class="btn"
-            type="button"
-            onClick={() => void props.model.loadPendingEnvironment()}
-          >
-            {t("portalsPage.retry")}
-          </button>
-        </Show>
-      </section>
+        >
+          {environmentReady()}
+          <PendingEnvironment model={props.model} />
+        </Errored>
+      </Loading>
     </Show>
   );
 }

@@ -454,7 +454,6 @@ describe("Claw source-host plugin collision", () => {
   const preflightPlugin = vi.fn(async () => ({
     ok: true as const,
     action: "install" as const,
-    request: {} as never,
   }));
   const probePlugin = vi.fn(async (request: Parameters<typeof installPluginFromClawHub>[0]) => {
     await request.onPluginArtifactInspect?.({
@@ -548,9 +547,7 @@ describe("Claw source-host plugin collision", () => {
             preflightPlugin: async () => ({
               ok: false,
               code: "plugin_version_conflict",
-              request: {} as never,
               installedVersion: "2026.6.1",
-              expectedVersion: pinnedBundledPlugin.version,
             }),
             probePlugin,
             inspectPluginCapabilities: (_rootDir, pluginId) => ({

@@ -10,6 +10,7 @@ import {
   createSignal,
   createStore,
   isPending,
+  latest,
   onCleanup,
   onSettled,
 } from "solid-js";
@@ -84,6 +85,27 @@ function SessionHistory(props: PluginSessionSummaryProps, scope: SummaryScope) {
     target: scope.session,
     options: { admitAutomaticRead: current },
   }));
+  const progressReceipt = createMemo(() => ({ completion: progress.read().completion }), {
+    equals: (previous, next) => previous.completion === next.completion,
+  });
+  const progressReady = createMemo(() => progressReceipt().completion?.then(() => null) ?? null);
+  const ProgressView = () => (
+    <Show
+      when={progress.read().error}
+      fallback={
+        <SessionProgressCard
+          card={progress.read().card}
+          placement="board"
+          sessionStatus={metadata.sessionInfo?.status}
+          startedAt={metadata.sessionInfo?.startedAt}
+          endedAt={metadata.sessionInfo?.endedAt}
+          hasActiveRun={metadata.sessionInfo?.hasActiveRun === true}
+        />
+      }
+    >
+      <p role="alert">{t("sessionProgressCard.widgetUnavailable")}</p>
+    </Show>
+  );
   const refresh = () => {
     if (!current()) {
       return Promise.resolve();
@@ -321,20 +343,21 @@ function SessionHistory(props: PluginSessionSummaryProps, scope: SummaryScope) {
     <div class="plugin-session-summary">
       <Show when={progress.read().error || progress.read().card !== null}>
         <section class="plugin-session-summary__progress">
-          {progress.read().error ? (
-            <p role="alert">{t("sessionProgressCard.widgetUnavailable")}</p>
-          ) : progress.read().card === undefined ? (
-            <p>{t("sessionProgressCard.widgetLoading")}</p>
-          ) : (
-            <SessionProgressCard
-              card={progress.read().card}
-              placement="board"
-              sessionStatus={metadata.sessionInfo?.status}
-              startedAt={metadata.sessionInfo?.startedAt}
-              endedAt={metadata.sessionInfo?.endedAt}
-              hasActiveRun={metadata.sessionInfo?.hasActiveRun === true}
-            />
-          )}
+          <Loading
+            on={progressReceipt()}
+            fallback={
+              progress.read().card === undefined ? (
+                <p>{t("sessionProgressCard.widgetLoading")}</p>
+              ) : (
+                <ProgressView />
+              )
+            }
+          >
+            <Errored fallback={<p role="alert">{t("sessionProgressCard.widgetUnavailable")}</p>}>
+              {progress.read().card === undefined ? progressReady() : latest(progressReady)}
+              <ProgressView />
+            </Errored>
+          </Loading>
         </section>
       </Show>
       <Errored
