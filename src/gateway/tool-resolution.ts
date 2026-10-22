@@ -443,6 +443,7 @@ export async function resolveGatewayScopedTools(
     sessionControlAuthority,
     sandboxSessionRenameOnly,
     conversationReadOrigin: params.conversationReadOrigin,
+    inputProvenance: params.inputProvenance,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     skillWorkshop: params.skillWorkshop,
     allowMediaInvokeCommands: params.allowMediaInvokeCommands,
@@ -519,7 +520,6 @@ export async function resolveGatewayScopedTools(
           inputProvenance: params.inputProvenance,
           trustedInternalHandoff: params.trustedInternalHandoff,
           trigger: params.trigger,
-          continuesConversation: params.continuesConversation,
           approvalReviewerDeviceId: params.approvalReviewerDeviceId,
           runtimeToolAllowlist: [...mediatedToolNames],
           exec: execDefaults

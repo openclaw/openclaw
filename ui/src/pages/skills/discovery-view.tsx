@@ -1,6 +1,7 @@
-import { createMemo, For, onSettled } from "solid-js";
+import { createMemo, Errored, For, isPending, Loading, onSettled, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerSkillsBrowserEnglish } from "../../i18n/locales/en-skills-browser.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { PluginCardSummary } from "../plugins/plugin-card.tsx";
 import { skillDiscoveryEntries, type SkillDiscoveryEntry } from "./discovery.ts";
@@ -95,6 +96,10 @@ function DiscoveryCard(props: { entry: SkillDiscoveryEntry; skills: SkillsProps 
 }
 
 export function SkillDiscovery(props: SkillsProps) {
+  const query = createMemo(() => props.state.clawhubSearchQuery);
+  const connected = createMemo(() => props.state.connected);
+  const epoch = createMemo(() => props.clawhubSearchEpoch);
+  const pending = createMemo(() => isPending(props.readClawHubSearch), { loadingValue: true });
   let input: HTMLInputElement | undefined;
   const entries = createMemo(() =>
     skillDiscoveryEntries({
@@ -140,18 +145,31 @@ export function SkillDiscovery(props: SkillsProps) {
           {t("skillsPage.disconnected")}
         </p>
       )}
-      {props.state.clawhubSearchError && (
-        <div class="callout danger" role="alert">
-          {props.state.clawhubSearchError}{" "}
-          <button
-            type="button"
-            class="btn btn--sm"
-            onClick={() => props.onClawHubQueryChange(props.state.clawhubSearchQuery)}
-          >
-            {t("common.retry")}
-          </button>
-        </div>
-      )}
+      <Errored
+        fallback={(error, reset) => (
+          <Loading fallback={null}>
+            <Show when={!isPending(props.readClawHubSearch)}>
+              <div class="callout danger" role="alert">
+                {formatUiError(error())}{" "}
+                <button
+                  type="button"
+                  class="btn btn--sm"
+                  onClick={() => {
+                    props.onClawHubQueryChange(query());
+                    reset();
+                  }}
+                >
+                  {t("common.retry")}
+                </button>
+              </div>
+            </Show>
+          </Loading>
+        )}
+      >
+        <Loading on={[query(), connected(), epoch()]} fallback={null}>
+          {props.readClawHubSearch() && null}
+        </Loading>
+      </Errored>
       {props.state.clawhubInstallMessage && (
         <div
           role={props.state.clawhubInstallMessage!.kind === "error" ? "alert" : "status"}
@@ -168,21 +186,24 @@ export function SkillDiscovery(props: SkillsProps) {
       )}
       <div
         class="plugin-catalog-grid plugin-catalog-grid--results"
-        aria-busy={props.loading || props.state.clawhubSearchLoading ? "true" : "false"}
+        aria-busy={props.loading || pending() ? "true" : "false"}
       >
         <For each={entries()} keyed={(entry) => entry.id}>
           {(entry) => <DiscoveryCard entry={entry()} skills={props} />}
         </For>
       </div>
-      {entries().length === 0 &&
-        !props.loading &&
-        !props.state.clawhubSearchLoading &&
-        props.state.connected &&
-        !props.state.clawhubSearchError && (
-          <p class="muted" role="status">
-            {t("skillsPage.empty")}
-          </p>
-        )}
+      <Errored fallback={() => null}>
+        <Loading on={[query(), connected(), epoch()]} fallback={null}>
+          {props.readClawHubSearch() &&
+            entries().length === 0 &&
+            !props.loading &&
+            props.state.connected && (
+              <p class="muted" role="status">
+                {t("skillsPage.empty")}
+              </p>
+            )}
+        </Loading>
+      </Errored>
     </section>
   );
 }

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
+import * as updateFailureReport from "../../infra/update-failure-report.js";
 import {
   createUpdateRun,
   finishUpdateRun,
@@ -12,9 +12,10 @@ import {
 } from "../../infra/update-run-ledger.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqliteDir } from "../../state/openclaw-state-db.paths.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { expectMessages, expectNoCalls } from "./update-boundary.test-support.js";
 import { reportUnreportedUpdateAdmissionOutcome } from "./update-command-admission-report.js";
+import { snapshotUpdateFixtureTree } from "./update-command-filesystem-snapshot.test-support.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   UnreportedUpdateAdmissionOutcome,
@@ -29,13 +30,17 @@ import { publishUpdateCommandTerminalResultForTest as publishUpdateCommandTermin
 import { withUpdateFailureTriage } from "./update-command-triage.js";
 
 const mocks = vi.hoisted(() => ({
-  action: vi.fn<typeof import("./update-command-report.js").runInteractiveUpdateFailureAction>(),
+  select: vi.fn<() => Promise<string | symbol>>(),
+  confirm: vi.fn<() => Promise<boolean | symbol>>(),
   diagnose: vi.fn(),
   repair: vi.fn(),
 }));
 vi.mock("../../commands/triage-failure.js", () => ({ triageAfterFailure: mocks.repair }));
-// mock-isolation: Keep interactive failure actions inside the terminal fixture.
-vi.mock("./update-command-report.js", () => ({ runInteractiveUpdateFailureAction: mocks.action }));
+vi.mock("../../commands/configure.shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../commands/configure.shared.js")>()),
+  select: mocks.select,
+  confirm: mocks.confirm,
+}));
 vi.mock("../terminal-interactivity.js", () => ({ isTerminalInteractive: () => true }));
 vi.mock("../../infra/update-triage.js", () => ({
   prepareUpdateFailureTriage: async () => mocks.diagnose,
@@ -76,6 +81,7 @@ beforeEach(() => {
   for (const mock of Object.values(mocks)) {
     mock.mockReset();
   }
+  mocks.select.mockResolvedValue("dismiss");
   vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
   vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
 });
@@ -86,8 +92,6 @@ afterEach(() => {
 
 it.each([
   { status: "skipped", capturedBefore: false },
-  { status: "error", capturedBefore: false },
-  { status: "skipped", capturedBefore: true },
   { status: "error", capturedBefore: true },
 ] as const)(
   "does not borrow a nested Run for a detached $status refusal (captured before: $capturedBefore)",
@@ -96,15 +100,7 @@ it.each([
     const recorded = createUpdateRun({ trigger: "cli" }, { env });
     const run = { runId: recorded.runId, env };
     closeOpenClawStateDatabaseForTest();
-    const entries = (await fs.readdir(env.OPENCLAW_STATE_DIR, { recursive: true })).toSorted(
-      (left, right) => left.localeCompare(right),
-    );
-    const files = await Promise.all(
-      entries.map(async (entry) => {
-        const file = path.join(env.OPENCLAW_STATE_DIR, entry);
-        return (await fs.stat(file)).isFile() ? { file, body: await fs.readFile(file) } : undefined;
-      }),
-    );
+    const before = snapshotUpdateFixtureTree(env.OPENCLAW_STATE_DIR);
     const detachedRoot = dirs.make("update-detached-report-");
     vi.spyOn(os, "tmpdir").mockReturnValue(detachedRoot);
     const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
@@ -151,16 +147,7 @@ it.each([
         result.reportPath.startsWith(detachedRoot + path.sep),
     );
     expect(await fs.readFile(result.reportPath, "utf8")).toContain("fixture-admission-refused");
-    expect(
-      (await fs.readdir(env.OPENCLAW_STATE_DIR, { recursive: true })).toSorted((left, right) =>
-        left.localeCompare(right),
-      ),
-    ).toEqual(entries);
-    for (const file of files) {
-      if (file) {
-        expect(await fs.readFile(file.file)).toEqual(file.body);
-      }
-    }
+    expect(snapshotUpdateFixtureTree(env.OPENCLAW_STATE_DIR)).toEqual(before);
     expect(getUpdateRun(run.runId, { env })).toEqual(recorded);
   },
 );
@@ -211,7 +198,7 @@ it.each(["new-error", "pending-aggregate"] as const)(
       );
     }
     expect(read()).toEqual(recorded);
-    expectNoCalls(mocks.action, mocks.diagnose, mocks.repair);
+    expectNoCalls(mocks.select, mocks.diagnose, mocks.repair);
   },
 );
 
@@ -238,7 +225,7 @@ it.each([false, true])("preserves outcome after observer throws (pending=%s)", a
     expect.objectContaining({ status: result.status }),
   );
   expect(read()).toMatchObject({ status: pending ? "failed" : "succeeded" });
-  expectNoCalls(mocks.action, mocks.diagnose);
+  expectNoCalls(mocks.select, mocks.diagnose);
   expect(defaultRuntime.error).not.toHaveBeenCalledWith(
     expect.stringContaining("Update recovery remains pending"),
   );
@@ -258,29 +245,9 @@ it.each([
     });
     recordUpdateRunPhase(run.runId, phase, {}, options);
     const failure = new TypeError("Cannot complete update publication");
-    let reportBody: string | undefined;
-    mocks.action.mockImplementation(async ({ result, attemptId }) => {
-      const recordedRun = getUpdateRun(attemptId, options);
-      expect(recordedRun).toMatchObject({
-        status: "failed",
-        reason: "update-failed",
-        verification: {
-          rollbackOutcome: { status: phase === "requested" ? "not-needed" : "not-attempted" },
-        },
-      });
-      expect(result).toMatchObject({
-        status: "error",
-        reason: "update-failed",
-        failedStep: {
-          name: phase,
-          failureFacts: [expect.objectContaining({ check: phase, errorName: "TypeError" })],
-        },
-      });
-      reportBody = (
-        await prepareUpdateFailureReport({ attemptId, result: result!, recordedRun }, options)
-      ).body;
-      return "handled";
-    });
+    mocks.select.mockResolvedValue("report");
+    mocks.confirm.mockResolvedValue(false);
+    const prepare = vi.spyOn(updateFailureReport, "prepareUpdateFailureReport");
     await fails(async () => {
       if (publisher) {
         deferUpdateCommandTerminalResult(run, async () => {
@@ -290,7 +257,26 @@ it.each([
       }
       throw failure;
     });
-    expect(mocks.action).toHaveBeenCalledOnce();
+    expect(mocks.select).toHaveBeenCalledOnce();
+    expect(prepare).toHaveBeenCalledOnce();
+    const input = prepare.mock.calls[0]?.[0];
+    expect(input?.attemptId).toBe(run.runId);
+    expect(getUpdateRun(run.runId, options)).toMatchObject({
+      status: "failed",
+      reason: "update-failed",
+      verification: {
+        rollbackOutcome: { status: phase === "requested" ? "not-needed" : "not-attempted" },
+      },
+    });
+    expect(input?.result).toMatchObject({
+      status: "error",
+      reason: "update-failed",
+      failedStep: {
+        name: phase,
+        failureFacts: [expect.objectContaining({ check: phase, errorName: "TypeError" })],
+      },
+    });
+    const reportBody = (await prepare.mock.results[0]?.value)?.body;
     expect(onResult).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ runId: run.runId, status: "error", reason: "update-failed" }),
     );
@@ -310,7 +296,9 @@ it.each(["lost-authority", "pending-publication", "completed-publication"] as co
     const { env, run, read, fails, onResult } = fixture;
     let { recorded } = fixture;
     if (condition === "pending-publication") {
-      await fs.mkdir(path.join(resolveOpenClawStateSqliteDir(env), ".openclaw-restore-fixture"));
+      await fs.mkdir(
+        path.join(path.dirname(resolveOpenClawStateSqlitePath(env)), ".openclaw-restore-fixture"),
+      );
     }
     const failure =
       condition === "lost-authority"
@@ -334,7 +322,7 @@ it.each(["lost-authority", "pending-publication", "completed-publication"] as co
       condition === "completed-publication" ? 0 : 1,
     );
     expect(read()).toEqual(recorded);
-    expectNoCalls(onResult, mocks.action, mocks.diagnose);
+    expectNoCalls(onResult, mocks.select, mocks.diagnose);
     if (condition === "completed-publication") {
       expectMessages(
         defaultRuntime.error,

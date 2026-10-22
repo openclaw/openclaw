@@ -1,5 +1,7 @@
-import { createMemo } from "solid-js";
+import { createMemo, onSettled } from "solid-js";
 import type { ShellViewHost } from "../app/app-shell-view-state.ts";
+import { currentConfigConnectionEpoch } from "../lib/config/config-state-model.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import type { SettingsSidebarFallbackProps } from "./settings-sidebar-lazy.tsx";
 import {
   renderSettingsSidebar as SettingsSidebar,
@@ -11,6 +13,44 @@ export function ShellSettingsSidebar(props: {
   host: ShellViewHost;
   sidebarProps: SettingsSidebarFallbackProps;
 }) {
+  let commandLifetime = Promise.withResolvers<void>();
+  const retireCommands = () => {
+    commandLifetime.resolve();
+    commandLifetime = Promise.withResolvers<void>();
+  };
+  onSettled(() => {
+    const context = props.host.context!;
+    let location = context.router.getState().location;
+    let epoch = currentConfigConnectionEpoch(context.runtimeConfig.state);
+    // Owner notifications release actions before a held transition can park cleanup.
+    const stopRoute = context.router.subscribe(() => {
+      const next = context.router.getState().location;
+      if (
+        next.pathname !== location.pathname ||
+        next.search !== location.search ||
+        next.hash !== location.hash
+      ) {
+        location = next;
+        retireCommands();
+      }
+    });
+    const stopConfig = context.runtimeConfig.subscribe(() => {
+      const next = currentConfigConnectionEpoch(context.runtimeConfig.state);
+      if (next !== epoch) {
+        epoch = next;
+        retireCommands();
+      }
+    });
+    const stopLifecycle = context.lifecycleAbortSignal
+      ? listen(context.lifecycleAbortSignal, "abort", retireCommands)
+      : undefined;
+    return () => {
+      commandLifetime.resolve();
+      stopRoute();
+      stopConfig();
+      stopLifecycle?.();
+    };
+  });
   const sidebarProps = createMemo<SettingsSidebarProps>(() => {
     const host = props.host;
     host.shellRevision();
@@ -56,6 +96,7 @@ export function ShellSettingsSidebar(props: {
         status: runtimeConfig.configRecoveryError ? "recovery" : runtimeConfig.configAutoSaveStatus,
         lastError: runtimeConfig.configRecoveryError ?? runtimeConfig.lastError,
         needsApply: runtimeConfig.configNeedsApply,
+        saving: runtimeConfig.configSaving,
         applying: runtimeConfig.configApplying,
         applyDisabled:
           context.runtimeConfig.canApply === false ||
@@ -63,10 +104,14 @@ export function ShellSettingsSidebar(props: {
           runtimeConfig.configSaving ||
           (runtimeConfig.configFormDirty && runtimeConfig.configFormMode === "raw") ||
           updateBusy,
-        onRetry: () => void context.runtimeConfig.retry(),
-        onSave: () => void context.runtimeConfig.save(),
-        onReload: () => void context.runtimeConfig.discardDraft(),
-        onApply: () => void context.runtimeConfig.apply(),
+        presentationRetired: () => {
+          host.shellRevision();
+          return commandLifetime.promise;
+        },
+        onRetry: () => context.runtimeConfig.retry(),
+        onSave: () => context.runtimeConfig.save(),
+        onReload: () => context.runtimeConfig.discardDraft(),
+        onApply: () => context.runtimeConfig.apply(),
       },
     };
   });

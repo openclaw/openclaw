@@ -621,13 +621,11 @@ it.for([
       await expect(work).rejects.toBeInstanceOf(UpdateCommandFailure);
     }
     const result = settledResult!;
-    expect(result.candidateStartAttempted).toBe(false);
-    expect(result.exitCode).not.toBe(0);
-    expect(result.result).toMatchObject({
-      runId: created.runId,
-      status: "error",
-      reason: "state-migrated-no-rollback",
+    expect(result).toMatchObject({
+      candidateStartAttempted: false,
+      result: { runId: created.runId, status: "error", reason: "state-migrated-no-rollback" },
     });
+    expect(result.exitCode).not.toBe(0);
     if (original) {
       expect(result.result.steps).toContainEqual(
         expect.objectContaining({

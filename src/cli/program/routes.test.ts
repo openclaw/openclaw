@@ -1,4 +1,3 @@
-// Program route tests cover CLI route table registration and dispatch.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../../runtime.js";
 import {
@@ -6,6 +5,7 @@ import {
   ensureCliExecutionBootstrap,
 } from "../command-execution-startup.js";
 import { tryRouteCli } from "../route.js";
+import { expectNoCalls } from "./program.test-helpers.js";
 
 const modelsStatusCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const statusJsonCommandMock = vi.hoisted(() => vi.fn(async () => {}));
@@ -42,22 +42,28 @@ describe("program routes", () => {
 
   async function expectRunFalse(argv: string[]) {
     await expect(tryRouteCli(argv)).resolves.toBe(false);
-    expect(applyCliExecutionStartupPresentation).not.toHaveBeenCalled();
-    expect(ensureCliExecutionBootstrap).not.toHaveBeenCalled();
+    expectNoCalls(
+      vi.mocked(applyCliExecutionStartupPresentation),
+      vi.mocked(ensureCliExecutionBootstrap),
+    );
   }
 
-  it("returns false for plugins list route with unsupported arguments", async () => {
-    await expectRunFalse(routeArgv("plugins list --wat"));
-  });
+  async function expectRouted(args: string) {
+    await expect(tryRouteCli(routeArgv(args))).resolves.toBe(true);
+  }
 
-  it("defers gateway status SSH identity resolution to Commander", async () => {
-    await expectRunFalse(routeArgv("gateway status --ssh-identity ~/.ssh/id_test"));
+  it.each([
+    ["plugins", "list", "--wat"],
+    ["gateway", "status", "--ssh-identity", "~/.ssh/id_test"],
+    ["sessions", "--store", ""],
+    ["models", "--", "--status-json"],
+  ])("defers unsupported arguments %j to Commander", async (...args) => {
+    await expectRunFalse(["node", "openclaw", ...args]);
+    expect(modelsStatusCommandMock).not.toHaveBeenCalled();
   });
 
   it("routes local runtime intent with config and plugin startup disabled", async () => {
-    await expect(
-      tryRouteCli(routeArgv("gateway status --runtime-intent-only --json")),
-    ).resolves.toBe(true);
+    await expectRouted("gateway status --runtime-intent-only --json");
     expect(runDaemonStatusMock).toHaveBeenCalledWith(
       expect.objectContaining({ runtimeIntentOnly: true, json: true }),
     );
@@ -69,51 +75,18 @@ describe("program routes", () => {
   });
 
   it("routes status --json through the lean JSON command", async () => {
-    await expect(
-      tryRouteCli(routeArgv("status --json --deep --usage --agent beta --timeout 5000")),
-    ).resolves.toBe(true);
+    await expectRouted("status --json --deep --usage --agent beta --timeout 5000");
     expect(statusJsonCommandMock).toHaveBeenCalledWith(
       { deep: true, all: false, usage: true, agent: "beta", timeoutMs: 5000 },
       defaultRuntime,
     );
   });
 
-  it.each([["separate empty value", ["node", "openclaw", "sessions", "--store", ""]]])(
-    "falls back to Commander for a sessions --store $0",
-    async (_name, argv) => {
-      await expectRunFalse(argv);
-    },
-  );
-
-  it.each([["argument terminator", ["models", "--", "--status-json"]]])(
-    "leaves models parent %s to Commander",
-    async (_name, args) => {
-      await expectRunFalse(["node", "openclaw", ...args]);
-      expect(modelsStatusCommandMock).not.toHaveBeenCalled();
-    },
-  );
-
   it("accepts negative-number probe profile values", async () => {
-    await expect(
-      tryRouteCli([
-        "node",
-        "openclaw",
-        "models",
-        "status",
-        "--probe-provider",
-        "openai",
-        "--probe-timeout",
-        "5000",
-        "--probe-concurrency",
-        "2",
-        "--probe-max-tokens",
-        "64",
-        "--probe-profile",
-        "-1",
-        "--agent",
-        "default",
-      ]),
-    ).resolves.toBe(true);
+    await expectRouted(
+      "models status --probe-provider openai --probe-timeout 5000 --probe-concurrency 2 " +
+        "--probe-max-tokens 64 --probe-profile -1 --agent default",
+    );
     expect(modelsStatusCommandMock).toHaveBeenCalledWith(
       {
         probeProvider: "openai",

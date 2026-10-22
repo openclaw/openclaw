@@ -1,24 +1,22 @@
 import { performance } from "node:perf_hooks";
 import { isMainThread, threadId } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import * as sqlite from "../infra/node-sqlite.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
 import * as wal from "../infra/sqlite-wal.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { useAgentDatabaseDirectories } from "./openclaw-agent-db-lifecycle.test-support.js";
 import * as permissions from "./openclaw-agent-db-permissions.js";
 import * as registry from "./openclaw-agent-db-registry.js";
 import * as schema from "./openclaw-agent-db-schema.js";
 import {
   closeOpenClawAgentDatabaseByPath as closeAgentDb,
   closeOpenClawAgentDatabasesForTest,
-  closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase as openAgentDb,
   withOpenClawAgentDatabaseAsync as withAgentDb,
   resolveOpenClawAgentSqlitePath as agentDbPath,
 } from "./openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
 const logger = vi.hoisted(() => ({ warn: vi.fn() }));
 vi.mock("../logging/subsystem.js", async (importOriginal) => {
@@ -32,20 +30,15 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
   };
 });
 
-const tempDirs: string[] = [];
-afterEach(async () => {
+const tempDirs = useAgentDatabaseDirectories(() => {
   vi.restoreAllMocks();
-  await closeOpenClawAgentDatabasesAsync();
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-  cleanupTempDirs(tempDirs);
-  logger.warn.mockClear();
 });
+afterEach(() => logger.warn.mockClear());
 
 function createTimedOpen(indexRepairMs = 0) {
   const options = {
     agentId: "timing-test",
-    env: { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "openclaw-agent-open-timing-") },
+    env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-agent-open-timing-") },
   };
   const pathname = agentDbPath(options);
   let elapsedMs = 0;

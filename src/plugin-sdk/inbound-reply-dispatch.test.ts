@@ -15,7 +15,7 @@ import * as legacy from "./inbound-reply-dispatch.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 it("keeps the deprecated package subpath compatibility exports", () => {
-  const callableExports = [
+  for (const exportName of [
     "hasFinalInboundReplyDispatch",
     "hasVisibleInboundReplyDispatch",
     "resolveInboundReplyDispatchCounts",
@@ -27,9 +27,7 @@ it("keeps the deprecated package subpath compatibility exports", () => {
     "runPreparedInboundReply",
     "runChannelInboundEvent",
     "dispatchChannelInboundReply",
-  ] as const;
-
-  for (const exportName of callableExports) {
+  ] as const) {
     expect(legacy[exportName], exportName).toBeTypeOf("function");
   }
 
@@ -58,15 +56,17 @@ it("keeps public channel-inbound entry points drop-capable", () => {
 });
 
 it("records and dispatches through dispatchInboundReplyWithBase", async () => {
-  const recordInboundSession = vi.fn(async () => undefined) as unknown as RecordInboundSession;
+  const recordInboundSession = vi.fn<RecordInboundSession>(async () => undefined);
   const deliver = vi.fn(async () => undefined);
-  const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async (params) => {
-    await params.dispatcherOptions.deliver(
-      { text: "hello", mediaUrls: ["https://example.com/a.png"] },
-      { kind: "final" },
-    );
-    return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
-  }) as DispatchReplyWithBufferedBlockDispatcher;
+  const dispatchReplyWithBufferedBlockDispatcher = vi.fn<DispatchReplyWithBufferedBlockDispatcher>(
+    async (params) => {
+      await params.dispatcherOptions.deliver(
+        { text: "hello", mediaUrls: ["https://example.com/a.png"] },
+        { kind: "final" },
+      );
+      return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
+    },
+  );
   const ctxPayload = {
     Body: "body",
     RawBody: "body",

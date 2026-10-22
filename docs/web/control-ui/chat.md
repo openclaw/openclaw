@@ -190,8 +190,13 @@ Tap an image to open the zoomable viewer. The existing preview stays visible
 while a sharper, screen-sized rendition loads. If that request fails, **Retry**
 loads it again without replacing the preview or opening another tab. Swiping to
 a gallery image loads that selection, not the rest of the gallery in advance.
-**Download image** fetches the original only when selected. Copy and download
-also remain available from the image's action menu when a preview cannot load.
+Hover over a managed image, or focus it with the keyboard, to reveal **Copy image**
+and **Download image** inside its lower-right corner. Devices without hover keep
+these controls visible. Selecting the image itself still opens the viewer.
+**Download image** fetches the original only when selected. A failed preview can
+still have an accessible original, so its action menu retains copy and download.
+When the Gateway confirms that the source is unavailable, the card omits these
+file actions and keeps its applicable recovery action, such as **Retry**.
 Third-party image URLs retain a secondary browser link because their servers
 may allow image display but block cross-origin downloads; this is not a recovery
 action for uploaded or managed previews.
@@ -519,7 +524,9 @@ The naming model is asked for a plain-text label of that message, not of injecte
 harness or project instructions, and not a copy of the input's JSON wrapper.
 They are generated separately from the agent's work, so a title is not a completion
 status or a report of tool access. Existing titles and manual names are left
-unchanged; click a title to rename it.
+unchanged; click a title to rename it. A connected conversation without a saved
+session record keeps its ordinary title. Renaming requires that record and the
+appropriate access.
 
 Worktree creation waits up to 30 seconds for a title, then proceeds while naming
 finishes in the background. A late title still updates the session without
@@ -561,12 +568,13 @@ Run-error banners offer **Refresh** to reload the conversation without resending
 
 <AccordionGroup>
   <Accordion title="Send and history semantics">
+    - With the composer caret at the start, ArrowUp recalls earlier prompts and ArrowDown returns to your draft. Each new traversal includes newly loaded history; an active traversal keeps its order.
     - `chat.send` is **non-blocking**: it acknowledges admission with `{ runId, status: "started" }` and the response streams via `chat` events. An optional `messageSeq` identifies an already committed transcript position; it is omitted when input remains only in accepted custody. Trusted Control UI clients may also receive optional ACK timing metadata for local diagnostics.
     - Chat uploads accept images, videos, and other files. Images keep the native image path; other files are stored as managed media and shown in history as attachment links. Files appear in their final composer slots as soon as preparation starts, with a per-file progress fill and an in-place error icon if reading fails. Before sending, use **Remove attachment** at the corner of a staged attachment, including one still being prepared; the control supports touch and keyboard input in both Chat and New Session.
     - Opening a Markdown attachment (`.md`, `.markdown`, or a Markdown MIME type) in the side panel shows formatted headings, lists, tables, and code blocks. HTML attachments open a sandboxed page with a **Source** switch; other text attachments stay literal. HTML attachment previews accept up to 2 MiB of UTF-8 content; other text previews keep the 256 KiB limit. All retain the original download link; Markdown does not execute embedded HTML or automatically load remote images.
     - Same-origin PDF attachments up to 16 MiB open in a native reader that fills the side panel. Background download-link renewal keeps the reader’s page and zoom when the document is unchanged. Unavailable or oversized previews offer the original download instead; external PDFs and Office documents remain download-only.
     - Staged attachments scroll horizontally when they no longer fit. Faded edges show where more attachments remain, including after adding files or resizing the composer.
-    - Re-sending with the same `idempotencyKey` returns `{ status: "in_flight" }` while running, and `{ status: "ok" }` after completion.
+    - Re-sending with the same `idempotencyKey` returns `{ status: "in_flight" }` while running, and `{ status: "ok" }` after completion. A replayed receipt for an earlier input preserves any other active response, tool activity, and Stop target in the same conversation.
     - `chat.history` responses are size-bounded for UI safety. When transcript entries are too large, Gateway may truncate long text fields, omit heavy metadata blocks, and replace oversized messages with a placeholder (`[chat.history omitted: message too large]`).
     - Long tool output uses 2,000-character text previews in history. Complete structured results keep their existing display limit so source cards and embedded views remain available. Choose **Show full output** to load the captured result on demand; copying or downloading from that view uses the full result. User and assistant text keep their separate display limits.
     - When a visible assistant message was truncated in `chat.history`, the Control UI automatically fetches the full display-normalized transcript entry through `chat.message.get` by `sessionKey`, active `agentId` when needed, and transcript `messageId`. The preview remains visible while the entry loads; recovered text replaces it inline.
@@ -640,6 +648,7 @@ Run-error banners offer **Refresh** to reload the conversation without resending
     - Exact-run Stop cancels that parent's associated sub-agents and Swarm collectors, including their descendants. Successful cancellation prevents selected queued children from starting while running siblings stop; it leaves unrelated parent turns and session-wide queues alone.
     - If Stop reports incomplete descendant cancellation, inspect the remaining native subagent runs with `/subagents list` and ask the agent to retry their cancellation with `subagents`. Do not treat the parent's stopped state as confirmation that every child stopped or that runtime cleanup was instantaneous. See [Sub-agent stopping](/tools/subagents#stopping) for scope details.
     - While a run is active, normal follow-ups use the Gateway's effective `messages.queue` mode. `steer` injects into the running turn; other modes keep the browser's durable queued delivery. If the Gateway queues an input instead of steering it, the message appears above the composer until consumed or canceled. Reconnecting also recovers queued inputs from older history pages without changing the page you are viewing. Once the Gateway accepts input for an existing session, its database owns the approved input until it reaches the transcript. Collected messages are retired together with their combined transcript entry. Unconsumed input survives a Gateway restart as interrupted input requiring an explicit resend. Click **Steer** on a browser-owned queued message to inject it manually; removing a server-owned queued message requests its cancellation. A message you steer moves once from the queue to the bottom of the transcript when delivery starts. It stays there while acknowledgment and history catch up, until its saved copy replaces it. Accepted messages keep their saved transcript positions: earlier saved output stays above the steer and later output appears below it. This order survives history refreshes, reconnects, and reloading a finished run. Unsaved assistant text remains a single live tail after saved rows until its own transcript entries arrive.
+    - Type `/steer <message>` to steer explicitly. Once consumed, the message belongs in the transcript, with no separate command chip waiting for the entire run to finish. If the Gateway defers the input, its queued message remains above the composer until consumed or canceled.
     - With **Settings → Appearance → Send shortcut** set to **Enter**, **Cmd/Ctrl+Enter** submits the opposite follow-up action while connected to an active run: queue when Enter steers, or steer when Enter queues (including inherited `collect` and `followup` modes). The send button tooltip shows both actions for the current follow-up setting. This affects only that message, not your saved preference. With the **Cmd/Ctrl+Enter** send shortcut selected, modified Enter remains the normal send action and plain Enter inserts a newline. Interrupt mode keeps its normal behavior.
     - Reorder the queue from the handle on the left of a queued message: drag it, or focus it and press the up and down arrow keys. The position is stored with the message, so it survives a reload and decides delivery order, not just what the list looks like. Rows already handed to a run — sending, steering, running a command, awaiting settings, or waiting on an uncertain delivery — hold their place and split the queue: a message moves only among the rows between two of them, so it can never reach the Gateway ahead of work already handed over.
     - Edit a queued message with the pencil on its row, or by double-clicking the row. The row becomes its own textarea and stays in place while the main composer remains independent, including any separate draft and attachments. Submit replaces the row in the same slot and preserves its attachments and delivery choice, even when the composer currently defaults to Steer or Interrupt; Cancel or Escape discards the row-local draft and restores the queued message. A normal composer send remains a separate queued item even while a row edit is open. The queue behind an edited row waits rather than delivering a message you are still rewriting, so that row splits the queue for reordering the same way an in-flight row does. Queued slash commands keep the discard-and-retype flow.
@@ -814,7 +823,8 @@ cancel native clipboard writes that the browser has already accepted.
 
 Markdown tables wrap headings and cell text to fit the conversation. On wide desktop
 panes, top-level assistant tables stay at the reading width when their content fits
-and use extra space only as needed, without widening the surrounding prose. Long
+and use extra space only as needed, without widening the surrounding prose or
+borrowing the space reserved for an open Details panel. Long
 cells wrap within the pane limit; genuinely dense tables still scroll horizontally.
 Short values such as byte counts stay intact beside long filenames or hashes, including on mobile.
 Table controls appear below the table. Wide desktop tables use compact icon-only
@@ -843,8 +853,10 @@ flowchart LR
 ```
 ````
 
-Open the **Diagram options** menu in the top-right corner to switch between the
-diagram and source or choose **Expand diagram** for the image viewer with zoom.
+Click or tap the diagram to open the image viewer with zoom. With keyboard
+focus on the diagram, press **Enter** or **Space**. The **Diagram options** menu
+in the top-right corner still lets you switch between the diagram and source
+or choose **Expand diagram**.
 The copy button appears on hover or keyboard focus and stays visible on touch
 screens. It copies the original Mermaid text.
 Diagram colors and fonts follow the current UI theme.

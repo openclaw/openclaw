@@ -1,6 +1,8 @@
-import { createSignal, createMemo, Show } from "solid-js";
+import { createSignal, createMemo, Errored, isPending, Loading, Show } from "solid-js";
 import type { SessionWorkspaceListResult } from "../../../api/types.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { formatUiError } from "../../../lib/format-error.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createScrollPosition } from "../../../lib/reactive/scroll-state.ts";
 import { sessionWorkspaceFileKey } from "../../../lib/sessions/workspace.ts";
 import { WorkspaceTranscriptAttachments } from "./chat-session-workspace-attachments.tsx";
@@ -11,8 +13,11 @@ import {
   type SessionWorkspaceMobileProps,
   type SessionWorkspaceMobileStatus,
 } from "./chat-session-workspace-mobile.tsx";
+import { createSessionWorkspaceRead } from "./chat-session-workspace-read.ts";
 import type { SessionWorkspaceProps } from "./chat-sidebar-view-types.ts";
 import { hasTranscriptAttachments } from "./chat-transcript-attachments.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 type File = SessionWorkspaceListResult["files"][number];
 
@@ -25,8 +30,6 @@ type MobileWorkspaceProjection = Pick<
   | "browserPath"
   | "browserSearch"
   | "filter"
-  | "loading"
-  | "error"
   | "connected"
   | "mobileNavigation"
   | "onRetry"
@@ -102,15 +105,13 @@ function projectMobileWorkspace(workspace: MobileWorkspaceProjection): {
     }
   }
   let status: SessionWorkspaceMobileStatus;
-  if (workspace.error) {
-    status = { kind: "error", message: workspace.error, onRetry: workspace.onRetry };
-  } else if (workspace.connected === false && !list) {
+  if (workspace.connected === false && !list) {
     status = {
       kind: "unavailable",
       message: t("chat.workspaceFiles.mobile.disconnected"),
       onRetry: workspace.onRetry,
     };
-  } else if (!list || (!browser && listed && (workspace.loading || query))) {
+  } else if (!list || (!browser && listed && query)) {
     status = { kind: "loading" };
   } else if (
     groups.length ||
@@ -118,9 +119,7 @@ function projectMobileWorkspace(workspace: MobileWorkspaceProjection): {
       workspace.filter === "all" &&
       hasTranscriptAttachments(workspace.transcriptAttachments, query))
   ) {
-    status = { kind: "ready", refreshing: workspace.loading };
-  } else if (workspace.loading) {
-    status = { kind: "loading" };
+    status = { kind: "ready", refreshing: false };
   } else if (!browser && (path || workspace.filter === "all")) {
     status = {
       kind: "unavailable",
@@ -144,14 +143,13 @@ function projectMobileWorkspace(workspace: MobileWorkspaceProjection): {
 export function MobileWorkspaceContents(props: {
   workspace: SessionWorkspaceProps & Pick<SessionWorkspaceMobileProps, "onScrollPortRef">;
 }) {
+  const { read, scope } = createSessionWorkspaceRead(() => props.workspace);
   const sessionKey = createMemo(() => props.workspace.sessionKey);
   const attachments = createMemo(() => props.workspace.transcriptAttachments);
   const list = createMemo(() => props.workspace.list);
   const path = createMemo(() => props.workspace.browserPath);
   const query = createMemo(() => props.workspace.browserSearch);
   const filter = createMemo(() => props.workspace.filter);
-  const loading = createMemo(() => props.workspace.loading);
-  const error = createMemo(() => props.workspace.error);
   const connected = createMemo(() => props.workspace.connected);
   const cachedBrowser = createMemo(() => props.workspace.directories?.[path()]?.browser);
   const expanded = {
@@ -171,8 +169,6 @@ export function MobileWorkspaceContents(props: {
       browserPath: path(),
       browserSearch: query(),
       filter: filter(),
-      loading: loading(),
-      error: error(),
       connected: connected(),
       cachedBrowser: cachedBrowser(),
       onRetry,
@@ -230,7 +226,7 @@ export function MobileWorkspaceContents(props: {
       props.workspace.onMobileScroll?.(top);
     }
   };
-  return (
+  const View = (view: { status: SessionWorkspaceMobileStatus }) => (
     <SessionWorkspaceMobile
       attachmentContent={
         <Show when={!path() && filter() === "all" && attachments()}>
@@ -244,7 +240,7 @@ export function MobileWorkspaceContents(props: {
         </Show>
       }
       groups={model().groups}
-      status={model().status}
+      status={view.status}
       location={location()}
       filter={filter()}
       search={query()}
@@ -254,10 +250,38 @@ export function MobileWorkspaceContents(props: {
       onOpenFileInsideFiles={(file, origin) => props.workspace.onOpenFile(file, origin)}
       onOpenArtifactInsideFiles={(id) => props.workspace.onOpenArtifact(id)}
       onToggleGroup={(kind) => props.workspace.onToggleMobileGroup?.(kind)}
-      onSearchFocus={() => props.workspace.onSearchFocus?.()}
       onScrollElement={onScrollElement}
       onScrollPortRef={props.workspace.onScrollPortRef}
       onScroll={onScroll}
     />
+  );
+  return (
+    <Errored
+      fallback={(error, reset) => (
+        <View
+          status={{
+            kind: "error",
+            message: formatUiError(error()),
+            onRetry: () => {
+              onRetry();
+              reset();
+            },
+          }}
+        />
+      )}
+    >
+      <Loading on={scope()} fallback={<View status={{ kind: "loading" }} />}>
+        {read()}
+        <View
+          status={
+            isPending(read)
+              ? model().status.kind === "ready"
+                ? { kind: "ready", refreshing: true }
+                : { kind: "loading" }
+              : model().status
+          }
+        />
+      </Loading>
+    </Errored>
   );
 }

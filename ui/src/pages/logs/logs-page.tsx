@@ -1,6 +1,6 @@
 import "../../styles/logs.css";
 import type { LogsTailResult } from "@openclaw/gateway-protocol";
-import { createSignal, onCleanup, onSettled } from "solid-js";
+import { createSignal, createStore, onSettled } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import {
   beginPanelRefresh,
@@ -25,7 +25,7 @@ import {
   type LogEntry,
   type LogLevel,
 } from "./log-lines.ts";
-import { LogsView } from "./view.tsx";
+import { LogsView, type LogsReadCompletion } from "./view.tsx";
 
 declare module "@solidjs/web" {
   namespace JSX {
@@ -38,30 +38,44 @@ declare module "@solidjs/web" {
 const LOG_BUFFER_LIMIT = 2000;
 const LOGS_POLL_INTERVAL_MS = 2000;
 
-export function LogsPage() {
+export function renderSolid() {
+  return (
+    <ShellLayoutBoundary traits={{ logsPage: true, toolbarHeader: true, settingsWorkspace: true }}>
+      <LogsPage />
+    </ShellLayoutBoundary>
+  );
+}
+
+function LogsPage() {
   const context = useApplication();
   const [status, setStatus] = createSignal(createPanelRefreshStatus(), { ownedWrite: true });
   const [file, setFile] = createSignal<string | null>(null, { ownedWrite: true });
-  const [entries, setEntries] = createSignal<LogEntry[]>([], { ownedWrite: true });
+  const [entries, setEntries] = createStore<LogEntry[]>([], { shallow: true });
   const [filterText, setFilterText] = createSignal("");
-  const [levelFilters, setLevelFilters] = createSignal<Record<LogLevel, boolean>>({
+  const [levelFilters, setLevelFilters] = createStore<Record<LogLevel, boolean>>({
     ...DEFAULT_LOG_LEVEL_FILTERS,
   });
   const [autoFollow, setAutoFollow] = createSignal(true);
   const [truncated, setTruncated] = createSignal(false, { ownedWrite: true });
-  const [requestState, setRequestState] = createSignal<"idle" | "quiet" | "visible">("idle", {
+  const [completion, setCompletion] = createSignal<LogsReadCompletion | null>(null, {
     ownedWrite: true,
   });
   let cursor: number | null = null;
   let cursorBootId: string | undefined;
-  let request: AbortController | null = null;
+  let request:
+    | (LogsReadCompletion & {
+        controller: AbortController;
+        resolve: (status: ReturnType<typeof createPanelRefreshStatus> | null) => void;
+      })
+    | null = null;
   let disposed = false;
   let stream: HTMLElement | undefined;
 
   const cancelRequest = () => {
-    request?.abort();
+    request?.controller.abort();
+    request?.resolve(null);
     request = null;
-    setRequestState("idle");
+    setCompletion(null);
   };
   const polling = useVisiblePoll(LOGS_POLL_INTERVAL_MS, () => void loadLogs({ quiet: true }));
   const gateway = useGatewayPage({
@@ -71,7 +85,7 @@ export function LogsPage() {
       cursorBootId = undefined;
       setStatus(createPanelRefreshStatus());
       setFile(null);
-      setEntries([]);
+      setEntries(() => []);
       setTruncated(false);
       follow.reset();
     },
@@ -102,9 +116,10 @@ export function LogsPage() {
       return false;
     }
     cancelRequest();
-    const current = new AbortController();
+    const result = Promise.withResolvers<ReturnType<typeof createPanelRefreshStatus> | null>();
+    const current = { controller: new AbortController(), quiet: Boolean(options.quiet), ...result };
     request = current;
-    setRequestState(options.quiet ? "quiet" : "visible");
+    setCompletion(current);
     setStatus((previous) => beginPanelRefresh(previous, { clearError: !options.quiet }));
     const bootId = gateway.snapshot?.hello?.server?.bootId;
     const resetCursor = options.reset || bootId !== cursorBootId;
@@ -112,12 +127,13 @@ export function LogsPage() {
     const previousFile = file();
     const isCurrent = () =>
       !disposed && request === current && context.gateway === source && gateway.isCurrent(scope);
+    let accepted: ReturnType<typeof createPanelRefreshStatus> | null = null;
     try {
       const tail = (nextCursor?: number) =>
         scope.client.request<LogsTailResult>(
           "logs.tail",
           { cursor: nextCursor, limit: 500, maxBytes: 250_000 },
-          { signal: current.signal },
+          { signal: current.controller.signal },
         );
       let payload = await tail(previousCursor ?? undefined);
       if (!isCurrent()) {
@@ -133,14 +149,24 @@ export function LogsPage() {
       }
       const nextEntries = payload.lines.map(parseLogLine);
       const reset = resetCursor || sourceChanged || payload.reset || previousCursor === null;
-      setEntries((previous) =>
-        reset ? nextEntries : [...previous, ...nextEntries].slice(-LOG_BUFFER_LIMIT),
+      // Truncation belongs to the displayed history until a complete tail replaces it.
+      setTruncated(
+        Boolean(payload.truncated) ||
+          (!reset && truncated()) ||
+          (reset ? nextEntries.length : entries.length + nextEntries.length) > LOG_BUFFER_LIMIT,
       );
+      setEntries((draft) => {
+        if (reset) {
+          draft.length = 0;
+        }
+        draft.push(...nextEntries);
+        draft.splice(0, Math.max(0, draft.length - LOG_BUFFER_LIMIT));
+      });
       cursor = payload.cursor;
       cursorBootId = bootId;
       setFile(payload.file);
-      setTruncated(Boolean(payload.truncated));
-      setStatus(completePanelRefresh());
+      accepted = completePanelRefresh();
+      setStatus(accepted);
       follow.schedule();
       return true;
     } catch (error) {
@@ -148,21 +174,21 @@ export function LogsPage() {
         return false;
       }
       if (isMissingOperatorReadScopeError(error)) {
-        setEntries([]);
+        setEntries(() => []);
+        setTruncated(false);
         const failed = failPanelRefresh(createPanelRefreshStatus(), error, gateway.snapshot);
-        setStatus(
-          failed.error
-            ? { ...failed, error: formatMissingOperatorReadScopeMessage("logs") }
-            : failed,
-        );
+        accepted = failed.error
+          ? { ...failed, error: formatMissingOperatorReadScopeMessage("logs") }
+          : failed;
       } else {
-        setStatus((previous) => failPanelRefresh(previous, error, gateway.snapshot));
+        accepted = failPanelRefresh(status(), error, gateway.snapshot);
       }
+      setStatus(accepted);
       return false;
     } finally {
       if (request === current) {
+        current.resolve(accepted);
         request = null;
-        setRequestState("idle");
       }
     }
   }
@@ -171,10 +197,6 @@ export function LogsPage() {
     container: () => stream,
     enabled: autoFollow,
     identity: () => gateway.epoch,
-  });
-  onCleanup(() => {
-    disposed = true;
-    cancelRequest();
   });
   onSettled(() => {
     const resetContentScroll = () => {
@@ -186,7 +208,13 @@ export function LogsPage() {
     };
     resetContentScroll();
     const frame = requestAnimationFrame(resetContentScroll);
-    return () => cancelAnimationFrame(frame);
+    return () => {
+      disposed = true;
+      request?.controller.abort();
+      request?.resolve(null);
+      request = null;
+      cancelAnimationFrame(frame);
+    };
   });
 
   return (
@@ -194,24 +222,26 @@ export function LogsPage() {
       <ShellLayoutBoundary traits={{ logsPage: true, toolbarHeader: true }}>
         <section class="content-header">
           <div>
-            <div class="page-title">{t("tabs.logs")}</div>
+            <h1 class="page-title">{t("tabs.logs")}</h1>
           </div>
         </section>
         <SettingsWorkspace fillHeight>
           <LogsView
-            loading={requestState() === "visible"}
-            refreshDisabled={!gateway.connected || requestState() !== "idle"}
+            completion={completion()}
+            refreshDisabled={!gateway.connected}
             status={status()}
             file={file()}
-            entries={entries()}
+            entries={entries}
             filterText={filterText()}
-            levelFilters={levelFilters()}
+            levelFilters={levelFilters}
             autoFollow={autoFollow()}
             truncated={truncated()}
             onStreamRef={(element) => (stream = element)}
             onFilterTextChange={setFilterText}
             onLevelToggle={(level, enabled) =>
-              setLevelFilters((previous) => ({ ...previous, [level]: enabled }))
+              setLevelFilters((draft) => {
+                draft[level] = enabled;
+              })
             }
             onToggleAutoFollow={(enabled) => {
               setAutoFollow(enabled);

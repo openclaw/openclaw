@@ -1,10 +1,13 @@
 // Only inference is synthetic; file writes, publication,
 // durable history, download authorization, and the browser sandbox are production paths.
+import { createHash } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { buffer } from "node:stream/consumers";
+import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import type { BrowserContext, Frame, Page } from "playwright";
 import { expect, it } from "vitest";
 import { writeToolCall } from "../../../src/gateway/gateway-provider-fixture.test-support.ts";
 import { ensureGatewayOwnerProfile } from "../../../src/state/user-profiles.ts";
@@ -15,8 +18,14 @@ import {
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
+import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { pairControlUiPage } from "../test-helpers/control-ui-browser-pairing.ts";
+import {
+  installControlUiE2ePageDiagnosticRing,
+  recordControlUiE2eFailureFacts,
+} from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { clickBoardWidgetControl } from "../test-helpers/control-ui-e2e-widget.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -29,6 +38,163 @@ const finalHtml = `<!doctype html><html><head><meta charset="utf-8"><title>Imple
 <output id="value">0</output><script>let count=0;document.querySelector('#count').onclick=()=>document.querySelector('#value').textContent=String(++count);</script></body></html>\r\n`;
 let instance: OpenClawTestInstance;
 let sourcePath: string;
+
+async function installCountDiagnostics(context: BrowserContext, page: Page) {
+  const key = "__OPENCLAW_HTML_PUBLICATION_DOCUMENT__";
+  const prefix = "[html-publication-probe] ";
+  const observations: unknown[] = [];
+  const record = (value: unknown) => {
+    observations.push(value);
+    if (observations.length > 64) {
+      observations.shift();
+    }
+  };
+  const frameIds = new Map<Frame, number>();
+  const frameId = (frame: Frame): number => {
+    let id = frameIds.get(frame);
+    if (id === undefined) {
+      id = frameIds.size;
+      frameIds.set(frame, id);
+    }
+    return id;
+  };
+  const recordFrameEvent = (event: string, frame: Frame) => {
+    const parent = frame.parentFrame();
+    record({ event, at: Date.now(), frame: frameId(frame), parent: parent && frameId(parent) });
+  };
+  page.on("frameattached", (frame) => recordFrameEvent("frameattached", frame));
+  page.on("framenavigated", (frame) => recordFrameEvent("framenavigated", frame));
+  page.on("framedetached", (frame) => recordFrameEvent("framedetached", frame));
+  page.on("response", (response) => {
+    if (new URL(response.url()).pathname === "/mcp-app-sandbox") {
+      record({ event: "sandbox-response", csp: response.headers()["content-security-policy"] });
+    }
+  });
+  page.on("pageerror", (error) => {
+    record({ event: "pageerror", at: Date.now(), message: error.message, stack: error.stack });
+  });
+  page.on("console", (message) => {
+    const text = message.text();
+    if (!text.startsWith(prefix)) {
+      return;
+    }
+    try {
+      record(JSON.parse(text.slice(prefix.length)) as unknown);
+    } catch {
+      record({ event: "unreadable-probe" });
+    }
+  });
+  // Passive observers retain document and event identity even if a frame is replaced.
+  // No reads or extra awaits are inserted between readiness and the original click.
+  await context.addInitScript(
+    ({ key: probeKey, prefix: probePrefix }) => {
+      const documentId = `${performance.timeOrigin}:${Math.random()}`;
+      Reflect.set(window, probeKey, documentId);
+      const emit = (event: string, details: Record<string, unknown> = {}) => {
+        const count = document.getElementById("count");
+        console.debug(
+          probePrefix +
+            JSON.stringify({
+              event,
+              documentId,
+              at: performance.timeOrigin + performance.now(),
+              readyState: document.readyState,
+              value: document.getElementById("value")?.textContent ?? null,
+              handler: count?.onclick?.toString() ?? null,
+              ...details,
+            }),
+        );
+      };
+      for (const event of ["DOMContentLoaded", "load"] as const) {
+        window.addEventListener(event, () => emit(event), { once: true });
+      }
+      window.addEventListener("securitypolicyviolation", (event) =>
+        emit("csp-violation", {
+          directive: event.effectiveDirective,
+          blocked: event.blockedURI,
+          line: event.lineNumber,
+        }),
+      );
+      for (const type of ["pointerdown", "pointerup", "click"] as const) {
+        for (const capture of [true, false]) {
+          window.addEventListener(
+            type,
+            (event) => {
+              const target = event.target instanceof Element ? event.target : null;
+              emit(type, {
+                capture,
+                trusted: event.isTrusted,
+                prevented: event.defaultPrevented,
+                target: target && { tag: target.tagName, id: target.id },
+                x: event.clientX,
+                y: event.clientY,
+              });
+            },
+            { capture, passive: true },
+          );
+        }
+      }
+    },
+    { key, prefix },
+  );
+  return async () => {
+    const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+    const expectedScript = /<script>([\s\S]*?)<\/script>/.exec(finalHtml)?.[1];
+    const frames = await withTimeout(
+      Promise.all(
+        page.frames().map(async (frame) => {
+          const parent = frame.parentFrame();
+          const identity = { frame: frameId(frame), parent: parent && frameId(parent) };
+          try {
+            const snapshot = await frame.evaluate((probeKey) => {
+              const count = document.getElementById("count");
+              const documentId = Reflect.get(window, probeKey);
+              return {
+                documentId: typeof documentId === "string" ? documentId : null,
+                readyState: document.readyState,
+                value: document.getElementById("value")?.textContent ?? null,
+                handler: count?.onclick?.toString() ?? null,
+                html: count ? document.documentElement.outerHTML : null,
+                scripts: count
+                  ? Array.from(document.scripts, (script) => script.textContent ?? "")
+                  : [],
+                children: Array.from(document.querySelectorAll("iframe"), (child) => ({
+                  sandbox: child.getAttribute("sandbox"),
+                  srcdoc: child.getAttribute("srcdoc"),
+                })),
+              };
+            }, key);
+            const { html, scripts, children } = snapshot;
+            return {
+              frame: identity.frame,
+              parent: identity.parent,
+              documentId: snapshot.documentId,
+              readyState: snapshot.readyState,
+              value: snapshot.value,
+              handler: snapshot.handler,
+              htmlSha256: html === null ? null : hash(html),
+              scriptSha256: scripts.map(hash),
+              expectedScriptPresent:
+                expectedScript !== undefined && scripts.includes(expectedScript),
+              children: children.map(({ srcdoc, sandbox }) => ({
+                sandbox,
+                srcdocSha256: srcdoc === null ? null : hash(srcdoc),
+              })),
+            };
+          } catch (error) {
+            return { frame: identity.frame, parent: identity.parent, error: String(error) };
+          }
+        }),
+      ),
+      3_000,
+      "HTML publication Count diagnostics",
+    );
+    const report = JSON.stringify({ expectedHtmlSha256: hash(finalHtml), observations, frames });
+    await writeFile(path.join(suite.artifactDir, "count.public.json"), report);
+    // The ordinary CI log retains this synthetic-only report even without a media upload.
+    console.error("[html-publication-count]", report);
+  };
+}
 
 async function startProvider() {
   const failures: string[] = [];
@@ -216,7 +382,9 @@ suite.define(() => {
         permissions: ["local-network-access"],
         viewport: { width: 1440, height: 1000 },
       },
-      async ({ page }) => {
+      async ({ context, page }) => {
+        const captureCountDiagnostics = await installCountDiagnostics(context, page);
+        const pageEvents = installControlUiE2ePageDiagnosticRing(page);
         await pairControlUiPage(page, cli);
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await waitForControlUiGatewayReady(page);
@@ -257,8 +425,65 @@ suite.define(() => {
         await panel
           .locator("openclaw-chat-html-preview [role=status]")
           .waitFor({ state: "hidden" });
-        await document.getByRole("button", { name: "Count", exact: true }).click();
-        expect(await document.locator("output").textContent()).toBe("1");
+        // Inner-frame readiness does not settle the enclosing panel's layout transition.
+        await page
+          .locator('[data-region="side"]')
+          .filter({ has: panel })
+          .evaluate(finishElementAnimations);
+        const previewFacts = async (phase: "before" | "after") => {
+          const [content, frameBounds] = await Promise.all([
+            document.locator("body").evaluate((body) => {
+              const button = body.querySelector("button");
+              const buttonBounds = button?.getBoundingClientRect();
+              const output = body.querySelector("output");
+              return {
+                timeOrigin: performance.timeOrigin,
+                clickHandlerPresent: typeof button?.onclick === "function",
+                output: output ? Number(output.textContent) : null,
+                buttonX: buttonBounds?.x ?? null,
+                buttonY: buttonBounds?.y ?? null,
+                buttonWidth: buttonBounds?.width ?? null,
+                buttonHeight: buttonBounds?.height ?? null,
+              };
+            }),
+            frame.boundingBox(),
+          ]);
+          const facts = {
+            ...content,
+            frameX: frameBounds?.x ?? null,
+            frameY: frameBounds?.y ?? null,
+            frameWidth: frameBounds?.width ?? null,
+            frameHeight: frameBounds?.height ?? null,
+          };
+          return Object.fromEntries(
+            Object.entries(facts).map(([key, value]) => [`htmlPreview_${phase}_${key}`, value]),
+          );
+        };
+        // Retain document identity across the real click; never replay it for diagnostics.
+        const beforeClick = withTimeout(previewFacts("before"), 1_000).catch(() => ({}));
+        try {
+          await clickBoardWidgetControl(
+            page,
+            document.getByRole("button", { name: "Count", exact: true }),
+          );
+          await expect.poll(() => document.locator("output").textContent()).toBe("1");
+        } catch (error) {
+          recordControlUiE2eFailureFacts(page, {
+            ...(await beforeClick),
+            htmlPreview_pageErrors: pageEvents.filter((event) => event.source === "pageerror")
+              .length,
+            htmlPreview_consoleErrors: pageEvents.filter(
+              (event) => event.source === "console" && event.details.type === "error",
+            ).length,
+          });
+          await withTimeout(previewFacts("after"), 1_000)
+            .then((facts) => recordControlUiE2eFailureFacts(page, facts))
+            .catch(() => undefined);
+          await captureCountDiagnostics().catch((diagnosticError: unknown) => {
+            console.error("[html-publication-count] capture failed", String(diagnosticError));
+          });
+          throw error;
+        }
         expect(
           await document.locator("body").evaluate(() => {
             let topDenied = false;

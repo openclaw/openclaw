@@ -2112,7 +2112,6 @@ syncBuiltinESMExports();\n`,
             config: { dreaming: { enabled: false } },
           });
           expect(config.agents.defaults.maxConcurrent).toBe(1);
-          expect(config.agents.defaults.heartbeat).toEqual({ every: "0m" });
           if (liveFailure) {
             expect(Object.keys(config.agents.entries)).toEqual(["main"]);
             expect(config.models.providers.openai.apiKey).toEqual({
@@ -2125,6 +2124,7 @@ syncBuiltinESMExports();\n`,
             expect(config.agents.defaults.utilityModel).toBe(LIVE_GATEWAY_MODEL);
             expect(config.agents.defaults.thinkingDefault).toBe("off");
             expect(config.agents.defaults.models[LIVE_GATEWAY_MODEL].params.maxTokens).toBe(128);
+            expect(config.cron).toEqual({ enabled: false });
             expect(config.tools).toEqual({ deny: ["*"] });
           } else {
             expect(config.models.providers.openai.baseUrl).toMatch(

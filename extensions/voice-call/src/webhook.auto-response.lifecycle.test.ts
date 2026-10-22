@@ -104,7 +104,6 @@ async function startCall(streaming = false) {
     manager,
     provider,
     {},
-    undefined,
     {} as never,
   );
   servers.push(server);

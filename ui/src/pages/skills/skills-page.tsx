@@ -1,7 +1,7 @@
-import { createEffect, createMemo, createStore, onSettled, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, createStore, onSettled, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SkillStatusReport } from "../../api/types.ts";
-import type { SolidRouteProps } from "../../app-route-types.ts";
+import type { SolidRouteProps } from "../../app-route-types.tsx";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import {
   hasOperatorAdminAccess,
@@ -11,9 +11,8 @@ import {
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
-import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
-import { createPageRequest } from "../../lib/page-request.ts";
+import { createPageRequest, type PageReadResult } from "../../lib/page-request.ts";
 import { projectApplicationConfig } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectAgents } from "../../lib/reactive/domain-capabilities.ts";
@@ -56,11 +55,8 @@ function createSkillsData(): Omit<SkillsState, "client" | "connected" | "runtime
     skillEdits: {},
     skillMessages: {},
     clawhubSearchResults: null,
-    clawhubSearchLoading: false,
-    clawhubSearchError: null,
     clawhubDetail: null,
     clawhubDetailRef: null,
-    clawhubDetailLoading: false,
     clawhubDetailError: null,
     clawhubInstallMessage: null,
     clawhubVerdicts: {},
@@ -111,7 +107,10 @@ export function SkillsPage(props: SkillsPageProps) {
     clawhubSearchQuery: "",
   });
   let active = true;
-  let clawhubSearchTimer: ReturnType<typeof setTimeout> | null = null;
+  let clawhubSearchTimer: {
+    timeout: ReturnType<typeof setTimeout>;
+    resolve: (result: PageReadResult) => void;
+  } | null = null;
   let routeDataInitialized = false;
   let routeDataEnabled = true;
   let accessSignature = "";
@@ -128,21 +127,35 @@ export function SkillsPage(props: SkillsPageProps) {
     },
   });
   const data = skills.state;
-  const searchRequest = createPageRequest(
-    () => {
-      data.clawhubSearchLoading = searchRequest.pending;
-    },
-    {
-      task: ({ client, query }: { client: GatewayBrowserClient; query: string }, { signal }) =>
-        searchClawHub(client, query, signal),
-      onComplete: (results) => {
-        data.clawhubSearchResults = results;
-      },
-      onError: (error) => {
-        data.clawhubSearchError = formatUiError(error);
-      },
-    },
+  const [detailReceipt, setDetailReceipt] = createSignal<{
+    client: GatewayBrowserClient | null;
+    epoch: number;
+    agentId: string | null;
+    agentRevision: number;
+    ref: string;
+    completion: ReturnType<typeof loadClawHubDetail>;
+  } | null>(null);
+  const [searchCompletion, setSearchCompletion] = createSignal<Promise<PageReadResult> | null>(
+    null,
   );
+  const searchRequest = createPageRequest(() => {}, {
+    task: ({ client, query }: { client: GatewayBrowserClient; query: string }, { signal }) =>
+      searchClawHub(client, query, signal),
+    onComplete: (results) => {
+      data.clawhubSearchResults = results;
+    },
+    onError: () => {},
+  });
+  const readClawHubSearch = createMemo(() => {
+    const completion = searchCompletion();
+    // First readiness belongs to Loading too, before request admission publishes its receipt.
+    return (completion ?? Promise.resolve(null)).then((result) => {
+      if (result) {
+        throw result.error;
+      }
+      return true;
+    });
+  });
   const gateway = useGatewayPage({
     getGateway: () => context.gateway,
     onIdentityChange: resetLoadedSkillState,
@@ -182,6 +195,41 @@ export function SkillsPage(props: SkillsPageProps) {
       }
       ensureInitialData();
     },
+  });
+  // Unrelated skill publications must not re-arm the detail boundary.
+  const detailClient = createMemo(() => gateway.client);
+  const detailEpoch = createMemo(() => gateway.epoch);
+  const detailRef = createMemo(() => skills.read().clawhubDetailRef);
+  const detailSnapshot = createMemo(() => skills.read().clawhubDetail);
+  const detailError = createMemo(() => skills.read().clawhubDetailError);
+  const detailAgent = createMemo(() => skills.read().skillsAgentId);
+  const detailAgentRevision = createMemo(() => skills.read().skillsAgentRevision);
+  const readClawHubDetail = createMemo(() => {
+    const client = detailClient();
+    const epoch = detailEpoch();
+    const agentId = detailAgent();
+    const agentRevision = detailAgentRevision();
+    const ref = detailRef();
+    detailSnapshot();
+    detailError();
+    const receipt = detailReceipt();
+    if (!ref) {
+      return Promise.resolve(null);
+    }
+    const completion =
+      receipt?.client === client &&
+      receipt.epoch === epoch &&
+      receipt.agentId === agentId &&
+      receipt.agentRevision === agentRevision &&
+      receipt.ref === ref
+        ? receipt.completion
+        : Promise.resolve();
+    return completion.then(() => {
+      if (data.clawhubDetailError) {
+        throw new Error(data.clawhubDetailError);
+      }
+      return data.clawhubDetail;
+    });
   });
   const viewState = createMemo(() => ({ ...skills.read(), ...local }));
   const config = context.config ? projectApplicationConfig(context.config) : undefined;
@@ -290,22 +338,25 @@ export function SkillsPage(props: SkillsPageProps) {
       return;
     }
     lastSearchScope = scope;
-    if (scope[1]) {
-      void runSearch(query);
+    if (scope[1] && !clawhubSearchTimer) {
+      void setSearchCompletion(performSearch(query));
     }
   }
 
-  async function runSearch(query: string) {
-    searchRequest.cancel();
-    data.clawhubSearchError = null;
+  function performSearch(query: string): Promise<PageReadResult> {
+    searchRequest.reset();
     const snapshot = context.gateway.snapshot;
-    data.clawhubSearchLoading =
-      snapshot.phase === "connected" && canReadSkills() && admittedSurface === "discovery";
     const client = snapshot.client;
-    if (!data.clawhubSearchLoading || !client || clawhubSearchTimer) {
-      return;
+    if (
+      snapshot.phase !== "connected" ||
+      !canReadSkills() ||
+      admittedSurface !== "discovery" ||
+      !client
+    ) {
+      return Promise.resolve(null);
     }
-    await searchRequest.run({ client, query });
+    void searchRequest.run({ client, query });
+    return searchRequest.read!;
   }
 
   function agentSelection() {
@@ -321,27 +372,29 @@ export function SkillsPage(props: SkillsPageProps) {
     }
     if (previousAgentId !== data.skillsAgentId) {
       selectSkill(null);
-      closeClawHubDetail(data);
+      closeDetail();
     }
   }
 
   function invalidateSkillRequests() {
+    setDetailReceipt(null);
     data.skillsAgentRevision++;
     data.skillsLoading = false;
     data.skillOperation = null;
-    data.clawhubDetailLoading = false;
     data.clawhubVerdictsLoading = false;
     data.skillCardLoadingKey = null;
-    data.clawhubSearchLoading = false;
-    searchRequest.cancel();
+    setSearchCompletion(null);
+    searchRequest.reset();
     clearClawHubSearchTimer();
     clawhubIcons.reconcileKeys(new Set(Object.keys(data.clawhubIconUrls)));
     library.invalidateRequests();
   }
 
   function resetLoadedSkillState() {
+    setDetailReceipt(null);
     library.reset();
-    searchRequest.cancel();
+    setSearchCompletion(null);
+    searchRequest.reset();
     clearClawHubSearchTimer();
     if (routeDataInitialized) {
       routeDataEnabled = false;
@@ -387,7 +440,7 @@ export function SkillsPage(props: SkillsPageProps) {
       void loadClawHubSecurityVerdicts(data, route.report);
     }
     if (route.clawhubRef && route.clawhubRef !== data.clawhubDetailRef) {
-      void loadClawHubDetail(data, route.clawhubRef);
+      openClawHubDetail(route.clawhubRef);
     }
   }
 
@@ -439,20 +492,24 @@ export function SkillsPage(props: SkillsPageProps) {
       state.clawhubSearchQuery = query;
     });
     data.clawhubSearchResults = null;
-    data.clawhubSearchError = null;
-    data.clawhubSearchLoading = true;
     data.clawhubInstallMessage = null;
     clearClawHubSearchTimer();
-    searchRequest.cancel();
-    clawhubSearchTimer = setTimeout(() => {
-      clawhubSearchTimer = null;
-      void runSearch(query);
-    }, 300);
+    searchRequest.reset();
+    void setSearchCompletion(
+      new Promise<PageReadResult>((resolve) => {
+        const timeout = setTimeout(() => {
+          clawhubSearchTimer = null;
+          void performSearch(query).then(resolve);
+        }, 300);
+        clawhubSearchTimer = { timeout, resolve };
+      }),
+    );
   }
 
   function clearClawHubSearchTimer() {
     if (clawhubSearchTimer) {
-      clearTimeout(clawhubSearchTimer);
+      clearTimeout(clawhubSearchTimer.timeout);
+      clawhubSearchTimer.resolve(null);
       clawhubSearchTimer = null;
     }
   }
@@ -462,6 +519,20 @@ export function SkillsPage(props: SkillsPageProps) {
       state.skillsDetailKey = key;
       state.skillsDetailTab = "overview";
     });
+  }
+
+  function openClawHubDetail(ref: string) {
+    const client = data.client;
+    const epoch = gateway.readEpoch();
+    const agentId = data.skillsAgentId;
+    const agentRevision = data.skillsAgentRevision;
+    const completion = loadClawHubDetail(data, ref);
+    setDetailReceipt({ client, epoch, agentId, agentRevision, ref, completion });
+  }
+
+  function closeDetail() {
+    setDetailReceipt(null);
+    closeClawHubDetail(data);
   }
 
   function changeDetailTab(tab: SkillDetailTab) {
@@ -526,6 +597,9 @@ export function SkillsPage(props: SkillsPageProps) {
         >
           <Skills
             state={viewState()}
+            readClawHubDetail={readClawHubDetail}
+            readClawHubSearch={readClawHubSearch}
+            clawhubSearchEpoch={gateway.epoch}
             surface={surface()}
             libraryEntries={library.state.list?.entries ?? []}
             onLibraryOpen={(skillId) => void library.open(skillId)}
@@ -602,14 +676,14 @@ export function SkillsPage(props: SkillsPageProps) {
             }
             onDetailTabChange={changeDetailTab}
             onClawHubQueryChange={changeClawHubQuery}
-            onClawHubDetailOpen={(ref) => void loadClawHubDetail(data, ref)}
-            onClawHubDetailClose={() => closeClawHubDetail(data)}
+            onClawHubDetailOpen={openClawHubDetail}
+            onClawHubDetailClose={closeDetail}
             onClawHubInstall={(ref, version) => {
               if (!canInstallFromClawHub()) {
                 return;
               }
               if (!library.showWorkspace()) {
-                data.clawhubDetailRef = null;
+                closeDetail();
                 library.edit((state) => {
                   state.importSource = { slug: ref, version };
                   state.importSlug = "";

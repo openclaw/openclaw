@@ -1,11 +1,49 @@
 /* @vitest-environment jsdom */
 
-import { createSignal } from "solid-js";
-import { expect, it } from "vitest";
+import { setWriteHook } from "@solidjs/signals";
+import { createRoot, createSignal, onSettled } from "solid-js";
+import { expect, it, vi } from "vitest";
 import type { ChatSourcePreview } from "../../../lib/chat/source-previews.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatSourcePreviews } from "./chat-source-previews.tsx";
+
+it("does not publish late favicons after disposal before the first settlement", async () => {
+  const pending = Promise.withResolvers<string | null>();
+  const fetchFavicon = vi.fn(() => pending.promise);
+  let settled = false;
+  const view = mountSolid(() => {
+    createRoot((dispose) => {
+      onSettled(() => {
+        settled = true;
+      });
+      const content = (
+        <ChatSourcePreviews
+          fetchFavicon={fetchFavicon}
+          sources={[{ url: "https://retired.test/page", title: "Retired", domain: "retired.test" }]}
+        />
+      );
+      dispose();
+      return content;
+    });
+    return null;
+  });
+  const writes = vi.fn();
+  try {
+    expect(fetchFavicon).toHaveBeenCalledTimes(1);
+    expect(settled).toBe(false);
+    view.unmount();
+    setWriteHook(writes);
+    pending.resolve("https://retired.test/favicon.png");
+    await pending.promise;
+    await Promise.resolve();
+    expect(writes).not.toHaveBeenCalled();
+  } finally {
+    setWriteHook(null);
+    pending.resolve(null);
+    view.unmount();
+  }
+});
 
 it("opens the matching source dialog and retires it when that source leaves", () => {
   const [sources, setSources] = createSignal<readonly ChatSourcePreview[]>([
@@ -17,9 +55,11 @@ it("opens the matching source dialog and retires it when that source leaves", ()
       excerptKind: "page",
     },
   ]);
-  const { container } = mountSolid(() => <ChatSourcePreviews sources={sources()} />);
+  const view = mountSolid(() => <ChatSourcePreviews sources={sources()} />);
+  const { container } = view;
   flush();
   const trigger = container.querySelector<HTMLButtonElement>(".chat-source-card")!;
+  expect(view.getByRole("button", { name: "Trip checklistexample.test" })).toBe(trigger);
   trigger.click();
   const surface = container.querySelector<HTMLElement>(".chat-source-popover")!;
   expect(surface.matches(":popover-open")).toBe(true);
@@ -32,4 +72,28 @@ it("opens the matching source dialog and retires it when that source leaves", ()
   flush();
   expect(container.querySelector(".chat-source-card")).toBeNull();
   expect(surface.matches(":popover-open")).toBe(false);
+});
+
+it("retires only a failed favicon and retains the other source card", async () => {
+  const fetchFavicon = vi.fn(async (hostname: string) => `https://${hostname}/favicon.png`);
+  const { container } = mountSolid(() => (
+    <ChatSourcePreviews
+      fetchFavicon={fetchFavicon}
+      sources={[
+        { url: "https://first.test/page", title: "First", domain: "first.test" },
+        { url: "https://second.test/page", title: "Second", domain: "second.test" },
+      ]}
+    />
+  ));
+  await waitForSolid(() => expect(container.querySelectorAll("img")).toHaveLength(2));
+  const [failedImage, retainedImage] = container.querySelectorAll("img");
+  const retainedCard = retainedImage!.closest(".chat-source-card");
+
+  failedImage!.dispatchEvent(new Event("error"));
+  flush();
+
+  expect(container.querySelectorAll("img")).toHaveLength(1);
+  expect(container.querySelector("img")).toBe(retainedImage);
+  expect(retainedImage!.closest(".chat-source-card")).toBe(retainedCard);
+  expect(fetchFavicon).toHaveBeenCalledTimes(2);
 });

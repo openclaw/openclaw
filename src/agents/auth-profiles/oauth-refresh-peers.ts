@@ -55,6 +55,7 @@ export function mergeOAuthRefreshPeerClaims(
 }
 
 type OAuthRefreshPeerTransition = {
+  assertCurrent?: () => void;
   profileId: string;
   fence: OAuthCredential;
   claims: readonly OAuthRefreshPeerClaim[];
@@ -161,11 +162,13 @@ function updateOAuthRefreshPeer(
   expected: OAuthCredential,
   update: (store: AuthProfileStore) => void,
   preserveProfileState?: boolean,
+  assertCurrent?: () => void,
 ) {
   return updateCandidateAuthProfileStore({
     candidate,
     profileId,
     preserveProfileState,
+    assertCurrent,
     updater: (store) => {
       if (!isExactOAuthCredential(store.profiles[profileId], expected)) {
         return false;
@@ -273,6 +276,8 @@ export async function rollbackOAuthRefreshPeerClaims(
             ...claim.original!,
           });
         },
+        undefined,
+        params.assertCurrent,
       );
       if (restored.changed) {
         continue;

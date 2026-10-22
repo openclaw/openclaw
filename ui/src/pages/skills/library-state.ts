@@ -20,6 +20,11 @@ import { assertUploadsEnabled, uploadsEnabled } from "../../lib/uploads.ts";
 import { readLibraryFiles, uploadLibraryArchive } from "./library-files.ts";
 
 export type LibraryView = "workspace" | "mine" | "team" | "all";
+type LibraryListOutcome = {
+  list: SkillsLibraryListResult | null;
+  error: string | null;
+};
+export type LibraryDetailOutcome = { error: unknown } | null;
 export type LibraryDraft = {
   importedFiles?: boolean;
   entry: SkillLibraryEntry | null;
@@ -58,6 +63,8 @@ export function createSkillLibrary(
   // Drafts and write admission stay synchronous; Solid only observes the owner.
   const observation = observeState<{
     list: SkillsLibraryListResult | null;
+    listRead: { completion: Promise<LibraryListOutcome> } | null;
+    detailRead: { completion: Promise<LibraryDetailOutcome> } | null;
     view: LibraryView | null;
     loading: boolean;
     busy: boolean;
@@ -69,6 +76,8 @@ export function createSkillLibrary(
     importSelection: File[];
   }>({
     list: null,
+    listRead: null,
+    detailRead: null,
     view: null,
     loading: false,
     busy: false,
@@ -129,8 +138,11 @@ export function createSkillLibrary(
     ) {
       return;
     }
+    const { promise, resolve } = Promise.withResolvers<LibraryListOutcome>();
+    data.listRead = { completion: promise };
     data.loading = true;
     data.error = null;
+    let failure: string | null = null;
     try {
       const result = await connection.client.request<SkillsLibraryListResult>(
         "skills.library.list",
@@ -143,11 +155,15 @@ export function createSkillLibrary(
       data.view ??= result.defaultTarget === "personal" ? "mine" : "workspace";
     } catch (error) {
       if (gateway.isCurrent(connection)) {
-        data.error = formatUiError(error);
+        failure = formatUiError(error);
+        data.error = failure;
       }
     } finally {
       if (gateway.isCurrent(connection)) {
         data.loading = false;
+        resolve({ list: data.list, error: failure });
+      } else {
+        resolve({ list: null, error: null });
       }
     }
   }
@@ -158,6 +174,7 @@ export function createSkillLibrary(
       return;
     }
     data.draft = libraryDraft();
+    data.detailRead = null;
     clearFeedback();
     setLocal((state) => {
       state.newFilePath = "";
@@ -229,10 +246,14 @@ export function createSkillLibrary(
     },
     create,
     invalidateRequests() {
+      data.listRead = null;
+      data.detailRead = null;
       data.loading = false;
       data.busy = false;
     },
     reset() {
+      data.listRead = null;
+      data.detailRead = null;
       clearFeedback();
       data.list = null;
       data.view = null;
@@ -250,6 +271,7 @@ export function createSkillLibrary(
         return;
       }
       data.draft = null;
+      data.detailRead = null;
       setImportOpen(false);
       setLocal((state) => {
         state.newFilePath = "";
@@ -264,16 +286,21 @@ export function createSkillLibrary(
         return;
       }
       await perform(async () => {
-        const read = await connection.client.request<SkillsLibraryReadResult>(
-          "skills.library.read",
-          {
-            skillId,
-          },
-        );
-        if (!gateway.isCurrent(connection)) {
-          return;
-        }
-        data.draft = libraryDraft(read);
+        const pending = connection.client
+          .request<SkillsLibraryReadResult>("skills.library.read", { skillId })
+          .then((read) => {
+            if (gateway.isCurrent(connection)) {
+              data.draft = libraryDraft(read);
+            }
+          });
+        // Only admitted reads publish a receipt; the mutable draft stays authoritative.
+        data.detailRead = {
+          completion: pending.then(
+            () => null,
+            (error: unknown) => (gateway.isCurrent(connection) ? { error } : null),
+          ),
+        };
+        await pending;
       });
     },
     async save() {

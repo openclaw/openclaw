@@ -27,6 +27,22 @@ function expectAbsent(value: unknown, fields: string) {
 }
 
 describe("Team-scale Gateway fixture", () => {
+  it("seeds scoped display preferences independently of the full editable config", () => {
+    const { scenario } = createControlUiTeamScaleFixture({ now });
+    expect(scenario.bootstrapPreferences).toMatchObject({
+      profileId: "team-person-001",
+      config: { tts: { maxTextLength: 4096 } },
+    });
+    expect(scenario.bootstrapPreferences?.config).not.toHaveProperty("models");
+    expect(scenario.methodResponses?.["config.get"]).toMatchObject({
+      hash: "synthetic-config-v1",
+      configRevisionHash: "synthetic-config-v1",
+      appliedConfigHash: "synthetic-config-v1",
+    });
+    const bytes = Buffer.byteLength(JSON.stringify(scenario.methodResponses?.["config.get"]));
+    expect(bytes).toBeGreaterThanOrEqual(152_000);
+    expect(bytes).toBeLessThanOrEqual(169_000);
+  });
   it("sustains certified ancestor churn past the minute fallback and preserves the raw delta baseline", () => {
     const fixture = createControlUiTeamScaleFixture({
       now,
@@ -179,6 +195,19 @@ describe("Team-scale Gateway fixture", () => {
     expect(secondPage.sessions).toHaveLength(100);
     expect(secondPage.sessions[0]?.sessionId).toBe("team-session-171");
     expect(secondPage).toMatchObject({ offset: 200, nextOffset: null, hasMore: false });
+  });
+
+  it("keeps an off-roster deep-link target outside both boot windows and pins", () => {
+    const fixture = createControlUiTeamScaleFixture({ now, offRosterSession: true });
+    const owner = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
+    for (const query of [{ ownerFirst: true }, { involvingMe: true }]) {
+      const result = owner.list({ rowMode: "sidebar", limit: 200, ...query }).result;
+      expect(result.sessions.some((row) => row.key === fixture.selectedSessionKey)).toBe(false);
+    }
+    expect(fixture.pinnedKeys).not.toContain(fixture.selectedSessionKey);
+    expect(fixture.scenario.sessions?.some((row) => row.key === fixture.selectedSessionKey)).toBe(
+      true,
+    );
   });
 
   it("projects real row modes and bounds transcript enrichment without changing row identity on reread", () => {

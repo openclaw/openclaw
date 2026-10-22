@@ -45,9 +45,8 @@ export function readOptionalRouteFiniteNumber(
 /** Read and normalize an optional positive timeout value. */
 export function readRouteTimerTimeoutMs(
   value: unknown,
-  fieldName = "timeoutMs",
-  opts?: { minMs?: number; invalidMessage?: string },
+  opts?: { minMs?: number },
 ): number | undefined {
-  const parsed = readRoutePositiveInteger(value, fieldName, opts);
+  const parsed = readRoutePositiveInteger(value, "timeoutMs");
   return parsed === undefined ? undefined : normalizeBrowserTimerDelayMs(parsed, opts);
 }

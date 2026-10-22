@@ -158,7 +158,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
     notifySessionKey,
     resolveSubagentSession,
     notifyDeliveryContext,
-    notifyFromConversationTurn,
   } = resolveExecNotificationDefaults(defaults);
   const approvalRunningNoticeMs = resolveApprovalRunningNoticeMs(defaults?.approvalRunningNoticeMs);
   // Derive agentId only when sessionKey is an agent session key.
@@ -571,7 +570,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           agentId,
           eventRouting: defaults?.eventRouting,
           notifyDeliveryContext,
-          notifyFromConversationTurn,
           timeoutSec: effectiveTimeout,
           processContinuationAvailable: allowBackground,
           startupSignal: signal,
@@ -584,6 +582,8 @@ export function createExecTool(defaults?: ExecToolDefaults) {
             settled = true;
           },
         });
+        // Completion wakes need the backgrounding below, so this precedes any wake.
+        run.session.originRunId = defaults?.runId;
         discardPreparedSandboxWorkdir = null;
       } catch (error) {
         gatewayApproval?.releaseSpawn?.();

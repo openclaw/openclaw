@@ -35,6 +35,9 @@ describe("talk diagnostics", () => {
       turnId: "turn-1",
       payload: {
         byteLength: 320,
+        durationMs: -1,
+        latencyMs: 0,
+        elapsedMs: 42,
         text: "private transcript should not export",
       },
     });
@@ -73,7 +76,7 @@ describe("talk diagnostics", () => {
         brain: "agent-consult",
         provider: "openai",
         final: undefined,
-        durationMs: undefined,
+        durationMs: 0,
         byteLength: 320,
       },
     });

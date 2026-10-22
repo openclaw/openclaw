@@ -116,6 +116,8 @@ signal-cli --version
 
 If you use the JVM build (`signal-cli-${VERSION}.tar.gz`), install a JRE first. Keep `signal-cli` updated; upstream notes old releases can break as Signal server APIs change.
 
+A managed `signal-cli` daemon gets only an allowlisted environment; see [Managed daemon environment](#managed-daemon-environment).
+
 3. Register and verify the number:
 
 ```bash
@@ -182,6 +184,25 @@ openclaw channels add --channel signal --signal-number +15551234567 \
 ```
 
 This skips auto-spawn and OpenClaw's startup wait. For a managed daemon with a slow start, set `channels.signal.transport.startupTimeoutMs`.
+
+## Managed daemon environment
+
+A managed `signal-cli` daemon gets only process essentials from the Gateway environment: `PATH`, `HOME`, user, locale (`LANG`, `LC_*`), `TZ`, temp directories, `XDG_*`, the Java launcher inputs (`JAVA_HOME`, `JAVA_OPTS`, `JAVA_TOOL_OPTIONS`, `JDK_JAVA_OPTIONS`, `_JAVA_OPTIONS`, `SIGNAL_CLI_OPTS`), signal-cli's own `SIGNAL_CLI_CONFIG` and `SIGNAL_CLI_USER_AGENT`, the native library path (`LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`, `DYLD_FALLBACK_LIBRARY_PATH`), and common Windows system variables. Provider keys, Gateway tokens and other secrets in the Gateway environment do not reach it.
+
+Proxy and trust-store variables (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `ALL_PROXY` in either case, `SSL_CERT_FILE`, `SSL_CERT_DIR`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`) are not inherited. When any of them is set, the Gateway logs a one-time warning naming them (names only, never values) when it starts the daemon, and `openclaw doctor` reports the same.
+
+`signal-cli` runs on the JVM, which takes proxy and trust-store settings from Java system properties. Pick one:
+
+- Pass Java properties through `JAVA_TOOL_OPTIONS`, which the daemon inherits:
+
+  ```bash
+  JAVA_TOOL_OPTIONS="-Dhttps.proxyHost=proxy.example -Dhttps.proxyPort=3128 -Dhttp.nonProxyHosts=localhost|127.0.0.1"
+  ```
+
+  For a private CA, add `-Djavax.net.ssl.trustStore=/path/to/truststore.p12 -Djavax.net.ssl.trustStoreType=PKCS12`.
+
+- Point `channels.signal.transport.cliPath` at a wrapper script that sets what it needs (for example, turns your proxy variables into Java properties), then runs `signal-cli "$@"`.
+- Run the daemon yourself and use [external native daemon mode](#external-native-daemon-mode).
 
 ## Container mode (bbernhard/signal-cli-rest-api)
 

@@ -48,7 +48,7 @@ import {
   tableHasColumn,
 } from "./openclaw-state-db-schema-helpers.js";
 import { migrateJsonCanonicalWideRowsV13 } from "./openclaw-state-db-schema-v13-widerow.js";
-import { migratePredicateColumnsV21 } from "./openclaw-state-db-schema-v21-columns.js";
+import { statePredicateColumnMigration } from "./openclaw-state-db-schema-v21-columns.js";
 import {
   migratePortableIdentityColumnsV22,
   STATE_CURSOR_TABLES_V22,
@@ -63,6 +63,10 @@ import {
   withLegacyStateWriteIndexes,
 } from "./openclaw-state-db-schema-v27-indexes.js";
 import { statePublicationDraftMigration } from "./openclaw-state-db-schema-v28-publication.js";
+import {
+  stateLocalWorkspaceManifestMigration,
+  withLegacyLocalWorkspaceManifests,
+} from "./openclaw-state-db-schema-v31-workspace-manifests.js";
 import {
   assertSupportedStateSchemaVersion,
   readStateSchemaContentVersion,
@@ -442,27 +446,6 @@ function migrateGitHubPublicationRequesterAuthority(
   return changed;
 }
 
-const statePredicateColumnMigration = {
-  version: 21,
-  tables: ["meeting_transcript_sessions", "meeting_transcript_summaries", "delivery_queue_entries"],
-  columns: [
-    ...[
-      "source_account_id",
-      "source_guild_id",
-      "source_channel_id",
-      "source_meeting_url",
-      "source_thread_ts",
-      "source_file_id",
-      "metadata_agent_id",
-    ].map((column) => `meeting_transcript_sessions.${column}`),
-    "meeting_transcript_summaries.overview",
-    "delivery_queue_entries.retention_id_prefix",
-    "delivery_queue_entries.retention_max_age_ms",
-    "delivery_queue_entries.retention_max_entries",
-  ],
-  migrate: migratePredicateColumnsV21,
-  applied: "Derived meeting transcript selectors and bounded delivery retention columns (v21)",
-};
 const statePortableIdentityMigration = {
   version: 22,
   tables: ["acp_sessions", ...STATE_CURSOR_TABLES_V22],
@@ -521,6 +504,15 @@ const stateClientCredentialMigration = {
   applied: "Moved client credentials and native socket material to the local owner (v29)",
 };
 
+const stateAutomationPolicyMigration = {
+  version: 30,
+  tables: [],
+  columns: [],
+  // Only the version fence changes; Doctor owns the subsequent job conversion.
+  migrate: () => false,
+  applied: "Fenced ordinary automation timing and delivery policies from older schedulers (v30)",
+};
+
 /** Version-gated column and row migrations, oldest first; each runs inside the caller's schema transaction. */
 export const versionedStateMigrations: ReadonlyArray<{
   migrate: (db: DatabaseSync, previousVersion: number) => boolean;
@@ -553,6 +545,7 @@ export const versionedStateMigrations: ReadonlyArray<{
   stateHeadLayoutMigration,
   stateWriteIndexMigration,
   statePublicationDraftMigration,
+  stateLocalWorkspaceManifestMigration,
 ];
 
 /** Recent version migrations own only their tables; Doctor owns unrelated historical repair. */
@@ -571,6 +564,8 @@ export function migrateBoundedStateSchema(
     stateWriteIndexMigration,
     statePublicationDraftMigration,
     stateClientCredentialMigration,
+    stateAutomationPolicyMigration,
+    stateLocalWorkspaceManifestMigration,
   ];
   const pending = migrations.filter(({ version }) => version > previousVersion);
   // An undeclared destination keeps the legacy full runner and full-backup requirement.
@@ -584,10 +579,12 @@ export function migrateBoundedStateSchema(
   const indexes = getCanonicalSqliteNamedIndexContracts(OPENCLAW_STATE_SCHEMA_SQL).filter((index) =>
     tables.has(index.tableName),
   );
-  const indexSourceSchema =
-    previousVersion < 27
-      ? withLegacyStateWriteIndexes(OPENCLAW_STATE_SCHEMA_SQL)
+  const manifestSourceSchema =
+    previousVersion < 31
+      ? withLegacyLocalWorkspaceManifests(OPENCLAW_STATE_SCHEMA_SQL)
       : OPENCLAW_STATE_SCHEMA_SQL;
+  const indexSourceSchema =
+    previousVersion < 27 ? withLegacyStateWriteIndexes(manifestSourceSchema) : manifestSourceSchema;
   const sourceSchema =
     previousVersion < 26 ? withLegacyStateHeadLayout(indexSourceSchema) : indexSourceSchema;
   // Older binaries can leave same-version repairs pending alongside a version change.

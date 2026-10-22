@@ -41,12 +41,7 @@ import {
 } from "./runtime.js";
 import { reefSetupContract, reefSetupWizard } from "./setup.js";
 import { assertReefIdentityBinding, loadKeys, openStores, ReefInboxCursorStore } from "./state.js";
-import {
-  ReefInboxConnection,
-  ReefTransportClient,
-  createReefWebSocket,
-  isRetryableReefRelayFailure,
-} from "./transport.js";
+import { ReefInboxConnection, ReefTransportClient, createReefWebSocket } from "./transport.js";
 import { isReefPairingApprovalToken, openReefTrustStore } from "./trust-store.js";
 import type { ReefAccount, ReefIngressMessage } from "./types.js";
 
@@ -522,7 +517,6 @@ export const reefPlugin: ChannelPlugin<ReefAccount, unknown, unknown, 2> = {
           },
           onReconcileError: (error) =>
             ctx.log?.error?.(`reef friend reconcile failed: ${String(error)}`),
-          shouldContinueAfterStartupReconcileError: isRetryableReefRelayFailure,
           onReady: activate,
         });
       } finally {

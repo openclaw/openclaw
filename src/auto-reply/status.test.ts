@@ -1,9 +1,20 @@
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import {
+  appendTranscriptMessageSync,
+  replaceSessionEntrySync,
+} from "../config/sessions/session-accessor.js";
+import { readRecentSessionUsageFromTranscriptAsync } from "../gateway/session-transcript-usage.js";
 import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { statusModelRefs } from "../status/status-message.test-support.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import * as commandsRegistry from "./commands-registry.js";
@@ -20,6 +31,7 @@ import {
   normalizedStatus,
   modelArgs,
   providerModels,
+  statusContext,
   type StatusTestArgs,
 } from "./status.test-fixtures.js";
 
@@ -87,9 +99,7 @@ function makeFallbackContextStatusArgs({
     runtimeContextTokens,
     sessionEntry: {
       ...route.sessionEntry,
-      totalTokens: 49_000,
-      totalTokensFresh: true,
-      totalTokensVersion: 1 as const,
+      ...freshUsage(49_000),
       ...(sessionContextTokens === undefined
         ? {}
         : {
@@ -104,6 +114,7 @@ function makeFallbackContextStatusArgs({
 
 it("shows sanitized TTS provider details in the voice status line", async () => {
   await withTempHome(async () => {
+    using _ = vi.spyOn(Date, "now").mockReturnValue(0);
     const normalized = normalizedStatus({
       config: {
         tts: {
@@ -120,7 +131,6 @@ it("shows sanitized TTS provider details in the voice status line", async () => 
         },
       } as unknown as OpenClawConfig,
       agent: {},
-      now: 0,
     });
 
     expect(normalized).toContain(
@@ -189,9 +199,7 @@ it("uses the channel override model context window instead of stale persisted co
     sessionEntry: {
       delivery: normalizeSessionDeliveryState({ context: { channel: "discord" } }),
       groupId: "123",
-      totalTokens: 49_000,
-      totalTokensFresh: true,
-      totalTokensVersion: 1,
+      ...freshUsage(49_000),
       contextTokens: 1_048_576,
     },
   });
@@ -252,9 +260,7 @@ it.each<[StatusTestArgs, string[], string[]]>([
     {
       sessionEntry: {
         cacheRead: 3_000_000,
-        totalTokens: 36_000,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
+        ...freshUsage(36_000),
         contextTokens: 1_000_000,
       },
       modelAuth: "unknown",
@@ -527,4 +533,248 @@ it("returns the empty state when no tools are available", () => {
   expect(buildToolsMessage({ agentId: "main", profile: "full", groups: [] })).toBe(
     "No tools are available for this agent right now.\n\nProfile: full",
   );
+});
+
+const openrouterArgs = {
+  ...modelArgs("openrouter", "google/gemini-2.5-pro"),
+  thinkingCatalog: [
+    { provider: "openrouter", id: "google/gemini-2.5-pro", contextWindow: 999_000 },
+    { provider: "google", id: "gemini-2.5-pro", contextWindow: 2_000_000 },
+  ],
+  config: providerModels(["google", "gemini-2.5-pro", { contextWindow: 2_000_000 }]),
+};
+function usage(input: number, output: number, cacheRead: number, totalTokens: number) {
+  return { input, output, cacheRead, cacheWrite: 0, totalTokens };
+}
+function freshUsage(totalTokens: number) {
+  return { totalTokens, totalTokensFresh: true, totalTokensVersion: 1 as const };
+}
+function withStatusHome(run: () => Promise<void>) {
+  return withTempHome(
+    async () => {
+      setRuntimeConfigSnapshot({});
+      await run();
+    },
+    { prefix: "openclaw-status-" },
+  ).finally(clearRuntimeConfigSnapshot);
+}
+
+describe("status transcript usage and model context", () => {
+  function transcriptFixture(
+    params: {
+      agentId?: string;
+      model?: string;
+      usage?: ReturnType<typeof usage>;
+    } = {},
+  ) {
+    const agentId = params.agentId ?? "main";
+    const scope = {
+      agentId,
+      sessionId: "status-transcript",
+      sessionKey: `agent:${agentId}:main`,
+      storePath: resolveSessionStorePathCore(undefined, { agentId }),
+    };
+    replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: Date.now() });
+    const append = (message: Parameters<typeof appendTranscriptMessageSync>[1]["message"]) =>
+      appendTranscriptMessageSync(scope, { message });
+    append({
+      role: "assistant",
+      model: params.model ?? "claude-opus-4-6",
+      usage: params.usage ?? usage(1, 2, 1000, 1003),
+    });
+    return {
+      append,
+      render: async (args: StatusTestArgs = {}) => {
+        const sessionKey = "sessionKey" in args ? args.sessionKey : statusContext.sessionKey;
+        const readerAgentId =
+          args.agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined);
+        const transcriptUsage = await readRecentSessionUsageFromTranscriptAsync(
+          {
+            agentId: readerAgentId,
+            sessionId: scope.sessionId,
+            sessionKey,
+            storePath: resolveSessionStorePathCore(undefined, { agentId: readerAgentId }),
+          },
+          256 * 1024,
+        );
+        return buildStatusMessage({
+          ...args,
+          sessionEntry: { sessionId: scope.sessionId, ...args.sessionEntry },
+          transcriptUsage,
+        });
+      },
+    };
+  }
+
+  const runtimeEntry = {
+    totalTokens: 3,
+    modelProvider: "anthropic",
+    model: "claude-opus-4-6",
+    agentHarnessId: "openclaw" as const,
+    contextTokens: 32_000,
+    contextTokensSource: "runtime" as const,
+  };
+
+  it("reads transcript usage for non-default agents", async () => {
+    await withStatusHome(async () => {
+      const { render, append } = transcriptFixture({ agentId: "worker1" });
+      const args: StatusTestArgs = {
+        sessionEntry: runtimeEntry,
+        sessionKey: "agent:worker1:telegram:12345",
+        resolvedHarness: "openclaw",
+      };
+      expect(normalizeTestText(await render(args))).toContain("Context: 1.0k/32k");
+      append({ role: "assistant", usage: { input: 2_000, output: 20, totalTokens: 2_000 } });
+      expect(normalizeTestText(await render(args))).toContain("Context: 2.0k/32k");
+    });
+  });
+
+  it.each([
+    {
+      name: "does not render stale context usage from transcript fallback",
+      transcript: usage(3_800_000, 20_000, 0, 3_820_000),
+      entry: {
+        inputTokens: 3_800_000,
+        outputTokens: 20_000,
+        totalTokens: 3_800_000,
+        totalTokensFresh: false,
+      },
+      present: ["Context: ?/1.0m"],
+      absent: ["Context: 3.8m/1.0m", "Context: 3.82m/1.0m"],
+    },
+    {
+      name: "does not let legacy cumulative session totals override fresh transcript context usage",
+      transcript: usage(10_000, 1_000, 26_000, 36_000),
+      entry: {
+        inputTokens: 16,
+        outputTokens: 5_100,
+        cacheRead: 2_300_000,
+        cacheWrite: 11_000,
+        totalTokens: 2_300_000,
+      },
+      present: ["Cache: 100% hit · 2.3m cached, 11k new", "Context: 36k/1.0m (4%)"],
+      absent: ["Context: 2.3m/1.0m"],
+    },
+  ])("$name", async ({ transcript, entry, present, absent }) => {
+    await withStatusHome(async () => {
+      const { render } = transcriptFixture({ usage: transcript });
+      const text = normalizeTestText(
+        await render({
+          sessionEntry: { contextTokens: 1_000_000, ...entry },
+        }),
+      );
+      present.forEach((snippet) => expect(text).toContain(snippet));
+      absent.forEach((snippet) => expect(text).not.toContain(snippet));
+    });
+  });
+
+  it("uses the same transcript usage fallback as sessions.list when a delivery mirror is last", async () => {
+    await withStatusHome(async () => {
+      const { render, append } = transcriptFixture();
+      append({
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        usage: usage(0, 0, 0, 0),
+      });
+
+      const text = await render({
+        sessionEntry: runtimeEntry,
+        resolvedHarness: "openclaw",
+        sessionKey: "agent:main:main",
+      });
+
+      expect(normalizeTestText(text)).toContain("Cache: 100% hit · 1.0k cached, 0 new");
+      expect(normalizeTestText(text)).toContain("Context: 1.0k/32k");
+    });
+  });
+
+  it.each([
+    ["slash", "google/gemini-2.5-pro", openrouterArgs, "999k", "2.0m"],
+    [
+      "bare",
+      "gemini-2.5-pro",
+      {
+        ...modelArgs("google-gemini-cli", "gemini-2.5-pro"),
+        thinkingCatalog: [
+          { provider: "google-gemini-cli", id: "gemini-2.5-pro", contextWindow: 1_000_000 },
+          { provider: "google", id: "gemini-2.5-pro", contextWindow: 128_000 },
+        ],
+      },
+      "1.0m",
+      "128k",
+    ],
+  ] as const)(
+    "keeps transcript-derived %s model ids in their admitted provider catalog",
+    async (_kind, model, args, context, otherContext) => {
+      await withStatusHome(async () => {
+        const { render } = transcriptFixture({
+          model,
+          usage: usage(2, 3, 1200, 1205),
+        });
+        const normalized = normalizeTestText(
+          await render({
+            ...args,
+            thinkingCatalog: [...args.thinkingCatalog],
+            sessionEntry: { totalTokens: 5 },
+          }),
+        );
+        expect(normalized).toContain(`Context: 1.2k/${context}`);
+        expect(normalized).not.toContain(`Context: 1.2k/${otherContext}`);
+      });
+    },
+  );
+
+  it("keeps runtime slash model ids in their admitted provider catalog when modelProvider is missing", () => {
+    const text = buildStatusMessage({
+      ...openrouterArgs,
+      sessionEntry: {
+        ...freshUsage(1205),
+        model: "google/gemini-2.5-pro",
+      },
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Context: 1.2k/999k");
+    expect(normalized).not.toContain("Context: 1.2k/2.0m");
+  });
+
+  it("keeps provider-aware lookup for legacy fallback runtime slash ids", () => {
+    const route = fallbackRoute(
+      { provider: "xiaomi", model: "mimo-v2-flash" },
+      { provider: "fake-minimax", model: "FakeMiniMax-M2.5" },
+    );
+    const text = buildStatusMessage({
+      ...route,
+      config: providerModels(
+        ["fake-minimax", "FakeMiniMax-M2.5", { contextWindow: 777_000 }],
+        ["xiaomi", "mimo-v2-flash", { contextWindow: 1_048_576 }],
+      ),
+      sessionEntry: {
+        ...route.sessionEntry,
+        modelProvider: undefined,
+        model: "fake-minimax/FakeMiniMax-M2.5",
+        ...freshUsage(49_000),
+      },
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Fallback: fake-minimax/FakeMiniMax-M2.5");
+    expect(normalized).toContain("Context: 49k/777k");
+    expect(normalized).not.toContain("Context: 49k/200k");
+  });
+
+  it("keeps provider-aware lookup for non-fallback runtime slash ids", () => {
+    const text = buildStatusMessage({
+      ...modelArgs("openai", "gpt-4o"),
+      config: providerModels(["openai", "gpt-4o", { contextWindow: 777_000 }]),
+      sessionEntry: {
+        model: "openai/gpt-4o",
+        ...freshUsage(49_000),
+      },
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Context: 49k/777k");
+  });
 });

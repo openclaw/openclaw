@@ -1,9 +1,8 @@
-import { createSignal, Show } from "solid-js";
+import { createStore, lazy, Loading } from "solid-js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { normalizeBasePath } from "../app-route-paths.ts";
 import { withPromiseModalHost } from "../components/promise-modal-host.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
-import { t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { notifyBrowserAuthRestored, bindBrowserHttpFailures } from "./browser-http.ts";
 import {
@@ -12,6 +11,8 @@ import {
   type ControlUiAuthSource,
 } from "./control-ui-auth.ts";
 import { webKitHostWindow } from "./native-webkit-bridge.ts";
+
+const RecoveryDialog = lazy(() => import("./browser-auth-recovery-dialog.tsx"));
 
 function renewBrowserSession(url: URL, signal: AbortSignal): Promise<void> {
   if (signal.aborted) {
@@ -87,51 +88,26 @@ export function startBrowserAuthRecovery(
         update?.();
       }
       const content = () => {
-        const readView = () => ({ openedSignIn, pending: Boolean(pending), probeResult });
-        const [view, setView] = createSignal(readView());
-        update = () => setView(readView());
+        const [view, setView] = createStore(
+          { openedSignIn, probe: pending, probeResult },
+          { shallow: true },
+        );
+        update = () =>
+          setView((draft) => {
+            draft.openedSignIn = openedSignIn;
+            draft.probe = pending;
+            draft.probeResult = probeResult;
+          });
         return (
-          <openclaw-modal-dialog
-            label={t("connection.browserSignIn.title")}
-            description={t("connection.browserSignIn.description")}
-            onModal-cancel={dismiss}
-          >
-            <div class="exec-approval-card">
-              <div class="exec-approval-header">
-                <div style={{ "min-width": "0" }}>
-                  <div class="exec-approval-title">{t("connection.browserSignIn.title")}</div>
-                  <div class="exec-approval-sub" style={{ "white-space": "normal" }}>
-                    {t("connection.browserSignIn.description")}
-                  </div>
-                </div>
-              </div>
-              <Show when={view().openedSignIn}>
-                <p>{t("connection.browserSignIn.returnHint")}</p>
-              </Show>
-              <p role="status" aria-live="polite">
-                {view().pending
-                  ? t("connection.browserSignIn.checking")
-                  : view().probeResult === "unavailable"
-                    ? t("connection.browserSignIn.unavailable")
-                    : view().probeResult === "sign-in"
-                      ? t("connection.browserSignIn.stillRequired")
-                      : null}
-              </p>
-              <openclaw-modal-actions class="exec-approval-actions">
-                <button class="btn primary" onClick={() => void signIn()}>
-                  {t("connection.browserSignIn.action")}
-                </button>
-                <Show when={view().openedSignIn}>
-                  <button class="btn" disabled={view().pending} onClick={() => void check(true)}>
-                    {t("connection.browserSignIn.checkAgain")}
-                  </button>
-                </Show>
-                <button class="btn" onClick={dismiss}>
-                  {t("connection.browserSignIn.dismiss")}
-                </button>
-              </openclaw-modal-actions>
-            </div>
-          </openclaw-modal-dialog>
+          <Loading>
+            <RecoveryDialog
+              view={view}
+              readProbeResult={() => probeResult}
+              onSignIn={() => void signIn()}
+              onCheck={() => void check(true)}
+              onDismiss={dismiss}
+            />
+          </Loading>
         );
       };
       dialog = { close: () => modal.finish(undefined), update: () => update?.() };

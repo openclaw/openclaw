@@ -26,17 +26,17 @@ import {
   type GitHubPublicationSessionRequest,
 } from "./github-publication-coordinator-methods.js";
 import { GitHubPublicationAuthorityLostError } from "./github-publication-execution-identity.js";
-import {
-  executeGitHubPublication,
-  reconcileGitHubPublication,
-} from "./github-publication-executor.js";
+import { executeGitHubPublication } from "./github-publication-executor.js";
 import { GitHubPublicationRequesterUnavailableError } from "./github-publication-failure.js";
 import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
 import {
   digestGitHubPublicationRequest as digestRequest,
   projectGitHubPublicationResult as publicationResult,
 } from "./github-publication-receipt.js";
-import { readGitHubPublicationRequestInWorker } from "./github-publication-recovery.js";
+import {
+  readGitHubPublicationRequestInWorker,
+  reconcileGitHubPublication,
+} from "./github-publication-recovery.js";
 import { insertGitHubPublicationRequestAsync } from "./github-publication-request-async.js";
 import {
   restoreGitHubPublicationRequester,
@@ -127,6 +127,7 @@ export function createGitHubPublicationCoordinator(params: {
       throw new Error("GitHub publication session identity changed.");
     }
     using admitted = await readGitHubPublicationWorktreeOwner({
+      allowExistingPullRequest: true,
       sessionId: request.claim.sessionId,
       sessionKey: request.sessionKey,
       agentId: request.agentId,
@@ -188,7 +189,7 @@ export function createGitHubPublicationCoordinator(params: {
       worktree: {
         id: worktree.id,
         repoFingerprint: worktree.repoFingerprint,
-        branch: worktree.branch,
+        branch: worktreeOwner.publicationBranch,
       },
       sessionId: request.claim.sessionId,
       lifecycleRevision: admitted.loaded.entry?.lifecycleRevision ?? null,
@@ -314,6 +315,7 @@ export function createGitHubPublicationCoordinator(params: {
             assertOwned();
             return await executeGitHubPublication({
               initial: claimed,
+              requester: getRequester,
               validateCustody,
               assertWorkflowChangesAllowed: () =>
                 assertGitHubPublicationWorkflowChangesAllowed(getRequester()),

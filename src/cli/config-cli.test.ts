@@ -128,6 +128,7 @@ vi.mock("./config-model-validation.js", () => ({
   checkTouchedTextModelRefs: (...args: unknown[]) => mockCheckTouchedTextModelRefs(...args),
 }));
 
+// mock-isolation: CLI output tests use fixed policy; Gateway reload tests cover policy decisions.
 vi.mock("../gateway/config-reload-plan.js", () => ({
   buildGatewayReloadPlan: (changedPaths: string[]) => {
     const hotReasons = changedPaths.filter(
@@ -147,7 +148,6 @@ vi.mock("../gateway/config-reload-plan.js", () => ({
       reloadHooks: false,
       restartGmailWatcher: false,
       restartCron: false,
-      restartHeartbeat: hotReasons.length > 0,
       reloadPlugins: false,
       restartChannels: new Set(),
       disposeMcpRuntimes: false,

@@ -107,21 +107,14 @@ describe("Anthropic provider usage", () => {
     }
   });
 
-  it("classifies setup tokens through the real usage auth owner", async () => {
-    const key = `sk-ant-oat01-${"a".repeat(80)}`;
+  it.each([
+    [`sk-ant-oat01-${"a".repeat(80)}`, `sk-ant-oat01-${"a".repeat(80)}`],
+    ["sk-ant-admin-profile", 'openclaw:anthropic-admin:v1:{"token":"sk-ant-admin-profile"}'],
+  ])("classifies stored usage credential %s", async (key, token) => {
     const result = await resolveAuth({
       resolveApiKeyCandidatesFromConfigAndStore: async () => [key],
     });
-    expect(result).toEqual({ token: key });
-  });
-
-  it("auto-detects an Admin API key stored in the Anthropic provider profile", async () => {
-    const result = await resolveAuth({
-      resolveApiKeyCandidatesFromConfigAndStore: async () => ["sk-ant-admin-profile"],
-    });
-    expect(result).toEqual({
-      token: 'openclaw:anthropic-admin:v1:{"token":"sk-ant-admin-profile"}',
-    });
+    expect(result).toEqual({ token });
   });
 
   it("prefers a stored Admin API key when normal API and OAuth credentials coexist", async () => {
@@ -150,25 +143,12 @@ describe("Anthropic provider usage", () => {
     });
   });
 
-  it("uses plan metadata from the resolved auth profile", async () => {
-    const snapshot = await fetchUsage({
-      subscriptionType: "pro",
-      rateLimitTier: "default_pro",
-    });
-    expect(snapshot.plan).toBe("Pro");
-  });
-
-  it("attaches the resolved credential email to OAuth usage snapshots", async () => {
-    const snapshot = await fetchUsage({
-      email: "profile@example.com",
-    });
-    expect(snapshot.accountEmail).toBe("profile@example.com");
-  });
-
-  it("does not attach a plan label when usage has no windows", async () => {
-    const snapshot = await fetchUsage({
-      fetchFn: vi.fn(async () => Response.json({})),
-    });
-    expect(snapshot.plan).toBeUndefined();
+  it.each([
+    [{ subscriptionType: "pro", rateLimitTier: "default_pro" }, "plan", "Pro"],
+    [{ email: "profile@example.com" }, "accountEmail", "profile@example.com"],
+    [{ fetchFn: vi.fn(async () => Response.json({})) }, "plan", undefined],
+  ] as const)("attaches only applicable resolved metadata %j", async (options, field, expected) => {
+    const snapshot = await fetchUsage(options);
+    expect(snapshot[field]).toBe(expected);
   });
 });

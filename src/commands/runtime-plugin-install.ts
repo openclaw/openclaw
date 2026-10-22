@@ -5,7 +5,6 @@ import { modelSelectionShouldEnsureCopilotRuntimePlugin } from "../agents/copilo
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
 import { modelSelectionShouldEnsureCodexPlugin } from "../agents/openai-routing.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import type { PluginCapabilityConsentHandler } from "../plugins/capability-consent.js";
 import { enablePluginWithCapabilityConsent } from "../plugins/enable.js";
@@ -86,17 +85,6 @@ const MUSE_RUNTIME_PLUGIN_DESCRIPTOR: RuntimePluginInstallDescriptor = {
     ),
 };
 
-function isInstalledRecordPresentOnDisk(
-  record: PluginInstallRecord | undefined,
-  env: NodeJS.ProcessEnv,
-): boolean {
-  const installPath = record?.installPath?.trim();
-  if (!installPath) {
-    return false;
-  }
-  return existsSync(path.join(resolveUserPath(installPath, env), "package.json"));
-}
-
 function finalizeRequiredRuntimePluginInstall(
   descriptor: RuntimePluginInstallDescriptor,
   result: {
@@ -125,27 +113,6 @@ function finalizeRequiredRuntimePluginInstall(
   };
 }
 
-function adaptRuntimePluginInstallIo(params: RuntimePluginEnsureParams): {
-  prompter: WizardPrompter;
-  runtime: RuntimeEnv;
-} {
-  const silent = params.output === "silent";
-  const runtime = {
-    ...params.runtime,
-    error: () => {},
-    ...(silent ? { log: () => {} } : {}),
-  };
-  return {
-    prompter: silent
-      ? createNonInteractiveLoggingPrompter(
-          runtime,
-          (message) => `Runtime plugin install unexpectedly prompted: ${message}`,
-        )
-      : { ...params.prompter, note: async () => {} },
-    runtime,
-  };
-}
-
 async function ensureRuntimePluginForModelSelection(
   params: RuntimePluginEnsureParams,
   descriptor: RuntimePluginInstallDescriptor,
@@ -153,14 +120,29 @@ async function ensureRuntimePluginForModelSelection(
   if (!descriptor.shouldEnsure(params)) {
     return { ok: true, cfg: params.cfg, required: false };
   }
-  const io = adaptRuntimePluginInstallIo(params);
+  const silent = params.output === "silent";
+  const runtime = {
+    ...params.runtime,
+    error: () => {},
+    ...(silent ? { log: () => {} } : {}),
+  };
+  const prompter = silent
+    ? createNonInteractiveLoggingPrompter(
+        runtime,
+        (message) => `Runtime plugin install unexpectedly prompted: ${message}`,
+      )
+    : { ...params.prompter, note: async () => {} };
   const onCapabilityConsent =
     params.onCapabilityConsent ??
     (params.output === "silent"
       ? async () => undefined
       : createPluginCapabilityConsentPrompter(params.prompter));
   const existingRecords = await loadInstalledPluginIndexInstallRecords({ env: process.env });
-  if (isInstalledRecordPresentOnDisk(existingRecords[descriptor.pluginId], process.env)) {
+  const installPath = existingRecords[descriptor.pluginId]?.installPath?.trim();
+  if (
+    installPath &&
+    existsSync(path.join(resolveUserPath(installPath, process.env), "package.json"))
+  ) {
     // A recorded install with package.json on disk can be repaired/enabled
     // without re-downloading the plugin during setup.
     const repair = await repairRequiredRuntimePluginInstall(
@@ -173,10 +155,10 @@ async function ensureRuntimePluginForModelSelection(
       descriptor.pluginId,
     );
     for (const change of repair.changes) {
-      io.runtime.log?.(change);
+      runtime.log?.(change);
     }
     for (const warning of repair.warnings) {
-      io.runtime.log?.(`${descriptor.warningLabel} update warning: ${warning}`);
+      runtime.log?.(`${descriptor.warningLabel} update warning: ${warning}`);
     }
     const enableResult = await enablePluginWithCapabilityConsent(params.cfg, descriptor.pluginId, {
       workspaceDir: params.workspaceDir,
@@ -207,8 +189,8 @@ async function ensureRuntimePluginForModelSelection(
       trustedSourceLinkedOfficialInstall: true,
       ...(descriptor.versionBoundToOpenClaw ? { versionBoundToOpenClaw: true } : {}),
     },
-    prompter: io.prompter,
-    runtime: io.runtime,
+    prompter,
+    runtime,
     ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
     promptInstall: false,
     autoConfirmSingleSource: true,

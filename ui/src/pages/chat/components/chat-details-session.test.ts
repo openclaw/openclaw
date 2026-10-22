@@ -99,6 +99,43 @@ it("omits empty linked-work disclosures and opens arriving pull requests", async
     element.querySelector<HTMLDetailsElement>('[data-details-group="pull-requests"]')?.open,
   ).toBe(true);
 });
+it("keeps compaction busy until the owning request settles and uses the current callback", async () => {
+  const pending = createDeferred();
+  const compact = vi.fn(() => pending.promise);
+  const element = await mount({
+    selectedSession: {
+      key: "agent:main:details",
+      kind: "direct",
+      totalTokens: 50000,
+      contextTokens: 100000,
+    },
+    onCompact: compact,
+  });
+  const disclosure = element.querySelector<HTMLDetailsElement>(".chat-details__context")!;
+  disclosure.open = true;
+  disclosure.dispatchEvent(new Event("toggle"));
+  flush();
+  const button = element.querySelector<HTMLButtonElement>(".chat-context__compact")!;
+  try {
+    button.click();
+    await waitForSolid(() => {
+      expect(button.disabled).toBe(true);
+      expect(button.textContent).toContain("Compacting");
+    });
+    expect(compact).toHaveBeenCalledOnce();
+    button.click();
+    expect(compact).toHaveBeenCalledOnce();
+  } finally {
+    pending.resolve();
+  }
+  await waitForSolid(() => expect(button.disabled).toBe(false));
+  const replacement = vi.fn(async () => {});
+  element.props = { ...element.props!, onCompact: replacement };
+  await element.updateComplete;
+  button.click();
+  await waitForSolid(() => expect(replacement).toHaveBeenCalledOnce());
+  expect(compact).toHaveBeenCalledOnce();
+});
 it("keeps immutable creator, mutable owner and participants distinct without claiming live presence", async () => {
   const element = await mount({
     selectedSession: {

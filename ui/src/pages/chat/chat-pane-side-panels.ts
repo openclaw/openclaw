@@ -1,10 +1,7 @@
 import type { SessionsCompanionStateResult } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
-import { SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS } from "../../../../packages/gateway-protocol/src/session-companion-contract.js";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { shellViewport, type ShellViewportSnapshot } from "../../app/shell-viewport.ts";
-import { t } from "../../i18n/index.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
-import { buildCompanionQuestionPrefill } from "../../lib/chat/companion-question.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
@@ -19,7 +16,6 @@ import {
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
-import { formatChatSelectionAnnotation } from "./components/chat-selection-attachment.ts";
 import type { SidebarLayout, SidebarSlotId } from "./sidebar-layout-types.ts";
 import {
   closeSlot,
@@ -120,11 +116,7 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
       reservedHeight: this.mobilePresentation.reservedHeight,
       destination: this.mobilePresentation.destination,
       detailsMount: this.mobilePresentation.detailsMount,
-      setDetailsMount: (element) => {
-        if (element !== this.mobilePresentation.detailsMount) {
-          this.mobilePresentation.detailsMount = element;
-        }
-      },
+      setDetailsMount: this.setMobileDetailsMount,
       navigate: (destination, source) => this.navigateMobileHost(destination, source),
       reveal: (source) => this.navigateMobileHost(this.mobilePresentation.destination, source),
       close: () => {
@@ -173,6 +165,13 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
       onViewportChange: this.onMobileViewportChange,
     };
   }
+
+  // The renderer keys attachment cleanup by this pane's stable callback.
+  private readonly setMobileDetailsMount = (element: HTMLElement | null): void => {
+    if (element !== this.mobilePresentation.detailsMount) {
+      this.mobilePresentation.detailsMount = element;
+    }
+  };
 
   private readonly onMobileComposerEditingChange = (editing: boolean): void => {
     if (!this.usesMobileHost || editing === this.mobilePresentation.composerEditing) {
@@ -581,28 +580,14 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
     }
     const agentId = resolveChatAgentId(state);
     const thread = this.sessionCompanionThreads.view(sourceSessionKey, agentId);
-    const nextAttachments = [...(thread.attachments ?? []), attachment];
-    // Only an oversized passage gets the old quote-only path; comments stay correctable.
     if (
-      formatChatSelectionAnnotation({ ...attachment.selectionAnnotation, comment: "" }).length >
-      SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS
-    ) {
-      showToast({
-        message: t(
-          thread.draft.trim() ? "chat.rail.selectionTooLong" : "chat.rail.selectionQuoteOnly",
-        ),
-      });
-    } else if (
-      !this.sessionCompanionThreads.setAttachments(sourceSessionKey, nextAttachments, agentId)
+      !this.sessionCompanionThreads.setAttachments(
+        sourceSessionKey,
+        [...(thread.attachments ?? []), attachment],
+        agentId,
+      )
     ) {
       return false;
-    }
-    if (!thread.draft.trim()) {
-      this.sessionCompanionThreads.setDraft(
-        sourceSessionKey,
-        buildCompanionQuestionPrefill(attachment.selectionAnnotation.text) ?? "",
-        agentId,
-      );
     }
     this.requestSessionRail("open");
     return true;

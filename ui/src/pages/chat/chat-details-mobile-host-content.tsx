@@ -1,9 +1,10 @@
 import { For, Show, createMemo, createSignal, onSettled } from "solid-js";
 import type { ControlUiSessionPullRequestSnapshot } from "../../../../src/gateway/control-ui-contract.js";
 import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { elementRef } from "../../lib/reactive/element-ref.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { ContentPresentation } from "../../lib/solid/presentation.ts";
@@ -25,6 +26,8 @@ import type { PreparedChatSessionSharing } from "./components/chat-session-shari
 import type { ChatSessionVersionsMobileProps } from "./components/chat-session-versions-mobile.tsx";
 import { createSessionAutomationInventory } from "./components/chat-summary-automations.tsx";
 import { ProcessesPanelData } from "./processes-panel-data.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 export type MobileDetailsBindings = {
   sharing?: PreparedChatSessionSharing;
@@ -110,8 +113,8 @@ function MobileHostContent(
     if (!data) {
       return undefined;
     }
-    const { rows, error, loading } = data.snapshot;
-    return { rows, error, loading, refresh: () => data.refresh() };
+    const { rows, error, errorKind, loading } = data.snapshot;
+    return { rows, error, errorKind, loading, refresh: () => data.refresh() };
   });
   const route = () => props.host.destination.page?.details;
   const activePeople = createMemo(() =>

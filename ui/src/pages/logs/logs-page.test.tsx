@@ -1,16 +1,20 @@
 /* @vitest-environment jsdom */
 
+import { getQueriesForElement } from "@solidjs/testing-library";
 import { createSignal, flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
-import { LogsPage } from "./logs-page.tsx";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { renderSolid as LogsRoute } from "./logs-page.tsx";
 
 type TestContext = ReturnType<typeof contextWithClient>;
+
+const TRUNCATION_NOTICE = "Log output truncated; showing latest chunk.";
 
 function contextWithClient(client: GatewayBrowserClient, connected = false, bootId?: string) {
   const { gateway, publish } = createApplicationGateway({
@@ -31,7 +35,7 @@ function mountPage(initial: TestContext) {
   };
   const { container, unmount: dispose } = mountSolid(() => (
     <ApplicationProvider value={liveContext as unknown as ApplicationContext}>
-      <LogsPage />
+      <LogsRoute />
     </ApplicationProvider>
   ));
   return {
@@ -97,11 +101,136 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+it("names the page with a level-one heading", async () => {
+  const { page } = await setup(vi.fn().mockResolvedValue(tail(1, ["one"])));
+  expect(getQueriesForElement(page.container).getByRole("heading", { level: 1 }).textContent).toBe(
+    "Logs",
+  );
+});
+
+it.each([{ lines: [] }, { lines: ["next line"] }])(
+  "retains the truncation notice after an incremental response with $lines",
+  async ({ lines }) => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ...tail(100, ["retained line"], "/tmp/truncated.log"),
+        truncated: true,
+      })
+      .mockResolvedValueOnce({ ...tail(110, lines, "/tmp/truncated.log"), truncated: false });
+    const { page } = await setup(request);
+    expect(page.container.textContent).toContain(TRUNCATION_NOTICE);
+
+    await poll();
+
+    expect(request.mock.calls[1]?.[1]).toMatchObject({ cursor: 100 });
+    expect(page.lines()).toEqual(["retained line", ...lines]);
+    expect(page.container.textContent).toContain(TRUNCATION_NOTICE);
+  },
+);
+
+it("warns only after the display buffer evicts rows and retains that notice", async () => {
+  const lines = Array.from({ length: 2001 }, (_, index) => `line ${index + 1}`);
+  let cursor = 0;
+  const request = vi.fn(async () => {
+    const pageLines = lines.slice(cursor, cursor + 500);
+    cursor += pageLines.length;
+    return { ...tail(cursor, pageLines, "/tmp/buffer.log"), truncated: false };
+  });
+  const { page } = await setup(request);
+  expect(page.container.textContent).not.toContain(TRUNCATION_NOTICE);
+  const secondRow = page.container.querySelectorAll(".log-row")[1];
+  for (const count of [1000, 1500, 2000]) {
+    await poll();
+    expect(page.lines()).toHaveLength(count);
+    expect(page.container.textContent).not.toContain(TRUNCATION_NOTICE);
+  }
+
+  await poll();
+  const retained = page.lines();
+  expect(retained).toHaveLength(2000);
+  expect(retained[0]).toBe("line 2");
+  expect(page.container.querySelector(".log-row")).toBe(secondRow);
+  expect(retained.at(-1)).toBe("line 2001");
+  expect(page.container.textContent).toContain(TRUNCATION_NOTICE);
+
+  await poll();
+  expect(page.lines()).toEqual(retained);
+  expect(page.container.textContent).toContain(TRUNCATION_NOTICE);
+});
+
+it.each(["manual refresh", "server reset", "file replacement"])(
+  "clears truncation when %s replaces the displayed history with a complete tail",
+  async (replacement) => {
+    const request = vi.fn().mockResolvedValueOnce({
+      ...tail(100, ["old tail"], "/tmp/old.log"),
+      truncated: true,
+    });
+    const { page } = await setup(request);
+    expect(page.container.textContent).toContain(TRUNCATION_NOTICE);
+    if (replacement === "file replacement") {
+      request.mockResolvedValueOnce(tail(150, ["discarded cross-file suffix"], "/tmp/new.log"));
+    }
+    request.mockResolvedValueOnce({
+      ...tail(
+        150,
+        ["complete replacement"],
+        replacement === "file replacement" ? "/tmp/new.log" : "/tmp/old.log",
+      ),
+      truncated: false,
+      reset: replacement === "server reset",
+    });
+
+    await (replacement === "manual refresh" ? page.refresh() : poll());
+
+    expect(page.lines()).toEqual(["complete replacement"]);
+    expect(page.container.textContent).not.toContain(TRUNCATION_NOTICE);
+    expect(request.mock.calls.at(-1)?.[1]).toMatchObject({
+      cursor: replacement === "server reset" ? 100 : undefined,
+    });
+  },
+);
+
+it("retains truncation with stale rows and clears it when read access clears them", async () => {
+  const request = vi
+    .fn()
+    .mockResolvedValueOnce({ ...tail(100, ["retained tail"], "/tmp/stale.log"), truncated: true })
+    .mockRejectedValueOnce(new Error("log read failed"))
+    .mockRejectedValueOnce(
+      new GatewayRequestError({
+        code: "FORBIDDEN",
+        message: "permission denied",
+        details: {
+          code: "MISSING_SCOPE",
+          missingScope: "operator.read",
+          requiredScopes: ["operator.read"],
+        },
+      }),
+    );
+  const { page } = await setup(request);
+  await poll();
+  expect(page.lines()).toEqual(["retained tail"]);
+  expect(page.container.textContent).toContain("Showing stale data");
+  expect(page.container.textContent).toContain(TRUNCATION_NOTICE);
+
+  await poll();
+  expect(page.lines()).toEqual([]);
+  expect(page.container.textContent).toContain("You don't have permission to view logs.");
+  expect(page.container.textContent).not.toContain(TRUNCATION_NOTICE);
+});
+
 it("retains one initial request across metadata snapshots with empty logs", async () => {
   const { request, replies } = pendingRequests();
   const { client, context, page } = await setup(request, false);
   context.gateway.publish({ client, phase: "connected" } as ApplicationGatewaySnapshot);
   expect(request).toHaveBeenCalledOnce();
+  await waitForSolid(() =>
+    expect(
+      getQueriesForElement(page.container)
+        .getByRole("button", { name: "Loading…" })
+        .hasAttribute("disabled"),
+    ).toBe(true),
+  );
   context.gateway.publish({ ...context.gateway.snapshot });
   expect(request.mock.calls.map((call) => call[2].signal.aborted)).toEqual([false]);
 
@@ -234,7 +363,14 @@ it("serializes quiet polls so an older cursor cannot overwrite a newer one", asy
   const pending = deferred<ReturnType<typeof tail>>();
   const request = responding(tail(1, ["seed"])).mockReturnValue(pending.promise);
   const { page } = await setup(request);
+  const row = page.container.querySelector(".log-row");
   await poll();
+  expect(
+    getQueriesForElement(page.container)
+      .getByRole("button", { name: "Refresh" })
+      .hasAttribute("disabled"),
+  ).toBe(true);
+  expect(page.container.querySelector(".log-row")).toBe(row);
   await poll();
   expect(request).toHaveBeenCalledTimes(2);
   expect(page.lines()).toEqual(["seed"]);
@@ -263,12 +399,35 @@ it("reloads a changed log file before publishing any rows from it", async () => 
 });
 
 it.each([false, true])("recovers a logs error with previously loaded rows: %s", async (loaded) => {
+  const pending = deferred<ReturnType<typeof tail>>();
   const request = responding(...(loaded ? [tail(1, ["old"])] : []))
-    .mockRejectedValueOnce(new Error("logs unavailable"))
+    .mockReturnValueOnce(pending.promise)
     .mockResolvedValueOnce({ ...tail(2, ["recovered"]), reset: loaded });
   const { context, page } = await setup(request);
+  const input = page.container.querySelector<HTMLInputElement>(".settings-input")!;
+  const stream = page.container.querySelector(".log-stream");
+  input.focus();
   if (loaded) {
     await page.refresh();
+    expect(page.lines()).toEqual(["old"]);
+  }
+  expect(
+    getQueriesForElement(page.container)
+      .getByRole("button", { name: "Loading…" })
+      .hasAttribute("disabled"),
+  ).toBe(true);
+  expect(page.container.querySelector(".log-stream")).toBe(stream);
+  expect(page.container.querySelector(".settings-input")).toBe(input);
+  expect(document.activeElement).toBe(input);
+  pending.reject(new Error("logs unavailable"));
+  await waitForSolid(() =>
+    expect(
+      getQueriesForElement(page.container)
+        .getByRole("button", { name: "Refresh" })
+        .hasAttribute("disabled"),
+    ).toBe(false),
+  );
+  if (loaded) {
     expect(page.lines()).toEqual(["old"]);
     expect(page.container.querySelector(".logs-refresh-status")?.textContent).toContain(
       "Showing stale data",
@@ -284,9 +443,12 @@ it.each([false, true])("recovers a logs error with previously loaded rows: %s", 
     "logs unavailable",
   );
   await (loaded ? page.refresh() : poll());
-  expect(page.lines()).toEqual(["recovered"]);
+  await waitForSolid(() => expect(page.lines()).toEqual(["recovered"]));
   expect(page.container.textContent).not.toContain("logs unavailable");
   expect(page.container.querySelector(".logs-refresh-status")).toBeNull();
+  expect(page.container.querySelector(".log-stream")).toBe(stream);
+  expect(page.container.querySelector(".settings-input")).toBe(input);
+  expect(document.activeElement).toBe(input);
 });
 
 it("keeps text and level filters active as quiet polls append rows", async () => {

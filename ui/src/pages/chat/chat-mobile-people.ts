@@ -22,6 +22,7 @@ export type ChatMobilePeople = {
   owner?: ChatMobilePerson;
   participants: readonly ChatMobilePerson[];
   unlistedParticipantCount: number;
+  participantsComplete: boolean;
 };
 
 export type ChatMobilePeopleInput = {
@@ -136,6 +137,9 @@ export function projectChatMobilePeople(input: ChatMobilePeopleInput): ChatMobil
     creator: creator?.key === owner?.key ? undefined : creator,
     owner,
     participants: [...participants.values()],
+    participantsComplete:
+      input.session.participantCount !== undefined &&
+      input.session.participantCount <= recordedParticipantKeys.size,
     unlistedParticipantCount: Math.max(
       0,
       (input.session.participantCount ?? 0) - recordedParticipantKeys.size,

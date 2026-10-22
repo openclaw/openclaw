@@ -57,7 +57,12 @@ function mountProfiles(client: GatewayBrowserClient) {
     connection: { gatewayUrl: "ws://gateway.example.test", token: "", password: "" },
   });
   const runtimeConfig = createRuntimeConfigCapability(gateway);
-  const context = { gateway, runtimeConfig, navigate: vi.fn() } as unknown as ApplicationContext;
+  const context = {
+    gateway,
+    runtimeConfig,
+    router: { subscribe: () => () => {} },
+    navigate: vi.fn(),
+  } as unknown as ApplicationContext;
   const view = mountSolid(() => (
     <ApplicationProvider value={context}>
       <CloudWorkersPage />
@@ -93,6 +98,76 @@ const operatingSystems = [
 function osSelect(page: Element) {
   return page.querySelector<HTMLSelectElement>('select[aria-label="Operating system"]');
 }
+
+it("keeps the profile draft and accepted catalog through refresh failure and retry", async () => {
+  const config = { cloudWorkers: { profiles: { worker: machineProfile() } } };
+  const catalog = {
+    environments: [],
+    profiles: [{ id: "worker", providerId: "crabbox", operatingSystems }],
+  };
+  let hash = "initial";
+  let response = Promise.resolve<EnvironmentsListResult>(catalog);
+  const request = createGatewayRequestMock(async (method, params) => {
+    if (method === "config.get") {
+      return configSnapshot(config, hash);
+    }
+    if (method === "environments.list") {
+      return isRecord(params) && params.projection === "profiles" ? response : { environments: [] };
+    }
+    throw new Error(`Unexpected request ${method}`);
+  });
+  const client = createTestGatewayClient(request);
+  const transport = vi.spyOn(client, "request");
+  const { runtimeConfig, view, page } = mountProfiles(client);
+  const catalogCalls = () =>
+    transport.mock.calls.filter(
+      ([method, params]) =>
+        method === "environments.list" && isRecord(params) && params.projection === "profiles",
+    ).length;
+  try {
+    await waitForSolid(() =>
+      expect(profileRow(page, "worker").textContent).toContain("Advertised"),
+    );
+    click(profileRow(page, "worker"), "Edit");
+    const lifetime = await waitForSolid(() =>
+      expectDefined(
+        page.querySelector<HTMLInputElement>('input[aria-label="Max lifetime"]'),
+        "Profile lifetime",
+      ),
+    );
+    change(lifetime, "9h");
+    const refresh = async (nextHash: string) => {
+      const pending = createDeferred<EnvironmentsListResult>();
+      response = pending.promise;
+      hash = nextHash;
+      const before = catalogCalls();
+      await runtimeConfig.refresh();
+      await waitForSolid(() => expect(catalogCalls()).toBeGreaterThan(before));
+      return pending;
+    };
+    const pending = await refresh("second");
+    expect(profileRow(page, "worker").textContent).toContain("Advertised");
+    expect(page.querySelector('input[aria-label="Max lifetime"]')).toBe(lifetime);
+    expect(lifetime.value).toBe("9h");
+    pending.reject(new Error("Synthetic catalog unavailable"));
+    await waitText(() => page, "Synthetic catalog unavailable");
+    expect(page.querySelector('input[aria-label="Max lifetime"]')).toBe(lifetime);
+    expect(lifetime.value).toBe("9h");
+
+    const retry = await refresh("third");
+    expect(page.textContent).toContain("Synthetic catalog unavailable");
+    retry.resolve(catalog);
+    await waitForSolid(() =>
+      expect(page.textContent).not.toContain("Synthetic catalog unavailable"),
+    );
+    expect(profileRow(page, "worker").textContent).toContain("Advertised");
+    expect(page.querySelector('input[aria-label="Max lifetime"]')).toBe(lifetime);
+    expect(lifetime.value).toBe("9h");
+  } finally {
+    view.unmount();
+    runtimeConfig.dispose();
+  }
+});
 
 it("retires a pending profile catalog when permissions change on the same connection", async () => {
   const pendingCatalog = createDeferred<EnvironmentsListResult>();
@@ -349,3 +424,61 @@ it.each([
     expect(renderingErrors).not.toHaveBeenCalled();
   },
 );
+
+it("keeps a rejected profile draft and retires pending save presentation on access loss", async () => {
+  const config = { cloudWorkers: { profiles: { worker: machineProfile() } } };
+  let pending = createDeferred<unknown>();
+  let patches = 0;
+  const request = createGatewayRequestMock(async (method) => {
+    if (method === "config.get") {
+      return configSnapshot(config, "initial");
+    }
+    if (method === "environments.list") {
+      return { environments: [], profiles: [] };
+    }
+    if (method === "config.patch") {
+      patches += 1;
+      return pending.promise;
+    }
+    throw new Error(`Unexpected request ${method}`);
+  });
+  const client = createTestGatewayClient(request);
+  const { gatewayHarness, runtimeConfig, view, page } = mountProfiles(client);
+  try {
+    await waitForSolid(() => expect(profileRow(page, "worker")).toBeTruthy());
+    click(profileRow(page, "worker"), "Edit");
+    const lifetime = await waitForSolid(() =>
+      expectDefined(
+        page.querySelector<HTMLInputElement>('input[aria-label="Max lifetime"]'),
+        "Profile lifetime",
+      ),
+    );
+    change(lifetime, "9h");
+    click(page, "Save");
+    await waitForSolid(() => {
+      expect(patches).toBe(1);
+      expect(actionButton(page, "Saving…").disabled).toBe(true);
+      expect(lifetime.disabled).toBe(true);
+    });
+    pending.reject(new Error("Synthetic profile save unavailable"));
+    await waitText(() => page, "Synthetic profile save unavailable");
+    expect(page.querySelector('input[aria-label="Max lifetime"]')).toBe(lifetime);
+    expect(lifetime.value).toBe("9h");
+    await waitForSolid(() => expect(actionButton(page, "Save").disabled).toBe(false));
+
+    pending = createDeferred<unknown>();
+    click(page, "Save");
+    await waitForSolid(() => expect(patches).toBe(2));
+    gatewayHarness.publish(true, client, gatewayHelloForMethods([], ["operator.read"]));
+    await waitText(() => page, "Administrator access is required to manage cloud worker profiles.");
+    expect(page.querySelector('input[aria-label="Max lifetime"]')).toBeNull();
+    pending.resolve({ ok: true, config, hash: "after" });
+    await pending.promise;
+    flush();
+    expect(page.querySelector('input[aria-label="Max lifetime"]')).toBeNull();
+    expect(page.textContent).not.toContain("Profile saved.");
+  } finally {
+    view.unmount();
+    runtimeConfig.dispose();
+  }
+});

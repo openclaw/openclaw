@@ -6,6 +6,7 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import "../../styles/base.css";
 import { Logbook } from "./logbook-view.tsx";
+const neverRetired = new Promise<void>(() => {});
 
 let container: HTMLDivElement;
 let dispose: (() => void) | undefined;
@@ -68,7 +69,7 @@ it.each([
     );
     // SAFETY: This view fixture only invokes request on the browser client.
     const client = { request } as unknown as GatewayBrowserClient;
-    dispose = mountSolid(() => <Logbook initialClient={client} />, {
+    dispose = mountSolid(() => <Logbook initialClient={client} getRetired={() => neverRetired} />, {
       container,
     }).unmount;
     await waitForSolid(() =>

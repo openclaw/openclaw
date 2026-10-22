@@ -97,6 +97,7 @@ export const detected: SystemAgentSetupDetectResult = {
 
 export function props(overrides: Partial<ModelSetupViewProps> = {}): ModelSetupViewProps {
   return {
+    detectionIdentity: () => undefined,
     page: { phase: "ready", result: detected },
     activation: { phase: "idle" },
     verify: { phase: "idle" },

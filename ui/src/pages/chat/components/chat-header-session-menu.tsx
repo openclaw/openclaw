@@ -5,7 +5,6 @@ import {
   createSignal,
   flush,
   merge,
-  onCleanup,
   onSettled,
   Show,
 } from "solid-js";
@@ -34,7 +33,8 @@ import {
   type MenuItem,
   type MenuHandle,
 } from "../../../components/solid/menu.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
 import type { SessionCreatedActor } from "../../../lib/session-owner.ts";
@@ -52,9 +52,10 @@ import {
 import {
   canManageChatSessionSharing,
   useChatSessionSharingMenu,
-  selectChatSessionSharingItem,
   type ChatSessionSharingProps,
 } from "./chat-session-sharing.solid.tsx";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 export type HeaderMenuAction =
   | SessionManagementAction
@@ -76,7 +77,6 @@ type HeaderMenuProps = {
   mobile?: boolean;
   mobileHost?: HeaderSessionMenuMobileHost;
   mobilePageOpen?: boolean;
-  prewarm?: boolean;
   bubbleModeEnabled: boolean;
   mainKey: string;
   copyMarkdownAllowed: boolean;
@@ -134,9 +134,8 @@ function ChatHeaderSessionMenuContent(
   const menuId = `chat-header-session-${++nextMenuId}`;
   const [compactView, setCompactView] = createSignal<CompactMenuView>("root");
   const [open, setOpen] = createSignal(false);
-  const preparation = () => liveProps.prewarm;
   const presented = () => open() || (liveProps.mobilePageOpen ?? false);
-  const presentation = createParkedProjection(() => ({ ...liveProps }), presented, preparation);
+  const presentation = createParkedProjection(() => ({ ...liveProps }), presented);
   const props = createProjection(presentation, presentation(), { key: "id" });
   const controls = createMenuControls();
   let menu: MenuHandle | undefined;
@@ -171,7 +170,7 @@ function ChatHeaderSessionMenuContent(
     readState,
     onAction,
     close,
-    createSessionOwnerMenu(presented, preparation),
+    createSessionOwnerMenu(presented),
   );
   const view = useSessionMenuEntries(actions, readState, {
     controls,
@@ -204,15 +203,17 @@ function ChatHeaderSessionMenuContent(
     ),
     controls,
   );
-  menus.set(host, () => menu);
   const shortcut = (event: KeyboardEvent) => {
     if (props.paneTitle !== undefined || !actions.handleKeydown(event, view.appearance)) {
       activateMenuShortcut(menu?.overlay.surface, event);
     }
   };
-  onCleanup(() => {
-    menus.delete(host);
-    stopShortcut?.();
+  onSettled(() => {
+    menus.set(host, () => menu);
+    return () => {
+      menus.delete(host);
+      stopShortcut?.();
+    };
   });
   const content = (id: string, value: JSX.Element): MenuEntry => ({
     kind: "content",
@@ -522,7 +523,7 @@ function ChatHeaderSessionMenuContent(
       value.startsWith("public:")
     ) {
       if (props.sharing) {
-        void selectChatSessionSharingItem(props.sharing, value);
+        void sharing.select(value);
       }
       return;
     }
@@ -549,7 +550,6 @@ function ChatHeaderSessionMenuContent(
         controls={controls}
         id={menuId}
         lazy
-        prewarm={liveProps.prewarm && !liveProps.compact}
         class={[
           "session-menu chat-header-session-menu",
           {
@@ -615,7 +615,6 @@ export const ChatHeaderSessionMenu = defineSolidBridge<HeaderMenuProps, HeaderMe
       mobile: { default: undefined, attribute: false },
       mobileHost: { default: undefined, attribute: false },
       mobilePageOpen: { default: false, attribute: false },
-      prewarm: { default: false, attribute: false },
       bubbleModeEnabled: { default: false, attribute: false },
       mainKey: { default: "main", attribute: false },
       copyMarkdownAllowed: { default: false, attribute: false },

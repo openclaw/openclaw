@@ -1,6 +1,19 @@
-import { createMemo, Show } from "solid-js";
+import {
+  action as nativeAction,
+  affects,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  Errored,
+  Loading,
+  onSettled,
+  refresh as refreshRead,
+  Show,
+} from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
 import type { MenuControls } from "../../../components/solid/menu.tsx";
+import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import { registerGitHubEnglish } from "../../../i18n/locales/en-github.ts";
 import "../../../components/tooltip.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
@@ -14,6 +27,76 @@ import {
 import { GitHubPublicationAvatar, GitHubPublicationMenu } from "./chat-github-publication-menu.tsx";
 
 registerGitHubEnglish();
+
+/** The owner admits and records work; Solid consumes only completion and presentation. */
+function createPublicationAction(publication: () => GitHubPublicationView) {
+  const retirement = createMemo(() => ({ retired: publication().readiness.retired }), {
+    equals: (previous, next) => previous.retired === next.retired,
+  });
+  const presentation = createMemo(() => {
+    const { retired } = retirement();
+    const [busy, setBusy] = createOptimistic(false);
+    return { retired, busy, setBusy };
+  });
+  const [receipt, setReceipt] = createSignal<{
+    retired: Promise<void>;
+    completion: Promise<void>;
+  } | null>(null);
+  const read = createMemo(() => {
+    const { read: completion, retired } = publication().readiness;
+    return completion ? Promise.race([completion, retired]) : null;
+  });
+  const outcome = createMemo(() => {
+    const action = receipt();
+    return action?.retired === retirement().retired ? action.completion : null;
+  });
+  const present = nativeAction(function* (
+    view: ReturnType<typeof presentation>,
+    completion: Promise<void>,
+  ) {
+    if (view === presentation()) {
+      view.setBusy(true);
+      affects(read);
+    }
+    const settled: boolean = yield Promise.race([
+      completion.then(() => true),
+      view.retired.then(() => false),
+    ]);
+    if (settled && view === presentation()) {
+      // Reconcile the owner's accepted receipt; refreshing never admits another RPC.
+      yield refreshRead(read);
+    }
+  });
+  return {
+    scope: retirement,
+    read,
+    outcome,
+    error: (error: () => unknown, reset: () => void) => (
+      <LazyViewError
+        error={error()}
+        onRetry={() => {
+          setReceipt(null);
+          reset();
+        }}
+        inline
+      />
+    ),
+    busy: () => presentation().busy() || publication().activity !== null,
+    run(callback: (() => void | Promise<void>) | undefined) {
+      const view = presentation();
+      const completion = callback?.();
+      if (completion) {
+        // Acknowledgement can retire its binding; commit that owner change first.
+        onSettled(() => {
+          const pending = present(view, completion);
+          // An owner update can remove these controls before the outcome is observed.
+          void pending.catch(() => {});
+          setReceipt({ retired: view.retired, completion: pending });
+        });
+      }
+    },
+  };
+}
 
 function sourceLabel(source: string): string {
   return t(
@@ -75,7 +158,12 @@ export function GitHubPublicationAccountSelector(props: {
         {(value) => (
           <span class="github-publication-mobile__account-identity">
             <GitHubPublicationAvatar login={value().login} />
-            <span class="github-publication-mobile__login" aria-label={`@${value().login}`}>
+            <span
+              ref={createTextOverflow(() => value().login)}
+              class="github-publication-mobile__login"
+              aria-label={`@${value().login}`}
+              title={`@${value().login}`}
+            >
               @{value().login}
             </span>
           </span>
@@ -118,6 +206,7 @@ export function GitHubPublicationAction(props: {
     result: Extract<NonNullable<GitHubPublicationView["result"]>, { status: "published" }>,
   ) => void;
 }) {
+  const operation = createPublicationAction(() => props.publication);
   const publishedLinkRef = props.controls?.ref();
   const dismissRef = props.controls?.ref();
   const published = () => {
@@ -125,78 +214,89 @@ export function GitHubPublicationAction(props: {
     return result?.status === "published" ? result : undefined;
   };
   return (
-    <Show
-      when={published()}
-      fallback={
-        <Show
-          when={props.publication.optionsUnavailable}
-          fallback={
-            <>
-              <PublicationButton publication={props.publication} controls={props.controls} />
-              <Show when={!props.mobile}>
-                <GitHubPublicationAccountSelector
-                  publication={props.publication}
-                  presented={props.presented}
-                  menuControls={props.menuControls}
-                  controls={props.controls}
-                />
-              </Show>
-            </>
-          }
-        >
-          <PublicationRefresh
-            publication={props.publication}
-            tooltip={`${t("githubPublication.statusUnavailable")}: ${props.publication.error}`}
-            labelled={props.mobile}
-            hideTooltip={props.mobile}
-            controls={props.controls}
-          />
-        </Show>
-      }
-    >
-      {(result) => (
-        <>
-          <a
-            ref={(element) => publishedLinkRef?.(element)}
-            class="chat-pr__create"
-            href={result().url}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={(event) => {
-              if (props.onOpenPublished && shouldHandleNavigationClick(event)) {
-                event.preventDefault();
-                props.onOpenPublished(result());
-              }
-            }}
+    <Errored fallback={operation.error}>
+      <Show
+        when={published()}
+        fallback={
+          <Show
+            when={props.publication.optionsUnavailable}
+            fallback={
+              <>
+                <PublicationButton publication={props.publication} controls={props.controls} />
+                <Show when={!props.mobile}>
+                  <GitHubPublicationAccountSelector
+                    publication={props.publication}
+                    presented={props.presented}
+                    menuControls={props.menuControls}
+                    controls={props.controls}
+                  />
+                </Show>
+              </>
+            }
           >
-            {t("chat.pullRequests.openPublishedPr")}
-          </a>
-          <Show when={props.publication.onNewAction}>
-            <button
-              ref={(element) => dismissRef?.(element)}
-              class="chat-pr__dismiss"
-              type="button"
-              aria-label={t("common.dismiss")}
-              disabled={props.publication.activity !== null}
-              onClick={() => props.publication.onNewAction?.()}
-            >
-              <Icon name="x" />
-            </button>
+            <PublicationRefresh
+              publication={props.publication}
+              tooltip={`${t("githubPublication.statusUnavailable")}: ${props.publication.error}`}
+              labelled={props.mobile}
+              hideTooltip={props.mobile}
+              controls={props.controls}
+            />
           </Show>
-        </>
-      )}
-    </Show>
+        }
+      >
+        {(result) => (
+          <>
+            <a
+              ref={(element) => publishedLinkRef?.(element)}
+              class="chat-pr__create"
+              href={result().url}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(event) => {
+                if (props.onOpenPublished && shouldHandleNavigationClick(event)) {
+                  event.preventDefault();
+                  props.onOpenPublished(result());
+                }
+              }}
+            >
+              {t("chat.pullRequests.openPublishedPr")}
+            </a>
+            <Show when={props.publication.onNewAction}>
+              <button
+                ref={(element) => dismissRef?.(element)}
+                class="chat-pr__dismiss"
+                type="button"
+                aria-label={t("common.dismiss")}
+                disabled={operation.busy()}
+                onClick={() => operation.run(props.publication.onNewAction)}
+              >
+                <Loading on={operation.scope()} fallback={<Icon name="x" />}>
+                  {(() => {
+                    operation.read();
+                    operation.outcome();
+                    return <Icon name="x" />;
+                  })()}
+                </Loading>
+              </button>
+            </Show>
+          </>
+        )}
+      </Show>
+    </Errored>
   );
 }
 
 function PublicationButton(props: { publication: GitHubPublicationView; controls?: MenuControls }) {
   const controlRef = props.controls?.ref();
+  const operation = createPublicationAction(() => props.publication);
   const action = createMemo(() => {
     const publication = props.publication;
-    const { result, activity } = publication;
+    const result = publication.result;
     const selection = publicationButtonSelection(publication);
-    const busy = activity !== null;
-    const pendingLabel = t(activity === "read" ? "common.loading" : "chat.pullRequests.publishing");
+    const busy = operation.busy();
+    const pendingLabel = t(
+      publication.activity === "read" ? "common.loading" : "chat.pullRequests.publishing",
+    );
     if (result?.status === "failed") {
       return {
         click: publication.onNewAction,
@@ -237,23 +337,32 @@ function PublicationButton(props: { publication: GitHubPublicationView; controls
   });
   // Accepted shared requests retain their status button even without a replay callback.
   return (
-    <Show
-      when={
-        action().click ||
-        props.publication.result?.status === "publishing" ||
-        props.publication.result?.status === "requested"
-      }
-    >
-      <button
-        ref={(element) => controlRef?.(element)}
-        class="chat-pr__create"
-        type="button"
-        disabled={action().disabled}
-        onClick={() => action().click?.()}
+    <Errored fallback={operation.error}>
+      <Show
+        when={
+          action().click ||
+          props.publication.result?.status === "publishing" ||
+          props.publication.result?.status === "requested"
+        }
       >
-        {action().label}
-      </button>
-    </Show>
+        <button
+          ref={(element) => controlRef?.(element)}
+          class="chat-pr__create"
+          type="button"
+          disabled={action().disabled}
+          onClick={() => operation.run(action().click)}
+        >
+          {action().label}
+          <Loading on={operation.scope()} fallback={null}>
+            {(() => {
+              operation.read();
+              operation.outcome();
+              return null;
+            })()}
+          </Loading>
+        </button>
+      </Show>
+    </Errored>
   );
 }
 
@@ -282,26 +391,36 @@ function PublicationRefresh(props: {
   controls?: MenuControls;
 }) {
   const controlRef = props.controls?.ref();
+  const operation = createPublicationAction(() => props.publication);
   return (
-    <openclaw-tooltip
-      content={props.tooltip ?? t("githubPublication.refresh")}
-      prop:disabled={props.hideTooltip}
-    >
-      <button
-        ref={(element) => controlRef?.(element)}
-        class={
-          props.labelled
-            ? "chat-pr__create"
-            : "btn btn--ghost btn--icon chat-icon-btn chat-pr__publication-refresh"
-        }
-        type="button"
-        aria-label={t("githubPublication.refresh")}
-        onClick={() => props.publication.onRefresh?.()}
+    <Errored fallback={operation.error}>
+      <openclaw-tooltip
+        content={props.tooltip ?? t("githubPublication.refresh")}
+        prop:disabled={props.hideTooltip}
       >
-        <Icon name="refresh" />
-        <Show when={props.labelled}>{t("githubPublication.refresh")}</Show>
-      </button>
-    </openclaw-tooltip>
+        <button
+          ref={(element) => controlRef?.(element)}
+          class={
+            props.labelled
+              ? "chat-pr__create"
+              : "btn btn--ghost btn--icon chat-icon-btn chat-pr__publication-refresh"
+          }
+          type="button"
+          aria-label={t("githubPublication.refresh")}
+          disabled={operation.busy()}
+          onClick={() => operation.run(props.publication.onRefresh)}
+        >
+          <Loading on={operation.scope()} fallback={<Icon name="refresh" />}>
+            {(() => {
+              operation.read();
+              operation.outcome();
+              return <Icon name="refresh" />;
+            })()}
+          </Loading>
+          <Show when={props.labelled}>{t("githubPublication.refresh")}</Show>
+        </button>
+      </openclaw-tooltip>
+    </Errored>
   );
 }
 

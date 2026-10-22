@@ -37,11 +37,18 @@ vi.mock("../../agents/sandbox/docker-persistent-target.js", () => ({
 
 installRequesterCronAuthorityTestHooks();
 
+const expectedApproval = (approvalId: string) => ({
+  approvalId,
+  decision: "allow-once",
+  source: "operator",
+  message: expect.stringMatching(/human operator approved[\s\S]*identity is not supplied/i),
+});
+
 describe("agent stream approval through the automation tool", () => {
   it.each(["shape", "past schedule"] as const)(
     "allows correction after a server %s rejection, then honors actual denial",
     async (invalid) => {
-      await withStreamApprovalFixture(async ({ tools, read, deliveries, takeApproval, decide }) => {
+      await withStreamApprovalFixture(async ({ add, read, deliveries, takeApproval, decide }) => {
         const job =
           invalid === "shape"
             ? { schedule: { kind: "stream", command: "tail -F example.log" }, task: "watch" }
@@ -49,15 +56,12 @@ describe("agent stream approval through the automation tool", () => {
                 ...approvedStreamJob(),
                 schedule: { kind: "at", at: "2000-01-01T00:00:00.000Z" },
               };
-        await expect(tools.invoke(AUTOMATIONS_TOOL_NAME, { action: "add", job })).rejects.toThrow(
+        await expect(add(job)).rejects.toThrow(
           invalid === "shape" ? /invalid cron.add params/ : /past/,
         );
         expect(deliveries).toEqual([]);
         expect(await read()).toEqual([]);
-        const corrected = tools.invoke(AUTOMATIONS_TOOL_NAME, {
-          action: "add",
-          job: approvedStreamJob(),
-        });
+        const corrected = add();
         const request = await takeApproval(corrected);
         await decide(request.id, "deny");
         expect(await corrected).toMatchObject({ details: { outcome: "operator-denied" } });
@@ -68,22 +72,17 @@ describe("agent stream approval through the automation tool", () => {
 
   it("allows a corrected disable after server validation rejection", async () => {
     await withStreamApprovalFixture(
-      async ({ tools, read }) => {
-        await tools.invoke(AUTOMATIONS_TOOL_NAME, { action: "add", job: approvedStreamJob() });
+      async ({ add, updateJob, read }) => {
+        await add();
         const original = expectDefined((await read())[0], "saved watcher");
         await expect(
-          tools.invoke(AUTOMATIONS_TOOL_NAME, {
-            action: "update",
-            jobId: original.id,
-            job: { enabled: false, schedule: { kind: "at", at: "2000-01-01T00:00:00.000Z" } },
+          updateJob(original.id, {
+            enabled: false,
+            schedule: { kind: "at", at: "2000-01-01T00:00:00.000Z" },
           }),
         ).rejects.toThrow(/past/);
         expect((await read())[0]).toMatchObject({ id: original.id, enabled: true });
-        await tools.invoke(AUTOMATIONS_TOOL_NAME, {
-          action: "update",
-          jobId: original.id,
-          job: { enabled: false },
-        });
+        await updateJob(original.id, { enabled: false });
         expect((await read())[0]).toMatchObject({ id: original.id, enabled: false });
       },
       { ask: "off" },
@@ -94,8 +93,8 @@ describe("agent stream approval through the automation tool", () => {
     "removes only the captured watcher without another question (definition changed=%s)",
     async (changed) => {
       await withStreamApprovalFixture(
-        async ({ tools, read }) => {
-          await tools.invoke(AUTOMATIONS_TOOL_NAME, { action: "add", job: approvedStreamJob() });
+        async ({ add, tools, read }) => {
+          await add();
           const original = expectDefined((await read())[0], "saved watcher");
           const remove = cron.remove.bind(cron);
           const mutation = vi.spyOn(cron, "remove").mockImplementationOnce(async (...args) => {
@@ -177,13 +176,10 @@ describe("agent stream approval through the automation tool", () => {
     "carries the admitted sandbox through %s without creating a host stream",
     async (decision) => {
       await withStreamApprovalFixture(
-        async ({ tools, read, takeApproval, decide, runSandboxShell }) => {
-          const create = tools.invoke(AUTOMATIONS_TOOL_NAME, {
-            action: "add",
-            job: {
-              ...approvedStreamJob(),
-              schedule: { kind: "stream", command: ["python3", "watch.py"], cwd: "/workspace" },
-            },
+        async ({ add, read, takeApproval, decide, runSandboxShell }) => {
+          const create = add({
+            ...approvedStreamJob(),
+            schedule: { kind: "stream", command: ["python3", "watch.py"], cwd: "/workspace" },
           });
           const request = await takeApproval(create);
           expect(request.request).toMatchObject({
@@ -210,14 +206,7 @@ describe("agent stream approval through the automation tool", () => {
             expect(await create).toMatchObject({
               details: {
                 streamExecutionHost: "sandbox",
-                streamExecutionApproval: {
-                  approvalId: request.id,
-                  decision: "allow-once",
-                  source: "operator",
-                  message: expect.stringMatching(
-                    /human operator approved[\s\S]*identity is not supplied/i,
-                  ),
-                },
+                streamExecutionApproval: expectedApproval(request.id),
               },
             });
             expect(await read()).toMatchObject([
@@ -240,13 +229,10 @@ describe("agent stream approval through the automation tool", () => {
 
   it("rejects sandbox image tag replacement while the user considers the question", async () => {
     await withStreamApprovalFixture(
-      async ({ tools, read, takeApproval, decide, changeSandboxImage, runSandboxShell }) => {
-        const create = tools.invoke(AUTOMATIONS_TOOL_NAME, {
-          action: "add",
-          job: {
-            ...approvedStreamJob(),
-            schedule: { kind: "stream", command: ["python3", "watch.py"], cwd: "/workspace" },
-          },
+      async ({ add, read, takeApproval, decide, changeSandboxImage, runSandboxShell }) => {
+        const create = add({
+          ...approvedStreamJob(),
+          schedule: { kind: "stream", command: ["python3", "watch.py"], cwd: "/workspace" },
         });
         const outcome = create.then(
           () => true,
@@ -265,11 +251,8 @@ describe("agent stream approval through the automation tool", () => {
 
   it("creates only after consent and asks again when the creator reactivates or changes its watcher", async () => {
     await withStreamApprovalFixture(
-      async ({ tools, read, manager, takeApproval, decide, deliveries }) => {
-        const create = tools.invoke(AUTOMATIONS_TOOL_NAME, {
-          action: "add",
-          job: { ...approvedStreamJob(), declarationKey: "fixture:approved-stream" },
-        });
+      async ({ add, updateJob, tools, read, manager, takeApproval, decide, deliveries }) => {
+        const create = add({ ...approvedStreamJob(), declarationKey: "fixture:approved-stream" });
         const request = await takeApproval(create);
         expect(request.request).toMatchObject({
           host: "gateway",
@@ -290,9 +273,9 @@ describe("agent stream approval through the automation tool", () => {
         expect(request.request.warningText).toMatch(/restart/i);
         expect(request.request.warningText).toMatch(/disabled|deleted/i);
         expect(await read()).toEqual([]);
-        const concurrentCreate = tools.invoke(AUTOMATIONS_TOOL_NAME, {
-          action: "add",
-          job: { ...approvedStreamJob(), declarationKey: "fixture:approved-stream" },
+        const concurrentCreate = add({
+          ...approvedStreamJob(),
+          declarationKey: "fixture:approved-stream",
         });
         const concurrentRequest = await takeApproval(concurrentCreate);
         await decide(request.id, "allow-once");
@@ -303,14 +286,7 @@ describe("agent stream approval through the automation tool", () => {
           details: {
             created: true,
             job: { streamExecutionHost: "gateway" },
-            streamExecutionApproval: {
-              approvalId: request.id,
-              decision: "allow-once",
-              source: "operator",
-              message: expect.stringMatching(
-                /human operator approved[\s\S]*identity is not supplied/i,
-              ),
-            },
+            streamExecutionApproval: expectedApproval(request.id),
           },
         });
         expect(unchanged).toMatchObject({ details: { created: false, updated: false } });
@@ -354,10 +330,9 @@ describe("agent stream approval through the automation tool", () => {
         await expect(
           tools.invoke(AUTOMATIONS_TOOL_NAME, { action: "get", jobId: operatorJob.id }),
         ).rejects.toThrow(/not found/);
-        const disabled = await tools.invoke(AUTOMATIONS_TOOL_NAME, {
-          action: "update",
-          jobId: stored.id,
-          job: { name: "Renamed log watcher", enabled: false },
+        const disabled = await updateJob(stored.id, {
+          name: "Renamed log watcher",
+          enabled: false,
         });
         expect(disabled).not.toHaveProperty("details.streamExecutionApproval");
         expect((await read())[0]).toMatchObject({ name: "Renamed log watcher", enabled: false });
@@ -370,11 +345,7 @@ describe("agent stream approval through the automation tool", () => {
           },
         ]) {
           const before = await read();
-          const update = tools.invoke(AUTOMATIONS_TOOL_NAME, {
-            action: "update",
-            jobId: stored.id,
-            job: patch,
-          });
+          const update = updateJob(stored.id, patch);
           const next = await takeApproval(update);
           expect(next.id).not.toBe(request.id);
           expect(next.request.sessionId).toBe(SESSION_ID);
@@ -388,14 +359,7 @@ describe("agent stream approval through the automation tool", () => {
           expect(await update).toMatchObject({
             details: {
               id: stored.id,
-              streamExecutionApproval: {
-                approvalId: next.id,
-                decision: "allow-once",
-                source: "operator",
-                message: expect.stringMatching(
-                  /human operator approved[\s\S]*identity is not supplied/i,
-                ),
-              },
+              streamExecutionApproval: expectedApproval(next.id),
             },
           });
           expect(await manager.consumeAllowOnce(next.id)).toBe(false);
@@ -404,17 +368,9 @@ describe("agent stream approval through the automation tool", () => {
           enabled: true,
           schedule: { command: [process.execPath, "--version"] },
         });
-        await tools.invoke(AUTOMATIONS_TOOL_NAME, {
-          action: "update",
-          jobId: stored.id,
-          job: { enabled: false },
-        });
+        await updateJob(stored.id, { enabled: false });
         const beforeDeniedActivation = await read();
-        const deniedActivation = tools.invoke(AUTOMATIONS_TOOL_NAME, {
-          action: "update",
-          jobId: stored.id,
-          job: { enabled: true },
-        });
+        const deniedActivation = updateJob(stored.id, { enabled: true });
         const declined = await takeApproval(deniedActivation);
         await decide(declined.id, "deny");
         expect(await deniedActivation).toMatchObject({
@@ -427,11 +383,7 @@ describe("agent stream approval through the automation tool", () => {
           },
         });
         expect(await read()).toEqual(beforeDeniedActivation);
-        const nextActivation = tools.invoke(AUTOMATIONS_TOOL_NAME, {
-          action: "update",
-          jobId: stored.id,
-          job: { enabled: true },
-        });
+        const nextActivation = updateJob(stored.id, { enabled: true });
         const nextRequest = await takeApproval(nextActivation);
         expect(nextRequest.id).not.toBe(declined.id);
         await decide(nextRequest.id, "deny");
@@ -446,15 +398,11 @@ describe("agent stream approval through the automation tool", () => {
     "commits one approved %s from a Control UI management turn",
     async (change) => {
       await withStreamApprovalFixture(
-        async ({ tools, read, takeApproval, decide, setPolicy, deliveries }) => {
-          await tools.invoke(AUTOMATIONS_TOOL_NAME, { action: "add", job: approvedStreamJob() });
+        async ({ add, updateJob, read, takeApproval, decide, setPolicy, deliveries }) => {
+          await add();
           const stored = expectDefined((await read())[0], "unattended stream");
           if (change === "reactivate") {
-            await tools.invoke(AUTOMATIONS_TOOL_NAME, {
-              action: "update",
-              jobId: stored.id,
-              job: { enabled: false },
-            });
+            await updateJob(stored.id, { enabled: false });
           }
           await setPolicy("full", "always");
           const patch =
@@ -466,11 +414,7 @@ describe("agent stream approval through the automation tool", () => {
                     command: [process.execPath, "--version"],
                   },
                 };
-          const update = tools.invoke(AUTOMATIONS_TOOL_NAME, {
-            action: "update",
-            jobId: stored.id,
-            job: patch,
-          });
+          const update = updateJob(stored.id, patch);
           const request = await takeApproval(update);
           await decide(request.id, "allow-once");
           const outcome = await Promise.race([
@@ -494,11 +438,8 @@ describe("agent stream approval through the automation tool", () => {
     "leaves no stream when the pending request ends with %s",
     async (outcome) => {
       await withStreamApprovalFixture(
-        async ({ tools, read, manager, takeApproval, decide, revokeRun }) => {
-          const create = tools.invoke(AUTOMATIONS_TOOL_NAME, {
-            action: "add",
-            job: approvedStreamJob(),
-          });
+        async ({ add, tools, read, manager, takeApproval, decide, revokeRun }) => {
+          const create = add();
           const settled = create.then(
             () => ({ ok: true }),
             (error: unknown) => ({ ok: false, error }),
@@ -566,19 +507,12 @@ describe("agent stream approval through the automation tool", () => {
 
   it("does not claim user approval for unattended creation or updates", async () => {
     await withStreamApprovalFixture(
-      async ({ tools, read, deliveries }) => {
-        const created = await tools.invoke(AUTOMATIONS_TOOL_NAME, {
-          action: "add",
-          job: approvedStreamJob(),
-        });
+      async ({ add, updateJob, read, deliveries }) => {
+        const created = await add();
         expect(created).not.toHaveProperty("details.streamExecutionApproval");
         const stored = expectDefined((await read())[0], "unattended stream");
-        const updated = await tools.invoke(AUTOMATIONS_TOOL_NAME, {
-          action: "update",
-          jobId: stored.id,
-          job: {
-            schedule: { ...approvedStreamJob().schedule, command: [process.execPath, "--version"] },
-          },
+        const updated = await updateJob(stored.id, {
+          schedule: { ...approvedStreamJob().schedule, command: [process.execPath, "--version"] },
         });
         expect(updated).not.toHaveProperty("details.streamExecutionApproval");
         expect(deliveries).toEqual([]);
@@ -589,10 +523,8 @@ describe("agent stream approval through the automation tool", () => {
 
   it("requires a delivered question even when the host fallback permits execution", async () => {
     await withStreamApprovalFixture(
-      async ({ tools, read, deliveries }) => {
-        await expect(
-          tools.invoke(AUTOMATIONS_TOOL_NAME, { action: "add", job: approvedStreamJob() }),
-        ).rejects.toThrow(/approval|deliver/i);
+      async ({ add, read, deliveries }) => {
+        await expect(add()).rejects.toThrow(/approval|deliver/i);
         expect(deliveries).toHaveLength(1);
         expect(await read()).toEqual([]);
       },
@@ -603,11 +535,11 @@ describe("agent stream approval through the automation tool", () => {
   it("refuses a script changed after the user was shown the pending watcher", async () => {
     const scriptPath = path.join(stateDir, "stream-source.js");
     await writeFile(scriptPath, 'console.log("reviewed source");\n');
-    await withStreamApprovalFixture(async ({ tools, read, takeApproval, decide }) => {
+    await withStreamApprovalFixture(async ({ add, read, takeApproval, decide }) => {
       const job = approvedStreamJob();
-      const create = tools.invoke(AUTOMATIONS_TOOL_NAME, {
-        action: "add",
-        job: { ...job, schedule: { ...job.schedule, command: [process.execPath, scriptPath] } },
+      const create = add({
+        ...job,
+        schedule: { ...job.schedule, command: [process.execPath, scriptPath] },
       });
       const settled = create.then(
         () => ({ ok: true }),
@@ -626,11 +558,8 @@ describe("agent stream approval through the automation tool", () => {
   });
 
   it("asks again when the reviewed policy changes before the approval is used", async () => {
-    await withStreamApprovalFixture(async ({ tools, read, takeApproval, decide, setPolicy }) => {
-      const create = tools.invoke(AUTOMATIONS_TOOL_NAME, {
-        action: "add",
-        job: approvedStreamJob(),
-      });
+    await withStreamApprovalFixture(async ({ add, read, takeApproval, decide, setPolicy }) => {
+      const create = add();
       const first = await takeApproval(create);
       await setPolicy("full", "always");
       await decide(first.id, "allow-once");
@@ -640,14 +569,7 @@ describe("agent stream approval through the automation tool", () => {
       await decide(second.id, "allow-once");
       expect(await create).toMatchObject({
         details: {
-          streamExecutionApproval: {
-            approvalId: second.id,
-            decision: "allow-once",
-            source: "operator",
-            message: expect.stringMatching(
-              /human operator approved[\s\S]*identity is not supplied/i,
-            ),
-          },
+          streamExecutionApproval: expectedApproval(second.id),
         },
       });
       expect(await read()).toMatchObject([{ name: "App log watcher", enabled: true }]);
@@ -668,7 +590,7 @@ describe("agent stream approval through the automation tool", () => {
     "rechecks $change after a delivered approval question",
     async ({ change, sandbox }) => {
       await withStreamApprovalFixture(
-        async ({ tools, read, takeApproval, decide, setConfig }) => {
+        async ({ add, updateJob, tools, read, takeApproval, decide, setConfig }) => {
           const job = {
             ...approvedStreamJob(),
             ...(sandbox
@@ -679,16 +601,12 @@ describe("agent stream approval through the automation tool", () => {
           };
           let savedId: string | undefined;
           if (change === "session permission update") {
-            const initial = tools.invoke(AUTOMATIONS_TOOL_NAME, { action: "add", job });
+            const initial = add(job);
             const initialRequest = await takeApproval(initial);
             await decide(initialRequest.id, "allow-once");
             await initial;
             savedId = expectDefined((await read())[0], "created stream").id;
-            await tools.invoke(AUTOMATIONS_TOOL_NAME, {
-              action: "update",
-              jobId: savedId,
-              job: { enabled: false },
-            });
+            await updateJob(savedId, { enabled: false });
           }
           const before = await read();
           const mutation = tools.invoke(
@@ -775,11 +693,8 @@ describe("agent stream approval through the automation tool", () => {
     const release = createDeferred();
     let hold = true;
     await withStreamApprovalFixture(
-      async ({ tools, read, takeApproval, decide, setPolicy }) => {
-        const create = tools.invoke(AUTOMATIONS_TOOL_NAME, {
-          action: "add",
-          job: approvedStreamJob(),
-        });
+      async ({ add, read, takeApproval, decide, setPolicy }) => {
+        const create = add();
         const settled = create.then(
           () => ({ ok: true }),
           (error: unknown) => ({ ok: false, error }),

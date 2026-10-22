@@ -66,17 +66,13 @@ describe("chat split layout", () => {
     expect(closePane(createSplitLayout(), "p1")).toBeUndefined();
   });
 
-  it("updates pane session and active pane without mutating the input", () => {
+  it("maps UI split and focus commands without mutating the source layout", () => {
     const layout = createSplitLayout();
-    const activeChanged = setActivePane(setPaneSession(layout, "p1", "agent:main:new"), "p1");
-    expect(findPane(activeChanged, "p1")?.pane.sessionKey).toBe("agent:main:new");
-    expect(activeChanged.activePaneId).toBe("p1");
-    expect(layout.columns.at(0)?.panes.at(0)?.sessionKey).toBe("main");
+    const initial = setActivePane(setPaneSession(layout, "p2", "source"), "p1");
+    expect(findPane(initial, "p2")?.pane.sessionKey).toBe("source");
+    expect(initial.activePaneId).toBe("p1");
+    expect(layout.columns.at(1)?.panes.at(0)?.sessionKey).toBe("main");
     expect(panesOf(layout)).not.toBe(layout.columns.at(0)?.panes);
-  });
-
-  it("maps UI split and focus commands onto pane state", () => {
-    const initial = setActivePane(setPaneSession(createSplitLayout(), "p2", "source"), "p1");
     const split = applyUiCommandToSplitLayout(
       initial,
       {

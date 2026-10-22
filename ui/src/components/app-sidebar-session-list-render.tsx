@@ -74,7 +74,7 @@ function renderSessionListBody(params: {
   sections: RenderableSessionSection[];
   nativeSessionsHaveMore: boolean;
   catalogs: SessionCatalogRenderSnapshot;
-  catalogRenderer: SessionCatalogGroupsRenderer | null;
+  catalogRenderer: SessionCatalogGroupsRenderer;
 }) {
   const host = createMemo(() => params.host);
   const personHeaders = createMemo<PersonHeaders | undefined>(() => {
@@ -111,14 +111,14 @@ function renderSessionListBody(params: {
         const initialSectionId = untrack(() => section().id);
         if (initialSectionId.startsWith("catalog:")) {
           return (
-            <Show when={params.catalogRenderer && catalogsBySectionId().get(section().id)}>
-              {(catalog) => {
-                // The parent section retains this lazy renderer for the catalog's lifetime.
-                const InitialRenderer = params.catalogRenderer!;
-                return (
-                  <InitialRenderer host={host()} snapshot={params.catalogs} catalog={catalog()} />
-                );
-              }}
+            <Show when={catalogsBySectionId().get(section().id)}>
+              {(catalog) => (
+                <params.catalogRenderer
+                  host={host()}
+                  snapshot={params.catalogs}
+                  catalog={catalog()}
+                />
+              )}
             </Show>
           );
         }
@@ -151,13 +151,21 @@ export function renderSessionList(params: {
   nativeSessionsHaveMore: boolean;
   nativeSessionsLoading: boolean;
   catalogs: SessionCatalogRenderSnapshot;
-  catalogRenderer: SessionCatalogGroupsRenderer | null;
+  catalogRenderer: SessionCatalogGroupsRenderer;
 }) {
   const host = createMemo(() => params.host);
+  // A create for a rendered custom group is placed by that section instead.
+  const unplacedCreate = createMemo(() => {
+    const pending = host().pendingSessionCreate();
+    const category = pending?.category;
+    return category && params.sections.some((section) => section.category === category)
+      ? undefined
+      : pending;
+  });
   return renderSessionListFrame(
     host,
     <div class="sidebar-recent-sessions">
-      {renderPendingSessionCreateRow(host)}
+      {renderPendingSessionCreateRow(unplacedCreate)}
       {renderSessionListBody(params)}
       {renderRosterLoadMore(
         host(),

@@ -18,6 +18,7 @@ import { parseArgs } from "node:util";
 import { Value } from "typebox/value";
 import { rawDataToString } from "../../packages/gateway-client/src/websocket-data.ts";
 import { HelloOkSchema } from "../../packages/gateway-protocol/src/schema/frames.ts";
+import type { SessionsPatchParams } from "../../packages/gateway-protocol/src/schema/sessions-patch.ts";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.ts";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import { stripInboundMetadata } from "../../src/auto-reply/reply/strip-inbound-meta.js";
@@ -56,7 +57,13 @@ const { values } = parseArgs({
   options: {
     "state-dir": { type: "string" },
     allocations: { type: "boolean", default: false },
+    "worker-allocations": { type: "boolean", default: false },
     diagnostics: { type: "boolean", default: false },
+    "broadcast-timing": { type: "boolean", default: false },
+    "session-projection-source": { type: "string" },
+    "transport-counts": { type: "boolean", default: false },
+    compressed: { type: "boolean", default: false },
+    "distinct-viewers": { type: "boolean", default: false },
     "prep-trace": { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
     "workload-cpu-profile": { type: "boolean", default: false },
@@ -65,16 +72,24 @@ const { values } = parseArgs({
     "worker-memory": { type: "boolean", default: false },
     "baseline-owners": { type: "boolean", default: false },
     "stress-tools": { type: "boolean", default: false },
+    "stress-session-store": { type: "boolean", default: false },
+    "transcript-hydration-counts": { type: "boolean", default: false },
     "operator-access-policy": { type: "boolean", default: false },
     "stress-subagents": { type: "boolean", default: false },
     "mixed-rpc": { type: "boolean", default: false },
     "dashboard-rpc": { type: "boolean", default: false },
+    "github-options-connected": { type: "boolean", default: false },
+    "github-options-observe": { type: "boolean", default: false },
+    "github-observation-owner": { type: "string" },
+    "github-availability-owner": { type: "string" },
     "stream-start-diagnostics": { type: "boolean", default: false },
     "stream-start-allocations": { type: "boolean", default: false },
     "active-work-diagnostics": { type: "boolean", default: false },
     scenario: { type: "string", default: "transcript-broadcast" },
     revision: { type: "string" },
     operations: { type: "string" },
+    "warmup-operations": { type: "string" },
+    "heap-sampling-interval": { type: "string" },
     "rpc-concurrency": { type: "string", default: "1" },
     "reconnect-stagger-ms": { type: "string", default: "125" },
     limit: { type: "string", default: "100" },
@@ -98,6 +113,7 @@ const { values } = parseArgs({
     "duration-ms": { type: "string", default: "3600000" },
     "warmup-ms": { type: "string", default: "300000" },
     "round-interval-ms": { type: "string", default: "15000" },
+    "soak-rounds": { type: "string" },
     "memory-interval-ms": { type: "string", default: "60000" },
     "retained-profile-ms": { type: "string", default: "600000" },
     "reset-every-rounds": { type: "string", default: "20" },
@@ -108,14 +124,26 @@ const { values } = parseArgs({
     "session-census": { type: "boolean", default: false },
     "fingerprint-retention": { type: "boolean", default: false },
     "session-row-deltas": { type: "boolean", default: false },
+    "presence-deltas": { type: "boolean", default: false },
     "session-envelope-refs": { type: "boolean", default: false },
     "start-at": { type: "string" },
     "list-interval-ms": { type: "string", default: "0" },
+    "list-profile-reference": { type: "string" },
     "poll-seed": { type: "string" },
   },
 });
 if (!values["state-dir"]) {
   throw new Error("--state-dir is required (existing team-shape fixture)");
+}
+if (
+  (values["github-options-observe"] &&
+    (!values["dashboard-rpc"] || path.resolve(values.entry) !== path.resolve("src/entry.ts"))) ||
+  ((values["github-observation-owner"] || values["github-availability-owner"]) &&
+    !values["github-options-observe"])
+) {
+  throw new Error(
+    "GitHub stage observation requires --dashboard-rpc --entry src/entry.ts --github-options-observe",
+  );
 }
 const integer = (raw: string, label: string, min = 1) =>
   parseStrictIntegerOption({ raw, label, min, fallback: min });
@@ -136,6 +164,7 @@ if (
   ![
     "sessions.list",
     "sessions.describe",
+    "sessions.patch",
     "connect",
     "reconnect",
     "subscribe",
@@ -148,7 +177,7 @@ if (
   ].includes(scenario)
 ) {
   throw new Error(
-    "--scenario must be sessions.list, sessions.describe, connect, reconnect, subscribe, chat.send, transcript-broadcast, attempt-retention, session-idle-retention, memory-soak, or plugins.reload",
+    "--scenario must be sessions.list, sessions.describe, sessions.patch, connect, reconnect, subscribe, chat.send, transcript-broadcast, attempt-retention, session-idle-retention, memory-soak, or plugins.reload",
   );
 }
 const retentionScenario = scenario === "attempt-retention";
@@ -178,6 +207,18 @@ if (verifyHistoryReplay && (historyLastTurns || historyPayloadBytes)) {
     "--verify-history-replay uses equal-length histories with two 4 KiB reasoning items per turn; omit --history-last-turns and --history-payload-kib",
   );
 }
+const proxyViewers = values.compressed || values["distinct-viewers"];
+if (proxyViewers && values["operator-access-policy"]) {
+  throw new Error("--compressed/--distinct-viewers cannot combine with --operator-access-policy");
+}
+if (
+  proxyViewers &&
+  ((scenario !== "transcript-broadcast" && scenario !== "memory-soak") || values["mixed-rpc"])
+) {
+  throw new Error(
+    "--compressed/--distinct-viewers require transcript-broadcast or memory-soak without --mixed-rpc",
+  );
+}
 const reasoningScenario = retentionScenario || idleScenario || soakScenario;
 if (
   (values["session-census"] || values["fingerprint-retention"]) &&
@@ -199,18 +240,31 @@ if (
   !values["stream-start-allocations"] &&
   !values["workload-cpu-profile"] &&
   !values["operator-access-policy"] &&
+  !(["sessions.list", "sessions.patch"].includes(scenario) && values["capture-responses"]) &&
   scenario !== "transcript-broadcast" &&
   !retentionScenario &&
   !idleScenario &&
   !soakScenario
 ) {
-  throw new Error("--scenario requires --allocations or --workload-cpu-profile");
+  throw new Error(
+    "--scenario requires --allocations, --workload-cpu-profile, or --capture-responses for sessions.list/sessions.patch",
+  );
 }
 const operations = integer(
   values.operations ??
     (scenario === "plugins.reload" ? "1" : scenario === "reconnect" ? values.clients : "100"),
   "--operations",
 );
+const warmupOperations = integer(
+  values["warmup-operations"] ?? String(operations),
+  "--warmup-operations",
+);
+if (values["warmup-operations"] !== undefined && turnScenario) {
+  throw new Error("--warmup-operations requires an RPC scenario");
+}
+const heapSamplingIntervalBytes = values["heap-sampling-interval"]
+  ? integer(values["heap-sampling-interval"], "--heap-sampling-interval")
+  : undefined;
 const limit = integer(values.limit, "--limit");
 const rowMode = values["row-mode"];
 if (!["compact", "sidebar", "dashboard"].includes(rowMode)) {
@@ -270,6 +324,14 @@ const rounds = integer(values.rounds, "--rounds");
 const durationMs = integer(values["duration-ms"], "--duration-ms");
 const warmupMs = integer(values["warmup-ms"], "--warmup-ms", 0);
 const roundIntervalMs = integer(values["round-interval-ms"], "--round-interval-ms");
+const soakRounds =
+  values["soak-rounds"] === undefined ? undefined : integer(values["soak-rounds"], "--soak-rounds");
+if (soakRounds !== undefined && !soakScenario) {
+  throw new Error("--soak-rounds requires --scenario memory-soak");
+}
+if (values["worker-allocations"] && (!soakScenario || !values.allocations)) {
+  throw new Error("--worker-allocations requires memory-soak --allocations");
+}
 const memoryIntervalMs = integer(values["memory-interval-ms"], "--memory-interval-ms");
 const retainedProfileMs = integer(values["retained-profile-ms"], "--retained-profile-ms", 0);
 const resetEveryRounds = integer(values["reset-every-rounds"], "--reset-every-rounds", 0);
@@ -297,6 +359,9 @@ if (values["stress-tools"] && !toolScenario) {
     "--stress-tools requires chat.send, attempt-retention, session-idle-retention, or memory-soak",
   );
 }
+if (values["stress-session-store"] && !values["stress-tools"]) {
+  throw new Error("--stress-session-store requires --stress-tools");
+}
 if (
   values["operator-access-policy"] &&
   (scenario !== "chat.send" || !values["stress-tools"] || listIntervalMs !== 0)
@@ -315,6 +380,14 @@ if (values["mixed-rpc"] && (!listIntervalMs || !turnScenario || clientCount < 4)
 }
 if (values["dashboard-rpc"] && (!soakScenario || !values["mixed-rpc"])) {
   throw new Error("--dashboard-rpc requires memory-soak and --mixed-rpc");
+}
+if (values["github-options-connected"] && !values["dashboard-rpc"]) {
+  throw new Error("--github-options-connected requires --dashboard-rpc");
+}
+if (values["github-options-connected"] && historyTurns) {
+  throw new Error(
+    "--github-options-connected requires fresh foreground sessions; omit --history-turns",
+  );
 }
 const recapBurstRepeats = integer(values["recap-burst-repeats"], "--recap-burst-repeats", 0);
 const recapBurstIntervalMs = integer(
@@ -348,8 +421,47 @@ if (
 if (values["stream-start-allocations"] && (!turnScenario || values.allocations)) {
   throw new Error("--stream-start-allocations requires a turn scenario without --allocations");
 }
+if (
+  values["broadcast-timing"] &&
+  (!values.diagnostics || path.resolve(values.entry) !== path.resolve("src/entry.ts"))
+) {
+  throw new Error("--broadcast-timing requires --diagnostics --entry src/entry.ts");
+}
+if (
+  values["broadcast-timing"] &&
+  (values.allocations ||
+    values["stream-start-allocations"] ||
+    (soakScenario && retainedProfileMs > 0))
+) {
+  throw new Error(
+    "--broadcast-timing needs a separate pass without --allocations, --stream-start-allocations, or memory-soak retained heap capture (--retained-profile-ms 0)",
+  );
+}
+if (
+  values["session-projection-source"] &&
+  path.resolve(values.entry) !== path.resolve("src/entry.ts")
+) {
+  throw new Error("--session-projection-source requires --entry src/entry.ts");
+}
+const sessionProjectionSource = values["session-projection-source"]
+  ? realpathSync(path.resolve(values["session-projection-source"]))
+  : undefined;
 if (values["poll-seed"] !== undefined && !listIntervalMs) {
   throw new Error("--poll-seed requires --list-interval-ms");
+}
+if (
+  values["transport-counts"] &&
+  (values.allocations ||
+    values.diagnostics ||
+    values["cpu-profile"] ||
+    values["workload-cpu-profile"] ||
+    values["stream-start-allocations"] ||
+    values["stream-start-diagnostics"] ||
+    values["active-work-diagnostics"] ||
+    values["trace-gc"] ||
+    soakScenario)
+) {
+  throw new Error("--transport-counts needs a separate pass without profiling or diagnostics");
 }
 const recordListRequests =
   values.diagnostics ||
@@ -374,10 +486,24 @@ const fixture: unknown = JSON.parse(
 if (!isRecord(fixture) || fixture.format !== "openclaw-team-shape-v1") {
   throw new Error("--state-dir must contain a generated team-shape fixture");
 }
+if (values["github-options-connected"] && fixture.githubOptionsConnected !== true) {
+  throw new Error("Regenerate this fixture with --github-options-connected before measurement");
+}
 const output = path.join(root, `broadcast-measure-${Date.now()}`);
 mkdirSync(output);
 const project = Array.isArray(fixture.projectWorktrees) ? fixture.projectWorktrees[0] : undefined;
 const fixtureSessionCount = typeof fixture.sessionCount === "number" ? fixture.sessionCount : 0;
+const patchKeys =
+  scenario === "sessions.patch"
+    ? Array.from({ length: fixtureSessionCount }, (_, index) => index)
+        .filter((index) => index % 5 !== 0)
+        .slice(0, clientCount)
+        .map((index) => `agent:main:team-shape-session-${index}`)
+    : [];
+if (scenario === "sessions.patch" && patchKeys.length !== clientCount) {
+  throw new Error("sessions.patch requires one unarchived fixture session per client");
+}
+const patchSequences = patchKeys.map(() => 0);
 if (values["mixed-rpc"] && fixtureSessionCount < 1) {
   throw new Error("--mixed-rpc requires retained fixture sessions for chat.history");
 }
@@ -398,14 +524,48 @@ if (values["stress-tools"] || values["mixed-rpc"]) {
     diffControlOriginal = readFileSync(path.join(stressWorktree, "README.md"), "utf8");
   }
 }
+const viewerOrigin = "https://broadcast-measure.example.invalid";
+const viewerIdentity = (index: number) =>
+  `broadcast-viewer-${values["distinct-viewers"] ? index : 0}@example.invalid`;
+const viewerProfiles = new Set<string>();
 const cfg = JSON.parse(readFileSync(path.join(root, "openclaw.json"), "utf8"));
-applyMockOpenAiModelConfig(cfg, { mockPort, modelRef: "openai/gpt-4.1" });
+applyMockOpenAiModelConfig(cfg, {
+  mockPort,
+  modelRef: "openai/gpt-4.1",
+  ...(scenario === "sessions.patch" ? { utilityModelRef: "openai/gpt-4.1-mini" } : {}),
+});
 if (verifyHistoryReplay) {
   for (const model of cfg.models.providers.openai.models) {
     // The synthetic provider must fit the seed plus turns accumulated across restarts.
     model.contextWindow = 2_097_152;
     model.contextTokens = 2_000_000;
   }
+}
+if (proxyViewers) {
+  const identities = Array.from(
+    { length: values["distinct-viewers"] ? clientCount : 1 },
+    (_, index) => viewerIdentity(index),
+  );
+  const scopes = ["operator.admin", "operator.read", "operator.write"];
+  cfg.gateway = {
+    ...cfg.gateway,
+    auth: {
+      mode: "trusted-proxy",
+      trustedProxy: {
+        userHeader: "x-forwarded-user",
+        requiredHeaders: ["x-forwarded-proto"],
+        allowUsers: identities,
+        allowLoopback: true,
+      },
+      identityScopes: Object.fromEntries(identities.map((identity) => [identity, scopes])),
+    },
+    trustedProxies: ["127.0.0.1", "::1"],
+    controlUi: { enabled: false, allowedOrigins: [viewerOrigin] },
+    roles: {
+      default: "administrator",
+      definitions: { administrator: { agents: "*", sessions: { others: "write" }, scopes } },
+    },
+  };
 }
 cfg.agents.defaults = {
   ...cfg.agents.defaults,
@@ -421,13 +581,15 @@ cfg.tools = {
 if (stressWorktree) {
   cfg.agents.entries.main.workspace = stressWorktree;
 }
-cfg.plugins = {
-  ...cfg.plugins,
-  entries: {
-    ...(soakScenario ? cfg.plugins?.entries : {}),
-    "memory-core": { config: { dreaming: { enabled: false } } },
-  },
-};
+if (scenario !== "plugins.reload") {
+  cfg.plugins = {
+    ...cfg.plugins,
+    entries: {
+      ...(soakScenario ? cfg.plugins?.entries : {}),
+      "memory-core": { config: { dreaming: { enabled: false } } },
+    },
+  };
+}
 if (values["active-work-diagnostics"]) {
   if (scenario !== "transcript-broadcast") {
     throw new Error("--active-work-diagnostics requires --scenario transcript-broadcast");
@@ -449,6 +611,33 @@ const dashboardBoardId = "synthetic-soak-board";
 const dashboardPreviewUrl = "https://github.com/openclaw-fixture/soak/issues/1";
 const dashboardPreviewTitle = "Synthetic dashboard issue";
 let dashboardFixtureRequests = 0;
+const githubStages: Array<{
+  request: number;
+  phase: string;
+  startedAtEpochMs: number;
+  durationMs: number;
+}> = [];
+let githubObservationOwner: { path: string; override: boolean } | undefined;
+let githubAvailabilityOwner: { path: string; override: boolean } | undefined;
+type GitHubFixtureRequest = {
+  phase: "setup/preflight" | "measurement" | "outside-measurement";
+  route: string;
+  sequence: number;
+  startedAtEpochMs: number;
+  durationMs: number;
+  delayMs: number;
+  status: number;
+  accountRevision?: number;
+};
+const githubFixtureRequests: GitHubFixtureRequest[] = [];
+const githubOptionsObservations: Array<{
+  phase: GitHubFixtureRequest["phase"];
+  sessionKey: string;
+  startedAtEpochMs: number;
+  durationMs: number;
+  stale: boolean;
+  login: string;
+}> = [];
 const dashboardPreload = path.join(output, "dashboard-preload.mjs");
 if (values["dashboard-rpc"]) {
   for (const id of ["github", "workboard"]) {
@@ -460,12 +649,30 @@ if (values["dashboard-rpc"]) {
   writeFileSync(
     dashboardPreload,
     `import { MockAgent } from ${JSON.stringify(import.meta.resolve("undici"))};
+import { setTimeout as delay } from 'node:timers/promises';
 const transport = new MockAgent();
 transport.disableNetConnect();
 const github = transport.get('https://api.github.com');
 const repository = '/repos/openclaw-fixture/soak';
+const connected = ${JSON.stringify(values["github-options-connected"])};
+let firstAccountRequestAt;
+let accountRevision = 1;
+if (connected) {
+  github.intercept({ path: '/user', method: 'GET' }).reply(() => {
+    firstAccountRequestAt ??= Date.now();
+    accountRevision = Date.now() - firstAccountRequestAt >= 60_000 ? 2 : 1;
+    return { statusCode: 200, data: JSON.stringify({ id: 1516,
+      login: accountRevision === 1 ? 'synthetic-shared' : 'synthetic-shared-updated',
+      avatar_url: null }), responseOptions: { headers: {
+        'content-type': 'application/json', 'x-oauth-scopes': 'repo, read:org, gist',
+      } } };
+  }).persist();
+  github.intercept({ path: /^\\/repos\\/openclaw-fixture\\/soak\\/pulls\\?/, method: 'GET' })
+    .reply(200, []).persist();
+}
 github.intercept({ path: repository, method: 'GET' }).reply(200, {
-  private: false, visibility: 'public', full_name: 'openclaw-fixture/soak',
+  id: 1516, private: false, visibility: 'public', fork: false,
+  full_name: 'openclaw-fixture/soak', default_branch: 'main',
 }).persist();
 github.intercept({ path: repository + '/issues/1', method: 'GET' }).reply(() => {
   process.send?.({ channel: 'dashboard-github-fixture' });
@@ -478,9 +685,27 @@ github.intercept({ path: repository + '/issues/1', method: 'GET' }).reply(() => 
 }).persist();
 // Startup replaces global agents; bind the synthetic transport on each fetch.
 const nativeFetch = globalThis.fetch;
+const routeRequests = new Map();
 globalThis.fetch = async (input, options) => {
   const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
-  if (url.origin === 'https://api.github.com') return nativeFetch(input, { ...options, dispatcher: transport });
+  if (url.origin === 'https://api.github.com') {
+    const route = url.pathname + url.search;
+    const sequence = (routeRequests.get(route) ?? 0) + 1;
+    routeRequests.set(route, sequence);
+    const delayMs = connected && url.pathname === '/user' ? 300 + ((sequence - 1) % 3) * 300 : 0;
+    const startedAtEpochMs = performance.timeOrigin + performance.now();
+    let status = 0;
+    try {
+      if (delayMs) await delay(delayMs, undefined, { signal: options?.signal ?? undefined });
+      const response = await nativeFetch(input, { ...options, dispatcher: transport });
+      status = response.status;
+      return response;
+    } finally {
+      if (connected) process.send?.({ channel: 'dashboard-github-upstream', route, sequence,
+        startedAtEpochMs, durationMs: performance.timeOrigin + performance.now() - startedAtEpochMs,
+        delayMs, status, ...(url.pathname === '/user' ? { accountRevision } : {}) });
+    }
+  }
   if (url.hostname !== '127.0.0.1') throw new Error('Benchmark blocked external fetch');
   return nativeFetch(input, options);
 };\n`,
@@ -490,11 +715,34 @@ let reloadPluginId: string | undefined;
 if (scenario === "plugins.reload") {
   const plugin = writePluginFixtures(output, { count: 1, activationOnStartup: true });
   reloadPluginId = plugin.pluginIds[0];
-  cfg.plugins = { enabled: true, allow: plugin.pluginIds, load: { paths: [plugin.pluginsDir] } };
+  cfg.plugins = {
+    ...cfg.plugins,
+    enabled: true,
+    allow: [...new Set([...(cfg.plugins?.allow ?? []), ...plugin.pluginIds])],
+    load: { paths: [plugin.pluginsDir] },
+  };
 }
 const authorityChannel = "openclaw-operator-authority-bench";
 const authorityEmail = "operator@authority.example.test";
 const authorityOrigin = "https://authority.example.test";
+const fixtureDirectPassword = "synthetic-connected-github-local-caller";
+const trustedProxyScenario =
+  values["operator-access-policy"] ||
+  values["github-options-connected"] ||
+  values["presence-deltas"];
+const clientConnection = {
+  url: `ws://127.0.0.1:${port}`,
+  ...(trustedProxyScenario
+    ? {
+        origin: authorityOrigin,
+        headers: {
+          "x-forwarded-user": authorityEmail,
+          "x-forwarded-proto": "https",
+          "x-forwarded-for": "203.0.113.50",
+        },
+      }
+    : {}),
+};
 if (values["operator-access-policy"]) {
   const id = "synthetic-operator-access";
   const pluginDir = path.join(output, id);
@@ -562,11 +810,14 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     cfg.plugins.allow.push(id);
   }
   cfg.plugins.entries[id] = { enabled: true };
+}
+if (trustedProxyScenario) {
   cfg.gateway = {
     ...cfg.gateway,
     trustedProxies: ["127.0.0.1"],
     auth: {
       mode: "trusted-proxy",
+      ...(values["github-options-connected"] ? { password: fixtureDirectPassword } : {}),
       identityScopes: { [authorityEmail]: ["operator.admin"] },
       trustedProxy: {
         userHeader: "x-forwarded-user",
@@ -582,7 +833,9 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
           scopes: ["operator.admin"],
           agents: "*",
           sessions: { others: "write" },
-          accessPolicyPlugin: id,
+          ...(values["operator-access-policy"]
+            ? { accessPolicyPlugin: "synthetic-operator-access" }
+            : {}),
         },
       },
     },
@@ -810,8 +1063,10 @@ let outputLimitResponses = 0;
 let recoveredResponses = 0;
 let imageRequests = 0;
 let reasoningResponses = 0;
+let reasoningResponseSequence = 0;
 let reasoningReplayRequests = 0;
 let historicalReplayRequests = 0;
+const sessionStoreValues = new Map<string, string>();
 let activeWorkCounts: { running: number; queued: number } | undefined;
 async function readActiveWorkCounts() {
   let lastCounts: { running: number; queued: number } | undefined;
@@ -874,8 +1129,10 @@ let cohort:
       arrivals: Set<number>;
       turns: Map<number, TurnTiming>;
       toolCallIds: Set<string>;
+      completedToolCallIds: Set<string>;
       outputLimited: Set<string>;
-      reasoningSignatures: Map<string, string>;
+      requestPhases: Map<string, string>;
+      reasoningSignatures: Map<string, Set<string>>;
       incompleteReasoningSignatures: Map<string, string>;
       phases: StreamStartPhases;
       beforeRelease?: () => Promise<void>;
@@ -939,7 +1196,10 @@ const mock = createServer((req, res) => {
       : undefined;
     const index = facts.turnIndex;
     const toolOutputs =
-      Array.isArray(input) && cohort
+      Array.isArray(input) &&
+      cohort &&
+      facts.purpose !== "activity-recap" &&
+      facts.purpose !== "session-observer"
         ? input.filter(
             (item) =>
               item?.type === "function_call_output" && cohort?.toolCallIds.has(item.call_id),
@@ -947,14 +1207,32 @@ const mock = createServer((req, res) => {
         : [];
     const toolOutput = toolOutputs.at(-1);
     const continuation = toolScenario && toolOutput !== undefined;
+    const primary =
+      cohort &&
+      facts.purpose === "benchmark-turn" &&
+      !facts.hasToolOutput &&
+      !continuation &&
+      index !== undefined &&
+      index >= 1 &&
+      index <= runCount &&
+      lastUser !== undefined &&
+      stripInboundMetadata(lastUser).trim().split("\n")[0] ===
+        `Reply with benchmark stream ${index}. Transcript-broadcast cohort ${cohort.id}.`;
+    const requestPhase = primary
+      ? `primary:${index}`
+      : continuation
+        ? `${retentionScenario && !cohort?.outputLimited.has(toolOutput.call_id) ? "limit" : "answer"}:${toolOutput.call_id}`
+        : undefined;
+    const firstRequestPhase =
+      requestPhase !== undefined && !cohort?.requestPhases.has(requestPhase);
     if (continuation) {
       if (reasoningScenario) {
-        const expectedSignature = cohort?.reasoningSignatures.get(toolOutput.call_id);
+        const expectedSignatures = cohort?.reasoningSignatures.get(toolOutput.call_id);
         if (
-          expectedSignature === undefined ||
+          expectedSignatures === undefined ||
           !Array.isArray(input) ||
           !input.some(
-            (item) => item?.type === "reasoning" && item.encrypted_content === expectedSignature,
+            (item) => item?.type === "reasoning" && expectedSignatures.has(item.encrypted_content),
           )
         ) {
           throw new Error("synthetic reasoning signature did not survive the provider request");
@@ -968,7 +1246,9 @@ const mock = createServer((req, res) => {
         ) {
           throw new Error("reasoning-only output-limit signature was replayed during recovery");
         }
-        reasoningReplayRequests++;
+        if (firstRequestPhase) {
+          reasoningReplayRequests++;
+        }
       }
       if (
         toolOutputs.some(
@@ -983,20 +1263,15 @@ const mock = createServer((req, res) => {
         );
       }
       if (!retentionScenario || !cohort?.outputLimited.has(toolOutput.call_id)) {
-        toolResults += toolOutputs.length;
+        // Provider history can replay a completed call in several requests.
+        for (const result of toolOutputs) {
+          if (cohort && !cohort.completedToolCallIds.has(result.call_id)) {
+            cohort.completedToolCallIds.add(result.call_id);
+            toolResults++;
+          }
+        }
       }
     }
-    const primary =
-      cohort &&
-      facts.purpose === "benchmark-turn" &&
-      !facts.hasToolOutput &&
-      !continuation &&
-      index !== undefined &&
-      index >= 1 &&
-      index <= runCount &&
-      lastUser !== undefined &&
-      stripInboundMetadata(lastUser).trim().split("\n")[0] ===
-        `Reply with benchmark stream ${index}. Transcript-broadcast cohort ${cohort.id}.`;
     if (verifyHistoryReplay && primary) {
       const expected = expectedHistoricalReasoning[index - 1]!;
       const replayed = new Set(
@@ -1037,7 +1312,13 @@ const mock = createServer((req, res) => {
       if (!hasImage) {
         throw new Error("synthetic inline image did not survive the provider request");
       }
-      imageRequests++;
+      if (firstRequestPhase) {
+        imageRequests++;
+      }
+    }
+    if (firstRequestPhase && requestPhase !== undefined) {
+      // Histories can repeat a completed call; count and sign each logical phase once.
+      cohort?.requestPhases.set(requestPhase, "");
     }
     activeStreams++;
     peakStreams = Math.max(peakStreams, activeStreams);
@@ -1079,6 +1360,15 @@ const mock = createServer((req, res) => {
         const items = toolPaths.map((toolPath, toolIndex) => {
           const callId = `call_allocation_${currentCohort.id}_${index}_${toolIndex}`;
           currentCohort.toolCallIds.add(callId);
+          const storeKey = `benchmark-${index}-${toolIndex}`;
+          const previous = sessionStoreValues.get(storeKey);
+          const storeCode = values["stress-session-store"]
+            ? `if ((await load(${JSON.stringify(storeKey)})) !== ${JSON.stringify(previous) ?? "undefined"}) throw new Error("Synthetic session store replay mismatch");\n` +
+              `await store(${JSON.stringify(storeKey)}, ${JSON.stringify(currentCohort.id)});\n`
+            : "";
+          if (values["stress-session-store"]) {
+            sessionStoreValues.set(storeKey, currentCohort.id);
+          }
           return {
             type: "function_call",
             id: `fc_${currentCohort.id}_${index}_${toolIndex}`,
@@ -1090,6 +1380,7 @@ const mock = createServer((req, res) => {
                     title: "Read the synthetic fixture and verify its worktree",
                     awaitResults: true,
                     code:
+                      storeCode +
                       `json(await read({ path: ${JSON.stringify(toolPath)} }));\n` +
                       `const shell = await exec({ command: "pwd", workdir: ${JSON.stringify(stressWorktree)} });\n` +
                       `if (shell.exitCode !== 0 || shell.aggregated.trim() !== ${JSON.stringify(stressWorktree)}) throw new Error("Synthetic exec worktree mismatch");\n` +
@@ -1148,7 +1439,7 @@ const mock = createServer((req, res) => {
             },
           ];
           answer = outputLimitAnswer;
-        } else {
+        } else if (firstRequestPhase) {
           recoveredResponses++;
         }
       }
@@ -1165,20 +1456,32 @@ const mock = createServer((req, res) => {
           "response" in event &&
           event.response !== undefined
         ) {
+          const encryptedContent =
+            (requestPhase !== undefined && cohort?.requestPhases.get(requestPhase)) ||
+            promptContent.update(Buffer.alloc(8192)).toString("hex");
+          if (firstRequestPhase && requestPhase !== undefined) {
+            reasoningResponses++;
+            cohort?.requestPhases.set(requestPhase, encryptedContent);
+          }
           const reasoning = {
             type: "reasoning",
-            id: `rs_${cohort?.id}_${index}_${reasoningResponses++}`,
+            id: `rs_${cohort?.id}_${index}_${reasoningResponseSequence++}`,
             status: "completed",
             summary: [],
-            encrypted_content: promptContent.update(Buffer.alloc(8192)).toString("hex"),
+            encrypted_content: encryptedContent,
           };
-          if (reasoningReplayKey) {
-            // Replay keeps completed reasoning and drops reasoning-only length stops.
-            const signatures =
-              event.type === "response.completed"
-                ? cohort?.reasoningSignatures
-                : cohort?.incompleteReasoningSignatures;
-            signatures?.set(reasoningReplayKey, reasoning.encrypted_content);
+          if (firstRequestPhase && reasoningReplayKey && cohort) {
+            // Accept any completed signature already issued for this call, never a length stop.
+            if (event.type === "response.completed") {
+              let signatures = cohort.reasoningSignatures.get(reasoningReplayKey);
+              if (!signatures) {
+                signatures = new Set();
+                cohort.reasoningSignatures.set(reasoningReplayKey, signatures);
+              }
+              signatures.add(encryptedContent);
+            } else {
+              cohort.incompleteReasoningSignatures.set(reasoningReplayKey, encryptedContent);
+            }
           }
           const output_index = event.response.output.length;
           for (const type of ["response.output_item.added", "response.output_item.done"]) {
@@ -1208,6 +1511,8 @@ const mock = createServer((req, res) => {
 });
 const children: ChildProcess[] = [];
 const clients: ReturnType<typeof createGatewayWsClient>[] = [];
+const githubOptionsClients: ReturnType<typeof createGatewayWsClient>[] = [];
+const chatDeltaDeliveryMs: number[] = [];
 const expectedClosures = new WeakSet<ReturnType<typeof createGatewayWsClient>>();
 const responseFrameBytes = new WeakMap<
   ReturnType<typeof createGatewayWsClient>,
@@ -1318,12 +1623,36 @@ const env = {
   OPENCLAW_STATE_DIR: root,
   TMPDIR: path.join(root, "tmp"),
   OPENAI_API_KEY: "synthetic-fixture",
+  ...(values["github-options-connected"]
+    ? {
+        GH_TOKEN: "synthetic-github-options",
+        GITHUB_TOKEN: "synthetic-github-options",
+        // Trusted-proxy local-call resolution selects the explicit/env password.
+        OPENCLAW_GATEWAY_PASSWORD: fixtureDirectPassword,
+        // Synthetic HTTPS origins are metadata only, including during worktree preparation.
+        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_KEY_0: "protocol.https.allow",
+        GIT_CONFIG_VALUE_0: "never",
+      }
+    : {}),
   OPENCLAW_PROFILE: `team-shape-${port}`,
   OPENCLAW_SYSTEMD_UNIT: `openclaw-gateway-team-shape-${port}`,
   ...(values["prep-trace"] ? { OPENCLAW_LOG_LEVEL: "trace" } : {}),
   ...(idleScenario ? { OPENCLAW_BENCH_FIRST_TEXT: "1" } : {}),
+  ...(values["broadcast-timing"] ? { OPENCLAW_BENCH_BROADCAST_TIMING: "1" } : {}),
+  ...(sessionProjectionSource
+    ? { OPENCLAW_BENCH_SESSION_PROJECTION_SOURCE: sessionProjectionSource }
+    : {}),
   ...(values["worker-memory"] ? { OPENCLAW_BENCH_WORKER_MEMORY_DIR: output } : {}),
   ...(values["baseline-owners"] ? { OPENCLAW_BENCH_TRANSCRIPT_BASELINE_OWNERS: "1" } : {}),
+  ...(values["github-observation-owner"]
+    ? { OPENCLAW_BENCH_GITHUB_OBSERVATION_OWNER: path.resolve(values["github-observation-owner"]) }
+    : {}),
+  ...(values["github-availability-owner"]
+    ? {
+        OPENCLAW_BENCH_GITHUB_AVAILABILITY_OWNER: path.resolve(values["github-availability-owner"]),
+      }
+    : {}),
 };
 function launch(args: string[], name: string, extraEnv: NodeJS.ProcessEnv = {}, ipc = false) {
   const log = createWriteStream(path.join(output, `${name}.log`));
@@ -1335,8 +1664,66 @@ function launch(args: string[], name: string, extraEnv: NodeJS.ProcessEnv = {}, 
   child.stdout?.pipe(log, { end: false });
   child.stderr?.pipe(log, { end: false });
   child.on("message", (message: unknown) => {
+    if (
+      isRecord(message) &&
+      message.channel === "github-options-stage" &&
+      typeof message.request === "number" &&
+      typeof message.phase === "string" &&
+      typeof message.startedAtEpochMs === "number" &&
+      typeof message.durationMs === "number"
+    ) {
+      githubStages.push({
+        request: message.request,
+        phase: message.phase,
+        startedAtEpochMs: message.startedAtEpochMs,
+        durationMs: message.durationMs,
+      });
+    }
+    if (
+      isRecord(message) &&
+      message.channel === "github-options-owner-loaded" &&
+      typeof message.path === "string" &&
+      typeof message.override === "boolean"
+    ) {
+      githubObservationOwner = { path: message.path, override: message.override };
+    }
+    if (
+      isRecord(message) &&
+      message.channel === "github-options-availability-loaded" &&
+      typeof message.path === "string" &&
+      typeof message.override === "boolean"
+    ) {
+      githubAvailabilityOwner = { path: message.path, override: message.override };
+    }
     if (isRecord(message) && message.channel === "dashboard-github-fixture") {
       dashboardFixtureRequests++;
+    }
+    if (
+      isRecord(message) &&
+      message.channel === "dashboard-github-upstream" &&
+      typeof message.route === "string" &&
+      typeof message.sequence === "number" &&
+      typeof message.startedAtEpochMs === "number" &&
+      typeof message.durationMs === "number" &&
+      typeof message.delayMs === "number" &&
+      typeof message.status === "number"
+    ) {
+      githubFixtureRequests.push({
+        phase: capturingColdSetup
+          ? "setup/preflight"
+          : measuring
+            ? "measurement"
+            : "outside-measurement",
+        route: message.route,
+        sequence: message.sequence,
+        startedAtEpochMs: message.startedAtEpochMs,
+        durationMs: message.durationMs,
+        delayMs: message.delayMs,
+        status: message.status,
+        ...(typeof message.accountRevision === "number"
+          ? { accountRevision: message.accountRevision }
+          : {}),
+      });
     }
     if (
       isRecord(message) &&
@@ -1442,6 +1829,26 @@ if (values["dashboard-rpc"] && Array.isArray(fixture.projectWorktrees)) {
       original: readFileSync(path.join(worktree, "README.md"), "utf8"),
     });
   }
+}
+function bindConnectedOptionsWorktree(target: (typeof diffTargets)[number], created: unknown) {
+  if (
+    !isRecord(created) ||
+    !isRecord(created.entry) ||
+    !isRecord(created.entry.worktree) ||
+    typeof created.entry.worktree.id !== "string" ||
+    typeof created.entry.sessionRoot !== "string"
+  ) {
+    throw new Error("Connected GitHub options require a session-owned managed worktree");
+  }
+  const worktree = realpathSync(created.entry.sessionRoot);
+  if (
+    !worktree.startsWith(`${realpathSync(root)}${path.sep}`) ||
+    !readFileSync(path.join(worktree, ".git"), "utf8").startsWith("gitdir: ")
+  ) {
+    throw new Error("Connected GitHub worktree must be linked and inside the synthetic fixture");
+  }
+  target.worktree = worktree;
+  target.original = readFileSync(path.join(worktree, "README.md"), "utf8");
 }
 const dashboardRpcShapes = values["dashboard-rpc"]
   ? [
@@ -1678,11 +2085,11 @@ const connectParams = {
   minProtocol: PROTOCOL_VERSION,
   maxProtocol: PROTOCOL_VERSION,
   client: {
-    id: values["operator-access-policy"] ? "openclaw-control-ui" : "gateway-client",
+    id: proxyViewers || trustedProxyScenario ? "openclaw-control-ui" : "gateway-client",
     displayName: "synthetic-broadcast-measurement",
     version: "1.0.0",
     platform: process.platform,
-    mode: values["operator-access-policy"] ? "webchat" : "backend",
+    mode: proxyViewers ? "ui" : trustedProxyScenario ? "webchat" : "backend",
   },
   role: "operator",
   scopes: ["operator.read", "operator.admin"],
@@ -1691,6 +2098,7 @@ const connectParams = {
     "chat-only-assistant-text",
     ...(exactClients < clientCount ? ["roster-message-bodies-optional"] : []),
     ...(values["session-row-deltas"] ? ["session-row-deltas"] : []),
+    ...(values["presence-deltas"] ? ["presence-deltas"] : []),
     ...(values["session-envelope-refs"] ? ["session-event-field-refs"] : []),
   ],
 };
@@ -1794,7 +2202,15 @@ function validateDashboardRpc(method: string, result: unknown) {
                   ? isRecord(result.session) && result.session.key === parentKey
                   : method === "controlUi.sessionPullRequests.subscribe"
                     ? result.subscribed === true
-                    : "personal" in result && "shared" in result;
+                    : "personal" in result &&
+                      "shared" in result &&
+                      (!values["github-options-connected"] ||
+                        (isRecord(result.shared) &&
+                          result.shared.accountId === 1516 &&
+                          ["synthetic-shared", "synthetic-shared-updated"].includes(
+                            String(result.shared.login),
+                          ) &&
+                          result.sharedUnavailableReason === undefined));
   if (!valid) {
     throw new Error(`${method} did not return the expected synthetic dashboard data`);
   }
@@ -1812,6 +2228,29 @@ async function rpc(
   assertGatewayAlive();
   if (!response.ok) {
     throw new Error(`${method}: ${JSON.stringify(response.error)}`);
+  }
+  if (values["github-options-connected"] && method === "sessions.github.options") {
+    validateDashboardRpc(method, response.payload);
+    if (
+      isRecord(params) &&
+      typeof params.sessionKey === "string" &&
+      isRecord(response.payload) &&
+      isRecord(response.payload.shared) &&
+      typeof response.payload.shared.login === "string"
+    ) {
+      githubOptionsObservations.push({
+        phase: capturingColdSetup
+          ? "setup/preflight"
+          : measuring
+            ? "measurement"
+            : "outside-measurement",
+        sessionKey: params.sessionKey,
+        startedAtEpochMs: performance.timeOrigin + started,
+        durationMs: rpcDurationMs,
+        stale: response.payload.stale === true,
+        login: response.payload.shared.login,
+      });
+    }
   }
   if (capturingColdSetup) {
     const sessionKey = isRecord(params) ? (params.sessionKey ?? params.key) : undefined;
@@ -1860,12 +2299,53 @@ function latencySummary(latenciesMs: number[]) {
   return {
     count: sorted.length,
     p50Ms: sorted[Math.ceil(sorted.length * 0.5) - 1] ?? null,
+    p95Ms: sorted[Math.ceil(sorted.length * 0.95) - 1] ?? null,
     p99Ms: sorted[Math.ceil(sorted.length * 0.99) - 1] ?? null,
+    latenciesMs,
   };
 }
 function readPromotion(profilePath: string, operationCount: number) {
   const gcTrace = readGatewayGcTrace(path.join(output, "gateway.stdout.log"), profilePath);
   return { gcTrace, promotedBytesPerOperation: gcTrace.promotedBytes / operationCount };
+}
+function sessionPatchParams(index: number, sequence: number): SessionsPatchParams {
+  const changes: Omit<SessionsPatchParams, "key">[] = [
+    { label: `Synthetic patch ${index} ${sequence}` },
+    { statusNote: `Synthetic progress ${sequence}`, ttlMinutes: 5 },
+    { model: "openai/gpt-4.1-mini" },
+    { label: null },
+    { statusNote: null },
+    { model: null },
+  ];
+  return { key: patchKeys[index]!, ...changes[sequence % changes.length] };
+}
+function assertSessionPatch(params: SessionsPatchParams, result: unknown) {
+  if (
+    !isRecord(result) ||
+    result.ok !== true ||
+    result.key !== params.key ||
+    !isRecord(result.entry)
+  ) {
+    throw new Error("sessions.patch did not return the committed fixture session");
+  }
+  const entry = result.entry;
+  if ("label" in params && entry.label !== (params.label ?? undefined)) {
+    throw new Error("sessions.patch did not apply the requested label");
+  }
+  if ("statusNote" in params) {
+    const note = isRecord(entry.agentStatus) ? entry.agentStatus.note : undefined;
+    if (note !== (params.statusNote ?? undefined)) {
+      throw new Error("sessions.patch did not apply the requested status note");
+    }
+  }
+  if (
+    "model" in params &&
+    (!isRecord(result.resolved) ||
+      result.resolved.modelProvider !== "openai" ||
+      result.resolved.model !== (params.model ? "gpt-4.1-mini" : "gpt-4.1"))
+  ) {
+    throw new Error("sessions.patch did not apply the requested model selection");
+  }
 }
 function assertListPage(
   page: unknown,
@@ -2050,13 +2530,16 @@ async function runRound(
 ) {
   if (
     retentionScenario ||
-    (soakScenario && resetEveryRounds > 0 && completedSoakRounds % resetEveryRounds === 0)
+    (soakScenario &&
+      resetEveryRounds > 0 &&
+      (measuredRound ?? completedSoakRounds) % resetEveryRounds === 0)
   ) {
     // Retire each previous session generation so retained history is not the measurement.
     for (const key of keys) {
       await rpc(client, "sessions.reset", { key });
       sessionResets++;
     }
+    sessionStoreValues.clear();
   }
   const child = gateway;
   if (!child) {
@@ -2112,7 +2595,9 @@ async function runRound(
     arrivals: new Set(),
     turns: new Map(),
     toolCallIds: new Set(),
+    completedToolCallIds: new Set(),
     outputLimited: new Set(),
+    requestPhases: new Map(),
     reasoningSignatures: new Map(),
     incompleteReasoningSignatures: new Map(),
     phases: { admissionStartedAtEpochMs: epochNow() },
@@ -2460,14 +2945,15 @@ async function connectClient(index: number) {
   let previousSeq: number | undefined;
   let receivedFrameBytes = 0;
   const client = createGatewayWsClient({
-    url: `ws://127.0.0.1:${port}`,
-    ...(values["operator-access-policy"]
+    ...clientConnection,
+    ...(proxyViewers
       ? {
-          origin: authorityOrigin,
+          origin: viewerOrigin,
           headers: {
-            "x-forwarded-user": authorityEmail,
-            "x-forwarded-proto": "https",
             "x-forwarded-for": "203.0.113.50",
+            "x-forwarded-proto": "https",
+            "x-forwarded-host": "broadcast-measure.example.invalid",
+            "x-forwarded-user": viewerIdentity(index),
           },
         }
       : {}),
@@ -2512,6 +2998,14 @@ async function connectClient(index: number) {
         }
       }
       if (measuring) {
+        if (
+          event.event === "chat" &&
+          payload?.state === "delta" &&
+          isRecord(payload.message) &&
+          typeof payload.message.timestamp === "number"
+        ) {
+          chatDeltaDeliveryMs.push(epochNow() - payload.message.timestamp);
+        }
         counters.set(event.event, (counters.get(event.event) ?? 0) + 1);
         clientCounters.set(event.event, (clientCounters.get(event.event) ?? 0) + 1);
         eventBytes.set(event.event, (eventBytes.get(event.event) ?? 0) + receivedFrameBytes);
@@ -2566,11 +3060,37 @@ async function connectClient(index: number) {
     !hello.features.methods.includes("sessions.list") ||
     !hello.features.methods.includes("sessions.describe") ||
     hello.auth.role !== "operator" ||
-    (values["operator-access-policy"] && hello.auth.method !== "trusted-proxy") ||
+    (trustedProxyScenario && hello.auth.method !== "trusted-proxy") ||
     !hello.auth.scopes.includes("operator.admin") ||
     hello.snapshot.sessionDefaults?.defaultAgentId !== "main"
   ) {
     throw new Error("connect did not return a valid hello snapshot");
+  }
+  if (
+    client.ws.extensions.includes("permessage-deflate") !== (proxyViewers || trustedProxyScenario)
+  ) {
+    throw new Error("Gateway compression negotiation did not match the requested ingress");
+  }
+  if (proxyViewers) {
+    if (hello.auth.method !== "trusted-proxy") {
+      throw new Error("Synthetic viewer did not authenticate through the trusted proxy");
+    }
+    const self = await rpc(client, "users.self", {});
+    if (
+      !isRecord(self) ||
+      !isRecord(self.profile) ||
+      typeof self.profile.id !== "string" ||
+      !self.profile.id
+    ) {
+      throw new Error("Synthetic viewer did not acquire a user profile");
+    }
+    viewerProfiles.add(self.profile.id);
+    const expectedProfiles = values["distinct-viewers"] ? index + 1 : 1;
+    if (viewerProfiles.size !== expectedProfiles) {
+      throw new Error(
+        "Synthetic viewer profile identities did not match the requested cardinality",
+      );
+    }
   }
   if (measuring) {
     handshakeLatenciesMs.push(handshakeElapsedMs);
@@ -2592,7 +3112,7 @@ function cleanup() {
         console.warn("Stress cron cleanup failed; discard this fixture before reuse:", error);
       }
     }
-    for (const client of clients) {
+    for (const client of [...clients, ...githubOptionsClients]) {
       client.close();
     }
     await Promise.all(
@@ -2626,27 +3146,39 @@ try {
     mock.listen(mockPort, "127.0.0.1", resolve);
   });
   await ready(mockPort, "/health");
+  const gatewayArgs = buildGatewayBenchChildArgs(
+    values.entry,
+    port,
+    [
+      ...(values.allocations || values["stream-start-allocations"] || values["trace-gc"]
+        ? ["--trace-gc-nvp"]
+        : []),
+      "--import",
+      "./scripts/tsx.mjs",
+      "--import",
+      "./scripts/lib/gateway-bench-profile-preload.ts",
+      ...(values["transport-counts"]
+        ? ["--import", "./scripts/lib/gateway-bench-transport-preload.ts"]
+        : []),
+      ...(values["transcript-hydration-counts"]
+        ? ["--import", "./scripts/perf/transcript-hydration-counts-preload.ts"]
+        : []),
+      ...(values["worker-memory"] || values["baseline-owners"]
+        ? ["--import", "./scripts/perf/transcript-worker-memory-preload.ts"]
+        : []),
+      ...(values["dashboard-rpc"] ? ["--import", dashboardPreload] : []),
+      ...(values["github-options-observe"]
+        ? ["--import", "./scripts/perf/github-options-measure-preload.ts"]
+        : []),
+    ],
+    proxyViewers || trustedProxyScenario ? "trusted-proxy" : "none",
+  );
   gateway = launch(
-    buildGatewayBenchChildArgs(
-      values.entry,
-      port,
-      [
-        ...(values.allocations || values["stream-start-allocations"] || values["trace-gc"]
-          ? ["--trace-gc-nvp"]
-          : []),
-        "--import",
-        "./scripts/tsx.mjs",
-        "--import",
-        "./scripts/lib/gateway-bench-profile-preload.ts",
-        ...(values["worker-memory"] || values["baseline-owners"]
-          ? ["--import", "./scripts/perf/transcript-worker-memory-preload.ts"]
-          : []),
-        ...(values["dashboard-rpc"] ? ["--import", dashboardPreload] : []),
-      ],
-      values["operator-access-policy"] ? "trusted-proxy" : "none",
-    ),
+    gatewayArgs,
     "gateway",
-    {},
+    values["transport-counts"]
+      ? { OPENCLAW_BENCH_TRANSPORT_COUNTS_PATH: path.join(output, "transport-counts.json") }
+      : {},
     true,
   );
   await ready(port, "/readyz", gateway);
@@ -2658,12 +3190,20 @@ try {
     const client = await connectClient(index);
     if (index === 0) {
       if (!historyTurns) {
-        await rpc(client, "sessions.create", {
+        const created = await rpc(client, "sessions.create", {
           key: parentKey,
           ...(stressWorktree ? { cwd: stressWorktree } : {}),
+          ...(values["github-options-connected"]
+            ? { worktree: true, worktreeBaseRef: "refs/heads/main" }
+            : {}),
           visibility: "shared",
           displayName: "Synthetic broadcast parent",
         });
+        if (values["github-options-connected"]) {
+          bindConnectedOptionsWorktree(diffTargets[0]!, created);
+          stressWorktree = diffTargets[0]!.worktree;
+          diffControlOriginal = diffTargets[0]!.original;
+        }
         await rpc(client, "sessions.reset", { key: parentKey });
       }
       if (values["stress-subagents"]) {
@@ -2697,6 +3237,61 @@ try {
   const sender = clients[0];
   if (!sender) {
     throw new Error("no sender client");
+  }
+  for (const target of diffTargets) {
+    if (target.sessionKey !== parentKey) {
+      const created = await rpc(sender, "sessions.create", {
+        key: target.sessionKey,
+        cwd: target.worktree,
+        ...(values["github-options-connected"]
+          ? { worktree: true, worktreeBaseRef: "refs/heads/main" }
+          : {}),
+        visibility: "shared",
+        displayName: "Synthetic dashboard diff",
+      });
+      if (values["github-options-connected"]) {
+        bindConnectedOptionsWorktree(target, created);
+      }
+      await rpc(sender, "sessions.reset", { key: target.sessionKey });
+    }
+  }
+  if (values["github-options-connected"]) {
+    // Broad dashboard grants skip target qualification. These sockets exercise
+    // the session-scoped read path without changing the other widget grants.
+    for (let index = 0; index < clientCount; index++) {
+      const client = createGatewayWsClient({
+        ...clientConnection,
+        headers: { ...clientConnection.headers, "x-openclaw-scopes": "operator.sessions.read" },
+      });
+      githubOptionsClients.push(client);
+      trackClientFrames(client);
+      await client.waitOpen();
+      const hello = await rpc(client, "connect", {
+        ...connectParams,
+        scopes: ["operator.sessions.read"],
+      });
+      if (
+        !Value.Check(HelloOkSchema, hello) ||
+        hello.auth.method !== "trusted-proxy" ||
+        hello.auth.scopes.length !== 1 ||
+        hello.auth.scopes[0] !== "operator.sessions.read"
+      ) {
+        const auth = isRecord(hello) && isRecord(hello.auth) ? hello.auth : undefined;
+        throw new Error(
+          `GitHub options client did not retain its session-scoped grant: ${JSON.stringify({
+            method: auth?.method,
+            scopes: auth?.scopes,
+          })}`,
+        );
+      }
+    }
+    await Promise.all(
+      githubOptionsClients.map((client, index) =>
+        rpc(client, "sessions.github.options", {
+          sessionKey: diffTargets[index % diffTargets.length]!.sessionKey,
+        }),
+      ),
+    );
   }
   if (values["dashboard-rpc"]) {
     await rpc(sender, "board.widget.put", {
@@ -2739,23 +3334,23 @@ try {
       });
     }
     for (const { method, params } of dashboardRpcShapes) {
+      if (values["github-options-connected"] && method === "sessions.github.options") {
+        continue;
+      }
       validateDashboardRpc(method, await rpc(sender, method, params));
     }
+  }
+  if (reloadPluginId) {
+    writeFileSync(
+      path.join(output, "plugin-inventory.json"),
+      JSON.stringify(await rpc(sender, "plugins.list", {}), null, 2),
+    );
   }
   const expectedSidebar =
     scenario === "reconnect"
       ? sidebarIdentity(await rpc(sender, "sessions.list", { limit, rowMode, archived: "all" }))
       : undefined;
   for (const target of diffTargets) {
-    if (target.sessionKey !== parentKey) {
-      await rpc(sender, "sessions.create", {
-        key: target.sessionKey,
-        cwd: target.worktree,
-        visibility: "shared",
-        displayName: "Synthetic dashboard diff",
-      });
-      await rpc(sender, "sessions.reset", { key: target.sessionKey });
-    }
     // First work captures the baseline; later child announcements must not capture our edit.
     const runId = randomUUID();
     await rpc(sender, "agent", {
@@ -2805,7 +3400,7 @@ try {
   }
   console.log("PHASE subscribed-and-reset");
   let idleTurnCohorts: Awaited<ReturnType<typeof runRound>>[] = [];
-  const runScenario = async (measuredRound?: number) => {
+  const runScenario = async (measuredRound?: number, operationCount = operations) => {
     if (idleScenario) {
       idleTurnCohorts = [];
       for (let offset = 0; offset < keys.length; offset += runCount) {
@@ -2822,8 +3417,8 @@ try {
       }
       return streamStart;
     }
-    for (let offset = 0; offset < operations; offset += clientCount) {
-      const batchCount = Math.min(clientCount, operations - offset);
+    for (let offset = 0; offset < operationCount; offset += clientCount) {
+      const batchCount = Math.min(clientCount, operationCount - offset);
       const batchStarted = performance.now();
       const reconnectStarted: number[] = [];
       const slots = clients.slice(0, batchCount).entries();
@@ -2898,6 +3493,9 @@ try {
               ) {
                 throw new Error("sessions.describe did not return the parent with seeded children");
               }
+            } else if (scenario === "sessions.patch") {
+              const params = sessionPatchParams(index, patchSequences[index]!++);
+              assertSessionPatch(params, await rpc(workerClient, "sessions.patch", params));
             } else {
               const result = await rpc(workerClient, "plugins.reload", {
                 plugins: [{ pluginId: reloadPluginId }],
@@ -2927,7 +3525,9 @@ try {
     return undefined;
   };
   const warmupStartedAt = performance.now();
-  do {
+  // Equal warmup work keeps paired runs at the same retained-history boundary.
+  const warmupRoundCount = soakScenario ? Math.max(1, Math.ceil(warmupMs / roundIntervalMs)) : 1;
+  for (let round = 0; round < warmupRoundCount; round++) {
     // Warm runtime imports on the parent, leaving all measured sessions untouched.
     if (idleScenario) {
       await runRound(sender, undefined, [parentKey]);
@@ -2935,7 +3535,7 @@ try {
       break;
     }
     const started = performance.now();
-    await runScenario();
+    await runScenario(undefined, warmupOperations);
     await drainEvents();
     if (!soakScenario) {
       break;
@@ -2949,7 +3549,7 @@ try {
         ),
       ),
     );
-  } while (performance.now() - warmupStartedAt < warmupMs);
+  }
   console.log("PHASE warmed");
   if (startAt !== undefined) {
     if (Date.now() >= startAt) {
@@ -2972,18 +3572,20 @@ try {
       ? path.join(output, "allocation-soak.heapprofile")
       : undefined;
   // A twenty-minute churn profile needs coarser sampling to bound native records and JSON export.
-  const soakSamplingIntervalBytes = 512 * 1024;
+  const soakSamplingIntervalBytes = heapSamplingIntervalBytes ?? 512 * 1024;
   if (soakAllocationPath) {
     // Reading or stopping a V8 sampling profile forces GC; keep one window for the entire soak.
     await controlGatewayProfile(gateway, "heap", "start", soakAllocationPath, {
       samplingIntervalBytes: soakSamplingIntervalBytes,
+      includeWorkers: values["worker-allocations"],
     });
   }
   const measurementStartedAt = Date.now();
   const measuredGateway = gateway;
-  const finishWholeSoakDiagnostics =
-    soakScenario && (values.diagnostics || values.allocations || values["trace-gc"])
-      ? await startGatewayDiagnostics(gateway, "whole-soak")
+  const finishWholeWorkloadDiagnostics =
+    (soakScenario || scenario === "plugins.reload") &&
+    (values.diagnostics || values.allocations || values["trace-gc"])
+      ? await startGatewayDiagnostics(gateway, soakScenario ? "whole-soak" : "whole-reload")
       : undefined;
   const samples = [];
   const memorySamples: Array<{
@@ -3070,7 +3672,9 @@ try {
   for (
     let round = 0;
     soakScenario
-      ? Date.now() - measurementStartedAt < durationMs
+      ? soakRounds === undefined
+        ? Date.now() - measurementStartedAt < durationMs
+        : round < soakRounds
       : round < (idleScenario ? 2 : rounds);
     round++
   ) {
@@ -3087,6 +3691,7 @@ try {
       retainedProfileStartedAt = Date.now();
     }
     counters.clear();
+    chatDeltaDeliveryMs.length = 0;
     rpcMeasurements.clear();
     handshakeLatenciesMs.length = 0;
     reconnectStorms.length = 0;
@@ -3106,15 +3711,17 @@ try {
     recoveredResponses = 0;
     imageRequests = 0;
     reasoningResponses = 0;
+    reasoningResponseSequence = 0;
     reasoningReplayRequests = 0;
     historicalReplayRequests = 0;
     recapRequests = 0;
     recapReceipts.length = 0;
     recapPhase = undefined;
     activeWorkCounts = undefined;
-    const finishGatewayDiagnostics = values.diagnostics
-      ? await startGatewayDiagnostics(gateway)
-      : undefined;
+    const finishGatewayDiagnostics =
+      values.diagnostics || values["transport-counts"]
+        ? await startGatewayDiagnostics(gateway)
+        : undefined;
     const finishControllerDiagnostics = values.diagnostics
       ? startGatewayBenchDiagnostics()
       : undefined;
@@ -3122,7 +3729,6 @@ try {
     const workloadCpuProfilePath = values["workload-cpu-profile"]
       ? path.join(output, `workload-${round}.cpuprofile`)
       : undefined;
-    measuring = !workloadCpuProfilePath;
     const rpcLatencies: Record<string, number[]> = Object.fromEntries(
       mixedRpcMethods.map((method) => [method, []]),
     );
@@ -3138,6 +3744,7 @@ try {
       endedAtEpochMs: number;
       durationMs: number;
       diffSessionKey?: string;
+      githubOptionsSessionKey?: string;
     }> = [];
     const workload = async () => {
       let polling = true;
@@ -3163,6 +3770,7 @@ try {
                   const started = performance.now();
                   let responseId = "";
                   let diffSessionKey: string | undefined;
+                  let githubOptionsSessionKey: string | undefined;
                   const method = values["mixed-rpc"]
                     ? mixedRpcMethods[poll++ % mixedRpcMethods.length]!
                     : "sessions.list";
@@ -3175,12 +3783,30 @@ try {
                       }
                     : undefined;
                   if (dashboardShape) {
+                    const optionsClient =
+                      method === "sessions.github.options"
+                        ? githubOptionsClients[clientIndex]
+                        : undefined;
+                    if (optionsClient) {
+                      githubOptionsSessionKey =
+                        diffTargets[
+                          (round + clientIndex + Math.floor(poll / mixedRpcMethods.length)) %
+                            diffTargets.length
+                        ]!.sessionKey;
+                    }
                     validateDashboardRpc(
                       method,
-                      await rpc(client, method, dashboardShape.params, onResponse),
+                      await rpc(
+                        optionsClient ?? client,
+                        method,
+                        githubOptionsSessionKey
+                          ? { sessionKey: githubOptionsSessionKey }
+                          : dashboardShape.params,
+                        onResponse,
+                      ),
                     );
                   } else if (method === "connect") {
-                    const peer = createGatewayWsClient({ url: `ws://127.0.0.1:${port}` });
+                    const peer = createGatewayWsClient(clientConnection);
                     trackClientFrames(peer);
                     try {
                       await peer.waitOpen();
@@ -3237,7 +3863,14 @@ try {
                     const page = await rpc(
                       client,
                       method,
-                      { rowMode, limit, archived: "all" },
+                      {
+                        rowMode,
+                        limit,
+                        archived: "all",
+                        ...(values["list-profile-reference"]
+                          ? { involvingProfileId: values["list-profile-reference"] }
+                          : {}),
+                      },
                       onResponse,
                     );
                     if (
@@ -3246,7 +3879,7 @@ try {
                       page.count !== Math.min(limit, page.totalCount) ||
                       !Array.isArray(page.sessions) ||
                       page.sessions.length !== page.count ||
-                      page.count === 0
+                      (page.count === 0 && !values["list-profile-reference"])
                     ) {
                       throw new Error("concurrent sessions.list did not return the requested page");
                     }
@@ -3264,6 +3897,7 @@ try {
                       endedAtEpochMs: performance.timeOrigin + ended,
                       durationMs: requestDurationMs,
                       ...(diffSessionKey ? { diffSessionKey } : {}),
+                      ...(githubOptionsSessionKey ? { githubOptionsSessionKey } : {}),
                     });
                   }
                   const intervalMs = random ? listIntervalMs * (0.5 + random()) : listIntervalMs;
@@ -3308,18 +3942,38 @@ try {
         await listWork;
       }
     };
-    const measuredWorkload = workloadCpuProfilePath
-      ? async () => {
-          await controlGatewayProfile(measuredGateway, "cpu", "start", workloadCpuProfilePath);
-          measuring = true;
-          try {
-            await workload();
-          } finally {
-            measuring = false;
-            await controlGatewayProfile(measuredGateway, "cpu", "stop", workloadCpuProfilePath);
-          }
+    const measuredWorkload = async () => {
+      if (workloadCpuProfilePath) {
+        await controlGatewayProfile(measuredGateway, "cpu", "start", workloadCpuProfilePath);
+      }
+      try {
+        if (turnScenario) {
+          await drainEvents();
         }
-      : workload;
+        measuring = true;
+        await workload();
+        // Polling RPCs can publish after workload's first drain. Freeze counters
+        // at a quiet boundary, rather than midway through their recipient fanout.
+        if (turnScenario) {
+          const beforeDrain = perClientCounters.map((counts) => Object.fromEntries(counts));
+          const drainStarted = performance.now();
+          await drainEvents();
+          console.log(
+            `FANOUT_BOUNDARY ${JSON.stringify({
+              round,
+              waitMs: performance.now() - drainStarted,
+              before: beforeDrain,
+              after: perClientCounters.map((counts) => Object.fromEntries(counts)),
+            })}`,
+          );
+        }
+      } finally {
+        measuring = false;
+        if (workloadCpuProfilePath) {
+          await controlGatewayProfile(measuredGateway, "cpu", "stop", workloadCpuProfilePath);
+        }
+      }
+    };
     if (values["operator-access-policy"]) {
       await controlAuthorityCounters(gateway, "start");
     }
@@ -3330,6 +3984,7 @@ try {
             path.join(output, `allocation-${round}.heapprofile`),
             turnScenario ? sessionCount : operations,
             measuredWorkload,
+            { samplingIntervalBytes: heapSamplingIntervalBytes },
           )
         : undefined;
     if (!values.allocations || soakScenario) {
@@ -3352,10 +4007,15 @@ try {
     if (listIntervalMs && listLatencies.length === 0) {
       throw new Error("No sessions.list samples collected; shorten --list-interval-ms");
     }
-    measuring = false;
     const diagnostics = finishGatewayDiagnostics
       ? { gateway: await finishGatewayDiagnostics(), controller: finishControllerDiagnostics?.() }
       : undefined;
+    const broadcastTimings = (allocation?.diagnostics ?? diagnostics?.gateway)?.groups.filter(
+      (group) => group.channel === "openclaw.benchmark.broadcast",
+    );
+    if (values["broadcast-timing"] && !broadcastTimings?.length) {
+      throw new Error("Broadcast timing observed no calls in the measured window");
+    }
     assertGatewayAlive();
     if (clients.some((client) => client.ws.readyState !== client.ws.OPEN)) {
       throw new Error("a subscriber was lost during the measured round");
@@ -3475,6 +4135,7 @@ try {
           method,
           {
             ...latencySummary(measurements.latenciesMs),
+            latenciesMs: measurements.latenciesMs,
             callsPerMinute: (measurements.latenciesMs.length / cpu.wallMs) * 60_000,
             responseBytes: measurements.responseBytes,
             responseBytesPerCall: measurements.responseBytes / measurements.latenciesMs.length,
@@ -3495,6 +4156,13 @@ try {
         ? { allocatedMbPerTurn: allocation.estimatedAllocatedBytesPerOperation / 1_000_000 }
         : {}),
       diagnostics,
+      ...(values["broadcast-timing"]
+        ? {
+            broadcastLatencyMs: Object.fromEntries(
+              (broadcastTimings ?? []).map((group) => [group.operation, group.metrics.durationMs]),
+            ),
+          }
+        : {}),
       streamStart,
       ...(values["mixed-rpc"]
         ? {
@@ -3526,6 +4194,14 @@ try {
           }
         : {}),
       ...cpu,
+      chatDeltaDeliveryMs: summarizeLatencies([...chatDeltaDeliveryMs]),
+      ...(values["transport-counts"]
+        ? {
+            transportCounts: JSON.parse(
+              readFileSync(path.join(output, "transport-counts.json"), "utf8"),
+            ),
+          }
+        : {}),
       eventCounts: Object.fromEntries(counters),
       eventBytes: Object.fromEntries(eventBytes),
       sessionEventSizes: Object.fromEntries(sessionEventSizes),
@@ -3570,6 +4246,14 @@ try {
         : null,
       estimatedAllocatedBytesPerSessionEvent:
         allocation && sourceEvents ? allocation.sampledAllocatedBytes / sourceEvents : null,
+      broadcastAllocatedBytesPerSessionEvent:
+        allocation && sourceEvents
+          ? allocation.broadcastAllocation.sampledBytes / sourceEvents
+          : null,
+      broadcastAllocatedBytesPerTurn:
+        allocation && turnScenario
+          ? allocation.broadcastAllocation.sampledBytes / sessionCount
+          : null,
       mainThreadMsPerSecond: (cpu.mainThread.totalMs / cpu.wallMs) * 1000,
       sessionEventsPerSecond: (sourceEvents / cpu.wallMs) * 1000,
     };
@@ -3594,17 +4278,17 @@ try {
         // Verify the retained prefix after reopening; reading it now warms idle workers.
       }
     }
-    if (soakScenario) {
-      if (Date.now() - (memorySamples.at(-1)?.atEpochMs ?? 0) >= memoryIntervalMs) {
+    if (soakScenario || scenario === "plugins.reload") {
+      if (soakScenario && Date.now() - (memorySamples.at(-1)?.atEpochMs ?? 0) >= memoryIntervalMs) {
         await sampleMemory();
       }
+      const remainingMs = roundIntervalMs - (Date.now() - roundStartedAt);
       await delay(
         Math.max(
           0,
-          Math.min(
-            roundIntervalMs - (Date.now() - roundStartedAt),
-            durationMs - (Date.now() - measurementStartedAt),
-          ),
+          soakScenario
+            ? Math.min(remainingMs, durationMs - (Date.now() - measurementStartedAt))
+            : remainingMs,
         ),
       );
     }
@@ -3654,9 +4338,23 @@ try {
     };
     console.log(`FINGERPRINT_RETENTION ${JSON.stringify(fingerprintRetention)}`);
   }
-  const wholeSoakDiagnostics = await finishWholeSoakDiagnostics?.();
+  if (soakScenario && soakRounds !== undefined) {
+    // Keep equal work counts without shortening the continuous GC/allocation window.
+    await delay(Math.max(0, durationMs - (Date.now() - measurementStartedAt)));
+  }
+  const wholeWorkloadDiagnostics = await finishWholeWorkloadDiagnostics?.();
   if (values["dashboard-rpc"] && dashboardFixtureRequests === 0) {
     throw new Error("Dashboard GitHub preview never reached the synthetic transport");
+  }
+  if (
+    values["github-options-observe"] &&
+    (!githubObservationOwner ||
+      !githubAvailabilityOwner ||
+      !githubStages.some(({ phase }) => phase === "handler"))
+  ) {
+    throw new Error(
+      "GitHub options source observation requires both owners loaded and a measured handler",
+    );
   }
   let wholeSoakAllocation;
   if (soakAllocationPath) {
@@ -3670,6 +4368,9 @@ try {
       ...profile,
       completedTurns,
       allocatedMbPerTurn: profile.sampledAllocatedBytes / 1_000_000 / completedTurns,
+      ...(values["worker-allocations"]
+        ? { workerManifestPath: `${soakAllocationPath}.workers.json` }
+        : {}),
     };
   }
   let retainedProfile;
@@ -3739,25 +4440,80 @@ try {
       throw new Error("stress cron did not complete during the measured soak");
     }
   }
+  // Capture filter/paging equivalence after the measured window, without warming its caches.
+  const listResponses: Array<{ params: unknown; payload: unknown }> = [];
+  if (values["capture-responses"] && scenario === "sessions.patch") {
+    const responses: Array<{ params: SessionsPatchParams; payload: unknown }> = [];
+    for (let sequence = 0; sequence < 6; sequence++) {
+      const params = sessionPatchParams(0, sequence);
+      const payload = await rpc(sender, "sessions.patch", params);
+      assertSessionPatch(params, payload);
+      responses.push({ params, payload });
+    }
+    writeFileSync(path.join(output, "patch-responses.json"), JSON.stringify(responses));
+  }
+  if (values["capture-responses"] && (scenario === "sessions.list" || soakScenario)) {
+    // Fresh harness sessions contain random IDs and current clocks; compare the seeded roster.
+    if (!historyTurns) {
+      for (const key of [...keys, parentKey]) {
+        await rpc(sender, "sessions.delete", { key, deleteTranscript: true });
+      }
+    }
+    for (const request of [
+      {},
+      { limit: 1 },
+      { offset: 1 },
+      { offset: 199 },
+      { offset: fixtureSessionCount },
+      { archived: false },
+      { archived: true },
+      { sortBy: "updatedAt" },
+      { sortBy: "lastInteractionAt" },
+      { sortBy: "activity" },
+      { pinned: true },
+      { pinned: false },
+      { search: "team" },
+      { search: "no-such-synthetic-session" },
+      { agentId: "main" },
+      { excludeSubagents: true },
+      { excludeSystem: true, excludeCron: true },
+      { requireLastInteraction: true },
+      { includeGlobal: true, includeUnknown: true },
+      { ownerFirst: true },
+      ...(values["list-profile-reference"]
+        ? [
+            { involvingProfileId: values["list-profile-reference"] },
+            { involvingProfileId: "team-shape-profile-0", includePeople: true },
+            { involvingProfileId: "team-shape-profile-0", archived: true },
+            { involvingProfileId: "team-shape-profile-0", search: "no-such-synthetic-session" },
+          ]
+        : []),
+    ]) {
+      const params = { limit, rowMode, archived: "all", ...request };
+      listResponses.push({ params, payload: await rpc(sender, "sessions.list", params) });
+    }
+    writeFileSync(path.join(output, "list-responses.json"), JSON.stringify(listResponses));
+  }
   // Process exit plus drained log streams makes promotion accounting independent of pipe buffering.
   await cleanup();
   let wholeSoakGc;
-  if (wholeSoakDiagnostics && (values.allocations || values["trace-gc"])) {
+  if (soakScenario && wholeWorkloadDiagnostics && (values.allocations || values["trace-gc"])) {
     const trace = readGatewayGcTrace(
       path.join(output, "gateway.stdout.log"),
       "whole-soak",
       "diagnostics",
     );
     const completedTurns = samples.length * runCount;
-    const wallMs = wholeSoakDiagnostics.durationMs;
+    const wallMs = wholeWorkloadDiagnostics.durationMs;
     wholeSoakGc = {
       ...trace,
       completedTurns,
       wallMs,
       promotedMbPerTurn: trace.promotedBytes / 1_000_000 / completedTurns,
       scavengeSecondsPerMinute:
-        ((wholeSoakDiagnostics.gc.minorDurationMs?.total ?? 0) * 60) / wallMs,
-      majorSecondsPerMinute: ((wholeSoakDiagnostics.gc.majorDurationMs?.total ?? 0) * 60) / wallMs,
+        ((wholeWorkloadDiagnostics.gc.minorDurationMs?.total ?? 0) * 60) / wallMs,
+      majorSecondsPerMinute:
+        ((wholeWorkloadDiagnostics.gc.majorDurationMs?.total ?? 0) * 60) / wallMs,
     };
   }
   const result = {
@@ -3766,18 +4522,23 @@ try {
     verifyHistoryReplay,
     revision: values.revision ?? null,
     operationsPerRound: turnScenario ? sessionCount : operations,
+    warmupOperations: turnScenario ? undefined : warmupOperations,
     rpcConcurrency,
     reconnectStaggerMs,
     rpcLatencyScope:
       "client request-to-response; handler and queue timings are in Gateway diagnostics",
     perEventResourceScope:
       "whole measured workload main-isolate CPU and sampled allocations divided by session publications or deliveries; not encode/send-only cost",
+    broadcastLatencyScope: values["broadcast-timing"]
+      ? "broadcastLatencyMs times synchronous broadcastInternal calls by event, including targeted and retained sends; chatDeltaDeliveryMs times Gateway chat timestamp to subscriber receipt"
+      : "chatDeltaDeliveryMs measures Gateway chat timestamp to subscriber receipt; no broadcastInternal duration timer is installed",
     connectionMeasurementScope: connectionScenario
       ? "owned socket replacement; handshake includes WebSocket open and connect; reconnect adds subscribe and list; events during intentional disconnection are not replayed"
       : undefined,
     limit,
     rowMode,
     sessionRowDeltas: values["session-row-deltas"],
+    presenceDeltas: values["presence-deltas"],
     sessionEnvelopeRefs: values["session-envelope-refs"],
     listIntervalMs,
     mixedRpc: values["mixed-rpc"],
@@ -3786,6 +4547,52 @@ try {
           dashboardRpc: {
             methods: dashboardRpcShapes.map(({ method }) => method),
             dashboardFixtureRequests,
+            ...(values["github-options-observe"]
+              ? {
+                  githubObservation: {
+                    owner: githubObservationOwner,
+                    availabilityOwner: githubAvailabilityOwner,
+                    stages: githubStages,
+                  },
+                }
+              : {}),
+            ...(values["github-options-connected"]
+              ? {
+                  githubOptionsConnected: {
+                    additionalScopedSockets: githubOptionsClients.length,
+                    accountId: 1516,
+                    accountVerificationDelayMs: [300, 600, 900],
+                    accountRenameAfterMs: 60_000,
+                    upstreamRequests: githubFixtureRequests,
+                    upstreamByRoute: Object.fromEntries(
+                      [...new Set(githubFixtureRequests.map((request) => request.route))].map(
+                        (route) => {
+                          const requests = githubFixtureRequests.filter(
+                            (request) => request.route === route,
+                          );
+                          return [
+                            route,
+                            {
+                              count: requests.length,
+                              totalMs: requests.reduce(
+                                (sum, request) => sum + request.durationMs,
+                                0,
+                              ),
+                              latencyMs: latencySummary(
+                                requests.map((request) => request.durationMs),
+                              ),
+                            },
+                          ];
+                        },
+                      ),
+                    ),
+                    observations: githubOptionsObservations,
+                    accountRenameObserved: githubOptionsObservations.some(
+                      (observation) => observation.login === "synthetic-shared-updated",
+                    ),
+                  },
+                }
+              : {}),
             diffWorktrees: diffTargets.map(({ sessionKey, worktree }) => ({
               sessionKey,
               worktree,
@@ -3795,12 +4602,20 @@ try {
         }
       : {}),
     stressTools: values["stress-tools"],
+    stressSessionStore: values["stress-session-store"],
+    transcriptHydrationCounts: values["transcript-hydration-counts"],
     operatorAccessPolicy: values["operator-access-policy"],
     stressSubagents: values["stress-subagents"],
     cronRuns,
     ...(values["mixed-rpc"] ? { diffEditControlVerified: true, diffEditVisibilityMs } : {}),
     pollSeed: values["poll-seed"] ?? null,
     diagnostics: values.diagnostics,
+    broadcastTiming: values["broadcast-timing"],
+    sessionProjectionSource,
+    transportCounts: values["transport-counts"],
+    compressed: proxyViewers,
+    distinctViewers: values["distinct-viewers"],
+    viewerProfileCount: viewerProfiles.size,
     cpuProfile: values["cpu-profile"],
     workloadCpuProfile: values["workload-cpu-profile"],
     captureResponses: values["capture-responses"],
@@ -3809,6 +4624,7 @@ try {
     streamStartAllocations: values["stream-start-allocations"],
     activeWorkDiagnostics: values["active-work-diagnostics"],
     measurementStartedAt,
+    ...(scenario === "plugins.reload" ? { wholeReloadDiagnostics: wholeWorkloadDiagnostics } : {}),
     initialFullFrame,
     clientCount,
     exactClients,
@@ -3855,6 +4671,7 @@ try {
           durationMs,
           warmupMs,
           roundIntervalMs,
+          soakRounds,
           memoryIntervalMs,
           retainedProfileMs,
           resetEveryRounds,
@@ -3868,7 +4685,7 @@ try {
           memorySamples,
           retainedProfile,
           wholeSoakAllocation,
-          wholeSoakDiagnostics,
+          wholeSoakDiagnostics: wholeWorkloadDiagnostics,
           wholeSoakGc,
         }
       : {}),

@@ -9,6 +9,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GitCheckoutContext } from "../infra/git-read-operations.js";
+import { runGitWorkerOperation } from "../infra/git-worker.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import {
   createOpenClawTestState,
@@ -80,6 +81,54 @@ export const testGitContext = {
   branch: "claude/browser-tabs-tighter-header",
 };
 
+export function localPrGitReads(type?: string) {
+  return vi
+    .mocked(runGitWorkerOperation)
+    .mock.calls.filter(
+      ([operation]) =>
+        (!type || operation.type === type) &&
+        operation.type !== "checkout.revision" &&
+        operation.type !== "pull-request.branch-comparison",
+    );
+}
+
+export function mockPrCheckout(options: {
+  revision: () => string | null;
+  resolve?: (root: string) => GitCheckoutContext | null;
+  additions?: (root: string) => number;
+  emptyFacts?: boolean;
+}) {
+  vi.mocked(runGitWorkerOperation).mockImplementation(async (operation) => {
+    switch (operation.type) {
+      case "pull-request.branch-comparison":
+        return { statsBase: null, creatable: false, equalPushedTips: false, complete: true };
+      case "checkout.revision":
+        return options.revision();
+      case "checkout.context":
+        if (options.resolve) {
+          return options.resolve(operation.input.root);
+        }
+        break;
+      case "pull-request.branch-facts":
+        return options.emptyFacts && !options.additions
+          ? undefined
+          : {
+              creatable: true,
+              stats: options.additions
+                ? {
+                    additions: options.additions(operation.input.root),
+                    deletions: 0,
+                    changedFiles: 1,
+                  }
+                : null,
+            };
+      default:
+        break;
+    }
+    throw new Error("Unexpected local Git operation");
+  });
+}
+
 /** Direct loader tests supply real target facts; registered callers use the row projection. */
 export async function loadTestSessionPullRequests(
   params: PrRequest,
@@ -121,11 +170,7 @@ export async function loadTestSessionPullRequests(
         assertCurrent();
         return loadPrs(params, {
           ...ownerDeps,
-          read: {
-            target: { ...target, source },
-            sourceIdentity,
-            assertCurrent,
-          },
+          read: { target: { ...target, source }, sourceIdentity, assertCurrent },
         });
       },
     );
@@ -149,6 +194,7 @@ async function prepareTestSessionPrTarget(params: { sessionKey: string; agentId?
       repository.sessionKey === selected.canonicalKey
       ? repository
       : null,
+    { includeBoundPullRequest: true },
   );
 }
 

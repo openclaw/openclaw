@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { invokeNodeRequest } from "./nodes.invoke.test-support.js";
+import {
+  expectNodeFailure,
+  expectNodeReply as expectReply,
+  invokeNodeRequest,
+} from "./nodes.invoke.test-support.js";
 import { nodePendingWorkHandlers } from "./nodes.pending-work.js";
 import type { GatewayClient } from "./types.js";
 
@@ -42,10 +46,6 @@ const wakeOptions = () => ({
   lifecycle: lifecycle.signal,
   generation,
 });
-function expectReply(respond: ReturnType<typeof vi.fn>, payload: unknown) {
-  expect(respond).toHaveBeenCalledWith(true, payload, undefined);
-}
-
 function makeContext(
   getSession: () => { connId: string; pairingGeneration?: string } | undefined = () => undefined,
 ) {
@@ -77,12 +77,8 @@ async function request(
   });
 }
 
-function expectPairingChanged(respond: ReturnType<typeof vi.fn>) {
-  expect(respond).toHaveBeenCalledWith(
-    false,
-    undefined,
-    expect.objectContaining({ details: { code: "PAIRING_CHANGED" } }),
-  );
+function expectPairingChanged(respond: Awaited<ReturnType<typeof request>>) {
+  expectNodeFailure(respond, { details: { code: "PAIRING_CHANGED" } });
 }
 
 describe("node.pending handlers", () => {
@@ -125,13 +121,9 @@ describe("node.pending handlers", () => {
         return reason === "same-generation reconnect";
       });
       if (reason === "missing identity") {
-        expect(await request("drain", {}, undefined, null)).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({
-            message: expect.stringContaining("connected device identity"),
-          }),
-        );
+        expectNodeFailure(await request("drain", {}, undefined, null), {
+          message: expect.stringContaining("connected device identity"),
+        });
       } else {
         expectPairingChanged(await request("drain", {}, context));
       }
@@ -142,20 +134,17 @@ describe("node.pending handlers", () => {
   it.each([999, 86_400_001, 1_000.5, Number.NaN, Number.POSITIVE_INFINITY, "1000"])(
     "rejects invalid pending-work TTL %s before queueing",
     async (expiresInMs) => {
-      expect(await request("enqueue", { expiresInMs, wake: false })).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "INVALID_REQUEST" }),
-      );
+      expectNodeFailure(await request("enqueue", { expiresInMs, wake: false }), {
+        code: "INVALID_REQUEST",
+      });
       expect(work.enqueueNodePendingWork).not.toHaveBeenCalled();
     },
   );
 
   it.each([1_000, 86_400_000])("forwards admitted pending-work TTL %s", async (expiresInMs) => {
-    expect(await request("enqueue", { expiresInMs, wake: false })).toHaveBeenCalledWith(
-      true,
+    expectReply(
+      await request("enqueue", { expiresInMs, wake: false }),
       expect.objectContaining({ queued: item }),
-      undefined,
     );
     expect(work.enqueueNodePendingWork).toHaveBeenCalledWith(
       expect.objectContaining({ expiresInMs }),

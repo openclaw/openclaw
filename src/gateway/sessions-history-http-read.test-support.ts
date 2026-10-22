@@ -1,17 +1,20 @@
-import { expect, test, vi } from "vitest";
-import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
-import { commitMemory } from "../config/sessions/session-actor-memory-publication.test-support.js";
-import { withSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
-import type { SessionActorStorageWrites } from "../config/sessions/session-actor-storage-contract.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
-import * as sessionHistoryState from "./session-history-state.js";
-import {
-  makeTranscriptAssistantMessage,
-  withGatewayHarness,
-} from "./sessions-history-http.test-support.js";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { expect } from "vitest";
+import { appendExactAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
+import { readSseEvent } from "./session-history-fixtures.test-support.js";
 
 const READ_SCOPE_HEADER = { "x-openclaw-scopes": "operator.read" };
-const AGENT_ID = "main";
+
+export async function appendHistoryMessage(
+  params: Parameters<typeof appendExactAssistantMessageToSessionTranscript>[0],
+) {
+  const appended = await appendExactAssistantMessageToSessionTranscript(params);
+  expect(appended.ok).toBe(true);
+  if (!appended.ok) {
+    throw new Error(appended.reason);
+  }
+  return appended;
+}
 
 export async function fetchSessionHistory(
   port: number,
@@ -29,6 +32,7 @@ export async function fetchSessionHistory(
 
 export type SessionHistoryMessage = {
   role?: string;
+  timestamp?: number;
   content?: Array<{ text?: string }>;
   __openclaw?: { id?: string; seq?: number; turnBoundary?: boolean };
 };
@@ -40,6 +44,58 @@ export type SessionHistoryBody = {
   nextCursor?: string;
   hasMore?: boolean;
 };
+
+export const historyTexts = (body: SessionHistoryBody) =>
+  body.messages?.map((message) => message.content?.[0]?.text);
+
+export class SessionHistorySseStream {
+  readonly reader: ReadableStreamDefaultReader<Uint8Array>;
+  readonly streamState = { buffer: "" };
+
+  constructor(response: Response) {
+    expect(response.status).toBe(200);
+    this.reader = expectDefined(response.body?.getReader(), "session-history SSE reader");
+  }
+
+  next(expectedEvent?: "history"): Promise<SessionHistoryBody>;
+  next(expectedEvent: string): Promise<unknown>;
+  async next(expectedEvent = "history"): Promise<unknown> {
+    const event = await readSseEvent(this.reader, this.streamState);
+    expect(event.event).toBe(expectedEvent);
+    return event.data;
+  }
+
+  async expectTexts(texts: string[]) {
+    expect(historyTexts(await this.next())).toEqual(texts);
+  }
+
+  async expectMessage(text: string, seq: number, id?: string) {
+    const data = (await this.next("message")) as {
+      message?: SessionHistoryMessage;
+      messageSeq?: number;
+    };
+    expect(data.message?.content?.[0]?.text).toBe(text);
+    expect(data.messageSeq).toBe(seq);
+    if (id !== undefined) {
+      expect(data.message?.["__openclaw"]).toMatchObject({ id, seq });
+    }
+  }
+
+  async [Symbol.asyncDispose]() {
+    await this.reader.cancel();
+  }
+}
+
+export const historyStream = (response: Response) => new SessionHistorySseStream(response);
+
+export async function openHistoryStream(port: number, sessionKey: string, query?: string) {
+  return historyStream(
+    await fetchSessionHistory(port, sessionKey, {
+      query,
+      headers: { Accept: "text/event-stream" },
+    }),
+  );
+}
 
 export async function readSessionHistoryBody(
   port: number,
@@ -53,71 +109,4 @@ export async function readSessionHistoryBody(
 
 export function expectErrorResponse(body: unknown, expected: { type: string; message: string }) {
   expect(body).toEqual({ ok: false, error: expected });
-}
-
-export function registerMemorySessionHistoryTests(
-  createSessionStoreFile: () => Promise<string>,
-): void {
-  test("reads unbound memory history without creating missing owners and withholds a closed owner's snapshot", async () => {
-    await createSessionStoreFile();
-    await withGatewayHarness(async (harness) => {
-      const sessionKey = "agent:main:dashboard:incognito-http-history";
-      const sessionId = "memory-http-history";
-      const text = "Private memory reply";
-      const location = {
-        agentId: AGENT_ID,
-        path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: AGENT_ID }),
-      };
-      const expectMissing = async () => {
-        const response = await fetchSessionHistory(harness.port, sessionKey);
-        expect(response.status).toBe(404);
-        expectErrorResponse(await response.json(), {
-          type: "not_found",
-          message: `Session not found: ${sessionKey}`,
-        });
-        expect(memorySessionActorOwners.read(location)).toBeUndefined();
-      };
-      expect(memorySessionActorOwners.read(location)).toBeUndefined();
-      try {
-        await expectMissing();
-
-        const authority = { assertCurrent() {}, authorize() {} };
-        const lifetime = { assertCurrent() {}, assertReadable() {} };
-        const input: SessionActorStorageWrites["session.entry.create"]["input"] = {
-          entry: { sessionId, updatedAt: Date.now(), incognito: true },
-          transcriptEvents: [
-            { type: "session", id: sessionId, version: 3, cwd: "/synthetic" },
-            {
-              type: "message",
-              id: "memory-http-reply",
-              parentId: null,
-              message: makeTranscriptAssistantMessage({ text }),
-            },
-          ],
-        };
-        await withSessionActorStorage(
-          { agentId: AGENT_ID, sessionKey, storePath: location.path },
-          { create: true, authority, lifetime },
-          ({ actor }) => commitMemory(actor.storage, "session.entry.create", input, authority),
-        );
-
-        const history = await readSessionHistoryBody(harness.port, sessionKey);
-        expect(history.sessionKey).toBe(sessionKey);
-        expect(history.messages?.map((message) => message.content?.[0]?.text)).toEqual([text]);
-
-        const readSnapshot = sessionHistoryState.readSessionHistorySnapshotAsync;
-        using snapshotSpy = vi
-          .spyOn(sessionHistoryState, "readSessionHistorySnapshotAsync")
-          .mockImplementationOnce(async (params) => {
-            const snapshot = await readSnapshot(params);
-            memorySessionActorOwners.closeDatabase(location);
-            return snapshot;
-          });
-        await expectMissing();
-        expect(snapshotSpy).toHaveBeenCalledOnce();
-      } finally {
-        memorySessionActorOwners.closeDatabase(location);
-      }
-    });
-  });
 }

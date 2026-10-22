@@ -121,7 +121,7 @@ it.each([false, true])(
     flush();
     expect(pause).toHaveBeenCalledTimes(2);
     expect(revoke).toHaveBeenCalledWith("blob:synthetic-speech");
-    expect(readButton(view)).toBe(button);
+    await waitForSolid(() => expect(readButton(view)).toBe(button));
   },
 );
 
@@ -175,6 +175,70 @@ it("leaves unconfigured speech controls absent", () => {
   expect(request).not.toHaveBeenCalled();
 });
 
+it.each([
+  { name: "configured", bootstrapConfig: { tts: {} }, loaded: false, visible: true },
+  { name: "unconfigured", bootstrapConfig: { tts: null }, loaded: false, visible: false },
+  { name: "older projection", bootstrapConfig: {}, loaded: true, visible: true },
+  { name: "no projection", bootstrapConfig: null, loaded: true, visible: true },
+  {
+    name: "config-only response with older projection",
+    bootstrapConfig: {},
+    loaded: true,
+    visible: true,
+    configOnly: true,
+  },
+  {
+    name: "config-only response without projection",
+    bootstrapConfig: null,
+    loaded: true,
+    visible: true,
+    configOnly: true,
+  },
+])("uses $name speech configuration without eagerly loading an editor", async (scenario) => {
+  const listeners = new Set<() => void>();
+  vi.spyOn(context.runtimeConfig, "subscribe").mockImplementation((listener) => {
+    const notify = () => listener(context.runtimeConfig.state);
+    listeners.add(notify);
+    return () => listeners.delete(notify);
+  });
+  Object.assign(runtimeConfig.state, {
+    configSnapshot: null,
+    bootstrapConfig: scenario.bootstrapConfig,
+  });
+  runtimeConfig.ensureLoaded.mockImplementation(async () => {
+    const config = { tts: {} };
+    Object.assign(runtimeConfig.state, {
+      configSnapshot: scenario.configOnly ? { config } : { runtimeConfig: config },
+    });
+    listeners.forEach((notify) => notify());
+  });
+  const view = mount();
+  await waitForSolid(() => {
+    expect(Boolean(view.queryByRole("button", { name: "Read aloud" }))).toBe(scenario.visible);
+  });
+  expect(runtimeConfig.ensureLoaded).toHaveBeenCalledTimes(scenario.loaded ? 1 : 0);
+});
+
+it.each(["bootstrap", "config-only"])(
+  "chunks speech using the %s limit without reading the full config",
+  async (source) => {
+    const config = { tts: { maxTextLength: 12 } };
+    Object.assign(runtimeConfig.state, {
+      configSnapshot: source === "config-only" ? { config } : null,
+      bootstrapConfig: source === "bootstrap" ? config : {},
+    });
+    request.mockResolvedValue(speech);
+    const view = mount();
+    readButton(view).click();
+    await waitForSolid(() => expect(audio[0]?.src).toBe("blob:synthetic-speech"));
+    expect(request).toHaveBeenNthCalledWith(1, "tts.speak", { text: "Local voice" });
+    audio[0]!.dispatchEvent(new Event("ended"));
+    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
+    expect(request).toHaveBeenNthCalledWith(2, "tts.speak", { text: "is working." });
+    expect(runtimeConfig.ensureLoaded).not.toHaveBeenCalled();
+  },
+);
+
 it("does not play a synthesis result after the message is unmounted", async () => {
   const view = mount();
   readButton(view).click();
@@ -187,7 +251,9 @@ it("does not play a synthesis result after the message is unmounted", async () =
 });
 
 it("shows a Gateway synthesis failure instead of starting another speech provider", async () => {
-  request.mockRejectedValue(new Error("Local speech endpoint unavailable"));
+  request
+    .mockRejectedValueOnce(new Error("Local speech endpoint unavailable"))
+    .mockResolvedValue(speech);
   const view = mount();
   readButton(view).click();
   await waitForSolid(() =>
@@ -195,4 +261,30 @@ it("shows a Gateway synthesis failure instead of starting another speech provide
   );
   expect(request).toHaveBeenCalledOnce();
   expect(play).toHaveBeenCalledOnce();
+  readButton(view).click();
+  await waitForSolid(() => expect(audio[0]?.src).toBe("blob:synthetic-speech"));
+  expect(view.queryByRole("status")).toBeNull();
+  expect(request).toHaveBeenCalledTimes(2);
+});
+
+it("stops same-tick playback and ignores its late synthesis during a new playback", async () => {
+  const view = mount();
+  const button = readButton(view);
+  button.click();
+  button.click();
+  expect(request).toHaveBeenCalledOnce();
+  await waitForSolid(() => expect(readButton(view)).toBe(button));
+
+  const next = createDeferred<TtsSpeakResult>();
+  request.mockReturnValueOnce(next.promise);
+  button.click();
+  await waitForSolid(() => expect(readButton(view, "Stop reading")).toBe(button));
+  pending.resolve(speech);
+  await pending.promise;
+  await Promise.resolve();
+  expect(createUrl).not.toHaveBeenCalled();
+  expect(readButton(view, "Stop reading")).toBe(button);
+  next.resolve(speech);
+  await waitForSolid(() => expect(audio[0]?.src).toBe("blob:synthetic-speech"));
+  expect(request).toHaveBeenCalledTimes(2);
 });

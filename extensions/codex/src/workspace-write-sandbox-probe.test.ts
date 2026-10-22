@@ -75,22 +75,11 @@ describe("Codex workspace-write sandbox probe", () => {
     return result;
   }
 
-  it.each([
-    "loopback: Failed RTM_NEWADDR: Operation not permitted",
-    "loopback: Failed RTM_NEWLINK: Operation not permitted",
-    "setting up uid map: Permission denied",
-    "No permissions to create a new namespace",
-  ])("recognizes bwrap denial: %s", async (message) => {
-    const denial = `bwrap: ${message}`;
-    runner.mockResolvedValue({ ...success, code: 1, stderr: `other output\n ${denial} \n` });
-    expect(await probe()).toEqual({
-      status: "denied",
-      command: `/managed/codex sandbox -c 'sandbox_mode="workspace-write"' -c sandbox_workspace_write.network_access=false -- true`,
-      denial,
-    });
-  });
-
-  it.each([
+  it.each<[string | Partial<SpawnResult>, string]>([
+    ["loopback: Failed RTM_NEWADDR: Operation not permitted", ""],
+    ["loopback: Failed RTM_NEWLINK: Operation not permitted", ""],
+    ["setting up uid map: Permission denied", ""],
+    ["No permissions to create a new namespace", ""],
     [
       { code: 1, stderr: "wrapper: bwrap: loopback: Failed RTM_NEWADDR: denied" },
       "without a recognized bwrap denial",
@@ -101,17 +90,22 @@ describe("Codex workspace-write sandbox probe", () => {
     ],
     [{ code: null, termination: "signal", signal: "SIGKILL" }, "SIGKILL"],
     [{ outputLimitExceeded: true }, "capture limit"],
-  ] satisfies [Partial<SpawnResult>, string][])(
-    "does not diagnose namespace policy for %j",
-    async (result, reason) => {
-      runner.mockResolvedValue({ ...success, ...result });
-      expect(await probe()).toEqual({
-        status: "inconclusive",
-        command: expect.stringContaining("/managed/codex sandbox"),
-        reason: expect.stringContaining(reason),
-      });
-    },
-  );
+  ])("classifies sandbox outcome %j", async (result, reason) => {
+    const denial = typeof result === "string" ? `bwrap: ${result}` : undefined;
+    runner.mockResolvedValue({
+      ...success,
+      ...(typeof result === "string" ? { code: 1, stderr: `other output\n ${denial} \n` } : result),
+    });
+    expect(await probe()).toEqual({
+      command: `/managed/codex sandbox -c 'sandbox_mode="workspace-write"' -c sandbox_workspace_write.network_access=false -- true`,
+      ...(denial
+        ? { status: "denied", denial }
+        : {
+            status: "inconclusive",
+            reason: expect.stringContaining(reason),
+          }),
+    });
+  });
 
   it("reports spawn errors without throwing and removes its temporary state", async () => {
     runner.mockRejectedValueOnce(new Error("spawn ENOENT"));
@@ -178,18 +172,18 @@ describe("Codex workspace-write sandbox probe", () => {
   );
 
   it.each([
-    {
-      kind: "proxy",
-      cfg: config({
+    [
+      "proxy",
+      config({
         command: "/custom/codex",
         args: ["app-server", "proxy", "--sock", "/run/codex.sock"],
       }),
-    },
-    { kind: "websocket", cfg: config({ transport: "websocket", url: "ws://localhost:4500" }) },
-    { kind: "non-linux", cfg: config() },
-    { kind: "no-runtime", cfg: config({}, false) },
-    { kind: "desktop", cfg: config() },
-  ])("skips $kind", async ({ kind, cfg }) => {
+    ],
+    ["websocket", config({ transport: "websocket", url: "ws://localhost:4500" })],
+    ["non-linux", config()],
+    ["no-runtime", config({}, false)],
+    ["desktop", config()],
+  ] satisfies [string, OpenClawConfig][])("skips %s", async (kind, cfg) => {
     if (kind === "non-linux") {
       vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
     } else if (kind === "desktop") {

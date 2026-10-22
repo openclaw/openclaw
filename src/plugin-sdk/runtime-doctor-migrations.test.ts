@@ -94,6 +94,12 @@ const migrationInput = {
   context: { openPluginStateKeyedStore: vi.fn() } as never,
 };
 
+const filePlan = (
+  kind: "move" | "copy",
+  label: string,
+  sourcePath: string,
+  targetPath: string,
+): ChannelLegacyStateMigrationPlan => ({ kind, label, sourcePath, targetPath });
 const plans: ChannelLegacyStateMigrationPlan[] = [
   {
     kind: "plugin-state-import",
@@ -106,18 +112,8 @@ const plans: ChannelLegacyStateMigrationPlan[] = [
     scopeKey: "",
     readEntries: () => [],
   },
-  {
-    kind: "move",
-    label: "Credentials",
-    sourcePath: "/oauth/creds.json",
-    targetPath: "/oauth/demo/creds.json",
-  },
-  {
-    kind: "copy",
-    label: "Backup",
-    sourcePath: "/state/backup.json",
-    targetPath: "/state/demo/backup.json",
-  },
+  filePlan("move", "Credentials", "/oauth/creds.json", "/oauth/demo/creds.json"),
+  filePlan("copy", "Backup", "/state/backup.json", "/state/demo/backup.json"),
 ];
 it.each([
   { input: [], preview: null },

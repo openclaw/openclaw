@@ -1,6 +1,5 @@
 import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { seedChatSettings } from "./chat-layout-fixtures.test-support.ts";
 import {
@@ -8,9 +7,9 @@ import {
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
   installMockGateway,
-  sessionsListResponse,
 } from "./session-management.test-support.ts";
 import { expectAttribute } from "./sidebar-assertions.test-support.ts";
+import { style } from "./sidebar-contract.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
 
@@ -20,7 +19,7 @@ suite.define(() => {
     { theme: "dark", touch: false },
     { theme: "dark", touch: true },
   ] as const)(
-    "reveals new children without losing counts or manual collapse in chip mode ($theme, touch=$touch)",
+    "keeps child toggles reachable by pointer and keyboard in chip mode ($theme, touch=$touch)",
     async ({ theme, touch }) => {
       await suite.withPage(
         { colorScheme: theme, hasTouch: touch, viewport: { width: 1280, height: 800 } },
@@ -45,7 +44,7 @@ suite.define(() => {
             themeMode: theme,
             navWidth: 320,
           });
-          const gateway = await installMockGateway(page, {
+          await installMockGateway(page, {
             sessionKey: activeKey,
             sessions: [active, parent, ...children],
           });
@@ -67,47 +66,18 @@ suite.define(() => {
               elements: [surface],
             });
           }
-          expect(await toggle.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
-          expect(
-            await toggle.evaluate((element) => getComputedStyle(element).pointerEvents),
-          ).not.toBe("none");
+          expect(await style(toggle, "opacity")).toBe("1");
+          expect(await style(toggle, "pointer-events")).not.toBe("none");
           const toggleBox = await toggle.boundingBox();
           const titleBox = await row.locator(".sidebar-recent-session__title-row").boundingBox();
           expect(toggleBox!.x).toBeGreaterThanOrEqual(titleBox!.x + titleBox!.width);
           expect(await toggle.textContent()).toContain("2");
           await toggle.click();
           await expectAttribute(toggle, "aria-expanded", "false");
-          const third = makeChild("verification", 4);
-          await gateway.setSessionsListResponse(
-            sessionsListResponse([
-              active,
-              { ...parent, childSessions: [...childKeys, third.key] },
-              ...children,
-              third,
-            ]),
-          );
-          const refreshChildren = async (reason: "create" | "patch", updatedAt: number) => {
-            await pauseVirtualClock(page);
-            await gateway.emitGatewayEvent("sessions.changed", {
-              sessionKey: parentKey,
-              agentId: "main",
-              reason,
-              updatedAt,
-            });
-            await page.clock.fastForward(5_001);
-            await page.clock.resume();
-          };
-          await refreshChildren("create", now + 4);
-          await expectAttribute(toggle, "aria-expanded", "true");
-          await sidebar.locator('[data-session-key="' + third.key + '"]').waitFor();
-          await toggle.click();
-          await expectAttribute(toggle, "aria-expanded", "false");
-          await refreshChildren("patch", now + 5);
-          expect(await toggle.getAttribute("aria-expanded")).toBe("false");
-          expect(await sidebar.locator('[data-session-key="' + third.key + '"]').count()).toBe(0);
+          expect(await child.count()).toBe(0);
           await toggle.focus();
           await page.keyboard.press("Enter");
-          await sidebar.locator('[data-session-key="' + third.key + '"]').waitFor();
+          await child.waitFor();
           expect(await toggle.getAttribute("aria-expanded")).toBe("true");
         },
       );

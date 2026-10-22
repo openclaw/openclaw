@@ -156,7 +156,7 @@ async function enqueueGuardedCliWatchdog(params: {
   const { testing: cliBackends } = await import("../../agents/cli-backends.test-support.js");
   const { prepareCliRunContext } = await import("../../agents/cli-runner/prepare.js");
   const { runPreparedCliAgent } = await import("../../agents/cli-runner.js");
-  const { executeDeps } = await import("../../agents/cli-runner/execute-deps.js");
+  const processSupervisor = await import("../../process/supervisor/index.js");
   const { resolveSessionFilePathCore, resolveSessionFilePathOptions, resolveSessionStorePathCore } =
     await import("../../config/sessions/paths.js");
   const sessionTarget = {
@@ -187,12 +187,14 @@ async function enqueueGuardedCliWatchdog(params: {
     ],
   });
   let receipt: ReturnType<typeof enqueueSessionEventForHost> | undefined;
-  const enqueue = executeDeps.enqueueSessionEvent;
-  const observer = vi.spyOn(executeDeps, "enqueueSessionEvent").mockImplementation((...args) => {
-    receipt = enqueue(...args);
-    return receipt;
-  });
-  const supervisor = vi.spyOn(executeDeps, "getProcessSupervisor").mockReturnValue({
+  const enqueue = sessionEventHandoff.enqueueSessionEventForHost;
+  const observer = vi
+    .spyOn(sessionEventHandoff, "enqueueSessionEventForHost")
+    .mockImplementation((...args) => {
+      receipt = enqueue(...args);
+      return receipt;
+    });
+  const supervisor = vi.spyOn(processSupervisor, "getProcessSupervisor").mockReturnValue({
     acquireScopeCleanup: () => async () => {},
     spawn: async () => ({
       runId,
@@ -506,7 +508,9 @@ it.for([
       let outcome: Awaited<ReturnType<typeof enqueueSessionEventForHost>["settled"]>;
       let accepted: Awaited<ReturnType<typeof enqueueSessionEventForHost>["accepted"]>;
       const route = toolOnly
-        ? vi.spyOn(routedReplies, "routeReply").mockResolvedValue({ ok: true, delivered: true })
+        ? vi
+            .spyOn(routedReplies, "routePreparedReply")
+            .mockResolvedValue({ ok: true, delivered: true })
         : undefined;
       try {
         const text = "Process the event; record the result.";

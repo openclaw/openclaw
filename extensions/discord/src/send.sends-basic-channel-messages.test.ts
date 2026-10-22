@@ -24,6 +24,7 @@ import { DiscordError } from "./internal/rest.js";
 import {
   deleteMessageDiscord,
   editMessageDiscord,
+  listPinsDiscord,
   pinMessageDiscord,
   unpinMessageDiscord,
 } from "./send.messages.js";
@@ -764,6 +765,63 @@ it("fails closed when the channel belongs to a different guild", async () => {
   ).resolves.toBe(false);
 });
 
+it.each([
+  { pinCount: 250, pageSize: 50 },
+  { pinCount: 6, pageSize: 1 },
+])("lists all $pinCount pins across $pageSize-item pages", async ({ pinCount, pageSize }) => {
+  const pins = Array.from({ length: pinCount }, (_, index) => ({
+    pinned_at: new Date(Date.UTC(2026, 0, 1, 0, 0, pinCount - index))
+      .toISOString()
+      .replace("Z", "000+00:00"),
+    message: { id: String(index + 1) },
+  }));
+  const loopback = await loopbackRest({
+    respond: ({ path }) => {
+      const url = new URL(path ?? "/", "http://localhost");
+      if (url.pathname === "/v10/channels/789/pins") {
+        return pins.slice(0, 50).map((pin) => pin.message);
+      }
+      const before = url.searchParams.get("before");
+      const start = before === null ? 0 : pins.findIndex((pin) => pin.pinned_at === before) + 1;
+      const items = pins.slice(start, start + pageSize);
+      return { items, has_more: start + items.length < pins.length };
+    },
+  });
+
+  await expect(listPinsDiscord("789", clientOptions(loopback.rest))).resolves.toEqual(
+    pins.map((pin) => pin.message),
+  );
+  expect(
+    loopback.requests.map(({ method, path }) => {
+      const url = new URL(path ?? "/", "http://localhost");
+      return {
+        method,
+        path: url.pathname,
+        limit: url.searchParams.get("limit"),
+        before: url.searchParams.get("before"),
+      };
+    }),
+  ).toEqual(
+    Array.from({ length: Math.ceil(pinCount / pageSize) }, (_, index) => ({
+      method: "GET",
+      path: "/v10/channels/789/messages/pins",
+      limit: "50",
+      before: index === 0 ? null : pins[index * pageSize - 1]!.pinned_at,
+    })),
+  );
+});
+
+it("pins and unpins through current routes while preserving message ID normalization", async () => {
+  const loopback = await loopbackRest({ respond: () => ({}) });
+  await pinMessageDiscord("789", " 123 ", clientOptions(loopback.rest));
+  await unpinMessageDiscord("789", " 123 ", clientOptions(loopback.rest));
+
+  expect(loopback.requests.map(({ method, path }) => ({ method, path }))).toEqual([
+    { method: "PUT", path: "/v10/channels/789/messages/pins/123" },
+    { method: "DELETE", path: "/v10/channels/789/messages/pins/123" },
+  ]);
+});
+
 const unknownMessage = Object.assign(new Error("Unknown Message"), {
   status: 404,
   discordCode: 10008,
@@ -787,13 +845,13 @@ const mutations = [
   [
     "pin",
     "putMock",
-    (channel: string, id: string) => Routes.channelPin(channel, id),
+    (channel: string, id: string) => Routes.channelMessagesPin(channel, id),
     pinMessageDiscord,
   ],
   [
     "unpin",
     "deleteMock",
-    (channel: string, id: string) => Routes.channelPin(channel, id),
+    (channel: string, id: string) => Routes.channelMessagesPin(channel, id),
     unpinMessageDiscord,
   ],
 ] as const;

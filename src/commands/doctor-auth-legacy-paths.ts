@@ -23,7 +23,10 @@ import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import { resolveConfiguredAgentDatabaseCandidatePaths } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasErrnoCode } from "../infra/errno.js";
-import { createRetiredStateInspectionError } from "../infra/state-migrations.retired-files.js";
+import {
+  createRetiredStateInspectionError,
+  listExistingRetiredStateFiles,
+} from "../infra/state-migrations.retired-files.js";
 import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
 import { resolveUserPath } from "../utils.js";
 
@@ -176,15 +179,8 @@ export function listReferencedLegacyOAuthSidecarPaths(
   try {
     names = fs.readdirSync(directory).filter((name) => /^[a-f0-9]{32}\.json$/.test(name));
   } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      try {
-        fs.lstatSync(directory);
-      } catch (inspectionError) {
-        if (hasErrnoCode(inspectionError, "ENOENT")) {
-          return [];
-        }
-        throw createRetiredStateInspectionError(directory, inspectionError);
-      }
+    if (hasErrnoCode(error, "ENOENT") && listExistingRetiredStateFiles([directory]).length === 0) {
+      return [];
     }
     throw createRetiredStateInspectionError(directory, error);
   }
@@ -249,7 +245,7 @@ export function inspectLegacyOAuthSidecarsBeforeConfigRecovery(params: {
   };
   const raw = readConfigFileIfPresent(context.deps, context.configPath);
   if (raw !== undefined) {
-    const parsed = parseConfigJson5(raw, context.deps.json5);
+    const parsed = parseConfigJson5(raw);
     if (parsed.ok) {
       collect(parsed.parsed);
       const included = resolveConfigIncludesForRead(

@@ -3,6 +3,10 @@ import { createServer, ServerResponse, type IncomingMessage } from "node:http";
 import { setImmediate as nextImmediate } from "node:timers/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  closeHttpServer,
+  listenLoopback,
+} from "../../test/helpers/gateway-integration-fixtures.js";
+import {
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
@@ -18,7 +22,6 @@ import {
   setDefaultSecurityHeaders,
   setSseHeaders,
   watchClientDisconnect,
-  writeDone,
 } from "./http-common.js";
 import { makeMockHttpReqRes, makeMockHttpResponse } from "./test-http-response.js";
 
@@ -53,19 +56,13 @@ function mockDisconnect(
   return { res, controller, onDisconnect, cleanup };
 }
 
-const HSTS = "max-age=63072000; includeSubDomains; preload";
-it.each([
-  [undefined, undefined],
-  [{ strictTransportSecurity: " \t " }, undefined],
-  [{ strictTransportSecurity: `  ${HSTS}  ` }, HSTS],
-] as const)("sets security headers with HSTS %j", (options, expected) => {
+it("sets the complete default security policy", () => {
   const { res, setHeader } = makeMockHttpResponse();
-  setDefaultSecurityHeaders(res, options);
+  setDefaultSecurityHeaders(res);
   expect(Object.fromEntries(setHeader.mock.calls)).toEqual({
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
     "Permissions-Policy": "camera=(), microphone=(self), geolocation=()",
-    ...(expected === undefined ? {} : { "Strict-Transport-Security": expected }),
   });
 });
 
@@ -111,15 +108,9 @@ describe("readJsonBodyOrError", () => {
       setDefaultSecurityHeaders(res);
       tasks.push(readJsonBodyOrError(req, res, 1024));
     });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("missing listener");
-    }
+    const origin = await listenLoopback(server);
     try {
-      const response = await fetch(`http://127.0.0.1:${address.port}/`, {
+      const response = await fetch(origin, {
         method: "POST",
         body: "x".repeat(2048),
       });
@@ -140,10 +131,7 @@ describe("readJsonBodyOrError", () => {
       }
     } finally {
       stop();
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
+      await closeHttpServer(server);
       await Promise.all(tasks);
     }
   });
@@ -159,13 +147,6 @@ describe("readJsonBodyOrError", () => {
     res.emit("finish");
     expect(destroy).not.toHaveBeenCalled();
   });
-});
-
-it("writeDone writes the SSE termination sentinel to the response stream", () => {
-  const { res } = makeMockHttpResponse();
-  const write = vi.spyOn(res, "write");
-  writeDone(res);
-  expect(write).toHaveBeenCalledWith("data: [DONE]\n\n");
 });
 
 it.each([true, false])("setSseHeaders supports flushHeaders available: %s", (available) => {

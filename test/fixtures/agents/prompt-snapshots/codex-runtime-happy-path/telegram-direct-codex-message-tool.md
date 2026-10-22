@@ -94,7 +94,6 @@
     "tts",
     "web_fetch",
     "web_search",
-    "heartbeat_respond",
     "sessions_yield"
   ],
   "experimentalRawEvents": true,
@@ -257,8 +256,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 77670,
-    "roughTokens": 19418
+    "chars": 79656,
+    "roughTokens": 19914
   },
   "openClawDeveloperInstructions": {
     "chars": 3490,
@@ -273,8 +272,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6876
   },
   "totalWithDynamicToolsJson": {
-    "chars": 105173,
-    "roughTokens": 26294
+    "chars": 107159,
+    "roughTokens": 26790
   },
   "userInputText": {
     "chars": 879,
@@ -603,7 +602,6 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
   "tts",
   "web_fetch",
   "web_search",
-  "heartbeat_respond",
   "sessions_yield"
 ]
 ```
@@ -754,45 +752,6 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
       "type": "object"
     },
     "name": "message",
-    "type": "function"
-  },
-  {
-    "description": "Accept heartbeat result for post-turn handling. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only.",
-    "inputSchema": {
-      "additionalProperties": false,
-      "properties": {
-        "nextCheck": {
-          "type": "string"
-        },
-        "notificationText": {
-          "type": "string"
-        },
-        "notify": {
-          "type": "boolean"
-        },
-        "outcome": {
-          "enum": ["no_change", "progress", "done", "blocked", "needs_attention"],
-          "type": "string"
-        },
-        "priority": {
-          "enum": ["low", "normal", "high"],
-          "type": "string"
-        },
-        "reason": {
-          "type": "string"
-        },
-        "scratch": {
-          "description": "Complete replacement for heartbeat monitor prose; not a recurring schedule.",
-          "type": "string"
-        },
-        "summary": {
-          "type": "string"
-        }
-      },
-      "required": ["outcome", "notify", "summary"],
-      "type": "object"
-    },
-    "name": "heartbeat_respond",
     "type": "function"
   }
 ]

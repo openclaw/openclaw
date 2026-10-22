@@ -1,7 +1,8 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show } from "solid-js";
-import "../../../components/modal-dialog.ts";
+import { createMemo, Errored, For, Loading, Show } from "solid-js";
+import "../../../components/modal-dialog.tsx";
 import { i18n } from "../../../i18n/index.ts";
+import { formatUiError } from "../../../lib/format-error.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { WikiImportInsights, WikiOverview } from "./dreaming.ts";
@@ -70,6 +71,7 @@ export function WikiPreviewOverlay(props: DreamingProps) {
     <Show when={preview()} keyed>
       {(request) => {
         const current = () => props.wikiPreview ?? request;
+        const readScope = createMemo(() => props.wikiPreview?.readKey);
         const updatedAtLabel = () => {
           const updatedAt = current().page.updatedAt;
           return updatedAt ? ` · ${formatCompactDateTime(updatedAt)}` : "";
@@ -92,24 +94,35 @@ export function WikiPreviewOverlay(props: DreamingProps) {
                 </div>
               </div>
               <div class="dreams-diary__preview-body">
-                {current().loading ? (
-                  <div class="dreams-diary__empty-text">{t("dreaming.wiki.loadingPage")}</div>
-                ) : current().error ? (
-                  <div class="dreams-diary__error">{current().error}</div>
-                ) : (
-                  <>
-                    {current().page.truncated === true ? (
-                      <div class="dreams-diary__preview-hint">
-                        {current().page.totalLines != null
-                          ? t("dreaming.wiki.previewTruncatedWithTotal", {
-                              count: String(current().page.totalLines),
-                            })
-                          : t("dreaming.wiki.previewTruncated")}
-                      </div>
-                    ) : undefined}
-                    <pre class="dreams-diary__preview-pre">{current().page.content}</pre>
-                  </>
-                )}
+                <Errored
+                  fallback={(error) => (
+                    <div class="dreams-diary__error">{formatUiError(error())}</div>
+                  )}
+                >
+                  <Loading
+                    on={readScope()}
+                    fallback={
+                      <div class="dreams-diary__empty-text">{t("dreaming.wiki.loadingPage")}</div>
+                    }
+                  >
+                    <Show when={props.wikiPreview?.readPage()}>
+                      {(page) => (
+                        <>
+                          {page().truncated === true ? (
+                            <div class="dreams-diary__preview-hint">
+                              {page().totalLines != null
+                                ? t("dreaming.wiki.previewTruncatedWithTotal", {
+                                    count: String(page().totalLines),
+                                  })
+                                : t("dreaming.wiki.previewTruncated")}
+                            </div>
+                          ) : undefined}
+                          <pre class="dreams-diary__preview-pre">{page().content}</pre>
+                        </>
+                      )}
+                    </Show>
+                  </Loading>
+                </Errored>
               </div>
               <openclaw-modal-actions class="dreams-diary__preview-footer">
                 <button
@@ -333,7 +346,6 @@ export function ImportedInsightsContent(props: {
   owner: DreamingProps;
   data: WikiImportInsights | null;
   selectedPage: number;
-  loading: boolean;
 }) {
   const cluster = createMemo(() => props.data?.clusters[props.selectedPage]);
   const returnedItems = createMemo(
@@ -370,8 +382,8 @@ export function ImportedInsightsContent(props: {
       when={cluster()}
       fallback={
         <DiaryEmpty
-          message={t(props.loading ? "dreaming.wiki.loadingInsights" : "dreaming.wiki.noInsights")}
-          hint={props.loading ? undefined : t("dreaming.wiki.noInsightsHint")}
+          message={t("dreaming.wiki.noInsights")}
+          hint={t("dreaming.wiki.noInsightsHint")}
         />
       }
     >
@@ -398,7 +410,6 @@ export function WikiOverviewContent(props: {
   owner: DreamingProps;
   data: WikiOverview | null;
   selectedPage: number;
-  loading: boolean;
 }) {
   const cluster = createMemo(() => props.data?.clusters[props.selectedPage]);
   const returnedItems = createMemo(
@@ -422,8 +433,8 @@ export function WikiOverviewContent(props: {
       when={cluster()}
       fallback={
         <DiaryEmpty
-          message={t(props.loading ? "dreaming.wiki.loadingWiki" : "dreaming.wiki.emptyWiki")}
-          hint={props.loading ? undefined : t("dreaming.wiki.emptyWikiHint")}
+          message={t("dreaming.wiki.emptyWiki")}
+          hint={t("dreaming.wiki.emptyWikiHint")}
         />
       }
     >

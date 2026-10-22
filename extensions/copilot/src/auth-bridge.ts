@@ -25,18 +25,46 @@ interface ResolvedCopilotAuth {
   agentId: string;
 }
 
+type CopilotSessionAuth = Pick<
+  ResolvedCopilotAuth,
+  "authMode" | "authProfileId" | "authProfileVersion"
+>;
+
+export function sessionAuthFields(auth: CopilotSessionAuth): CopilotSessionAuth {
+  return auth.authMode === "gitHubToken" || auth.authMode === "byok"
+    ? {
+        authMode: auth.authMode,
+        authProfileId: auth.authProfileId,
+        authProfileVersion: auth.authProfileVersion,
+      }
+    : { authMode: "useLoggedInUser" };
+}
+
+export function sessionAuthMatches(
+  stored: CopilotSessionAuth,
+  current: CopilotSessionAuth,
+): boolean {
+  if (stored.authMode !== current.authMode) {
+    return false;
+  }
+  if (stored.authMode === "useLoggedInUser") {
+    return true;
+  }
+  return (
+    stored.authProfileId === current.authProfileId &&
+    stored.authProfileVersion === current.authProfileVersion
+  );
+}
+
 export function createCopilotByokAuth(
-  input: Pick<
-    ResolveCopilotAuthInput,
-    "agentId" | "agentDir" | "copilotHome" | "authProfileId" | "env" | "homeDir"
-  > & { authProfileVersion?: string },
+  input: Pick<ResolveCopilotAuthInput, "agentId" | "agentDir" | "copilotHome" | "authProfileId"> & {
+    authProfileVersion?: string;
+  },
 ): ResolvedCopilotAuth {
   const base = resolveCopilotAuth({
     agentId: input.agentId,
     agentDir: input.agentDir,
     copilotHome: input.copilotHome,
-    env: input.env,
-    homeDir: input.homeDir,
     auth: { useLoggedInUser: true },
   });
   return {
@@ -63,23 +91,14 @@ interface ResolveCopilotAuthInput {
   authProfileId?: string;
   /** Explicit-token caller fallback; host-resolved tokens use their fingerprint. */
   profileVersion?: string;
-  /** Injected for test seams. Defaults to `process.env`. */
-  env?: NodeJS.ProcessEnv;
-  /** Injected for test seams. Defaults to `os.homedir()`. */
-  homeDir?: () => string;
 }
 
 export function resolveCopilotAuth(input: ResolveCopilotAuthInput): ResolvedCopilotAuth {
-  const env = input.env ?? process.env;
-  const homeDir = input.homeDir ?? osHomedir;
-
   const agentId = sanitizeAgentId(input.agentId);
   const copilotHome = resolveCopilotHome({
     explicit: readNonEmptyString(input.copilotHome),
     agentDir: readNonEmptyString(input.agentDir),
     agentId,
-    env,
-    homeDir,
   });
 
   const explicitToken = readNonEmptyString(input.auth?.gitHubToken);
@@ -123,7 +142,7 @@ export function resolveCopilotAuth(input: ResolveCopilotAuthInput): ResolvedCopi
     };
   }
 
-  const envFallback = readEnvTokenFallback(env);
+  const envFallback = readEnvTokenFallback();
   if (envFallback) {
     return {
       authMode: "gitHubToken",
@@ -152,8 +171,6 @@ function resolveCopilotHome(args: {
   explicit: string | undefined;
   agentDir: string | undefined;
   agentId: string;
-  env: NodeJS.ProcessEnv;
-  homeDir: () => string;
 }): string {
   if (args.explicit) {
     return resolve(args.explicit);
@@ -163,26 +180,15 @@ function resolveCopilotHome(args: {
     return resolve(join(args.agentDir, "copilot"));
   }
 
-  const openClawHome = readNonEmptyString(args.env.OPENCLAW_HOME);
-  const rootHome = openClawHome ? resolve(openClawHome) : safeHomeDir(args.homeDir);
+  const openClawHome = readNonEmptyString(process.env.OPENCLAW_HOME);
+  const rootHome = openClawHome ? resolve(openClawHome) : osHomedir();
   return resolve(join(rootHome, ".openclaw", "agents", args.agentId, "copilot"));
 }
 
-function safeHomeDir(homeDir: () => string): string {
-  try {
-    const value = homeDir();
-    if (value.length > 0) {
-      return value;
-    }
-  } catch {
-    // fall through
-  }
-  return process.cwd();
-}
-
-function readEnvTokenFallback(
-  env: NodeJS.ProcessEnv,
-): { token: string; profileId: string; profileVersion: string } | undefined {
+function readEnvTokenFallback():
+  | { token: string; profileId: string; profileVersion: string }
+  | undefined {
+  const env = process.env;
   const candidates: Array<{ name: string; value: string | undefined }> = [
     { name: "OPENCLAW_GITHUB_TOKEN", value: readNonEmptyString(env.OPENCLAW_GITHUB_TOKEN) },
     { name: "COPILOT_GITHUB_TOKEN", value: readNonEmptyString(env.COPILOT_GITHUB_TOKEN) },

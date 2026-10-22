@@ -70,8 +70,7 @@ it.each([false, true])(
     const controller = new AbortController();
     const slow = write({ agentId: "slow" }, { timeoutMs: 10_000, signal: controller.signal });
     const ready = write({ agentId: "ready" }, { timeoutMs: 10_000 });
-    const slowRaw = frames[0];
-    const readyRaw = frames[1];
+    const [slowRaw, readyRaw] = frames;
     const slowFrame = frame();
     const readyFrame = frame(1);
     refuse(requests, slowFrame, "startup-sidecars", 100);
@@ -130,12 +129,13 @@ it.each(["waiting", "synchronous refusal", "redispatched", "overdue retry"])(
   "preserves the original deadline through %s",
   async (phase) => {
     let clockOffset = 0;
+    const nowMs = () => Date.now() + clockOffset;
     const {
       requests,
       frames,
       frame: readFrame,
       write,
-    } = fixture({ nowMs: () => Date.now() + clockOffset }, (frame) => {
+    } = fixture({ nowMs }, (frame) => {
       if (phase === "synchronous refusal") {
         refuse(requests, frame, "startup-sidecars", 2_000);
       }
@@ -158,19 +158,6 @@ it.each(["waiting", "synchronous refusal", "redispatched", "overdue retry"])(
     expectSettled(requests);
   },
 );
-
-it("does not retain settled IDs for the socket generation", async () => {
-  const { requests, sender } = fixture({ nowMs: () => 0 }, () => {
-    throw new Error("synthetic send failure");
-  });
-
-  for (let index = 0; index < 100; index += 1) {
-    await requests.request(sender, "bounded", {}, { timeoutMs: null }).catch(() => undefined);
-  }
-
-  const retained = (requests as unknown as { retiredIds?: ReadonlySet<string> }).retiredIds;
-  expect(retained?.size ?? 0).toBe(0);
-});
 
 it("settles each retired request once when its timing observer shuts down again", async () => {
   const timings: string[] = [];

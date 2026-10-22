@@ -236,7 +236,7 @@ suite.define(() => {
           const row = roster.locator("tbody tr").filter({
             has: page.getByRole("checkbox", { name: `Select session: ${sessionKey}`, exact: true }),
           });
-          await row.getByRole("button", { name: "Open session menu", exact: true }).click();
+          await row.getByRole("button", { name: "Open session menu" }).click();
           const assignTo = page.getByRole("menuitem", { name: /^Assign to…?$/u });
           await expandAssignment(assignTo, width < 560);
           const current = assignee(page, "Bob");
@@ -700,8 +700,8 @@ suite.define(() => {
           ).toBeVisible();
           if (surface === "header") {
             await openSessionActions(page, surface);
-            const { assignTo, panel } = ownerControls(page);
-            await assignTo.hover();
+            await openSessionMenuSubmenu(page, "Assign to…");
+            const { panel } = ownerControls(page);
             const retainedOwner = assignee(panel, "Bob");
             await expectBrowser(retainedOwner).toHaveAttribute("aria-checked", "true");
             await expectBrowser(retainedOwner).toBeDisabled();

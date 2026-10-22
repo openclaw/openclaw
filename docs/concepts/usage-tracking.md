@@ -12,6 +12,8 @@ title: "Usage tracking"
 - Human-readable quota-window output is normalized to `X% left`, even when a provider reports consumed quota, remaining quota, or only raw counts. Providers without resettable quota windows show provider summary text instead (for example a balance).
 - Session-level `/status` and the `session_status` tool fall back to the session's transcript log when the live session snapshot is missing token/model data. That fallback fills missing token/cache counters, can recover the active runtime model label, and prefers the larger prompt-oriented total when session metadata is missing or smaller (`totalTokensFresh !== true`, zero, or below the transcript-derived value). Nonzero live values always win over the fallback.
 
+Provider usage is cached for 60 seconds; set `models.usage.cacheTtlMs` to change this (`0` disables reuse).
+
 ## Where it shows up
 
 - `/status` in chats: status card with session tokens and estimated cost (API key models only). Provider usage shows for the **current model provider** when available, as a normalized `X% left` window or provider summary text.
@@ -430,7 +432,8 @@ provider-neutral for CLI, app, and Control UI consumers.
   profile). Combines the account credits endpoint with the key quota endpoint,
   so account balance/spend, key budget, and daily/weekly/monthly usage appear
   when the credential can access them. Either endpoint can enrich the snapshot
-  independently.
+  independently. Transport failures include their underlying cause in the usage
+  error shown by `openclaw status --usage --json`.
 - **Venice**: API key via env/config/auth store (`VENICE_API_KEY`). Shows USD and
   DIEM balances plus DIEM epoch allocation usage when reported.
 - **Xiaomi MiMo**: two separate usage surfaces. Pay-as-you-go uses an API key

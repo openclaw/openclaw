@@ -61,6 +61,7 @@ import {
   refreshChatMetadata,
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
+import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { publishChatWorkContext } from "./chat-work-context.ts";
 import { resolveChatAttachmentLimits } from "./components/chat-attachment-admission.ts";
 import { getChatComposerState, resetChatComposerState } from "./components/chat-composer-state.ts";
@@ -304,6 +305,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       if (pageState.chatMetadataIsPresented?.()) {
         void refreshChatMetadata(pageState);
         this.resumeDeferredSessionHydration();
+        this.markSessionRead(selectedChatSessionRow(pageState));
         void this.refreshTaskSuggestions({ automatic: true });
       }
     };
@@ -315,6 +317,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     }
     pageState.sidebarLayout = this.restorePaneSidebarLayout(pageState.sidebarLayout);
     pageState.getWorkContext = () => this.workContext;
+    pageState.isRouteSessionPending = () => this.routeResolutionPending;
     // Task tabs can precede main chat in DOM order; viewport reads and commands
     // must resolve through the same transcript owner.
     pageState.chatIsProgrammaticScroll = () => this.transcript.isProgrammaticScroll;
@@ -619,6 +622,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     }
     this.syncSessionReactions();
     this.syncRetainedBoardSession(this.resolveBoardView());
+    this.resumeConfirmedRouteWork(changes.routeResolutionPending);
   }
 
   override afterRender(focusComposerChanged: boolean) {
@@ -714,7 +718,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     this.sessionDiscussionPanels.clear();
     this.taskSuggestionsRequestVersion += 1;
     this.setTaskSuggestions([]);
-    this.tasks.busyIds = new Set();
     this.tasks.operations = new Map();
     this.resetSessionSuggestions();
     this.resetSessionReactions();

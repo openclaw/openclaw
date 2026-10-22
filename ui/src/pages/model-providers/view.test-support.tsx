@@ -30,10 +30,15 @@ export function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelPr
   return {
     connected: true,
     loading: false,
-    refreshing: false,
+    coreReceipt: null,
+    scopeError: null,
     error: null,
     providerUsageFailed: false,
     supplementalLoading: false,
+    metrics: {
+      usage: { value: () => new Map(), request: () => null },
+      cost: { value: () => new Map(), request: () => null },
+    },
     updatedAt: 1,
     credentialAgentLabel: "Writer",
     cards: [card()],

@@ -201,28 +201,4 @@ describe("buildSlackProgressCardBlocks", () => {
     expect(JSON.stringify(activity)).toContain("Exec 59 — run 59");
     expect(JSON.stringify(activity)).not.toContain("Exec 0");
   });
-
-  it.each(["success", "error"] as const)(
-    "settles approval and failure text when a card ends as %s",
-    (state) => {
-      const lines: ChannelProgressDraftLine[] = [
-        { ...approval("Run the command"), text: "Approval required" },
-        {
-          kind: "command-output",
-          label: "Bash",
-          detail: "run checks",
-          status: "exit 1",
-          text: "Bash: run checks · exit 1",
-        },
-      ];
-      const working = JSON.stringify(card({ title: "Working", lines }));
-      expect(working).toContain("Run the command");
-      expect(working).toContain("exit 1");
-      const finished = JSON.stringify(card({ state, title: "Working", lines }));
-      expect(finished).not.toContain("Run the command");
-      expect(finished).not.toContain("requested");
-      expect(finished.includes("Recovered:")).toBe(state === "success");
-      expect(finished).toContain("exit 1");
-    },
-  );
 });

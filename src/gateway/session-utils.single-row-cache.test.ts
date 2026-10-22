@@ -256,6 +256,8 @@ test(
         if (!denied) {
           throw new Error("expected lifecycle tool overrides");
         }
+        expect(denied).toEqual(["blocked"]);
+        expect(Object.isFrozen(denied)).toBe(true);
         expect(() => denied.push("response-only")).toThrow(TypeError);
         expect((await rowReader.snapshot(parentA, { now })).row).toEqual(row);
       });
@@ -306,37 +308,32 @@ test.each([false, true])(
       const parentKey = incognito ? "agent:main:dashboard:incognito-parent" : "agent:main:parent";
       const childKey = `agent:${agentId}:subagent:child`;
       const childStorePath = resolveSessionStorePathCore(undefined, { agentId });
+      const childTarget = { agentId, storePath: childStorePath, sessionKey: childKey };
       const childPrompt = "unused registry child prompt ".repeat(2048);
       await sessions.replaceSessionEntry(
         { agentId: MAIN_AGENT_ID, sessionKey: parentKey, ...(incognito ? {} : { storePath }) },
         { ...session("parent", now), ...(incognito ? { incognito: true } : {}) },
       );
-      await sessions.replaceSessionEntry(
-        { agentId, storePath: childStorePath, sessionKey: childKey },
-        {
-          ...session("child", now),
-          ...retainedDetails(now, childPrompt),
-        },
-      );
+      await sessions.replaceSessionEntry(childTarget, {
+        ...session("child", now),
+        ...retainedDetails(now, childPrompt),
+      });
       await control(childKey, parentKey, now);
       await withParseSpy(async (parse) => {
         const sql = observeHostDataSql();
-        try {
-          const loaded = await loadChildren(parentKey);
-          expect(loaded.store[childKey]).toMatchObject({ sessionId: "child", updatedAt: now });
-          expectCompact(loaded.store[childKey]);
-          expectUnparsed(parse, childPrompt, '"systemPromptReport"');
-          expect(sql.queries).toEqual([]);
-        } finally {
-          sql.restore();
-        }
+        using _ = { [Symbol.dispose]: sql.restore };
+        const loaded = await loadChildren(parentKey);
+        expect(loaded.store[childKey]).toMatchObject({ sessionId: "child", updatedAt: now });
+        expectCompact(loaded.store[childKey]);
+        expectUnparsed(parse, childPrompt, '"systemPromptReport"');
+        expect(sql.queries).toEqual([]);
       });
       expect(await children(parentKey, now)).toEqual([childKey]);
 
-      await sessions.replaceSessionEntry(
-        { agentId, storePath: childStorePath, sessionKey: childKey },
-        { ...session("child", now + 1), label: "Updated child" },
-      );
+      await sessions.replaceSessionEntry(childTarget, {
+        ...session("child", now + 1),
+        label: "Updated child",
+      });
       expect((await loadChildren(parentKey)).store[childKey]?.label).toBe("Updated child");
 
       await sessions.deleteSessionEntryLifecycle({

@@ -95,6 +95,10 @@ export const baseProps = () => ({
   onFormRemove: vi.fn(),
   onSectionChange: vi.fn(),
   onSave: vi.fn(),
+  presentationRetired: (() => {
+    const retired = new Promise<void>(() => {});
+    return () => retired;
+  })(),
   onRawDiscard: vi.fn(),
   onSubsectionChange: vi.fn(),
   theme: "claw" as ThemeName,
@@ -127,11 +131,11 @@ export const baseProps = () => ({
   customThemeLabel: null,
   customThemeSourceUrl: null,
   customThemeImportUrl: "",
-  customThemeImportBusy: false,
+  customThemeImportCompletion: undefined,
   customThemeImportMessage: null,
   customThemeImportExpanded: false,
   onCustomThemeImportUrlChange: vi.fn(),
-  onImportCustomTheme: vi.fn(),
+  onImportCustomTheme: vi.fn(() => undefined),
   onClearCustomTheme: vi.fn(),
   onOpenCustomThemeImport: vi.fn(),
   tabIcon: undefined,
@@ -141,7 +145,7 @@ export const baseProps = () => ({
   setTextScale: vi.fn(),
   sidebarLiveActivity: true,
   hiddenSessionCatalogIds: new Set<string>(),
-  hiddenSessionCatalogLabels: new Map<string, string>(),
+  hiddenSessionCatalogLabels: { read: () => new Map<string, string>(), scope: null },
   setSessionCatalogHidden: vi.fn(),
   openLinksExternally: false,
   composerHoldToRecord: true,

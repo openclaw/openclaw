@@ -120,7 +120,7 @@
   font-size: var(--control-ui-text-sm);
   font-weight: 500;
   line-height: 1.35;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
 }
 

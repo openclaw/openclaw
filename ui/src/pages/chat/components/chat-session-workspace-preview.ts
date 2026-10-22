@@ -13,11 +13,7 @@ import type {
   SessionWorkspaceHost,
   SessionWorkspaceState,
 } from "./chat-session-workspace-types.ts";
-import type {
-  SessionWorkspacePreview,
-  SessionWorkspaceNavigation,
-  SidebarContent,
-} from "./chat-sidebar-content-types.ts";
+import type { SessionWorkspacePreview, SidebarContent } from "./chat-sidebar-content-types.ts";
 
 type PreviewRead = {
   order: number;
@@ -37,7 +33,6 @@ export function openWorkspaceItem<T>(
   options: {
     disposition?: "pinned" | "preview";
     intent?: "navigate";
-    navigation?: SessionWorkspaceNavigation;
     line?: number | null;
     revalidate?: boolean;
     label: string;
@@ -50,9 +45,7 @@ export function openWorkspaceItem<T>(
     return undefined;
   }
   const intent = { id: itemId, disposition: options.disposition ?? ("pinned" as const) };
-  const navigation =
-    options.navigation ??
-    (options.disposition ? captureSessionWorkspaceNavigation(workspace) : undefined);
+  const navigation = options.disposition ? captureSessionWorkspaceNavigation(workspace) : undefined;
   const known = workspace.previews.find(
     (entry) =>
       entry.id === itemId || entry.canonicalKey === itemId || entry.requestIds?.includes(itemId),
@@ -200,6 +193,7 @@ export function openWorkspaceItem<T>(
               // Even unchanged bytes settle newer intent and retire older alias reads.
               read.published = capturePreview(canonical);
               previewReads.set(canonical, read);
+              canonical.readResult = read.settled;
             }
             if (preview.pinned === true) {
               canonical.pinned = true;
@@ -227,6 +221,8 @@ export function openWorkspaceItem<T>(
       }
       return undefined;
     })();
+    preview.readResult = read.settled;
+    sessionWorkspaceForHost(state).publish();
     return read.settled;
   };
   if (options.disposition && !known) {

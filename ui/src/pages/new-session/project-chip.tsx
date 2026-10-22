@@ -1,5 +1,18 @@
-import { createMemo, For, Show } from "solid-js";
+import { createDeferred } from "@solidjs/signals";
+import {
+  action,
+  affects,
+  createMemo,
+  createOptimistic,
+  Errored,
+  For,
+  Loading,
+  refresh,
+  Show,
+} from "solid-js";
+import type { ProjectRecord } from "../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../components/solid/icon.tsx";
+import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { pathDisplayName } from "../../lib/path-display.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -7,7 +20,7 @@ import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
 import { SessionMenuItem } from "./cloud-target-view.tsx";
 import { findBrowsableDeviceFolderHost } from "./device-placement.ts";
-import type { ProjectBrowserFocus } from "./draft-place-browser.ts";
+import type { BrowserProjectRegistration, ProjectBrowserFocus } from "./draft-place-browser.ts";
 import { parentFolderDisplayName } from "./path.ts";
 import { SessionPicker } from "./picker.tsx";
 import { PlaceBrowser } from "./place-browser.tsx";
@@ -90,6 +103,110 @@ export function ProjectChip(props: {
       projectAddAvailable,
     };
   });
+  const projectSource = createMemo(
+    () => {
+      const browser = props.params.place.browser;
+      const projects = browser.projects;
+      return { browser, pending: browser.projectRead, projects };
+    },
+    {
+      equals: (previous, next) =>
+        previous.browser === next.browser &&
+        previous.pending === next.pending &&
+        (next.pending !== null || previous.projects === next.projects),
+    },
+  );
+  const projectsReady = createMemo(() => props.params.place.browser.projectsReady);
+  const projects = createDeferred<readonly ProjectRecord[]>((previous) => {
+    const source = projectSource();
+    // A picker mounted during a shared refresh starts with the accepted rows.
+    if (previous === undefined && projectsReady()) {
+      return source.projects;
+    }
+    return source.pending ? source.pending.then(() => source.browser.projects) : source.projects;
+  });
+  const browser = createMemo(() => props.params.place.browser);
+  const connectionEpoch = createMemo(() => props.params.gateway.connectionEpoch);
+  const registration = createMemo(() => {
+    const owner = browser();
+    const epoch = connectionEpoch();
+    const [saving, setSaving] = createOptimistic(false);
+    return { browser: owner, epoch, projects, saving, setSaving };
+  });
+  const presentRegistration = action(function* (
+    presentation: ReturnType<typeof registration>,
+    pending: Promise<void>,
+    receipt: BrowserProjectRegistration,
+  ) {
+    if (
+      presentation.browser === props.params.place.browser &&
+      presentation.epoch === props.params.gateway.connectionEpoch &&
+      receipt.isCurrent()
+    ) {
+      presentation.setSaving(true);
+      affects(presentation.projects);
+    }
+    yield Promise.race([pending, receipt.retired]);
+    if (
+      presentation.browser === props.params.place.browser &&
+      presentation.epoch === props.params.gateway.connectionEpoch &&
+      props.params.gateway.connected &&
+      presentation.browser.projectsReady &&
+      presentation.browser.projectRead === null
+    ) {
+      // The owner already reloaded; do not rejoin a held catalog after the browser closes.
+      yield refresh(presentation.projects);
+    }
+  });
+  const registerProject = async (path: string) => {
+    const presentation = registration();
+    let receipt: BrowserProjectRegistration | undefined;
+    const pending = presentation.browser.registerBrowserProject(path, (started) => {
+      receipt = started;
+    });
+    if (!receipt) {
+      return pending;
+    }
+    // Publish the admitted owner operation before joining its presentation action.
+    await Promise.resolve();
+    try {
+      await presentRegistration(presentation, pending, receipt);
+    } catch (error) {
+      if (
+        presentation.browser === props.params.place.browser &&
+        presentation.epoch === props.params.gateway.connectionEpoch &&
+        receipt.isCurrent()
+      ) {
+        presentation.browser.browser.error = formatUiError(error);
+        props.params.onChange();
+      }
+    }
+  };
+  const localProjects = createMemo(() => {
+    // Retired catalogs clear immediately; a live refresh keeps local filtering responsive.
+    const accepted = !props.nativeTerminal && projectsReady() ? projects() : [];
+    const query = view().query.toLowerCase();
+    return query
+      ? accepted.filter((project) =>
+          [project.displayName, project.originUrl ?? "", project.repoRoot ?? ""]
+            .join("\n")
+            .toLowerCase()
+            .includes(query),
+        )
+      : accepted;
+  });
+  const projectSearchRead = createMemo(() => props.params.place.browser.projectSearchRead);
+  const projectSearchResult = createMemo(() => {
+    const read = projectSearchRead();
+    return read
+      ? read.completed.then((outcome) => {
+          if (outcome && "error" in outcome) {
+            throw outcome.error;
+          }
+          return outcome?.result ?? null;
+        })
+      : null;
+  });
   const browseButton = () => (
     <button
       type="button"
@@ -135,15 +252,16 @@ export function ProjectChip(props: {
       {props.params.place.browser.browserOpen ? (
         <PlaceBrowser
           pathRef={(node) => props.focus && (props.focus.path = node)}
+          registeringProject={
+            registration().saving() || props.params.place.browser.browserRegistering
+          }
           params={{
             browser: props.params.place.browser.browser,
             id: "new-session-place-browser",
             label: view().browserLabel,
             registerProjectPath: props.params.place.browser.browserProjectPath,
-            registeringProject: props.params.place.browser.browserRegistering,
             onBack: () => props.params.place.browser.showRoot(),
-            onRegisterProject: (path) =>
-              void props.params.place.browser.registerBrowserProject(path),
+            onRegisterProject: (path) => void registerProject(path),
             onClose: () => props.params.place.browser.close(),
             onApplyFolder: applyFolder,
           }}
@@ -241,8 +359,8 @@ export function ProjectChip(props: {
               })}
             />
           </label>
-          {
-            <For each={props.state.localProjects} keyed={(project) => project.id}>
+          <Loading on={projectsReady()}>
+            <For each={localProjects()} keyed={(project) => project.id}>
               {(project) => {
                 const icon = <Icon name="gitBranch" />;
                 return (
@@ -260,7 +378,7 @@ export function ProjectChip(props: {
                 );
               }}
             </For>
-          }
+          </Loading>
           {view().cloneInput && view().projectAddAvailable ? (
             <SessionMenuItem
               item={{
@@ -277,52 +395,59 @@ export function ProjectChip(props: {
           {!view().cloneInput && view().query.length >= 2 && view().projectSearchAvailable ? (
             <>
               <div class="new-session-page__menu-title">{t("newSession.githubProjects")}</div>
-              {props.params.place.browser.projectSearchResult?.credential === "missing" ? (
-                <div class="new-session-page__menu-note">{t("newSession.githubTokenHint")}</div>
-              ) : undefined}
-              {props.params.place.browser.projectSearchLoading ? (
-                <div class="new-session-page__project-status" role="status">
-                  {t("common.loading")}
-                </div>
-              ) : undefined}
-              {props.params.place.browser.projectSearchError ? (
-                <div class="new-session-page__project-error" role="alert">
-                  {props.params.place.browser.projectSearchError}
-                </div>
-              ) : undefined}
-              {
-                <For
-                  each={props.params.place.browser.projectSearchResult?.projects ?? []}
-                  keyed={(project) => project.cloneUrl}
+              <Errored
+                fallback={(error) => (
+                  <div class="new-session-page__project-error" role="alert">
+                    {formatUiError(error())}
+                  </div>
+                )}
+              >
+                <Loading
+                  on={projectSearchRead()}
+                  fallback={
+                    <div class="new-session-page__project-status" role="status">
+                      {t("common.loading")}
+                    </div>
+                  }
                 >
-                  {(project) => {
-                    const icon = <Icon name="gitBranch" />;
-                    return (
-                      <SessionMenuItem
-                        item={{
-                          value: `remote-project:${project().fullName}`,
-                          label: project().fullName,
-                          icon,
-                          sub: project().description ?? t("newSession.cloneProject"),
-                          checked:
-                            props.params.place.browser.remoteProject?.cloneUrl ===
-                            project().cloneUrl,
-                          title: project().webUrl,
-                          onSelect: () =>
-                            props.params.place.selectRemoteProject({
-                              identity: project().fullName,
-                              cloneUrl: project().cloneUrl,
-                              ...(project().defaultBranch
-                                ? { defaultBranch: project().defaultBranch }
-                                : {}),
-                            }),
-                        }}
-                        submitting={props.params.submitting || !view().projectAddAvailable}
-                      />
-                    );
-                  }}
-                </For>
-              }
+                  {projectSearchResult()?.credential === "missing" ? (
+                    <div class="new-session-page__menu-note">{t("newSession.githubTokenHint")}</div>
+                  ) : undefined}
+                  {
+                    <For
+                      each={projectSearchResult()?.projects ?? []}
+                      keyed={(project) => project.cloneUrl}
+                    >
+                      {(project) => {
+                        const icon = <Icon name="gitBranch" />;
+                        return (
+                          <SessionMenuItem
+                            item={{
+                              value: `remote-project:${project().fullName}`,
+                              label: project().fullName,
+                              icon,
+                              sub: project().description ?? t("newSession.cloneProject"),
+                              checked:
+                                props.params.place.browser.remoteProject?.cloneUrl ===
+                                project().cloneUrl,
+                              title: project().webUrl,
+                              onSelect: () =>
+                                props.params.place.selectRemoteProject({
+                                  identity: project().fullName,
+                                  cloneUrl: project().cloneUrl,
+                                  ...(project().defaultBranch
+                                    ? { defaultBranch: project().defaultBranch }
+                                    : {}),
+                                }),
+                            }}
+                            submitting={props.params.submitting || !view().projectAddAvailable}
+                          />
+                        );
+                      }}
+                    </For>
+                  }
+                </Loading>
+              </Errored>
             </>
           ) : undefined}
           {(props.nativeTerminal || props.params.place.browser.projects.length === 0) &&

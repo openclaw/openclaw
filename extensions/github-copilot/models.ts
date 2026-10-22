@@ -322,8 +322,6 @@ type FetchCopilotModelCatalogParams = {
   /** Resolved baseUrl from the same token-exchange response. */
   baseUrl: string;
   headers?: Record<string, string>;
-  /** Optional AbortSignal; defaults to a 10s timeout. */
-  signal?: AbortSignal;
 };
 
 /**
@@ -346,16 +344,14 @@ export async function fetchCopilotModelCatalog(
     throw new Error("fetchCopilotModelCatalog: copilotApiToken required");
   }
   const url = `${trimmedBase}/models`;
-  const controller = params.signal ? undefined : new AbortController();
-  const timeoutId = controller
-    ? setTimeout(() => controller.abort(), COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS)
-    : undefined;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS);
   let release: (() => Promise<void>) | undefined;
   try {
     const guarded = await fetchWithSsrFGuard({
       url,
       policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(trimmedBase),
-      signal: params.signal ?? controller?.signal,
+      signal: controller.signal,
       init: {
         method: "GET",
         headers: {
@@ -386,9 +382,7 @@ export async function fetchCopilotModelCatalog(
     }
     return out;
   } finally {
-    if (timeoutId !== undefined) {
-      clearTimeout(timeoutId);
-    }
+    clearTimeout(timeoutId);
     await release?.();
   }
 }

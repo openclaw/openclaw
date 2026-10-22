@@ -1,6 +1,6 @@
 import { ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -85,17 +85,13 @@ function fixture(guestPlatform: "win32" | "linux" = "win32") {
       const lease = path.join(storage, key + "." + nonce + ".json");
       return fs.existsSync(lease) ? JSON.parse(fs.readFileSync(lease, "utf8")) : undefined;
     }
-    const database = new DatabaseSync(path.join(storage, "windows-shared-host.sqlite"), {
+    using database = new DatabaseSync(path.join(storage, "windows-shared-host.sqlite"), {
       readOnly: true,
     });
-    try {
-      const row = database
-        .prepare("SELECT lease_json FROM workspace_leases WHERE workspace_key = ?")
-        .get(key);
-      return row ? JSON.parse(String(row.lease_json)) : undefined;
-    } finally {
-      database.close();
-    }
+    const row = database
+      .prepare("SELECT lease_json FROM workspace_leases WHERE workspace_key = ?")
+      .get(key);
+    return row ? JSON.parse(String(row.lease_json)) : undefined;
   };
 
   // Execute the generated program with real lease storage and IPC receipts.
@@ -246,9 +242,7 @@ function fixture(guestPlatform: "win32" | "linux" = "win32") {
     workspaceDir,
     kill: async () => {
       const child = children.at(-1)!;
-      const closed = new Promise<void>((resolve) => {
-        child.once("close", () => resolve());
-      });
+      const closed = once(child, "close");
       exits.get(child)!();
       await closed;
     },

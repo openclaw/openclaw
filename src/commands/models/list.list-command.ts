@@ -13,7 +13,7 @@ import { type RuntimeEnv, writeRuntimeJson, writeRuntimeStdout } from "../../run
 import { getModelCatalogWarnings, readSelectedGatewayModelCatalog } from "./catalog-warnings.js";
 import { formatTokenK, isRich, padTerminalCell, truncate } from "./list.format.js";
 import type { ModelRow } from "./list.types.js";
-import { loadModelsConfigWithSource } from "./load-config.js";
+import { loadModelsConfig } from "./load-config.js";
 import { ensureFlagCompatibility, resolveModelsTargetAgent } from "./shared.js";
 
 // The catalog worker permits three minutes; leave room for connection and result projection.
@@ -75,7 +75,7 @@ export async function modelsListCommand(
       import("../../gateway/server-methods/models-list-result.js"),
     ]);
     const readLocal = async () => {
-      const { resolvedConfig: localConfig } = await loadModelsConfigWithSource({
+      const localConfig = await loadModelsConfig({
         commandName: "models list",
         runtime,
       });

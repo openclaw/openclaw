@@ -122,7 +122,15 @@ describe("Gateway Claw Add plan", () => {
     const plan = await buildPlan(source, config, "claw-gateway-add-fixture");
     const projected = projectGatewayClawAddPlan(plan, source, trust, config);
 
-    expect(plan.actions.filter((action) => action.kind === "workspaceFile")).toHaveLength(3);
+    expect(plan.actions.filter((action) => action.kind === "workspaceFile")).toHaveLength(2);
+    expect(plan.actions).toContainEqual(
+      expect.objectContaining({
+        kind: "cronJob",
+        id: "$portable-heartbeat",
+        scratch:
+          "# Incident Heartbeat\n\nCheck active incidents, unresolved owners, and overdue status updates.\n",
+      }),
+    );
     expect(projected).toMatchObject({
       operation: "add",
       target: { agentId: "claw-gateway-add-fixture" },
@@ -163,20 +171,30 @@ describe("Gateway Claw Add plan", () => {
     );
   });
 
-  it("uses the configured state root for a new agent workspace", async () => {
-    const stateDir = path.join(
-      realpathSync(os.tmpdir()),
-      "openclaw-claws-gateway-add-isolated-state",
-    );
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const source = await readFixture();
-
-    const plan = await buildPlan(source, undefined, "claw-gateway-state-root-fixture");
-
-    expect(plan.agent.workspace).toBe(
-      path.join(stateDir, "workspace-claw-gateway-state-root-fixture"),
-    );
-  });
+  it.each(["empty", "explicit-main", "implicit-main"] as const)(
+    "keeps a new Claw outside the default workspace (%s)",
+    async (mode) => {
+      const stateDir = path.join(realpathSync(os.tmpdir()), "openclaw-claws-gateway-default-root");
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      const mainWorkspace = path.join(stateDir, "workspace");
+      const config =
+        mode === "empty"
+          ? undefined
+          : {
+              agents: {
+                defaults: { workspace: mainWorkspace },
+                ...(mode === "explicit-main"
+                  ? { entries: { main: { workspace: mainWorkspace } } }
+                  : {}),
+              },
+            };
+      const plan = await buildPlan(await readFixture(), config, "claw-gateway-state-root-fixture");
+      expect(plan.agent.workspace).toBe(
+        path.join(stateDir, "workspace-claw-gateway-state-root-fixture"),
+      );
+      expect(plan.blockers.map((blocker) => blocker.code)).not.toContain("workspace_collision");
+    },
+  );
 
   it("reviews a fresh sibling when Remove retained the previous workspace", async () => {
     const stateDir = tempDirs.make("openclaw-claws-gateway-readd-");
@@ -245,45 +263,6 @@ describe("Gateway Claw Add plan", () => {
     expect(reviewedProjection.target.workspace).toBe(`${base}-2`);
     expect(currentProjection.target.workspace).toBe(`${base}-3`);
     expect(currentProjection.planIntegrity).not.toBe(reviewedProjection.planIntegrity);
-  });
-
-  it("keeps a new Claw workspace outside the default agent workspace", async () => {
-    const stateDir = path.join(realpathSync(os.tmpdir()), "openclaw-claws-gateway-default-root");
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const source = await readFixture();
-    const mainWorkspace = path.join(stateDir, "workspace");
-    const plan = await buildGatewayClawAddPlan(source, {
-      config: {
-        agents: {
-          defaults: { workspace: mainWorkspace },
-          entries: { main: { workspace: mainWorkspace } },
-        },
-      },
-      agentId: "claw-gateway-default-root-fixture",
-      sourceMcpServers: {},
-    });
-
-    expect(plan.agent.workspace).toBe(
-      path.join(stateDir, "workspace-claw-gateway-default-root-fixture"),
-    );
-    expect(plan.blockers.map((blocker) => blocker.code)).not.toContain("workspace_collision");
-  });
-
-  it("uses a sibling workspace when an implicit main agent owns the default root", async () => {
-    const stateDir = path.join(realpathSync(os.tmpdir()), "openclaw-claws-gateway-legacy-root");
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const source = await readFixture();
-    const mainWorkspace = path.join(stateDir, "workspace");
-    const plan = await buildGatewayClawAddPlan(source, {
-      config: { agents: { defaults: { workspace: mainWorkspace } } },
-      agentId: "claw-gateway-legacy-root-fixture",
-      sourceMcpServers: {},
-    });
-
-    expect(plan.agent.workspace).toBe(
-      path.join(stateDir, "workspace-claw-gateway-legacy-root-fixture"),
-    );
-    expect(plan.blockers.map((blocker) => blocker.code)).not.toContain("workspace_collision");
   });
 
   it("keeps an explicitly configured workspace for a blocked agent", async () => {
@@ -360,12 +339,24 @@ describe("Gateway Claw Add plan", () => {
           excluded: expect.arrayContaining(["exec", "browser"]),
         },
         sandbox: { mode: "all", scope: "agent", workspaceAccess: "rw" },
-        heartbeat: { enabled: true, intervalMs: 1_800_000 },
+        heartbeat: { enabled: false, intervalMs: null },
       },
     });
     expect(projected.scheduledJobs).toEqual({
       coverage: "package-declarations",
       jobs: [
+        {
+          id: "$portable-heartbeat",
+          action: "schedule",
+          blocked: false,
+          proposed: {
+            schedule: { everyMs: 1_800_000 },
+            session: "isolated",
+            delivery: "owner",
+            message: expect.stringContaining("Review your automation scratch checklist"),
+            messageDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+          },
+        },
         {
           id: "heartbeat-summary",
           action: "schedule",

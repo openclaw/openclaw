@@ -1,7 +1,7 @@
 import {
   resumeScheduledTaskAutoStartAfterUpdate,
   suspendScheduledTaskAutoStartForUpdate,
-} from "../../daemon/schtasks.js";
+} from "../../daemon/schtasks-control.js";
 import { finishUpdateRun } from "../../infra/update-run-ledger.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -155,7 +155,7 @@ export function createWindowsTaskAutoStartRecovery(params: {
                   ? "update-failed"
                   : "cancelled",
             },
-            { env: params.updateRun.env },
+            params.updateRun,
           );
         }
       } catch (cause) {

@@ -48,26 +48,6 @@ describe("tlonRuntimeOutbound", () => {
   });
 });
 
-function mockProbeResponse(response: Response, events: string[]) {
-  const release = vi.fn(async () => {
-    void response.body?.cancel().catch(() => undefined);
-    events.push("release");
-  });
-  vi.mocked(urbitFetch).mockResolvedValue({
-    response,
-    finalUrl: "https://example.com/~/name",
-    release,
-    refreshTimeout: vi.fn(),
-  });
-  return release;
-}
-
-function expectCleanup(cancel: unknown, release: unknown, events: string[]) {
-  expect(cancel).toHaveBeenCalledOnce();
-  expect(release).toHaveBeenCalledOnce();
-  expect(events).toEqual(["cancel", "release"]);
-}
-
 describe("probeTlonAccount", () => {
   afterEach(() => vi.useRealTimers());
 
@@ -93,14 +73,25 @@ describe("probeTlonAccount", () => {
       const response = new Response(new ReadableStream<Uint8Array>({ cancel: cancelBody }), {
         status,
       });
-      const release = mockProbeResponse(response, events);
+      const release = vi.fn(async () => {
+        void response.body?.cancel().catch(() => undefined);
+        events.push("release");
+      });
+      vi.mocked(urbitFetch).mockResolvedValue({
+        response,
+        release,
+        finalUrl: "https://example.com/~/name",
+        refreshTimeout: vi.fn(),
+      });
 
       await expect(probeTlonAccount(account)).resolves.toEqual({
         ...expected,
         elapsedMs: expect.any(Number),
       });
 
-      expectCleanup(cancelBody, release, events);
+      expect(cancelBody).toHaveBeenCalledOnce();
+      expect(release).toHaveBeenCalledOnce();
+      expect(events).toEqual(["cancel", "release"]);
     },
   );
 

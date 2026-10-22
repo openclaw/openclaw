@@ -10,7 +10,10 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { throwCollectedErrors } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
-import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import {
+  hasCommandProcessCleanupError,
+  ignoreNonCleanupCommandError,
+} from "../process/exec-result.js";
 import { sleep } from "../utils.js";
 import { GATEWAY_SERVICE_KIND } from "./constants.js";
 import { resolveGatewayServiceProbeHosts } from "./gateway-service-probe-hosts.js";
@@ -249,18 +252,13 @@ export async function readLaunchAgentProgramArguments(
     ...resolveLaunchAgentEnvironmentReadOptions(env, label),
     ...options,
   });
-  if (!command && options?.requireEffective) {
+  if (!command && options?.requireEffective && !options.allowMissingDefinition) {
     // A removed plist can leave its job registered; only launchd can prove absence.
     const timeoutMs =
       options.timeoutMs && options.timeoutMs > 0 ? Math.min(options.timeoutMs, 5_000) : 5_000;
     const [probe, system] = await Promise.all([
       probeLaunchAgentState(`${resolveLaunchAgentGuiDomain()}/${label}`, timeoutMs).catch(
-        (error: unknown) => {
-          if (hasCommandProcessCleanupError(error)) {
-            throw error;
-          }
-          return null;
-        },
+        ignoreNonCleanupCommandError,
       ),
       inspectSystemLaunchDaemonOwnership(label, { timeoutMs, scanInstalledPlists: false }),
     ]);
@@ -293,12 +291,7 @@ export async function resolveLaunchAgentGatewayContext(env: GatewayServiceEnv): 
   if (serviceKind && serviceKind !== GATEWAY_SERVICE_KIND) {
     return { env, port: null, probeHosts: [] };
   }
-  const command = await readLaunchAgentProgramArguments(env).catch((error: unknown) => {
-    if (hasCommandProcessCleanupError(error)) {
-      throw error;
-    }
-    return null;
-  });
+  const command = await readLaunchAgentProgramArguments(env).catch(ignoreNonCleanupCommandError);
   return {
     env: mergeGatewayServiceEnv(env, command),
     port:

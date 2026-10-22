@@ -105,7 +105,6 @@ export async function cleanupAmbientCommentTypingReaction(params: {
     to?: string;
     threadId?: string | number;
   };
-  runtime?: RuntimeEnv;
 }): Promise<boolean> {
   const deliveryContext = params.deliveryContext;
   if (
@@ -135,7 +134,6 @@ export async function cleanupAmbientCommentTypingReaction(params: {
         client: params.client,
         replyId,
         action: "delete",
-        runtime: params.runtime,
         logPrefix: "[feishu]",
       }),
   });

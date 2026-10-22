@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, Errored, For, Loading, Show } from "solid-js";
 import type { SkillsLibraryMutateParams } from "../../../../packages/gateway-protocol/src/index.ts";
-import "../../components/modal-dialog.ts";
+import "../../components/modal-dialog.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
   SettingsEmpty,
@@ -11,7 +11,7 @@ import {
 import { t } from "../../lib/reactive/i18n.ts";
 import { uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { libraryFileText } from "./library-file-text.ts";
-import type { SkillLibraryModel } from "./library-state.ts";
+import type { LibraryDetailOutcome, SkillLibraryModel } from "./library-state.ts";
 import { SkillLibraryToolbar } from "./library-toolbar.tsx";
 
 export function SkillLibrary(props: {
@@ -20,27 +20,77 @@ export function SkillLibrary(props: {
 }) {
   const current = () => props.library.state;
   // List receipts replace the snapshot; mutable editor drafts and feedback do not.
-  const list = createMemo(() => current().list);
-  const query = createMemo(() => props.library.local.query.toLowerCase().trim());
-  const scope = createMemo(() => current().view);
-  const entries = createMemo(() => {
-    const snapshot = list();
-    const search = query();
-    const view = scope();
-    return (snapshot?.entries ?? []).filter((entry) => {
-      const scopeMatches =
-        view === "mine"
-          ? entry.ownerProfileId === snapshot?.profileId
-          : view !== "team" || entry.shared || entry.ownerProfileId === null;
-      return (
-        scopeMatches &&
-        (!search ||
-          `${entry.slug} ${entry.name} ${entry.description} ${entry.ownerLabel}`
-            .toLowerCase()
-            .includes(search))
-      );
+  const acceptedList = createMemo(() => current().list);
+  const completion = createMemo(() => current().listRead);
+  const read = createMemo(
+    () => completion()?.completion ?? Promise.resolve({ list: acceptedList(), error: null }),
+  );
+  // Accepted rows stay live; the shared feedback also owns refresh errors.
+  const readError = () => {
+    const error = acceptedList() ? null : read().error;
+    if (error) {
+      throw new Error(error);
+    }
+    return null;
+  };
+  const Entries = () => {
+    const list = createMemo(() => acceptedList() ?? read().list);
+    const query = createMemo(() => props.library.local.query.toLowerCase().trim());
+    const scope = createMemo(() => current().view);
+    const entries = createMemo(() => {
+      const snapshot = list();
+      const search = query();
+      const view = scope();
+      return (snapshot?.entries ?? []).filter((entry) => {
+        const scopeMatches =
+          view === "mine"
+            ? entry.ownerProfileId === snapshot?.profileId
+            : view !== "team" || entry.shared || entry.ownerProfileId === null;
+        return (
+          scopeMatches &&
+          (!search ||
+            `${entry.slug} ${entry.name} ${entry.description} ${entry.ownerLabel}`
+              .toLowerCase()
+              .includes(search))
+        );
+      });
     });
-  });
+    return (
+      <SettingsSection title={t(`skillLibrary.${current().view}`)} count={entries().length}>
+        <Show
+          when={entries().length > 0}
+          fallback={<SettingsEmpty message={t("skillLibrary.empty")} />}
+        >
+          <For each={entries()} keyed={(entry) => entry.skillId}>
+            {(entry) => (
+              <div class="settings-row">
+                <button
+                  type="button"
+                  class="settings-row__text plugins-item__detail-button"
+                  disabled={current().loading || current().busy}
+                  onClick={() => void props.library.open(entry().skillId)}
+                >
+                  <span class="settings-row__title">{entry().slug}</span>
+                  <span class="settings-row__desc">{entry().description}</span>
+                  <span class="settings-row__desc">
+                    {entry().ownerLabel} ·{" "}
+                    {entry().shared ? t("skillLibrary.shared") : t("skillLibrary.private")} ·{" "}
+                    {entry().revision.slice(0, 8)}
+                  </span>
+                </button>
+                <div class="settings-row__control">
+                  <SettingsStatus
+                    kind={entry().enabled ? "ok" : "muted"}
+                    label={t(entry().enabled ? "skillsPage.enabled" : "skillsPage.disabled")}
+                  />
+                </div>
+              </div>
+            )}
+          </For>
+        </Show>
+      </SettingsSection>
+    );
+  };
   return (
     <>
       <SkillLibraryToolbar library={props.library} navigationActions={props.navigationActions} />
@@ -75,44 +125,16 @@ export function SkillLibrary(props: {
             }
           />
         </label>
-        <Show
-          when={Boolean(list()) || !current().loading}
-          fallback={<p role="status">{t("common.loading")}</p>}
-        >
-          <SettingsSection title={t(`skillLibrary.${current().view}`)} count={entries().length}>
-            <Show
-              when={entries().length > 0}
-              fallback={<SettingsEmpty message={t("skillLibrary.empty")} />}
-            >
-              <For each={entries()} keyed={(entry) => entry.skillId}>
-                {(entry) => (
-                  <div class="settings-row">
-                    <button
-                      type="button"
-                      class="settings-row__text plugins-item__detail-button"
-                      disabled={current().loading || current().busy}
-                      onClick={() => void props.library.open(entry().skillId)}
-                    >
-                      <span class="settings-row__title">{entry().slug}</span>
-                      <span class="settings-row__desc">{entry().description}</span>
-                      <span class="settings-row__desc">
-                        {entry().ownerLabel} ·{" "}
-                        {entry().shared ? t("skillLibrary.shared") : t("skillLibrary.private")} ·{" "}
-                        {entry().revision.slice(0, 8)}
-                      </span>
-                    </button>
-                    <div class="settings-row__control">
-                      <SettingsStatus
-                        kind={entry().enabled ? "ok" : "muted"}
-                        label={t(entry().enabled ? "skillsPage.enabled" : "skillsPage.disabled")}
-                      />
-                    </div>
-                  </div>
-                )}
-              </For>
-            </Show>
-          </SettingsSection>
-        </Show>
+        {/* A stable list host keeps async replacement from reparenting the focused search field. */}
+        <div>
+          <Loading
+            on={acceptedList() ? null : completion()}
+            fallback={<p role="status">{t("common.loading")}</p>}
+          >
+            <Errored fallback={() => null}>{readError()}</Errored>
+            <Entries />
+          </Loading>
+        </div>
       </Show>
       <SkillLibraryDialogs library={props.library} />
     </>
@@ -149,16 +171,35 @@ export function SkillLibraryFeedback(props: {
 }
 
 export function SkillLibraryDialogs(props: { library: SkillLibraryModel }) {
-  const current = () => props.library.state;
   return (
     <>
-      <Show when={current().draft}>
+      <Show when={props.library.state.detailRead} keyed>
+        {(receipt) => <LibraryDetailRead completion={receipt.completion} />}
+      </Show>
+      <Show when={props.library.state.draft}>
         <LibraryEditor library={props.library} />
       </Show>
       <Show when={props.library.local.importOpen}>
         <LibraryImport library={props.library} />
       </Show>
     </>
+  );
+}
+
+function LibraryDetailRead(props: { completion: Promise<LibraryDetailOutcome> }) {
+  const outcome = createMemo(() => props.completion);
+  const readError = () => {
+    const result = outcome();
+    if (result) {
+      throw result.error;
+    }
+    return null;
+  };
+  // The existing owner feedback displays errors without replacing an accepted draft.
+  return (
+    <Loading>
+      <Errored fallback={() => null}>{readError()}</Errored>
+    </Loading>
   );
 }
 
@@ -281,6 +322,16 @@ function LibraryEditor(props: { library: SkillLibraryModel }) {
       footer={
         <Show when={props.library.canEdit()}>
           <openclaw-modal-actions class="skill-reader-dialog__actions">
+            <Show when={draft().entry}>
+              <MutationButton action="remove" />
+              <MutationButton action={draft().entry!.enabled ? "disable" : "enable"} />
+              <Show when={draft().entry?.ownerProfileId}>
+                <MutationButton action={draft().entry!.shared ? "unshare" : "share"} />
+              </Show>
+              <Show when={props.library.canTransfer() && draft().entry?.ownerProfileId}>
+                <MutationButton action="transfer" />
+              </Show>
+            </Show>
             <button
               type="submit"
               class="btn primary"
@@ -293,16 +344,6 @@ function LibraryEditor(props: { library: SkillLibraryModel }) {
             >
               {current().busy ? t("common.loading") : t("skillLibrary.save")}
             </button>
-            <Show when={draft().entry}>
-              <MutationButton action={draft().entry!.enabled ? "disable" : "enable"} />
-              <Show when={draft().entry?.ownerProfileId}>
-                <MutationButton action={draft().entry!.shared ? "unshare" : "share"} />
-              </Show>
-              <Show when={props.library.canTransfer() && draft().entry?.ownerProfileId}>
-                <MutationButton action="transfer" />
-              </Show>
-              <MutationButton action="remove" />
-            </Show>
           </openclaw-modal-actions>
         </Show>
       }

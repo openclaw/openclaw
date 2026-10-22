@@ -31,18 +31,41 @@ const setDreamDiarySubTab = (tab: DreamingViewState["activeDiarySubTab"]) =>
 const setDreamAdvancedWaitingSort = (sort: DreamingViewState["advancedWaitingSort"]) =>
   (viewState.advancedWaitingSort = sort);
 
-function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
-  const props: DreamingProps = {
-    access: fullDreamingViewAccess,
-    viewState,
-    active: true,
-    selectedAgentId: "main",
+function buildProps(
+  overrides?: Partial<DreamingProps>,
+  statusOverrides?: Partial<ReturnType<DreamingProps["readStatusData"]>>,
+): DreamingProps {
+  const status: ReturnType<DreamingProps["readStatusData"]> = {
     shortTermCount: 47,
     promotedCount: 12,
     phases: {
-      light: { enabled: true, cron: "0 * * * *", nextRunAtMs: Date.parse("2026-04-05T11:30:00Z") },
-      deep: { enabled: true, cron: "30 * * * *", nextRunAtMs: Date.parse("2026-04-05T12:00:00Z") },
-      rem: { enabled: false, cron: "0 4 * * *" },
+      light: {
+        enabled: true,
+        cron: "0 * * * *",
+        limit: 20,
+        managedCronPresent: true,
+        lookbackDays: 2,
+        nextRunAtMs: Date.parse("2026-04-05T11:30:00Z"),
+      },
+      deep: {
+        enabled: true,
+        cron: "30 * * * *",
+        limit: 10,
+        managedCronPresent: true,
+        minScore: 0,
+        minRecallCount: 3,
+        minUniqueQueries: 3,
+        recencyHalfLifeDays: 14,
+        nextRunAtMs: Date.parse("2026-04-05T12:00:00Z"),
+      },
+      rem: {
+        enabled: false,
+        cron: "0 4 * * *",
+        limit: 10,
+        managedCronPresent: false,
+        lookbackDays: 7,
+        minPatternStrength: 0.75,
+      },
     },
     shortTermEntries: [
       {
@@ -79,18 +102,28 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
     ],
     nextCycle: "4:00 AM",
     timezone: "America/Los_Angeles",
+    ...statusOverrides,
+  };
+  const props: DreamingProps = {
+    access: fullDreamingViewAccess,
+    viewState,
+    active: true,
+    selectedAgentId: "main",
     statusError: null,
+    readStatus: () => null,
+    readStatusData: () => status,
+    readDiary: () => result.dreamDiaryContent,
+    readImports: () => result.wikiImportInsights,
+    readOverview: () => result.wikiOverview,
     modeSaving: false,
     dreamDiaryLoading: false,
     dreamDiaryActionLoading: false,
     dreamDiaryActionMessage: null,
     dreamDiaryActionArchivePath: null,
-    dreamDiaryError: null,
     dreamDiaryContent:
       "# Dream Diary\n\n<!-- openclaw:dreaming:diary:start -->\n\n---\n\n*April 5, 2026, 3:00 AM*\n\nThe repository whispered of forgotten endpoints tonight.\n\n<!-- openclaw:dreaming:diary:end -->",
     memoryWikiEnabled: true,
     wikiImportInsightsLoading: false,
-    wikiImportInsightsError: null,
     wikiImportInsights: {
       sourceType: "chatgpt",
       totalItems: 2,
@@ -160,7 +193,6 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
       ],
     },
     wikiOverviewLoading: false,
-    wikiOverviewError: null,
     wikiOverview: {
       totalItems: 1,
       totalPages: 2,
@@ -207,7 +239,7 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
     onRefreshDiary: () => {},
     onRefreshImports: () => {},
     onRefreshWikiOverview: () => {},
-    onOpenConfig: () => {},
+    onOpenConfig: async () => {},
     onOpenWikiPage: async () => {},
     onCloseWikiPreview: vi.fn(),
     wikiPreview: null,
@@ -219,7 +251,7 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
     onRepairDreamingArtifacts: () => {},
     onViewStateChange: () => {},
   };
-  return {
+  const result: DreamingProps = {
     ...props,
     ...overrides,
     onViewStateChange: vi.fn((update) => {
@@ -227,6 +259,7 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
       overrides?.onViewStateChange?.(update);
     }),
   };
+  return result;
 }
 
 function renderInto(props: DreamingProps): HTMLDivElement {
@@ -272,6 +305,7 @@ describe("dreaming view", () => {
         get dreamDiaryContent() {
           return props().dreamDiaryContent;
         },
+        readDiary: () => props().dreamDiaryContent,
       });
     });
     flush();
@@ -362,7 +396,7 @@ describe("dreaming view", () => {
     expect(idleContainer.querySelector(".dreams__status-label")?.textContent).toBe("Dreaming Idle");
     expectElement(idleContainer, ".dreams--idle");
 
-    const unknownPhaseContainer = renderInto(buildProps({ phases: undefined }));
+    const unknownPhaseContainer = renderInto(buildProps(undefined, { phases: undefined }));
     const statuses = [...unknownPhaseContainer.querySelectorAll(".dreams__phase")].map((phase) => ({
       status: phase.querySelector(".dreams__phase-next")?.textContent?.trim(),
       off: phase.classList.contains("dreams__phase--off"),
@@ -477,8 +511,13 @@ describe("dreaming view", () => {
     await Promise.resolve();
 
     expect(onOpenWikiPage).toHaveBeenCalledWith("sources/chatgpt-2026-04-10-alpha.md");
-    const request = { page: previewPage, loading: false, error: null };
-    props.wikiPreview = { ...request, request };
+    const request = { page: previewPage, source: { read: previewPage } };
+    props.wikiPreview = {
+      request,
+      page: previewPage,
+      readKey: request.source,
+      readPage: () => previewPage,
+    };
     rerender();
     expect(compactText(container.querySelector(".dreams-diary__preview-hint"))).toBe(
       "Showing the first chunk of this page (6001 total lines).",
@@ -614,8 +653,13 @@ describe("dreaming view", () => {
     await Promise.resolve();
 
     expect(onOpenWikiPage).toHaveBeenCalledWith("reports/weekly-stock.md");
-    const request = { page: previewPage, loading: false, error: null };
-    props.wikiPreview = { ...request, request };
+    const request = { page: previewPage, source: { read: previewPage } };
+    props.wikiPreview = {
+      request,
+      page: previewPage,
+      readKey: request.source,
+      readPage: () => previewPage,
+    };
     rerender();
     expect(textItems(container, ".dreams-diary__insight-list strong")).not.toContain(
       "Page details",
@@ -813,7 +857,13 @@ describe("dreaming view", () => {
       "Dreams will appear here after the first dreaming cycle runs.",
     );
 
-    const errorContainer = renderInto(buildProps({ dreamDiaryError: "read failed" }));
+    const errorContainer = renderInto(
+      buildProps({
+        readDiary: () => {
+          throw new Error("read failed");
+        },
+      }),
+    );
     expect(errorContainer.querySelector(".dreams-diary__error")?.textContent).toBe("read failed");
 
     const container = renderInto(buildProps());
@@ -898,7 +948,7 @@ describe("dreaming view", () => {
 
     setDreamAdvancedWaitingSort("recent");
     let container = renderInto(
-      buildProps({
+      buildProps(undefined, {
         shortTermEntries,
         promotedEntries: [],
       }),
@@ -910,7 +960,7 @@ describe("dreaming view", () => {
 
     setDreamAdvancedWaitingSort("signals");
     container = renderInto(
-      buildProps({
+      buildProps(undefined, {
         shortTermEntries,
         promotedEntries: [],
       }),
@@ -962,7 +1012,7 @@ describe("dreaming view", () => {
 
     setDreamAdvancedWaitingSort("recent");
     let container = renderInto(
-      buildProps({
+      buildProps(undefined, {
         shortTermEntries,
         promotedEntries: [],
       }),
@@ -974,7 +1024,7 @@ describe("dreaming view", () => {
 
     setDreamAdvancedWaitingSort("signals");
     container = renderInto(
-      buildProps({
+      buildProps(undefined, {
         shortTermEntries,
         promotedEntries: [],
       }),

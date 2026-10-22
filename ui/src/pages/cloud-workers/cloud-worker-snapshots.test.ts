@@ -2,6 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -32,6 +33,102 @@ function input(page: Element, label: string) {
 }
 
 describe("Cloud environments", () => {
+  it("shows accepted inventory before images settle and retains details through a refresh", async () => {
+    const inventory = createDeferred<unknown>();
+    const images = createDeferred<unknown>();
+    const refresh = createDeferred<unknown>();
+    const result = snapshotListFixture();
+    result.images = [
+      { ...result.images[0]!, held: false, retirement: undefined, projectRoot: "/projects/app" },
+    ];
+    let reads = 0;
+    const { page, harness, client } = mountTestPage([...methods, "environments.prepare"], {
+      response: (method, params) => {
+        if (method === "environments.list" && params?.includePreparedDetails) {
+          return ++reads === 1 ? inventory.promise : refresh.promise;
+        }
+        return method === "crabbox.images.list" ? images.promise : undefined;
+      },
+    });
+    try {
+      await waitText(() => page, "Loading");
+      inventory.resolve({ environments: [buildEnvironmentFixture("failed")], profiles: [] });
+      await waitText(() => sheet(page), "github.com/acme/app");
+      expect(button(sheet(page), "Rebuild").disabled).toBe(true);
+      images.resolve(result);
+      await waitForSolid(() => expect(button(sheet(page), "Rebuild").disabled).toBe(false));
+      const row = page.querySelector(".cloud-environments__row");
+      harness.publish(
+        true,
+        client,
+        gatewayHelloForMethods(["environments.list", "environments.prepare"]),
+      );
+      await waitForSolid(() => expect(reads).toBe(2));
+      await waitForSolid(() => expect(button(sheet(page), "Rebuild").disabled).toBe(true));
+      expect(page.querySelector(".cloud-environments__row")).toBe(row);
+      expect(sheet(page).textContent).toContain("01234567");
+      refresh.resolve({ environments: [], profiles: [] });
+      await waitForSolid(() => expect(page.querySelector(".cloud-environments__sheet")).toBeNull());
+    } finally {
+      inventory.resolve({ environments: [], profiles: [] });
+      images.resolve(result);
+      refresh.resolve({ environments: [], profiles: [] });
+    }
+  });
+
+  it("coalesces inventory refreshes and ignores retired reads while the replacement is pending", async () => {
+    const pending = Array.from({ length: 3 }, () => createDeferred<unknown>());
+    const inventory = { environments: [], profiles: [] };
+    const result = snapshotListFixture();
+    result.images = [
+      { ...result.images[0]!, held: false, retirement: undefined, projectRoot: "/projects/app" },
+    ];
+    const advertised = [...methods, "environments.prepare"];
+    const withoutImages = advertised.filter((method) => method !== "crabbox.images.list");
+    let reads = 0;
+    const { page, harness, client } = mountTestPage(advertised, {
+      result,
+      response: (method, params) => {
+        if (method !== "environments.list" || !params?.includePreparedDetails) {
+          return undefined;
+        }
+        const request = reads++;
+        return request > 0 && request <= pending.length ? pending[request - 1]!.promise : inventory;
+      },
+    });
+    const invalidate = () => {
+      harness.publish(true, client, gatewayHelloForMethods(withoutImages));
+      harness.publish(true, client, gatewayHelloForMethods(advertised));
+    };
+    try {
+      await waitForSolid(() => expect(button(sheet(page), "Rebuild").disabled).toBe(false));
+      invalidate();
+      await waitForSolid(() => expect(reads).toBe(2));
+      invalidate();
+      await waitForSolid(() => expect(button(sheet(page), "Rebuild").disabled).toBe(true));
+      expect(reads).toBe(2);
+      pending[0]!.resolve(inventory);
+      await waitForSolid(() => expect(reads).toBe(3));
+      harness.publish(false, client, null);
+      harness.publish(true, client, gatewayHelloForMethods(advertised));
+      await waitForSolid(() => expect(reads).toBe(4));
+      pending[1]!.reject(new Error("Retired inventory failure"));
+      await pending[1]!.promise.catch(() => {});
+      flush();
+      expect(button(sheet(page), "Rebuild").disabled).toBe(true);
+      pending[2]!.resolve(inventory);
+      await waitForSolid(() => expect(button(sheet(page), "Rebuild").disabled).toBe(false));
+      expect(page.textContent).not.toContain("Retired inventory failure");
+      // Reconnect's permission receipt and initial load coalesce into one trailing refresh.
+      expect(reads).toBe(5);
+      expect(page.querySelector('[role="alert"]')).toBeNull();
+    } finally {
+      for (const request of pending) {
+        request.resolve(inventory);
+      }
+    }
+  });
+
   it("retains loaded environments and pool/policy drafts through a blip, but retires them for another client", async () => {
     const { page, request, harness, client } = mountTestPage(methods);
     await waitForSolid(() => expect(input(page, "Refresh after").disabled).toBe(false));
