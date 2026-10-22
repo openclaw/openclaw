@@ -7,21 +7,36 @@ import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js"
 vi.unmock("../agents/agent-scope-config.js");
 
 const { runSecurityAuditCore } = await import("./audit.js");
+function rosterFinding(detail?: string) {
+  return expect.objectContaining({
+    checkId: "config.agent_roster.invalid_default_count",
+    ...(detail ? { detail: expect.stringContaining(detail) } : {}),
+  });
+}
 
 describe("security audit rosterless configs", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  function makeAuditPaths(label: string) {
-    const rootDir = tempDirs.make(`openclaw-audit-${label}-`);
+  function audit(options: Parameters<typeof runSecurityAuditCore>[0]) {
+    const rootDir = tempDirs.make("openclaw-audit-roster-");
     const stateDir = path.join(rootDir, "state");
     const workspaceDir = path.join(rootDir, "workspace");
     fs.mkdirSync(stateDir, { recursive: true });
     fs.mkdirSync(workspaceDir, { recursive: true });
-    return { stateDir, workspaceDir };
+    return runSecurityAuditCore({
+      stateDir,
+      workspaceDir,
+      configPath: path.join(stateDir, "openclaw.json"),
+      env: {},
+      includeFilesystem: true,
+      includeChannelSecurity: false,
+      ...options,
+    });
   }
 
-  function makeEscapingWorkspace(rootDir: string, workspaceDir: string) {
-    const externalSkillDir = path.join(rootDir, `external-${path.basename(workspaceDir)}`);
+  function makeEscapingWorkspace(rootDir: string, name: string) {
+    const workspaceDir = path.join(rootDir, name);
+    const externalSkillDir = path.join(rootDir, `external-${name}`);
     const skillsDir = path.join(workspaceDir, "skills");
     fs.mkdirSync(externalSkillDir, { recursive: true });
     fs.mkdirSync(skillsDir, { recursive: true });
@@ -31,101 +46,47 @@ describe("security audit rosterless configs", () => {
       path.join(skillsDir, "escape"),
       process.platform === "win32" ? "junction" : "dir",
     );
+    return workspaceDir;
   }
 
   it("uses the explicit audit workspace without resolving a missing roster default", async () => {
-    const { stateDir, workspaceDir } = makeAuditPaths("rosterless");
-
-    await expect(
-      runSecurityAuditCore({
-        config: {},
-        stateDir,
-        configPath: path.join(stateDir, "openclaw.json"),
-        workspaceDir,
-        env: {},
-        includeFilesystem: true,
-        includeChannelSecurity: false,
-      }),
-    ).resolves.toEqual(expect.objectContaining({ findings: expect.any(Array) }));
+    await expect(audit({ config: {} })).resolves.toEqual(
+      expect.objectContaining({ findings: expect.any(Array) }),
+    );
   });
 
   it("distinguishes an authored empty roster from an absent pre-roster source", async () => {
-    const { stateDir, workspaceDir } = makeAuditPaths("authored-empty-roster");
     const config = { agents: { entries: { main: {} } } };
-    const baseOptions = {
-      config,
-      stateDir,
-      configPath: path.join(stateDir, "openclaw.json"),
-      workspaceDir,
-      env: {},
-      includeFilesystem: true,
-      includeChannelSecurity: false,
-    };
+    const authoredEmpty = await audit({ config, sourceConfig: { agents: { entries: {} } } });
+    expect(authoredEmpty.findings).toContainEqual(rosterFinding("found 0"));
 
-    const authoredEmpty = await runSecurityAuditCore({
-      ...baseOptions,
-      sourceConfig: { agents: { entries: {} } },
-    });
-    expect(authoredEmpty.findings).toContainEqual(
-      expect.objectContaining({
-        checkId: "config.agent_roster.invalid_default_count",
-        detail: expect.stringContaining("found 0"),
-      }),
-    );
-
-    const absent = await runSecurityAuditCore({ ...baseOptions, sourceConfig: {} });
-    expect(absent.findings).not.toContainEqual(
-      expect.objectContaining({ checkId: "config.agent_roster.invalid_default_count" }),
-    );
+    const absent = await audit({ config, sourceConfig: {} });
+    expect(absent.findings).not.toContainEqual(rosterFinding());
   });
 
   it("still reports a legacy default marker on an explicit roster", async () => {
-    const { stateDir, workspaceDir } = makeAuditPaths("explicit-roster-with-default");
     const config: OpenClawConfigWithLegacyRoster = {
-      agents: {
-        ownership: "explicit",
-        entries: { alpha: { default: true }, beta: {} },
-      },
+      agents: { ownership: "explicit", entries: { alpha: { default: true }, beta: {} } },
     };
-    const report = await runSecurityAuditCore({
-      config,
-      stateDir,
-      configPath: path.join(stateDir, "openclaw.json"),
-      workspaceDir,
-      env: {},
-      includeFilesystem: true,
-      includeChannelSecurity: false,
-    });
+    const report = await audit({ config });
 
-    expect(report.findings).toContainEqual(
-      expect.objectContaining({
-        checkId: "config.agent_roster.invalid_default_count",
-        detail: expect.stringContaining("Expected no"),
-      }),
-    );
+    expect(report.findings).toContainEqual(rosterFinding("Expected no"));
   });
 
   it("scans every explicit fleet workspace without fabricating a legacy default workspace", async () => {
     const rootDir = tempDirs.make("openclaw-audit-explicit-workspaces-");
     const stateDir = path.join(rootDir, "state");
-    const unusedDefaultsWorkspace = path.join(rootDir, "unused-defaults");
-    const alphaWorkspace = path.join(rootDir, "alpha");
-    const betaWorkspace = path.join(rootDir, "beta");
+    const unusedDefaultsWorkspace = makeEscapingWorkspace(rootDir, "unused-defaults");
+    const alphaWorkspace = makeEscapingWorkspace(rootDir, "alpha");
+    const betaWorkspace = makeEscapingWorkspace(rootDir, "beta");
     fs.mkdirSync(stateDir, { recursive: true });
-
-    for (const workspaceDir of [unusedDefaultsWorkspace, alphaWorkspace, betaWorkspace]) {
-      makeEscapingWorkspace(rootDir, workspaceDir);
-    }
 
     const report = await runSecurityAuditCore({
       config: {
         agents: {
           ownership: "explicit",
           defaults: { workspace: unusedDefaultsWorkspace },
-          entries: {
-            alpha: { workspace: alphaWorkspace },
-            beta: { workspace: betaWorkspace },
-          },
+          entries: { alpha: { workspace: alphaWorkspace }, beta: { workspace: betaWorkspace } },
         },
       },
       stateDir,

@@ -3,9 +3,11 @@ import type { CronJob, CronStoredJob } from "./types.js";
 /** Remove scheduler-only state before a cron job crosses a public API boundary. */
 export function toPublicCronJob(job: CronStoredJob): CronJob {
   const {
+    pluginCommand: _pluginCommand,
     operatorSource: _operatorSource,
     inferenceBinding: _inferenceBinding,
     sourceConversation: _sourceConversation,
+    streamSandbox: _streamSandbox,
     skillLibrarySelections: _skillLibrarySelections,
     createdActor: _createdActor,
     toolsAllowProvenance: _toolsAllowProvenance,
@@ -16,6 +18,7 @@ export function toPublicCronJob(job: CronStoredJob): CronJob {
     ...publicJob
   } = job;
   const state = { ...job.state };
+  delete state.pluginCommandRuns;
   delete state.queuedAtMs;
   delete state.runningReceiptId;
   delete state.startupCatchupAtMs;
@@ -24,5 +27,11 @@ export function toPublicCronJob(job: CronStoredJob): CronJob {
   delete state.runningScheduleChangeId;
   delete state.failureAlertIncident;
   delete state.lastFailureNotificationId;
-  return { ...publicJob, state };
+  return {
+    ...publicJob,
+    state,
+    ...(job.schedule.kind === "stream"
+      ? { streamExecutionHost: job.streamSandbox ? ("sandbox" as const) : ("gateway" as const) }
+      : {}),
+  };
 }

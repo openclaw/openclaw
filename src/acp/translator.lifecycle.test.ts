@@ -95,9 +95,10 @@ it.each([
     expected: "default-key",
   },
   {
-    name: "uses the generated bridge key without a lookup when routing is unset",
+    name: "creates the generated bridge key without a lookup when routing is unset",
     metadata: {},
     opts: { requireExistingSession: true },
+    create: true,
   },
   {
     name: "lets false reset metadata override the server reset default",
@@ -112,7 +113,7 @@ it.each([
     expected: "explicit-key",
     reset: true,
   },
-])("newSession $name", async ({ metadata, opts, expected, lookup, reset }) => {
+])("newSession $name", async ({ metadata, opts, expected, lookup, reset, create }) => {
   const gateway = createAcpGateway();
   const request = vi.spyOn(gateway, "request").mockResolvedValue(sessions([]));
   if (lookup) {
@@ -132,6 +133,7 @@ it.each([
   expect(request.mock.calls).toEqual([
     ...(lookup ? [["sessions.resolve", lookup]] : []),
     ...(reset ? [["sessions.reset", { key: selectedKey }]] : []),
+    ...(create ? [["sessions.create", { key: selectedKey, cwd }]] : []),
     ["sessions.list", { limit: 200, search: selectedKey, includeDerivedTitles: true }],
   ]);
 });

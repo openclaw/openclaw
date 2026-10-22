@@ -58,9 +58,8 @@ export class GatewayChatRequests {
     this.lifetime.abort();
   }
 
-  cancelPending(scope: TuiRequestScope): boolean {
+  cancelPending(scope: TuiRequestScope): void {
     const agentId = scope.agentId ?? parseAgentSessionKey(scope.sessionKey)?.agentId;
-    let cancelled = false;
     for (const pending of this.pendingWrites) {
       if (
         pending.sessionKey === scope.sessionKey &&
@@ -68,10 +67,8 @@ export class GatewayChatRequests {
         (!scope.runId || pending.runId === scope.runId)
       ) {
         pending.controller.abort();
-        cancelled = true;
       }
     }
-    return cancelled;
   }
 
   async write<T>(

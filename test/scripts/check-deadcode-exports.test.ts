@@ -6,7 +6,6 @@ import knipConfig from "../../config/knip.config.ts";
 import scriptExportsKnipConfig from "../../config/knip.scripts-exports.config.ts";
 import {
   checkExportScan,
-  parseKnipCompactUnusedExports,
   parseKnipCompactUnusedExportsResult,
 } from "../../scripts/check-deadcode-exports.mts";
 import { vitestWorkerBuildEntries } from "../../scripts/lib/vitest-worker-build-entries.mts";
@@ -124,6 +123,21 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
     expect(compile(source, path.join(path.dirname(file), `other.${kind}`))).toBe("");
   });
 
+  it("models named Solid lazy consumers without retaining a deleted loader", () => {
+    const source = `const SettingsSidebar = lazy(() => import("./settings-sidebar-shell.tsx"), {
+  export: "ShellSettingsSidebar",
+});`;
+    const read = vi.spyOn(fs, "readFileSync").mockReturnValue(source);
+    const compile = knipConfig.compilers.mjs;
+    expect(compile("// config", "config/knip-vite-consumers.mjs")).toContain(
+      'import { ShellSettingsSidebar as __solidLazy0 } from "../ui/src/components/settings-sidebar-shell.tsx";',
+    );
+    read.mockReturnValue("const SettingsSidebar = null;");
+    expect(compile("// config", "config/knip-vite-consumers.mjs")).not.toContain(
+      "ShellSettingsSidebar",
+    );
+  });
+
   it("models only Vite runner members consumed by the build", () => {
     const source = `const { module: routes } = await runnerImport<typeof import("./src/app-route-paths.ts")>(
   path.join(here, "src/app-route-paths.ts"), options);
@@ -140,7 +154,30 @@ const offlineShell = { routes: routes.APP_ROUTE_PATHS };`;
     expect(compile(source, "config/unrelated.mjs")).toBe(source);
   });
 
-  it("parses all compact export sections and expands symbol lists", () => {
+  it("models the locale catalogue members consumed through Vite's runner", () => {
+    const source = `const { module, dependencies } = await runnerImport<
+  typeof import("../../scripts/lib/control-ui-i18n-catalog.ts")
+>(sourceCatalogPath, options);
+const startup = module.loadControlUiStartupCatalog();
+const catalog = module.loadControlUiSourceCatalog();`;
+    vi.spyOn(fs, "readFileSync").mockReturnValue(source);
+    expect(scriptRootWorkspace.entry).toContain("config/knip.config.ts!");
+    expect(scriptRootWorkspace.entry).toContain("config/knip-vite-consumers.mjs!");
+    const compile = knipConfig.compilers.mjs;
+    expect(compile("// config", "config/knip-vite-consumers.mjs")).toContain(
+      'import { loadControlUiStartupCatalog as __vite0_0, loadControlUiSourceCatalog as __vite0_1 } from "../scripts/lib/control-ui-i18n-catalog.ts";',
+    );
+    const withoutStartup = source.replace(
+      "const startup = module.loadControlUiStartupCatalog();",
+      "",
+    );
+    vi.mocked(fs.readFileSync).mockReturnValue(withoutStartup);
+    expect(compile("// config", "config/knip-vite-consumers.mjs")).not.toContain(
+      "loadControlUiStartupCatalog",
+    );
+  });
+
+  it("rejects findings from every compact export section and expands symbol lists", () => {
     const output = [
       "Unused exports (2)\nsrc/b.ts: beta, alpha\n/tmp/outside.ts: noise\nC:\\tmp\\outside.ts: noise\nC:outside.ts: noise\n\\\\server\\share\\outside.ts: noise",
       "Unused exported types (1)\nextensions/example/src/types.ts: ExampleType",
@@ -150,7 +187,7 @@ const offlineShell = { routes: routes.APP_ROUTE_PATHS };`;
       "Unused exported namespace members (1)\nsrc/protocol.ts: Result (v2)",
       "Unused files (1)\nsrc/noise.ts: src/noise.ts",
     ].join("\n\n");
-    expect(parseKnipCompactUnusedExports(`\n${output}\n`)).toEqual([
+    const entries = [
       "extensions/example/src/types.ts: ExampleType",
       "packages/example/src/state.ts: Ready",
       "src/b.ts: alpha",
@@ -158,7 +195,12 @@ const offlineShell = { routes: routes.APP_ROUTE_PATHS };`;
       "src/namespace.ts: runtimeHelper",
       "src/namespace.ts: RuntimeType",
       "src/protocol.ts: Result (v2)",
-    ]);
+    ];
+    expect(checkExportScan("finding scan", `\n${output}\n`)).toEqual({
+      entries,
+      message: `finding scan:\nUnused exports are not allowed:\n${entries.map((entry) => `  ${entry}`).join("\n")}\nDelete the exports or model their real production consumers in Knip.`,
+      ok: false,
+    });
   });
 
   it.each([
@@ -192,18 +234,5 @@ Install workspace dependencies in-tree (pnpm install) — on delegated boxes the
 
   it("accepts clean export scan output unchanged", () => {
     expect(checkExportScan("clean scan", "")).toEqual({ entries: [], message: "", ok: true });
-  });
-
-  it("reports genuine export findings unchanged", () => {
-    expect(
-      checkExportScan("finding scan", "Unused exports (1)\nsrc/config/types.ts: TelegramConfig\n"),
-    ).toEqual({
-      entries: ["src/config/types.ts: TelegramConfig"],
-      message: `finding scan:
-Unused exports are not allowed:
-  src/config/types.ts: TelegramConfig
-Delete the exports or model their real production consumers in Knip.`,
-      ok: false,
-    });
   });
 });

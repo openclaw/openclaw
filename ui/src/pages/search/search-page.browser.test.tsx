@@ -7,6 +7,7 @@ import { i18n } from "../../i18n/lib/translate.ts";
 import { REDACTED_SENTINEL } from "../../lib/config-form-utils.ts";
 import { createInitialConfigState } from "../../lib/config/config-state-model.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   atPath,
   editInput,
@@ -30,6 +31,7 @@ async function mount(
   } = {},
 ) {
   let result = options.result ?? ready;
+  let statusResponse: Promise<WebSearchStatusResult> | undefined;
   const statusRequested = createDeferred();
   let testResponse: Promise<unknown> = Promise.resolve({
     provider: "searxng",
@@ -51,7 +53,7 @@ async function mount(
         statusRequested.resolve();
       }
       return method === "webSearch.status"
-        ? Promise.resolve(result)
+        ? (statusResponse ?? Promise.resolve(result))
         : method === "webSearch.test"
           ? testResponse
           : method === "models.list"
@@ -92,6 +94,9 @@ async function mount(
     setResult: (next: WebSearchStatusResult) => {
       result = next;
     },
+    setStatusResponse: (next: Promise<WebSearchStatusResult> | undefined) => {
+      statusResponse = next;
+    },
     setTestResponse: (next: Promise<unknown>) => {
       testResponse = next;
     },
@@ -99,6 +104,78 @@ async function mount(
 }
 
 describe("Search settings", () => {
+  it("retains controls and the query draft through a failed refresh and retry", async () => {
+    const fixture = await mount();
+    const query = fixture.edit("Search query", "Keep my search draft", false);
+    const refresh = createDeferred<WebSearchStatusResult>();
+    fixture.setStatusResponse(refresh.promise);
+    fixture.click("Refresh search status");
+    flush();
+    await waitForSolid(() => expect(fixture.calls("webSearch.status")).toHaveLength(2));
+
+    expect(fixture.button("Refresh search status").disabled).toBe(true);
+    expect(fixture.button("Test search").disabled).toBe(true);
+    expect(fixture.input("Search query")).toBe(query);
+    expect(fixture.element.textContent).toContain(i18n.t("searchPage.loading"));
+    expect(fixture.element.querySelector(".settings-loading-skeleton")).toBeNull();
+
+    refresh.reject(new Error("Search status unavailable"));
+    await fixture.settle();
+    await waitForSolid(() =>
+      expect(fixture.element.querySelector('[role="alert"]')?.textContent).toContain(
+        "Search status unavailable",
+      ),
+    );
+    expect(fixture.input("Search query")).toBe(query);
+    expect(query.value).toBe("Keep my search draft");
+
+    const retry = createDeferred<WebSearchStatusResult>();
+    fixture.setStatusResponse(retry.promise);
+    fixture.click("Retry");
+    flush();
+    await waitForSolid(() => expect(fixture.calls("webSearch.status")).toHaveLength(3));
+    expect(fixture.element.querySelector('[role="alert"]')).toBeNull();
+    expect(fixture.input("Search query")).toBe(query);
+    retry.resolve(ready);
+    await fixture.settle();
+    expect(fixture.element.querySelector('[role="alert"]')).toBeNull();
+    expect(fixture.input("Search query")).toBe(query);
+    expect(query.value).toBe("Keep my search draft");
+    expect(fixture.calls("webSearch.test")).toHaveLength(0);
+  });
+
+  it.each(["connection", "agent"] as const)(
+    "retires controls and rejects a failed refresh after the %s changes",
+    async (change) => {
+      const fixture = await mount();
+      const originalQuery = fixture.input("Search query");
+      const refresh = createDeferred<WebSearchStatusResult>();
+      fixture.setStatusResponse(refresh.promise);
+      fixture.click("Refresh search status");
+      flush();
+      await waitForSolid(() => expect(fixture.calls("webSearch.status")).toHaveLength(2));
+      fixture.setStatusResponse(undefined);
+      if (change === "connection") {
+        fixture.replaceConnection();
+      } else {
+        fixture.setResult({ ...ready, agentId: "scout" });
+        fixture.setAgent("scout");
+      }
+      flush();
+      expect(originalQuery.isConnected).toBe(false);
+
+      refresh.reject(new Error("Retired search status failed"));
+      await fixture.settle();
+      expect(fixture.element.querySelector('[role="alert"]')).toBeNull();
+      expect(fixture.input("Search query")).not.toBe(originalQuery);
+      expect(fixture.calls("webSearch.status")).toHaveLength(3);
+      expect(fixture.calls("webSearch.status").at(-1)?.[1]).toEqual({
+        agentId: change === "agent" ? "scout" : "main",
+      });
+      expect(fixture.calls("webSearch.test")).toHaveLength(0);
+    },
+  );
+
   it("keeps the initial localized query and edited draft when the locale changes", async () => {
     const locale = i18n.getLocale();
     try {
@@ -131,6 +208,9 @@ describe("Search settings", () => {
       const catalog = createDeferred<ModelCatalogResult>();
       const fixture = await mount({ modelsResponse: catalog.promise, waitReady: false });
       expect(fixture.calls("webSearch.status")).toHaveLength(0);
+      await waitForSolid(() =>
+        expect(fixture.element.querySelector(".settings-loading-skeleton")).not.toBeNull(),
+      );
       if (outcome === "success") {
         fixture.setResult({ ...ready, agentId: "scout" });
         fixture.setAgent("scout");
@@ -144,6 +224,7 @@ describe("Search settings", () => {
       expect(statuses).toHaveLength(1);
       expect(statuses[0]?.[1]).toEqual({ agentId: outcome === "success" ? "scout" : "main" });
       expect(fixture.element.querySelector('select[aria-label="Search provider"]')).not.toBeNull();
+      expect(fixture.element.querySelector(".settings-loading-skeleton")).toBeNull();
       expect(fixture.element.textContent).toContain("Configured");
     },
   );
@@ -252,8 +333,9 @@ describe("Search settings", () => {
       const old = createDeferred<unknown>();
       fixture.setTestResponse(old.promise);
       fixture.click("Test search");
-      flush();
-      expect(fixture.statuses()).toContainEqual(expect.stringContaining("Searching…"));
+      await waitForSolid(() =>
+        expect(fixture.statuses()).toContainEqual(expect.stringContaining("Searching…")),
+      );
       if (change === "agent") {
         fixture.setResult({
           ...ready,
@@ -265,7 +347,18 @@ describe("Search settings", () => {
         fixture.gateway.publish({ ...fixture.snapshot, phase: "stopped", client: null });
         fixture.gateway.publish(fixture.snapshot);
       }
-      old.resolve({ provider: "searxng", status: "ok", latencyMs: 1, content: "Obsolete success" });
+      try {
+        await waitForSolid(() =>
+          expect(fixture.statuses()).toContainEqual(expect.stringContaining("Not tested")),
+        );
+      } finally {
+        old.resolve({
+          provider: "searxng",
+          status: "ok",
+          latencyMs: 1,
+          content: "Obsolete success",
+        });
+      }
       await fixture.settle();
       expect(fixture.element.textContent).not.toContain("Obsolete success");
       expect(fixture.element.textContent).not.toContain("Search succeeded");
@@ -281,9 +374,15 @@ describe("Search settings", () => {
       const pending = createDeferred<unknown>();
       fixture.setTestResponse(pending.promise);
       fixture.click("Test search");
-      flush();
+      fixture.click("Test search");
+      expect(fixture.calls("webSearch.test")).toHaveLength(1);
       try {
-        expect(query).toMatchObject({ disabled: true, value: "Query A" });
+        await waitForSolid(() =>
+          expect({ disabled: query.disabled, value: query.value }).toEqual({
+            disabled: true,
+            value: "Query A",
+          }),
+        );
       } finally {
         if (outcome === "request error") {
           pending.reject(new Error("Previous transport error"));
@@ -317,6 +416,30 @@ describe("Search settings", () => {
       expect(fixture.element.querySelector('a[href="https://example.com/previous"]')).toBeNull();
     },
   );
+
+  it("runs a test search on Enter but not on the Enter that confirms IME input", async () => {
+    const fixture = await mount();
+    const query = fixture.input("Search query");
+    editInput(query, "東京", false);
+    query.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await fixture.settle();
+    expect(fixture.calls("webSearch.test")).toHaveLength(1);
+    expect(fixture.calls("webSearch.test")[0]?.[1]).toMatchObject({ query: "東京" });
+
+    editInput(query, "おおさか", false);
+    query.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true }),
+    );
+    flush();
+    expect(fixture.calls("webSearch.test")).toHaveLength(1);
+
+    // WebKit can deliver the committing Enter just after compositionend with both flags cleared.
+    editInput(query, "大阪", false);
+    query.dispatchEvent(new CompositionEvent("compositionend", { data: "大阪", bubbles: true }));
+    query.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    flush();
+    expect(fixture.calls("webSearch.test")).toHaveLength(1);
+  });
 
   it.each(["native", "external"] as const)(
     "routes %s search to chat and tests only managed credentials",

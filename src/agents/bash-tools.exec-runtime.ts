@@ -9,7 +9,6 @@ import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
   resolveExecApprovalAllowedDecisions,
   type ExecApprovalDecision,
-  type ExecTarget,
 } from "../infra/exec-approvals.js";
 import {
   execRequestAbortSignal,
@@ -23,7 +22,7 @@ import { redactToolPayloadText } from "../logging/redact.js";
 import { withChildProcessOperation } from "../process/spawn-diagnostics.js";
 import type { SpawnInitiation } from "../process/spawn-initiation.js";
 import { getProcessSupervisor, type ManagedRun } from "../process/supervisor/index.js";
-import type { RunExit, SpawnInput, TerminationReason } from "../process/supervisor/types.js";
+import type { RunExit, SpawnInput } from "../process/supervisor/types.js";
 import type {
   SecretEgressProcessGrant,
   SecretEgressSentinelBinding,
@@ -53,7 +52,7 @@ import {
   waitForExecSession,
 } from "./bash-process-registry.js";
 import { emitExecProcessCompleted } from "./bash-tools.exec-diagnostics.js";
-import { prepareHostExecSpawn } from "./bash-tools.exec-host-spawn.js";
+import { prepareHostExecSpawn, resolveExecLaunchEnv } from "./bash-tools.exec-host-spawn.js";
 import { createExecLaunchLifecycle } from "./bash-tools.exec-launch.js";
 import { maybeNotifyOnExit, prepareExecExitNotification } from "./bash-tools.exec-notify.js";
 import {
@@ -62,7 +61,6 @@ import {
   renderExecUpdateText,
 } from "./bash-tools.exec-output.js";
 import { settleExecProcessExit } from "./bash-tools.exec-settlement.js";
-import { isRequestedExecTargetAllowed } from "./bash-tools.exec-target.js";
 import type {
   ExecExitFailureKind,
   ExecProcessOutcome,
@@ -74,7 +72,6 @@ import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { createSessionSlug } from "./session-slug.js";
 import { createStreamingBinaryOutputSanitizer } from "./shell-utils.js";
-import { registerTrustedToolNoStartError } from "./tool-result-error.js";
 import {
   getGatewayToolCallerIdentity,
   withoutGatewayToolCallerIdentity,
@@ -121,80 +118,6 @@ export type ExecProcessHandle = {
   /** Immediately suppress all future `onUpdate` calls for this handle. */
   disableUpdates: () => void;
 };
-
-/** Renders an exec target label, preserving `auto`. */
-export function renderExecTargetLabel(target: ExecTarget) {
-  return target;
-}
-
-/** Resolves configured/requested/elevated exec target into an effective host. */
-export function resolveExecTarget(params: {
-  configuredTarget?: ExecTarget;
-  requestedTarget?: ExecTarget | null;
-  elevatedRequested: boolean;
-  sandboxAvailable: boolean;
-  sandboxRequired?: boolean;
-}) {
-  const sandboxRequired = params.sandboxRequired === true;
-  if (sandboxRequired && !params.sandboxAvailable) {
-    throw registerTrustedToolNoStartError(
-      new Error("This session requires a sandbox, but its sandbox runtime is unavailable."),
-    );
-  }
-  if (sandboxRequired && params.elevatedRequested) {
-    throw registerTrustedToolNoStartError(
-      new Error("Elevated execution is unavailable because this session requires a sandbox."),
-    );
-  }
-  // Session isolation outranks every agent, session, and request-scoped host preference.
-  const configuredTarget = sandboxRequired ? "auto" : (params.configuredTarget ?? "auto");
-  const requestedTarget =
-    params.requestedTarget === "auto" ? null : (params.requestedTarget ?? null);
-  if (sandboxRequired && (requestedTarget === "gateway" || requestedTarget === "node")) {
-    throw registerTrustedToolNoStartError(
-      new Error(
-        `exec host not allowed (requested ${renderExecTargetLabel(requestedTarget)}; this session requires a sandbox).`,
-      ),
-    );
-  }
-  if (
-    requestedTarget &&
-    !isRequestedExecTargetAllowed({
-      configuredTarget,
-      requestedTarget,
-      sandboxAvailable: params.sandboxAvailable,
-    })
-  ) {
-    const allowedConfig = (
-      configuredTarget === "auto" &&
-      params.sandboxAvailable &&
-      (requestedTarget === "gateway" || requestedTarget === "node")
-        ? [renderExecTargetLabel(requestedTarget)]
-        : [renderExecTargetLabel(requestedTarget), "auto"]
-    ).join(" or ");
-    throw registerTrustedToolNoStartError(
-      new Error(
-        `exec host not allowed (requested ${renderExecTargetLabel(requestedTarget)}; ` +
-          `configured host is ${renderExecTargetLabel(configuredTarget)}; ` +
-          `set tools.exec.host=${allowedConfig} to allow this override).`,
-      ),
-    );
-  }
-  const selectedTarget = requestedTarget ?? configuredTarget;
-  const resolvedTarget = params.elevatedRequested
-    ? selectedTarget === "node"
-      ? "node"
-      : "gateway"
-    : selectedTarget;
-  const effectiveHost =
-    resolvedTarget === "auto" ? (params.sandboxAvailable ? "sandbox" : "gateway") : resolvedTarget;
-  return {
-    configuredTarget,
-    requestedTarget,
-    selectedTarget: resolvedTarget,
-    effectiveHost,
-  };
-}
 
 /** Merges shell-discovered PATH entries into an exec environment. */
 export function applyShellPath(env: Record<string, string>, shellPath?: string | null) {
@@ -275,61 +198,6 @@ function joinExecFailureOutput(aggregated: string, reason: string) {
   return aggregated ? `${aggregated}\n\n${reason}` : reason;
 }
 
-function classifyExecFailureKind(params: {
-  exitReason: TerminationReason;
-  exitCode: number;
-  isShellFailure: boolean;
-  exitSignal: NodeJS.Signals | number | null;
-}): ExecExitFailureKind {
-  if (params.isShellFailure) {
-    return params.exitCode === 127 ? "shell-command-not-found" : "shell-not-executable";
-  }
-  if (params.exitReason === "overall-timeout") {
-    return "overall-timeout";
-  }
-  if (params.exitReason === "no-output-timeout") {
-    return "no-output-timeout";
-  }
-  if (params.exitSignal != null) {
-    return "signal";
-  }
-  return "aborted";
-}
-
-function formatExecFailureReason(params: {
-  failureKind: ExecExitFailureKind;
-  exitSignal: NodeJS.Signals | number | null;
-  timeoutSec: number | null | undefined;
-  processContinuationAvailable: boolean;
-}): string {
-  switch (params.failureKind) {
-    case "shell-command-not-found":
-      return "Command not found";
-    case "shell-not-executable":
-      return "Command not executable (permission denied)";
-    case "overall-timeout": {
-      const timeoutText =
-        typeof params.timeoutSec === "number" && params.timeoutSec > 0
-          ? `Command timed out after ${params.timeoutSec} seconds.`
-          : "Command timed out.";
-      const retryGuidance = appendExecTimeoutRetryGuidance(timeoutText, params.failureKind);
-      return params.processContinuationAvailable
-        ? `${retryGuidance}\n\nIf it should keep running, start it with exec background=true or yieldMs so OpenClaw can register a pollable process session. Do not rely on shell backgrounding with a trailing &.`
-        : retryGuidance;
-    }
-    case "no-output-timeout":
-      return appendExecTimeoutRetryGuidance(
-        "Command timed out waiting for output.",
-        params.failureKind,
-      );
-    case "signal":
-      return `Command aborted by signal ${params.exitSignal}`;
-    case "aborted":
-      return "Command aborted before exit code was captured";
-  }
-  throw new Error("Unsupported exec failure kind");
-}
-
 function buildExecExitOutcome(params: {
   exit: RunExit;
   aggregated: string;
@@ -355,18 +223,48 @@ function buildExecExitOutcome(params: {
       noOutputTimedOut: params.exit.noOutputTimedOut,
     };
   }
-  const failureKind = classifyExecFailureKind({
-    exitReason: params.exit.reason,
-    exitCode,
-    isShellFailure,
-    exitSignal: params.exit.exitSignal,
-  });
-  const reason = formatExecFailureReason({
-    failureKind,
-    exitSignal: params.exit.exitSignal,
-    timeoutSec: params.timeoutSec,
-    processContinuationAvailable: params.processContinuationAvailable,
-  });
+  const failureKind: ExecExitFailureKind = isShellFailure
+    ? exitCode === 127
+      ? "shell-command-not-found"
+      : "shell-not-executable"
+    : params.exit.reason === "overall-timeout"
+      ? "overall-timeout"
+      : params.exit.reason === "no-output-timeout"
+        ? "no-output-timeout"
+        : params.exit.exitSignal != null
+          ? "signal"
+          : "aborted";
+  let reason: string;
+  switch (failureKind) {
+    case "shell-command-not-found":
+      reason = "Command not found";
+      break;
+    case "shell-not-executable":
+      reason = "Command not executable (permission denied)";
+      break;
+    case "overall-timeout": {
+      const timeoutText =
+        typeof params.timeoutSec === "number" && params.timeoutSec > 0
+          ? `Command timed out after ${params.timeoutSec} seconds.`
+          : "Command timed out.";
+      const retryGuidance = appendExecTimeoutRetryGuidance(timeoutText, failureKind);
+      reason = params.processContinuationAvailable
+        ? `${retryGuidance}\n\nIf it should keep running, start it with exec background=true or yieldMs so OpenClaw can register a pollable process session. Do not rely on shell backgrounding with a trailing &.`
+        : retryGuidance;
+      break;
+    }
+    case "no-output-timeout":
+      reason = appendExecTimeoutRetryGuidance("Command timed out waiting for output.", failureKind);
+      break;
+    case "signal":
+      reason = `Command aborted by signal ${params.exit.exitSignal}`;
+      break;
+    case "aborted":
+      reason = "Command aborted before exit code was captured";
+      break;
+    default:
+      throw new Error("Unsupported exec failure kind");
+  }
   return {
     status: "failed",
     exitCode: params.exit.exitCode,
@@ -754,7 +652,7 @@ export async function runExecProcess({
           withoutGatewayToolCallerIdentity(() =>
             supervisor.spawn({
               ...input,
-              ...(grant ? { env: { ...input.env, ...grant.env } } : {}),
+              env: resolveExecLaunchEnv(input.env, Boolean(opts.sandbox), grant?.env),
               onCancel: () => {
                 beginSandboxTermination();
                 grant?.revoke();

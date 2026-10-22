@@ -855,7 +855,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
       );
 
       await expect(suspendScheduledTaskAutoStartForUpdate(env)).rejects.toThrow(
-        "schtasks disable failed: schtasks timed out after 15000ms",
+        "Scheduled Task disable failed: schtasks timed out after 15000ms",
       );
 
       expect(schtasksCalls).toEqual([
@@ -905,7 +905,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
       schtasksResponses.push({ code: 1, stdout: "", stderr: "ERROR: Access is denied." });
 
       await expect(resumeScheduledTaskAutoStartAfterUpdate(env)).rejects.toThrow(
-        "schtasks enable failed: ERROR: Access is denied.",
+        "Scheduled Task enable failed: ERROR: Access is denied.",
       );
     });
   });

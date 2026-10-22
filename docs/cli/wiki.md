@@ -109,6 +109,10 @@ Source files must be valid UTF-8. Malformed input is rejected without replacing 
 
 Imported source pages carry provenance frontmatter (`sourceType: local-file`, `sourcePath`, `ingestedAt`). Ingest always recompiles the vault afterward.
 
+Concurrent `wiki ingest` and Gateway bridge imports targeting the same vault wait
+for each other's source writes and compilation to finish. Ingest waits up to five
+minutes for a busy vault before reporting a lock timeout.
+
 Flags: `--title <title>` overrides the source title (default: derived from the filename).
 
 ### `wiki okf import <path>`

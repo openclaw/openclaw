@@ -13,6 +13,7 @@ import {
   sqliteMethods,
 } from "../../../test/helpers/sqlite-parent-observer.js";
 import { buildCurrentRunRestartRecoveryClaim } from "../../agents/agent-command-restart-recovery.js";
+import { sanitizeAgentRunTerminalReply } from "../../agents/agent-run-terminal-reply.js";
 import { buildEmbeddedRunPayloads } from "../../agents/embedded-agent-runner/run/payloads.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import {
@@ -545,7 +546,13 @@ async function runHookBackedEmbeddedAgent(params: {
   return hookResult?.handled
     ? {
         payloads: buildHandledBeforeAgentReplyPayloads(hookResult.reply),
-        meta: { agentMeta: {} },
+        meta: {
+          agentMeta: {},
+          terminalReply: hookResult.reply
+            ? sanitizeAgentRunTerminalReply(hookResult.reply.text ?? "")
+            : { disposition: "silent" as const },
+          providerStarted: false,
+        },
       }
     : {
         payloads: [{ text: "model reply" }],
@@ -3130,6 +3137,22 @@ describe("runReplyAgent pending final delivery capture", () => {
       restartRecoveryForceSafeTools: true,
       restartRecoverySourceIngress: "channel",
     });
+  });
+
+  it("settles an omitted hook reply silently after checkpointing", async () => {
+    state.beforeAgentReplyHasHooksMock.mockImplementation(
+      (hookName) => hookName === "before_agent_reply",
+    );
+    state.beforeAgentReplyRunMock.mockResolvedValue({ handled: true });
+    state.runEmbeddedAgentMock.mockImplementationOnce(runHookBackedEmbeddedAgent);
+    const receipt: ReplyOperationRunState = {};
+    const { run } = createMinimalRun({
+      opts: { [REPLY_OPERATION_RUN_STATE]: receipt },
+      runOverrides: { terminalReplyExpectation: "result-required" },
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+    expect(resolveReplyOperationAgentTurn(receipt)).toBe("ok");
   });
 
   it("finalizes a hook-handled turn when source delivery is intentionally suppressed", async () => {

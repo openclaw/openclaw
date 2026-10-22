@@ -61,11 +61,12 @@ export class GitHubPublicationWorkspaceChangedError extends GitHubPublicationKno
 }
 
 export class GitHubPublicationBranchChangedError extends GitHubPublicationKnownFailure {
-  constructor() {
+  constructor(options: { originalPullRequest?: boolean } = {}) {
     super("GitHub publication cannot safely extend the published branch.", {
       code: "push_rejected",
-      nextAction:
-        "Preserve your local work and inspect the published head. To refresh the existing PR, apply the intended changes on top of that head without rewriting its history; otherwise publish from a new session branch and open a replacement PR. Repository-only checkpoints cannot adopt external branch changes; use a new session branch for those. Do not merge old history merely to make a rebased branch pushable. The broker never rewrites published history.",
+      nextAction: options.originalPullRequest
+        ? "Preserve your local work and inspect the original PR's current head. Continue only after its updated source has been explicitly accepted and your intended edits reapplied without rewriting published history. Do not create a replacement PR or redirect publication to another branch."
+        : "Preserve your local work and inspect the published head. To refresh the existing PR, apply the intended changes on top of that head without rewriting its history; otherwise publish from a new session branch and open a replacement PR. Repository-only checkpoints cannot adopt external branch changes; use a new session branch for those. Do not merge old history merely to make a rebased branch pushable. The broker never rewrites published history.",
     });
   }
 }

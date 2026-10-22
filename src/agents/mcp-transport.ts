@@ -36,9 +36,6 @@ type ResolvedMcpTransport = {
 
 function attachStderrLogging(serverName: string, transport: OpenClawStdioClientTransport) {
   const stderr = transport.stderr;
-  if (!stderr) {
-    return undefined;
-  }
   let reported = false;
   const onData = () => {
     if (!reported) {
@@ -113,7 +110,6 @@ export function resolveMcpTransport(
       env: resolved.env,
       cwd: resolved.cwd,
       prepareDataDir: options?.prepareDataDir,
-      stderr: "pipe",
     });
     return {
       transport,

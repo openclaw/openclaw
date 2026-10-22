@@ -13,6 +13,7 @@ import {
   assertTransactionUsable,
   runSqliteReadSnapshotSync,
 } from "../../infra/sqlite-transaction.js";
+import { groupPluginRecords as groupRecords } from "../../plugins/record-groups.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
@@ -301,13 +302,7 @@ export function readTranscriptExportSnapshotsFromDatabase(
         end += 1;
       }
       const batch = reads.slice(start, end);
-      const bySession = new Map<string, TranscriptExportRead[]>();
-      for (const read of batch) {
-        const sessionId = read.request.resolved.sessionId;
-        const targets = bySession.get(sessionId) ?? [];
-        targets.push(read);
-        bySession.set(sessionId, targets);
-      }
+      const bySession = groupRecords(batch, (read) => read.request.resolved.sessionId);
       const rows = iterateSqliteQuerySync(
         database.db,
         getSessionKysely(database.db)
@@ -320,7 +315,6 @@ export function readTranscriptExportSnapshotsFromDatabase(
               : transcriptEventJsonSql(database.db)
             ).as("event_json"),
           ])
-          .where("session_id", "in", [...bySession.keys()])
           .where((eb) =>
             eb.or(
               batch.map(({ request, throughSeq, afterSeq }) =>
@@ -677,6 +671,7 @@ export function findTranscriptEventInDatabase(
   sessionId: string,
   match: (event: TranscriptEvent) => boolean,
   navigationMatch?: (event: TranscriptEvent) => boolean,
+  { malformed = "skip" }: { malformed?: "skip" | "throw" } = {},
 ): { event: TranscriptEvent } | undefined {
   return readHotSessionTranscriptSnapshot(database, sessionId, "match", () => {
     const events = getSessionKysely(database.db)
@@ -705,7 +700,7 @@ export function findTranscriptEventInDatabase(
               .where("seq", "=", row.seq),
           )
         : row;
-      const found = payload && findTranscriptEventInRows([payload], match);
+      const found = payload && findTranscriptEventInRows([payload], match, malformed);
       if (found) {
         return found;
       }

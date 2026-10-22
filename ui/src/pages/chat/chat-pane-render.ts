@@ -1,16 +1,12 @@
-import { resolveArtifactDownloadSource } from "../../api/artifact-download.ts";
-import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { patchSettings } from "../../app/settings.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../../app/user-profile.ts";
-import {
-  markdownSessionPublicOrigin,
-  navigateMarkdownSession,
-} from "../../components/markdown-session-links.ts";
+import { navigateMarkdownSession } from "../../components/markdown-session-links.ts";
 import { personActivityRouting } from "../../components/person-activity-link.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   pickFreshestObserverDigest,
@@ -18,7 +14,6 @@ import {
   resolveChatPaneObserverRunId,
 } from "../../lib/observer-digest.ts";
 import { hasSessionPresenceViewers } from "../../lib/presence-users.ts";
-import { projectsForGateway } from "../../lib/projects.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { GitHubPublicationOwner } from "../../lib/sessions/github-publication-owner.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
@@ -30,6 +25,7 @@ import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import { resolveChatModelSetup } from "./chat-model-setup.ts";
 import { ChatPaneLayoutRender } from "./chat-pane-layout-render.ts";
 import { createChatPaneRails } from "./chat-pane-rails.ts";
+import { chatPaneResourceProps } from "./chat-pane-resource-presentation.ts";
 import {
   createChatPaneQueuedEditProps,
   createChatPaneSessionActionCallbacks,
@@ -48,7 +44,6 @@ import {
   createChatPaneRunRecoveryActions,
   dismissChatError,
   resolveChatPaneFollowUpMode,
-  projectChatPaneTranscript,
 } from "./chat-pane-state.ts";
 import type { ChatProviderReviewOwner } from "./chat-provider-review-controller.tsx";
 import { createChatQuestionActions } from "./chat-question-actions.ts";
@@ -63,12 +58,16 @@ import {
 } from "./chat-state-route.ts";
 import type { ChatProps } from "./chat-view.tsx";
 import { openSessionWorkspaceFile } from "./components/chat-session-workspace.ts";
-import { resolveChatLinkFaviconFetcher } from "./link-favicon-loader.ts";
 import { chatFailureRunId, hasAbortableSessionRun, hasDirectSessionRun } from "./run-lifecycle.ts";
 import { lockChatScroll, scheduleChatScroll } from "./scroll.ts";
 import { createChatWidgetLayout } from "./session-message-cache.ts";
 import { resolveChatProjectionRunId } from "./tool-stream-status.ts";
 import { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";
+
+registerChatSessionEnglish();
+
+// Catalog panes have no live run; stable empty inputs preserve their transcript cache.
+const emptyTranscriptItems: [] = [];
 
 export class ChatPaneRuntime extends ChatPaneLayoutRender {
   render(readProviderReview?: () => ChatProviderReviewOwner) {
@@ -121,7 +120,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     const currentAgentId = resolveChatAgentId(state);
     const catalogKey = parseCatalogSessionKey(state.sessionKey);
     const catalog = catalogKey !== null;
-    const overlays = this.context?.overlays;
     const selectedAgent = this.context.agents.state.agentsList?.agents.find(
       (agent) => agent.id === currentAgentId,
     );
@@ -204,6 +202,8 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     const { closePanelSlot, openPanelSlot, sessionWorkspace } = createChatPaneRails({
       state,
       sidebarLayout,
+      presentation: this.sessionPresentation,
+      visibleLayout: this.usesMobileHost ? this.presentSidebarLayout(sidebarLayout) : undefined,
       presentationId: this.presentationId,
       sessionTitle: this.resolveHeaderSessionTitle(selectedSession),
       paneLabel: this.paneLabel,
@@ -211,6 +211,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       gatewaySnapshot,
       setObserverVisibility: this.setSessionObserverVisibility,
       updateSidebarLayout: (layout) => this.commitSidebarLayout(layout),
+      onOpenPanel: this.onSidebarPanelOpened,
     });
     const selfUser = resolveCurrentSelfUser({
       snapshotUser: gatewaySnapshot.selfUser,
@@ -264,7 +265,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
             navigateToModelProvider(this.context, currentAgentId, provider),
           onModelAccounts: () => this.context.navigate("profile"),
         });
-    const projectCatalog = projectsForGateway(this.context.gateway).snapshot;
+    const messages = catalog ? this.history.catalogMessages : state.chatMessages;
     const publicationScope = this.captureConnectionScope();
     const readPublicationRow = () => {
       const row = selectedChatSessionRow(state);
@@ -358,11 +359,18 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         sessionDisabledBanner ?? placementComposer.disabledBanner ?? modelUnavailableBanner,
     };
     const mentionsUnsupported = !nativeConversation || selectedSession?.incognito || !selfProfileId;
-    const { gatewayQuestionPrompts, inlineApproval } = this.projectConversationAttention(
+    const conversationAttention = this.projectConversationAttention(
       state,
       currentAgentId,
       !catalogKey && !sessionParticipationBlocked,
     );
+    const detailsProgressRefresh =
+      canWriteProgressCard &&
+      composerAvailability.canSend &&
+      nativeConversation &&
+      this.detailsProgressCardPresentation
+        ? this.captureProgressCardRefreshAction()
+        : undefined;
     const props: ChatProps = {
       applicationContext: this.context,
       registerBrowserAnnotationFocus: this.registerBrowserAnnotationFocus,
@@ -370,6 +378,9 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       onHistorySentinelRef: this.registerHistorySentinel,
       onTranscriptAnnouncementRef: this.registerTranscriptAnnouncement,
       onComposerShellRef: this.registerComposerShell,
+      onComposerFloatRef: this.registerComposerFloat,
+      onActivityPillsLayout: this.onActivityPillsLayout,
+      onScrollPortRef: this.mobileScrollFades.register,
       paneId: this.presentationId,
       sessionKey: state.sessionKey,
       announceTranscript: this.active && this.presented,
@@ -410,13 +421,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       progressCardLifetime: progressPresentation?.lifetime,
       gatewayScope: gatewayPresentationScope(this.context.gateway),
       progressCardInitialLoading: this.progressCardInitialLoading,
-      progressCardRefresh:
-        canWriteProgressCard &&
-        composerAvailability.canSend &&
-        nativeConversation &&
-        progressPresentation
-          ? this.captureProgressCardRefreshAction()
-          : undefined,
+      progressCardRefresh: progressPresentation ? detailsProgressRefresh : undefined,
       collapseTaskProgress: state.settings.chatCollapseTaskProgress === true,
       ...this.captureProgressCardActions(canWriteProgressCard),
       readingHistory: state.chatReadingHistory,
@@ -425,7 +430,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         this.transcript.cancelScroll();
       },
       onDismissProgressCard: progressPresentation ? this.hideProgressCard.bind(this) : undefined,
-      gatewayQuestionPrompts,
+      ...conversationAttention,
       asyncQuestionStorage: nativeConversation
         ? this.chatState.composerPersistence.durableScope
         : null,
@@ -445,11 +450,17 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
               onShowEarlier: () => void this.loadOlderMessages(),
             }
           : undefined,
-      ...projectChatPaneTranscript(
-        state,
-        catalog ? this.history.catalogMessages : null,
-        projectionRunId,
-      ),
+      messages,
+      toolMessages: catalog ? emptyTranscriptItems : state.chatToolMessages,
+      guardianNotices: catalog ? emptyTranscriptItems : state.guardianNotices,
+      streamSegments: catalog ? emptyTranscriptItems : state.chatStreamSegments,
+      get stream() {
+        return catalog ? null : state.chatStream;
+      },
+      reasoning: catalog ? null : state.chatReasoning,
+      streamStartedAt: catalog ? null : state.chatStreamStartedAt,
+      runId: catalog ? null : projectionRunId,
+      runUsageById: catalog ? undefined : state.chatRunUsageById,
       assistantAvatarUrl: resolveChatAvatarUrl(state),
       sendShortcut: state.settings.chatSendShortcut,
       followUpMode: state.chatFollowUpMode,
@@ -460,6 +471,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         active: !catalogKey && this.active && this.presented,
         gateway: this.context.gateway,
       },
+      registerHumanMentionAccess: this.registerHumanMentionAccess,
       mentions: state.chatMentions,
       getMentions: () => state.chatMentions ?? [],
       mentionsUnsupported,
@@ -512,15 +524,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       workerRuntimeInstall: placementComposer.workerRuntimeInstall,
       runError:
         catalogKey || providerPaused ? null : (state.chatRunError ?? placementComposer.runError),
-      inlineApproval,
-      approvalBusy: overlays?.snapshot?.approvalBusy,
-      approvalCanGrant: overlays?.snapshot?.approvalCanGrant ?? false,
-      approvalErrors: overlays?.snapshot?.approvalErrors,
-      onApprovalDecision:
-        overlays && !sessionParticipationBlocked
-          ? (approvalId, decision) =>
-              overlays.decideApproval(decision, approvalId, inlineApproval ?? undefined)
-          : undefined,
       workspaceConflict: visibleWorkspaceConflict,
       onDismissWorkspaceConflict:
         visibleWorkspaceConflict && selectedSession
@@ -559,14 +562,10 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       pullRequestsStatus: this.sessionPullRequestsStatus,
       onDismissPullRequest: this.dismissSessionPullRequest,
       onDismissPullRequestsBranch: this.dismissSessionPullRequestsBranch,
-      // Until catalog success, a lowercase name may be a hidden/ambiguous alias.
-      // Do not mint a checkout link that can prefetch the wrong repository.
-      githubRepo: projectCatalog.result ? this.githubRepo : null,
-      githubRepositories: projectCatalog.repositories,
 
       onOpenSessionDiff: sessionWorkspace.onOpenDiff,
       githubPublication: this.publication.binding?.view(),
-      onOpenWorkspaceFile: (target) => openSessionWorkspaceFile(state, target),
+      onOpenWorkspaceFile: (target) => void openSessionWorkspaceFile(state, target),
       onOpenSessionLink: (target) => navigateMarkdownSession(this.context, target),
       onNavigate: (routeId, options) => this.context.navigate(routeId, options),
       onRefresh: this.refreshHistory,
@@ -659,11 +658,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       mainKey,
       ...userPresentation,
       personActivity: personActivityRouting(this.context),
-      mediaPolicyEpoch: state.mediaPolicyEpoch,
-      connectionEpoch: state.connectionEpoch,
-      embedSandboxMode: state.embedSandboxMode,
-      allowExternalEmbedUrls: state.allowExternalEmbedUrls,
-      fetchLinkFavicon: resolveChatLinkFaviconFetcher(state),
+      ...chatPaneResourceProps(state, this.context),
       chatMessageMaxWidth: state.settings.chatMessageMaxWidth,
       chatBubbleMode: isChatBubbleMode(
         state.settings,
@@ -672,12 +667,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         mainKey,
       ),
       branding: this.context?.theme.branding,
-      assistantAttachmentAuthToken: resolveControlUiAuthToken(state),
-      resolveArtifactDownload: (params, signal) =>
-        resolveArtifactDownloadSource(state, params, signal),
-      basePath: state.basePath,
-      sessionPublicOrigin: markdownSessionPublicOrigin(this.context),
-      resourceBasePath: state.resourceBasePath,
     };
     return {
       providerReviewSource: { state, canWrite: canWriteProgressCard && !selectedSessionArchived },
@@ -694,6 +683,10 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         sidebarLayout,
         sessionWorkspace,
         chatProps: props,
+        detailsActions: {
+          ...this.captureProgressCardActions(canWriteProgressCard),
+          progressCardRefresh: detailsProgressRefresh,
+        },
         observerDigest,
         observerRunId,
         catalog,

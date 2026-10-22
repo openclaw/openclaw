@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
@@ -118,7 +119,7 @@ async function holdGatewayLifecycle(databasePath: string, signal: AbortSignal) {
     import { acquireGatewayStateOwner } from ${JSON.stringify(ownerUrl.href)};
     const owner = acquireGatewayStateOwner({
       databasePath: ${JSON.stringify(databasePath)},
-      payload: { pid: process.pid, createdAt: new Date().toISOString(), configPath: "/fixture/config.json", role: "gateway" },
+      payload: { pid: process.pid, processNamespace: ${JSON.stringify(readGatewayLockProcessNamespace())}, createdAt: new Date().toISOString(), configPath: "/fixture/config.json", role: "gateway" },
     });
     process.stdout.write("ready\\n");
     process.stdin.resume();

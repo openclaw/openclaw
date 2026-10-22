@@ -22,7 +22,7 @@ import { listSelectableAgents, normalizeAgentLabel } from "../lib/agents/display
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
 import type { GatewayStatus as GatewayStatusKind } from "../lib/gateway-status.ts";
 import { isComposingKeyboardEvent } from "../lib/ime.ts";
-import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { projectAgentSelection } from "../lib/reactive/application.ts";
 import { i18nRevision, t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
@@ -37,13 +37,15 @@ import {
 } from "../lib/settings-navigation.ts";
 import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
 import type { GatewayStatusProps } from "./gateway-status.ts";
-import type { SettingsSaveIndicatorProps } from "./settings-save-indicator.tsx";
+import {
+  SettingsSaveIndicator,
+  type SettingsSaveIndicatorProps,
+} from "./settings-save-indicator.tsx";
 import { SidebarBuildChip } from "./sidebar-build-chip.tsx";
 import { GatewayStatus } from "./solid/gateway-status.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Kbd } from "./solid/kbd.tsx";
 import "./agent-select-registration.ts";
-import "./settings-save-indicator.tsx";
 import "../styles/settings.css";
 import { ThemeBrandingIcon } from "./theme-brand-icon.tsx";
 
@@ -88,16 +90,6 @@ type SettingsNavigationItemView = {
   routeId: RouteId;
   blocks: readonly SettingsSearchBlock[];
 };
-
-function isRedundantRouteBlock(routeId: RouteId, block: SettingsSearchBlock): boolean {
-  if (block.pathname) {
-    return false;
-  }
-  const blockLabel = normalizeLowercaseStringOrEmpty(block.label);
-  return [settingsNavigationLabelForRoute(routeId), titleForRoute(routeId)].some(
-    (label) => normalizeLowercaseStringOrEmpty(label) === blockLabel,
-  );
-}
 
 function filterSettingsNavigationGroups(
   searchQuery: string,
@@ -165,9 +157,15 @@ function filterSettingsNavigationGroups(
       labelKey: null,
       items: pageRoutes.map((routeId) => ({
         routeId,
-        blocks: (blocksByRoute.get(routeId) ?? []).filter(
-          (block) => !isRedundantRouteBlock(routeId, block),
-        ),
+        blocks: (blocksByRoute.get(routeId) ?? []).filter((block) => {
+          if (block.pathname) {
+            return true;
+          }
+          const blockLabel = normalizeLowercaseStringOrEmpty(block.label);
+          return ![settingsNavigationLabelForRoute(routeId), titleForRoute(routeId)].some(
+            (label) => normalizeLowercaseStringOrEmpty(label) === blockLabel,
+          );
+        }),
       })),
     },
     ...searchableRoutes
@@ -243,13 +241,9 @@ function SettingsNavigationItem(props: {
       onBlur={(event) => cancelRoutePreload(props.sidebar.preloadTimers, event)}
       onPointerEnter={preload}
       onPointerLeave={(event) => cancelRoutePreload(props.sidebar.preloadTimers, event)}
-      onClick={(event) => {
-        if (!shouldHandleNavigationClick(event)) {
-          return;
-        }
-        event.preventDefault();
-        props.sidebar.onNavigate(props.routeId);
-      }}
+      onClick={(event) =>
+        handleNavigationClick(event, () => props.sidebar.onNavigate(props.routeId))
+      }
     >
       <span class="settings-sidebar__item-icon" aria-hidden="true">
         <Show
@@ -291,17 +285,15 @@ function SettingsBlockItem(props: { sidebar: SettingsSidebarProps; block: Settin
       href={pathname() + (props.block.search ?? "") + props.block.hash}
       class={["settings-sidebar__subitem", { "settings-sidebar__subitem--active": active() }]}
       aria-current={active() ? "location" : undefined}
-      onClick={(event) => {
-        if (!shouldHandleNavigationClick(event)) {
-          return;
-        }
-        event.preventDefault();
-        props.sidebar.onNavigate(props.block.routeId, {
-          ...(props.block.pathname ? { pathname: props.block.pathname } : {}),
-          ...(props.block.search ? { search: props.block.search } : {}),
-          hash: props.block.hash,
-        });
-      }}
+      onClick={(event) =>
+        handleNavigationClick(event, () => {
+          props.sidebar.onNavigate(props.block.routeId, {
+            ...(props.block.pathname ? { pathname: props.block.pathname } : {}),
+            ...(props.block.search ? { search: props.block.search } : {}),
+            hash: props.block.hash,
+          });
+        })
+      }
     >
       <span class="settings-sidebar__subitem-label">{props.block.label}</span>
     </a>
@@ -361,7 +353,7 @@ function SettingsConnectionStatus(props: SettingsSidebarProps) {
   return (
     <Show
       when={props.connectionStatus !== null}
-      fallback={<openclaw-settings-save-indicator prop:props={props.saveIndicator} />}
+      fallback={<SettingsSaveIndicator {...props.saveIndicator} />}
     >
       <GatewayStatus
         kind={props.connectionStatus}
@@ -549,7 +541,7 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
               )}
             </Show>
             <div class="settings-sidebar__connection">
-              <openclaw-settings-save-indicator prop:props={props.saveIndicator} />
+              <SettingsSaveIndicator {...props.saveIndicator} />
             </div>
             <SidebarBuildChip
               basePath={props.basePath}

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { activateSessionMenuValue } from "../app-sidebar-menu.ts";
 import {
   catalogPage,
   createGatewayHarness,
@@ -101,6 +102,24 @@ describe("AppSidebar section reordering", () => {
     expect(harness.groupsPut).not.toHaveBeenCalled();
   });
 
+  it("drags a section from its label toggle without a dedicated grip", async () => {
+    const { sidebar, header, harness } = await mountWithGroups(["Alpha", "Beta"]);
+    const source = header("category:Beta");
+    const toggle = source.querySelector(".sidebar-session-group-toggle")!;
+    const dataTransfer = createDataTransferStub();
+
+    expect(
+      source.querySelector(".sidebar-session-group-drag-handle, .sidebar-reorder-trigger"),
+    ).toBeNull();
+    toggle.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    dispatchDragEvent(source, "dragstart", dataTransfer);
+
+    expect(dataTransfer.types).not.toEqual([]);
+    expect(sidebar.sessionOrganizer.draggingSidebarSection).toBe("category:Beta");
+    dispatchDragEvent(header("category:Alpha"), "drop", dataTransfer);
+    await waitForFast(() => expect(harness.groupsPut).toHaveBeenCalled());
+  });
+
   it("keeps new-session link gestures separate from section dragging and menus", async () => {
     const { sidebar, header } = await mountWithGroups(["Alpha"]);
     const dataTransfer = createDataTransferStub();
@@ -124,6 +143,7 @@ describe("AppSidebar section reordering", () => {
     const { sidebar, harness, section } = await mountWithGroups(["Done"], [], {
       groupSessions: true,
     });
+    await activateSessionMenuValue(sidebar, "empty-groups:never");
     const source = sidebar.querySelector('[data-session-key="agent:main:group-0"]');
     const groupsSection = section("groups");
     expect(source).not.toBeNull();

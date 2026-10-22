@@ -8,10 +8,7 @@ import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import type { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import { clearCodexBindingForClient } from "./session-binding.js";
-import {
-  isSameCodexAppServerThreadOwner,
-  withExclusiveCodexAppServerThread,
-} from "./thread-ownership.js";
+import { withExclusiveCodexAppServerThread } from "./thread-ownership.js";
 
 export async function cleanupCodexAttempt(
   resources: CodexAttemptResources,
@@ -143,14 +140,6 @@ export async function cleanupCodexAttempt(
           bindingStore.withLease(
             bindingIdentity,
             async () => {
-              if (
-                !isSameCodexAppServerThreadOwner(
-                  await bindingStore.readAsync(bindingIdentity),
-                  resourceState.thread,
-                )
-              ) {
-                throw new Error("Codex plugin refresh lost its managed thread binding.");
-              }
               if (!(await releaseThreadSubscription(connection.assertCurrent))) {
                 throw new Error("Plugin reload could not release the previous Codex thread.");
               }

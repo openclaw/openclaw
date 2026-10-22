@@ -210,6 +210,12 @@ availability. They never gain new app IDs or a broader destructive,
 open-world, or approval ceiling. Tools added later within an already captured
 app may run only when both the stored ceiling and current policy allow them.
 
+A finite `toolsAllow` list must match the creator's captured tool surface. If a
+native app tool name cannot be carried, the automation tool rejects creation or
+the tool-cap edit and identifies the unavailable entry. It does not silently save
+only the remaining tools. This error does not grant app access or broaden the cap;
+remove the entry only if the job can perform its work without that tool.
+
 Scheduled app calls are unattended. Only actions explicitly allowed both when
 the job was created and when it runs can proceed without a prompt. An action
 that still requires approval or elicitation is declined. A changed account,
@@ -691,6 +697,15 @@ per-app/tool settings above.
 
 Destructive plugin elicitations are allowed by default for configured Codex
 plugins, while unsafe schemas and ambiguous ownership are rejected:
+
+Set `read_only: true` on a configured plugin entry to limit its connected apps
+to tools explicitly marked read-only by `app/read`. Missing tool metadata and
+disabled tools fail closed. OpenClaw projects this restriction into native Codex
+tool permissions, including on thread recovery and side questions; an old saved
+tool grant cannot enable a write. All eligible read tools are available. This
+does not restrict individual actions within a tool or configure unrelated
+`mcp_servers` entries. If multiple enabled plugins own the same app, a read-only
+restriction from any owner remains in force. The default is `false`.
 
 - Global `allow_destructive_actions` defaults to `true`.
 - Per-plugin `allow_destructive_actions` overrides the global policy for

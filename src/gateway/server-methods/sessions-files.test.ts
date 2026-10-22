@@ -7,6 +7,10 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as identityFile from "../../agents/identity-file.js";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { withSessionTranscriptDeltaReader } from "../../config/sessions/session-transcript-delta-read.js";
 import { root as openSafeRoot } from "../../infra/fs-safe.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
@@ -57,6 +61,20 @@ vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
   loadGatewaySessionEntryReadOnlyInWorker: async (params: { key: string; agentId?: string }) =>
     hoisted.loadSessionEntry(params.key, { agentId: params.agentId }),
 }));
+
+vi.mock("../../config/sessions/session-entry-read-facts.js", async (importOriginal) => {
+  const { createRepositorySessionEntryReader } =
+    await import("./sessions-files.repository.test-support.js");
+  const actual =
+    await importOriginal<typeof import("../../config/sessions/session-entry-read-facts.js")>();
+  return {
+    ...actual,
+    readRetainedSessionEntryFacts: createRepositorySessionEntryReader(
+      actual.readRetainedSessionEntryFacts,
+      (key) => hoisted.loadSessionEntry(key),
+    ),
+  };
+});
 
 // mock-isolation: File-policy tests supply visible transcript pages without opening SQLite.
 vi.mock("../../config/sessions/session-transcript-delta-read.js", () => ({
@@ -115,9 +133,11 @@ const mockVisibleMessages = createVisibleMessagesMock(hoisted.readDelta);
 let workspaceRoot: string;
 beforeEach(() => {
   workspaceRoot = prepareSessionFilesTest(hoisted, mockVisibleMessages);
+  setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
 });
 
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   removeWorkspaceFixture(workspaceRoot);
 });
 
@@ -201,6 +221,7 @@ describe("sessions.files RPC handlers", () => {
 
   it("uses the persisted fixed-store owner for a bare session workspace", async () => {
     const cfg = fixedStoreConfig();
+    setRuntimeConfigSnapshot(cfg);
     hoisted.loadSessionEntry.mockReturnValue({
       agentId: "ops",
       canonicalKey: "global",
@@ -228,6 +249,7 @@ describe("sessions.files RPC handlers", () => {
 
   it("rejects a foreign agent before a bare fixed-store workspace write", async () => {
     const cfg = fixedStoreConfig();
+    setRuntimeConfigSnapshot(cfg);
 
     const error = await files.error(
       "set",
@@ -536,11 +558,24 @@ describe("sessions.files RPC handlers", () => {
 
   it("allows only one concurrent save across nested workspace aliases", async () => {
     const original = "export default {};\n";
-    const firstSave = saveFile("ui/vite.config.ts", "export default { first: true };\n", original);
-    mockSession({ sessionId: "nested", spawnedCwd: workspacePath("ui") });
+    const firstSession = hoisted.loadSessionEntry();
+    const nestedKey = "agent:main:nested";
+    const nestedSession = {
+      ...firstSession,
+      canonicalKey: nestedKey,
+      entry: { ...firstSession.entry, sessionId: "nested", spawnedCwd: workspacePath("ui") },
+    };
+    hoisted.loadSessionEntry.mockImplementation((key: string) =>
+      key === nestedKey ? nestedSession : firstSession,
+    );
     const [first, second] = await Promise.all([
-      firstSave,
-      saveFile("./vite.config.ts", "export default { second: true };\n", original),
+      saveFile("ui/vite.config.ts", "export default { first: true };\n", original),
+      files.request("set", {
+        sessionKey: nestedKey,
+        path: "./vite.config.ts",
+        content: "export default { second: true };\n",
+        expectedHash: hashContent(original),
+      }),
     ]);
 
     const calls = [...first, ...second];

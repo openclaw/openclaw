@@ -1,3 +1,4 @@
+import { createChangeListeners } from "../../../src/shared/listeners.js";
 import { DEFAULT_SIDEBAR_ENTRIES, type NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationRouter } from "../app-routes.ts";
 import { selectApplicationSession } from "../app/agent-selection.ts";
@@ -160,7 +161,7 @@ export abstract class AppSidebarBase {
     return element?.isConnected ? element : undefined;
   }
 
-  private readonly listeners = new Set<() => void>();
+  private readonly listeners = createChangeListeners();
   private attached = false;
   private complete: Promise<boolean> = Promise.resolve(true);
   private finishUpdate: ((value: boolean) => void) | undefined;
@@ -216,19 +217,14 @@ export abstract class AppSidebarBase {
     // The bridge delays disposal across moves; detached hosts cannot admit new work.
     return this.attached && this.hostElement.isConnected;
   }
-  subscribe(listener: () => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
+  readonly subscribe = this.listeners.subscribe;
   invalidate(): void {
     if (!this.finishUpdate) {
       this.complete = new Promise((resolve) => {
         this.finishUpdate = resolve;
       });
     }
-    for (const listener of this.listeners) {
-      listener();
-    }
+    this.listeners.publish();
   }
   get updateComplete(): Promise<boolean> {
     return this.complete;
@@ -269,6 +265,12 @@ export abstract class AppSidebarBase {
 
   setSessionOwnerFilter = (ownerId: string | null, involvingMe = false) => {
     this.sessionOwnerFilter.set(ownerId, involvingMe);
+    if (this.sidebarSnapshot) {
+      // Keep the cached rows, but let explicit intent select the replacement query.
+      const selected = this.sessionOwnerFilter.read();
+      this.sidebarSnapshot.ownerId = selected.ownerId;
+      this.sidebarSnapshot.involvingMe = selected.involvingMe;
+    }
   };
 
   pluginNavigation() {

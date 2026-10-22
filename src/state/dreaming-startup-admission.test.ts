@@ -214,13 +214,13 @@ async function withPendingPreparation(
   });
 }
 
-it.each([
+it.for([
   { managed: false, phase: "inspection" as const },
   { managed: true, phase: "inspection" as const },
   { managed: true, phase: "preparation" as const },
 ])(
   "scrubs historical dreaming artifacts after pending $phase (managed: $managed)",
-  async ({ managed, phase }) => {
+  async ({ managed, phase }, { signal }) => {
     await withState("dreaming-admission", async (state) => {
       const config = memoryConfig(state.workspaceDir);
       publishConfig(config);
@@ -244,6 +244,15 @@ it.each([
       });
       const fixture = dreamingFixture(state, config, managed);
       const { logger } = fixture;
+      const cleaned = createDeferredCore();
+      logger.info.mockImplementation((message: string) => {
+        if (
+          message ===
+          "memory-core: dreaming cleanup scrubbed 1 stale session entry and archived 0 orphan transcripts."
+        ) {
+          cleaned.resolve();
+        }
+      });
       try {
         await withPendingPreparation(
           state,
@@ -259,13 +268,14 @@ it.each([
               return preparation;
             });
             const startup = fixture.start();
-            // On the regression, the hook settles with a warning instead of joining preparation.
-            await Promise.race([joining.promise, startup]);
+            // Startup returns while background cleanup waits for database preparation.
+            await withinTest(startup, signal);
+            await withinTest(joining.promise, signal);
             const prepared = wait("main", { env: state.env });
             expect(prepared).toBeDefined();
             activate();
             await prepared;
-            await startup;
+            await withinTest(cleaned.promise, signal);
             expect.soft(logger.warn.mock.calls).toEqual([]);
             expect.soft(getSessionEntry({ agentId: "main", sessionKey })).toBeUndefined();
             expect
@@ -337,7 +347,9 @@ it.each(["failed", "stopped"] as const)("rejects cleanup when startup is %s", as
   });
 });
 
-it("does not warn when fresh agent stores are created during dreaming startup cleanup", async () => {
+it("does not warn when fresh agent stores are created during dreaming startup cleanup", async ({
+  signal,
+}) => {
   await withState("dreaming-fresh-startup", async (state) => {
     const agentIds = ["main", "researcher"];
     const config: OpenClawConfig = {
@@ -355,6 +367,7 @@ it("does not warn when fresh agent stores are created during dreaming startup cl
     });
     const cleanup = artifactCleanup.cleanupSessionLifecycleArtifactsCore;
     const startedAgents: string[] = [];
+    const cleaned = createDeferredCore();
     vi.spyOn(artifactCleanup, "cleanupSessionLifecycleArtifactsCore").mockImplementation(
       (params) => {
         if ("kind" in params || !params.agentId) {
@@ -365,18 +378,22 @@ it("does not warn when fresh agent stores are created during dreaming startup cl
         // First creation races after the real cleanup captures the absent source.
         createStore(params.agentId);
         startedAgents.push(params.agentId);
+        if (startedAgents.length === agentIds.length) {
+          cleaned.resolve(pending.then(() => {}));
+        }
         return pending;
       },
     );
     try {
       await fixture.start();
+      await withinTest(cleaned.promise, signal);
       expect(startedAgents).toEqual(agentIds);
-      expect(logger.warn).not.toHaveBeenCalled();
-      expect(logger.error).not.toHaveBeenCalled();
     } finally {
       await fixture.stop();
       vi.restoreAllMocks();
     }
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(logger.error).not.toHaveBeenCalled();
   });
 });
 
@@ -504,22 +521,16 @@ it.for([
             assert(manager?.sync, result.error ?? "Startup did not acquire a memory manager");
             expect(logger.warn).not.toHaveBeenCalled();
             expect(subscriptions).toHaveLength(1);
-            const indexed = createDeferredCore();
-            const sync = manager.sync.bind(manager);
-            vi.spyOn(manager, "sync").mockImplementation((params) => {
-              const work = sync(params);
-              if (params?.reason === "watch") {
-                indexed.resolve(work);
-              }
-              return work;
-            });
             await fs.promises.mkdir(state.workspaceDir, { recursive: true });
             await fs.promises.writeFile(
               path.join(state.workspaceDir, "MEMORY.md"),
               "Violet cranes nest beside the lagoon.",
             );
             subscriptions[0]!.notify();
-            await withinTest(indexed.promise, signal);
+            await instance.waitForRetainedWork(signal, {
+              includeConsumers: false,
+              includeCalls: true,
+            });
             expect(manager.status().chunks).toBeGreaterThan(0);
             expect(acquisition).toHaveBeenCalledTimes(1);
             await service.stop?.(context);

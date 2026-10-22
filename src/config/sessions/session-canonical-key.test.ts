@@ -306,20 +306,3 @@ it("omits saved prompts before decoding keys but retains them for Doctor", async
     prompt,
   );
 });
-
-it("still rejects divergent lineage on the first read", async () => {
-  const scope = createScope();
-  await upsertSessionEntryCore(scope, {
-    sessionId: "cold-key",
-    updatedAt: 1,
-    parentSessionKey: "agent:main:parent",
-    skillsSnapshot: { prompt: "synthetic saved prompt", skills: [] },
-  });
-  const database = open(scope);
-  markCanonicalSessionValidationPending(database, [scope.sessionKey]);
-  updateRow(database.db, scope.sessionKey, "parent_session_key = ?", "agent:main:different");
-  await closeOpenClawAgentDatabasesAsync();
-  closeColdDatabases();
-
-  expect(() => loadSessionEntryReadOnly(scope)).toThrow("openclaw doctor --fix");
-});

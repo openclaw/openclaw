@@ -1,14 +1,19 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type, type Static } from "typebox";
+import { Value } from "typebox/value";
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { resolveSubagentCompletionResultText } from "../subagents/completion/subagent-completion-result.js";
 import { subscribeSubagentRunChanges } from "../subagents/registry/subagent-registry-publication.js";
+import { matchesSubagentRequesterSession } from "../subagents/registry/subagent-registry-queries.js";
 import { prepareSubagentRunsByRunIds } from "../subagents/registry/subagent-registry.js";
 import type { SubagentRunRecord } from "../subagents/registry/subagent-registry.types.js";
 import { markCollectorReaderTool } from "../subagents/swarm/swarm-collector-capability.js";
@@ -82,12 +87,55 @@ type CollectorOwnerScope = {
   currentSessionKeys: ReadonlySet<string>;
   currentAgentId?: string;
   config?: OpenClawConfig;
+  expectedRequester?: { sessionId: string; lifecycleRevision?: string };
 };
+
+// Hooks see the call ID and may invoke other tools with it. The per-tool marker
+// survives wrapper spreads; correlation strings alone never select an owner.
+const NATIVE_COLLECTOR_IDENTITY = Symbol.for("openclaw.nativeCollectorIdentity");
+type NativeCollectorTool = AnyAgentTool & { [NATIVE_COLLECTOR_IDENTITY]?: symbol };
+const nativeCollectorOwner = resolveGlobalSingleton(
+  Symbol.for("openclaw.nativeSubagentCollectorOwner"),
+  () =>
+    new AsyncLocalStorage<{
+      identity: symbol;
+      toolCallId: string;
+      owner: CollectorOwnerScope & { assertCurrent: () => void };
+    }>(),
+);
+
+export function withNativeSubagentCollectorOwner<T>(
+  tool: NativeCollectorTool,
+  toolCallId: string,
+  owner: CollectorOwnerScope & { assertCurrent: () => void },
+  run: () => T,
+): T {
+  const identity = tool[NATIVE_COLLECTOR_IDENTITY];
+  if (!identity) {
+    throw new ToolInputError("Native collection requires its original collector tool.");
+  }
+  return nativeCollectorOwner.run({ identity, toolCallId, owner }, run);
+}
+
+/** The finalized tool may return a policy denial instead of its declared output. */
+export function readNativeSubagentCollection(details: unknown) {
+  if (!Value.Check(AgentsWaitOutputSchema, details)) {
+    const failure = asOptionalRecord(details);
+    const reason = failure?.reason ?? failure?.error;
+    throw new ToolInputError(
+      typeof reason === "string" ? reason : "Native subagent collection was not accepted.",
+    );
+  }
+  return details;
+}
 
 function ownsRun(
   entry: SubagentRunRecord,
-  { currentSessionKeys, currentAgentId, config }: CollectorOwnerScope,
+  { currentSessionKeys, currentAgentId, config, expectedRequester }: CollectorOwnerScope,
 ): boolean {
+  if (expectedRequester && !matchesSubagentRequesterSession(entry, expectedRequester)) {
+    return false;
+  }
   const owner = entry.swarmRequesterSessionKey?.trim();
   if (!owner) {
     return false;
@@ -212,6 +260,7 @@ async function waitForCollector(
     waitForAll?: boolean;
     signal?: AbortSignal;
     abortError: () => Error;
+    assertCurrent?: () => void;
   },
 ) {
   const deadline =
@@ -224,6 +273,7 @@ async function waitForCollector(
     resume?.();
   };
   const assertNotAborted = () => {
+    params.assertCurrent?.();
     if (params.signal?.aborted) {
       throw params.abortError();
     }
@@ -244,6 +294,7 @@ async function waitForCollector(
             callbackAbort = params.abortError();
             throw callbackAbort;
           }
+          params.assertCurrent?.();
           return readWaitState(entries, params.ids, params);
         });
       } catch (error) {
@@ -295,53 +346,81 @@ export function createAgentsWaitTool(opts: {
   agentId?: string;
   config?: OpenClawConfig;
 }): AnyAgentTool {
-  const swarm = resolveSwarmConfig(opts.config, opts.agentId);
+  const identity = Symbol("nativeCollector");
   return markCollectorReaderTool({
+    [NATIVE_COLLECTOR_IDENTITY]: identity,
     label: "Wait for Agents",
     name: "agents_wait",
     displaySummary: "Wait for collector children.",
     description: describeAgentsWaitTool(false),
     parameters: AgentsWaitToolSchema,
     outputSchema: AgentsWaitOutputSchema,
-    execute: async (_toolCallId, args, signal) => {
+    execute: async (toolCallId, args, signal) => {
       const params = args as Static<typeof AgentsWaitToolSchema>;
-      if (params.awaitResults !== undefined && typeof params.awaitResults !== "boolean") {
-        throw new ToolInputError("agents_wait awaitResults must be a boolean.");
-      }
-      if (params.awaitResults && params.timeoutSeconds !== undefined) {
-        throw new ToolInputError(
-          "agents_wait with awaitResults=true cannot also specify timeoutSeconds.",
-        );
-      }
-      if (params.ids.length > MAX_WAIT_IDS) {
-        throw new ToolInputError(`agents_wait supports at most ${MAX_WAIT_IDS} ids.`);
-      }
-      const ids = [...new Set(params.ids.map((id) => id.trim()).filter(Boolean))];
-      if (ids.length === 0) {
-        throw new ToolInputError("agents_wait requires at least one non-empty run id.");
-      }
-      const currentSessionKeys = new Set(
-        [opts.runSessionKey, opts.agentSessionKey].filter((key): key is string =>
-          Boolean(key?.trim()),
-        ),
+      const scope = nativeCollectorOwner.getStore();
+      return jsonResult(
+        await collectNativeSubagentResults({
+          ...params,
+          currentSessionKeys: new Set(
+            [opts.runSessionKey, opts.agentSessionKey].filter((key): key is string =>
+              Boolean(key?.trim()),
+            ),
+          ),
+          currentAgentId: opts.agentId,
+          config: opts.config,
+          ...(scope?.identity === identity && scope.toolCallId === toolCallId
+            ? scope.owner
+            : undefined),
+          signal,
+        }),
       );
-      const requestedTimeout = asFiniteNumber(params.timeoutSeconds) ?? 30;
-      const timeoutSeconds = Math.min(Math.max(0, requestedTimeout), swarm.waitTimeoutSecondsMax);
-      const result = await waitForCollector({
-        ids,
-        currentSessionKeys,
-        currentAgentId: opts.agentId,
-        config: opts.config,
-        timeoutMs: params.awaitResults ? undefined : timeoutSeconds * 1_000,
-        waitForAll: params.awaitResults,
-        signal,
-        abortError: () => createAbortError("agents_wait aborted."),
-      });
-      const noAuthorizedTargets =
-        result.completed.length === 0 &&
-        result.pending.length === 0 &&
-        Boolean(result.errors?.length);
-      return jsonResult(noAuthorizedTargets ? { ...result, success: false } : result);
     },
   });
+}
+
+/** Native event-driven collector, with optional exact requester and effect-time authority. */
+async function collectNativeSubagentResults(
+  params: CollectorOwnerScope & {
+    ids: string[];
+    timeoutSeconds?: number;
+    awaitResults?: boolean;
+    signal?: AbortSignal;
+    assertCurrent?: () => void;
+  },
+) {
+  params.assertCurrent?.();
+  const swarm = resolveSwarmConfig(params.config, params.currentAgentId);
+  if (params.awaitResults !== undefined && typeof params.awaitResults !== "boolean") {
+    throw new ToolInputError("agents_wait awaitResults must be a boolean.");
+  }
+  if (params.awaitResults && params.timeoutSeconds !== undefined) {
+    throw new ToolInputError(
+      "agents_wait with awaitResults=true cannot also specify timeoutSeconds.",
+    );
+  }
+  if (params.ids.length > MAX_WAIT_IDS) {
+    throw new ToolInputError(`agents_wait supports at most ${MAX_WAIT_IDS} ids.`);
+  }
+  const ids = [...new Set(params.ids.map((id) => id.trim()).filter(Boolean))];
+  if (ids.length === 0) {
+    throw new ToolInputError("agents_wait requires at least one non-empty run id.");
+  }
+  const currentSessionKeys = params.currentSessionKeys;
+  const requestedTimeout = asFiniteNumber(params.timeoutSeconds) ?? 30;
+  const timeoutSeconds = Math.min(Math.max(0, requestedTimeout), swarm.waitTimeoutSecondsMax);
+  const result = await waitForCollector({
+    ids,
+    currentSessionKeys,
+    currentAgentId: params.currentAgentId,
+    config: params.config,
+    timeoutMs: params.awaitResults ? undefined : timeoutSeconds * 1_000,
+    waitForAll: params.awaitResults,
+    signal: params.signal,
+    assertCurrent: params.assertCurrent,
+    expectedRequester: params.expectedRequester,
+    abortError: () => createAbortError("agents_wait aborted."),
+  });
+  const noAuthorizedTargets =
+    result.completed.length === 0 && result.pending.length === 0 && Boolean(result.errors?.length);
+  return noAuthorizedTargets ? { ...result, success: false as const } : result;
 }

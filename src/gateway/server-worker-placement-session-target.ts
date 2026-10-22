@@ -288,17 +288,14 @@ export async function resolveWorkerPlacementSessionTarget(params: {
   const assertRoutingCurrent = captureSessionMutationRouting(params.config, targetChangedError, [
     { ...params, preserveQualifiedAddress: true },
   ]);
-  let active = true;
+  const lifetime = new DisposableStack();
   let retained: ReturnType<typeof retainPreparedSessionEntryPredicate> | undefined;
   let unregister = () => {};
-  const release = () => {
-    if (!active) {
-      return;
-    }
-    active = false;
+  lifetime.defer(() => {
     retained?.release();
     unregister();
-  };
+  });
+  const release = () => lifetime.dispose();
   const retainTarget = (
     target: Awaited<ReturnType<typeof resolveGatewaySessionStoreTargetInWorker>>,
   ) => {
@@ -368,7 +365,17 @@ export async function resolveWorkerPlacementSessionTarget(params: {
       repositoryWorkspaceId: initialEntry.repositoryWorkspaceId,
       deviceFolder: initialEntry.deviceFolder,
     };
-    const acceptWorktree = captureWorktreeRegistryReadGuard(worktreeContext, "source-owner");
+    const acceptWorktree = captureWorktreeRegistryReadGuard(
+      worktreeContext,
+      "source-owner",
+      initialIdentity.worktreeId
+        ? {
+            id: initialIdentity.worktreeId,
+            ownerKind: "session",
+            ownerId: initialTarget.canonicalKey,
+          }
+        : undefined,
+    );
     const worktree =
       initialIdentity.repositoryWorkspaceId || initialIdentity.deviceFolder
         ? undefined
@@ -384,7 +391,7 @@ export async function resolveWorkerPlacementSessionTarget(params: {
       : undefined;
     const resolveBinding = (config = params.config) => {
       assertRoutingCurrent(config);
-      if (!active || retained?.isCurrent() === false) {
+      if (lifetime.disposed || retained?.isCurrent() === false) {
         throw targetChangedError();
       }
       const target = memory ? initialTarget : (params.readTarget?.(config) ?? initialTarget);

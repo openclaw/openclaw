@@ -32,7 +32,7 @@ function assertSqliteWalResetSafeVersion(version: string, nodeVersion: string): 
   const wording = isShared ? "uses shared system" : "embeds";
   const remediation = isShared
     ? "Upgrade the system SQLite library to one of those safe versions, or use a Node build embedding a safe version."
-    : "Upgrade to Node 24.16.0+ or 26.1.0+ before retrying.";
+    : "Upgrade to Node 24.22.1+ or 26.12.1+ before retrying.";
   throw new Error(
     `OpenClaw requires SQLite 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x for WAL safety; ` +
       `Node ${nodeVersion} ${wording} SQLite ${version}, which is affected by the upstream WAL-reset ` +
@@ -54,7 +54,7 @@ type SqliteNativeRuntimeAdmission = {
   format: 1;
   runtime: ReturnType<typeof sqliteNativeRuntimeIdentity>;
   version: string;
-  storageIdentity?: string;
+  storageIdentity?: { sourceId: string; compileOptions: string };
   extensionLoadingSupported: boolean;
   iteratorBehavior: SqliteIteratorBehavior;
 };
@@ -81,7 +81,15 @@ function parseSqliteNativeRuntimeAdmission(
     format: 1,
     runtime,
     version: value.version,
-    storageIdentity: typeof value.storageIdentity === "string" ? value.storageIdentity : undefined,
+    storageIdentity:
+      isRecord(value.storageIdentity) &&
+      typeof value.storageIdentity.sourceId === "string" &&
+      typeof value.storageIdentity.compileOptions === "string"
+        ? {
+            sourceId: value.storageIdentity.sourceId,
+            compileOptions: value.storageIdentity.compileOptions,
+          }
+        : undefined,
     extensionLoadingSupported: value.extensionLoadingSupported,
     iteratorBehavior: {
       nextAfterDoneIsTerminal: value.iteratorBehavior.nextAfterDoneIsTerminal,
@@ -134,7 +142,7 @@ export function assertSafeSqliteRuntime(
   // reports, so query the loaded library before callers open real state databases.
   const database = new sqlite.DatabaseSync(":memory:");
   let version: string;
-  let storageIdentity: string | undefined;
+  let storageIdentity: SqliteNativeRuntimeAdmission["storageIdentity"];
   let extensions: boolean;
   let iteratorBehavior: SqliteIteratorBehavior;
   try {
@@ -143,7 +151,8 @@ export function assertSafeSqliteRuntime(
         "(SELECT group_concat(compile_options, ',') FROM (SELECT compile_options FROM pragma_compile_options ORDER BY compile_options)) AS compileOptions, " +
         "sqlite_compileoption_used('OMIT_LOAD_EXTENSION') AS omitted",
     );
-    const row = statement.get();
+    const probe = probeSqliteIteratorBehavior(statement);
+    const row = probe.row;
     version = typeof row?.version === "string" ? row.version : "unknown";
     assertSqliteWalResetSafeVersion(version, process.versions.node);
     // Bind restart proof to the library actually loaded, including custom builds.
@@ -153,16 +162,10 @@ export function assertSafeSqliteRuntime(
       row.sourceId &&
       typeof row.compileOptions === "string"
     ) {
-      storageIdentity = JSON.stringify([
-        version,
-        row.sourceId,
-        row.compileOptions,
-        process.versions.node,
-        process.versions.bun ?? null,
-      ]);
+      storageIdentity = { sourceId: row.sourceId, compileOptions: row.compileOptions };
     }
     extensions = row?.omitted === 0;
-    iteratorBehavior = probeSqliteIteratorBehavior(statement);
+    iteratorBehavior = probe.iteratorBehavior;
   } finally {
     database.close();
   }

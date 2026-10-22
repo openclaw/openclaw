@@ -142,6 +142,7 @@ export type Task<Input, Output> = Omit<PromiseWithResolvers<Output>, "resolve"> 
   computePermit?: WorkerComputePermit;
   enqueuedAt: number;
   observation?: WorkerTaskObservation;
+  diagnosticLabel?: string;
   startedAt?: number;
   preparedAt?: number;
   transferMs: number;

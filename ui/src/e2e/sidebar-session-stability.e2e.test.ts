@@ -5,6 +5,7 @@ import {
   pauseVirtualClock,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   controlUiSessionPath,
@@ -170,9 +171,7 @@ suite.define(() => {
             pointer === "coarse",
           );
           if (width === 390) {
-            const drawerToggle = page
-              .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
-              .first();
+            const drawerToggle = navigationDrawerToggle(page);
             await drawerToggle.waitFor({ state: "visible" });
             await drawerToggle.click();
           }

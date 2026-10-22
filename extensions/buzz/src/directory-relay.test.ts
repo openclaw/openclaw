@@ -51,6 +51,7 @@ function createProfileRelay(relayClose?: ReturnType<typeof vi.fn>) {
 function startDirectory(relay: Relay, onFatalError?: (error: Error) => void) {
   return startBuzzDirectoryRelay({
     ...directoryParams(relay),
+    subscribedRoomIds: new Set(),
     onFatalError,
   });
 }

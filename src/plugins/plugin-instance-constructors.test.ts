@@ -29,6 +29,12 @@ function createBase(): BaseConstructor {
   })()`);
 }
 
+function expectInstances(value: object, ...constructors: Array<new () => object>) {
+  for (const constructor of constructors) {
+    expect(value).toBeInstanceOf(constructor);
+  }
+}
+
 let instance: PluginInstance;
 beforeEach(() => {
   instance = new PluginInstance("constructors");
@@ -67,14 +73,11 @@ describe("managed exported constructors", () => {
       }
     }
     const base = new WrappedBase();
-    expect(base).toBeInstanceOf(Base);
-    expect(base).toBeInstanceOf(WrappedBase);
+    expectInstances(base, Base, WrappedBase);
     expect(base.basePublic).toBe("base");
     expect(base.readBase()).toBe("base private");
     const derived = new Derived();
-    expect(derived).toBeInstanceOf(Derived);
-    expect(derived).toBeInstanceOf(WrappedBase);
-    expect(derived).toBeInstanceOf(Base);
+    expectInstances(derived, Derived, WrappedBase, Base);
     expect(derived.basePublic).toBe("base");
     expect(derived.readBase()).toBe("base private");
     expect(derived.readDerived()).toBe("derived private");
@@ -103,26 +106,19 @@ describe("managed exported constructors", () => {
       }
     },
   );
-});
 
-describe("managed constructor receiver layers", () => {
   it("preserves a nested VM function prototype getter receiver", async () => {
     const Base = createBase();
     const WrappedBase = instance.wrap(Base);
     class Middle extends WrappedBase {
       #value = "middle private";
-      readMiddle() {
-        return this.#value;
-      }
       get middleLabel() {
         return this.#value;
       }
     }
     const WrappedMiddle = instance.wrap(Middle);
     const value = new WrappedMiddle();
-    expect(value).toBeInstanceOf(Base);
-    expect(value).toBeInstanceOf(Middle);
-    expect(value).toBeInstanceOf(WrappedMiddle);
+    expectInstances(value, Base, Middle, WrappedMiddle);
     expect(value.readBase()).toBe("base private");
     const read = Object.getOwnPropertyDescriptor(WrappedMiddle.prototype, "middleLabel")!.get!;
     expect(Reflect.apply(read, value, [])).toBe("middle private");

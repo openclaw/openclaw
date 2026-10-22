@@ -31,53 +31,6 @@ function isNodeCompileCacheRequested(env: NodeJS.ProcessEnv): boolean {
   return env.NODE_COMPILE_CACHE !== undefined && env.NODE_DISABLE_COMPILE_CACHE === undefined;
 }
 
-type OpenClawCompileCacheRespawnPlan = {
-  command: string;
-  args: string[];
-  env: NodeJS.ProcessEnv;
-  detachForProcessTree: boolean;
-};
-
-function buildOpenClawCompileCacheRespawnPlan(params: {
-  currentFile: string;
-  compileCacheDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): OpenClawCompileCacheRespawnPlan | undefined {
-  const env = params.env ?? process.env;
-  const argv = process.argv;
-  const platform = process.platform;
-  // A recovered Unix Gateway must not acquire another short-lived stop wrapper.
-  if (platform !== "win32" && isForegroundGatewayRunArgv(argv)) {
-    return undefined;
-  }
-  if (isForegroundGmailRunArgv(argv) || shouldKeepNativeHookRelayInProcess(argv, platform)) {
-    return undefined;
-  }
-  if (!isSourceEntry(params.currentFile)) {
-    return undefined;
-  }
-  if (env[COMPILE_CACHE_DISABLED_RESPAWNED_ENV] === "1") {
-    return undefined;
-  }
-  if (!params.compileCacheDir && !isNodeCompileCacheRequested(env)) {
-    return undefined;
-  }
-  const nextEnv: NodeJS.ProcessEnv = {
-    ...env,
-    NODE_DISABLE_COMPILE_CACHE: "1",
-    [COMPILE_CACHE_DISABLED_RESPAWNED_ENV]: "1",
-  };
-  delete nextEnv.NODE_COMPILE_CACHE;
-  return {
-    ...resolveOpenClawCliRespawn({
-      entryPath: params.currentFile,
-      args: argv.slice(2),
-      env: nextEnv,
-    }),
-    detachForProcessTree: platform !== "win32" && !isTerminalInteractiveRespawnArgv(argv),
-  };
-}
-
 export async function respawnWithoutOpenClawCompileCacheIfNeeded(params: {
   currentFile: string;
   env?: NodeJS.ProcessEnv;
@@ -102,14 +55,40 @@ export async function respawnWithoutOpenClawCompileCacheIfNeeded(params: {
       return runRespawnedChild(resolveOpenClawCliRespawn({ entryPath: params.currentFile, env }));
     }
   }
-  const plan = buildOpenClawCompileCacheRespawnPlan({
-    currentFile: params.currentFile,
-    compileCacheDir: getCompileCacheDir?.(),
-    env: params.env,
-  });
-  if (!plan) {
+  const compileCacheDir = getCompileCacheDir?.();
+  const env = params.env ?? process.env;
+  const argv = process.argv;
+  const platform = process.platform;
+  // A recovered Unix Gateway must not acquire another short-lived stop wrapper.
+  if (platform !== "win32" && isForegroundGatewayRunArgv(argv)) {
     return false;
   }
+  if (isForegroundGmailRunArgv(argv) || shouldKeepNativeHookRelayInProcess(argv, platform)) {
+    return false;
+  }
+  if (!isSourceEntry(params.currentFile)) {
+    return false;
+  }
+  if (env[COMPILE_CACHE_DISABLED_RESPAWNED_ENV] === "1") {
+    return false;
+  }
+  if (!compileCacheDir && !isNodeCompileCacheRequested(env)) {
+    return false;
+  }
+  const nextEnv: NodeJS.ProcessEnv = {
+    ...env,
+    NODE_DISABLE_COMPILE_CACHE: "1",
+    [COMPILE_CACHE_DISABLED_RESPAWNED_ENV]: "1",
+  };
+  delete nextEnv.NODE_COMPILE_CACHE;
+  const plan = {
+    ...resolveOpenClawCliRespawn({
+      entryPath: params.currentFile,
+      args: argv.slice(2),
+      env: nextEnv,
+    }),
+    detachForProcessTree: platform !== "win32" && !isTerminalInteractiveRespawnArgv(argv),
+  };
   const writeError =
     (await params.prepareWriteError?.()) ??
     ((message: string) => {

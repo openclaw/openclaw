@@ -23,6 +23,36 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("live model switch worker persistence", () => {
   const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-model-switch-worker-");
+  const selection = { provider: "openai", model: "gpt-5.4" };
+  const initialSelection = {
+    sessionId: "model-switch",
+    updatedAt: 1,
+    liveModelSwitchPending: true,
+    providerOverride: selection.provider,
+    modelOverride: selection.model,
+  };
+  function fixture() {
+    const storePath = path.join(sessionDirs.make(), "sessions.json");
+    return {
+      scope: { storePath, sessionKey: "agent:main:model-switch" },
+      cfg: { session: { store: storePath } },
+      defaultProvider: selection.provider,
+      defaultModel: selection.model,
+      providerUsed: selection.provider,
+      modelUsed: selection.model,
+    };
+  }
+
+  async function withoutHostSql(run: () => Promise<unknown>, forbidden: RegExp) {
+    const sql = observeHostDataSql();
+    try {
+      const result = await run();
+      expect(sql.queries.filter((query) => forbidden.test(query))).toEqual([]);
+      return result;
+    } finally {
+      sql.restore();
+    }
+  }
 
   function completeSelection(
     scope: { storePath: string; sessionKey: string },
@@ -60,52 +90,32 @@ describe("live model switch worker persistence", () => {
   it.each(["clear", "complete"] as const)(
     "%s consumes only the applied selection without host session SQL",
     async (operation) => {
-      const storePath = path.join(sessionDirs.make(), "sessions.json");
-      const scope = { storePath, sessionKey: "agent:main:model-switch" };
-      const cfg = { session: { store: storePath } };
-      const initial = {
-        sessionId: "model-switch",
-        updatedAt: 1,
-        label: "keep this label",
-        liveModelSwitchPending: true,
-        providerOverride: "openai",
-        modelOverride: "gpt-5.4",
-      };
+      const { scope, ...params } = fixture();
+      const initial = { ...initialSelection, label: "keep this label" };
       await replaceSessionEntry(scope, initial);
       const apply = async () => {
         if (operation === "clear") {
           await clearLiveModelSwitchPending({
-            cfg,
-            sessionKey: scope.sessionKey,
+            ...params,
             agentId: "main",
-            defaultProvider: "openai",
-            defaultModel: "gpt-5.4",
-            expectedSelection: { provider: "openai", model: "gpt-5.4" },
+            sessionKey: scope.sessionKey,
+            expectedSelection: selection,
           });
           return;
         }
         await completeSelection(scope, "complete-selection", (entry) =>
           prepareLiveModelSwitchAfterRun({
-            cfg,
-            sessionKey: scope.sessionKey,
+            ...params,
             agentId: "main",
-            providerUsed: "openai",
-            modelUsed: "gpt-5.4",
+            sessionKey: scope.sessionKey,
             entry,
           }),
         );
       };
-      const sql = observeHostDataSql();
-      try {
-        await apply();
-        expect(
-          sql.queries.filter((query) =>
-            /session_nodes|session_entry_snapshots|\b(?:BEGIN|COMMIT|ROLLBACK)\b/i.test(query),
-          ),
-        ).toEqual([]);
-      } finally {
-        sql.restore();
-      }
+      await withoutHostSql(
+        apply,
+        /session_nodes|session_entry_snapshots|\b(?:BEGIN|COMMIT|ROLLBACK)\b/i,
+      );
       expect(loadSessionEntry(scope)).toMatchObject({
         sessionId: initial.sessionId,
         label: initial.label,
@@ -140,52 +150,34 @@ describe("live model switch worker persistence", () => {
         liveModelSwitchPending: true,
         modelOverride: "gpt-5.5",
       });
-      const readSql = observeHostDataSql();
-      try {
-        expect(
-          await shouldSwitchToLiveModel({
-            ...scope,
-            cfg,
-            agentId: "main",
-            defaultProvider: "openai",
-            defaultModel: "gpt-5.4",
-            currentProvider: "openai",
-            currentModel: "gpt-5.4",
-          }),
-        ).toMatchObject({ provider: "openai", model: "gpt-5.5" });
-        expect(
-          readSql.queries.filter((query) =>
-            /session_nodes|session_entry_snapshots|session_participants|session_windows/i.test(
-              query,
-            ),
-          ),
-        ).toEqual([]);
-      } finally {
-        readSql.restore();
-      }
+      expect(
+        await withoutHostSql(
+          () =>
+            shouldSwitchToLiveModel({
+              ...scope,
+              ...params,
+              agentId: "main",
+              currentProvider: selection.provider,
+              currentModel: selection.model,
+            }),
+          /session_nodes|session_entry_snapshots|session_participants|session_windows/i,
+        ),
+      ).toMatchObject({ provider: "openai", model: "gpt-5.5" });
     },
   );
 
   it("keeps newer selections when a prepared terminal reducer reaches the actor", async () => {
-    const storePath = path.join(sessionDirs.make(), "sessions.json");
-    const scope = { storePath, sessionKey: "agent:main:model-switch" };
-    const cfg = { session: { store: storePath } };
+    const { scope, ...params } = fixture();
     const initial = {
-      sessionId: "model-switch",
-      updatedAt: 1,
-      liveModelSwitchPending: true,
-      providerOverride: "openai",
-      modelOverride: "gpt-5.4",
+      ...initialSelection,
       agentRuntimeOverride: "openclaw",
       authProfileOverride: "profile-a",
       authProfileOverrideSource: "user" as const,
     };
     const reducer = prepareLiveModelSwitchAfterRun({
-      cfg,
+      ...params,
       sessionKey: scope.sessionKey,
       entry: initial,
-      providerUsed: "openai",
-      modelUsed: "gpt-5.4",
     });
     if (!reducer) {
       throw new Error("Expected applied model selection");

@@ -28,7 +28,10 @@ import { mockFirstObjectArg as callArgument } from "../../test-utils/mock-call-a
 import * as fetchTimeout from "../../utils/fetch-timeout.js";
 import { formatAgentInternalEventsForPrompt } from "../internal-events.js";
 import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.test-support.js";
-import { defineMediaGenerationDuplicateTests } from "./media-generation-lifecycle.test-support.js";
+import {
+  defineMediaGenerationDuplicateTests,
+  withHeldMediaGenerationResult,
+} from "./media-generation-lifecycle.test-support.js";
 import { createMusicGenerateTool } from "./music-generate-tool.js";
 
 function mockGeneratedMusic(
@@ -408,7 +411,7 @@ it("preserves the selected stored filename in background completion", async () =
     generatedWav.byteLength,
     "audio/wav",
   );
-  mockGeneratedMusic({
+  const generate = mockGeneratedMusic({
     provider: "google",
     model: "lyria-3-pro-preview",
     tracks: [{ buffer: generatedWav, mimeType: "audio/wav", fileName: "track-1.wav" }],
@@ -416,65 +419,61 @@ it("preserves the selected stored filename in background completion", async () =
   });
   mediaStoreMocks.saveMediaBuffer.mockResolvedValueOnce(stored);
 
-  const scheduledWork: Array<() => Promise<void>> = [];
-  const tool = musicTool(
-    "google/lyria-3-pro-preview",
-    {
-      ...requester,
-      scheduleBackgroundWork: (work) => scheduledWork.push(work),
-    },
-    { timeoutMs: 1000 },
-  );
+  const tool = musicTool("google/lyria-3-pro-preview", requester, { timeoutMs: 1000 });
 
-  const result = await tool.execute("call-1", {
-    prompt,
-    instrumental: true,
-    filename: "anthem.wav",
-  });
-  const text = textOf(result);
+  await withHeldMediaGenerationResult(generate, taskExecutorMocks, async (complete) => {
+    const result = await tool.execute("call-1", {
+      prompt,
+      instrumental: true,
+      filename: "anthem.wav",
+    });
+    const text = textOf(result);
 
-  expect(text).toContain("Background task started for music generation (task-123).");
-  expect(text).toContain("Do not call music_generate again for this request.");
-  expect(text).toContain("Timeout normalized: requested 1000ms; used 120000ms.");
-  const details = detailsOf(result);
-  expect(details).toMatchObject({
-    async: true,
-    status: "started",
-    task: { taskId: "task-123" },
-    instrumental: true,
-    timeoutMs: 120_000,
-    requestedTimeoutMs: 1000,
+    expect(text).toContain("Background task started for music generation (task-123).");
+    expect(text).toContain("Do not call music_generate again for this request.");
+    expect(text).toContain("Timeout normalized: requested 1000ms; used 120000ms.");
+    const details = detailsOf(result);
+    expect(details).toMatchObject({
+      async: true,
+      status: "started",
+      task: { taskId: "task-123" },
+      instrumental: true,
+      timeoutMs: 120_000,
+      requestedTimeoutMs: 1000,
+    });
+    const normalization = { requested: 1000, applied: 120_000, minimum: 120_000 };
+    expect(details.timeoutNormalization).toEqual(normalization);
+    expect((result as { terminate?: boolean }).terminate).toBeUndefined();
+    expect(taskExecutorMocks.completeOperation).not.toHaveBeenCalled();
+    expect(mediaStoreMocks.saveMediaBuffer).not.toHaveBeenCalled();
+    await complete();
+    expect(generate).toHaveBeenCalledOnce();
+    expect(generateMusicOptions()).toMatchObject({
+      autoProviderFallback: false,
+      timeoutMs: 120_000,
+    });
+    const progress = callArgument(taskExecutorMocks.recordProgress);
+    expect(String(progress.runId)).toMatch(/^tool:music_generate:/);
+    expect(progress.progressSummary).toBe("Generating music");
+    expect(String(callArgument(taskExecutorMocks.completeOperation).runId)).toMatch(
+      /^tool:music_generate:/,
+    );
+    expect(wakeSpy).toHaveBeenCalledTimes(1);
+    const wake = callArgument(wakeSpy);
+    expect(wake).toMatchObject({ handle: { taskId: "task-123" }, status: "ok" });
+    expect(wake.result).toContain(`path="${stored.path}"`);
+    expect(wake.result).not.toContain("MEDIA:");
+    expect(wake.result).toContain('name="anthem.wav"');
+    expect(wake.attachments).toEqual([
+      {
+        type: "audio",
+        path: stored.path,
+        mimeType: "audio/wav",
+        name: "anthem.wav",
+        sizeBytes: generatedWav.byteLength,
+      },
+    ]);
   });
-  const normalization = { requested: 1000, applied: 120_000, minimum: 120_000 };
-  expect(details.timeoutNormalization).toEqual(normalization);
-  expect((result as { terminate?: boolean }).terminate).toBeUndefined();
-  expect(scheduledWork).toHaveLength(1);
-  await scheduledWork[0]!();
-  expect(generateMusicOptions()).toMatchObject({
-    autoProviderFallback: false,
-    timeoutMs: 120_000,
-  });
-  const progress = callArgument(taskExecutorMocks.recordProgress);
-  expect(String(progress.runId)).toMatch(/^tool:music_generate:/);
-  expect(progress.progressSummary).toBe("Generating music");
-  expect(String(callArgument(taskExecutorMocks.completeOperation).runId)).toMatch(
-    /^tool:music_generate:/,
-  );
-  expect(wakeSpy).toHaveBeenCalledTimes(1);
-  const wake = callArgument(wakeSpy);
-  expect(wake).toMatchObject({ handle: { taskId: "task-123" }, status: "ok" });
-  expect(wake.result).toContain(`path="${stored.path}"`);
-  expect(wake.result).not.toContain("MEDIA:");
-  expect(wake.result).toContain('name="anthem.wav"');
-  expect(wake.attachments).toEqual([
-    {
-      type: "audio",
-      path: stored.path,
-      mimeType: "audio/wav",
-      name: "anthem.wav",
-      sizeBytes: generatedWav.byteLength,
-    },
-  ]);
 });
 
 it("stops loading later music references when the caller aborts a pending reference", async () => {
@@ -493,11 +492,9 @@ it("stops loading later music references when the caller aborts a pending refere
     return reference.promise;
   });
   taskExecutorMocks.createOperation.mockReturnValue({ taskId: "task-music-references" });
-  const scheduleBackgroundWork = vi.fn();
   const tool = musicTool("minimax/music-2.6", {
     ...requester,
     workspaceDir: process.cwd(),
-    scheduleBackgroundWork,
   });
   const controller = new AbortController();
   const abortReason = new Error("music requester cancelled while loading a reference");
@@ -517,7 +514,6 @@ it("stops loading later music references when the caller aborts a pending refere
   await expect(pending).rejects.toBe(abortReason);
   expect(loadMedia).toHaveBeenCalledOnce();
   expect(taskExecutorMocks.createOperation).not.toHaveBeenCalled();
-  expect(scheduleBackgroundWork).not.toHaveBeenCalled();
   expect(generate).not.toHaveBeenCalled();
   const loadOptions = loadMedia.mock.calls[0]?.[1];
   const signal = typeof loadOptions === "object" ? loadOptions.requestInit?.signal : undefined;
@@ -532,23 +528,22 @@ it("keeps an accepted detached music task running after its requester aborts", a
   mediaStoreMocks.saveMediaBuffer.mockResolvedValue(savedMedia("accepted-music.mp3", 5));
   taskExecutorMocks.createOperation.mockReturnValue({ taskId: "task-music-accepted" });
   const controller = new AbortController();
-  const scheduled: Array<() => Promise<void>> = [];
-  const tool = musicTool("google/lyria-3-clip-preview", {
-    ...requester,
-    scheduleBackgroundWork: (work) => scheduled.push(work),
-  });
-  const result = await tool.execute(
-    "call-music-accepted",
-    { prompt: "an accepted music" },
-    controller.signal,
-  );
-  controller.abort(new Error("requester ended after acceptance"));
+  const tool = musicTool("google/lyria-3-clip-preview", requester);
+  await withHeldMediaGenerationResult(generate, taskExecutorMocks, async (complete) => {
+    const result = await tool.execute(
+      "call-music-accepted",
+      { prompt: "an accepted music" },
+      controller.signal,
+    );
+    controller.abort(new Error("requester ended after acceptance"));
 
-  expect(detailsOf(result).status).toBe("started");
-  expect(scheduled).toHaveLength(1);
-  await scheduled[0]!();
-  expect(generate).toHaveBeenCalledOnce();
-  expect(taskExecutorMocks.completeOperation).toHaveBeenCalledOnce();
+    expect(detailsOf(result).status).toBe("started");
+    expect(taskExecutorMocks.completeOperation).not.toHaveBeenCalled();
+    expect(mediaStoreMocks.saveMediaBuffer).not.toHaveBeenCalled();
+    await complete();
+    expect(generate).toHaveBeenCalledOnce();
+    expect(taskExecutorMocks.completeOperation).toHaveBeenCalledOnce();
+  });
 });
 
 defineMediaGenerationDuplicateTests({
@@ -557,14 +552,17 @@ defineMediaGenerationDuplicateTests({
   listTasks: mediaActivityMocks.listOperations,
   createTool: (options) => expectMusicGenerateTool(createMusicGenerateTool(options)),
   requesterOrigin: { channel: "discord", to: "channel:1" },
-  setupProviders: () =>
+  setupProviders: () => {
     registerMusicProvider({
       id: "google",
       defaultModel: "lyria-3-clip-preview",
       models: ["lyria-3-clip-preview", "lyria-3-pro-preview"],
       capabilities: { generate: { supportsInstrumental: true } },
       generateMusic: unusedGenerator(),
-    }),
+    });
+    mediaStoreMocks.saveMediaBuffer.mockResolvedValue(savedMedia("proof.mp3", 11));
+    return mockGeneratedMusic();
+  },
   cases: [
     {
       name: "dedupes a recent default-model music request repeated with explicit or model-only override",

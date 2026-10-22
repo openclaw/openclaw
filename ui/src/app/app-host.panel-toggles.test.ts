@@ -170,8 +170,7 @@ describe("OpenClaw shell panel toggles", () => {
     await vi.waitFor(() => expect(toggle).toHaveBeenCalledOnce());
     const delivered = toggle.mock.calls[0]?.[0] as CustomEvent;
     expect(delivered).not.toBe(event);
-    expect(delivered.type).toBe(eventType);
-    expect(delivered.detail).toEqual(detail);
+    expect([delivered.type, delivered.detail]).toEqual([eventType, detail]);
   });
 
   it("restores a structured browser panel event once in a replacement shell", async () => {
@@ -195,8 +194,7 @@ describe("OpenClaw shell panel toggles", () => {
     });
     const restored = toggle.mock.calls[0]?.[0];
     expect(restored).toBeInstanceOf(CustomEvent);
-    expect(restored?.type).toBe(eventType);
-    expect((restored as CustomEvent).detail).toEqual(detail);
+    expect([restored?.type, (restored as CustomEvent).detail]).toEqual([eventType, detail]);
     expect(readLazyShellAction()).toBeNull();
   });
 });

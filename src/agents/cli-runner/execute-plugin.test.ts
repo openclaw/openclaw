@@ -1,6 +1,7 @@
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import type { CliExecutionHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   CliBackendExecute,
@@ -105,6 +106,27 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+function historyWriter(overrides: Partial<CliExecutionHistoryWriter>): CliExecutionHistoryWriter {
+  return {
+    target: {
+      agentId: "main",
+      sessionId: "sdk-session",
+      sessionKey: "agent:main:main",
+      storePath: "/synthetic/sessions.sqlite",
+    },
+    runId: "history-owner",
+    authFingerprint: "a".repeat(64),
+    bindsNativeLogin: false,
+    replaysHistory: true,
+    assertCurrent() {},
+    async assertReadable() {},
+    checkNativeLoginBoundary() {},
+    bindExecutionEnv() {},
+    async settleNativeLogin() {},
+    ...overrides,
+  };
+}
+
 describe("plugin-owned CLI execution host boundary", () => {
   it("streams plugin events through the canonical host output boundary", async () => {
     // Exercise stream translation independently of cold policy-worker startup time.
@@ -155,22 +177,13 @@ describe("plugin-owned CLI execution host boundary", () => {
     const { context } = await createExecution();
     context.promptContext = { prependContext: "private conversation history" };
     let historyReadable = true;
-    context.cliHistoryWriter = {
-      target: {
-        agentId: "main",
-        sessionId: "sdk-session",
-        sessionKey: "agent:main:main",
-        storePath: "/synthetic/sessions.sqlite",
-      },
-      runId: "history-owner",
-      authFingerprint: "a".repeat(64),
-      assertCurrent() {},
+    context.cliHistoryWriter = historyWriter({
       async assertReadable() {
         if (!historyReadable) {
           throw new Error("Private history account changed");
         }
       },
-    };
+    });
     const preparingPermission = createDeferred();
     const releasePermission = createDeferred();
     const resolvePermission = execDefaults.resolveExecDefaultsAsync;
@@ -191,6 +204,27 @@ describe("plugin-owned CLI execution host boundary", () => {
     }
     expect(await result).toEqual(new Error("Private history account changed"));
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("does not disclose private input when a native login changes after the plugin started", async () => {
+    const { context } = await createExecution();
+    let loginHolds = true;
+    context.cliHistoryWriter = historyWriter({
+      bindsNativeLogin: true,
+      checkNativeLoginBoundary(carriesSavedHistory) {
+        if (carriesSavedHistory && !loginHolds) {
+          throw new Error("Private history account changed");
+        }
+      },
+    });
+    const execute: CliBackendExecute = async function* (execution) {
+      // The bundled Claude runtime checks this host-internal field before its prompt send.
+      const host: CliBackendExecuteContext & { assertPrivateInputCurrent?: () => void } = execution;
+      loginHolds = false;
+      host.assertPrivateInputCurrent?.();
+      yield SUCCESS_RESULT;
+    };
+    await expect(runPlugin(context, execute)).rejects.toThrow("Private history account changed");
   });
 
   it.each([false, true])(

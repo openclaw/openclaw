@@ -174,7 +174,12 @@ describe("gateway chat metadata refresh", () => {
 
     catalog.pendingProviders = undefined;
     await notify();
-    expect(onChanged).toHaveBeenCalledExactlyOnceWith(catalogChange);
+    expect(onChanged).toHaveBeenCalledExactlyOnceWith({
+      modelCatalogChanged: false,
+      modelCatalogStatusChanged: true,
+      authChanged: false,
+      commandsChanged: false,
+    });
     expect(await harness.read()).toEqual(original);
     expect(harness.getPreparedOwner()).toBe(owner);
     expect(owner.modelCatalog).toBe(catalog);

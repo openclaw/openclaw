@@ -1,6 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -149,23 +148,6 @@ describe("getShellConfig", () => {
       commandTransport: "argv",
     });
   });
-
-  it("uses an explicit custom shell path through the same resolver", () => {
-    const binDir = createTempCommandDir("zsh");
-    const shellPath = path.join(binDir, "zsh");
-
-    expect(getShellConfig(shellPath)).toEqual({
-      shell: shellPath,
-      args: ["-f", "-c"],
-      commandTransport: "argv",
-    });
-  });
-
-  it("rejects a missing explicit custom shell path", () => {
-    expect(() => getShellConfig(path.join(os.tmpdir(), "missing-openclaw-shell"))).toThrow(
-      "Custom shell path not found",
-    );
-  });
 });
 
 describe.skipIf(isWin)("getBashShellConfig POSIX discovery", () => {
@@ -252,10 +234,16 @@ describe("getBashShellConfig", () => {
   it.each(["System32", "Sysnative"])(
     "uses stdin transport for the legacy %s WSL launcher",
     (systemDirectory) => {
-      const shellPath = `C:\\Windows\\${systemDirectory}\\bash.exe`;
-      vi.spyOn(fs, "existsSync").mockImplementation((candidate) => String(candidate) === shellPath);
+      const shellPath = writeCommand(
+        tempDirs.make("openclaw-wsl-bash-"),
+        `Windows/${systemDirectory}/bash.exe`,
+        true,
+      );
+      vi.stubEnv("ProgramFiles", "");
+      vi.stubEnv("ProgramFiles(x86)", "");
+      vi.stubEnv("PATH", path.dirname(shellPath));
 
-      expect(getBashShellConfig(shellPath)).toEqual({
+      expect(getBashShellConfig()).toEqual({
         shell: shellPath,
         args: ["-s"],
         commandTransport: "stdin",
@@ -328,59 +316,35 @@ it.runIf(!isWin)(
   },
 );
 
-describe("getShellConfig on Windows", () => {
-  let programFiles: string;
-  beforeEach(() => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    delete process.env.ProgramW6432;
-    delete process.env.SystemRoot;
-    delete process.env.WINDIR;
-    programFiles = tempDirs.make("openclaw-pfiles-");
-    process.env.ProgramFiles = programFiles;
-    process.env.PATH = "";
-  });
-
-  it.each(["ProgramFiles", "ProgramW6432"] as const)("finds PowerShell 7 in %s", (installEnv) => {
-    const programW6432 = tempDirs.make("openclaw-pw6432-");
-    const pwsh7Path = writeCommand(
-      installEnv === "ProgramFiles" ? programFiles : programW6432,
-      "PowerShell/7/pwsh.exe",
-    );
-
-    process.env.ProgramW6432 = programW6432;
-
-    expect(getShellConfig().shell).toBe(pwsh7Path);
-  });
-
-  it("finds pwsh on PATH when not in standard install locations", () => {
-    const binDir = createTempCommandDir("pwsh");
-    const pwshPath = path.join(binDir, "pwsh");
-
-    process.env.PATH = binDir;
-
-    expect(getShellConfig().shell).toBe(pwshPath);
-  });
-
-  it("prefers a native pwsh.exe over earlier bare shims, batch wrappers, and PowerShell 5.1", () => {
-    const shimDir = createTempCommandDir("pwsh");
-    const binDir = createTempCommandDir("pwsh.exe");
-    const systemRoot = tempDirs.make("openclaw-sysroot-");
-    const pwshPath = path.join(binDir, "pwsh.exe");
-    writeCommand(binDir, "pwsh.cmd", true);
-    writeCommand(systemRoot, "System32/WindowsPowerShell/v1.0/powershell.exe");
-
-    process.env.SystemRoot = systemRoot;
-    process.env.PATH = [shimDir, binDir].join(path.delimiter);
-
-    expect(getShellConfig().shell).toBe(pwshPath);
-  });
-
-  it("falls back to Windows PowerShell 5.1 path when pwsh is unavailable", () => {
-    const sysRoot = tempDirs.make("openclaw-sysroot-");
-    const ps51Path = writeCommand(sysRoot, "System32/WindowsPowerShell/v1.0/powershell.exe");
-
-    process.env.SystemRoot = sysRoot;
-
-    expect(getShellConfig().shell).toBe(ps51Path);
-  });
+const ps51 = "System32/WindowsPowerShell/v1.0/powershell.exe";
+it.each([
+  {
+    name: "ProgramFiles",
+    files: ["pfiles/PowerShell/7/pwsh.exe"],
+    expected: "pfiles/PowerShell/7/pwsh.exe",
+  },
+  {
+    name: "ProgramW6432",
+    files: ["pw6432/PowerShell/7/pwsh.exe"],
+    expected: "pw6432/PowerShell/7/pwsh.exe",
+  },
+  { name: "PATH", files: ["bin/pwsh"], expected: "bin/pwsh" },
+  {
+    name: "native executable before shims, batch wrappers, and PowerShell 5.1",
+    files: ["shims/pwsh", "bin/pwsh.exe", "bin/pwsh.cmd", ps51],
+    expected: "bin/pwsh.exe",
+  },
+  { name: "PowerShell 5.1 fallback", files: [ps51], expected: ps51 },
+])("getShellConfig on Windows selects $name", ({ files, expected }) => {
+  vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+  const root = tempDirs.make("openclaw-powershell-");
+  for (const file of files) {
+    writeCommand(root, file, /^(?:shims|bin)\//.test(file));
+  }
+  process.env.ProgramFiles = path.join(root, "pfiles");
+  process.env.ProgramW6432 = path.join(root, "pw6432");
+  process.env.SystemRoot = root;
+  delete process.env.WINDIR;
+  process.env.PATH = ["shims", "bin"].map((dir) => path.join(root, dir)).join(path.delimiter);
+  expect(getShellConfig().shell).toBe(path.join(root, expected));
 });

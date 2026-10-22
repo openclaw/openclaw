@@ -1,7 +1,14 @@
 import { resolveImageSourceUrl } from "openclaw/plugin-sdk/image-generation";
-import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
+import {
+  downloadGeneratedVideoAsset,
+  resolveGeneratedMediaMaxBytes,
+} from "openclaw/plugin-sdk/media-generation-runtime";
+import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   assertOkOrThrowHttpError,
+  executeProviderOperationWithRetry,
+  fetchWithTimeoutGuarded,
+  type ProviderOperationTimeoutMs,
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
   pollProviderOperation,
@@ -27,7 +34,6 @@ import {
   createXaiVideoGenerationProviderMetadata,
   isXaiVideo15Model,
 } from "./capability-provider-metadata.js";
-import { downloadXaiVideo, fetchXaiVideoResponse } from "./video-generation-transport.js";
 
 const POLL_INTERVAL_MS = 5_000;
 const MAX_POLL_ATTEMPTS = 120;
@@ -239,6 +245,42 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
           provider: "xai",
           capability: "video",
         });
+      const fetchXaiVideoResponse = async (params: {
+        url: string;
+        init: RequestInit;
+        stage: "poll" | "download";
+        requestFailedMessage: string;
+        auditContext: string;
+        timeoutMs?: ProviderOperationTimeoutMs;
+      }) => {
+        return await executeProviderOperationWithRetry({
+          provider: "xai",
+          stage: params.stage,
+          operation: async () => {
+            const result = await fetchWithTimeoutGuarded(
+              params.url,
+              params.init,
+              resolvePositiveTimerTimeoutMs(
+                typeof params.timeoutMs === "function" ? params.timeoutMs() : params.timeoutMs,
+                XAI_VIDEO_DEFAULT_TIMEOUT_MS,
+              ),
+              fetch,
+              {
+                ...(allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
+                ...(dispatcherPolicy ? { dispatcherPolicy } : {}),
+                auditContext: params.auditContext,
+              },
+            );
+            try {
+              await assertOkOrThrowHttpError(result.response, params.requestFailedMessage);
+              return result;
+            } catch (error) {
+              await result.release();
+              throw error;
+            }
+          },
+        });
+      };
       const deadline = createProviderOperationDeadline({
         timeoutMs: req.timeoutMs,
         label: "xAI video generation",
@@ -302,8 +344,6 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
                 deadline: pollDeadline,
                 defaultTimeoutMs: XAI_VIDEO_DEFAULT_TIMEOUT_MS,
               }),
-              allowPrivateNetwork,
-              dispatcherPolicy,
             });
             try {
               return readXaiStatusResponse(
@@ -331,15 +371,29 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
         if (!videoUrl) {
           throw new Error(XAI_VIDEO_MALFORMED_RESPONSE);
         }
-        const video = await downloadXaiVideo({
+        const video = await downloadGeneratedVideoAsset({
           url: videoUrl,
           timeoutMs: createProviderOperationTimeoutResolver({
             deadline,
             defaultTimeoutMs: XAI_VIDEO_DEFAULT_TIMEOUT_MS,
           }),
-          allowPrivateNetwork,
-          dispatcherPolicy,
+          defaultTimeoutMs: XAI_VIDEO_DEFAULT_TIMEOUT_MS,
+          fetchFn: fetch,
+          provider: "xai",
+          label: "xAI generated video download",
+          requestFailedMessage: "xAI generated video download failed",
           maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "video"),
+          validateBinaryResponse: true,
+          chunkTimeoutMs: 0,
+          fetchResponse: async ({ timeoutMs }) =>
+            await fetchXaiVideoResponse({
+              url: videoUrl,
+              stage: "download",
+              requestFailedMessage: "xAI generated video download failed",
+              auditContext: "xai-video-download",
+              init: { method: "GET" },
+              timeoutMs,
+            }),
         });
         return {
           videos: [video],

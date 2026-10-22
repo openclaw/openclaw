@@ -44,6 +44,8 @@ const input: {
   gates: SharedArrayBuffer;
 } = workerData;
 const port = parentPort!;
+const fail = (event: string, error: unknown) =>
+  port.postMessage({ event, error: error instanceof Error ? error.message : String(error) });
 const gates = new Int32Array(input.gates);
 function wait(index: number) {
   while (Atomics.load(gates, index) === 0) {
@@ -141,17 +143,11 @@ try {
       }
       port.postMessage({ event: "done", result });
     } catch (error) {
-      port.postMessage({
-        event: "done",
-        error: error instanceof Error ? error.message : String(error),
-      });
+      fail("done", error);
     }
   });
 } catch (error) {
   anchor.close();
-  port.postMessage({
-    event: "ready",
-    error: error instanceof Error ? error.message : String(error),
-  });
+  fail("ready", error);
   port.close();
 }

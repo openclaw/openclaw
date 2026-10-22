@@ -49,28 +49,47 @@ type PrivateCompletionStopFixture = {
   agentCommandMock: typeof gatewayAgentCommandMock;
 };
 
+function observe<T>(pending: Promise<T>) {
+  return pending.then(
+    (value) => ({ value }),
+    (error: unknown) => ({ error }),
+  );
+}
+
+async function waitForStop(
+  command: AgentCommandOpts,
+  release: ReturnType<typeof createDeferred<void>>,
+) {
+  command.abortSignal!.addEventListener("abort", () => release.resolve(), { once: true });
+  await release.promise;
+  command.abortSignal!.throwIfAborted();
+  throw new Error("operator stop must prevent further work");
+}
+
+function releaseOnAbort(signal: AbortSignal) {
+  const release = createDeferred();
+  signal.addEventListener("abort", () => release.resolve(), { once: true });
+  return release;
+}
+
 export function registerPrivateCompletionStopTests(getFixture: () => PrivateCompletionStopFixture) {
   it.for([false, true])(
     "preserves an operator stop after private input consumption across retry and restart (terminal first=%s)",
     async (terminalFirst, { signal }) => {
-      const {
-        kernel,
-        sequence,
-        sessionKey,
-        sessionId,
-        runId,
-        storePath,
-        recorder,
-        dispatch,
-        completions,
-        pending,
-        restart,
-        source,
-        agentCommandMock,
-      } = getFixture();
-      const descendantRunId = `private-descendant-${sequence}`;
+      const f = getFixture();
+      const { sessionKey, sessionId, runId, storePath, agentCommandMock } = f;
+      const descendantRunId = `private-descendant-${f.sequence}`;
       const childSessionKey = `agent:main:subagent:${descendantRunId}`;
       const childSessionId = `${descendantRunId}-session`;
+      const descendant = () =>
+        listRunsForControllerFromRuns(loadSubagentRegistryFromSqlite(), sessionKey).find(
+          (run) => run.runId === descendantRunId,
+        );
+      const abort = (key = sessionKey, id = runId) =>
+        f.kernel.gatewayInstanceRuntime.recovery.dispatchSessionMethod("chat.abort", {
+          sessionKey: key,
+          runId: id,
+        });
       let observedTerminal = false;
       const metadataOverlap = holdMetadataThroughSubagentStop({
         sessionKey: childSessionKey,
@@ -81,32 +100,23 @@ export function registerPrivateCompletionStopTests(getFixture: () => PrivateComp
           if (terminalFirst) {
             expect(observedTerminal).toBe(true);
           }
-          expect(
-            listRunsForControllerFromRuns(loadSubagentRegistryFromSqlite(), sessionKey).find(
-              (run) => run.runId === descendantRunId,
-            ),
-          ).toMatchObject({ endedReason: "subagent-killed", execution: { status: "terminal" } });
+          expect(descendant()).toMatchObject({
+            endedReason: "subagent-killed",
+            execution: { status: "terminal" },
+          });
         },
       });
       onTestFinished(() => metadataOverlap.dispose());
       const consumed = createDeferred();
-      const release = createDeferred();
-      signal.addEventListener("abort", () => release.resolve(), { once: true });
+      const release = releaseOnAbort(signal);
       agentCommandMock.mockImplementationOnce(async (input) => {
         const command = input as AgentCommandOpts;
         await command.onExecutionStarted?.();
-        await recorder(input).persistApproved();
+        await f.recorder(input).persistApproved();
         consumed.resolve();
-        command.abortSignal!.addEventListener("abort", () => release.resolve(), { once: true });
-        await release.promise;
-        command.abortSignal!.throwIfAborted();
-        throw new Error("operator stop must prevent further work");
+        return waitForStop(command, release);
       });
-      const first = dispatch();
-      const observed = first.then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
+      const observed = observe(f.dispatch());
       await consumed.promise;
       if (terminalFirst) {
         const acquire = vi.spyOn(
@@ -130,14 +140,11 @@ export function registerPrivateCompletionStopTests(getFixture: () => PrivateComp
               }
             };
           });
-        onTestFinished(() => {
-          lock.mockRestore();
-        });
+        onTestFinished(() => lock.mockRestore());
       }
       const childStarted = createDeferred();
-      const releaseChild = createDeferred();
+      const releaseChild = releaseOnAbort(signal);
       let childAbortSignal: AbortSignal | undefined;
-      signal.addEventListener("abort", () => releaseChild.resolve(), { once: true });
       await writeSubagentSessionEntry({
         stateDir: process.env.OPENCLAW_STATE_DIR!,
         agentId: "main",
@@ -147,18 +154,12 @@ export function registerPrivateCompletionStopTests(getFixture: () => PrivateComp
       });
       agentCommandMock.mockImplementationOnce(async (input) => {
         const command = input as AgentCommandOpts;
-        expect(command.runId).toBe(descendantRunId);
-        expect(command.sessionId).toBe(childSessionId);
+        expect(command).toMatchObject({ runId: descendantRunId, sessionId: childSessionId });
         childAbortSignal = command.abortSignal;
         await command.onExecutionStarted?.();
         await command.userTurnTranscriptRecorder?.persistApproved();
         childStarted.resolve();
-        command.abortSignal!.addEventListener("abort", () => releaseChild.resolve(), {
-          once: true,
-        });
-        await releaseChild.promise;
-        command.abortSignal!.throwIfAborted();
-        throw new Error("operator stop must interrupt the continuation child");
+        return waitForStop(command, releaseChild);
       });
       const child = dispatchGatewayMethodInProcess<Record<string, unknown>>(
         "agent",
@@ -173,13 +174,10 @@ export function registerPrivateCompletionStopTests(getFixture: () => PrivateComp
           expectFinal: true,
           forceSyntheticClient: true,
           operatorRoleActor: { kind: "system" },
-          resolveGatewayContext: () => kernel.gatewayRequestContext,
+          resolveGatewayContext: () => f.kernel.gatewayRequestContext,
         },
       );
-      const observedChild = child.then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
+      const observedChild = observe(child);
       const childWaitEntered = createDeferred();
       const waitForAgentJob = agentJobs.waitForAgentJob;
       const waitObservation = vi
@@ -191,16 +189,14 @@ export function registerPrivateCompletionStopTests(getFixture: () => PrivateComp
           }
           return wait;
         });
-      // Cancellation must release the admission barrier so cleanup can join both producers.
       const releaseWaitAdmission = () => childWaitEntered.resolve();
       signal.addEventListener("abort", releaseWaitAdmission, { once: true });
       try {
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           childStarted.promise,
-          observedChild.then(() => {
-            throw new Error("continuation child finished before execution started");
-          }),
-        ]);
+          observedChild,
+          "continuation child finished before execution started",
+        );
         await registerSubagentRun({
           runId: descendantRunId,
           childSessionKey,
@@ -214,24 +210,11 @@ export function registerPrivateCompletionStopTests(getFixture: () => PrivateComp
           cleanup: "keep",
           expectsCompletionMessage: false,
         });
-        // Keep both producers live until the child's registration and wait request
-        // are admitted; a slow socket handshake must not hide the outstanding wait.
-        await expect
-          .poll(() =>
-            listRunsForControllerFromRuns(loadSubagentRegistryFromSqlite(), sessionKey).some(
-              (run) => run.runId === descendantRunId,
-            ),
-          )
-          .toBe(true);
+        await expect.poll(() => descendant() !== undefined).toBe(true);
         signal.throwIfAborted();
         await childWaitEntered.promise;
         signal.throwIfAborted();
-        expect(
-          await kernel.gatewayInstanceRuntime.recovery.dispatchSessionMethod("chat.abort", {
-            sessionKey,
-            runId,
-          }),
-        ).toMatchObject({ aborted: true });
+        expect(await abort()).toMatchObject({ aborted: true });
         expect(childAbortSignal?.aborted).toBe(true);
         if (terminalFirst) {
           expect(observedTerminal).toBe(true);
@@ -247,17 +230,11 @@ export function registerPrivateCompletionStopTests(getFixture: () => PrivateComp
         try {
           signal.removeEventListener("abort", releaseWaitAdmission);
           waitObservation.mockRestore();
-          if (source(runId) !== undefined) {
-            await kernel.gatewayInstanceRuntime.recovery.dispatchSessionMethod("chat.abort", {
-              sessionKey,
-              runId,
-            });
+          if (f.source(runId) !== undefined) {
+            await abort();
           }
-          if (source(descendantRunId) !== undefined) {
-            await kernel.gatewayInstanceRuntime.recovery.dispatchSessionMethod("chat.abort", {
-              sessionKey: childSessionKey,
-              runId: descendantRunId,
-            });
+          if (f.source(descendantRunId) !== undefined) {
+            await abort(childSessionKey, descendantRunId);
           }
           release.resolve();
           releaseChild.resolve();
@@ -267,35 +244,26 @@ export function registerPrivateCompletionStopTests(getFixture: () => PrivateComp
         }
       }
       await settleSubagentRegistryPersistenceWork();
-      expect(await observedChild).toMatchObject({
-        value: { status: "timeout", stopReason: "rpc" },
-      });
-      // The terminal marker is durable before metadata cleanup above. Confirmed
-      // requester-wide Stop then retires the child's completion obligation.
-      expect(
-        listRunsForControllerFromRuns(loadSubagentRegistryFromSqlite(), sessionKey).find(
-          (run) => run.runId === descendantRunId,
-        ),
-      ).toBeUndefined();
-      expect(completions()).toMatchObject([{ succeeded: 0 }]);
-      expect(JSON.parse(String(completions()[0]?.outcome_json))).toMatchObject({
+      const stopped = { value: { status: "timeout", stopReason: "rpc" } };
+      expect(await observedChild).toMatchObject(stopped);
+      expect(descendant()).toBeUndefined();
+      expect(f.completions()).toMatchObject([{ succeeded: 0 }]);
+      expect(JSON.parse(String(f.completions()[0]?.outcome_json))).toMatchObject({
         reason: "cancelled",
         stopReason: "rpc",
       });
-      expect(pending()).toEqual([]);
-      expect(await observed).toMatchObject({ value: { status: "timeout", stopReason: "rpc" } });
+      expect(f.pending()).toEqual([]);
+      expect(await observed).toMatchObject(stopped);
       // Retire only this run's process projection to exercise the durable receipt.
-      // Matching pre-admission Stop cache replay is covered separately above.
-      kernel.gatewayRequestContext.dedupe.delete(`agent:${runId}`);
-      expect(await dispatch()).toMatchObject({ status: "error", stopReason: "rpc" });
-      await restart();
-      expect(await dispatch()).toMatchObject({ status: "error", stopReason: "rpc" });
-      expect(
-        agentCommandMock.mock.calls.map(([input]) => {
-          const command = input as AgentCommandOpts;
-          return { runId: command.runId, sessionId: command.sessionId };
-        }),
-      ).toEqual([
+      f.kernel.gatewayRequestContext.dedupe.delete(`agent:${runId}`);
+      expect(await f.dispatch()).toMatchObject({ status: "error", stopReason: "rpc" });
+      await f.restart();
+      expect(await f.dispatch()).toMatchObject({ status: "error", stopReason: "rpc" });
+      const commands = agentCommandMock.mock.calls.map(([input]) => {
+        const command = input as AgentCommandOpts;
+        return { runId: command.runId, sessionId: command.sessionId };
+      });
+      expect(commands).toEqual([
         { runId, sessionId },
         { runId: descendantRunId, sessionId: childSessionId },
       ]);
@@ -305,28 +273,17 @@ export function registerPrivateCompletionStopTests(getFixture: () => PrivateComp
   it.each(["resolved", "rejected", "abandoned"] as const)(
     "preserves executing private timeout facts (%s)",
     async (kind) => {
-      const {
-        kernel,
-        sessionKey,
-        runId,
-        recorder,
-        dispatch,
-        completions,
-        source,
-        agentCommandMock,
-      } = getFixture();
-      const consumed = createDeferred<ReturnType<typeof recorder>>();
+      const f = getFixture();
+      const { kernel, sessionKey, runId } = f;
+      const consumed = createDeferred<UserTurnTranscriptRecorder>();
       const release = createDeferred();
       let producerReturned = false;
-      agentCommandMock.mockImplementationOnce(async (input) => {
+      f.agentCommandMock.mockImplementationOnce(async (input) => {
         const command = input as AgentCommandOpts;
-        const operation = getCurrentSessionControllerOwner();
-        if (!operation) {
-          throw new Error("Missing admitted command owner");
-        }
+        const operation = expectDefined(getCurrentSessionControllerOwner(), "command owner");
         markReplyOperationExecutionStarted(operation);
         await command.onExecutionStarted?.();
-        const inputRecorder = recorder(input);
+        const inputRecorder = f.recorder(input);
         await inputRecorder.persistApproved();
         inputRecorder.markSentToProvider?.();
         consumed.resolve(inputRecorder);
@@ -348,13 +305,9 @@ export function registerPrivateCompletionStopTests(getFixture: () => PrivateComp
           },
         };
       });
-      const first = dispatch();
-      const observed = first.then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error: String(error) }),
-      );
+      const observed = observe(f.dispatch());
       const inputRecorder = await consumed.promise;
-      const active = expectDefined(source(runId), "executing controller");
+      const active = expectDefined(f.source(runId), "executing controller");
       expect(isRpcSourceExecuting(active)).toBe(true);
       const releaseTerminalWrite = createDeferred();
       const terminalWrites = createPreparedLifecycleWriteTracker();
@@ -376,7 +329,7 @@ export function registerPrivateCompletionStopTests(getFixture: () => PrivateComp
         chatAbort.abortChatRunById(kernel.gatewayRequestContext, {
           runId,
           sessionKey,
-          expectedEntry: expectDefined(source(runId), "private source"),
+          expectedEntry: expectDefined(f.source(runId), "private source"),
           stopReason: "timeout",
         }),
       ).toEqual({ aborted: true });
@@ -390,7 +343,6 @@ export function registerPrivateCompletionStopTests(getFixture: () => PrivateComp
         ...kernel.gatewayRequestContext,
         scheduler: createTestGatewayScheduler(clock.clock),
         logHealth: { info: vi.fn(), error: vi.fn() },
-        runWorktreeGc: async () => undefined,
         runDeliveryQueueMediaGc: async () => undefined,
         runManagedOutgoingMediaGc: async () => undefined,
       });
@@ -398,8 +350,8 @@ export function registerPrivateCompletionStopTests(getFixture: () => PrivateComp
         await clock.advanceBy(60_000);
         expect(active.input.abortSignal.aborted).toBe(true);
         expect(active.adapter.abortStopReason).toBe("timeout");
-        expect(source(runId)).toBe(active);
-        expect(completions()).toEqual([]);
+        expect(f.source(runId)).toBe(active);
+        expect(f.completions()).toEqual([]);
         if (kind === "abandoned") {
           // Keep terminal projection and execution pending beyond the old abort grace.
           await terminalWrites.accepted;
@@ -411,11 +363,11 @@ export function registerPrivateCompletionStopTests(getFixture: () => PrivateComp
             expectDefined(active.adapter.projectSessionTerminalPersistence, "terminal persistence"),
             "Terminal persistence settled before its held write was released",
           );
-          expect(source(runId)).toBe(active);
+          expect(f.source(runId)).toBe(active);
           expect(producerReturned).toBe(false);
           expect(active.adapter.projectSessionTerminalPending).toBe(true);
           expect(inputRecorder.getProcessingCompletion?.()).toBeUndefined();
-          expect(completions()).toEqual([]);
+          expect(f.completions()).toEqual([]);
         }
       } finally {
         await timers.stopPeriodicTasks();
@@ -430,39 +382,36 @@ export function registerPrivateCompletionStopTests(getFixture: () => PrivateComp
         }
       }
       const response = await observed;
-      const rows = completions();
-      const outcome = JSON.parse(String(rows[0]?.outcome_json));
-      expect(response).toMatchObject({ value: { status: "timeout", stopReason: "timeout" } });
-      expect(outcome).toMatchObject({ status: "timeout", stopReason: "timeout" });
+      const outcome = JSON.parse(String(f.completions()[0]?.outcome_json));
+      const timeout = { status: "timeout", stopReason: "timeout" };
+      expect(response).toMatchObject({ value: timeout });
+      expect(outcome).toMatchObject(timeout);
       expect(
         await waitForChatAbortControllerRemoval({
           targets: [{ runId, entry: active }],
           timeoutMs: SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
         }),
       ).toBe(true);
-      expect(source(runId)).toBeUndefined();
+      expect(f.source(runId)).toBeUndefined();
       expect(active.adapter.projectSessionTerminalPersisted).toBe(true);
       if (kind !== "rejected") {
-        expect(outcome).toMatchObject({
-          reason: "hard_timeout",
-          timeoutPhase: "provider",
-          providerStarted: true,
-        });
-        expect(response).toMatchObject({
-          value: { timeoutPhase: "provider", providerStarted: true },
-        });
+        const provider = { timeoutPhase: "provider", providerStarted: true };
+        expect(outcome).toMatchObject({ reason: "hard_timeout", ...provider });
+        expect(response).toMatchObject({ value: provider });
       } else {
-        expect(outcome.reason).toBe("timed_out");
-        expect(outcome.timeoutPhase).toBeUndefined();
-        expect(outcome.providerStarted).toBeUndefined();
+        expect([outcome.reason, outcome.timeoutPhase, outcome.providerStarted]).toEqual([
+          "timed_out",
+          undefined,
+          undefined,
+        ]);
       }
       kernel.gatewayRequestContext.dedupe.delete(`agent:${runId}`);
-      agentCommandMock.mockImplementationOnce(async (input) => {
-        await recorder(input).persistApproved();
+      f.agentCommandMock.mockImplementationOnce(async (input) => {
+        await f.recorder(input).persistApproved();
         return { payloads: [], meta: { durationMs: 1, terminalReply: { disposition: "empty" } } };
       });
-      expect(await dispatch()).toMatchObject({ status: "ok", inputProcessingCompleted: true });
-      expect(agentCommandMock).toHaveBeenCalledTimes(2);
+      expect(await f.dispatch()).toMatchObject({ status: "ok", inputProcessingCompleted: true });
+      expect(f.agentCommandMock).toHaveBeenCalledTimes(2);
     },
   );
 }

@@ -85,13 +85,6 @@ const installedCodex = resolveGlobalSingleton<InstalledCodexAppServerState>(
   },
 );
 
-type InstalledCodexAppServerProbes = {
-  env?: NodeJS.ProcessEnv;
-  platform?: NodeJS.Platform;
-  runVersion?: (nativeCommand: string) => Promise<string>;
-  probeHandshake?: (command: string) => Promise<string | undefined>;
-};
-
 type ResolveManagedCodexNativeCommandOptions = {
   platform?: NodeJS.Platform;
   arch?: NodeJS.Architecture;
@@ -113,9 +106,7 @@ export async function resolveManagedCodexClientVersion(
   options: Pick<
     ResolveManagedCodexAppServerOptions,
     "platform" | "pathExists" | "selectionTimeoutMs"
-  > & {
-    probes?: InstalledCodexAppServerProbes;
-  } = {},
+  > = {},
 ): Promise<string> {
   return (await resolveInstalledCodexForOrder(order, options))?.version ?? CODEX_APP_SERVER_VERSION;
 }
@@ -129,9 +120,7 @@ async function resolveInstalledCodexForOrder(
   options: Pick<
     ResolveManagedCodexAppServerOptions,
     "platform" | "pathExists" | "selectionTimeoutMs"
-  > & {
-    probes?: InstalledCodexAppServerProbes;
-  },
+  >,
 ): Promise<InstalledCodexAppServer | undefined> {
   const platform = options.platform ?? process.platform;
   const pathExists = options.pathExists ?? commandPathExists;
@@ -142,20 +131,18 @@ async function resolveInstalledCodexForOrder(
       }
     }
   }
-  return resolveInstalledCodexAppServer(options.probes, options.selectionTimeoutMs);
+  return resolveInstalledCodexAppServer(options.selectionTimeoutMs);
 }
 
 /**
- * Selects the installed Codex once per process; later callers reuse the
- * decision, so probes only apply to the call that makes it.
+ * Selects the installed Codex once per process; later callers reuse the decision.
  */
 async function resolveInstalledCodexAppServer(
-  probes: InstalledCodexAppServerProbes = {},
   timeoutMs = INSTALLED_CODEX_PROBE_TIMEOUT_MS,
 ): Promise<InstalledCodexAppServer | undefined> {
   if (!installedCodex.selection) {
     installedCodex.pending = true;
-    const selection = decideInstalledCodexAppServer(probes).then((decision) => {
+    const selection = decideInstalledCodexAppServer().then((decision) => {
       if (installedCodex.selection !== selection) {
         return undefined;
       }
@@ -247,23 +234,22 @@ export function readInstalledCodexAppServerStatus(
   return installedCodex.rejected === command ? "rejected" : undefined;
 }
 
-async function decideInstalledCodexAppServer(
-  probes: InstalledCodexAppServerProbes,
-): Promise<{ found: string; selected: InstalledCodexAppServer } | { reason: string }> {
-  const env = probes.env ?? process.env;
-  const platform = probes.platform ?? process.platform;
+async function decideInstalledCodexAppServer(): Promise<
+  { found: string; selected: InstalledCodexAppServer } | { reason: string }
+> {
+  const env = process.env;
   const selectionDeadline = performance.now() + INSTALLED_CODEX_PROBE_TIMEOUT_MS;
   const found = resolveNodeHostExecutable("codex", { env, strategy: "direct" })?.executable;
   if (!found) {
     return { reason: "no codex on PATH" };
   }
-  const launcher = await resolveInstalledCodexLauncher(found, platform);
+  const launcher = await resolveInstalledCodexLauncher(found, process.platform);
   if (!launcher) {
     return {
       reason: `installed ${found} is not a native Codex executable or the official ${MANAGED_CODEX_APP_SERVER_PACKAGE} launcher`,
     };
   }
-  if (isManagedCodexDesktopCommand(launcher.command, platform)) {
+  if (isManagedCodexDesktopCommand(launcher.command, process.platform)) {
     return { reason: `installed ${found} belongs to a macOS desktop app` };
   }
   let output: string;
@@ -272,9 +258,7 @@ async function decideInstalledCodexAppServer(
     return { reason: `installed ${found} selection timed out before the version check` };
   }
   try {
-    output = probes.runVersion
-      ? await probes.runVersion(launcher.nativeCommand)
-      : await runCodexVersionCommand(launcher.nativeCommand, process.env, versionTimeoutMs);
+    output = await runCodexVersionCommand(launcher.nativeCommand, process.env, versionTimeoutMs);
   } catch (error) {
     return { reason: `installed ${found} --version failed: ${coerceErrorMessage(error)}` };
   }
@@ -301,15 +285,10 @@ async function decideInstalledCodexAppServer(
   }
   let handshakeVersion: string | undefined;
   try {
+    // Lazy: the probe spawns through transport-stdio, which imports this module.
     handshakeVersion = await (
-      probes.probeHandshake ??
-      // Lazy: the probe spawns through transport-stdio, which imports this module.
-      (async (command) =>
-        (await import("./installed-probe.js")).probeCodexAppServerHandshake(
-          command,
-          handshakeTimeoutMs,
-        ))
-    )(launcher.command);
+      await import("./installed-probe.js")
+    ).probeCodexAppServerHandshake(launcher.command, handshakeTimeoutMs);
   } catch (error) {
     return {
       reason: `installed ${found} ${version} failed the app-server handshake: ${coerceErrorMessage(error)}`,

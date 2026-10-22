@@ -10,6 +10,8 @@
   "exclude": [
     "../../src/gateway/chat-*.test.ts",
     "../../src/gateway/chat-*.test.tsx",
+    "../../src/gateway/cron-stream-*.test.ts",
+    "../../src/gateway/cron-stream-*.test.tsx",
     "../../src/gateway/server*.test.ts",
     "../../src/gateway/server*.test.tsx"
   ]

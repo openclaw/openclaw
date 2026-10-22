@@ -3,7 +3,6 @@ import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-i
 import {
   collectErrorGraphCandidates,
   PlatformMessageNotDispatchedError,
-  readErrorName,
 } from "openclaw/plugin-sdk/error-runtime";
 import {
   captureChannelReadAuthority,
@@ -18,7 +17,7 @@ import {
   readResponseTextPrefix,
   readResponseWithLimit,
 } from "openclaw/plugin-sdk/response-limit-runtime";
-import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
+import { isTransientNetworkError, retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromPrivateNetworkOptIn,
@@ -405,33 +404,6 @@ export type CreateDmChannelRetryOptions = NonNullable<MattermostAccountConfig["d
   onRetry?: (attempt: number, delayMs: number, error: Error) => void;
 };
 
-const RETRYABLE_NETWORK_ERROR_CODES = new Set([
-  "ECONNRESET",
-  "ECONNREFUSED",
-  "ETIMEDOUT",
-  "ESOCKETTIMEDOUT",
-  "ECONNABORTED",
-  "ENOTFOUND",
-  "EAI_AGAIN",
-  "EHOSTUNREACH",
-  "ENETUNREACH",
-  "EPIPE",
-  "UND_ERR_CONNECT_TIMEOUT",
-  "UND_ERR_DNS_RESOLVE_FAILED",
-  "UND_ERR_CONNECT",
-  "UND_ERR_SOCKET",
-  "UND_ERR_HEADERS_TIMEOUT",
-  "UND_ERR_BODY_TIMEOUT",
-]);
-
-const RETRYABLE_NETWORK_ERROR_NAMES = new Set([
-  "AbortError",
-  "TimeoutError",
-  "ConnectTimeoutError",
-  "HeadersTimeoutError",
-  "BodyTimeoutError",
-]);
-
 const RETRYABLE_NETWORK_MESSAGE_SNIPPETS = [
   "network error",
   "timeout",
@@ -507,15 +479,7 @@ export function isRetryableError(error: Error): boolean {
     }
   }
 
-  if (
-    candidates.some((candidate) =>
-      RETRYABLE_NETWORK_ERROR_CODES.has(readErrorCode(candidate) ?? ""),
-    )
-  ) {
-    return true;
-  }
-
-  if (candidates.some((candidate) => RETRYABLE_NETWORK_ERROR_NAMES.has(readErrorName(candidate)))) {
+  if (isTransientNetworkError(error)) {
     return true;
   }
 
@@ -528,24 +492,6 @@ export function isRetryableError(error: Error): boolean {
       RETRYABLE_NETWORK_MESSAGE_SNIPPETS.some((pattern) => message.includes(pattern))
     );
   });
-}
-
-function readErrorCode(error: unknown): string | undefined {
-  if (!error || typeof error !== "object") {
-    return undefined;
-  }
-  const { code, errno } = error as {
-    code?: unknown;
-    errno?: unknown;
-  };
-  const raw = typeof code === "string" && code.trim() ? code : errno;
-  if (typeof raw === "string" && raw.trim()) {
-    return raw.trim().toUpperCase();
-  }
-  if (typeof raw === "number" && Number.isFinite(raw)) {
-    return String(raw);
-  }
-  return undefined;
 }
 
 export async function createMattermostPost(

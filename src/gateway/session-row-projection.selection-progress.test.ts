@@ -1,19 +1,27 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import type { AgentHarness } from "../agents/harness/types.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import * as history from "../config/sessions/session-transcript-worker-runtime.js";
 import { cronTestJob } from "../cron/service.fixture-builders.test-support.js";
+import type { CronJob } from "../cron/types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import * as plugins from "../plugins/runtime.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as reads from "./server-methods/sessions-read-cache.test-support.js";
-import { registerSessionAutomationSource } from "./session-automation-index.js";
+import {
+  invalidateSessionAutomationIndex,
+  registerSessionAutomationSource,
+} from "./session-automation-index.js";
 import * as membership from "./session-membership-projection.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import {
   canRetainSessionRowRuntimeOwnership,
   isPreparedSessionRowDatabaseFacts,
+  ready,
 } from "./session-row-projection-record.js";
 import * as rowFixture from "./session-row-projection.read-fixture.test-support.js";
 import { listProjectedSessions } from "./session-utils-list.js";
@@ -120,6 +128,104 @@ it.for([
     });
   },
 );
+
+describe("automation bindings", () => {
+  const cfg = { agents: { entries: { main: {} } } };
+  afterEach(() => registerSessionAutomationSource(null));
+
+  it("rebuilds only changed automation bindings and preserves complete unrelated rows", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const keys = ["bound", "next", "parent", "other"].map((name) => `agent:main:${name}`);
+      for (const [index, sessionKey] of keys.entries()) {
+        replaceSessionEntrySync(
+          { agentId: "main", sessionKey },
+          {
+            sessionId: `session-${index}`,
+            updatedAt: 1,
+            ...(index === 0 ? { parentSessionKey: keys[2] } : {}),
+          },
+        );
+      }
+      const jobs: CronJob[] = [];
+      registerSessionAutomationSource({ getJobs: () => jobs, getDefaultAgentId: () => "main" });
+      using projection = await rowFixture.createTestProjection({ cfg });
+      const snapshot = () =>
+        projection
+          .selectEntries()
+          .filter(ready)
+          .map((row) => projection.present(row, { now: 1 }));
+      await projection.ensureMaterialized();
+      for (const key of keys) {
+        projection.describe({ agentId: "main", key });
+      }
+      const before = snapshot();
+      const databaseReads = vi.spyOn(history, "withSessionHistoryWorkerDatabases");
+      const sharedReads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+      const refresh = async (expectedCount: number, boundKey?: string) => {
+        const count = projection.materializedCount;
+        invalidateSessionAutomationIndex();
+        await projection.ensureMaterialized();
+        expect(projection.materializedCount - count).toBe(expectedCount);
+        expect(snapshot()).toEqual(
+          before.map((row) =>
+            row.key === boundKey ? Object.assign({}, row, { hasAutomation: true }) : row,
+          ),
+        );
+      };
+      await refresh(0);
+      const binding = cronTestJob({ id: "binding", sessionTarget: `session:${keys[0]}` });
+      jobs.push(binding);
+      await refresh(1, keys[0]);
+      binding.sessionTarget = `session:${keys[1]}`;
+      await refresh(2, keys[1]);
+      expect(databaseReads).not.toHaveBeenCalled();
+      expect(sharedReads).not.toHaveBeenCalled();
+      const count = projection.materializedCount;
+      sessionChanges.emit({ all: true, scope: "stores" });
+      await projection.ensureMaterialized();
+      expect(projection.materializedCount - count).toBe(keys.length);
+      expect(databaseReads).toHaveBeenCalled();
+    });
+  });
+
+  it("keeps automation aliases scoped to their logical agent in a shared store", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
+      const storePath = `${stateDir}/shared-sessions.json`;
+      const sharedConfig = {
+        session: { store: storePath, scope: "global" as const },
+        agents: {
+          entries: { main: {}, work: {} },
+          defaults: { sessionStore: { agentId: "main" } },
+        },
+      };
+      for (const agentId of ["main", "work"]) {
+        replaceSessionEntrySync(
+          { agentId, storePath, sessionKey: "global" },
+          { sessionId: `${agentId}-global`, updatedAt: 1 },
+        );
+      }
+      const binding = cronTestJob({ id: "binding", sessionTarget: "main" });
+      const jobs = [binding];
+      registerSessionAutomationSource({
+        getJobs: () => jobs,
+        getDefaultAgentId: () => "main",
+      });
+      using projection = await rowFixture.createTestProjection({ cfg: sharedConfig });
+      await projection.ensureMaterialized();
+      projection.describe({ agentId: "main", key: "global", storePath });
+      const work = projection.describe({ agentId: "work", key: "global", storePath });
+      const count = projection.materializedCount;
+      binding.enabled = false;
+      invalidateSessionAutomationIndex();
+      await projection.ensureMaterialized();
+      expect(projection.materializedCount - count).toBe(1);
+      expect(projection.describe({ agentId: "work", key: "global", storePath })).toBe(work);
+      expect(
+        projection.snapshot({ agentId: "main", key: "global", storePath }).row?.hasAutomation,
+      ).toBeUndefined();
+    });
+  });
+});
 
 // Opaque ownership must be re-read after invalidation; otherwise selection spins in microtasks.
 it.each(["parent model change", "late cron registration"])(

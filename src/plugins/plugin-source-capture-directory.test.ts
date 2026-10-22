@@ -18,7 +18,9 @@ import {
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import { retainGatewayPluginMetadata } from "./plugin-metadata-lifecycle.js";
 import { withPluginSourceCaptureDirectory } from "./plugin-package-metadata-capture.js";
+import { resolvePluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 import {
+  createPluginNativeCaptureRoot,
   createPluginSourceCaptureRoot,
   prunePluginNativeCaptureDirectories,
   retainPluginSourceCaptureInstance,
@@ -97,11 +99,41 @@ function captureFixture() {
   return { instance, capture, root, payload };
 }
 
+it("keeps update source copies in TMPDIR without relocating retained native captures", () => {
+  vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  const artifact = artifactFixture();
+  expectArtifactBytes(artifact);
+  expect(
+    artifact.boundaryRoot.startsWith(path.join(process.env.TMPDIR!, "openclaw-plugin-captures-")),
+  ).toBe(true);
+  const native = createPluginNativeCaptureRoot(stateDir);
+  cleanups.push(() => native.disposeAsync());
+  const storage = resolvePluginSourceCaptureStorage();
+  const preparedNative = createPluginNativeCaptureRoot(storage.stateDir, storage.placement);
+  cleanups.push(() => preparedNative.disposeAsync());
+  expect(
+    native.directory.startsWith(path.join(stateDir, "tmp", "plugin-captures") + path.sep),
+  ).toBe(true);
+  expect(
+    preparedNative.directory.startsWith(path.join(stateDir, "tmp", "plugin-captures") + path.sep),
+  ).toBe(true);
+});
+
 function metadataFixture(scheduler = createTestGatewayScheduler()) {
   const metadata = retainGatewayPluginMetadata(scheduler);
   cleanups.push(() => metadata.close());
   return metadata;
 }
+
+it("keeps update plugin captures on the selected temporary volume", async () => {
+  vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+  const { capture, root } = captureFixture();
+  expect(root.startsWith(`${process.env.TMPDIR}${path.sep}`)).toBe(true);
+  const artifact = artifactFixture(capture);
+  expectArtifactBytes(artifact);
+  expect(fs.existsSync(path.join(stateDir, "tmp", "plugin-captures"))).toBe(false);
+});
 
 function artifactFixture(directory?: string, managedRoot?: string) {
   const create = () => capturePluginGenerationArtifact(source);

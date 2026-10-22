@@ -46,26 +46,20 @@ const startupBotInfo: TelegramBotInfo = {
 };
 
 function installTelegramRuntime() {
-  const runtime = createPluginRuntimeMock({
+  const runtime: TelegramRuntime = createPluginRuntimeMock({
     state: {
       openKeyedStore: <T>(options: Parameters<TelegramRuntime["state"]["openKeyedStore"]>[0]) =>
         createPluginStateKeyedStoreForTests<T>("telegram", { ...options, env: testState.env }),
     },
   });
-  const telegramRuntime = {
-    ...runtime,
-    channel: {
-      ...runtime.channel,
-      telegram: {
-        probeTelegram: probeTelegram as NonNullable<
-          NonNullable<TelegramRuntime["channel"]["telegram"]>["probeTelegram"]
-        >,
-        monitorTelegramProvider: monitorTelegramProvider as TelegramMonitorFn,
-      },
-    },
-  } as unknown as TelegramRuntime;
-  setTelegramRuntime(telegramRuntime);
-  return telegramRuntime;
+  runtime.channel.telegram = {
+    probeTelegram: probeTelegram as NonNullable<
+      NonNullable<TelegramRuntime["channel"]["telegram"]>["probeTelegram"]
+    >,
+    monitorTelegramProvider: monitorTelegramProvider as TelegramMonitorFn,
+  };
+  setTelegramRuntime(runtime);
+  return runtime;
 }
 
 function createTelegramConfig(
@@ -89,11 +83,7 @@ function accountContext(cfg: OpenClawConfig, accountId = "default", abortSignal?
 }
 
 function startAccount(ctx: ReturnType<typeof accountContext>) {
-  const start = telegramPlugin.gateway?.startAccount;
-  if (!start) {
-    throw new Error("expected Telegram startAccount gateway handler");
-  }
-  return start(ctx);
+  return telegramPlugin.gateway!.startAccount!(ctx);
 }
 
 function startTelegramAccount(
@@ -540,39 +530,16 @@ describe("telegramPlugin gateway startup", () => {
 
   it("releases a stopped stale polling lease for the account token", async () => {
     vi.useFakeTimers();
-    try {
-      const cfg = createTelegramConfig();
-      const account = telegramPlugin.config.resolveAccount(cfg, "default");
-      const stopAccount = telegramPlugin.gateway?.stopAccount;
-      if (!stopAccount) {
-        throw new Error("expected Telegram stopAccount gateway handler");
-      }
-
-      const abort = new AbortController();
-      await acquireTelegramPollingLease({
-        token: "123456:bad-token",
-        accountId: "default",
-        abortSignal: abort.signal,
-      });
-      abort.abort();
-
-      const stop = stopAccount(
-        createStartAccountContext({
-          account,
-          abortSignal: abort.signal,
-          cfg,
-        }),
-      );
-      await vi.advanceTimersByTimeAsync(5_000);
-      await stop;
-
-      const next = await acquireTelegramPollingLease({
-        token: "123456:bad-token",
-        accountId: "default",
-      });
-      next.release();
-    } finally {
-      vi.useRealTimers();
-    }
+    const abort = new AbortController();
+    const lease = { token: "123456:bad-token", accountId: "default" };
+    await acquireTelegramPollingLease({ ...lease, abortSignal: abort.signal });
+    abort.abort();
+    const stop = telegramPlugin.gateway!.stopAccount!(
+      accountContext(createTelegramConfig(), "default", abort.signal),
+    );
+    await vi.advanceTimersByTimeAsync(5_000);
+    await stop;
+    const next = await acquireTelegramPollingLease(lease);
+    next.release();
   });
 });

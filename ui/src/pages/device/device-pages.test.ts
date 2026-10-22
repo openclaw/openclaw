@@ -8,7 +8,6 @@ import type {
   NativeDeviceSettingsSnapshot,
 } from "../../app/native-device-settings.ts";
 import { i18n } from "../../i18n/index.ts";
-import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createChromeExtensionSetupResult } from "../../test-helpers/chrome-extension-setup.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
@@ -17,11 +16,10 @@ import {
   createTauriDeviceSettingsSnapshot,
 } from "../../test-helpers/native-device-settings.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { DevicePage } from "./device-page.tsx";
 import { DevicePermissionsPage } from "./permissions-page.tsx";
 
-type DevicePageElement = HTMLElement & { updateComplete: Promise<boolean> };
 const providers: HTMLElement[] = [];
 const unmounts = new WeakMap<HTMLElement, () => void>();
 
@@ -31,6 +29,7 @@ function createCapability(
   const listeners = new Set<(value: NativeDeviceSettingsSnapshot) => void>();
   const capability = {
     snapshot,
+    initialSnapshot: Promise.resolve(snapshot),
     subscribe(listener: (value: NativeDeviceSettingsSnapshot) => void) {
       listeners.add(listener);
       return () => {
@@ -66,8 +65,7 @@ async function mount(
   nativeDeviceSettings: NativeDeviceSettingsCapability | null,
 ) {
   const context = { nativeDeviceSettings } as ApplicationContext;
-  // The retained Lit Chrome setup child still consumes its DOM context.
-  const provider = createApplicationContextProvider(context);
+  const provider = document.createElement("div");
   document.body.append(provider);
   providers.push(provider);
   const fixture = createSolidApplicationContextProvider(context);
@@ -269,16 +267,24 @@ it("switches Gateway hosting only when available and follows the native owner's 
   const saved = createNativeDeviceSettingsSnapshot();
   saved.app.keepGatewayRunning = true;
   settle(0, saved);
-  flush();
+  await waitForSolid(() => expect(toggleInput(hosting).disabled).toBe(false));
   expect(toggleInput(hosting).checked).toBe(true);
   toggle(page, title, false);
   expect(set).toHaveBeenLastCalledWith("app.keepGatewayRunning", false, expect.any(Function));
   settle(1, saved, new Error("Gateway did not become ready."));
-  flush();
+  await waitForSolid(() => expect(toggleInput(hosting).disabled).toBe(false));
   expect(toggleInput(hosting).checked).toBe(true);
   expect(hosting.querySelector('[role="alert"]')?.textContent).toContain(
     "Could not change Gateway hosting. Gateway did not become ready.",
   );
+  toggle(page, title, false);
+  flush();
+  expect(hosting.querySelector('[role="alert"]')).toBeNull();
+  // Native Cancel returns the accepted snapshot unchanged.
+  settle(2, saved);
+  await waitForSolid(() => expect(toggleInput(hosting).disabled).toBe(false));
+  expect(toggleInput(hosting).checked).toBe(true);
+  expect(row(page, title)).toBe(hosting);
   saved.app.keepGatewayRunningAvailable = false;
   render(saved);
   expect(toggleInput(hosting).disabled).toBe(true);
@@ -288,6 +294,21 @@ it("switches Gateway hosting only when available and follows the native owner's 
   delete saved.app.keepGatewayRunning;
   render(saved);
   expect(page.textContent).not.toContain(title);
+});
+
+it("leaves a held Gateway confirmation without delaying profile cleanup or leaking its error", async () => {
+  const { capability, page, settle } = await setup();
+  const title = "Keep OpenClaw running when the app is closed";
+  toggle(page, title, true);
+  flush();
+  typeInput(profileInput(page), "pending-profile");
+  unmountPage(page);
+  expectCookieWrite(capability, "targetProfile", "pending-profile");
+
+  const next = await mount("openclaw-device-page", capability);
+  settle(0, createNativeDeviceSettingsSnapshot(), new Error("Retired confirmation"));
+  await waitForSolid(() => expect(toggleInput(row(next, title)).disabled).toBe(false));
+  expect(row(next, title).querySelector('[role="alert"]')).toBeNull();
 });
 
 it("shows native desktop state and reconciles Keep computer awake with the native owner", async () => {
@@ -320,12 +341,11 @@ it("shows native desktop state and reconciles Keep computer awake with the nativ
 
 it("leaves Chrome data untouched on entry and focus until explicit refresh", async () => {
   const { capability, page } = await setup();
-  const chrome = page.querySelector<DevicePageElement>("openclaw-native-chrome-setup")!;
-  await chrome.updateComplete;
+  const chrome = page.querySelector<HTMLElement>("openclaw-native-chrome-setup")!;
+  flush();
   expect(capability.setupChromeExtension).not.toHaveBeenCalled();
   window.dispatchEvent(new Event("focus"));
   flush();
-  await chrome.updateComplete;
   expect(capability.setupChromeExtension).not.toHaveBeenCalled();
   const refresh = [...chrome.querySelectorAll("button")].find(
     (button) => button.textContent?.trim() === "Refresh setup status",

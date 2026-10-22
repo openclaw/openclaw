@@ -1,7 +1,6 @@
 import type { ProviderAcceptance } from "@openclaw/ai/transports";
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type {
   DiagnosticEventInput,
   DiagnosticModelCallContent,
@@ -37,6 +36,7 @@ type ModelCallObservationState = {
   terminalReason?: "stop" | "length" | "toolUse" | "error" | "aborted";
   timeToFirstByteMs?: number;
   providerProcessingMs?: number;
+  reasoningSuppressed?: boolean;
   modelContent?: DiagnosticModelCallContent;
   outputMessages?: unknown[];
   usage?: ModelCallUsage;
@@ -178,6 +178,12 @@ function observeModelCallTerminalMessage(state: ModelCallObservationState, value
   let rawUsage: unknown;
   try {
     rawUsage = value.usage;
+    state.reasoningSuppressed ||=
+      value.role === "assistant" &&
+      Array.isArray(value.diagnostics) &&
+      value.diagnostics.some(
+        (entry: unknown) => isRecord(entry) && entry.type === "reasoning_suppressed",
+      );
     const timing = Array.isArray(value.diagnostics)
       ? value.diagnostics.findLast(
           (entry: unknown) => isRecord(entry) && entry.type === "provider_timing",
@@ -309,7 +315,6 @@ function isSemanticModelCallResult(result: unknown): boolean {
 
 export function createModelObserver(params: {
   diagnosticOwner?: DiagnosticEmbeddedRunOwner;
-  config?: OpenClawConfig;
   streamContext: ModelCallRequestContext;
   contentCapture?: DiagnosticModelContentCapturePolicy;
   suppressPluginHooks?: boolean;

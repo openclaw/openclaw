@@ -1,4 +1,4 @@
-import { createMemo, onSettled } from "solid-js";
+import { createMemo, Loading, onSettled } from "solid-js";
 import type { AgentSelectElement } from "../../components/agent-select.ts";
 import type { PopoverHandle } from "../../components/solid/popover.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
@@ -62,6 +62,10 @@ export function RequiredSessionPlacement(props: {
 }) {
   const profile = () =>
     props.gateway.cloudProfiles.find((candidate) => candidate.id === props.gateway.requiredProfile);
+  const completion = createMemo(() => ({ promise: props.gateway.cloudProfilesRead }), {
+    equals: (previous, next) => previous.promise === next.promise,
+  });
+  const cloudProfilesRead = createMemo(() => completion().promise?.then(() => null));
   return (
     <span
       class="new-session-page__select"
@@ -78,17 +82,19 @@ export function RequiredSessionPlacement(props: {
                 ? "newSession.openClawWorker"
                 : "newSession.requiredWorker",
             )}
-      {!props.gateway.cloudProfilesPending &&
-      (!props.gateway.placementPolicyReady || !profile()) ? (
-        <button
-          type="button"
-          class="btn btn--sm"
-          ref={props.retryRef}
-          onClick={() => void props.gateway.retryRequiredPlacement()}
-        >
-          {t("common.retry")}
-        </button>
-      ) : undefined}
+      <Loading on={completion()}>
+        {cloudProfilesRead()}
+        {!props.gateway.placementPolicyReady || !profile() ? (
+          <button
+            type="button"
+            class="btn btn--sm"
+            ref={props.retryRef}
+            onClick={() => void props.gateway.retryRequiredPlacement()}
+          >
+            {t("common.retry")}
+          </button>
+        ) : undefined}
+      </Loading>
     </span>
   );
 }

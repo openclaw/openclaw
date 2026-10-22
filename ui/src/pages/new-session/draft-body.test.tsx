@@ -39,6 +39,8 @@ it.each([
     );
     expect(avatar?.getAttribute("src")).toBe(avatarUrl);
     expect(group?.classList.contains("chat-group--with-footer")).toBe(true);
+    // Chat reserves the footer row on every user turn, so the preview must too.
+    expect(group?.querySelector(":scope > .chat-group-footer")).not.toBeNull();
     expect(group?.closest(".chat-thread--direct") !== null).toBe(placement === "footer");
   });
 });

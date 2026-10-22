@@ -4,14 +4,15 @@ import {
   getAgentEventLifecycleGeneration,
   rotateAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
+import { recordCronNextCheckProposal } from "../../infra/agent-run-registry.automation.js";
 import {
   claimAgentRunContext,
   clearAgentRunContext,
   getAgentRunContext,
-  recordCronNextCheckProposal,
   registerAgentRunContext,
 } from "../../infra/agent-run-registry.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
+import { readSessionMessagesAsyncMock } from "./run-automation.test-support.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import * as h from "./run.test-harness.js";
 
@@ -46,7 +47,9 @@ function expectCronInvocationContext(runParams: {
     sessionId: runParams.sessionId,
     sessionKey: runParams.sessionKey,
     lifecycleGeneration: getAgentEventLifecycleGeneration(),
-    cronRunsByJobId: new Map([["test-job", { nextCheckEnabled: false }]]),
+    cronRunsByJobId: new Map([
+      ["test-job", { nextCheckEnabled: false, assertCurrent: expect.any(Function) }],
+    ]),
   });
   return runParams.runId;
 }
@@ -305,7 +308,7 @@ describe("runCronIsolatedAgentTurn session cleanup", () => {
         expectedLifecycleRevision: "test-lifecycle-revision",
         expectedSessionUpdatedAt: 0,
       },
-      timeoutMs: 10_000,
+      timeoutMs: null,
     });
   });
 
@@ -380,7 +383,7 @@ describe("runCronIsolatedAgentTurn session cleanup", () => {
       h.resolveCronSessionMock.mockReturnValue(
         h.makeCronSession({ store: { [source.sessionKey]: sourceEntry } }),
       );
-      h.readSessionMessagesAsyncMock.mockResolvedValue([
+      readSessionMessagesAsyncMock.mockResolvedValue([
         { role: "user", content: "Otters hold hands while sleeping." },
         { role: "assistant", content: "Got it." },
       ]);
@@ -396,12 +399,12 @@ describe("runCronIsolatedAgentTurn session cleanup", () => {
       expect(prompt).toEqual(expect.any(String));
       if (isolated) {
         expect(result.sessionKey).not.toBe(source.sessionKey);
-        expect(h.readSessionMessagesAsyncMock).not.toHaveBeenCalled();
+        expect(readSessionMessagesAsyncMock).not.toHaveBeenCalled();
         expect(prompt).toContain(message);
         expect(prompt).not.toContain("Otters hold hands while sleeping.");
         expectCall(h.resolveCronSessionMock, { sourceSessionKey: undefined, forceNew: true });
       } else {
-        expect(h.readSessionMessagesAsyncMock).toHaveBeenCalledWith(
+        expect(readSessionMessagesAsyncMock).toHaveBeenCalledWith(
           expect.objectContaining({
             sessionEntry: sourceEntry,
             sessionId: source.sessionId,

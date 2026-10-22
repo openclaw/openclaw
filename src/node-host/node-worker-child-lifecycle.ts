@@ -1,3 +1,4 @@
+import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
@@ -129,12 +130,7 @@ export class NodeWorkerChildLifecycle {
           : [],
       ),
     );
-    const errors = results.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
-    );
-    if (errors.length) {
-      throw new AggregateError(errors, "node worker idle cleanup failed");
-    }
+    throwSettledAggregate(results, "node worker idle cleanup failed");
   }
 
   /** Starts one physical owner behind the durable journal gate, independent of turn reuse. */

@@ -61,8 +61,8 @@ describe("config appearance preferences", () => {
       devices: [{ deviceId, label }],
       permissionRequired: false,
       selectedDeviceId: deviceId,
-      loading: false,
-      error: null,
+      discovery: null,
+      selection: null,
     };
   }
 
@@ -443,7 +443,7 @@ describe("config appearance preferences", () => {
       onMicrophoneSelect: vi.fn(),
       onMicrophoneRefresh,
       camera: mediaDevice("camera-1", "Desk Camera"),
-      onCameraSelect: vi.fn(),
+      onCameraSelect: vi.fn().mockResolvedValue(undefined),
       onCameraRefresh,
       composerHoldToRecord: true,
     });
@@ -496,14 +496,18 @@ describe("config appearance preferences", () => {
       const onRefresh = vi.fn();
       const state = {
         devices: [...devices],
-        loading,
+        discovery: loading ? new Promise<string | null>(() => {}) : null,
         permissionRequired: true,
         selectedDeviceId: "",
-        error: null,
+        selection: null,
       };
       const { container } = renderAppearance(
         device === "camera"
-          ? { camera: state, onCameraSelect: vi.fn(), onCameraRefresh: onRefresh }
+          ? {
+              camera: state,
+              onCameraSelect: vi.fn().mockResolvedValue(undefined),
+              onCameraRefresh: onRefresh,
+            }
           : { microphone: state, onMicrophoneSelect: vi.fn(), onMicrophoneRefresh: onRefresh },
       );
       const select = required(container, `[data-settings-${device}]`, HTMLSelectElement);
@@ -586,7 +590,10 @@ describe("config appearance preferences", () => {
   it("labels hidden session sections from the catalog and keeps ids as the fallback", () => {
     const { container, props } = renderAppearance({
       hiddenSessionCatalogIds: new Set(["claude", "offline-catalog"]),
-      hiddenSessionCatalogLabels: new Map([["claude", "Claude Code"]]),
+      hiddenSessionCatalogLabels: {
+        read: () => new Map([["claude", "Claude Code"]]),
+        scope: null,
+      },
     });
 
     const heading = Array.from(container.querySelectorAll("h3")).find(

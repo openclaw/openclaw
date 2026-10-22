@@ -20,7 +20,7 @@
     }
   },
   "dependencies": {
-    "zod": "4.6.6"
+    "zod": "4.6.7"
   },
   "openclaw": {
     "extensions": [

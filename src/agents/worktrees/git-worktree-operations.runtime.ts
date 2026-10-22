@@ -160,7 +160,7 @@ export async function executeGitWorktreeOperation(
         operation.input.replacementRefBase,
       );
     case "worktree.directory-size":
-      return await measureDirectoryTreeBytes(operation.input.root, operation.input.excludeGit);
+      return await measureDirectoryTreeBytes(operation.input.root);
     default:
       throw new Error("Unknown managed-worktree Git operation");
   }

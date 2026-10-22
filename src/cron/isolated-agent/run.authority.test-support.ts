@@ -11,36 +11,29 @@ import {
 } from "../../agents/tools/gateway-caller-context.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  cfg,
-  stateDir,
-} from "../../gateway/server-methods/requester-cron-authority.test-support.js";
+import { stateDir } from "../../gateway/server-methods/requester-cron-authority.test-support.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { admitScheduledOccurrence } from "../execution-context-admission.js";
 import { CronService } from "../service.js";
 import { createNoopLogger } from "../service.test-harness.js";
+import { runCronSessionTurn } from "../session-run.js";
 import { resolveCronSessionTargetSessionKey } from "../session-target.js";
-import {
-  ensureAgentWorkspaceMock,
-  loadRunCronIsolatedAgentTurn,
-  mockRunCronFallbackPassthrough,
-  resetRunCronIsolatedAgentTurnHarness,
-  resolveConfiguredModelRefMock,
-  resolveCronDeliveryPlanMock,
-} from "./run.test-harness.js";
+import * as harness from "./run.test-harness.js";
 
 export function resetAuthorityRunHarness() {
-  resetRunCronIsolatedAgentTurnHarness();
+  harness.resetRunCronIsolatedAgentTurnHarness();
   vi.stubEnv("OPENCLAW_TEST_FAST", "1");
-  ensureAgentWorkspaceMock.mockImplementation(async ({ dir }: { dir: string }) => ({ dir }));
-  resolveCronDeliveryPlanMock.mockReturnValue({ requested: false, mode: "none" });
-  mockRunCronFallbackPassthrough();
+  harness.ensureAgentWorkspaceMock.mockImplementation(async ({ dir }: { dir: string }) => ({
+    dir,
+  }));
+  harness.resolveCronDeliveryPlanMock.mockReturnValue({ requested: false, mode: "none" });
+  harness.mockRunCronFallbackPassthrough();
 }
 
 export async function prepareAuthorityConfig(overrides: Partial<OpenClawConfig> = {}) {
   const { resolveAgentDir } = await import("./run.runtime.js");
   const agentDir = path.join(stateDir, "agents", "main", "agent");
   const config: OpenClawConfig = {
-    ...cfg,
     models: createEmbeddedAgentRunnerOpenAiConfig(["gpt-4.1"]).models,
     agents: {
       defaults: { skipBootstrap: true, workspace: stateDir, model: "openai/gpt-4.1" },
@@ -55,7 +48,7 @@ export async function prepareAuthorityConfig(overrides: Partial<OpenClawConfig> 
   setRuntimeConfigSnapshot(config);
   // Capture and execution must address the same canonical credential owner.
   vi.mocked(resolveAgentDir).mockReturnValue(agentDir);
-  resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-4.1" });
+  harness.resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-4.1" });
   await persistAuthProfileBatch({
     stateDir,
     profiles: [
@@ -112,7 +105,7 @@ export async function withAuthorityTools<T>(
 
 export function createAuthorityCronService(
   config: OpenClawConfig,
-  runCron: Awaited<ReturnType<typeof loadRunCronIsolatedAgentTurn>>,
+  runCron: Awaited<ReturnType<typeof harness.loadRunCronIsolatedAgentTurn>>,
   overrides: Partial<ConstructorParameters<typeof CronService>[0]> = {},
 ) {
   return new CronService({
@@ -122,15 +115,26 @@ export function createAuthorityCronService(
     defaultAgentId: "main",
     log: createNoopLogger(),
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
+    runSessionEvent: (request) =>
+      runCronSessionTurn({
+        ...request,
+        cfg: config,
+        agentId: "main",
+        sessionKey: expectDefined(
+          resolveCronSessionTargetSessionKey(request.job.sessionTarget),
+          "explicit Cron session target",
+        ),
+      }),
+    // Admits like the Gateway, so parent reads, pauses and child bindings are real.
+    admitScheduledOccurrence: ({ job }) =>
+      admitScheduledOccurrence({ cfg: config, job, agentId: "main", trigger: "cron" }),
     runIsolatedAgentJob: (request) =>
       runCron({
         ...request,
         cfg: config,
         deps: {},
         agentId: "main",
-        sessionKey:
-          resolveCronSessionTargetSessionKey(request.job.sessionTarget) ?? `cron:${request.job.id}`,
+        sessionKey: `cron:${request.job.id}`,
       }),
     ...overrides,
   });

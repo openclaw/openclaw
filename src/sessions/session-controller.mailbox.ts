@@ -104,7 +104,6 @@ export function getSessionControllerMailbox(
     summarySources: [],
     activeSummarySources: new Set(),
     summaryElisions: [],
-    evictedSummaryCount: 0,
     recentSources: new Map(),
   };
   owner.mailbox = mailbox;

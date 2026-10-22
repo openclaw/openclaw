@@ -295,8 +295,7 @@ it.each(["settle", "replacement", "incarnation"] as const)(
     expect(sibling.readSession(other.sessionKey, authority)?.entry).toEqual(otherBefore);
     if (outcome !== "settle") {
       expect(entry).toEqual(replacementEntry);
-      expect(entry?.status).toBeUndefined();
-      expect(entry?.abortedLastRun).toBeUndefined();
+      expect([entry?.status, entry?.abortedLastRun]).toEqual([undefined, undefined]);
       expect(replacementAbort).not.toHaveBeenCalled();
     } else {
       expect(entry).toMatchObject({
@@ -399,19 +398,17 @@ it("refuses a replacement session after recovery preparation yields", async () =
 });
 
 it("retains an owed completion when the exact admitted source input is absent", async () => {
-  const name = "completion-without-input";
-  const sessionKey = `agent:main:dashboard:incognito-${name}`;
   const claim = {
     taskId: "task",
     taskStatus: "succeeded" as const,
     taskRunId: "task-run",
     sourceRunId: "announce:task",
-    requesterSessionKey: sessionKey,
+    requesterSessionKey: "agent:main:dashboard:incognito-completion-without-input",
     requesterAgentId: "main",
-    sessionId: name,
+    sessionId: "completion-without-input",
     lifecycleRevision: "initial",
   };
-  const target = await create(name, {
+  const target = await create(claim.sessionId, {
     abortedLastRun: true,
     restartRecoveryDeliveryRunId: "recovery",
     restartRecoveryDeliverySourceRunId: claim.sourceRunId,

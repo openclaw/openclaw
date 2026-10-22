@@ -295,7 +295,9 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
             run: async () => {
               const memory = await acquireMemoryManager();
               if ("error" in memory) {
-                throw new Error(memory.error ?? "memory search unavailable");
+                throw Object.assign(new Error(memory.error ?? "memory search unavailable"), {
+                  code: memory.code,
+                });
               }
               signal.throwIfAborted();
               const explicitSources: MemorySource[] | undefined =

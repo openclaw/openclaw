@@ -1,39 +1,65 @@
-import { once } from "node:events";
 import type { Server } from "node:http";
 import { expect } from "vitest";
+import { createAuthProfileStoreFixture } from "../../agents/auth-profiles/credential-fixtures.test-support.js";
+import { apiKey } from "../../agents/model-catalog-fixtures.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { GatewayClient } from "../client.js";
 import { startGatewayWithClient } from "../test-helpers.e2e.js";
+import {
+  createModelsTestState,
+  listenModelsEndpoint,
+  modelsTestConfig,
+  startModelsGateway,
+} from "./models-integration.test-support.js";
+
+export async function startCatalogProvider(
+  state: OpenClawTestState,
+  options: {
+    provider: string;
+    token: string;
+    body: string;
+    manifest?: Record<string, unknown>;
+    config?: OpenClawConfig;
+    allowModels?: boolean;
+  },
+) {
+  const { provider, token, body, manifest, config = {} } = options;
+  const pluginPath = await writeCatalogPlugin(
+    state,
+    provider,
+    `module.exports = {
+    id: ${JSON.stringify(provider)}, register(api) { api.registerProvider({
+      id: ${JSON.stringify(provider)}, ${body}
+    }); },
+  };`,
+    manifest,
+  );
+  const cfg = modelsTestConfig(state, token, {
+    ...config,
+    agents:
+      options.allowModels === false
+        ? config.agents
+        : {
+            ...config.agents,
+            defaults: {
+              modelPolicy: { allow: [provider + "/*"] },
+              ...config.agents?.defaults,
+            },
+          },
+    plugins: { allow: [provider], load: { paths: [pluginPath] }, slots: { memory: "none" } },
+  });
+  await state.writeConfig(cfg);
+  return Object.assign(await startModelsGateway(state, cfg, token), { cfg });
+}
 
 export function createCatalogState(label: string, env: Record<string, string | undefined> = {}) {
-  return createOpenClawTestState({
-    label,
-    env: {
-      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      ...env,
-    },
+  return createModelsTestState(label, {
+    env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined, ...env },
   });
 }
 
-export async function listenCatalogServer(endpoint: Server) {
-  endpoint.listen(0, "127.0.0.1");
-  await once(endpoint, "listening");
-  const address = endpoint.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Catalog fixture did not bind a TCP port");
-  }
-  return `http://127.0.0.1:${address.port}`;
-}
+export const listenCatalogServer = listenModelsEndpoint;
 
 export async function writeCatalogPlugin(
   state: OpenClawTestState,
@@ -74,13 +100,11 @@ export async function closeCatalogServer(endpoint: Server, rejectErrors = false)
 }
 
 export function expectAssistantReply(messages: unknown[], text: string) {
-  expect(messages).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({
-        role: "assistant",
-        content: expect.arrayContaining([expect.objectContaining({ type: "text", text })]),
-      }),
-    ]),
+  expect(messages).toContainEqual(
+    expect.objectContaining({
+      role: "assistant",
+      content: expect.arrayContaining([expect.objectContaining({ type: "text", text })]),
+    }),
   );
 }
 
@@ -96,6 +120,31 @@ export function catalogModelDefaults() {
 
 export function createCatalogModel(id: string, name = id) {
   return { id, name, ...catalogModelDefaults() };
+}
+
+export function catalogDiscoverySource(
+  provider: string,
+  baseUrl: string,
+  options: { wrappedRows?: boolean; model?: Record<string, unknown>; error: string },
+) {
+  return `catalog: {
+    order: "profile",
+    async run(ctx) {
+      const auth = ctx.resolveProviderAuth(${JSON.stringify(provider)});
+      if (!auth.discoveryApiKey) return null;
+      const response = await fetch(${JSON.stringify(`${baseUrl}/models`)}, {
+        headers: { Authorization: "Bearer " + auth.discoveryApiKey },
+      });
+      if (!response.ok) throw new Error(${JSON.stringify(options.error)});
+      const payload = await response.json();
+      return { provider: {
+        baseUrl: ${JSON.stringify(baseUrl)}, api: "openai-completions",
+        models: ${options.wrappedRows ? "payload.data" : "payload"}.map((row) => ({
+          ...row, ...${JSON.stringify({ ...catalogModelDefaults(), ...options.model })},
+        })),
+      } };
+    },
+  }`;
 }
 
 export function catalogReply(id: string, model: string, text: string) {
@@ -141,15 +190,11 @@ export function catalogSessionRpc(client: GatewayClient) {
 }
 
 export function createCatalogAuthProfiles(keys: Record<string, string>) {
-  return {
-    version: 1,
-    profiles: Object.fromEntries(
-      Object.entries(keys).map(([provider, key]) => [
-        `${provider}:default`,
-        { type: "api_key" as const, provider, key },
-      ]),
+  return createAuthProfileStoreFixture(
+    Object.fromEntries(
+      Object.entries(keys).map(([provider, key]) => [`${provider}:default`, apiKey(provider, key)]),
     ),
-  };
+  );
 }
 
 export function catalogModelIds(

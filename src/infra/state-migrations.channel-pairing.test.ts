@@ -122,32 +122,27 @@ it.each([
   },
 );
 
-it("defers configured account discovery without resolving accounts", async () => {
-  const resolveAccounts = vi.fn(() => ({ defaultAccountIds: { "custom-channel": "primary" } }));
-  const { detected } = await fixture(
-    { "custom-channel-allowFrom.json": ["legacy-user"] },
-    {
-      configuredChannelIds: ["custom-channel"],
-      resolveAccounts,
-      deferConfiguredAccountDiscovery: true,
-    },
-  );
-  expect(detected.accountDiscoveryDeferred).toBe(true);
-  expect(resolveAccounts).not.toHaveBeenCalled();
-});
-
-it("does not defer pairing requests or built-in explicit default accounts", async () => {
-  const { detected } = await fixture(
+it.each([
+  ["configured allowFrom", { "custom-channel-allowFrom.json": ["legacy-user"] }, true],
+  [
+    "pairing requests and built-in explicit default accounts",
     {
       "telegram-pairing.json": { version: 1, requests: [] },
       "whatsapp-default-allowFrom.json": ["legacy-user"],
     },
-    {
-      configuredChannelIds: ["custom-channel", "whatsapp"],
-      deferConfiguredAccountDiscovery: true,
-    },
-  );
-  expect(detected.accountDiscoveryDeferred).toBe(false);
+    false,
+  ],
+] as const)("defers discovery only for configured allowFrom: %s", async (_, files, deferred) => {
+  const resolveAccounts = vi.fn(() => ({ defaultAccountIds: { "custom-channel": "primary" } }));
+  const { detected } = await fixture(files, {
+    configuredChannelIds: ["custom-channel", "whatsapp"],
+    ...(deferred ? { resolveAccounts } : {}),
+    deferConfiguredAccountDiscovery: true,
+  });
+  expect(detected.accountDiscoveryDeferred).toBe(deferred);
+  if (deferred) {
+    expect(resolveAccounts).not.toHaveBeenCalled();
+  }
 });
 
 it("imports requests and exact scoped accounts while ignoring invalid candidates", async () => {

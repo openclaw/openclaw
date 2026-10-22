@@ -83,7 +83,7 @@ async function dependencyOwner(
   }
 }
 
-export function assertUpdateCandidatePluginCopySource(source: string, privateRoot: string): void {
+function assertUpdateCandidatePluginCopySource(source: string, privateRoot: string): void {
   if (isPathInside(source, privateRoot) || isPathInside(privateRoot, source)) {
     throw new Error("Plugin copy source overlaps update state");
   }

@@ -3,6 +3,10 @@ import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, expect, it, vi } from "vitest";
 import { CodexAppServerRpcError } from "./app-server/rpc-error.js";
+import {
+  getSharedCodexAppServerClientState,
+  ownCodexStartup,
+} from "./app-server/shared-client-lifecycle.js";
 import { describeCodexSpawnError } from "./app-server/spawn-error.js";
 import { createClientHarness as createHarness } from "./app-server/test-support.js";
 import { observeCodexCatalogClient } from "./session-catalog-events.js";
@@ -82,11 +86,26 @@ it("shrinks oversized wire pages and retains the working limit for later refresh
   expect(pages[0]!.bytes).toBeGreaterThan(8 * 1024 * 1024);
   expect(pages.slice(1).every((page) => page.bytes < 8 * 1024 * 1024)).toBe(true);
   pages.length = 0;
-  await vi.advanceTimersByTimeAsync(15 * 60_000);
-  await control.listPage({});
-  await vi.waitFor(() => expect(factory.hasActiveWork()).toBe(false));
-  expect(pages.map((page) => page.limit)).toEqual([8, 8, 8]);
-  expect((await control.listPage({ limit: 64 })).sessions).toHaveLength(20);
+  native[19]!.name = "Refreshed";
+  // Unrelated shared startup must not gate this catalog's refresh assertions.
+  const unrelatedStartup = createDeferred<void>();
+  const startup = ownCodexStartup(
+    getSharedCodexAppServerClientState().startup,
+    unrelatedStartup.promise,
+  );
+  try {
+    await vi.advanceTimersByTimeAsync(15 * 60_000);
+    await control.listPage({});
+    await vi.waitFor(async () => {
+      const { sessions } = await control.listPage({ limit: 64 });
+      expect(sessions.find((session) => session.threadId === "large-19")?.name).toBe("Refreshed");
+    });
+    expect(pages.map((page) => page.limit)).toEqual([8, 8, 8]);
+    expect((await control.listPage({ limit: 64 })).sessions).toHaveLength(20);
+  } finally {
+    unrelatedStartup.resolve();
+    await startup;
+  }
 });
 
 it("defers an oversized single thread for 15 minutes without repeated background warnings", async () => {

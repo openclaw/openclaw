@@ -447,8 +447,20 @@ function scheduleCaptureCleanup(key: string, instance: Instance): void {
 export function retainPluginSourceCaptureInstance(
   stateDir?: string,
   placement?: PluginSourceCaptureStorage["placement"],
+  purpose: "source" | "native" = "source",
 ) {
-  const storage = resolvePluginSourceCaptureStorage(stateDir, placement);
+  const updateTmp = process.env.TMPDIR?.trim();
+  // Older update drivers already mark candidate helpers and select their TMPDIR.
+  // Native admissions can be published to the installed index; keep their durable placement.
+  const storage = resolvePluginSourceCaptureStorage(
+    stateDir,
+    purpose === "source" &&
+      process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1" &&
+      updateTmp &&
+      path.isAbsolute(updateTmp)
+      ? "temporary"
+      : placement,
+  );
   const key = JSON.stringify([storage.stateDir, storage.placement]);
   const maintenance = pluginSourceCaptureMaintenance.getStore();
   const scheduler = maintenance?.scheduler;
@@ -568,7 +580,7 @@ export function createPluginNativeCaptureRoot(
   stateDir?: string,
   placement?: PluginSourceCaptureStorage["placement"],
 ) {
-  const instance = retainPluginSourceCaptureInstance(stateDir, placement);
+  const instance = retainPluginSourceCaptureInstance(stateDir, placement, "native");
   try {
     const root = instance.createNativeDirectory();
     let committed = false;

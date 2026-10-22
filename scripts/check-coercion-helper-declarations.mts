@@ -155,6 +155,7 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
       "isRecord",
       "isStringArray",
       "isStringRecord",
+      "omitUndefinedFields",
       "readStringField",
     ],
   },
@@ -172,6 +173,7 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
       "collectNestedErrorCandidates",
       "extractErrorCodeOrErrno",
       "formatErrorStackWithMessage",
+      "mapErrorCauseChain",
       "readErrorCauses",
       "stringifyNonErrorCause",
       "toErrorObject",
@@ -241,6 +243,12 @@ export const DEFERRED_CANONICAL_COERCION_EXPORTS = [
     name: "formatErrorMessage",
     reason: "Dependency-light scripts retain a deliberately smaller formatting policy.",
   },
+  {
+    file: "scripts/lib/error-format.mts",
+    name: "formatErrorMessageWithCauses",
+    reason:
+      "Dependency-light release diagnostics need bounded cause-chain rendering before install.",
+  },
 ] as const satisfies readonly { file: string; name: string; reason: string }[];
 
 const EXCEPTIONAL_COERCION_HELPER_CARVE_OUTS = [
@@ -261,12 +269,6 @@ const EXCEPTIONAL_COERCION_HELPER_CARVE_OUTS = [
     name: "asStandaloneRecord",
     kind: "variable",
     reason: "Serialized standalone app closure cannot capture module imports.",
-  },
-  {
-    file: "extensions/diffs/src/viewer-payload.ts",
-    name: "isViewerRecord",
-    kind: "function",
-    reason: "Standalone browser asset build cannot resolve workspace package imports.",
   },
   {
     file: "scripts/lib/kova-report-gate.mts",

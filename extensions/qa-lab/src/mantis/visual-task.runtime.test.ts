@@ -114,7 +114,6 @@ describe("mantis visual task runtime", () => {
   const runTask = (options: MantisVisualTaskOptions) =>
     runMantisVisualTask({
       ...commonOptions(),
-      now: () => new Date("2026-05-04T12:00:00.000Z"),
       visionMode: "metadata",
       ...options,
     });
@@ -181,55 +180,44 @@ describe("mantis visual task runtime", () => {
     });
   });
 
-  it("fails when recording breaks after the visual driver passes", async () => {
-    const { commands, runner } = recordingRunner({
-      video: false,
-      error: "crabbox record failed after driver exit",
-    });
-
-    const result = await runTask({ commandRunner: runner });
-
-    expect(result.status).toBe("fail");
-    expect(JSON.parse(await fs.readFile(result.summaryPath, "utf8")).crabbox).toEqual({
-      bin: "/tmp/crabbox",
-      createdLease: true,
-      id: "cbx_abc123",
-      provider: "hetzner",
-      slug: "brisk-mantis",
-      state: "active",
-      vncCommand: "/tmp/crabbox vnc --provider hetzner --id cbx_abc123 --open",
-    });
-    expect(result.videoPath).toBeUndefined();
-    expect(commands.map((entry) => [entry.command, entry.args[0]])).toEqual(
-      ["warmup", "inspect", "record"].map((action) => ["/tmp/crabbox", action]),
-    );
-    expect(JSON.parse(await fs.readFile(result.summaryPath, "utf8"))).toMatchObject({
-      error: "crabbox record failed after driver exit",
-      recording: { error: "crabbox record failed after driver exit", required: true },
-      status: "fail",
-    });
-  });
-
-  it("preserves the video artifact when recording fails after writing output", async () => {
-    const { commands, runner } = recordingRunner({
-      video: true,
-      error: "crabbox record failed after writing video",
-    });
-
-    const result = await runTask({ commandRunner: runner });
-
-    expect(result.status).toBe("fail");
-    expect(result.videoPath).toBe(path.join(repoRoot, outputDir, "visual-task.mp4"));
-    await expect(fs.readFile(result.videoPath ?? "", "utf8")).resolves.toBe("mp4");
-    const recordArgs = commands.find((entry) => entry.args[0] === "record")?.args ?? [];
-    await expectPathMissing(requireArgAfter(recordArgs, "--output"));
-    expect(JSON.parse(await fs.readFile(result.summaryPath, "utf8"))).toMatchObject({
-      artifacts: { videoPath: result.videoPath },
-      error: "crabbox record failed after writing video",
-      recording: { error: "crabbox record failed after writing video", required: true },
-      status: "fail",
-    });
-  });
+  it.each([false, true])(
+    "preserves available artifacts after recording fails (video=%s)",
+    async (video) => {
+      const error = video
+        ? "crabbox record failed after writing video"
+        : "crabbox record failed after driver exit";
+      const { commands, runner } = recordingRunner({ video, error });
+      const result = await runTask({ commandRunner: runner });
+      expect(result.status).toBe("fail");
+      const summary = JSON.parse(await fs.readFile(result.summaryPath, "utf8"));
+      expect(summary).toMatchObject({
+        error,
+        recording: { error, required: true },
+        status: "fail",
+      });
+      if (video) {
+        expect(result.videoPath).toBe(path.join(repoRoot, outputDir, "visual-task.mp4"));
+        await expect(fs.readFile(result.videoPath ?? "", "utf8")).resolves.toBe("mp4");
+        const recordArgs = commands.find((entry) => entry.args[0] === "record")?.args ?? [];
+        await expectPathMissing(requireArgAfter(recordArgs, "--output"));
+        expect(summary.artifacts.videoPath).toBe(result.videoPath);
+      } else {
+        expect(summary.crabbox).toEqual({
+          bin: "/tmp/crabbox",
+          createdLease: true,
+          id: "cbx_abc123",
+          provider: "hetzner",
+          slug: "brisk-mantis",
+          state: "active",
+          vncCommand: "/tmp/crabbox vnc --provider hetzner --id cbx_abc123 --open",
+        });
+        expect(result.videoPath).toBeUndefined();
+        expect(commands.map((entry) => [entry.command, entry.args[0]])).toEqual(
+          ["warmup", "inspect", "record"].map((action) => ["/tmp/crabbox", action]),
+        );
+      }
+    },
+  );
 
   it("drives a lease, screenshots it, and verifies image-describe text", async () => {
     const { commands, runner } = driverRunner(

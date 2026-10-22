@@ -154,7 +154,10 @@ export async function reconcileInterruptedUpdateRuns(
             ? " Installed and serving candidate verified."
             : managed
               ? " Continuing without verified completion; will retry. Check openclaw update status."
-              : " No completed managed-service restart was recorded; checking skipped.");
+              : " No completed managed-service restart was recorded; checking skipped.") +
+      (observed.channelWarnings?.length
+        ? ` Channel health warnings: ${observed.channelWarnings.join(", ")}. Run openclaw channels status --probe.`
+        : "");
     const result = await persistInterruptedUpdateObservationAsync(
       context,
       {

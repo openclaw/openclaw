@@ -159,7 +159,11 @@ export function memoizedSidebarSections(
         catalogIds: catalogs.map((catalog) => catalog.id),
         collapsedSections,
         emptyGroupsMode: host.sessionsEmptyGroupsMode,
-        ownerFiltered: host.sessionOwnerFilterActive || host.sessionInvolvingMeFilterActive,
+        ownerFilter: host.sessionOwnerFilterActive
+          ? "owner"
+          : host.sessionInvolvingMeFilterActive
+            ? "involvingMe"
+            : null,
         visibleSessionLimits: roster ? rosterLimits : host.sessionData.visibleSessionLimits,
         sortMode: host.effectiveSessionSortMode(),
         statusFilter: host.sessionsStatusFilter,

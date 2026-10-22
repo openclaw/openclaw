@@ -34,6 +34,8 @@ export type WorkerTaskServerHost<TaskContext> = {
   onMessage: (sampleMemory: boolean) => void;
   installTaskContext: (context: TaskContext) => void;
   onIdle: () => void;
+  /** Optional host telemetry rides the terminal reply; never a separate task round trip. */
+  collectTaskDiagnostics?: () => unknown;
   /** Release host-owned diagnostics after task and resource receipts settle. */
   onRetire?: () => void | Promise<void>;
 };
@@ -248,7 +250,14 @@ export function serveOwnedWorkerTasks<Output, TaskContext, Input = unknown>(
         })
         .then((value) => {
           port.postMessage(
-            { status: "ok", value, taskId: task.taskId },
+            {
+              status: "ok",
+              value,
+              taskId: task.taskId,
+              ...(host.collectTaskDiagnostics
+                ? { diagnostics: host.collectTaskDiagnostics() }
+                : {}),
+            },
             options.transferList?.(value) ?? [],
           );
         })
@@ -261,6 +270,7 @@ export function serveOwnedWorkerTasks<Output, TaskContext, Input = unknown>(
             status: "failed",
             taskId: task.taskId,
             error: error instanceof Error ? error.message : String(error),
+            ...(host.collectTaskDiagnostics ? { diagnostics: host.collectTaskDiagnostics() } : {}),
           });
         })
         .finally(() => {

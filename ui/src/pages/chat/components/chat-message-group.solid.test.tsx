@@ -278,6 +278,7 @@ it("mounts only selected tool replacements and keeps their context, projection, 
   const plugins: ControlUiPluginCapability = {
     errors: [],
     hasPlugins: true,
+    revision: 0,
     registryStatus: "complete",
     canReload: false,
     isLoading: () => false,

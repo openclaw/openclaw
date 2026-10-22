@@ -243,7 +243,6 @@ export async function resolveMatrixStoragePaths(params: {
   return {
     rootDir,
     storagePath: path.join(rootDir, "bot-storage.json"),
-    cryptoPath: path.join(rootDir, "crypto"),
     recoveryKeyPath: path.join(rootDir, MATRIX_RECOVERY_KEY_FILENAME),
     idbSnapshotPath: path.join(rootDir, MATRIX_IDB_SNAPSHOT_FILENAME),
     accountKey: canonical.accountKey,

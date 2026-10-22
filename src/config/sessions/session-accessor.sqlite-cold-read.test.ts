@@ -241,7 +241,7 @@ async function withRace(run: (race: Race, state: OpenClawTestState) => Promise<v
 
 it("detects an archive committed before a warm incremental read begins", async () => {
   await withRace(async (race) => {
-    const read = race.readRows;
+    const read = vi.fn(race.readRows);
     const original = read();
     expect(original.length).toBeGreaterThan(0);
     const nativeExec = race.database.db.exec.bind(race.database.db);
@@ -254,7 +254,9 @@ it("detects an archive committed before a warm incremental read begins", async (
     expect.soft(read).toThrow(/cold storage/);
     expect(race.committed()).toBe(true);
     exec.mockRestore();
+    read.mockClear();
     await expect(readRestoredSessionTranscript(race.scope, read)).resolves.toEqual(original);
+    expect(read).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -467,20 +469,6 @@ it("preserves partial-store stats, UTF-8 bytes, and batch scope-cache freshness"
     } finally {
       resolve.mockRestore();
     }
-  });
-});
-
-it("retries restoration when a peer archives before the atomic read", async () => {
-  await withRace(async (race) => {
-    let reads = 0;
-    const result = await readRestoredSessionTranscript(race.scope, () => {
-      if (++reads === 1) {
-        race.commitArchive();
-      }
-      return loadTranscriptHeaderSync(race.scope);
-    });
-    expect(result).toMatchObject({ type: "session", id: race.scope.sessionId });
-    expect(reads).toBe(2);
   });
 });
 

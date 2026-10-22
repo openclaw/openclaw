@@ -1,9 +1,13 @@
-import { Show } from "solid-js";
-import "../../components/modal-dialog.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { Show, type Element } from "solid-js";
+import "../../components/modal-dialog.tsx";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { BoardSessionSurface, type BoardSessionSurfaceProps } from "./board-session-surface.tsx";
 
+registerEnglishCatalog(registerChatSessionEnglish);
+
 export function ChatBoardPanel(props: {
+  controls?: Element;
   error: string | undefined;
   elementReady: boolean;
   surface: BoardSessionSurfaceProps;
@@ -19,6 +23,7 @@ export function ChatBoardPanel(props: {
     >
       <BoardSessionSurface
         onViewRef={props.surface.onViewRef}
+        controls={props.controls}
         active={props.surface.active}
         session={props.surface.session}
         snapshot={props.surface.snapshot}
@@ -51,9 +56,6 @@ export function ChatBoardResetConfirmation(props: { onResolve: (confirmed: boole
           </div>
         </div>
         <openclaw-modal-actions class="exec-approval-actions">
-          <button class="btn primary" type="button" onClick={() => props.onResolve(true)}>
-            {t("common.confirm")}
-          </button>
           <button
             ref={(element) => {
               cancelButton = element;
@@ -64,6 +66,9 @@ export function ChatBoardResetConfirmation(props: { onResolve: (confirmed: boole
             onClick={() => props.onResolve(false)}
           >
             {t("common.cancel")}
+          </button>
+          <button class="btn primary" type="button" onClick={() => props.onResolve(true)}>
+            {t("common.confirm")}
           </button>
         </openclaw-modal-actions>
       </div>

@@ -21,6 +21,7 @@ const suite = createControlUiE2eSuite({
   name: "Control UI offline locale retry",
   startServer: () => startControlUiE2eServer(undefined, { source: true }),
   startServerBeforeBrowser: true,
+  trackBrowserContexts: true,
   unavailableMessage: (executablePath) =>
     `Playwright Chromium is not available at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
 });
@@ -28,7 +29,7 @@ const suite = createControlUiE2eSuite({
 const frenchLocaleModule = /\/src\/i18n\/locales\/fr\.ts(?:\?.*)?$/;
 
 async function createContext(): Promise<BrowserContext> {
-  return suite.browser.newContext(createControlUiE2eContextOptions());
+  return suite.newBrowserContext(createControlUiE2eContextOptions());
 }
 
 async function gatewayPhase(page: Page): Promise<string | undefined> {
@@ -60,7 +61,7 @@ suite.define(() => {
     { name: "saved-sv", browserLocale: "en-US", savedLocale: "sv", expectedLocale: "sv" },
     { name: "saved-fr", browserLocale: "sv-SE", savedLocale: "fr", expectedLocale: "fr" },
   ])("preserves the browser or saved language for $name after reload", async (scenario) => {
-    const context = await suite.browser.newContext({
+    const context = await suite.newBrowserContext({
       ...createControlUiE2eContextOptions(),
       locale: scenario.browserLocale,
     });
@@ -75,15 +76,18 @@ suite.define(() => {
     }
     await installMockGateway(page);
 
-    try {
-      await page.goto(`${suite.server.baseUrl}settings/appearance`);
-      const picker = page.locator("#settings-language openclaw-select-picker");
-      await picker.waitFor();
+    await page.goto(`${suite.server.baseUrl}settings/appearance`);
+    const picker = page.locator("#settings-language openclaw-select-picker");
+    await picker.waitFor();
+    const artifacts = createControlUiE2eArtifactDir("swedish-locale");
+    for (const stage of ["before", "after"]) {
+      if (stage === "after") {
+        await page.reload();
+      }
       await expect
         .poll(() => page.evaluate(() => document.documentElement.lang))
         .toBe(scenario.expectedLocale);
-      const trigger = picker.locator(".picker-select__trigger");
-      await trigger.click();
+      await picker.locator(".picker-select__trigger").click();
       const swedishOption = picker.locator('[role="option"][data-value="sv"]');
       await swedishOption.waitFor();
       await swedishOption.scrollIntoViewIfNeeded();
@@ -93,40 +97,28 @@ suite.define(() => {
           await picker.locator('[role="option"][data-value="system"]').textContent(),
         ).toContain("Svenska");
       }
-      const artifacts = createControlUiE2eArtifactDir("swedish-locale");
       await page.screenshot({
-        path: path.join(artifacts, `${scenario.name}-picker-before-reload.png`),
+        path: path.join(artifacts, `${scenario.name}-picker-${stage}-reload.png`),
       });
-
-      await page.reload();
-      await expect
-        .poll(() => page.evaluate(() => document.documentElement.lang))
-        .toBe(scenario.expectedLocale);
-      const browserState = {
-        ...(await page.evaluate(() => ({
-          navigatorLanguage: navigator.language,
-          documentLanguage: document.documentElement.lang,
-          savedLocale: localStorage.getItem("openclaw.i18n.locale"),
-        }))),
-        swedishTranslationMemoryPresent: existsSync(
-          new URL("../i18n/.i18n/sv.tm.jsonl", import.meta.url),
-        ),
-      };
-      expect(browserState.navigatorLanguage).toBe(scenario.browserLocale);
-      expect(browserState.savedLocale).toBe(scenario.savedLocale);
-      await trigger.click();
-      await swedishOption.waitFor();
-      await swedishOption.scrollIntoViewIfNeeded();
-      await page.screenshot({
-        path: path.join(artifacts, `${scenario.name}-picker-after-reload.png`),
-      });
-      writeFileSync(
-        path.join(artifacts, `${scenario.name}-browser-state.json`),
-        `${JSON.stringify(browserState, null, 2)}\n`,
-      );
-    } finally {
-      await context.close();
     }
+    const browserState = {
+      ...(await page.evaluate(() => ({
+        navigatorLanguage: navigator.language,
+        documentLanguage: document.documentElement.lang,
+        savedLocale: localStorage.getItem("openclaw.i18n.locale"),
+      }))),
+      swedishTranslationMemoryPresent: existsSync(
+        new URL("../i18n/.i18n/sv.tm.jsonl", import.meta.url),
+      ),
+    };
+    expect(browserState).toMatchObject({
+      navigatorLanguage: scenario.browserLocale,
+      savedLocale: scenario.savedLocale,
+    });
+    writeFileSync(
+      path.join(artifacts, `${scenario.name}-browser-state.json`),
+      `${JSON.stringify(browserState, null, 2)}\n`,
+    );
   });
 
   it("lazy-loads each registered locale only after the operator selects it", async () => {
@@ -142,21 +134,17 @@ suite.define(() => {
       }
     });
 
-    try {
-      await page.goto(`${suite.server.baseUrl}settings/appearance`);
-      const picker = page.locator("#settings-language openclaw-select-picker");
-      await picker.waitFor();
-      expect(requests.size).toBe(0);
+    await page.goto(`${suite.server.baseUrl}settings/appearance`);
+    const picker = page.locator("#settings-language openclaw-select-picker");
+    await picker.waitFor();
+    expect(requests.size).toBe(0);
 
-      for (const locale of SUPPORTED_LOCALES.slice(1)) {
-        await selectPickerValue(picker, locale);
-        await expect.poll(() => page.evaluate(() => document.documentElement.lang)).toBe(locale);
-        expect(requests.get(locale)).toBe(1);
-      }
-      expect(requests.size).toBe(SUPPORTED_LOCALES.length - 1);
-    } finally {
-      await context.close();
+    for (const locale of SUPPORTED_LOCALES.slice(1)) {
+      await selectPickerValue(picker, locale);
+      await expect.poll(() => page.evaluate(() => document.documentElement.lang)).toBe(locale);
+      expect(requests.get(locale)).toBe(1);
     }
+    expect(requests.size).toBe(SUPPORTED_LOCALES.length - 1);
   });
 
   it("applies a locale whose first chunk request failed after the Gateway reconnects", async () => {
@@ -208,7 +196,6 @@ suite.define(() => {
       expect(new URL(page.url()).pathname).toBe("/settings/appearance");
     } finally {
       await page.unroute(frenchLocaleModule, abortFrenchLocale);
-      await context.close();
     }
   });
 });

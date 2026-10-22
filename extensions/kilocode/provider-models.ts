@@ -117,15 +117,10 @@ function toModelDefinition(entry: GatewayModelEntry): ModelDefinitionConfig {
 }
 
 function buildStaticCatalog(): ModelDefinitionConfig[] {
-  return KILOCODE_MODEL_CATALOG.map((model) => ({
-    id: model.id,
-    name: model.name,
-    reasoning: model.reasoning,
-    input: model.input,
-    cost: KILOCODE_DEFAULT_COST,
-    contextWindow: model.contextWindow ?? KILOCODE_DEFAULT_CONTEXT_WINDOW,
-    maxTokens: model.maxTokens ?? KILOCODE_DEFAULT_MAX_TOKENS,
-  }));
+  return buildManifestModelProviderConfig({
+    providerId: "kilocode",
+    catalog: KILOCODE_MANIFEST_CATALOG,
+  }).models;
 }
 
 function asGatewayModelEntry(value: unknown): GatewayModelEntry {

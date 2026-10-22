@@ -74,7 +74,7 @@ it.each(["missing", "replaced", "reset with the same id", "claimed by another wr
       });
       const companion = createSessionCompanion({
         scheduler: createTestGatewayScheduler(),
-        getConfig: () => ({}),
+        getConfig: () => ({ agents: { defaults: { utilityModel: "test/model-a" } } }),
         contextReader: {
           currentSessionId: async () => "session-1",
           read: async () => ({
@@ -85,7 +85,6 @@ it.each(["missing", "replaced", "reset with the same id", "claimed by another wr
         sessionObserver: {
           getCompanionSnapshotAsync: async () => ({ agentId: "main", notes: [] }),
         },
-        resolveUtilityModelRef: () => "test/model-a",
       });
       try {
         await expect(

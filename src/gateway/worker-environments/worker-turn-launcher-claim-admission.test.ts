@@ -17,6 +17,7 @@ import {
   completeTurn,
   createLauncher,
   environmentForTunnel,
+  expectUncalled,
   launchDescriptor,
   executeTurn,
   localResult,
@@ -339,8 +340,7 @@ describe("worker turn launcher claim admission", () => {
         payloads: [{ text: "Recovered after cancellation" }],
       });
       await waitForSessionRunEnd(SESSION_ID, null);
-      expect(stopTunnel).not.toHaveBeenCalled();
-      expect(destroy).not.toHaveBeenCalled();
+      expectUncalled(stopTunnel, destroy);
       expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
     } finally {
       finishCancellation.resolve();
@@ -569,8 +569,7 @@ describe("worker turn launcher claim admission", () => {
     await waitForSessionRunEnd(SESSION_ID, null);
     expect(turnIds).toHaveLength(2);
     expect(turnIds[0]).not.toBe(turnIds[1]);
-    expect(stopTunnel).not.toHaveBeenCalled();
-    expect(destroy).not.toHaveBeenCalled();
+    expectUncalled(stopTunnel, destroy);
     expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
   });
 });

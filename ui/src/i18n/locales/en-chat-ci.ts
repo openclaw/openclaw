@@ -21,6 +21,10 @@ const enChatCi = {
       automationAutoFix: "Auto-fix CI & address comments",
       automationAutoMerge: "Auto-merge when ready",
       automationAutoArchive: "Auto-archive on merge or close",
+      automationAutoArchiveSession: "Auto-archive session",
+      automationAutoFixDescription: "Fix failures and respond to review comments",
+      automationAutoMergeDescription: "Once repository requirements are satisfied",
+      automationAutoArchiveDescription: "After merge or close, with no work pending",
       automationSchedulerDisabled: "The scheduler is disabled. Enabled jobs will not run.",
       automationSessionRequired:
         "Automations need a verified session identity. Reopen this session and try again.",

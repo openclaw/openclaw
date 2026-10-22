@@ -287,18 +287,6 @@ describe("command lane capacity groups", () => {
     expect(peak).toBe(1);
   });
 
-  test("a timed-out task releases group capacity to a queued sibling", async () => {
-    configure(1);
-    const timedOut = enqueueCommandInLane(CRON, async () => new Promise<never>(() => {}), {
-      taskTimeoutMs: 10,
-    });
-    const [hookRun, hookGate] = park(HOOK);
-    await expect(timedOut).rejects.toMatchObject({ name: "CommandLaneTaskTimeoutError" });
-    expect(getCommandLaneSnapshot(HOOK).activeCount).toBe(1);
-    hookGate();
-    await hookRun;
-  });
-
   test("rejects lanes that can be synchronously awaited", () => {
     // `cron` awaits `cron-nested`; grouping them turns a wait into a deadlock.
     for (const lane of [

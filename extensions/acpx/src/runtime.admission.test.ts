@@ -22,10 +22,10 @@ import { acpxOperationScope } from "./runtime-session-store.js";
 import { admissionRetentionEntrypoint } from "./runtime.admission-retention-entrypoint.test-support.js";
 import { AcpxRuntime } from "./runtime.js";
 import {
-  type TestSessionStore,
   makeRuntime,
   makeManagedRuntime,
   makeEmptySessionStore,
+  makeSessionStore,
 } from "./runtime.test-support.js";
 
 type RuntimeHandle = Awaited<ReturnType<AcpxRuntime["ensureSession"]>>;
@@ -231,13 +231,7 @@ function makePersistedRuntime(acpxRecordId = resetSessionKey) {
     name: resetSessionKey,
     acpSessionId: "old-session",
   };
-  let persisted = oldRecord;
-  const baseStore = {
-    load: vi.fn<TestSessionStore["load"]>(async () => persisted),
-    save: vi.fn<TestSessionStore["save"]>(async (record) => {
-      persisted = record;
-    }),
-  };
+  const baseStore = makeSessionStore(oldRecord);
   return { ...makeRuntime(baseStore), baseStore, oldRecord };
 }
 

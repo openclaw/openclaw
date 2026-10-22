@@ -319,7 +319,7 @@ async function executePreparedReplyAgentRunWithCompletion(
         }
         await checkpointBeforeAgentReply(hookCheckpoint);
         activeSessionEntry = getActiveSessionEntry();
-        return { ...hookResult, reply: hookReply };
+        return hookResult;
       },
     },
     () =>

@@ -20,7 +20,7 @@ import {
   type SessionUsageQuery,
   type SessionUsageTarget,
 } from "../../lib/sessions/usage.ts";
-import type { SessionLogEntry, UsageSessionEntry } from "./types.ts";
+import type { SessionLogEntry, UsageSessionEntry } from "./usage-state-types.ts";
 
 type UsageDetailTarget = Pick<UsageSessionEntry, "key" | "agentId" | "sessionId">;
 
@@ -106,6 +106,9 @@ function createUsageDetailRequest<T>(
     },
     get loading() {
       return pending !== null;
+    },
+    get read() {
+      return task.read;
     },
     async recover(sessionKey: string, loadInitial = false): Promise<void> {
       const target = resolveTarget(sessionKey);

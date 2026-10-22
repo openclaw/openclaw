@@ -90,11 +90,6 @@ const mocks = vi.hoisted(() => ({
     >(),
 }));
 
-vi.mock(
-  "../daemon-cli/lifecycle.runtime.js",
-  async () => await import("../daemon-cli/lifecycle.js"),
-);
-
 vi.mock("../../daemon/launchd-exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/launchd-exec.js")>()),
   execLaunchctl: mocks.launchctl,
@@ -590,7 +585,7 @@ describe("preserved update activation with real version guards", () => {
     expectUncalled(repair, mocks.restart, mocks.health);
   });
 
-  registerRecoveryTests({ root: () => root, configPath: () => configPath, run: () => run, mocks });
+  registerRecoveryTests(() => ({ root, configPath, run, mocks }));
 
   registerGenerationRecoveryTests(() => ({ root, configPath, mocks }));
 

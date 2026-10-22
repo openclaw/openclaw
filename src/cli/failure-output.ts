@@ -18,7 +18,6 @@ type FormatCliFailureOptions = {
   error: unknown;
   argv?: string[];
   env?: NodeJS.ProcessEnv;
-  includeDoctorHint?: boolean;
 };
 
 type CliFailureDebugOptions = Pick<FormatCliFailureOptions, "argv" | "env">;
@@ -221,14 +220,6 @@ export function formatCliOperatorError(
   return formatErrorMessage(value);
 }
 
-function pushPrefixed(out: string[], value: string): void {
-  for (const line of value.split("\n")) {
-    if (line.trim().length > 0) {
-      out.push(`[openclaw] ${line}`);
-    }
-  }
-}
-
 export function formatCliFailureLines(options: FormatCliFailureOptions): string[] {
   const env = options.env ?? process.env;
   const argv = options.argv ?? process.argv;
@@ -302,20 +293,22 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
       ...(showReason ? [reason(options.error)] : []),
       stateBusy
         ? "[openclaw] Another OpenClaw process is using your data. Wait for it to finish before trying again."
-        : options.includeDoctorHint === false
-          ? `[openclaw] For details, open Settings → Logs in the Control UI or run \`${formatCliCommand("openclaw logs --follow", env)}\`.`
-          : `[openclaw] For help, run \`${formatCliCommand("openclaw doctor", env)}\`.`,
+        : `[openclaw] For help, run \`${formatCliCommand("openclaw doctor", env)}\`.`,
     ];
   }
   const lines = [`[openclaw] ${options.title}`, reason(options.error)];
 
   if (showDebugDetails) {
     lines.push("[openclaw] Stack:");
-    pushPrefixed(lines, formatUncaughtError(options.error));
+    for (const line of formatUncaughtError(options.error).split("\n")) {
+      if (line.trim().length > 0) {
+        lines.push(`[openclaw] ${line}`);
+      }
+    }
   }
 
   // Doctor needs the same state owner; inspect wrappers without loading the SQLite runtime.
-  if (options.includeDoctorHint !== false && !stateBusy) {
+  if (!stateBusy) {
     lines.push(`[openclaw] Try: ${formatCliCommand("openclaw doctor", env)}`);
   }
   lines.push(`[openclaw] Help: ${formatCliCommand("openclaw --help", env)}`);

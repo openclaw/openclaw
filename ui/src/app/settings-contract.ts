@@ -120,6 +120,7 @@ export type UiSettings = {
   sidebarAgentsMode?: "chip" | "roster";
   sidebarPreTeamScope?: string | null; // null remembers All agents; undefined means unset.
   sidebarCollapsedAgentIds?: string[];
+  sidebarRecentlyCreatedAgentId?: string;
   sidebarEntries: string[]; // Ordered personal navigation references
   sidebarLiveActivity?: boolean; // Latest activity under running sidebar sessions (default true)
   chatMessageMaxWidth?: string; // Browser-local centered chat transcript max width

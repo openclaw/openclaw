@@ -91,7 +91,7 @@ export type SidebarToolActivity = {
   text?: string;
 };
 
-export type SidebarRecentSession = {
+export type SidebarRecentSession = Readonly<{
   key: string;
   agentId?: string;
   sessionId?: string;
@@ -206,7 +206,7 @@ export type SidebarRecentSession = {
   containsActiveDescendant: boolean;
   runningChildCount: number;
   failedChildCount: number;
-};
+}>;
 
 export type SidebarSessionHovercardRow = Pick<
   SidebarRecentSession,

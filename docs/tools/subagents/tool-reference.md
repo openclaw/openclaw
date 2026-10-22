@@ -256,7 +256,7 @@ In either mode, internal QA, research, coding, review, and test lanes use ordina
   Optional managed-worktree name. Requires `worktree: true` and `runtime: "subagent"`.
 </ParamField>
 <ParamField path="worktreeBaseRef" type="string">
-  Optional git base ref for the managed worktree. Requires `worktree: true` and `runtime: "subagent"`.
+  Optional git base ref for the managed worktree. Omit to use the fetched or cached default branch from `origin`, or the primary checkout's current `HEAD` commit when no `origin` remote is configured. An unavailable configured `origin` never falls back to local `HEAD`. Requires `worktree: true` and `runtime: "subagent"`.
 </ParamField>
 
 <Warning>
@@ -468,7 +468,9 @@ Use `subagents` for on-demand status and debugging. Use `sessions_yield` for
 announced completions, or `action: "wait"` with returned `runIds` (1–32 IDs)
 and `timeoutSeconds` (0–60, default 30) when this turn needs a selected result.
 A zero timeout reads a snapshot. `reason` is `completed`, `attention`,
-`unavailable`, or `timeout`; `tasks` contains authorized native run snapshots.
+`unavailable`, `input`, or `timeout`; `tasks` contains authorized native run snapshots.
+In the built-in runtime, admitted human input or peer mail wakes the wait with
+`reason: "input"`, so the agent can respond without waiting for the child.
 Waiting does not cancel execution or consume completion delivery.
 
 List entries include the native `runId`, child `sessionKey`, status, outcome,

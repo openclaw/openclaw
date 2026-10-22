@@ -3,7 +3,7 @@ import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "../../../no
 import { TRIAGE_EXTERNAL_AGENTS } from "../../commands/triage-handoff.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { formatErrorMessage as formatError, runCommandWithRuntime } from "../cli-utils.js";
-import { hasExplicitOptions } from "../command-options.js";
+import { listExplicitOptionFlagsExcept } from "../command-options.js";
 import { isDoctorMachineOutput } from "../doctor-output-mode.js";
 import { formatCliJsonFailure } from "../failure-output.js";
 import { formatDocsHelp } from "../help-format.js";
@@ -14,29 +14,14 @@ import type { ProgramContext } from "./context.js";
 import { collectOption } from "./helpers.js";
 import { setCommandJsonMode } from "./json-mode.js";
 
-const STATE_SQLITE_CONFLICTING_OPTION_NAMES = [
-  "workspaceSuggestions",
-  "yes",
+const STATE_SQLITE_ALLOWED_OPTION_NAMES = new Set(["stateSqlite", "json"]);
+const CLIENT_CREDENTIALS_ALLOWED_OPTION_NAMES = new Set([
+  "clientCredentials",
   "repair",
   "fix",
-  "force",
   "nonInteractive",
-  "generateGatewayToken",
-  "allowExec",
-  "deep",
-  "fullIntegrityCheck",
-  "lint",
-  "postUpgrade",
-  "sessionSqlite",
-  "sessionSqliteStore",
-  "sessionSqliteAgent",
-  "sessionSqliteAllAgents",
-  "githubIssue",
-  "severityMin",
-  "all",
-  "skip",
-  "only",
-] as const;
+  "json",
+]);
 
 function exitDoctorError(error: unknown, json: boolean): never {
   if (json) {
@@ -65,6 +50,11 @@ export function registerMaintenanceCommands(
       false,
     )
     .option("--non-interactive", "Run without prompts (safe migrations only)", false)
+    .option(
+      "--client-credentials",
+      "Prepare only local client credentials (requires --repair --non-interactive)",
+      false,
+    )
     .option("--generate-gateway-token", "Generate and configure a gateway token", false)
     .option(
       "--allow-exec",
@@ -115,10 +105,28 @@ export function registerMaintenanceCommands(
       }
       if (
         typeof opts.stateSqlite === "string" &&
-        hasExplicitOptions(command, STATE_SQLITE_CONFLICTING_OPTION_NAMES)
+        listExplicitOptionFlagsExcept(command, STATE_SQLITE_ALLOWED_OPTION_NAMES).length > 0
       ) {
         return exitDoctorError(
           "doctor shared-state SQLite maintenance can only be combined with --json.",
+          opts.json === true,
+        );
+      }
+      if (
+        opts.clientCredentials === true &&
+        (!(opts.repair === true || opts.fix === true) || opts.nonInteractive !== true)
+      ) {
+        return exitDoctorError(
+          "doctor --client-credentials requires --repair (or --fix) and --non-interactive.",
+          opts.json === true,
+        );
+      }
+      if (
+        opts.clientCredentials === true &&
+        listExplicitOptionFlagsExcept(command, CLIENT_CREDENTIALS_ALLOWED_OPTION_NAMES).length > 0
+      ) {
+        return exitDoctorError(
+          "doctor --client-credentials can only be combined with --repair (or --fix), --non-interactive, and --json.",
           opts.json === true,
         );
       }
@@ -137,6 +145,7 @@ export function registerMaintenanceCommands(
       const jsonImpliesLint =
         opts.json === true &&
         opts.lint !== true &&
+        opts.clientCredentials !== true &&
         opts.postUpgrade !== true &&
         typeof opts.stateSqlite !== "string" &&
         typeof opts.sessionSqlite !== "string";
@@ -200,6 +209,15 @@ export function registerMaintenanceCommands(
         );
       }
       try {
+        if (opts.clientCredentials === true) {
+          const { prepareStartupClientCredentials } =
+            await import("../../commands/startup-client-credentials.js");
+          await prepareStartupClientCredentials({ env: process.env, runtime: defaultRuntime });
+          if (opts.json === true) {
+            defaultRuntime.writeJson({ ok: true });
+          }
+          exitCliAfterOutput(defaultRuntime, 0);
+        }
         if (lintMode) {
           const { runDoctorLintCli } = await import("../../commands/doctor-lint.js");
           const exitCode = await runDoctorLintCli(defaultRuntime, {

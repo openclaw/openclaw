@@ -71,7 +71,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
   pendingCatalogArchives: ReadonlySet<string> = new Set();
   sessionCatalogRefreshStatus: PanelRefreshStatus = createPanelRefreshStatus();
   loadingMoreSessionCatalogIds: ReadonlySet<string> = new Set();
-  visibleSessionLimits = new Map<string, number>();
+  visibleSessionLimits: ReadonlyMap<string, number> = new Map();
   sessionsResult: SessionsListResult | null = null;
   sessionsAgentId: string | null = null;
   sessionsLoading = false;
@@ -336,6 +336,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
     this.gatewayAvailable = false;
     this.agentSelectionSource = undefined;
     this.agentSelectionIntentRevision = undefined;
+    this.sessionsLoading = false;
     retireSessionCatalogData(this);
     this.lineage.disconnect();
   }

@@ -3,7 +3,6 @@ import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { buildConversationIdentity } from "../../config/sessions/conversation-identity.js";
 import {
@@ -23,7 +22,6 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
-import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   deliveryContextFromSession,
@@ -38,6 +36,7 @@ import {
   resolveOutboundSessionRoute,
   type OutboundSessionRoute,
 } from "./outbound-session.js";
+import { routePlugin } from "./outbound-session.test-helpers.js";
 
 function makeRoute(
   sessionKey = "agent:helper:reef:direct:peer",
@@ -47,16 +46,6 @@ function makeRoute(
   kind: OutboundSessionRoute["chatType"] = "direct",
 ): OutboundSessionRoute {
   return { sessionKey, baseSessionKey: sessionKey, peer: { kind, id }, chatType: kind, from, to };
-}
-
-function routePlugin(
-  id: string,
-  resolve: NonNullable<ChannelPlugin["messaging"]>["resolveOutboundSessionRoute"],
-): ChannelPlugin {
-  return {
-    ...createChannelTestPluginBase({ id }),
-    messaging: { resolveOutboundSessionRoute: resolve },
-  };
 }
 
 function writeEntry(

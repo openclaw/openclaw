@@ -1,14 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  NODE_WORKER_IDLE_RETENTION_PROTOCOL_FEATURE,
-  WORKER_PROTOCOL_FEATURES,
-  WORKER_RPC_SET_VERSION,
-} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { NODE_WORKER_IDLE_RETENTION_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE } from "../../infra/node-commands.js";
+import {
+  testNodeWorkerLaunchIdentity,
+  testWorkerDescriptor,
+} from "../../node-host/node-worker-supervisor.test-support.js";
 import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
@@ -33,11 +33,6 @@ import { registerNodeLaunchAdapterNativeInferenceSuite } from "./node-launch-ada
 import { createNodeWorkerBundleTestNode } from "./node-worker-bundle.test-support.js";
 
 const DEVICE_ID = "device-session-host";
-const WORKER_RUNS = {
-  bundleHash: "a".repeat(64),
-  openclawVersion: "2026.8.1",
-  protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
-};
 const COMPLETED_RESULT = JSON.stringify({
   status: "completed",
   transcriptLeafId: "leaf-1",
@@ -63,39 +58,19 @@ function nodeProof(connId = "conn-1", available = 2): NodeWorkerSupervisorNodePr
 }
 
 function launchInput(): NodeWorkerLaunchInput {
+  const descriptor = testWorkerDescriptor(
+    "/tmp/openclaw-worker/workspace",
+    "Inspect the workspace.",
+  );
+  descriptor.admission.credential = "worker-fixture-value";
+  descriptor.assignment.suppressPromptTranscript = true;
   return {
     environmentSession: 1,
     launchId: "turn-1",
     gatewayNamespace: "gateway-1",
-    expectedBundleHash: WORKER_RUNS.bundleHash,
+    expectedBundleHash: descriptor.admission.handshake.bundleHash,
     placementGeneration: 4,
-    descriptor: {
-      version: 4,
-      admission: {
-        environmentId: "environment-1",
-        credential: "worker-fixture-value",
-        sessionId: "session-1",
-        ownerEpoch: 3,
-        rpcSetVersion: WORKER_RPC_SET_VERSION,
-        handshake: structuredClone(WORKER_RUNS),
-      },
-      assignment: {
-        agentId: "agent-1",
-        operationalRunInstance: { instanceId: "instance-1", runId: "run-1" },
-        agentRuntimeIdentityToken: "signed-runtime-token",
-        runId: "run-1",
-        turnId: "turn-1",
-        prompt: "Inspect the workspace.",
-        suppressPromptTranscript: true,
-        workspaceDir: "/tmp/openclaw-worker/workspace",
-        modelRef: { provider: "provider-1", model: "model-1" },
-        inferenceOptions: {},
-        initialMessages: [],
-        transcript: { baseLeafId: null, nextSeq: 1 },
-        liveEvents: { ackedSeq: 0, nextSeq: 1 },
-        toolAuthority: { allowedToolNames: [] },
-      },
-    },
+    descriptor,
   };
 }
 
@@ -103,15 +78,7 @@ function receipt(
   input: NodeWorkerLaunchInput,
   state: NodeWorkerSupervisorReceipt["state"],
 ): NodeWorkerSupervisorReceipt {
-  const identity = {
-    launchId: input.launchId,
-    planHash: nodeWorkerPlanHash(input),
-    environmentId: input.descriptor.admission.environmentId,
-    sessionId: input.descriptor.admission.sessionId,
-    ownerEpoch: input.descriptor.admission.ownerEpoch,
-    placementGeneration: input.placementGeneration,
-    runId: input.descriptor.assignment.runId,
-  };
+  const identity = testNodeWorkerLaunchIdentity(input);
   if (state === "completed") {
     return { ...identity, state, resultJson: COMPLETED_RESULT };
   }
@@ -728,7 +695,6 @@ describe("node worker launch adapter", () => {
       });
       adapter = adapterFor(invoke, {
         nodes: async () => [nodeProof("conn-1", launched && cause === "hosting withdrawn" ? 0 : 2)],
-        pollIntervalMs: 1,
         sleep: async () => {
           if (cause === "dispatch authority closed") {
             dispatchAuthorized = false;

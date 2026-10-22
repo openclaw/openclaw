@@ -360,12 +360,12 @@ describe("startGatewayDiscovery", () => {
     await result.stop();
   });
 
-  it("replaces advertisements and wide-area metadata across live mode changes", async () => {
+  it("replaces advertisements and wide-area metadata across live mode and registry changes", async () => {
     process.env.OPENCLAW_SSH_PORT = "2222";
     const stop = vi.fn();
     const service = makeDiscoveryService("bonjour", { stop });
     const discovery = await startDiscovery([service], {
-      discovery: { mdns: { mode: "off" }, wideArea: { domain: "openclaw.internal." } },
+      discovery: { mdns: { mode: "full" }, wideArea: { domain: "openclaw.internal." } },
       gatewayTls: { enabled: true, fingerprintSha256: "fingerprint" },
       gatewayDirectReachable: true,
       tailscaleMode: "serve",
@@ -384,9 +384,9 @@ describe("startGatewayDiscovery", () => {
         sshPort: full ? 2222 : undefined,
       });
     }
-    expectCalls([service.advertise, 3], [stop, 3]);
+    expectCalls([service.advertise, 4], [stop, 4]);
     expect(service.advertise).toHaveBeenNthCalledWith(
-      2,
+      3,
       expect.objectContaining({ minimal: false, sshPort: 2222 }),
     );
     await discovery.update({ mdnsMode: undefined });
@@ -394,10 +394,14 @@ describe("startGatewayDiscovery", () => {
       expect.objectContaining({ minimal: true, cliPath: undefined, sshPort: undefined }),
     );
     await discovery.update({ mdnsMode: "minimal" });
-    expect(service.advertise).toHaveBeenCalledTimes(4);
+    expect(service.advertise).toHaveBeenCalledTimes(5);
+    const next = makeDiscoveryService("next");
+    await discovery.update({ gatewayDiscoveryServices: [next] });
+    expect(stop).toHaveBeenCalledTimes(5);
+    expect(next.advertise).toHaveBeenCalledWith(expect.objectContaining({ minimal: true }));
     await discovery.stop();
     await discovery.stop();
-    expect(stop).toHaveBeenCalledTimes(4);
+    expect(stop).toHaveBeenCalledTimes(5);
   });
 
   it.each(["ready", "pending"] as const)(
@@ -636,21 +640,5 @@ describe("startGatewayDiscovery", () => {
     expect(service.advertise).toHaveBeenCalledOnce();
     await discovery.stop();
     expect(stop).toHaveBeenCalledOnce();
-  });
-
-  it("retires the initial registry before a first mixed plugin and mode reload", async () => {
-    const oldStop = vi.fn();
-    const old = makeDiscoveryService("old", { stop: oldStop });
-    const discovery = await startDiscovery([old], {
-      discovery: { mdns: { mode: "full" } },
-    });
-    await discovery.update({ mdnsMode: "minimal" });
-    expectCalls([oldStop, 1], [old.advertise, 2]);
-    expect(old.advertise).toHaveBeenLastCalledWith(expect.objectContaining({ minimal: true }));
-    const next = makeDiscoveryService("next");
-    await discovery.update({ gatewayDiscoveryServices: [next] });
-    expect(oldStop).toHaveBeenCalledTimes(2);
-    expect(next.advertise).toHaveBeenCalledWith(expect.objectContaining({ minimal: true }));
-    await discovery.stop();
   });
 });

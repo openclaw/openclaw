@@ -55,11 +55,13 @@ describe("Solid keyboard hints", () => {
     expect(view.container.querySelectorAll("kbd")).toHaveLength(2);
   });
 
-  it("keeps a literal shortcut inline with its tooltip label", () => {
+  it("renders a tooltip shortcut as a keycap chip instead of parenthesized text", () => {
     const view = render(() => (
       <ShortcutHint label="Commands" combo={{ key: "/", modifiers: [] }} />
     ));
-    expect(view.container.textContent).toBe("Commands (/)");
-    expect(view.container.querySelector("kbd")?.style.font).toBe("inherit");
+    expect(view.container.textContent).toBe("Commands /");
+    const key = view.container.querySelector("kbd");
+    expect(key?.classList.contains("shortcut-hint__keys")).toBe(true);
+    expect(key?.textContent).toBe("/");
   });
 });

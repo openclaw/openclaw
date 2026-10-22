@@ -1,4 +1,4 @@
-import { registerListener } from "../../../../src/shared/listeners.js";
+import { createChangeListeners, registerListener } from "../../../../src/shared/listeners.js";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import { registerControlUiReloadGuard } from "../../app/document-reload-guard.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
@@ -73,7 +73,7 @@ export class CreationComposer {
   error: string | null = null;
   flushInput: (() => void) | undefined;
   releasePresentation: (() => void) | undefined;
-  private readonly listeners = new Set<() => void>();
+  private readonly listeners = createChangeListeners();
   private readonly invalidations = new Set<() => void>();
   private readonly gatewayUrl;
   private readonly recoveryScope;
@@ -154,14 +154,10 @@ export class CreationComposer {
 
   readonly notify = () => {
     this.notifyDraft();
-    for (const listener of this.listeners) {
-      listener();
-    }
+    this.listeners.publish();
   };
 
-  subscribe(listener: () => void): () => void {
-    return registerListener(this.listeners, listener);
-  }
+  readonly subscribe = this.listeners.subscribe;
 
   setMessage(message: string, mentions?: readonly HumanMention[]): void {
     if (!this.canDisplay()) {

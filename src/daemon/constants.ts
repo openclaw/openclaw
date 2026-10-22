@@ -35,11 +35,8 @@ export const LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES: string[] = ["clawdbot-gateway
 
 function normalizeGatewayProfile(profile?: string): string | null {
   const trimmed = profile?.trim();
-  if (!trimmed || normalizeLowercaseStringOrEmpty(trimmed) === "default") {
-    // The default profile keeps the historical unqualified service names.
-    return null;
-  }
-  return trimmed;
+  // The default profile keeps the historical unqualified service names.
+  return trimmed && normalizeLowercaseStringOrEmpty(trimmed) !== "default" ? trimmed : null;
 }
 
 export function resolveGatewayProfileSuffix(profile?: string): string {
@@ -49,26 +46,11 @@ export function resolveGatewayProfileSuffix(profile?: string): string {
 
 export function resolveGatewayLaunchAgentLabel(profile?: string): string {
   const normalized = normalizeGatewayProfile(profile);
-  if (!normalized) {
-    return GATEWAY_LAUNCH_AGENT_LABEL;
-  }
-  return `ai.openclaw.${normalized}`;
+  return normalized ? `ai.openclaw.${normalized}` : GATEWAY_LAUNCH_AGENT_LABEL;
 }
 
 export function resolveGatewaySystemdServiceName(profile?: string): string {
   return `${GATEWAY_SYSTEMD_SERVICE_NAME}${resolveGatewayProfileSuffix(profile)}`;
-}
-
-function isAmbiguousLegacyGatewayCandidate(legacyName: string): boolean {
-  // openclaw-node is the Node service. openclaw-gateway and
-  // openclaw-gateway-<profile> are canonical gateway names for default or
-  // another profile (node -> openclaw-node, gateway -> openclaw-gateway,
-  // gateway-lisa -> openclaw-gateway-lisa).
-  return (
-    legacyName === NODE_SYSTEMD_SERVICE_NAME ||
-    legacyName === GATEWAY_SYSTEMD_SERVICE_NAME ||
-    legacyName.startsWith(`${GATEWAY_SYSTEMD_SERVICE_NAME}-`)
-  );
 }
 
 /**
@@ -88,18 +70,17 @@ export function resolveGatewaySystemdServiceNameCandidates(profile?: string): st
     return [canonical, "openclaw"];
   }
   const legacy = `openclaw${suffix}`;
-  if (isAmbiguousLegacyGatewayCandidate(legacy)) {
-    return [canonical];
-  }
-  return [canonical, legacy];
+  // Never adopt the default node or another profile's canonical Gateway.
+  return legacy === NODE_SYSTEMD_SERVICE_NAME ||
+    legacy === GATEWAY_SYSTEMD_SERVICE_NAME ||
+    legacy.startsWith(`${GATEWAY_SYSTEMD_SERVICE_NAME}-`)
+    ? [canonical]
+    : [canonical, legacy];
 }
 
 export function resolveGatewayWindowsTaskName(profile?: string): string {
   const normalized = normalizeGatewayProfile(profile);
-  if (!normalized) {
-    return GATEWAY_WINDOWS_TASK_NAME;
-  }
-  return `OpenClaw Gateway (${normalized})`;
+  return normalized ? `${GATEWAY_WINDOWS_TASK_NAME} (${normalized})` : GATEWAY_WINDOWS_TASK_NAME;
 }
 
 export function normalizeWindowsTaskIdentity(value: string): string {
@@ -147,10 +128,7 @@ export function resolveGatewayNativeServiceIdentityConflict(
 
 function formatGatewayServiceDescription(profile?: string): string {
   const normalized = normalizeGatewayProfile(profile);
-  if (!normalized) {
-    return "OpenClaw Gateway";
-  }
-  return `OpenClaw Gateway (profile: ${normalized})`;
+  return normalized ? `OpenClaw Gateway (profile: ${normalized})` : "OpenClaw Gateway";
 }
 
 export function resolveGatewayServiceDescription(params: {
@@ -160,23 +138,33 @@ export function resolveGatewayServiceDescription(params: {
   return params.description ?? formatGatewayServiceDescription(params.env.OPENCLAW_PROFILE);
 }
 
-export function resolveNodeLaunchAgentLabel(): string {
-  return NODE_LAUNCH_AGENT_LABEL;
+export function resolveNodeLaunchAgentLabel(profile?: string): string {
+  const normalized = normalizeGatewayProfile(profile);
+  return normalized ? `${NODE_LAUNCH_AGENT_LABEL}.${normalized}` : NODE_LAUNCH_AGENT_LABEL;
 }
 
-export function resolveNodeSystemdServiceName(): string {
-  return NODE_SYSTEMD_SERVICE_NAME;
+export function isNodeLaunchAgentLabel(label: string): boolean {
+  return label === NODE_LAUNCH_AGENT_LABEL || label.startsWith(`${NODE_LAUNCH_AGENT_LABEL}.`);
 }
 
-export function resolveNodeWindowsTaskName(): string {
-  return NODE_WINDOWS_TASK_NAME;
+export function resolveNodeSystemdServiceName(profile?: string): string {
+  return `${NODE_SYSTEMD_SERVICE_NAME}${resolveGatewayProfileSuffix(profile)}`;
 }
 
-export function resolveNodeServiceIdentityEnvironment(): Record<string, string> {
+export function resolveNodeWindowsTaskName(profile?: string): string {
+  const normalized = normalizeGatewayProfile(profile);
+  return normalized ? `${NODE_WINDOWS_TASK_NAME} (${normalized})` : NODE_WINDOWS_TASK_NAME;
+}
+
+export function resolveNodeServiceIdentityEnvironment(
+  env: Record<string, string | undefined> = {},
+): Record<string, string | undefined> {
+  const profile = env.OPENCLAW_PROFILE;
   return {
-    OPENCLAW_LAUNCHD_LABEL: resolveNodeLaunchAgentLabel(),
-    OPENCLAW_SYSTEMD_UNIT: resolveNodeSystemdServiceName(),
-    OPENCLAW_WINDOWS_TASK_NAME: resolveNodeWindowsTaskName(),
+    OPENCLAW_PROFILE: profile,
+    OPENCLAW_LAUNCHD_LABEL: resolveNodeLaunchAgentLabel(profile),
+    OPENCLAW_SYSTEMD_UNIT: resolveNodeSystemdServiceName(profile),
+    OPENCLAW_WINDOWS_TASK_NAME: resolveNodeWindowsTaskName(profile),
     OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
     OPENCLAW_TASK_SCRIPT_NAME: NODE_WINDOWS_TASK_SCRIPT_NAME,
     OPENCLAW_LOG_PREFIX: "node",

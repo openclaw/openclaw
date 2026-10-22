@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { createPluginRequesterModels } from "../plugins/requester-models.js";
 import type { OpenClawPluginToolContext } from "../plugins/tool-types.js";
 import { runOutsideCommandProcessScope } from "../process/exec-spawn.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -19,8 +20,8 @@ import { assertCompleteToolResult, resolveToolResultBudget } from "./tool-result
 import { canonicalizePath } from "./utils/paths.js";
 
 export type PluginToolExecutionCapabilities = Pick<
-  OpenClawPluginToolContext,
-  "sandbox" | "modelExecution" | "assertCompleteResult"
+  OpenClawPluginToolContext<2>,
+  "sandbox" | "modelExecution" | "assertCompleteResult" | "runtimeContext"
 >;
 
 /** Capture once at assembly; a retained plugin never resolves a later run's sandbox or identity. */
@@ -32,6 +33,8 @@ export function preparePluginToolExecutionCapabilities(params: {
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   config?: OpenClawConfig;
   agentId?: string;
+  sessionKey?: string;
+  sessionId?: string;
   modelContextWindowTokens?: number;
 }): (assertInvocationCurrent: () => void, signal?: AbortSignal) => PluginToolExecutionCapabilities {
   const sandbox = params.sandbox;
@@ -85,6 +88,17 @@ export function preparePluginToolExecutionCapabilities(params: {
   }
   const resultBudget = resolveToolResultBudget(params.modelContextWindowTokens);
   return (assertInvocationCurrent, pluginSignal) => ({
+    runtimeContext: {
+      models: authority
+        ? createPluginRequesterModels({
+            ...params,
+            assertCurrent: assertInvocationCurrent,
+            signal: AbortSignal.any(
+              [params.signal, pluginSignal].filter((value): value is AbortSignal => Boolean(value)),
+            ),
+          })
+        : undefined,
+    },
     assertCompleteResult(text) {
       assertInvocationCurrent();
       assertCompleteToolResult(text, resultBudget);

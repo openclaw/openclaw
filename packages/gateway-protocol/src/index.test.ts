@@ -148,6 +148,26 @@ describe("formatValidationErrors", () => {
     expect(formatValidationErrors([err])).toBe("at /auth: unexpected property 'token'");
   });
 
+  it.each(["required", "additionalProperties"])(
+    "reports bounded grouped %s fields without dropping the next correction",
+    (keyword) => {
+      const fields = Array.from({ length: 100 }, (_, index) => `field${index}`);
+      const text = formatValidationErrors([
+        makeError({
+          keyword,
+          instancePath: "/job",
+          params: {
+            [keyword === "required" ? "requiredProperties" : "additionalProperties"]: fields,
+          },
+        }),
+      ]);
+      expect(text).toContain("'field0'");
+      expect(text).toContain("'field1'");
+      expect(text).not.toContain("'field99'");
+      expect(text.length).toBeLessThan(1_000);
+    },
+  );
+
   it("de-dupes repeated entries", () => {
     const err = makeError({
       keyword: "required",

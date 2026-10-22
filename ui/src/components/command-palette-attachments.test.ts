@@ -21,6 +21,7 @@ import {
   prepareDraftContext,
   mountPalette,
   paletteInput,
+  pressKey,
   setInputValue,
 } from "./command-palette.test-support.ts";
 import "./command-palette.tsx";
@@ -86,11 +87,8 @@ function finishRead(index: number, dataUrl = "data:image/png;base64,aW1hZ2U=") {
   reader.dispatchEvent(new ProgressEvent("load"));
 }
 
-function key(input: HTMLTextAreaElement, init: KeyboardEventInit) {
-  const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
-  input.dispatchEvent(event);
-  return event;
-}
+const key = (input: HTMLTextAreaElement, { key: name = "", ...init }: KeyboardEventInit) =>
+  pressKey(input, name, { cancelable: true, ...init });
 
 async function mount(options: Parameters<typeof createDraftFixture>[0] = {}) {
   const fixture = createDraftFixture(options);
@@ -159,6 +157,7 @@ describe("command palette paste-only images", () => {
     expect(paste(input, [image()]).defaultPrevented).toBe(true);
     await palette.updateComplete;
     expect(start().disabled).toBe(true);
+    await vi.dynamicImportSettled();
     await waitForSolid(() =>
       expect(query('.chat-attachment-thumb[aria-busy="true"]')).not.toBeNull(),
     );
@@ -210,28 +209,7 @@ describe("command palette paste-only images", () => {
     },
   );
 
-  it("keeps failed read slots visible and permits removal and repaste", async () => {
-    const { palette, input, create, start, query, queryAll } = await mount();
-    paste(input, [image("unreadable.png")]);
-    readers[0]!.dispatchEvent(new ProgressEvent("error"));
-    await palette.updateComplete;
-    await waitForSolid(() => expect(query(".chat-attachment-thumb--error")).not.toBeNull());
-    const failed = query(".chat-attachment-thumb--error")!;
-    expect(failed.querySelector('[role="img"]')?.getAttribute("aria-label")).toContain(
-      "unreadable.png",
-    );
-    expect(start().disabled).toBe(true);
-    failed.querySelector<HTMLButtonElement>(".chat-attachment-remove")!.click();
-    paste(input, [image("retry.png")]);
-    finishRead(1);
-    await vi.waitFor(() => expect(start().disabled).toBe(false));
-    expect(queryAll(".chat-attachment-thumb")).toHaveLength(1);
-    expect(query(".chat-attachment-thumb--error")).toBeNull();
-    start().click();
-    await vi.waitFor(() => expect(create).toHaveBeenCalledOnce());
-  });
-
-  it("keeps a rejected image prompt visible without creating a duplicate session", async () => {
+  it("clears a rejected pasted-data-URL prompt when its image is removed", async () => {
     const { palette, input, create, start, query } = await mount();
     create.mockResolvedValueOnce({
       key: "agent:main:dashboard:rejected-images",
@@ -244,14 +222,7 @@ describe("command palette paste-only images", () => {
       expect(query('[role="alert"]')?.textContent).toContain("Image turn rejected"),
     );
     expect(start().disabled).toBe(true);
-    expect(query(".chat-attachment-thumb img")).not.toBeNull();
-    key(input, { key: "Enter", metaKey: true });
-    expect(create).toHaveBeenCalledOnce();
-    key(input, { key: "Escape" });
-    await palette.updateComplete;
-    await openPalette(palette);
-    expect(query(".chat-attachment-thumb img")).not.toBeNull();
-    expect(query(".cmd-palette__footer button")?.textContent).toContain("Open session");
+    await waitForSolid(() => expect(query(".chat-attachment-thumb img")).not.toBeNull());
     query<HTMLButtonElement>(".chat-attachment-remove")!.click();
     await palette.updateComplete;
     expect(query('[role="alert"]')).toBeNull();
@@ -340,8 +311,16 @@ describe("command palette paste-only images", () => {
       // A valid text/remaining-image prompt could be sent explicitly, but the
       // cold submit must not silently drop a rejected clipboard image.
       await vi.waitFor(() => expect(start().disabled).toBe(false));
-      expect(queryAll(".chat-attachment-thumb")).toHaveLength(outcome === "partial" ? 2 : 1);
-      expect(query(".chat-attachment-failures")?.textContent).toContain("oversized.gif");
+      await waitForSolid(() =>
+        expect(queryAll(".chat-attachment-thumb")).toHaveLength(outcome === "partial" ? 1 : 0),
+      );
+      expect(query(".chat-attachment-failures")).toBeNull();
+      expect(replacement.value).toBe("Keep every image");
+      expect(toast.showToast).toHaveBeenCalledExactlyOnceWith({
+        message: "File too large. Try a smaller file.",
+        placement: "top-center",
+        severity: "error",
+      });
     }
     if (outcome === "ready" || delayedPolicy) {
       const submitted = { message: textOnly ? "Keep every image" : "" };

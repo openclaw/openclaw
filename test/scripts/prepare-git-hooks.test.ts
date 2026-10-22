@@ -14,25 +14,16 @@ type SpawnResult = {
   stdout?: string;
 };
 
-function createSpawn(results: SpawnResult[]) {
-  return vi.fn((_bin: string, _args: string[]) => {
+function configure(results: SpawnResult[], hooks = true, cwd = "/repo") {
+  const warn = vi.fn();
+  const spawnSync = vi.fn((_bin: string, _args: string[]) => {
     const result = results.shift();
     if (!result) {
       throw new Error("unexpected git invocation");
     }
     return result;
   });
-}
-
-function configure(results: SpawnResult[], hooks = true, cwd = "/repo") {
-  const warn = vi.fn();
-  const spawnSync = createSpawn(results);
-  const result = configurePrepareGitHooks({
-    cwd,
-    existsSync: () => hooks,
-    spawnSync,
-    warn,
-  });
+  const result = configurePrepareGitHooks({ cwd, existsSync: () => hooks, spawnSync, warn });
   return { result, warn, spawnSync };
 }
 
@@ -66,43 +57,37 @@ describe("configurePrepareGitHooks", () => {
     expect(spawnSync).not.toHaveBeenCalled();
   });
 
-  type OwnershipCase = {
-    name: string;
+  type OwnershipConfig = {
     linked?: boolean;
     worktreeConfig?: boolean;
     local?: string;
     global?: string;
     overrides?: boolean;
-    reason: "configured" | "already-configured" | "config-failed";
-    expected: string | null;
   };
-  function ownership(
-    name: string,
-    reason: OwnershipCase["reason"],
-    expected: string | null,
-    config: Omit<OwnershipCase, "name" | "reason" | "expected"> = {},
-  ): OwnershipCase {
-    return { name, reason, expected, ...config };
+  function ownership(name: string, expected: string | null, config: OwnershipConfig = {}) {
+    const reason =
+      expected === null
+        ? "config-failed"
+        : expected === "git-hooks"
+          ? "configured"
+          : "already-configured";
+    return { name, expected, reason, ...config };
   }
   const ownershipCases = [
-    ownership("fresh primary", "configured", "git-hooks"),
-    ownership("explicit local owner", "already-configured", "local-hooks", {
-      local: "local-hooks",
-    }),
-    ownership("explicit global owner", "already-configured", "global-hooks", {
-      global: "global-hooks",
-    }),
-    ownership("explicit empty value", "already-configured", "", { local: "" }),
-    ownership("linked without private config", "config-failed", null, { linked: true }),
-    ownership("linked inherited owner", "already-configured", "shared-hooks", {
+    ownership("fresh primary", "git-hooks"),
+    ownership("explicit local owner", "local-hooks", { local: "local-hooks" }),
+    ownership("explicit global owner", "global-hooks", { global: "global-hooks" }),
+    ownership("explicit empty value", "", { local: "" }),
+    ownership("linked without private config", null, { linked: true }),
+    ownership("linked inherited owner", "shared-hooks", {
       linked: true,
       local: "shared-hooks",
     }),
-    ownership("linked private initialization", "configured", "git-hooks", {
+    ownership("linked private initialization", "git-hooks", {
       linked: true,
       worktreeConfig: true,
     }),
-    ownership("overrides masking shared config", "already-configured", "linked-hooks", {
+    ownership("overrides masking shared config", "linked-hooks", {
       linked: true,
       worktreeConfig: true,
       local: "shared-hooks",

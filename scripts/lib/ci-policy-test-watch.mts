@@ -98,6 +98,50 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     testFile,
     watchGlobs: ["src/gateway/server-close.ts", "src/gateway/server-run-shutdown.ts"],
   })),
+  // These E2Es boot a real Gateway or built CLI as a child process, so the
+  // import graph reaches only the test-instance helper. Without owner watches
+  // they ran on PRs only when that helper changed and drifted for days.
+  {
+    testFile: "test/gateway-background-process-restart.e2e.test.ts",
+    watchGlobs: [
+      "src/gateway/server-startup-observers.ts",
+      "src/agents/bash-tools.exec-notify.ts",
+      "src/infra/restart-intent{,-payload}.ts",
+      "src/sessions/session-controller*.ts",
+    ],
+    sourceOnly: true,
+  },
+  {
+    testFile: "test/gateway-session-end-shutdown.e2e.test.ts",
+    watchGlobs: [
+      "src/gateway/active-sessions-shutdown-{drain,tracker}.ts",
+      "src/gateway/session-lifecycle-plugin-hooks.ts",
+      "src/gateway/server-close.ts",
+      "src/gateway/server-run-shutdown.ts",
+      "src/plugins/session-end-transcript.ts",
+      "gateway-shutdown-budget.mjs",
+    ],
+    sourceOnly: true,
+  },
+  {
+    testFile: "test/gateway-hook-concurrency.e2e.test.ts",
+    watchGlobs: [
+      "src/process/command-queue{,.capacity-groups,.state}.ts",
+      "src/process/background-work.ts",
+      "src/gateway/server/hooks{,-event-dispatch,-request-handler}.ts",
+    ],
+    sourceOnly: true,
+  },
+  {
+    testFile: "test/scripts/node-runtime-recovery.built-cli.e2e.test.ts",
+    watchGlobs: [
+      "node-runtime-recovery.mjs",
+      "cli-parent-lifetime.mjs",
+      "src/entry.{compile-cache,respawn}.ts",
+      "src/process/respawn-child-runner.ts",
+    ],
+    sourceOnly: true,
+  },
   {
     testFile: "src/agents/agent-bundle-mcp-reload.test.ts",
     watchGlobs: ["src/agents/agent-bundle-mcp-manager.ts"],
@@ -280,10 +324,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     testFile: "extensions/team-reports/src/store.test.ts",
     watchGlobs: ["extensions/team-reports/src/store.worker.ts"],
   },
-  ...[
-    "extensions/workboard/src/dispatcher-ownership.test.ts",
-    "extensions/workboard/src/dispatcher.test.ts",
-  ].map((testFile): PolicyTestWatch => ({
+  ...["extensions/workboard/src/dispatcher.test.ts"].map((testFile): PolicyTestWatch => ({
     testFile,
     watchGlobs: ["extensions/workboard/src/sqlite-store.worker.ts"],
   })),
@@ -483,12 +524,10 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     testFile: "src/auto-reply/reply/get-reply.dashboard.test.ts",
     watchGlobs: ["skills/control-ui/SKILL.md"],
   },
-  ...["src/boards/board-generated-identity.test.ts", "src/boards/board-store.test.ts"].map(
-    (testFile): PolicyTestWatch => ({
-      testFile,
-      watchGlobs: ["src/boards/sqlite-board-store.worker.ts"],
-    }),
-  ),
+  ...["src/boards/board-store.test.ts"].map((testFile): PolicyTestWatch => ({
+    testFile,
+    watchGlobs: ["src/boards/sqlite-board-store.worker.ts"],
+  })),
   ...[
     "src/cli/capability-cli/model.account-secrets.provenance.test.ts",
     "src/commands/models/list.probe.resources.test.ts",
@@ -894,10 +933,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "src/infra/sqlite-store.worker.ts",
     ],
   })),
-  ...[
-    "src/gateway/session-row-projection.membership.test.ts",
-    "src/gateway/session-utils.single-row-cache.test.ts",
-  ].map((testFile): PolicyTestWatch => ({
+  ...["src/gateway/session-utils.single-row-cache.test.ts"].map((testFile): PolicyTestWatch => ({
     testFile,
     watchGlobs: [
       "src/config/sessions/session-transcript.worker.ts",
@@ -1052,19 +1088,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "src/state/openclaw-state.worker.ts",
     ],
   },
-  ...[
-    "src/infra/heartbeat-runner.clears-pending-final-delivery.test.ts",
-    "src/infra/heartbeat-runner.committed-work.test.ts",
-    "src/infra/heartbeat-runner.isolated-session-mirror.test.ts",
-    "src/infra/heartbeat-runner.typing.test.ts",
-  ].map((testFile): PolicyTestWatch => ({
-    testFile,
-    watchGlobs: [
-      "src/config/sessions/session-transcript-projection-publication.worker.ts",
-      "src/config/sessions/session-transcript.worker.ts",
-      "src/state/openclaw-agent-execution.worker.ts",
-    ],
-  })),
   ...[
     "src/infra/outbound/conversation-delivery.queue-admission.test.ts",
     "src/infra/outbound/delivery-queue-entry-state.test.ts",
@@ -1289,7 +1312,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     ],
   },
   {
-    testFile: "src/tts/tts-summary.static-catalog.test.ts",
+    testFile: "src/tts/tts-summary.selection.test.ts",
     watchGlobs: ["extensions/kimi-coding/openclaw.plugin.json"],
   },
   {

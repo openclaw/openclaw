@@ -38,15 +38,11 @@ function stableCanonicalValue(value: unknown): unknown {
   );
 }
 
-function stableSignatureValue(value: unknown): string {
-  return JSON.stringify(stableCanonicalValue(value)) ?? "undefined";
-}
-
 function canonicalCookieArray(value: unknown[]): unknown[] {
   return value
     .map(stableCanonicalValue)
     .toSorted((left, right) =>
-      stableSignatureValue(left).localeCompare(stableSignatureValue(right)),
+      (JSON.stringify(left) ?? "undefined").localeCompare(JSON.stringify(right) ?? "undefined"),
     );
 }
 

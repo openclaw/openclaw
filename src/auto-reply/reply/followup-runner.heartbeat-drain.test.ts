@@ -47,6 +47,16 @@ vi.mock("./followup-delivery.js", () => ({
   deliverFollowupDecision: async () => ({ kind: "completed", payloads: [] }),
 }));
 
+// mock-isolation: Preparation returns synthetic operations; real lifecycle custody
+// is covered by followup-runner.queue-custody.test.ts.
+vi.mock("./reply-turn-admission-lifecycle.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./reply-turn-admission-lifecycle.js")>()),
+  runWithReplyOperationLifecycleAdmission: async (
+    _operation: unknown,
+    run: () => Promise<unknown>,
+  ) => await run(),
+}));
+
 const { createFollowupRunner } = await import("./followup-runner.js");
 const state = getFollowupTurnTestState();
 const key = "followup-heartbeat-drain";
@@ -66,7 +76,6 @@ it("keeps heartbeat cleanup options out of a deferred queued user turn", async (
   const firstStarted = createDeferred();
   const releaseFirst = createDeferred();
   const settled = createDeferred();
-  let retriedExecution: AgentTurnParams | undefined;
   admissionState.beforeAdmission.mockImplementationOnce(async (queued) => {
     firstStarted.resolve();
     await releaseFirst.promise;
@@ -75,27 +84,22 @@ it("keeps heartbeat cleanup options out of a deferred queued user turn", async (
       new AgentDatabaseExecutionAdmissionClosedError("database is still closing"),
     );
   });
-  state.execute.mockImplementation(async (params: AgentTurnParams) => {
-    retriedExecution = params;
-    return { runId: "queued-user-run", outcome: { kind: "aborted", reason: "user" } };
+  state.execute.mockResolvedValue({
+    runId: "queued-user-run",
+    outcome: { kind: "aborted", reason: "user" },
   });
   const typing = createFollowupTurnTestTypingController();
+  const defaults = { typing, typingMode: "never" as const, defaultModel: "gpt-test" };
   const userRunner = createFollowupRunner({
-    typing,
-    typingMode: "never",
-    defaultModel: "gpt-test",
+    ...defaults,
     opts: {},
   });
   const heartbeatRunner = createFollowupRunner({
-    typing,
-    typingMode: "never",
-    defaultModel: "gpt-test",
+    ...defaults,
     opts: {
       isHeartbeat: true,
       useHeartbeatFailureCopy: true,
       cleanupBundleMcpOnRunEnd: true,
-      enableHeartbeatTool: true,
-      forceHeartbeatTool: true,
       sourceReplyDeliveryMode: "message_tool_only",
       bootstrapContextMode: "lightweight",
     },
@@ -148,20 +152,17 @@ it("keeps heartbeat cleanup options out of a deferred queued user turn", async (
     expect(getExistingFollowupQueue(key)).toBeUndefined();
     expect(admissionState.beforeAdmission).toHaveBeenCalledTimes(2);
     expect(state.execute).toHaveBeenCalledOnce();
+    const retriedExecution: AgentTurnParams = state.execute.mock.calls[0]![0];
     expect(retriedExecution).toMatchObject({
       isHeartbeat: false,
       opts: { isHeartbeat: false },
     });
-    for (const option of [
-      "enableHeartbeatTool",
-      "forceHeartbeatTool",
-      "useHeartbeatFailureCopy",
-      "cleanupBundleMcpOnRunEnd",
-      "bootstrapContextMode",
-      "sourceReplyDeliveryMode",
-    ] as const) {
-      expect(retriedExecution?.opts?.[option], option).toBeUndefined();
-    }
+    expect([
+      retriedExecution.opts?.useHeartbeatFailureCopy,
+      retriedExecution.opts?.cleanupBundleMcpOnRunEnd,
+      retriedExecution.opts?.bootstrapContextMode,
+      retriedExecution.opts?.sourceReplyDeliveryMode,
+    ]).toEqual(Array(4).fill(undefined));
   } finally {
     releaseFirst.resolve();
     heartbeatOperation.complete();

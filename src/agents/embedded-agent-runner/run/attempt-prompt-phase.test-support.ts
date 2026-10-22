@@ -102,7 +102,6 @@ export function createPromptAssemblyResult(
     heartbeatSummary: undefined,
     leasedSteering: undefined,
     transcriptLeafId: null,
-    decisionPrefilter: { shouldPruneTools: false, status: "skipped", reason: "fixture-baseline" },
   };
 }
 

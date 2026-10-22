@@ -21,10 +21,7 @@ export function addServiceEnvPlanEntries(
     includeKeys?: ReadonlySet<string>;
     valueSource?:
       | GatewayServiceEnvironmentValueSource
-      | ((params: {
-          rawKey: string;
-          normalizedKey: string;
-        }) => GatewayServiceEnvironmentValueSource | undefined);
+      | ((params: { normalizedKey: string }) => GatewayServiceEnvironmentValueSource | undefined);
   },
 ): void {
   for (const [rawKey, rawValue] of Object.entries(entries)) {
@@ -44,7 +41,7 @@ export function addServiceEnvPlanEntries(
     plan.environment[rawKey] = rawValue;
     const valueSource =
       typeof options.valueSource === "function"
-        ? options.valueSource({ rawKey, normalizedKey })
+        ? options.valueSource({ normalizedKey })
         : options.valueSource;
     plan.environmentValueSources[rawKey] = valueSource ?? "inline";
   }

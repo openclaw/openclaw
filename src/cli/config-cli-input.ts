@@ -12,6 +12,7 @@ import {
 } from "../config/types.secrets.js";
 import { visitConfigValueTree } from "../config/value-tree.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
+import { decodeUtf8Input } from "../infra/utf8-input.js";
 import {
   formatExecSecretRefIdValidationMessage,
   isValidFileSecretRefId,
@@ -33,12 +34,10 @@ import {
 } from "./config-cli-path.js";
 import type { ConfigSetDryRunInputMode } from "./config-set-dryrun.js";
 import {
-  decodeConfigMutationInput,
   parseBatchSource,
   parseConfigMutationJson5,
   readConfigMutationFileSync,
   resolveConfigSetMode,
-  type ConfigSetBatchEntry,
   type ConfigSetOptions,
 } from "./config-set-input.js";
 
@@ -178,87 +177,6 @@ function validateProviderAliasPath(path: PathSegment[]): void {
   }
 }
 
-function buildProviderFromBuilder(opts: ConfigSetOptions): SecretProviderConfig {
-  const sourceRaw = opts.providerSource?.trim();
-  if (!sourceRaw) {
-    throw new Error("--provider-source is required in provider builder mode.");
-  }
-  const source = parseSecretRefSource(sourceRaw, "--provider-source");
-  const timeoutMs = parseOptionalPositiveInteger(opts.providerTimeoutMs, "--provider-timeout-ms");
-  const maxBytes = parseOptionalPositiveInteger(opts.providerMaxBytes, "--provider-max-bytes");
-  const noOutputTimeoutMs = parseOptionalPositiveInteger(
-    opts.providerNoOutputTimeoutMs,
-    "--provider-no-output-timeout-ms",
-  );
-  const maxOutputBytes = parseOptionalPositiveInteger(
-    opts.providerMaxOutputBytes,
-    "--provider-max-output-bytes",
-  );
-  const providerEnv = parseProviderEnvEntries(opts.providerEnv);
-
-  let provider: SecretProviderConfig;
-  if (source === "env") {
-    const allowlist = normalizeStringEntries(opts.providerAllowlist);
-    for (const envName of allowlist) {
-      if (!isValidEnvSecretRefId(envName)) {
-        throw new Error(
-          `--provider-allowlist entry "${envName}" must match /^[A-Z][A-Z0-9_]{0,127}$/.`,
-        );
-      }
-    }
-    provider = { source: "env", ...(allowlist.length > 0 ? { allowlist } : {}) };
-  } else if (source === "file") {
-    const filePath = opts.providerPath?.trim();
-    if (!filePath) {
-      throw new Error("--provider-path is required when --provider-source file is used.");
-    }
-    const modeRaw = opts.providerMode?.trim();
-    if (modeRaw && modeRaw !== "singleValue" && modeRaw !== "json") {
-      throw new Error("--provider-mode must be one of: singleValue, json.");
-    }
-    const mode = modeRaw === "singleValue" || modeRaw === "json" ? modeRaw : undefined;
-    provider = {
-      source: "file",
-      path: filePath,
-      ...(mode ? { mode } : {}),
-      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-      ...(maxBytes !== undefined ? { maxBytes } : {}),
-    };
-  } else if (source === "store") {
-    provider = { source: "store" };
-  } else {
-    const command = opts.providerCommand?.trim();
-    if (!command) {
-      throw new Error("--provider-command is required when --provider-source exec is used.");
-    }
-    provider = {
-      source: "exec",
-      command,
-      ...(opts.providerArg?.length ? { args: opts.providerArg } : {}),
-      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-      ...(noOutputTimeoutMs !== undefined ? { noOutputTimeoutMs } : {}),
-      ...(maxOutputBytes !== undefined ? { maxOutputBytes } : {}),
-      ...(opts.providerJsonOnly ? { jsonOnly: true } : {}),
-      ...(providerEnv ? { env: providerEnv } : {}),
-      ...(opts.providerPassEnv?.length
-        ? { passEnv: normalizeStringEntries(opts.providerPassEnv) }
-        : {}),
-      ...(opts.providerTrustedDir?.length
-        ? { trustedDirs: normalizeStringEntries(opts.providerTrustedDir) }
-        : {}),
-    };
-  }
-
-  const validated = SecretProviderSchema.safeParse(provider);
-  if (!validated.success) {
-    const issue = validated.error.issues[0];
-    throw new Error(
-      `Provider builder config invalid at ${issue?.path?.join(".") ?? "<provider>"}: ${issue?.message ?? "Invalid provider config."}`,
-    );
-  }
-  return validated.data;
-}
-
 function parseSecretRefFromUnknown(value: unknown, label: string): SecretRef {
   if (!isPlainRecord(value)) {
     throw new Error(`${label} must be an object with source/provider/id.`);
@@ -305,42 +223,6 @@ function buildAssignmentOperation(params: {
   };
 }
 
-function parseBatchOperations(entries: ConfigSetBatchEntry[]): ConfigSetOperation[] {
-  return entries.map((entry, index) => {
-    const { tokens: pathTokens, quotedNumericSegments } = parseConcreteConfigPathWithProvenance(
-      entry.path,
-    );
-    const path = pathTokens.map(String);
-    const pathFields = { requestedPath: path, pathTokens, quotedNumericSegments };
-    if (entry.ref === undefined && entry.provider !== undefined) {
-      validateProviderAliasPath(path);
-      const validated = SecretProviderSchema.safeParse(entry.provider);
-      if (!validated.success) {
-        const issue = validated.error.issues[0];
-        throw new Error(
-          `batch[${index}].provider invalid at ${issue?.path?.join(".") ?? "<provider>"}: ${issue?.message ?? ""}`,
-        );
-      }
-      return {
-        inputMode: "json",
-        ...pathFields,
-        setPath: path,
-        value: validated.data,
-        schemaValidated: true,
-      };
-    }
-    return buildAssignmentOperation({
-      ...pathFields,
-      value:
-        entry.ref === undefined
-          ? entry.value
-          : parseSecretRefFromUnknown(entry.ref, `batch[${index}].ref`),
-      inputMode: "json",
-      validatedRef: entry.ref !== undefined,
-    });
-  });
-}
-
 export function buildConfigSetOperations(params: {
   path?: string;
   value?: string;
@@ -359,7 +241,42 @@ export function buildConfigSetOperations(params: {
     if (params.path !== undefined || params.value !== undefined) {
       throw modeError("batch mode does not accept <path> or <value> arguments.");
     }
-    return parseBatchOperations(batchEntries);
+    return batchEntries.map((entry, index) => {
+      const { tokens: pathTokens, quotedNumericSegments } = parseConcreteConfigPathWithProvenance(
+        entry.path,
+      );
+      const path = pathTokens.map(String);
+      if (entry.ref === undefined && entry.provider !== undefined) {
+        validateProviderAliasPath(path);
+        const validated = SecretProviderSchema.safeParse(entry.provider);
+        if (!validated.success) {
+          const issue = validated.error.issues[0];
+          throw new Error(
+            `batch[${index}].provider invalid at ${issue?.path?.join(".") ?? "<provider>"}: ${issue?.message ?? ""}`,
+          );
+        }
+        return {
+          inputMode: "json",
+          requestedPath: path,
+          pathTokens,
+          quotedNumericSegments,
+          setPath: path,
+          value: validated.data,
+          schemaValidated: true,
+        };
+      }
+      return buildAssignmentOperation({
+        requestedPath: path,
+        pathTokens,
+        quotedNumericSegments,
+        value:
+          entry.ref === undefined
+            ? entry.value
+            : parseSecretRefFromUnknown(entry.ref, `batch[${index}].ref`),
+        inputMode: "json",
+        validatedRef: entry.ref !== undefined,
+      });
+    });
   }
 
   const parsedConcretePath =
@@ -384,7 +301,85 @@ export function buildConfigSetOperations(params: {
     if (params.value !== undefined) {
       throw modeError("provider builder mode does not accept <value>.");
     }
-    const value = buildProviderFromBuilder(params.opts);
+    const opts = params.opts;
+    const sourceRaw = opts.providerSource?.trim();
+    if (!sourceRaw) {
+      throw new Error("--provider-source is required in provider builder mode.");
+    }
+    const source = parseSecretRefSource(sourceRaw, "--provider-source");
+    const timeoutMs = parseOptionalPositiveInteger(opts.providerTimeoutMs, "--provider-timeout-ms");
+    const maxBytes = parseOptionalPositiveInteger(opts.providerMaxBytes, "--provider-max-bytes");
+    const noOutputTimeoutMs = parseOptionalPositiveInteger(
+      opts.providerNoOutputTimeoutMs,
+      "--provider-no-output-timeout-ms",
+    );
+    const maxOutputBytes = parseOptionalPositiveInteger(
+      opts.providerMaxOutputBytes,
+      "--provider-max-output-bytes",
+    );
+    const providerEnv = parseProviderEnvEntries(opts.providerEnv);
+
+    let provider: SecretProviderConfig;
+    if (source === "env") {
+      const allowlist = normalizeStringEntries(opts.providerAllowlist);
+      for (const envName of allowlist) {
+        if (!isValidEnvSecretRefId(envName)) {
+          throw new Error(
+            `--provider-allowlist entry "${envName}" must match /^[A-Z][A-Z0-9_]{0,127}$/.`,
+          );
+        }
+      }
+      provider = { source: "env", ...(allowlist.length > 0 ? { allowlist } : {}) };
+    } else if (source === "file") {
+      const filePath = opts.providerPath?.trim();
+      if (!filePath) {
+        throw new Error("--provider-path is required when --provider-source file is used.");
+      }
+      const modeRaw = opts.providerMode?.trim();
+      if (modeRaw && modeRaw !== "singleValue" && modeRaw !== "json") {
+        throw new Error("--provider-mode must be one of: singleValue, json.");
+      }
+      const fileMode = modeRaw === "singleValue" || modeRaw === "json" ? modeRaw : undefined;
+      provider = {
+        source: "file",
+        path: filePath,
+        ...(fileMode ? { mode: fileMode } : {}),
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+        ...(maxBytes !== undefined ? { maxBytes } : {}),
+      };
+    } else if (source === "store") {
+      provider = { source: "store" };
+    } else {
+      const command = opts.providerCommand?.trim();
+      if (!command) {
+        throw new Error("--provider-command is required when --provider-source exec is used.");
+      }
+      provider = {
+        source: "exec",
+        command,
+        ...(opts.providerArg?.length ? { args: opts.providerArg } : {}),
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+        ...(noOutputTimeoutMs !== undefined ? { noOutputTimeoutMs } : {}),
+        ...(maxOutputBytes !== undefined ? { maxOutputBytes } : {}),
+        ...(opts.providerJsonOnly ? { jsonOnly: true } : {}),
+        ...(providerEnv ? { env: providerEnv } : {}),
+        ...(opts.providerPassEnv?.length
+          ? { passEnv: normalizeStringEntries(opts.providerPassEnv) }
+          : {}),
+        ...(opts.providerTrustedDir?.length
+          ? { trustedDirs: normalizeStringEntries(opts.providerTrustedDir) }
+          : {}),
+      };
+    }
+
+    const validated = SecretProviderSchema.safeParse(provider);
+    if (!validated.success) {
+      const issue = validated.error.issues[0];
+      throw new Error(
+        `Provider builder config invalid at ${issue?.path?.join(".") ?? "<provider>"}: ${issue?.message ?? "Invalid provider config."}`,
+      );
+    }
+    const value = validated.data;
     validateProviderAliasPath(pathFields.requestedPath);
     return [
       {
@@ -442,7 +437,7 @@ async function readStdinText(): Promise<string> {
         `--stdin input exceeds ${maxBytes} bytes; use --file <path> for larger patches.`,
       ),
   });
-  return decodeConfigMutationInput(bytes, "--stdin");
+  return decodeUtf8Input(bytes, "--stdin");
 }
 
 export function buildUnsetOperation(

@@ -92,6 +92,48 @@ function readObjectDeclaration(name: string, schema: unknown): ObjectDeclaration
   return { name, properties, required };
 }
 
+function factorObjectDeclaration(
+  object: ObjectDeclaration,
+  objects: ObjectDeclaration[],
+  outputSchema: ToolSearchCatalogEntry["outputSchema"],
+  initialOutput: string,
+): string {
+  let output = initialOutput;
+  // Extended results share their already-declared fields without widening either contract.
+  for (const base of objects) {
+    if (
+      !Object.entries(base.properties).every(
+        ([key, value]) =>
+          Object.hasOwn(object.properties, key) &&
+          base.required.has(key) === object.required.has(key) &&
+          isDeepStrictEqual(value, object.properties[key]),
+      )
+    ) {
+      continue;
+    }
+    const properties = Object.fromEntries(
+      Object.entries(object.properties).filter(([key]) => !Object.hasOwn(base.properties, key)),
+    );
+    const extension = toolSchemaDeclaration({
+      ...outputSchema,
+      anyOf: [
+        {
+          type: "object",
+          properties,
+          required: [...object.required].filter((key) => Object.hasOwn(properties, key)),
+          additionalProperties: false,
+        },
+      ],
+    });
+    const factored =
+      Object.keys(properties).length === 0 ? base.name : `${base.name} & ${extension}`;
+    if (extension !== "unknown" && factored.length < output.length) {
+      output = factored;
+    }
+  }
+  return output;
+}
+
 function createVariantDeclarations(params: {
   callableName: string;
   input: string;
@@ -124,39 +166,24 @@ function createVariantDeclarations(params: {
     let output = toolSchemaDeclaration({ ...outputSchema, anyOf: [schema] });
     const object = output === "unknown" ? undefined : readObjectDeclaration(name, schema);
     if (object) {
-      // Extended results share their already-declared fields without widening either contract.
-      for (const base of objects) {
-        if (
-          !Object.entries(base.properties).every(
-            ([key, value]) =>
-              Object.hasOwn(object.properties, key) &&
-              base.required.has(key) === object.required.has(key) &&
-              isDeepStrictEqual(value, object.properties[key]),
-          )
-        ) {
-          continue;
-        }
-        const properties = Object.fromEntries(
-          Object.entries(object.properties).filter(([key]) => !Object.hasOwn(base.properties, key)),
-        );
-        const extension = toolSchemaDeclaration({
-          ...outputSchema,
-          anyOf: [
-            {
-              type: "object",
-              properties,
-              required: [...object.required].filter((key) => Object.hasOwn(properties, key)),
-              additionalProperties: false,
-            },
-          ],
-        });
-        const factored =
-          Object.keys(properties).length === 0 ? base.name : `${base.name} & ${extension}`;
-        if (extension !== "unknown" && factored.length < output.length) {
-          output = factored;
-        }
-      }
+      output = factorObjectDeclaration(object, objects, outputSchema, output);
       objects.push(object);
+    } else if (
+      output !== "unknown" &&
+      isRecord(schema) &&
+      Array.isArray(schema.anyOf) &&
+      Object.keys(schema).every((key) => key === "anyOf")
+    ) {
+      output = schema.anyOf
+        .map((branch) => {
+          const declaration = toolSchemaDeclaration({ ...outputSchema, anyOf: [branch] });
+          const branchObject =
+            declaration === "unknown" ? undefined : readObjectDeclaration(name, branch);
+          return branchObject
+            ? factorObjectDeclaration(branchObject, objects, outputSchema, declaration)
+            : declaration;
+        })
+        .join(" | ");
     }
     if (!append(`type ${name} = ${output};`)) {
       return undefined;

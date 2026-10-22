@@ -504,6 +504,7 @@ export class ChatComposerPersistence {
   stop() {
     this.persistNow();
     this.ready = false;
+    this.durablePersistence.resetRestoreScope();
     this.pending = null;
     this.clearTimer();
   }
@@ -778,10 +779,8 @@ export class ChatComposerPersistence {
     );
   }
 
-  private resolveDurableScope(
-    state: DurableChatComposerPersistenceState,
-    scope: StoredChatOutboxScope = resolveUiConversationIdentity(state, state.sessionKey),
-  ) {
+  private resolveDurableScope(state: DurableChatComposerPersistenceState) {
+    const scope = resolveUiConversationIdentity(state, state.sessionKey);
     if (isIncognitoComposerScope(state, scope)) {
       return null;
     }

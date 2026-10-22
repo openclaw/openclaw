@@ -6,6 +6,11 @@ import { createRuntimeLlmFacade } from "./runtime-llm-facade.js";
 import { createRuntimeSystem } from "./runtime-system.js";
 import type { PluginRuntimeBase, PluginRuntime } from "./types.js";
 
+export const COMMAND_NATIVE_SUBAGENTS_CAPABILITY = "command-native-subagents-v1";
+const NATIVE_SUBAGENT_LIST_CAPABILITY = "native-subagent-list-v1";
+/** Probe before registering a command that requests `runtimeCapabilities: ["scheduledTurns"]`. */
+export const COMMAND_SCHEDULED_TURNS_CAPABILITY = "command-scheduled-turns-v1";
+
 function unavailable(method: string): () => never {
   return () => {
     throw new Error(`${method} is only available through the plugin runtime proxy.`);
@@ -16,7 +21,13 @@ function unavailable(method: string): () => never {
 export function createRuntimeBase(): PluginRuntimeBase {
   let system: PluginRuntime["system"] | undefined;
   return {
-    capabilities: Object.freeze([GATEWAY_SERVER_CAPS.SENDER_RESTRICTED_HIDDEN_HELPERS]),
+    capabilities: Object.freeze([
+      GATEWAY_SERVER_CAPS.SENDER_RESTRICTED_HIDDEN_HELPERS,
+      COMMAND_NATIVE_SUBAGENTS_CAPABILITY,
+      "requester-model-catalog-v1",
+      NATIVE_SUBAGENT_LIST_CAPABILITY,
+      COMMAND_SCHEDULED_TURNS_CAPABILITY,
+    ]),
     config: createRuntimeConfig(),
     llm: createRuntimeLlmFacade(getRuntimeConfig),
     // Only the registry proxy grants storage, never the base runtime directly.

@@ -170,7 +170,5 @@ export function repairOAuthProfileIdMismatch(params: {
     config: nextCfg,
     changes,
     migrated: true,
-    fromProfileId: legacyProfileId,
-    toProfileId,
   };
 }

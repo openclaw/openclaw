@@ -1100,7 +1100,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       replyResolver,
     });
 
-    // A routed media-only block increments neither blockCount (text-only counter)
+    // A routed media-only block contributes no accumulated text
     // nor dispatcher counts; the delivered-routed-block fact must suppress the
     // fallback so users never see failure text after valid media.
     const fallbackCall = mocks.routeReply.mock.calls.find(

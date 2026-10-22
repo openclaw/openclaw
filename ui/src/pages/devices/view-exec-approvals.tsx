@@ -155,7 +155,7 @@ export function resolveExecApprovalsState(input: DevicesProps) {
 }
 
 export function ExecApprovals(props: ExecApprovalsState) {
-  const ready = createMemo(() => props.ready);
+  const ready = () => props.ready;
   const targetReady = () => props.target !== "node" || Boolean(props.targetNodeId);
   const saveButton = (
     <button
@@ -182,7 +182,7 @@ export function ExecApprovals(props: ExecApprovalsState) {
                 <button
                   class="btn"
                   disabled={props.loading || !targetReady()}
-                  onClick={props.onLoad}
+                  onClick={() => props.onLoad()}
                 >
                   {props.loading ? t("common.loading") : t("common.loadApprovals")}
                 </button>
@@ -381,14 +381,12 @@ function ExecApprovalsPolicy(props: ExecApprovalsState) {
   const isDefaults = createMemo(() => props.selectedScope === EXEC_APPROVALS_DEFAULT_SCOPE);
   const defaults = createMemo(() => props.defaults);
   const agent = createMemo(() => props.selectedAgent ?? {});
-  const basePath = createMemo(() =>
-    isDefaults() ? ["defaults"] : ["agents", props.selectedScope],
-  );
+  const basePath = () => (isDefaults() ? ["defaults"] : ["agents", props.selectedScope]);
   const autoOverride = createMemo(() =>
     typeof agent().autoAllowSkills === "boolean" ? agent().autoAllowSkills : undefined,
   );
   const autoEffective = createMemo(() => autoOverride() ?? defaults().autoAllowSkills);
-  const autoIsDefault = createMemo(() => autoOverride() == null);
+  const autoIsDefault = () => autoOverride() == null;
 
   return (
     <>
@@ -505,7 +503,7 @@ function ExecApprovalsPolicy(props: ExecApprovalsState) {
 }
 
 function ExecApprovalsAllowlist(props: ExecApprovalsState) {
-  const allowlistPath = createMemo(() => ["agents", props.selectedScope, "allowlist"]);
+  const allowlistPath = () => ["agents", props.selectedScope, "allowlist"];
   const entries = createMemo(() => props.allowlist);
   return (
     <SettingsSection

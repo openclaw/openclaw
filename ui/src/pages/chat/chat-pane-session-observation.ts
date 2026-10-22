@@ -83,7 +83,8 @@ function createSessionObservationRefresh(
 function applyObservedChatSessionRow(
   state: ChatPageHost,
   row: GatewaySessionRow | null,
-  observedSessionId: string | null = null,
+  observedSessionId: string | null,
+  retireSessionMutations: () => void,
 ): void {
   const selectedAgentId = resolveChatAgentId(state);
   if (!row) {
@@ -99,6 +100,7 @@ function applyObservedChatSessionRow(
     if (sessions.length === result.sessions.length) {
       return;
     }
+    retireSessionMutations();
     state.sessionsResult = { ...result, sessions, count: sessions.length };
     return;
   }
@@ -146,6 +148,13 @@ function applyObservedChatSessionRow(
       stopChatRealtimeTalk(state, { preserveConversation: true });
     }
   }
+  const previous = current?.sessions.find((candidate) =>
+    visibleSessionMatches(state, candidate.key, candidate.agentId),
+  );
+  if (previous && previous.sessionId !== row.sessionId) {
+    // Release pending header presentation before publishing a replacement incarnation.
+    retireSessionMutations();
+  }
   state.sessionsResult = result;
   state.sessionsResultAgentId = selectedAgentId;
 }
@@ -173,6 +182,14 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
     matchesPane: () => boolean;
     observation: SessionRowObservation | null;
   } | null = null;
+
+  protected resumeConfirmedRouteWork(routeResolutionChanged?: boolean): void {
+    const state = this.state;
+    if (!routeResolutionChanged || this.routeResolutionPending || !state) {
+      return;
+    }
+    void resumeStoredChatOutboxes(state);
+  }
 
   protected observedParentSessionRow(): GatewaySessionRow | null {
     const binding = this.parentSessionObservation;
@@ -343,7 +360,9 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
           ) {
             state.pendingAbort = null;
           }
-          applyObservedChatSessionRow(state, row, binding.observation?.sessionId);
+          applyObservedChatSessionRow(state, row, binding.observation?.sessionId ?? null, () =>
+            this.retireHeaderSessionMutations(),
+          );
           this.synchronizeParentSessionObservation();
           if (state.pendingAbort) {
             void replayPendingChatAbort(state);
@@ -470,7 +489,12 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
       binding.observation?.hasObserved &&
       binding.observation?.isCurrent()
     ) {
-      applyObservedChatSessionRow(state, binding.observation.row, binding.observation.sessionId);
+      applyObservedChatSessionRow(
+        state,
+        binding.observation.row,
+        binding.observation.sessionId,
+        () => this.retireHeaderSessionMutations(),
+      );
       this.synchronizeParentSessionObservation();
     }
   }

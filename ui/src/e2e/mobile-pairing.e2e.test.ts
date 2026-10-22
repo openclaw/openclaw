@@ -5,7 +5,7 @@ import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/bro
 import type { Page } from "playwright";
 import qrcode from "qrcode";
 import { beforeEach, expect, it } from "vitest";
-import type { OpenClawModalDialog } from "../components/modal-dialog.ts";
+import type { OpenClawModalDialog } from "../components/modal-dialog.tsx";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
@@ -143,7 +143,7 @@ suite.define(() => {
         await page.getByRole("button", { name: "Pair device", exact: true }).isDisabled(),
       ).toBe(true);
       await gateway.setMethodResponse("device.pair.list", { pending: [], paired: [] });
-      await pending.getByRole("button", { name: "Approve", exact: true }).click();
+      await pending.getByRole("button", { name: "Approve Synthetic browser", exact: true }).click();
       const approved = await gateway.waitForRequest("device.pair.approve");
       expect(approved.params).toEqual({ requestId: "synthetic-browser-request" });
       await pending.waitFor({ state: "hidden" });

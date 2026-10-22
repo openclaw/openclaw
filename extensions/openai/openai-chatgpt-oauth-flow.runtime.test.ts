@@ -6,6 +6,7 @@ import { connect, type Socket } from "node:net";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
+import { isRecoverableOAuthRefreshFailure } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const ssrfMocks = vi.hoisted(() => ({ fetchWithSsrFGuard: vi.fn() }));
@@ -78,7 +79,14 @@ function expectTokenFailure(
   summary: string,
   extra = {},
 ) {
-  expect(result).toEqual({ type: "failed", operation, summary, ...extra });
+  if (result.type === "failed" && operation === "refresh") {
+    const { oauthRefreshOutcome, ...presentation } = result;
+    expect(presentation).toEqual({ type: "failed", operation, summary, ...extra });
+    expect(oauthRefreshOutcome).toMatchObject({ version: 1 });
+    expect(isRecoverableOAuthRefreshFailure(result)).toBe(false);
+  } else {
+    expect(result).toEqual({ type: "failed", operation, summary, ...extra });
+  }
 }
 
 function expectTokenSuccess(

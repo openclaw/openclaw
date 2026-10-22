@@ -6,6 +6,7 @@ import {
 } from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
+import { getOrCreateWeakOwnerMap } from "../shared/weak-owner-map.js";
 import type { GatewayContextResolver, GatewayRequestContext } from "./server-methods/types.js";
 import type { RemoteIngressPrincipalSnapshot } from "./server/client-identity-types.js";
 
@@ -126,11 +127,7 @@ function captureBoardViewTicketAuthority(
     throw new BoardGatewayUnavailableError();
   }
   input.remoteIngressPrincipal?.assertCurrent();
-  let owners = ticketAuthorities.get(input.gatewayContext);
-  if (!owners) {
-    owners = new Map();
-    ticketAuthorities.set(input.gatewayContext, owners);
-  }
+  const owners = getOrCreateWeakOwnerMap(ticketAuthorities, input.gatewayContext);
   const owner = input.remoteIngressPrincipal?.assertCurrent ?? input.gatewayContext;
   const existing = owners.get(owner);
   if (

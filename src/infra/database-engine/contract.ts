@@ -30,12 +30,7 @@ export type StoreSearchCapabilities = {
   rebuild?: () => void;
 };
 
-export type DatabaseErrorKind =
-  | "constraint"
-  | "busy"
-  | "connection-lost"
-  | "outcome-unknown"
-  | "other";
+type DatabaseErrorKind = "constraint" | "busy" | "connection-lost" | "outcome-unknown" | "other";
 export type PostgresSchemaFragment = {
   id: string;
   tables: readonly string[];

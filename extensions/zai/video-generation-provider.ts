@@ -17,7 +17,6 @@ import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-co
 import type {
   VideoGenerationModeCapabilities,
   VideoGenerationProvider,
-  VideoGenerationRequest,
 } from "openclaw/plugin-sdk/video-generation";
 import {
   resolveZaiBaseUrl,
@@ -62,67 +61,6 @@ function resolveVideoBaseUrl(configured: string | undefined): string {
   return baseUrl;
 }
 
-function buildCreateBody(req: VideoGenerationRequest): Record<string, unknown> {
-  const model = normalizeOptionalString(req.model) ?? DEFAULT_MODEL;
-  if (model !== DEFAULT_MODEL) {
-    throw new Error(`Z.AI video generation does not support model ${model}. Use ${DEFAULT_MODEL}.`);
-  }
-  if ((req.inputVideos?.length ?? 0) > 0 || (req.inputAudios?.length ?? 0) > 0) {
-    throw new Error("Z.AI video generation does not support video or audio reference inputs.");
-  }
-  if ((req.inputImages?.length ?? 0) > 1) {
-    throw new Error("Z.AI video generation supports at most one input image.");
-  }
-  const quality = req.providerOptions?.quality ?? "speed";
-  if (quality !== "speed" && quality !== "quality") {
-    throw new Error('Z.AI video quality must be "speed" or "quality".');
-  }
-  const fps = req.providerOptions?.fps ?? 30;
-  if (fps !== 30 && fps !== 60) {
-    throw new Error("Z.AI video fps must be 30 or 60.");
-  }
-  const body: Record<string, unknown> = {
-    model,
-    prompt: req.prompt,
-    quality,
-    fps,
-    duration: req.durationSeconds ?? 5,
-    size:
-      resolveClosestSize({
-        requestedSize: req.size,
-        requestedAspectRatio: req.aspectRatio,
-        supportedSizes: SIZES,
-      }) ?? "1280x720",
-    with_audio: req.audio ?? false,
-  };
-  const image = req.inputImages?.[0];
-  if (image) {
-    if (image.role && image.role !== "first_frame") {
-      throw new Error("Z.AI image-to-video supports only an ordinary or first_frame image.");
-    }
-    const url = normalizeOptionalString(image.url);
-    if (url) {
-      body.image_url = url;
-    } else {
-      if (!image.buffer) {
-        throw new Error("Z.AI image-to-video input is missing image data.");
-      }
-      if (image.buffer.length > MAX_IMAGE_BYTES) {
-        throw new Error("Z.AI image-to-video requires a PNG or JPEG image no larger than 5 MB.");
-      }
-      if (image.mimeType && image.mimeType !== "image/png" && image.mimeType !== "image/jpeg") {
-        throw new Error("Z.AI image-to-video requires a PNG or JPEG image.");
-      }
-      body.image_url = toImageDataUrl({
-        ...image,
-        buffer: image.buffer,
-        defaultMimeType: "image/png",
-      });
-    }
-  }
-  return body;
-}
-
 function readTaskStatus(payload: Record<string, unknown>): string {
   const status = normalizeOptionalString(payload.task_status);
   if (status !== "PROCESSING" && status !== "SUCCESS" && status !== "FAIL") {
@@ -145,7 +83,67 @@ export function buildZaiVideoGenerationProvider(): VideoGenerationProvider {
       videoToVideo: { enabled: false },
     },
     async generateVideo(req) {
-      const body = buildCreateBody(req);
+      const model = normalizeOptionalString(req.model) ?? DEFAULT_MODEL;
+      if (model !== DEFAULT_MODEL) {
+        throw new Error(
+          `Z.AI video generation does not support model ${model}. Use ${DEFAULT_MODEL}.`,
+        );
+      }
+      if ((req.inputVideos?.length ?? 0) > 0 || (req.inputAudios?.length ?? 0) > 0) {
+        throw new Error("Z.AI video generation does not support video or audio reference inputs.");
+      }
+      if ((req.inputImages?.length ?? 0) > 1) {
+        throw new Error("Z.AI video generation supports at most one input image.");
+      }
+      const quality = req.providerOptions?.quality ?? "speed";
+      if (quality !== "speed" && quality !== "quality") {
+        throw new Error('Z.AI video quality must be "speed" or "quality".');
+      }
+      const fps = req.providerOptions?.fps ?? 30;
+      if (fps !== 30 && fps !== 60) {
+        throw new Error("Z.AI video fps must be 30 or 60.");
+      }
+      const body: Record<string, unknown> = {
+        model,
+        prompt: req.prompt,
+        quality,
+        fps,
+        duration: req.durationSeconds ?? 5,
+        size:
+          resolveClosestSize({
+            requestedSize: req.size,
+            requestedAspectRatio: req.aspectRatio,
+            supportedSizes: SIZES,
+          }) ?? "1280x720",
+        with_audio: req.audio ?? false,
+      };
+      const image = req.inputImages?.[0];
+      if (image) {
+        if (image.role && image.role !== "first_frame") {
+          throw new Error("Z.AI image-to-video supports only an ordinary or first_frame image.");
+        }
+        const url = normalizeOptionalString(image.url);
+        if (url) {
+          body.image_url = url;
+        } else {
+          if (!image.buffer) {
+            throw new Error("Z.AI image-to-video input is missing image data.");
+          }
+          if (image.buffer.length > MAX_IMAGE_BYTES) {
+            throw new Error(
+              "Z.AI image-to-video requires a PNG or JPEG image no larger than 5 MB.",
+            );
+          }
+          if (image.mimeType && image.mimeType !== "image/png" && image.mimeType !== "image/jpeg") {
+            throw new Error("Z.AI image-to-video requires a PNG or JPEG image.");
+          }
+          body.image_url = toImageDataUrl({
+            ...image,
+            buffer: image.buffer,
+            defaultMimeType: "image/png",
+          });
+        }
+      }
       const providerConfig = req.cfg.models?.providers?.zai;
       const { baseUrl, headers, allowPrivateNetwork, dispatcherPolicy } =
         await resolveProviderApiKeyHttpRequestConfig({
@@ -189,7 +187,7 @@ export function buildZaiVideoGenerationProvider(): VideoGenerationProvider {
         deadline,
         defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
         fetchFn: fetch,
-        allowPrivateNetwork,
+        ssrfPolicy: { allowPrivateNetwork },
         dispatcherPolicy,
         maxAttempts: 120,
         pollIntervalMs: POLL_INTERVAL_MS,

@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as terminalTheme from "../../packages/terminal-core/src/theme.js";
 import { registerSecurityCli } from "./security-cli.js";
 
 const mocks = await vi.hoisted(async () => {
@@ -134,6 +135,23 @@ describe("security CLI", () => {
     });
     const payload = JSON.parse(String(runtimeLogs.at(-1)));
     expect(payload.secretDiagnostics).toEqual([diagnostic]);
+  });
+
+  it("prints the audit counts in the human summary", async () => {
+    runSecurityAuditCore.mockResolvedValueOnce({
+      ts: 0,
+      summary: { critical: 2, warn: 3, info: 5 },
+      findings: [],
+    });
+    const richSpy = vi.spyOn(terminalTheme, "isRich").mockReturnValue(false);
+    try {
+      await run();
+      expect(runtimeLogs).toEqual([
+        expect.stringContaining("\nSummary: 2 critical · 3 warn · 5 info\n"),
+      ]);
+    } finally {
+      richSpy.mockRestore();
+    }
   });
 
   it("reports an unexpected fixer failure instead of emitting a successful JSON audit", async () => {

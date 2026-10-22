@@ -3,8 +3,11 @@ import type { SessionBranch } from "../../../api/types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { createMenuControls, Menu, type MenuEntry } from "../../../components/solid/menu.tsx";
 import { Popover, type PopoverHandle } from "../../../components/solid/popover.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 type ChatPaneVersionsMenuProps = {
   catalog: boolean;
@@ -38,13 +41,14 @@ export function ChatPaneVersionsMenu(props: { menu: ChatPaneVersionsMenuProps })
               {branch.headline || t("chat.sessionHeader.untitledBranch")}
             </span>
             <span class="chat-pane__branch-meta">
+              {branch.active ? `${t("chat.sessionHeader.activeBranch")} · ` : ""}
               {t(
                 branch.messageCount === 1
                   ? "chat.sessionHeader.oneMessage"
                   : "chat.sessionHeader.messages",
                 { count: String(branch.messageCount) },
               )}
-              {relativeTime ? ` · ${relativeTime}` : ""}
+              {!branch.active && relativeTime ? ` · ${relativeTime}` : ""}
             </span>
           </span>
         ),
@@ -52,7 +56,11 @@ export function ChatPaneVersionsMenu(props: { menu: ChatPaneVersionsMenuProps })
           <span class="chat-pane__branch-active" aria-label={t("chat.sessionHeader.activeBranch")}>
             <Icon name="check" />
           </span>
-        ) : undefined,
+        ) : (
+          <span class="chat-pane__branch-more" aria-hidden="true">
+            <Icon name="moreHorizontal" />
+          </span>
+        ),
       };
     }),
   );
@@ -64,7 +72,7 @@ export function ChatPaneVersionsMenu(props: { menu: ChatPaneVersionsMenuProps })
           lazy
           id={id}
           class="chat-pane__branches-menu"
-          placement="bottom-end"
+          placement="bottom"
           label={t("chat.sessionHeader.branches")}
           disabled={Boolean(props.menu.branchSwitchDisabledReason)}
           triggerClass="btn btn--ghost btn--icon chat-icon-btn chat-pane__branches-trigger"
@@ -99,7 +107,7 @@ export function ChatPaneVersionsMenu(props: { menu: ChatPaneVersionsMenuProps })
                   class="chat-pane__versions-help"
                   anchor={anchor()}
                   label={t("chat.sessionHeader.versionsHelpLabel")}
-                  placement="bottom-end"
+                  placement="bottom-start"
                   ref={(handle) => {
                     help = handle;
                   }}

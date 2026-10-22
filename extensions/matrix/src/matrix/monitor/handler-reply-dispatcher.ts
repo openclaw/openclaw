@@ -310,7 +310,6 @@ export function createMatrixReplyDispatcher(config: {
                     prepareMatrixSingleText(edit.text, {
                       cfg,
                       accountId,
-                      preserveWhitespace: true,
                     }).convertedText,
                   );
                 },

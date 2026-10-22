@@ -9,7 +9,7 @@
   "type": "module",
   "dependencies": {
     "openai": "7.32.0",
-    "zod": "4.6.6"
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

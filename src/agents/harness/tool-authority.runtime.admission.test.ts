@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { setActiveEmbeddedRun as publishHarnessActiveEmbeddedRun } from "../../plugin-sdk/agent-harness-runtime.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
@@ -6,6 +7,10 @@ import {
   createReplyOperation,
   getSessionControllerOperation,
 } from "../../sessions/session-controller.js";
+import {
+  beginReplyMessageInjectionTarget,
+  captureCurrentReplyMessageInjectionTarget,
+} from "../../sessions/session-controller.message-injection.js";
 import { testing as replyTesting } from "../../sessions/session-controller.test-support.js";
 import { createEmbeddedRunHandle, testing } from "../embedded-agent-runner/runs.test-support.js";
 import {
@@ -108,6 +113,108 @@ describe("host-prepared embedded tool authority", () => {
               attempt.sessionFile,
             ),
           ).toThrow("host-admitted");
+        }
+      });
+    },
+  );
+
+  it.each(["cancel-target", "replace-target", "cancel-both"] as const)(
+    "preserves valid source fallback when projection loses its target (%s)",
+    async (transition) => {
+      await admitted(async ({ admittedRunContext }) => {
+        const operation = createReplyOperation({
+          sessionId,
+          sessionKey,
+          resetTriggered: false,
+          turnKind: "direct",
+        });
+        try {
+          await withPreparedEmbeddedRunToolAuthority(
+            { admittedRunContext, replyOperation: operation },
+            attempt,
+            undefined,
+            async (prepared) => {
+              const queue = vi.fn(async () => {});
+              const handle = createEmbeddedRunHandle({
+                runId: attempt.runId,
+                toolAuthorityFingerprint: prepared.toolAuthorityFingerprint,
+                guarded: true,
+                queueMessage: queue,
+              });
+              const releaseHandle = publishHarnessActiveEmbeddedRun(
+                sessionId,
+                handle,
+                sessionKey,
+                attempt.sessionFile,
+              );
+              const target = captureCurrentReplyMessageInjectionTarget(sessionKey)!;
+              const entered = createDeferred();
+              const resume = createDeferred();
+              const project = operation.projectToolAuthorityFingerprintAsync;
+              vi.spyOn(operation, "projectToolAuthorityFingerprintAsync").mockImplementation(
+                async (overlay) => {
+                  const fingerprint = await project(overlay);
+                  entered.resolve();
+                  await resume.promise;
+                  return fingerprint;
+                },
+              );
+              const source = new AbortController();
+              const sourceError = new Error("incoming source cancelled");
+              const pending = beginReplyMessageInjectionTarget(target, "retained input", {
+                isInboundUserMessage: true,
+                toolAuthorityOverlay: {
+                  messageProvider: "webchat",
+                  senderId: "authority-requester",
+                  senderIsOwner: true,
+                  disableTools: false,
+                  traceAuthorized: false,
+                },
+                assertCurrent: () => source.signal.throwIfAborted(),
+              });
+              let releaseReplacement: (() => void) | undefined;
+              try {
+                await awaitGateBeforeSettlement(entered.promise, pending, "Projection not reached");
+                if (transition === "replace-target") {
+                  releaseReplacement = publishHarnessActiveEmbeddedRun(
+                    sessionId,
+                    { ...handle },
+                    sessionKey,
+                    attempt.sessionFile,
+                  );
+                } else {
+                  operation.abortByUser();
+                  if (transition === "cancel-both") {
+                    source.abort(sourceError);
+                  }
+                }
+                resume.resolve();
+                if (transition === "cancel-both") {
+                  const injection = await pending;
+                  await expect(injection.acceptance).resolves.toBe(false);
+                  await expect(injection.outcome).resolves.toEqual({
+                    status: "failed",
+                    error: sourceError,
+                  });
+                } else {
+                  const injection = await pending;
+                  await expect(injection.acceptance).resolves.toBe(false);
+                  await expect(injection.outcome).resolves.toEqual({
+                    status: "rejected",
+                    reason: transition === "replace-target" ? "no_active_run" : "not_running",
+                  });
+                }
+                expect(queue).not.toHaveBeenCalled();
+              } finally {
+                resume.resolve();
+                await Promise.allSettled([pending]);
+                releaseReplacement?.();
+                releaseHandle?.();
+              }
+            },
+          );
+        } finally {
+          operation.complete();
         }
       });
     },

@@ -9,6 +9,7 @@ import { resolveSidebarOnline, sidebarOnlineOrder } from "./app-sidebar-online.t
 import { readSidebarBrandPresentation, type AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
+import { hasSidebarListFilter } from "./session-data-events.ts";
 import { resolveSidebarSessionRowSubtitle } from "./session-row-subtitle.ts";
 import {
   parseSidebarSnapshot,
@@ -50,6 +51,11 @@ export function isSidebarSnapshotSettled(host: AppSidebarRenderHost): boolean {
       !roster.loading &&
       roster.involvingMe === host.sidebarSessionOwnerFilter().involvingMe
     );
+  }
+  if (hasSidebarListFilter(host)) {
+    const query = host.sessionData.sessionListQuery(host.expandedAgentId());
+    const selected = context.sessions.listSnapshot(query);
+    return !selected.loading && (selected.readSucceeded === true || selected.error !== null);
   }
   return (
     !host.sessionData.sessionsLoading &&

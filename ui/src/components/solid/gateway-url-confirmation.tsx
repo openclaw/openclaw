@@ -7,7 +7,6 @@ import {
 import { formatGatewayHost } from "../../lib/gateway-host.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
-import { defineSolidBridge } from "../../lib/solid-bridge.ts";
 import { Icon } from "./icon.tsx";
 import { LazyElementStateView } from "./lazy-view-error.tsx";
 
@@ -25,7 +24,7 @@ function renderConfirmation(props: () => ConfirmationProps) {
     get label() {
       return t("connection.switchGateway.title");
     },
-    loadModule: () => import("../modal-dialog.ts"),
+    loadModule: () => import("../modal-dialog.tsx"),
   };
   const loader = createLazyCustomElementRequests({}, () => props().onCancel());
   const loadingState = projectOwner(loader, (owner) => owner.visibleState);
@@ -99,13 +98,13 @@ function renderConfirmation(props: () => ConfirmationProps) {
           </div>
           <p class="gateway-switch__note">{notes()}</p>
           <openclaw-modal-actions class="gateway-switch__actions">
+            <button type="button" class="btn" onClick={() => props().onCancel()}>
+              {t("connection.switchGateway.cancel")}
+            </button>
             <button type="button" class="btn primary" onClick={() => props().onConfirm()}>
               {t("connection.switchGateway.confirm", {
                 host: formatGatewayHost(props().pendingGatewayUrl ?? ""),
               })}
-            </button>
-            <button type="button" class="btn" onClick={() => props().onCancel()}>
-              {t("connection.switchGateway.cancel")}
             </button>
           </openclaw-modal-actions>
         </div>
@@ -114,15 +113,12 @@ function renderConfirmation(props: () => ConfirmationProps) {
   );
 }
 
-export const GatewayUrlConfirmation = defineSolidBridge<{ props?: ConfirmationProps }>(
-  "openclaw-gateway-url-confirmation",
-  (props, host) => {
-    host.style.display = "contents";
-    return (
-      <Show when={props.props?.pendingGatewayUrl ? props.props : undefined}>
+export function GatewayUrlConfirmation(input: { props?: ConfirmationProps }) {
+  return (
+    <openclaw-gateway-url-confirmation style="display: contents">
+      <Show when={input.props?.pendingGatewayUrl ? input.props : undefined}>
         {(confirmation) => renderConfirmation(confirmation)}
       </Show>
-    );
-  },
-  { properties: { props: { default: undefined, attribute: false } } },
-);
+    </openclaw-gateway-url-confirmation>
+  );
+}

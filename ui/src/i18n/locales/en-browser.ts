@@ -4,6 +4,12 @@ import { en } from "./en.ts";
 // Browser consumers register their fallback without taxing UI startup.
 const enBrowser = {
   browser: {
+    address: "Page address",
+    go: "Go",
+    actions: "Browser actions",
+    navigation: "Browser navigation",
+    loadFailed: "Couldn’t load browser",
+    newBrowserTab: "New browser tab",
     unavailable:
       "Browser control is unavailable for this connection. Reconnect with browser access.",
     navigationBlocked:

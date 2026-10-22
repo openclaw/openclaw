@@ -136,6 +136,39 @@ describe("resolveInFlightRunSnapshot", async () => {
     return result;
   };
 
+  it("replays accepted preparation before execution until cancellation", () => {
+    const runId = "preparing-repository";
+    const sessionKey = "agent:main:repository";
+    const storePath = "/synthetic/repository/sessions.db";
+    const source = createRpcSourceForTest(
+      {},
+      { runId, sessionKey, storeScope: storePath, accepted: true },
+    );
+    rpcSourceTesting.reset(new Map([[runId, source]]));
+    const chatRunState = createChatRunState();
+    chatRunState.recordProgressEvent(runId, {
+      runId,
+      sessionKey,
+      seq: 1,
+      ts: 1,
+      stream: "run_status",
+      data: { phase: "preparing_worktree_base" },
+    });
+    const resolve = () =>
+      resolveInFlightRunSnapshot({
+        chatRunState,
+        storePath,
+        requestedSessionKey: sessionKey,
+        canonicalSessionKey: sessionKey,
+      });
+    expect(resolve()).toMatchObject({
+      runId,
+      events: [{ data: { phase: "preparing_worktree_base" } }],
+    });
+    requestRpcSourceCancellation(source);
+    expect(resolve()).toBeUndefined();
+  });
+
   it("omits execution timing until a queued source actually starts", async () => {
     const source = createRpcSourceForTest(
       { projectSessionActive: true },

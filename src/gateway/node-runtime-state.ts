@@ -8,7 +8,6 @@ import { invalidateNodeWakeState } from "./node-wake-state.js";
 
 export type PendingNodeAction = {
   id: string;
-  nodeId: string;
   pairingGeneration: string;
   command: string;
   paramsJSON?: string;
@@ -86,7 +85,6 @@ export function enqueuePendingNodeAction(params: {
   }
   const action: PendingNodeAction = {
     id: randomUUID(),
-    nodeId: params.nodeId,
     pairingGeneration: params.pairingGeneration,
     command: params.command,
     paramsJSON: params.paramsJSON,

@@ -1,9 +1,5 @@
 import path from "node:path";
-import type {
-  AgentExecutorController,
-  AgentHarnessAttemptParamsV2,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
-import * as harnessRuntime from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig, OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
@@ -23,6 +19,7 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { assert, vi } from "vitest";
 import { createAttemptParams } from "./agentsapi-attempt.test-helpers.js";
+import type { StoredBinding } from "./agentsapi-binding-record.js";
 import type { AgentsApiBinding } from "./agentsapi-bindings.js";
 import { AgentsApiClient } from "./agentsapi-client.js";
 import { createHostedSession } from "./agentsapi.test-support.js";
@@ -32,41 +29,28 @@ export function registerHarness(
   env: NodeJS.ProcessEnv,
   readConfig: () => OpenClawConfig = () => ({}),
 ) {
-  return requireExecutorHarness(createBindingRuntime(env, readConfig));
+  return requireAgentsApiHarness(createBindingRuntime(env, readConfig));
 }
 
-export async function executorFixture(state: { stateDir: string; env: NodeJS.ProcessEnv }) {
+export function createBindingStore<T = StoredBinding>(env: NodeJS.ProcessEnv) {
+  return createPluginStateKeyedStoreForTests<T>("agentsapi", {
+    namespace: "agentsapi-sessions",
+    maxEntries: 100_000,
+    overflowPolicy: "reject-new",
+    env,
+  });
+}
+
+export async function externalSessionFixture(state: { stateDir: string; env: NodeJS.ProcessEnv }) {
   const params = await createAttempt(state.stateDir);
-  const config = { environment: "self_hosted", executorController: "fixture-executor" };
+  const config = { environment: "self_hosted" };
   const runtime = createBindingRuntime(state.env, () => ({
     plugins: { entries: { agentsapi: { config } } },
   }));
-  const openStore = () =>
-    createPluginStateKeyedStoreForTests<AgentsApiBinding>("agentsapi", {
-      namespace: "agentsapi-sessions",
-      maxEntries: 100_000,
-      overflowPolicy: "reject-new",
-      env: state.env,
-    });
+  const openStore = <T = AgentsApiBinding>() => createBindingStore<T>(state.env);
   const events: string[] = [];
-  const controller = {
-    workspaceDirectory: "/executor/project",
-    ensure: vi.fn<AgentExecutorController["ensure"]>(async () => {
-      nativeSession.status = "idle";
-      nativeSession.required_actions = [];
-    }),
-    retire: vi.fn<AgentExecutorController["retire"]>(async () => {
-      events.push("retire");
-    }),
-  };
-  const resolveController = vi
-    .spyOn(harnessRuntime, "resolveAgentExecutorController")
-    .mockImplementation((pluginId) => {
-      assert(pluginId === "fixture-executor", `Unknown fixture executor: ${pluginId}`);
-      return controller;
-    });
   const nativeSession: Awaited<ReturnType<AgentsApiClient["session"]>> = {
-    ...createHostedSession("requires_action"),
+    ...createHostedSession("idle"),
     id: "native-executor-session",
     agent: { ...createHostedSession().agent, id: "fixture-agent" },
     environment: {
@@ -76,13 +60,10 @@ export async function executorFixture(state: { stateDir: string; env: NodeJS.Pro
       workspace_directory: "/executor/project",
       remote_url: "wss://executor.example.test/session",
     },
-    required_actions: [{ type: "environment_connection", environment_id: "executor-environment" }],
+    required_actions: [],
   };
   const client = mockClient(nativeSession.id);
   client.session.mockResolvedValue(nativeSession);
-  const environment = vi
-    .spyOn(AgentsApiClient.prototype, "environment")
-    .mockResolvedValue(connectedEnvironment());
   const cancel = vi.spyOn(AgentsApiClient.prototype, "cancel").mockImplementation(async () => {
     events.push("cancel");
   });
@@ -90,18 +71,15 @@ export async function executorFixture(state: { stateDir: string; env: NodeJS.Pro
     params,
     runtime,
     openStore,
-    controller,
     nativeSession,
     ...client,
-    environment,
     cancel,
     events,
-    resolveController,
-    createHarness: () => requireExecutorHarness(runtime),
+    createHarness: () => requireAgentsApiHarness(runtime),
   };
 }
 
-export function requireExecutorHarness(runtime: PluginRuntime) {
+function requireAgentsApiHarness(runtime: PluginRuntime) {
   const registerAgentHarness = vi.fn<OpenClawPluginApi["registerAgentHarness"]>();
   plugin.register(createTestPluginApi({ id: "agentsapi", runtime, registerAgentHarness }));
   const harness = registerAgentHarness.mock.calls[0]?.[0];
@@ -143,18 +121,6 @@ function createBindingRuntime(env: NodeJS.ProcessEnv, current: () => OpenClawCon
     return authority ? store.withCurrent(authority) : store;
   };
   return runtime;
-}
-
-export function connectedEnvironment(): Awaited<ReturnType<AgentsApiClient["environment"]>> {
-  return {
-    id: "executor-environment",
-    type: "self_hosted",
-    status: "connected",
-    object: "agent.environment",
-    files: [],
-    plugins: [],
-    skills: [],
-  };
 }
 
 export async function reopenState() {

@@ -1,24 +1,16 @@
 import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
-import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
 import { GatewayPayloadLimitError, GatewayRequestError } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../i18n/locales/en-chat-message-metadata.ts";
-import type { ChatAttachment, ChatQueueItem, HumanMention } from "../../lib/chat/chat-types.ts";
-import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
-import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
-import { outboxStorageScope } from "../../lib/chat/outbox-payload-store.runtime.ts";
+import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import {
   INTERRUPTED_SETTINGS_WAIT_ERROR,
   sameQueuedDeliveryVersion,
 } from "../../lib/chat/outbox-store-codec.ts";
 import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
-import {
-  captureChatOutboxAdmission,
-  storedChatOutboxScopeKey,
-} from "../../lib/chat/outbox-store.ts";
+import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
-import { generateUUID } from "../../lib/uuid.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { loadChatBranches } from "./chat-history-branches.ts";
 import {
@@ -47,7 +39,6 @@ import {
   UNCONFIRMED_CHAT_SEND_ERROR,
 } from "./chat-send-support.ts";
 import { getPendingChatPickerPatch } from "./chat-settings-patches.ts";
-import { attachmentBatchRejection } from "./components/chat-attachment-admission.ts";
 import { formatConnectError } from "./connect-error.ts";
 import {
   captureOutboxPayloadOwner,
@@ -57,69 +48,8 @@ import {
 } from "./outbox-payloads.ts";
 import { isQueuedMessageBeingEdited } from "./queued-message-edit.ts";
 import { hasDirectSessionRun, isChatBusy } from "./run-lifecycle.ts";
-import { scheduleChatScroll } from "./scroll.ts";
 
 registerChatMessageMetadataEnglish();
-
-export function createPendingSendMessage(
-  host: ChatHost,
-  text: string,
-  attachments?: ChatAttachment[],
-  refreshSessions?: boolean,
-  submittedAtMs = performance.now(),
-  sendState?: ChatQueueItem["sendState"],
-  replyToId?: string,
-  resumedOrderKey?: number,
-  queueMode?: ChatQueueItem["queueMode"],
-  intent?: ChatQueueItem["intent"],
-  expectedLeafEntryId?: string | null,
-  mentions?: readonly HumanMention[],
-  workContext?: ChatWorkContext,
-): { item: ChatQueueItem; admission: ReturnType<typeof captureChatOutboxAdmission> } | null {
-  const submitted = trimHumanMentions(text, mentions);
-  const hasAttachments = Boolean(attachments && attachments.length > 0);
-  if (!submitted.text && !hasAttachments) {
-    return null;
-  }
-  const admission = captureChatOutboxAdmission(host, host.sessionKey);
-  const sender = resolveCurrentUserIdentity(host.hello, host.client?.instanceId, host.selfUser);
-  // A send that resumes an edited row inherits its place; the row itself is
-  // retired by the write that admits this replacement, not here.
-  const pending: ChatQueueItem = {
-    storageScope: outboxStorageScope(host),
-    id: generateUUID(),
-    text: intent ? text : submitted.text,
-    ...(submitted.mentions ? { mentions: submitted.mentions } : {}),
-    ...(workContext ? { workContext } : {}),
-    createdAt: Date.now(),
-    ...(resumedOrderKey !== undefined ? { orderKey: resumedOrderKey } : {}),
-    attachments: hasAttachments ? attachments : undefined,
-    refreshSessions,
-    sendAttempts: 0,
-    sendRunId: generateUUID(),
-    sendState,
-    ...(queueMode ? { queueMode } : {}),
-    ...(intent
-      ? { intent, ...(host.currentSessionId ? { sessionId: host.currentSessionId } : {}) }
-      : {}),
-    ...(intent && expectedLeafEntryId !== undefined ? { expectedLeafEntryId } : {}),
-    sendSubmittedAtMs: submittedAtMs,
-    ...admission.scope,
-    ...(sender ? { sender } : {}),
-    ...(replyToId ? { replyToId } : {}),
-  };
-  return { item: pending, admission };
-}
-
-export function publishPendingSendMessage(host: ChatHost, pending: ChatQueueItem): ChatQueueItem {
-  const positioned = chatOutboxOwner(host).keep(
-    host,
-    { sessionKey: pending.sessionKey!, agentId: pending.agentId },
-    pending,
-  );
-  scheduleChatScroll(host, true, true, { source: "manual" });
-  return positioned;
-}
 
 export function reconnectSafeQueuedSendState(
   host: Pick<ChatHost, "client" | "connected">,
@@ -288,26 +218,6 @@ export function finishScopedChatSending(host: ChatHost, scope: StoredChatOutboxS
   }
   host.chatSendingScopeKey = null;
   host.chatSending = false;
-}
-
-export function rejectOversizedQueuedChatDelivery(
-  host: ChatHost,
-  prepared: ChatQueueItem,
-  attachments: readonly ChatAttachment[],
-  sessionKey: string,
-  options: QueuedChatSendOptions | undefined,
-): boolean {
-  const error = attachmentBatchRejection(attachments, host.hello?.policy);
-  if (error === undefined) {
-    return false;
-  }
-  const storageMode = options?.storageMode ?? "durable";
-  const setState = deliveryStateWriter(host, storageMode, prepared.id);
-  if (!restoreRejectedChatDelivery(host, prepared, options)) {
-    setState("failed", error);
-  }
-  surfaceChatDeliveryFailure(host, sessionKey, prepared.agentId, error);
-  return true;
 }
 
 /** Settle transport failures without turning an unconfirmed send into a fresh attempt. */

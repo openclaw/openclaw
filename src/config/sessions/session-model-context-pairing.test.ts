@@ -136,7 +136,7 @@ describe("bounded model-context pairing", () => {
       pairing.retain(retained);
       const actual = pairing.read();
       expect(actual.size).toBe(retained.length - 1);
-      for (const frame of classifyToolUseResultPairing(retained).frames) {
+      for (const frame of classifyToolUseResultPairing(retained)) {
         for (const occurrence of frame.occurrences) {
           if (occurrence.sourceResult) {
             expect(actual.get(occurrence.sourceResult)).toBe(frame.assistant);

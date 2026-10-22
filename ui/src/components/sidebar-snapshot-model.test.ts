@@ -75,7 +75,7 @@ it("keeps display data without persisting authority, executable plugins, or watc
     token: "synthetic-secret",
     footer: { ...model.footer, scopes: ["operator.admin"] },
     plugins: [{ ...plugin, mount() {} }],
-    cards: [{ ...card, activeNow: true, unreadCount: 3, lastActiveAt: 99 }],
+    cards: [{ ...card, activeNow: true, lastActiveAt: 99 }],
   });
   expect(admitted?.footer).toEqual(model.footer);
   expect(admitted?.plugins).toEqual([plugin]);

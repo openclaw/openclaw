@@ -1,8 +1,8 @@
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { mapSessionResultRows, type readSessionChangedEvent } from "./reconcile.ts";
-import type { SessionGateway } from "./session-capability.ts";
 import { resolveUiConversationIdentity } from "./session-key.ts";
 import type { createSessionRosterObservations } from "./session-roster-observations.ts";
+import type { SessionGateway } from "./session-types.ts";
 
 type PermissionFields = Pick<GatewaySessionRow, "sessionId" | "permissionMode" | "updatedAt">;
 export type SessionPermissionClaim = {

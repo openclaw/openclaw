@@ -7,7 +7,6 @@ import {
   For,
   getOwner,
   Match,
-  onCleanup,
   onSettled,
   runWithOwner,
   Show,
@@ -85,18 +84,18 @@ function FrameBody(props: {
       node = following;
     }
   };
-  onCleanup(() => {
-    for (const range of ranges.values()) {
-      retire(range);
-    }
-    ranges.clear();
-  });
   onSettled(() => {
     const committedParent = anchor.parentElement;
     if (!committedParent) {
       throw new Error("Run frame body anchor was not committed");
     }
     setParent(committedParent);
+    return () => {
+      for (const range of ranges.values()) {
+        retire(range);
+      }
+      ranges.clear();
+    };
   });
   createEffect(
     () => ({

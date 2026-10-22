@@ -260,7 +260,7 @@ describe("irc inbound behavior", () => {
     );
   });
 
-  it("binds durable completion to reply-lane adoption", async () => {
+  it("leaves completion to reply-lane adoption instead of settling in the inbound adapter", async () => {
     const coreRuntime = createPluginRuntimeMock();
     setIrcRuntime(coreRuntime as never);
     const onAdopted = vi.fn(async () => undefined);
@@ -287,8 +287,10 @@ describe("irc inbound behavior", () => {
     expect(replyOptions?.turnAdoptionLifecycle).toEqual(
       expect.objectContaining({ abortSignal: turnAdoptionLifecycle.abortSignal }),
     );
+    expect(onAdopted).not.toHaveBeenCalled();
+    await replyOptions?.turnAdoptionLifecycle?.onAdopted();
     expect(onAdopted).toHaveBeenCalledOnce();
-    expect(result).toEqual({ kind: "completed" });
+    expect(result).toBeUndefined();
   });
 
   it.each([

@@ -80,7 +80,6 @@ async function runAdaptiveCardInvoke(
       value,
     },
     sendActivity: vi.fn(async () => ({ id: "activity-id" })),
-    sendActivities: async () => [],
   } as unknown as MSTeamsTurnContext);
 }
 
@@ -115,7 +114,6 @@ async function runMessageActivity(params: {
       value: params.value,
     },
     sendActivity: vi.fn(async () => ({ id: "activity-id" })),
-    sendActivities: async () => [],
   } as unknown as MSTeamsTurnContext);
 }
 
@@ -162,9 +160,7 @@ describe("msteams members added handler", () => {
         conversation: { id: "conversation-id", conversationType: "personal" },
       },
       sendActivity,
-      sendActivities: vi.fn(async () => []),
       updateActivity: vi.fn(async () => undefined),
-      deleteActivity: vi.fn(async () => undefined),
     });
 
     expect(sendActivity).not.toHaveBeenCalled();

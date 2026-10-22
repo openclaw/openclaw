@@ -10,7 +10,9 @@ import {
   validateExecApprovalsNodeSnapshot,
   validateExecApprovalsNodeSetParams,
   validateExecApprovalsSetParams,
+  validateExecApprovalsNativeCommitParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { commitNativeExecAuthorization } from "../../infra/exec-approvals-native.js";
 import { readExecApprovalsSocket } from "../../infra/exec-approvals-socket.js";
 import {
   ensureExecApprovalsSnapshot,
@@ -202,6 +204,33 @@ function execApprovalsNodeHandler<TParams extends { nodeId: string }>(definition
 }
 
 export const execApprovalsHandlers: GatewayRequestHandlers = {
+  "exec.approvals.native.commit": async (options) => {
+    const { params, respond } = options;
+    if (
+      !assertValidParams(
+        params,
+        validateExecApprovalsNativeCommitParams,
+        "exec.approvals.native.commit",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const guard = captureExecApprovalsOwnerGuard(params.expectedOwnerId, options);
+    if (guard === null) {
+      return;
+    }
+    await respondUnavailableOnThrow(respond, async () => {
+      guard.assertPreparationCurrent();
+      const result = await commitNativeExecAuthorization(
+        params,
+        guard.assertCurrent,
+        captureOpenClawStateWorkerContext(),
+      );
+      guard.assertCurrent();
+      respond(true, result, undefined);
+    });
+  },
   "exec.approvals.get": async (options) => {
     const { params, respond } = options;
     if (!assertValidParams(params, validateExecApprovalsGetParams, "exec.approvals.get", respond)) {

@@ -1,10 +1,10 @@
 import "../../test/dom.setup.ts";
 import { expectDefined } from "@openclaw/normalization-core";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import type {
   ControlUiAgentPickerProps,
   ControlUiComponents,
 } from "openclaw/plugin-sdk/control-ui";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createGatewaySession,
@@ -771,6 +771,26 @@ describe("selection reconciliation", () => {
     expect(page.workboard.state.draftOpen).toBe(true);
     expect(page.workboard.state.draftTitle).toBe("New operations task");
   });
+});
+
+it("titles the unfiltered page as all boards and a selected board by name", async () => {
+  const page = mountPage({ connected: true });
+  const request = expectDefined(page.request.getMockImplementation(), "request implementation");
+  page.request.mockImplementation(async (method, params) =>
+    method === "workboard.cards.list"
+      ? {
+          cards: [],
+          boards: [
+            { id: "planning", name: "Planning", total: 0, active: 0, archived: 0, byStatus: {} },
+          ],
+        }
+      : request(method, params),
+  );
+  page.fixture.notify();
+  const title = () => page.container.querySelector(".workboard-page-title")?.textContent?.trim();
+  await afterWorkboardUpdate(() => expect(title()).toBe("All boards"));
+  page.navigate("planning");
+  await afterWorkboardUpdate(() => expect(title()).toBe("Planning"));
 });
 
 it("saves explicit appearance clearing without sending legacy null values", async () => {

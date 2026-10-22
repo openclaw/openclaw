@@ -13,7 +13,6 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { killMatrixQaCliChild } from "./scenario-runtime-cli-process.js";
 import {
   formatMatrixQaCliCommand,
-  redactMatrixQaCliOutput,
   runMatrixQaOpenClawCli,
   startMatrixQaOpenClawCli,
 } from "./scenario-runtime-cli.js";
@@ -126,12 +125,6 @@ describe("Matrix QA CLI runtime", () => {
     ],
   ])("redacts secret arguments in %s", (command, expected) => {
     expect(formatMatrixQaCliCommand(command.split(" "))).toBe(expected);
-  });
-
-  it("redacts Matrix token output before diagnostics and artifacts", () => {
-    expect(
-      redactMatrixQaCliOutput("GET /_matrix/client/v3/sync?access_token=abcdef1234567890ghij"),
-    ).toBe("GET /_matrix/client/v3/sync?access_token=abcdef…ghij");
   });
 
   it.each([

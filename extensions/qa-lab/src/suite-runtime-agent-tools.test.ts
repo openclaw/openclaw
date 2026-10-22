@@ -189,5 +189,16 @@ it.each([
     }
     expect(message).not.toContain("old stderr");
     expect(closeMock).toHaveBeenCalled();
+    expect(connectMock).toHaveBeenCalledWith(expect.anything(), { timeout: 180_000 });
+    if (phase === "call") {
+      expect(listToolsMock).toHaveBeenCalledWith(
+        { method: "tools/list", params: {} },
+        { timeout: 180_000 },
+      );
+      expect(callToolMock).toHaveBeenCalledWith(
+        { name: "plugin.echo", arguments: { text: "hello" } },
+        { timeout: 180_000, toolDefinition: { name: "plugin.echo" } },
+      );
+    }
   },
 );
