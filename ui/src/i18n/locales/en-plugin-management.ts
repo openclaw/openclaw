@@ -4,6 +4,16 @@ import { en } from "./en.ts";
 // Plugin management and its lazy sibling surfaces register this shared copy on use.
 const enPluginManagement = {
   custodian: {
+    onboardingName: {
+      title: "What should we call you?",
+      description:
+        "This name appears on your Gateway profile. You can change it later in Settings → Profile.",
+      label: "Your name",
+      save: "Save name",
+      skip: "Maybe later",
+      loadFailed: "Could not check your profile name.",
+      saveFailed: "Could not save your profile name. Try again.",
+    },
     pluginPlaceholder: "Ask OpenClaw about {plugin}",
     pluginIntroTitle: "Ask about {plugin}",
     pluginStarterPurpose: "What does it do?",
