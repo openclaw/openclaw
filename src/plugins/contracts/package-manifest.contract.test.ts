@@ -119,17 +119,30 @@ it("bundles LanceDB JavaScript while installing matching native bindings per pla
 
 describe("plugin package authoring metadata", () => {
   it("exposes the declared discovery and release entrypoints", () => {
-    const openclaw = {
-      extensions: ["./src/index.ts"],
-      runtimeExtensions: ["./dist/index.js"],
-      setupEntry: "./src/setup.ts",
-      runtimeSetupEntry: "./dist/setup.js",
-      plugin: { id: "example", label: "Example" },
-      compat: { pluginApi: ">=1", minGatewayVersion: "2026.8.1" },
-      install: { npmSpec: "@openclaw/example", minHostVersion: "2026.8.1" },
+    const manifest: PackageManifest = {
+      name: "@openclaw/example",
+      version: "1.2.3",
+      openclaw: {
+        extensions: ["./src/index.ts"],
+        runtimeExtensions: ["./dist/index.js"],
+        setupEntry: "./src/setup.ts",
+        runtimeSetupEntry: "./dist/setup.js",
+        plugin: {
+          id: "example",
+          label: "Example",
+        },
+        compat: {
+          pluginApi: ">=1",
+          minGatewayVersion: "2026.8.1",
+        },
+        install: {
+          npmSpec: "@openclaw/example",
+          minHostVersion: "2026.8.1",
+        },
+      },
     };
-    const manifest: PackageManifest = { name: "@openclaw/example", version: "1.2.3", openclaw };
-    expect(getPackageManifestMetadata(manifest)).toEqual(openclaw);
+
+    expect(getPackageManifestMetadata(manifest)).toEqual(manifest.openclaw);
     expect(resolvePackageExtensionEntries(manifest)).toEqual({
       status: "ok",
       entries: ["./src/index.ts"],
@@ -137,13 +150,26 @@ describe("plugin package authoring metadata", () => {
   });
 
   it.each([
-    ["invalid", "openclaw must be an object"],
-    [{ extensions: "./index.js" }, "openclaw.extensions must be an array"],
-  ])("rejects metadata %j: %s", (openclaw, error) => {
-    expect(resolvePackageExtensionEntries({ openclaw } as PackageManifest)).toEqual({
+    {
+      name: "non-object openclaw metadata",
+      manifest: { openclaw: "invalid" } as unknown as PackageManifest,
+      error: "package.json openclaw must be an object",
+    },
+    {
+      name: "non-array extension metadata",
+      manifest: { openclaw: { extensions: "./index.js" } } as unknown as PackageManifest,
+      error: "package.json openclaw.extensions must be an array",
+    },
+    {
+      name: "blank extension metadata",
+      manifest: { openclaw: { extensions: [" "] } } as PackageManifest,
+      error: "package.json openclaw.extensions[0] must be a non-empty string",
+    },
+  ])("fails fast on $name", ({ manifest, error }) => {
+    expect(resolvePackageExtensionEntries(manifest)).toEqual({
       status: "invalid",
       entries: [],
-      error: `package.json ${error}`,
+      error,
     });
   });
 
@@ -170,7 +196,12 @@ describe("plugin package authoring metadata", () => {
     const result = await validatePackageExtensionEntriesForInstall({
       packageDir: process.cwd(),
       extensions: [],
-      manifest: { openclaw: { extensions: [], runtimeSetupEntry: "./dist/setup.js" } },
+      manifest: {
+        openclaw: {
+          extensions: [],
+          runtimeSetupEntry: "./dist/setup.js",
+        },
+      },
     });
 
     expect(result).toEqual({

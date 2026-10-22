@@ -1,10 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { catalogPage, createGatewayHarness, createSessionsHarness } from "../app-sidebar.ts";
+import { activateSessionMenuValue } from "../app-sidebar-menu.ts";
+import {
+  catalogPage,
+  createGatewayHarness,
+  createSessionsHarness,
+  mountSidebar,
+} from "../app-sidebar.ts";
 import { createDataTransferStub } from "../drag-data.ts";
 import { gatewayHelloForMethods } from "../gateway-methods.ts";
 import { waitForFast } from "../wait-for.ts";
-import { mountSidebarFixture } from "./compact.test-support.ts";
 import "../../components/app-sidebar.tsx";
 
 function dispatchDragEvent(
@@ -21,7 +26,11 @@ describe("AppSidebar section reordering", () => {
   async function mountWithGroups(
     groups: string[],
     sectionOrder: string[] = [],
-    options: { withCatalog?: boolean; scopes?: string[] } = {},
+    options: {
+      withCatalog?: boolean;
+      scopes?: string[];
+      groupSessions?: boolean;
+    } = {},
   ) {
     const page = catalogPage([{ threadId: "thread-codex", name: "Codex thread" }]);
     const request = vi.fn().mockResolvedValue(page);
@@ -38,18 +47,23 @@ describe("AppSidebar section reordering", () => {
       "agent:main:main",
       "agent:main:plain",
       "agent:main:thread",
-      "agent:main:builtin-group",
+      ...(options.groupSessions ? [] : ["agent:main:builtin-group"]),
       ...groups.map((_, index) => `agent:main:group-${index}`),
     ]);
     const rows = harness.sessions.state.result!.sessions;
     const fixtureRow = (key: string) => rows.find((entry) => entry.key === `agent:main:${key}`)!;
     const codingRow = fixtureRow("thread");
     codingRow.worktree = { id: "worktree-1", branch: "feature", repoRoot: "/repo" };
-    fixtureRow("builtin-group").kind = "group";
-    for (const [index, group] of groups.entries()) {
-      fixtureRow(`group-${index}`).category = group;
+    if (!options.groupSessions) {
+      fixtureRow("builtin-group").kind = "group";
     }
-    const { sidebar } = await mountSidebarFixture(gateway.gateway, harness.sessions);
+    for (const [index, group] of groups.entries()) {
+      Object.assign(fixtureRow(`group-${index}`), {
+        category: group,
+        ...(options.groupSessions ? { kind: "group" } : {}),
+      });
+    }
+    const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
     sidebar.connected = true;
     harness.publish({ groups, sectionOrder });
     await sidebar.updateComplete;
@@ -88,6 +102,24 @@ describe("AppSidebar section reordering", () => {
     expect(harness.groupsPut).not.toHaveBeenCalled();
   });
 
+  it("drags a section from its label toggle without a dedicated grip", async () => {
+    const { sidebar, header, harness } = await mountWithGroups(["Alpha", "Beta"]);
+    const source = header("category:Beta");
+    const toggle = source.querySelector(".sidebar-session-group-toggle")!;
+    const dataTransfer = createDataTransferStub();
+
+    expect(
+      source.querySelector(".sidebar-session-group-drag-handle, .sidebar-reorder-trigger"),
+    ).toBeNull();
+    toggle.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    dispatchDragEvent(source, "dragstart", dataTransfer);
+
+    expect(dataTransfer.types).not.toEqual([]);
+    expect(sidebar.sessionOrganizer.draggingSidebarSection).toBe("category:Beta");
+    dispatchDragEvent(header("category:Alpha"), "drop", dataTransfer);
+    await waitForFast(() => expect(harness.groupsPut).toHaveBeenCalled());
+  });
+
   it("keeps new-session link gestures separate from section dragging and menus", async () => {
     const { sidebar, header } = await mountWithGroups(["Alpha"]);
     const dataTransfer = createDataTransferStub();
@@ -105,6 +137,30 @@ describe("AppSidebar section reordering", () => {
 
     expect(dataTransfer.types).toEqual([]);
     expect(sidebar.sessionOrganizer.draggingSidebarSection).toBeNull();
+  });
+
+  it("clears a group session category when it drops onto Groups", async () => {
+    const { sidebar, harness, section } = await mountWithGroups(["Done"], [], {
+      groupSessions: true,
+    });
+    await activateSessionMenuValue(sidebar, "empty-groups:never");
+    const source = sidebar.querySelector('[data-session-key="agent:main:group-0"]');
+    const groupsSection = section("groups");
+    expect(source).not.toBeNull();
+    const dataTransfer = createDataTransferStub();
+
+    dispatchDragEvent(source!, "dragstart", dataTransfer);
+    dispatchDragEvent(groupsSection, "dragover", dataTransfer);
+    expect(dataTransfer.dropEffect).toBe("move");
+    dispatchDragEvent(groupsSection, "drop", dataTransfer);
+
+    await waitForFast(() =>
+      expect(harness.patch).toHaveBeenCalledWith(
+        "agent:main:group-0",
+        { category: null },
+        { agentId: "main", expectedSessionId: "session:agent:main:group-0" },
+      ),
+    );
   });
 
   it.each([false, true])(

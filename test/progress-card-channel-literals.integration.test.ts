@@ -1,14 +1,25 @@
-import { assert, expect, it } from "vitest";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import { loadDiscordDraftPreview, RequestClient } from "../extensions/discord/test-api.js";
 import {
   renderTelegramProgressDraftPreview,
   telegramHtmlToPlainTextFallback,
 } from "../extensions/telegram/test-api.js";
 import { markdownToIR } from "../packages/markdown-core/src/ir.js";
+import { createSubscribedSessionHarness } from "../src/agents/embedded-agent-subscribe.e2e-harness.js";
+import { createOpenClawTools } from "../src/agents/openclaw-tools.js";
+import type { InProcessGatewayCaller } from "../src/agents/tools/in-process-gateway.js";
 import { createChannelProgressDraftCompositor } from "../src/channels/progress-draft-compositor.js";
-import { projectProgressCardChannelUpdate } from "../src/session-cards/progress-card-channel-summary.js";
+import { normalizeAgentPlanSteps } from "../src/channels/streaming.js";
 
 const { createDiscordDraftPreviewController } = await loadDiscordDraftPreview();
+
+const gatewayCall = vi.hoisted(() => vi.fn<InProcessGatewayCaller>());
+vi.mock("../src/agents/tools/in-process-gateway.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/agents/tools/in-process-gateway.js")>()),
+  callInProcessGatewayTool: gatewayCall,
+}));
+
+afterEach(() => vi.clearAllMocks());
 
 const literal = (markdown: string, text: string, html = text) => ({ markdown, text, html });
 const cases = [
@@ -19,10 +30,42 @@ const cases = [
 ];
 
 type PushPlan = ReturnType<typeof createChannelProgressDraftCompositor>["pushPlanProgress"];
-async function pushCard(markdown: string, pushPlanProgress: PushPlan) {
-  const projected = projectProgressCardChannelUpdate({ markdown });
-  assert(projected, "Expected a valid progress card");
-  await pushPlanProgress(projected.steps, projected);
+async function runRegisteredCard(markdown: string, pushPlanProgress: PushPlan) {
+  gatewayCall.mockResolvedValue({
+    card: { sessionKey: "agent:main:literal-test", revision: 1, updatedAt: 1, markdown },
+  });
+  const tool = createOpenClawTools({
+    agentSessionKey: "agent:main:literal-test",
+    config: { tools: { allow: ["progress_card"] } },
+  }).find((entry) => entry.name === "progress_card");
+  assert(tool, "progress_card is not registered");
+  const { emit, subscription } = createSubscribedSessionHarness({
+    runId: "literal-test",
+    sessionPersistence: "detached",
+    onAgentEvent: async (event) => {
+      if (event.stream === "plan") {
+        const { steps, explanation, explanationFormat } = event.data;
+        await pushPlanProgress(normalizeAgentPlanSteps(steps), {
+          explanation: typeof explanation === "string" ? explanation : undefined,
+          explanationFormat: explanationFormat === "plain" ? "plain" : undefined,
+        });
+      }
+    },
+  });
+  const toolEvent = { toolName: tool.name, toolCallId: "card-1" };
+  try {
+    emit({ type: "tool_execution_start", ...toolEvent, args: { markdown } });
+    await subscription.waitForPendingEvents();
+    const result = await tool.execute("card-1", { markdown });
+    emit({ type: "tool_execution_end", ...toolEvent, result, isError: false });
+    await subscription.waitForPendingEvents();
+    expect(gatewayCall).toHaveBeenCalledWith(
+      "progressCard.put",
+      expect.objectContaining({ markdown, sessionKey: "agent:main:literal-test" }),
+    );
+  } finally {
+    subscription.unsubscribe();
+  }
 }
 
 it.for(cases)(
@@ -57,7 +100,7 @@ it.for(cases)(
       log: () => {},
     });
     onTestFinished(() => controller.cleanup());
-    await pushCard(markdown, controller.pushPlanProgress);
+    await runRegisteredCard(markdown, controller.pushPlanProgress);
     await controller.flush();
     expect(messages).toHaveLength(1);
     const rendered = markdownToIR(messages[0] ?? "", { autolink: true, linkify: true });
@@ -87,7 +130,7 @@ it.for(
       },
     });
     onTestFinished(() => progress.cancel());
-    await pushCard(markdown, progress.pushPlanProgress.bind(progress));
+    await runRegisteredCard(markdown, progress.pushPlanProgress.bind(progress));
     expect(previews).toHaveLength(1);
     const preview = previews[0];
     if (richMessages) {

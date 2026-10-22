@@ -1,7 +1,8 @@
-import { writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test-support.js";
+import { expectDefined } from "@openclaw/normalization-core";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { describeBrowserScreenshot, neutralizeMediaDirectives } from "./vision.js";
 
 const prompt =
@@ -30,7 +31,6 @@ beforeEach(() => {
   save.mockReset().mockResolvedValue({ path: "/tmp/resized.jpg" });
 });
 const filePath = "/tmp/screenshot.png";
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 function screenshot(overrides: Partial<Parameters<typeof describeBrowserScreenshot>[0]> = {}) {
   return describeBrowserScreenshot({ cfg: {}, filePath, ...overrides });
 }
@@ -62,10 +62,10 @@ describe("describeBrowserScreenshot", () => {
   });
 
   it.each([
-    [undefined, "main"],
-    ["worker", "worker"],
-    ["worker", "main"],
-  ] as const)("checks agent %s against session owner %s", async (agentId, owner) => {
+    { name: "session-owned default", agentId: undefined, owner: "main" },
+    { name: "explicit matching worker", agentId: "worker", owner: "worker" },
+    { name: "conflicting worker", agentId: "worker", owner: "main" },
+  ])("checks the $name identity without an agent directory", async ({ agentId, owner }) => {
     const result = screenshot({
       agentId,
       mediaScope: { sessionKey: `agent:${owner}:webchat:direct:123` },
@@ -86,16 +86,28 @@ describe("describeBrowserScreenshot", () => {
       buffer: Buffer.from("small"),
       contentType: "image/jpeg" as const,
     });
-    const image = path.join(tempDirs.make("browser-vision-"), "screenshot.png");
+    const dir = await mkdtemp(path.join(os.tmpdir(), "browser-vision-"));
+    const image = path.join(dir, "screenshot.png");
     await writeFile(image, Buffer.from("image"));
-    await screenshot({
-      cfg: { browser: {} },
-      filePath: image,
-      imageSanitization: { maxDimensionPx: 800 },
-    });
+    try {
+      await screenshot({
+        cfg: { browser: {} },
+        filePath: image,
+        imageSanitization: { maxDimensionPx: 800 },
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
     expect(normalize).toHaveBeenCalledWith(Buffer.from("image"), { maxSide: 800 });
     expect(save).toHaveBeenCalledWith(Buffer.from("small"), "image/jpeg", "browser");
-    expect(describeImage.mock.calls[0]?.[0]).toMatchObject({ filePath: "/tmp/resized.jpg" });
+    expect(expectDefined(describeImage.mock.calls[0]?.[0], "browser vision request").filePath).toBe(
+      "/tmp/resized.jpg",
+    );
+  });
+
+  it("returns null when image understanding is skipped or unconfigured", async () => {
+    describeImage.mockResolvedValue({ text: undefined, decision: { outcome: "skipped" } });
+    await expect(screenshot({ cfg: { browser: {} } })).resolves.toBeNull();
   });
 });
 

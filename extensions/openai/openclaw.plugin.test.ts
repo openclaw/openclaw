@@ -103,6 +103,27 @@ it.each([
 
 it("labels and orders OpenAI authentication choices", () => {
   expect(choice("openai")).not.toHaveProperty("deprecatedChoiceIds");
+  const group = {
+    groupId: "openai",
+    groupLabel: "OpenAI",
+    groupHint: "Codex login, Sign in with ChatGPT (Beta), or API key",
+  };
+  for (const [id, choiceLabel, choiceHint] of [
+    ["openai", "Codex login (browser)", "Sign in to Codex locally with your ChatGPT account"],
+    [
+      "openai-device-code",
+      "Codex login (device code)",
+      "Use a browser code when OpenClaw runs on a remote VM",
+    ],
+    ["openai-api-key", "OpenAI API Key", "Use your OpenAI API key directly"],
+    [
+      "openai-token-sharing",
+      "Sign in with ChatGPT (Beta)",
+      "Authorize OpenClaw for eligible Responses models using your Codex allowance",
+    ],
+  ] as const) {
+    expect(choice(id)).toMatchObject({ choiceLabel, choiceHint, ...group });
+  }
   for (const id of ["openai", "openai-device-code"]) {
     expect(choice(id)).not.toHaveProperty("assistantVisibility");
   }

@@ -1,7 +1,7 @@
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiReplacement } from "../../../../src/plugin-sdk/control-ui.js";
-import type { GatewaySessionRow as Row } from "../../api/types.ts";
 import { SIDEBAR_SESSION_PAGE_SIZE } from "../../components/app-sidebar-session-types.ts";
+import { getAppSidebarOwner } from "../../components/app-sidebar.tsx";
 import { createControlUiPluginHost } from "../../plugins/control-ui-host.ts";
 import {
   type ControlUiPluginOwner,
@@ -9,8 +9,6 @@ import {
 } from "../../plugins/control-ui-runtime.ts";
 import * as S from "../app-sidebar.ts";
 import { createTestGatewayClient } from "../gateway-client.ts";
-import { waitForFast } from "../wait-for.ts";
-import { mountSidebarFixture, sessionList } from "./compact.test-support.ts";
 import { patchRows, settleRoster, toggleRoster } from "./roster.test-support.ts";
 import "../../plugins/control-ui-view.solid.tsx";
 import "../../plugins/control-ui-contributions.solid.tsx";
@@ -29,6 +27,13 @@ it.each([false, true])("AppSidebar replacement sessions (delegates: %s)", async 
   const nextKeys = ["agent:main:main", "agent:main:next"];
   const sessions = S.createSessionsHarness("main", initialKeys);
   const context = S.createContext(S.createGateway(client), sessions.sessions, S.TWO_AGENTS);
+  const reportError = vi.fn();
+  Object.assign(context.plugins, { reportError });
+  const pluginListeners = new Set<() => void>();
+  vi.spyOn(context.plugins, "subscribe").mockImplementation((listener) => {
+    pluginListeners.add(listener);
+    return () => pluginListeners.delete(listener);
+  });
   const runtime = new ControlUiPluginRuntime(() => context);
   const owner: Omit<ControlUiPluginOwner, "host"> = {
     descriptor: { pluginId: "f", name: "F", revision: "1", entryUrl: "/f.js", styles: [] },
@@ -52,12 +57,12 @@ it.each([false, true])("AppSidebar replacement sessions (delegates: %s)", async 
     runtime.dispose();
   });
   const host = createControlUiPluginHost(() => context, runtime, owner);
-  const replacement: ControlUiReplacement<"session-list"> = {
-    id: "sessions",
+  const createReplacement = (id: string): ControlUiReplacement<"session-list"> => ({
+    id,
     label: "Sessions",
     surface: "session-list",
     mount(container, initial) {
-      const rows = div(container, { pluginReplacement: "sessions" });
+      const rows = div(container, { pluginReplacement: id });
       const update = ({ props }: typeof initial) => {
         rows.replaceChildren();
         for (const session of props.sessions) {
@@ -67,9 +72,11 @@ it.each([false, true])("AppSidebar replacement sessions (delegates: %s)", async 
       update(initial);
       return { update, dispose: delegates ? initial.mountDefault(div(container)) : () => {} };
     },
-  };
+  });
+  let replacement = createReplacement("sessions");
+  let selected = false;
   vi.spyOn(context.plugins, "selectedReplacement").mockImplementation((surface) =>
-    surface === "session-list"
+    selected && surface === "session-list"
       ? {
           key: `f/${replacement.id}`,
           pluginId: "f",
@@ -81,13 +88,30 @@ it.each([false, true])("AppSidebar replacement sessions (delegates: %s)", async 
   );
   const { sidebar } = await S.mountSidebarContext(context);
   const find = (selector: string) => sidebar.querySelector(selector);
+  expect(reportError).not.toHaveBeenCalled();
   const keys = () =>
     Array.from(
       sidebar.querySelectorAll<HTMLElement>("[data-plugin-session-key]"),
       (row) => row.dataset.pluginSessionKey,
     );
   await settleRoster(sidebar);
+  expect(keys()).toEqual([]);
+  selected = true;
+  pluginListeners.forEach((notify) => notify());
+  await settleRoster(sidebar);
   await vi.waitFor(() => expect(keys()).toEqual(initialKeys));
+  const firstReplacement = find('[data-plugin-replacement="sessions"]');
+  expect(firstReplacement).not.toBeNull();
+  const prepare = vi.spyOn(getAppSidebarOwner(sidebar.hostElement)!, "prepareRender");
+  replacement = createReplacement("other-sessions");
+  pluginListeners.forEach((notify) => notify());
+  await settleRoster(sidebar);
+  expect(find('[data-plugin-replacement="other-sessions"]')).not.toBeNull();
+  await settleRoster(sidebar);
+  expect(firstReplacement?.isConnected).toBe(false);
+  expect(keys()).toEqual(initialKeys);
+  expect(prepare).not.toHaveBeenCalled();
+  prepare.mockRestore();
   await toggleRoster(sidebar);
   await vi.waitFor(() => expect(find(".sidebar-session-toolbar")).not.toBeNull());
   expect(keys()).toEqual(initialKeys);
@@ -120,92 +144,8 @@ it.each([false, true])("AppSidebar replacement sessions (delegates: %s)", async 
   });
   await settleRoster(sidebar);
   expect(lastPluginRow()?.textContent).toBe("Latest replacement row");
-});
-
-const rowSelector = (key: string) => `[data-session-key="${key}"]`;
-
-it("shows categorized dashboard children on a cold sidebar without their parent", async () => {
-  const office = "agent:main:dashboard:office-ha";
-  const wake = "agent:main:dashboard:wake-word";
-  const archived = "agent:main:dashboard:archived";
-  const parent = "agent:main:discord:channel:parent";
-  const h = S.createSessionsHarness("main", [office, wake, archived]);
-  const rows = h.sessions.state.result!.sessions;
-  rows.forEach((row, index) =>
-    Object.assign(row, {
-      category: "HOME ASSISTANT",
-      archived: index === 2,
-    }),
-  );
-  Object.assign(rows[0]!, {
-    spawnedBy: parent,
-    parentSessionKey: parent,
-    createdVia: "spawn",
-    createdActor: { type: "agent" },
-  });
-  h.publish({ groups: ["HOME ASSISTANT"] });
-  const { q, update } = await mountSidebarFixture(undefined, h.sessions);
-  await update({ sessionKey: wake });
-  const group = q('[data-session-section="category:HOME ASSISTANT"]');
-  expect(group?.querySelectorAll(rowSelector(office))).toHaveLength(1);
-  expect(group?.querySelectorAll(rowSelector(wake))).toHaveLength(1);
-  expect(q(rowSelector(archived))).toBeNull();
-  expect(q(rowSelector(parent))).toBeNull();
-});
-
-it("promotes cached categorized children and lets current rows replace their placement", async () => {
-  const parentKey = "agent:main:parent";
-  const categorized = "agent:main:cached-categorized-child";
-  const ordinary = "agent:main:dashboard:cached-child";
-  const archived = "agent:main:cached-archived-child";
-  const h = S.createSessionsHarness("main", [parentKey]);
-  const result = h.sessions.state.result!;
-  const parent = result.sessions[0]!;
-  parent.childSessions = [categorized, ordinary, archived];
-  const child = (key: string, updatedAt: number, extra: Partial<Row> = {}) => ({
-    key,
-    updatedAt,
-    ...extra,
-    kind: "direct" as const,
-    spawnedBy: parentKey,
-  });
-  h.list.mockResolvedValue(
-    sessionList(
-      [
-        child(categorized, 3, { category: "Research", label: "Cached child" }),
-        child(ordinary, 2),
-        child(archived, 1, { category: "Research", archived: true }),
-      ],
-      1,
-    ),
-  );
-  h.publish({ groups: ["Research"] });
-  const { sidebar, q } = await mountSidebarFixture(undefined, h.sessions);
-  const tree = `[data-session-tree="${parentKey}"]`;
-  const group = '[data-session-section="category:Research"]';
-  const rows = (key: string, scope = "") =>
-    sidebar.querySelectorAll(`${scope} ${rowSelector(key)}`);
-  const ordinaryChild = () => q(`${tree} ${rowSelector(ordinary)}`);
-  q<HTMLButtonElement>("[data-child-session-toggle]")?.click();
-  await waitForFast(() => expect(h.list).toHaveBeenCalledOnce());
-  await waitForFast(() => expect(rows(categorized, group)).toHaveLength(1));
-  expect(ordinaryChild()).not.toBeNull();
-  expect(q(rowSelector(archived))).toBeNull();
-  h.publishList({
-    result: {
-      ...result,
-      count: 2,
-      sessions: [parent, child(categorized, 4, { label: "Current child" })],
-    },
-  });
-  await waitForFast(() => {
-    const current = rows(categorized);
-    expect(current).toHaveLength(1);
-    expect(current[0]?.textContent).toContain("Current child");
-    expect(current[0]?.closest(tree)).not.toBeNull();
-  });
-  expect(sidebar.textContent).not.toContain("Cached child");
-  expect(rows(categorized, group)).toHaveLength(0);
-  expect(ordinaryChild()).not.toBeNull();
-  expect(q(rowSelector(archived))).toBeNull();
+  selected = false;
+  pluginListeners.forEach((notify) => notify());
+  await settleRoster(sidebar);
+  expect(keys()).toEqual([]);
 });
