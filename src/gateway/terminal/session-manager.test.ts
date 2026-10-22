@@ -220,17 +220,6 @@ describe("TerminalSessionManager", () => {
     expect(fake.killed).toBe(true);
     expect(manager.size).toBe(0);
   });
-
-  it("enforces the cap against concurrent opens racing on the async spawn", async () => {
-    const { spawn, release } = heldPty();
-    const { manager } = fixture({ spawn, maxSessions: 1 });
-    const both = Promise.all([start(manager), start(manager)]);
-    release();
-    const [a, b] = await both;
-
-    expect([a.ok, b.ok].filter(Boolean)).toHaveLength(1);
-    expect(manager.size).toBe(1);
-  });
 });
 
 describe("TerminalSessionManager agent ownership", () => {

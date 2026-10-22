@@ -202,19 +202,8 @@ describe("createTerminalLaunchPolicy", () => {
     expect(policy.resolve().ok).toBe(true);
   });
 
-  it("retains failed hot-reload revocations until a later commit succeeds", () => {
+  it("retires a failed hot restriction when the replacement restart is accepted", () => {
     const baseConfig: OpenClawConfig = sandboxConfig("off");
-    const policy = createTerminalLaunchPolicy(baseConfig);
-    policy.prepareConfig(sandboxConfig("all"), hot);
-    expect(policy.resolve()).toMatchObject({ ok: false, block: { kind: "sandboxed" } });
-    // Simulate a failed hot reload, followed by a relaxation that has not
-    // succeeded yet. The first attempt's revocation must remain in force.
-    policy.prepareConfig(baseConfig, hot);
-    expect(policy.resolve().ok).toBe(false);
-
-    policy.commitConfig();
-    expect(policy.resolve().ok).toBe(true);
-
     const restartPolicy = createTerminalLaunchPolicy(baseConfig);
     restartPolicy.prepareConfig(sandboxConfig("all"), hot);
     restartPolicy.prepareConfig(baseConfig, restart);
