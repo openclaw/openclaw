@@ -360,7 +360,11 @@ async function runServerCommand(
       { timeout: timeoutMs, signal, windowsHide: true },
       (error, stdout, stderr) => {
         if (error) {
-          reject(signal?.aborted ? signal.reason : formatError(error, stderr));
+          reject(
+            signal?.aborted
+              ? toErrorObject(signal.reason, "Installation cancelled")
+              : formatError(error, stderr),
+          );
         } else {
           resolve(`${stdout}${stderr}`.trim());
         }
