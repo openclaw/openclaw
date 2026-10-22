@@ -98,11 +98,8 @@ export function createRuntimeConfigCapability(
     task();
     publish();
   };
-  const loadOnce = async (
-    key: "config" | "schema",
-    task: () => Promise<unknown>,
-  ): Promise<void> => {
-    await (loads.get(key) ?? run(task, key));
+  const loadConfigOnce = async (task: () => Promise<unknown>): Promise<void> => {
+    await (loads.get("config") ?? run(task, "config"));
   };
 
   const loadSchema = () => {
@@ -120,9 +117,7 @@ export function createRuntimeConfigCapability(
       state.configNeedsApply &&
       state.configSnapshot?.appliedConfigHash !== undefined,
     refresh: (isCurrent) =>
-      loadOnce("config", () =>
-        loadConfig(state, { background: true, draftWrites: writes }, isCurrent),
-      ),
+      loadConfigOnce(() => loadConfig(state, { background: true, draftWrites: writes }, isCurrent)),
   });
   const refreshConnectionState = (
     beforeApplySnapshot?: () => void,
@@ -173,7 +168,7 @@ export function createRuntimeConfigCapability(
 
   const ensureLoaded = async () => {
     if (!state.configSnapshot) {
-      await loadOnce("config", () => loadConfig(state, { draftWrites: writes }));
+      await loadConfigOnce(() => loadConfig(state, { draftWrites: writes }));
     }
     appliedRefresh.reconcile();
   };
