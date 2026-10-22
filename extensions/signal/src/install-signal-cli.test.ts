@@ -32,6 +32,7 @@ vi.mock("openclaw/plugin-sdk/setup-tools", async (importOriginal) => {
   };
 });
 
+// mock-isolation: Inspect installer commands without executing host processes.
 vi.mock("openclaw/plugin-sdk/run-command", () => ({
   runPluginCommandWithTimeout: runMock,
 }));

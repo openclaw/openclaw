@@ -216,7 +216,9 @@ describe("OpenRouter OAuth", () => {
     );
     expect(releaseGuard).toHaveBeenCalledTimes(1);
     const [exchangeUrl, exchangeInit] = fetchImpl.mock.calls[0]!;
-    expect(String(exchangeUrl)).toBe("https://openrouter.ai/api/v1/auth/keys");
+    expect(exchangeUrl instanceof Request ? exchangeUrl.url : String(exchangeUrl)).toBe(
+      "https://openrouter.ai/api/v1/auth/keys",
+    );
     expect(exchangeInit?.method).toBe("POST");
     expect(new Headers(exchangeInit?.headers).get("content-type")).toBe("application/json");
     const exchangeBody = requestJsonBody(exchangeInit);

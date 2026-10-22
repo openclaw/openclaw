@@ -27,7 +27,7 @@ type SignalToolResultMocks = {
   assertSignalDaemonEndpointAvailableMock: MockFn;
   spawnSignalDaemonMock: MockFn;
 };
-export const signalToolResultMocks: SignalToolResultMocks = vi.hoisted(() => ({
+const signalToolResultMocks: SignalToolResultMocks = vi.hoisted(() => ({
   waitForTransportReadyMock: vi.fn(),
   enqueueSystemEventMock: vi.fn(),
   sendMock: vi.fn(),
@@ -41,6 +41,7 @@ export const signalToolResultMocks: SignalToolResultMocks = vi.hoisted(() => ({
   assertSignalDaemonEndpointAvailableMock: vi.fn(),
   spawnSignalDaemonMock: vi.fn(),
 }));
+export { signalToolResultMocks };
 const {
   waitForTransportReadyMock,
   enqueueSystemEventMock,
@@ -258,6 +259,7 @@ vi.mock("./client.js", async () => ({
   signalRpcRequest: signalRpcRequestMock,
 }));
 
+// mock-isolation: Exercise ingress settlement without opening a daemon transport.
 vi.mock("./client-adapter.js", () => ({
   streamSignalEvents: streamMock,
   signalCheck: signalCheckMock,
@@ -286,6 +288,7 @@ vi.mock("openclaw/plugin-sdk/system-event-runtime", async () => {
   };
 });
 
+// mock-isolation: Drive readiness explicitly without polling a live daemon.
 vi.mock("openclaw/plugin-sdk/transport-ready-runtime", () => ({
   waitForTransportReady: waitForTransportReadyMock,
 }));

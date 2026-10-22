@@ -12,10 +12,12 @@ const mocks = vi.hoisted(() => ({
   rejectHardlinks: vi.fn(() => true),
 }));
 
+// mock-isolation: Supply only synthetic plugin records from each temporary fixture.
 vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: mocks.metadata,
 }));
 
+// mock-isolation: Keep config discovery scoped to the synthetic plugin registry.
 vi.mock("../config/io.plugin-metadata.js", () => ({
   resolveConfigWidePluginManifestRegistry: (...args: unknown[]) => {
     const snapshot = mocks.metadata(...args);
@@ -23,10 +25,12 @@ vi.mock("../config/io.plugin-metadata.js", () => ({
   },
 }));
 
+// mock-isolation: Control bundled fallback without loading installed plugin code.
 vi.mock("../plugins/public-surface-loader.js", () => ({
   loadBundledPluginPublicArtifactModuleFromCandidatesSync: mocks.artifact,
 }));
 
+// mock-isolation: Select each filesystem policy branch independently of the host.
 vi.mock("../plugins/hardlink-policy.js", () => ({
   shouldRejectHardlinkedPluginFiles: mocks.rejectHardlinks,
 }));

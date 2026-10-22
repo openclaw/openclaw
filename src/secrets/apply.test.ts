@@ -55,6 +55,7 @@ const { prepareSecretsRuntimeSnapshotMock } = vi.hoisted(() => ({
   ),
 }));
 
+// mock-isolation: Exercise apply publication without installing a live secrets runtime.
 vi.mock("./runtime.js", () => ({
   clearSecretsRuntimeSnapshot: vi.fn(),
   prepareSecretsRuntimeSnapshot: prepareSecretsRuntimeSnapshotMock,

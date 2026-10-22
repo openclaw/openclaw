@@ -81,7 +81,9 @@ async function prepareInput(input: SetupInput, cfg: OpenClawConfig = {}) {
   return inputWithTransport;
 }
 
-beforeEach(() => detectSignalTransportMock.mockReset());
+beforeEach(() => {
+  detectSignalTransportMock.mockReset();
+});
 
 it("uses setup-time container detection for a bare HTTP URL", async () => {
   detectSignalTransportMock.mockResolvedValue(container(url));
