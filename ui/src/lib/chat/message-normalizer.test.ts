@@ -16,6 +16,10 @@ function attachment(fields: Record<string, unknown>, type = "attachment") {
   return { type, attachment: fields };
 }
 
+const media = (url: string, kind: string, label: string, mimeType?: string) =>
+  attachment({ url, kind, label, ...(mimeType ? { mimeType } : {}) });
+const text = (value: string) => ({ type: "text", text: value });
+
 function assistant(content: unknown, fields: Record<string, unknown> = {}) {
   return normalizeMessage({ role: "assistant", content, ...fields });
 }
@@ -44,7 +48,7 @@ describe("message-normalizer", () => {
 
   it("keeps Responses text after malformed content blocks", () => {
     expect(assistant([null, { type: "output_text", text: "Visible answer" }]).content).toEqual([
-      { type: "text", text: "Visible answer" },
+      text("Visible answer"),
     ]);
   });
 
@@ -77,8 +81,8 @@ describe("message-normalizer", () => {
     expect(normalizeMessage(message)).toBe(initial);
     const replacement = normalizeMessage({ ...message, content: "finished answer" });
     expect(replacement).not.toBe(initial);
-    expect(replacement.content).toEqual([{ type: "text", text: "finished answer" }]);
-    expect(initial.content).toEqual([{ type: "text", text: "answer" }]);
+    expect(replacement.content).toEqual([text("finished answer")]);
+    expect(initial.content).toEqual([text("answer")]);
   });
 
   it("does not cache a missing timestamp's clock fallback", () => {
@@ -93,18 +97,16 @@ describe("message-normalizer", () => {
   });
 
   it("keeps user directives literal", () => {
-    const text = "MEDIA:/tmp/example.png\n[[reply_to_current]]";
-    const result = user({ text });
-    expect(result.content).toEqual([{ type: "text", text }]);
+    const literal = "MEDIA:/tmp/example.png\n[[reply_to_current]]";
+    const result = user({ text: literal });
+    expect(result.content).toEqual([text(literal)]);
     expect([result.replyTarget, result.audioAsVoice]).toEqual([undefined, undefined]);
   });
 
   it("accepts assistant Responses input blocks but rejects user output blocks", () => {
-    expect(assistant([{ type: "input_text", text: "Answer" }]).content).toEqual([
-      { type: "text", text: "Answer" },
-    ]);
+    expect(assistant([{ type: "input_text", text: "Answer" }]).content).toEqual([text("Answer")]);
     expect(user({ content: [{ type: "output_text", text: "Answer" }] }).content).not.toContainEqual(
-      { type: "text", text: "Answer" },
+      text("Answer"),
     );
   });
 
@@ -116,7 +118,7 @@ describe("message-normalizer", () => {
       assistant([
         { type: "audio", label: "clip.mp3", source: { ...source, media_type: "audio/mpeg" } },
       ]).content,
-    ).toEqual([attachment({ url, kind: "audio", label: "clip.mp3", mimeType: "audio/mpeg" })]);
+    ).toEqual([media(url, "audio", "clip.mp3", "audio/mpeg")]);
   });
 
   it("preserves managed audio playback, voice, and artifact metadata", () => {
@@ -148,7 +150,7 @@ describe("message-normalizer", () => {
     expect(
       assistant('Here.\n[embed ref="cv_status" title="Status" height="320" /]').content,
     ).toEqual([
-      { type: "text", text: "Here." },
+      text("Here."),
       canvas({
         viewId: "cv_status",
         url: "/__openclaw__/canvas/documents/cv_status/index.html",
@@ -172,7 +174,7 @@ describe("message-normalizer", () => {
         { type: "text", text: 'Ready.\n[embed ref="cv_widget" title="Widget" /]' },
         canonical,
       ]).content,
-    ).toEqual([{ type: "text", text: "Ready." }, canonical]);
+    ).toEqual([text("Ready."), canonical]);
   });
 
   it("extracts ordered MEDIA attachments with persisted delivery facts", () => {
@@ -183,19 +185,11 @@ describe("message-normalizer", () => {
     expect(result.replyTarget).toEqual({ kind: "id", id: "thread-123" });
     expect(result.audioAsVoice).toBe(true);
     expect(result.content).toEqual([
-      { type: "text", text: "Intro" },
+      text("Intro"),
+      media("https://example.com/image.png", "image", "image.png", "image/png"),
+      text("Outro"),
       attachment({
-        url: "https://example.com/image.png",
-        kind: "image",
-        label: "image.png",
-        mimeType: "image/png",
-      }),
-      { type: "text", text: "Outro" },
-      attachment({
-        url: "https://example.com/voice.ogg",
-        kind: "audio",
-        label: "voice.ogg",
-        mimeType: "audio/ogg",
+        ...media("https://example.com/voice.ogg", "audio", "voice.ogg", "audio/ogg").attachment,
         isVoiceNote: true,
       }),
     ]);
@@ -221,22 +215,17 @@ describe("message-normalizer", () => {
       ]).content,
     ).toEqual([
       canvas({ url: "/canvas/one" }),
-      attachment({ kind: "video", url: "/media/clip", label: "Video" }),
-      attachment({ kind: "document", url: "/media/document", label: "Document" }),
+      media("/media/clip", "video", "Video"),
+      media("/media/document", "document", "Document"),
     ]);
   });
 
   it("classifies MEDIA paths without leaking filename text", () => {
     const url = "/tmp/Shopping report.pdf";
     expect(assistant(`Before\nMEDIA:${url}\nAfter`).content).toEqual([
-      { type: "text", text: "Before" },
-      attachment({
-        url,
-        label: "Shopping report.pdf",
-        kind: "document",
-        mimeType: "application/pdf",
-      }),
-      { type: "text", text: "After" },
+      text("Before"),
+      media(url, "document", "Shopping report.pdf", "application/pdf"),
+      text("After"),
     ]);
   });
 
@@ -256,12 +245,7 @@ describe("message-normalizer", () => {
 
   it("preserves named failures beside delivered attachments", () => {
     const content = [
-      attachment({
-        url: "/media/deploy.yaml",
-        kind: "document",
-        label: "deploy.yaml",
-        mimeType: "application/yaml",
-      }),
+      media("/media/deploy.yaml", "document", "deploy.yaml", "application/yaml"),
       ...[
         ["unsupported-format", "settings.toml", "application/toml"],
         ["delivery-failed", "bundle.7z", "application/x-7z-compressed"],
@@ -283,9 +267,7 @@ describe("message-normalizer", () => {
       openclawDelivery: { replyToCurrent: true, replyToId: "  " },
     });
     expect(result.replyTarget).toEqual({ kind: "current" });
-    expect(result.content).toEqual([
-      attachment({ kind: "audio", url: "/media/voice.ogg", label: "Audio" }),
-    ]);
+    expect(result.content).toEqual([media("/media/voice.ogg", "audio", "Audio")]);
   });
 
   it("prefers trimmed transcript reply metadata over delivery facts", () => {
@@ -349,6 +331,6 @@ describe("message-normalizer", () => {
   ])("normalizes forwarded source attribution %j", (source, expected) => {
     const result = assistant("Forwarded report", { senderSession: source });
     expect(result.senderSession).toStrictEqual(expected);
-    expect(result.content).toEqual([{ type: "text", text: "Forwarded report" }]);
+    expect(result.content).toEqual([text("Forwarded report")]);
   });
 });
