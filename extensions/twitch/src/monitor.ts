@@ -145,10 +145,7 @@ export async function monitorTwitchProvider(options: TwitchMonitorOptions) {
             event: { mayPair: false },
             mentionFacts: {
               canDetectMention: true,
-              wasMentioned: mentionsBot(
-                message.message,
-                normalizeLowercaseStringOrEmpty(account.username),
-              ),
+              wasMentioned: mentionsBot(message.message, account.username),
             },
             dmPolicy: "open",
             groupPolicy: policyKind === "open" ? "open" : "allowlist",

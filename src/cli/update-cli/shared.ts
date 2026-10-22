@@ -67,6 +67,8 @@ export type UpdateCommandOptions = Pick<UpdateRunResult, "sourceRuntimePrepared"
     /** Immutable original bytes for this invocation; never restoration authority. */
     originalRecoveryCapture?: UpdateRecoveryBaselineRef;
     defaultStepTimeoutMs?: number;
+    /** Retain the admitted SQLite writer allowance through finalization. */
+    busyTimeoutMs?: number;
     activationTimeoutMs?: number;
     /** Explicit operator budget, minted once by this invocation’s admission. */
     deadline?: import("../daemon-cli/restart-health-deadline.js").GatewayRestartDeadline;
@@ -617,7 +619,7 @@ export async function confirmUpdateDowngrade(params: {
       status: "skipped",
       reason: decision === "cancelled" ? "cancelled" : "downgrade-confirmation-required",
     },
-    { env: run.env },
+    run,
   );
   if (decision === "confirmation-required") {
     defaultRuntime.error(

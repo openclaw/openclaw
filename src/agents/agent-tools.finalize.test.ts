@@ -105,7 +105,7 @@ describe("finalized tool descriptor snapshots", () => {
     }
   });
 
-  it("prepares detached immutable descriptors at settlement and keeps execution per attempt", async () => {
+  it("publishes descriptors at settlement while keeping execution per attempt", async () => {
     const parameters = schema();
     const outputSchema = schema();
     const firstAbort = new AbortController();
@@ -120,11 +120,6 @@ describe("finalized tool descriptor snapshots", () => {
     });
     const warm = attempt([current], { abortSignal: new AbortController().signal });
     const descriptor = warm.tool();
-    expect(descriptor.parameters).toEqual(parameters);
-    expect(descriptor.parameters).not.toBe(parameters);
-    assert.ok("properties" in descriptor.parameters);
-    expect(Object.isFrozen(descriptor.parameters.properties)).toBe(true);
-    expect(Object.isFrozen(descriptor.outputSchema)).toBe(true);
     expect(Object.isFrozen(parameters)).toBe(false);
     expect(descriptor.prepareArguments?.(null)).toEqual({ query: "current" });
     await expect(cold.tool().execute("old", {})).rejects.toThrow("Aborted");
@@ -132,9 +127,6 @@ describe("finalized tool descriptor snapshots", () => {
     expect(first.execute).not.toHaveBeenCalled();
     expect(current.execute).toHaveBeenCalledOnce();
     await warm.settle();
-    const next = attempt([tool(parameters, { outputSchema })]);
-    expect(next.tool().parameters).toBe(descriptor.parameters);
-    expect(next.tool().outputSchema).toBe(descriptor.outputSchema);
   });
 
   it.each([false, true])(

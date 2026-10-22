@@ -200,7 +200,7 @@ export function LogsPage() {
       <ShellLayoutBoundary traits={{ logsPage: true, toolbarHeader: true }}>
         <section class="content-header">
           <div>
-            <div class="page-title">{t("tabs.logs")}</div>
+            <h1 class="page-title">{t("tabs.logs")}</h1>
           </div>
         </section>
         <SettingsWorkspace fillHeight>

@@ -93,10 +93,7 @@ export function SidebarImage(props: {
         content.mimeType === "image/svg+xml"
           ? await readBlobAsDataUrl(
               await convertImageBlobToPng(await (await fetch(content.src)).blob()),
-              {
-                readError: "Image could not be decoded",
-                invalidResultError: "Image could not be decoded",
-              },
+              "Image could not be decoded",
             )
           : content.src;
       if (isCurrentImage(content) && props.controls.active !== false) {

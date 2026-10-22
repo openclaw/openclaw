@@ -197,9 +197,14 @@ describe("resolveFollowupDeliveryDecision", () => {
     },
   );
 
-  it.each(["required", "optional", "result-required"] as const)(
-    "discards queued earlier answers after a %s silent final",
-    async (expectation) => {
+  it.each([
+    { expectation: "required", providerStarted: true },
+    { expectation: "optional", providerStarted: true },
+    { expectation: "result-required", providerStarted: true },
+    { expectation: "result-required", providerStarted: false },
+  ] as const)(
+    "discards queued earlier answers after a $expectation silent final (providerStarted: $providerStarted)",
+    async ({ expectation, providerStarted }) => {
       const { replyOperation, failMock } = createMockReplyOperation();
       const turn = createTurn({ operation: replyOperation });
       turn.queued.run.terminalReplyExpectation = expectation;
@@ -207,6 +212,7 @@ describe("resolveFollowupDeliveryDecision", () => {
       const execution = createSettledExecution();
       execution.outcome.result.meta = {
         durationMs: 0,
+        providerStarted,
         finalAssistantRawText: "NO_REPLY",
         yielded: true,
         yieldAcknowledgment: "An unsent confirmation",
@@ -218,7 +224,9 @@ describe("resolveFollowupDeliveryDecision", () => {
         accounting: createAccounting([{ text: "Earlier answer" }]),
       });
       expect(decision).toMatchObject({ kind: "suppress", reason: "silent" });
-      expect(failMock).toHaveBeenCalledTimes(expectation === "result-required" ? 1 : 0);
+      expect(failMock).toHaveBeenCalledTimes(
+        expectation === "result-required" && providerStarted ? 1 : 0,
+      );
     },
   );
 

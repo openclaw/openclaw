@@ -33,14 +33,6 @@ export function writeFiles(cwd: string, files: Record<string, string> | readonly
 
 export const testConfig = (name: string) => `test/vitest/vitest.${name}.config.ts`;
 
-export const boundaryShard = {
-  checkName: "checks-node-changed-boundary",
-  configs: [testConfig("boundary")],
-  requiresDist: false,
-  runner: "blacksmith-8vcpu-ubuntu-2404",
-  shardName: "changed-boundary",
-};
-
 export function fullOwnerPlan(runnerBackend?: string, changedPaths?: string[]) {
   return createNodeTestShardBundles({
     compactMode: "pull-request",
@@ -102,18 +94,13 @@ export function selectedFiles(shards: FileSelection) {
 
 export function isSerialNodeTestProjection(
   groups: readonly { shard_name: string }[] | undefined,
-  owner: Pick<CompactNodeTestShard, "planConcurrency" | "groups">,
+  owner: Pick<CompactNodeTestShard, "planConcurrency">,
 ): boolean {
   if (owner.planConcurrency !== 2 || !groups) {
     return false;
   }
-  // Singleton projections may then share a serial row with another canonical owner.
-  return (
-    groups.length === 1 ||
-    groups.some(
-      (candidate) => !owner.groups.some((group) => group.shard_name === candidate.shard_name),
-    )
-  );
+  // Selected-plan packing normalizes only a canonical two-plan singleton to serial admission.
+  return groups.length === 1;
 }
 
 export function expectCanonicalGroupedConcurrency(shards: Shards, runnerBackend?: string) {

@@ -203,6 +203,17 @@ using the trusted in-process Gateway runtime. It only routes review to those
 devices; each reviewer still needs `operator.approvals`, and the tool must not
 take reviewer IDs from model-authored arguments.
 
+`toolContext.runId` is the host run id of the agent turn that built the tool.
+`toolContext.inputProvenance` is the host-stamped origin of that turn's input,
+when its producer supplied one. A background exec completion wake carries
+`{ kind: "internal_system", sourceTool: "exec", runId }`, where `runId` names
+the run whose `exec` call started the command. Compare it with the `runId` the
+factory saw on that earlier turn in the same session to recognize the
+completion of work that turn started. Both fields are facts for plugin-owned
+policy, not authority: a wake is never an owner turn (`senderIsOwner` is not
+`true`), restart-recovered "Exec lost" notices carry no `runId`, and the
+Gateway `agent` method accepts exec provenance only from backend callers.
+
 A factory may return a core `AgentTool`, an array of them, or `null` or
 `undefined` to opt out, as the example above does. When it returns a concrete
 tool, that tool uses the core runtime signature

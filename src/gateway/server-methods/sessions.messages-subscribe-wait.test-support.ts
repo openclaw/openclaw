@@ -7,7 +7,10 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { createOperatorApprovalSessionEventRuntime } from "../operator-approval-session-events.js";
 import { createSessionMessageSubscriberRegistry } from "../server-chat-state.js";
 import { handleGatewayRequest } from "../server-methods.js";
@@ -22,16 +25,37 @@ import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import { disposeSessionReadContexts } from "./sessions-read-cache.test-support.js";
 import { sessionSubscriptionHandlers } from "./sessions-subscriptions.js";
 
+export async function prepareSubscriptionFixture(
+  state: OpenClawTestState,
+  name: string,
+  readScope = "operator.sessions.read",
+) {
+  const cfg = rolePolicyConfig();
+  cfg.gateway!.roles!.definitions.view!.scopes.push("operator.approvals");
+  await state.writeConfig(cfg);
+  setRuntimeConfigSnapshot(cfg);
+  const client = { ...roleClient("view", `${name}-reader`), connId: `${name}-reader` };
+  client.connect.scopes = [readScope, "operator.approvals"];
+  client.connect.device = sharingPolicyClient({ deviceId: `${name}-device` }).connect.device;
+  const subscribers = createSessionMessageSubscriberRegistry();
+  const runtime = createOperatorApprovalSessionEventRuntime({
+    clients: [client],
+    sessionMessageSubscribers: subscribers,
+    broadcastToConnIds: () => {},
+  });
+  return { cfg, client, subscribers, runtime };
+}
+
 /** Hold display preparation at its owner, whether facts come from receipts or a worker. */
 export async function proveSubscriptionDoesNotWaitForDisplayRows(
   sessionCount: number,
   signal: AbortSignal,
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const cfg = rolePolicyConfig();
-    cfg.gateway!.roles!.definitions.view!.scopes.push("operator.approvals");
-    await state.writeConfig(cfg);
-    setRuntimeConfigSnapshot(cfg);
+    const { cfg, client, subscribers, runtime } = await prepareSubscriptionFixture(
+      state,
+      "dirty-row",
+    );
     const sessionId = "subscribe-dirty-row";
     const scope = { agentId: "main", sessionKey: `agent:main:${sessionId}`, sessionId };
     const { sessionKey } = scope;
@@ -44,15 +68,6 @@ export async function proveSubscriptionDoesNotWaitForDisplayRows(
         { sessionId: `subscribe-neighbor-${index}`, updatedAt: 1, visibility: "shared" },
       );
     }
-    const client = { ...roleClient("view", "dirty-row-reader"), connId: "dirty-row-reader" };
-    client.connect.scopes = ["operator.sessions.read", "operator.approvals"];
-    client.connect.device = sharingPolicyClient({ deviceId: "dirty-row-device" }).connect.device;
-    const subscribers = createSessionMessageSubscriberRegistry();
-    const runtime = createOperatorApprovalSessionEventRuntime({
-      clients: [client],
-      sessionMessageSubscribers: subscribers,
-      broadcastToConnIds: () => {},
-    });
     const runId = "subscribe-active-turn";
     registerAgentRunContext(runId, { ...scope, projectSessionActive: true });
     const context = await createHistoryReadContext({

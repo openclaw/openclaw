@@ -3,7 +3,6 @@ import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { expectAttachmentErrorToast } from "./chat-attachment-toast.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Client-side video compression" });
@@ -19,6 +18,48 @@ const upload = (page: Page, name: string, buffer = oversized) =>
     .setInputFiles({ name, mimeType: "video/mp4", buffer });
 
 suite.define(() => {
+  it("contains a long filename beside another video on mobile", () =>
+    suite.withPage(
+      { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true },
+      async ({ page }) => {
+        await installMockGateway(page, { attachmentMaxBytes: limit });
+        await page.goto(suite.server.baseUrl + "chat");
+        await page
+          .locator(".agent-chat__composer-combobox textarea")
+          .fill("Compare the two recordings.");
+        await upload(page, "clip.mp4", video);
+        const normal = page
+          .locator(".chat-attachment-thumb")
+          .filter({ has: button(page, "Remove clip.mp4") });
+        await normal.locator(".chat-attachment-file").waitFor();
+        await upload(page, "ScreenRecording_10-21-2026 09-53-48_1.mp4");
+        const offer = page
+          .locator(".chat-attachment-thumb")
+          .filter({ has: button(page, "Compress to fit") });
+        await offer.waitFor();
+        expect((await offer.locator(".chat-attachment-remove svg").boundingBox())?.width).toBe(
+          (await normal.locator(".chat-attachment-remove svg").boundingBox())?.width,
+        );
+        const normalBox = (await normal.boundingBox())!;
+        const offerBox = (await offer.boundingBox())!;
+        expect(offerBox.height).toBe(normalBox.height);
+        expect(offerBox.y).toBe(normalBox.y);
+        const name = offer.locator(".chat-attachment-file__name");
+        const clipping = await name.evaluate((element) => ({
+          clipped: element.scrollWidth > element.clientWidth,
+          text: element.textContent,
+        }));
+        expect(clipping).toEqual({
+          clipped: true,
+          text: "ScreenRecording_10-21-2026 09-53-48_1.mp4",
+        });
+        const nameBox = (await name.boundingBox())!;
+        expect(nameBox.x + nameBox.width).toBeLessThanOrEqual(offerBox.x + offerBox.width);
+        await button(page, "Remove ScreenRecording_10-21-2026 09-53-48_1.mp4").click();
+        expect(await normal.count()).toBe(1);
+      },
+    ));
+
   it("loads the encoder only after consent and sends a playable bounded copy", () =>
     suite.withPage({ viewport: { width: 1280, height: 800 } }, async ({ page }) => {
       const requests: string[] = [];
@@ -64,7 +105,7 @@ suite.define(() => {
         attachments: Array<{ content: string; mimeType: string; fileName: string }>;
       };
       const output = params.attachments[0]!;
-      expect(output.fileName).toMatch(/^screen-compressed\.(mp4|webm)$/u);
+      expect(output.fileName).toMatch(/^screen\.(mp4|webm)$/u);
       const bytes = Buffer.from(output.content, "base64");
       expect(bytes.length).toBeGreaterThan(0);
       expect(bytes.length).toBeLessThanOrEqual(limit);
@@ -99,12 +140,15 @@ suite.define(() => {
         { viewport, isMobile: mobile, hasTouch: mobile, colorScheme: "dark" },
         async ({ page, context }) => {
           const gateway = await installMockGateway(page, { attachmentMaxBytes: limit });
+          let unavailable = true;
           // Remove WebCodecs from the real worker before its script is cached.
           await context.route("**/chat-attachment-video.worker-*.js", async (route) => {
             const response = await route.fetch();
             await route.fulfill({
               response,
-              body: "globalThis.VideoEncoder = undefined;\n" + (await response.text()),
+              body:
+                (unavailable ? "globalThis.VideoEncoder = undefined;\n" : "") +
+                (await response.text()),
             });
           });
           await page.goto(suite.server.baseUrl + "chat");
@@ -116,19 +160,13 @@ suite.define(() => {
                 path: path.join(suite.artifactDir, `${device}-compression-failed.png`),
               });
             }
-            const toast = page.locator(".app-toast");
-            await toast.getByText(error, { exact: true }).waitFor();
-            if (capture && process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR) {
-              await page.screenshot({
-                path: path.join(suite.artifactDir, `${device}-compression-failed-toast.png`),
-              });
-            }
-            await expectAttachmentErrorToast(toast);
-            const bounds = (await toast.boundingBox())!;
-            expect(bounds.x + bounds.width / 2).toBeCloseTo(viewport.width / 2, 0);
-            expect(bounds.y).toBeLessThan(viewport.height / 4);
-            expect(await page.locator(".chat-attachment-thumb").count()).toBe(0);
-            expect(await page.locator(".chat-attachment-failures").count()).toBe(0);
+            await page
+              .locator(".chat-attachment-thumb")
+              .getByRole("status")
+              .filter({ hasText: error })
+              .waitFor();
+            await button(page, "Retry compression").waitFor();
+            expect(await page.locator(".app-toast").count()).toBe(0);
             expect(await page.locator(".agent-chat__composer-combobox textarea").inputValue()).toBe(
               "Keep this draft.",
             );
@@ -136,9 +174,14 @@ suite.define(() => {
           await upload(page, "invalid.mp4", Buffer.alloc(256 * 1024));
           await button(page, "Compress to fit").click();
           await expectError("Could not compress video. Try again.", true);
+          await button(page, "Remove invalid.mp4").click();
           await upload(page, "unsupported.mp4");
           await button(page, "Compress to fit").click();
           await expectError("This browser cannot compress this video.", false);
+          unavailable = false;
+          await button(page, "Retry compression").click();
+          await page.locator(".chat-attachment-thumb--preparation").waitFor({ state: "detached" });
+          await button(page, "Remove unsupported.mp4").waitFor();
           expect(await gateway.getRequests("chat.send")).toEqual([]);
           expect(await button(page, "Send message").isEnabled()).toBe(true);
         },
@@ -151,7 +194,8 @@ suite.define(() => {
       await page.goto(suite.server.baseUrl + "new");
       await upload(page, "screen.mp4");
       await button(page, "Compress to fit").click();
-      await page.locator('.chat-attachment-thumb[aria-busy="true"]').waitFor();
+      const preparing = page.locator('.chat-attachment-thumb[aria-busy="true"]');
+      await preparing.waitFor();
       await button(page, "Remove screen.mp4").click();
       await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(0);
     }));

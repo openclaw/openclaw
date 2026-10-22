@@ -1714,7 +1714,6 @@ src/proxy-capture/child-transport.ts
 src/proxy-capture/cli-contract.ts
 src/proxy-capture/env.ts
 src/proxy-capture/header-redaction.ts
-src/proxy-capture/paths.ts
 src/proxy-capture/runtime-cleanup.ts
 src/proxy-capture/runtime-deferral.ts
 src/proxy-capture/runtime-fetch-patch.ts
@@ -2439,6 +2438,7 @@ src/config/sessions/session-actor-memory-entry-guards.ts
 src/config/sessions/session-actor-memory-entry-install.ts
 src/config/sessions/session-actor-memory-entry.ts
 src/config/sessions/session-actor-memory-events.ts
+src/config/sessions/session-prior-workspace-boundary.ts
 src/config/sessions/session-actor-memory-fork.ts
 src/config/sessions/session-actor-memory-goals.ts
 src/config/sessions/session-actor-memory-history-anchors.ts

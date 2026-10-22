@@ -74,6 +74,7 @@ type ChatSessionRailProps = {
   onAttachmentsChange?: ChatAttachmentControlsProps["onAttachmentsChange"];
   attachmentLimits?: ChatAttachmentControlsProps["attachmentLimits"];
   uploadConfig?: ChatAttachmentControlsProps["uploadConfig"];
+  onOpenImage?: ChatAttachmentControlsProps["onOpenImage"];
   presented: boolean;
   focusRequest?: () => boolean;
 };
@@ -112,6 +113,7 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
       imagesOnly: true,
       disabled: !props.connected,
       onAttachmentsChange: props.onAttachmentsChange,
+      onOpenImage: props.onOpenImage,
       onPendingReadsChange: (delta) => {
         if (readSignal) {
           reads?.updatePending(readSignal, delta);
@@ -383,6 +385,7 @@ defineSolidBridge<ChatSessionRailProps>("openclaw-chat-session-rail", ChatSessio
     onSubmit: { default: undefined, attribute: false },
     onDraftChange: { default: undefined, attribute: false },
     onAttachmentsChange: { default: undefined, attribute: false },
+    onOpenImage: { default: undefined, attribute: false },
     attachmentLimits: { default: undefined, attribute: false },
     uploadConfig: { default: undefined, attribute: false },
     presented: { default: false, type: Boolean },

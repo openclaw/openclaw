@@ -89,6 +89,7 @@ export class DraftSubmissionFlow {
     mentions: this.mentionsValue,
     attachments: this.attachmentDraft.attachments,
     pendingAttachmentReads: this.attachmentDraft.reads.pendingReads,
+    attachmentReadRevision: this.attachmentDraft.reads.revision,
   }));
   private readonly draftChanged = () => {
     this.composerDraft.publish();

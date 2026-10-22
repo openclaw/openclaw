@@ -14,7 +14,14 @@
   "providers": [
     "clawrouter"
   ],
+  "mediaUnderstandingProviderMetadata": {
+    "clawrouter": {
+      "capabilities": ["audio"],
+      "defaultModels": { "audio": "gpt-4o-transcribe" }
+    }
+  },
   "contracts": {
+    "mediaUnderstandingProviders": ["clawrouter"],
     "imageGenerationProviders": ["clawrouter"],
     "speechProviders": ["clawrouter"],
     "usageProviders": [

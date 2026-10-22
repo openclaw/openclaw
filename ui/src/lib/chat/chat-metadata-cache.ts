@@ -128,6 +128,11 @@ export function invalidateChatMetadataForSessionEvent(
 ): void {
   const source = asNullableRecord(payload);
   const changed = readSessionChangedEvent(source);
+  // Deletion publishes its exact key first. The following broad notice refreshes
+  // roster membership and ancestors, not model choices in unrelated chats.
+  if (!changed && source?.reason === "delete") {
+    return;
+  }
   const session = asNullableRecord(source?.session);
   const agent = session?.agentId ?? source?.agentId;
   const agentId = typeof agent === "string" ? agent : undefined;

@@ -4496,18 +4496,20 @@ td.data-table-key-col {
   flex: 0 0 auto;
 }
 
+/* Counts (PRs, outbox) sit beside the 12px glyph as compact metadata,
+   not at the row's title size. */
 .session-row-badge {
   display: inline-flex;
   align-items: center;
+  gap: 2px;
   color: var(--muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
 }
 
 .session-row-badge--attention,
 .session-row-badge--approval {
-  gap: 2px;
   color: var(--warn);
-  font-size: 10px;
-  font-variant-numeric: tabular-nums;
 }
 
 .session-row-badge--pull-request[data-pull-request-state="open"],

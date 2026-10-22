@@ -65,45 +65,10 @@ function escapeXmlAttr(value: string): string {
   return escapeXmlText(value).replace(/"/g, "&quot;").replace(/'/g, "&apos;");
 }
 
-function buildAzureSpeechSsml(params: { text: string; voice: string; lang: string }): string {
-  return (
-    `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" ` +
-    `xml:lang="${escapeXmlAttr(params.lang)}">` +
-    `<voice name="${escapeXmlAttr(params.voice)}">${escapeXmlText(params.text)}</voice>` +
-    `</speak>`
-  );
-}
-
-function inferAzureSpeechFileExtension(outputFormat: string): string {
-  const normalized = outputFormat.toLowerCase();
-  if (normalized.includes("mp3")) {
-    return ".mp3";
-  }
-  return (
-    AZURE_SPEECH_FILE_EXTENSIONS.find(([prefix]) => normalized.startsWith(prefix))?.[1] ?? ".audio"
-  );
-}
-
-function isAzureSpeechVoiceCompatible(outputFormat: string): boolean {
-  const normalized = outputFormat.toLowerCase();
-  return normalized.startsWith("ogg-") && normalized.includes("opus");
-}
-
 function readAzureVoiceTagStrings(value: unknown): string[] | undefined {
   return Array.isArray(value)
     ? value.filter((entry): entry is string => trimToUndefined(entry) !== undefined)
     : undefined;
-}
-
-function isDeprecatedVoice(entry: Record<string, unknown>): boolean {
-  if (entry.IsDeprecated === true) {
-    return true;
-  }
-  if (typeof entry.IsDeprecated === "string" && entry.IsDeprecated.toLowerCase() === "true") {
-    return true;
-  }
-  const status = trimToUndefined(entry.Status)?.toLowerCase();
-  return status === "deprecated" || status === "retired" || status === "disabled";
 }
 
 async function azureSpeechTTS(req: SpeechSynthesisRequest, outputFormatOverride?: string) {
@@ -119,14 +84,13 @@ async function azureSpeechTTS(req: SpeechSynthesisRequest, outputFormatOverride?
   const { resolveGeneratedMediaMaxBytes } =
     await import("openclaw/plugin-sdk/media-generation-runtime");
   const text = req.text;
-  const requestedOutputFormat =
+  const outputFormat =
     outputFormatOverride ??
     formatOverride ??
     (req.target === "voice-note" ? config.voiceNoteOutputFormat : config.outputFormat);
   const timeoutMs = config.timeoutMs ?? req.timeoutMs;
   const maxBytes = resolveGeneratedMediaMaxBytes(req.cfg, "audio");
   const voice = voiceOverride ?? config.voice;
-  const outputFormat = requestedOutputFormat;
   const url = azureSpeechUrl({ ...config, path: "/cognitiveservices/v1" });
   const { assertOkOrThrowProviderError, readProviderBinaryResponse } =
     await import("openclaw/plugin-sdk/provider-http");
@@ -142,11 +106,11 @@ async function azureSpeechTTS(req: SpeechSynthesisRequest, outputFormatOverride?
         "X-Microsoft-OutputFormat": outputFormat,
         "User-Agent": "OpenClaw",
       },
-      body: buildAzureSpeechSsml({
-        text,
-        voice,
-        lang,
-      }),
+      body:
+        `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" ` +
+        `xml:lang="${escapeXmlAttr(lang)}">` +
+        `<voice name="${escapeXmlAttr(voice)}">${escapeXmlText(text)}</voice>` +
+        `</speak>`,
     },
     timeoutMs,
     policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(url),
@@ -166,7 +130,7 @@ async function azureSpeechTTS(req: SpeechSynthesisRequest, outputFormatOverride?
             new Error(`Azure Speech TTS audio response exceeds ${limit} bytes`),
         },
       ),
-      outputFormat: requestedOutputFormat,
+      outputFormat,
     };
   } finally {
     await release();
@@ -336,7 +300,17 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
           ? voices.flatMap((value) => {
               const voice = asOptionalRecord(value);
               const id = trimToUndefined(voice?.ShortName);
-              if (!voice || !id || isDeprecatedVoice(voice)) {
+              if (
+                !voice ||
+                !id ||
+                voice.IsDeprecated === true ||
+                (typeof voice.IsDeprecated === "string" &&
+                  voice.IsDeprecated.toLowerCase() === "true")
+              ) {
+                return [];
+              }
+              const status = trimToUndefined(voice.Status)?.toLowerCase();
+              if (status === "deprecated" || status === "retired" || status === "disabled") {
                 return [];
               }
               const voiceTag = asOptionalRecord(voice.VoiceTag);
@@ -364,11 +338,15 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
     isConfiguredAsync: async (ctx) => isConfigured(ctx),
     synthesize: async (req) => {
       const { audioBuffer, outputFormat } = await azureSpeechTTS(req);
+      const normalized = outputFormat.toLowerCase();
       return {
         audioBuffer,
         outputFormat,
-        fileExtension: inferAzureSpeechFileExtension(outputFormat),
-        voiceCompatible: isAzureSpeechVoiceCompatible(outputFormat),
+        fileExtension: normalized.includes("mp3")
+          ? ".mp3"
+          : (AZURE_SPEECH_FILE_EXTENSIONS.find(([prefix]) => normalized.startsWith(prefix))?.[1] ??
+            ".audio"),
+        voiceCompatible: normalized.startsWith("ogg-") && normalized.includes("opus"),
       };
     },
     synthesizeTelephony: async (req) => {

@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  baseStatusExpectedUpdateChannelInfo,
   baseStatusExpectedUpdateChannelLabel,
   baseStatusOverviewSurface,
   getStatusOverviewRowValue,
@@ -95,7 +94,6 @@ describe("status-all format", () => {
         },
       }),
     ).toEqual({
-      channelInfo: baseStatusExpectedUpdateChannelInfo,
       channelLabel: baseStatusExpectedUpdateChannelLabel,
       gitLabel: "main · tag v1.2.3",
       updateLine: `git main · ↔ origin/main · behind 2 · npm update ${newerRegistryVersion}`,
