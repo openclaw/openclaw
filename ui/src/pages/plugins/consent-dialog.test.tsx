@@ -21,6 +21,7 @@ function mount(overrides: Partial<ConsentProps> = {}): HTMLElement {
       fallback: { name: "Workboard" },
     },
     inspection: createInspectResult(),
+    inspectionRead: null,
     loading: false,
     error: null,
     canMutate: true,

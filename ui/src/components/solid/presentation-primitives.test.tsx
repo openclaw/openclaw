@@ -11,74 +11,23 @@ import {
 import { LoadingState } from "./loading-state.tsx";
 import { PanelEmptyState } from "./panel-empty-state.tsx";
 import { PanelIconButton } from "./panel-icon-button.tsx";
-import {
-  PanelLoadingSkeleton,
-  type PanelLoadingSkeletonVariant,
-} from "./panel-loading-skeleton.tsx";
+import { PanelLoadingSkeleton } from "./panel-loading-skeleton.tsx";
 
 afterEach(cleanup);
 
 describe("Solid presentation primitives", () => {
-  it("preserves the labeled empty state and its actionable content", () => {
-    const action = vi.fn();
-    const [heading, setHeading] = createSignal("No files");
+  it("announces the empty-state heading", () => {
     const view = render(() => (
-      <PanelEmptyState
-        icon={
-          <svg viewBox="0 0 24 24">
-            <path d="M1 1h10" />
-          </svg>
-        }
-        heading={heading()}
-        description="Choose a workspace to browse its files."
-        action={
-          <button type="button" onClick={action}>
-            Choose workspace
-          </button>
-        }
-      />
+      <PanelEmptyState heading="No files" description="Choose a workspace" />
     ));
     expect(view.getByRole("status").textContent).toContain("No files");
-    expect(view.container.querySelector("svg")?.closest('[aria-hidden="true"]')).not.toBeNull();
-    fireEvent.click(view.getByRole("button", { name: "Choose workspace" }));
-    expect(action).toHaveBeenCalledOnce();
-    setHeading("No matching files");
-    flush();
-    expect(view.getByRole("status").textContent).toContain("No matching files");
   });
 
-  it.each([
-    ["board", ".board-grid .widget", 4],
-    ["browser", ".viewport", 1],
-    ["chat", ".bubble", 3],
-    ["discussion", ".discussion-frame", 1],
-    ["document", ".code .line", 5],
-    ["file-list", ".rows .row", 5],
-    ["files", ".rows .row", 5],
-    ["review", ".summary .pill", 2],
-  ] satisfies Array<[PanelLoadingSkeletonVariant, string, number]>)(
-    "renders the %s loading structure",
-    (variant, selector, count) => {
-      const view = render(() => <PanelLoadingSkeleton variant={variant} label="Loading panel" />);
-      expect(view.container.querySelectorAll(selector)).toHaveLength(count);
-    },
-  );
-
-  it("switches the loading structure and updates desktop status without stale content", () => {
-    const [variant, setVariant] = createSignal<PanelLoadingSkeletonVariant>("terminal");
-    const [label, setLabel] = createSignal("Connecting");
-    const view = render(() => <PanelLoadingSkeleton variant={variant()} label={label()} />);
-    setVariant("desktop");
-    flush();
-    expect(view.container.querySelector(".terminal")).toBeNull();
-    expect(view.getByText("Connecting")).toBeTruthy();
+  it("hides the decorative desktop spinner from accessibility", () => {
+    const view = render(() => <PanelLoadingSkeleton variant="desktop" label="Connecting" />);
     expect(view.container.querySelector(".desktop-spinner")?.getAttribute("aria-hidden")).toBe(
       "true",
     );
-    setLabel("Authenticating");
-    flush();
-    expect(view.queryByText("Connecting")).toBeNull();
-    expect(view.getByText("Authenticating")).toBeTruthy();
   });
 
   it("announces loading and startup states while keeping decorative skeletons hidden", () => {

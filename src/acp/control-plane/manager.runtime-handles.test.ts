@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createAcceptedFixture } from "./manager.ownership.test-support.js";
 import {
   AcpRuntimeError,
   AcpSessionManager,
@@ -9,8 +10,6 @@ import {
   expectCalledWith,
   hoisted,
   installAcpSessionManagerTestLifecycle,
-  mockMutableSession,
-  managerFixture,
   readySessionMeta,
   resolvedIdentity,
   runtimeTurn,
@@ -33,24 +32,23 @@ describe("AcpSessionManager runtime handles", () => {
   installAcpSessionManagerTestLifecycle();
 
   function fixture(overrides: Partial<SessionAcpMeta> = {}, cfg: OpenClawConfig = baseCfg) {
-    const persisted = { currentMeta: readySessionMeta(overrides) };
-    const sessionKey = `agent:${persisted.currentMeta.agent}:acp:runtime-handles`;
-    const {
-      runtimeState: state,
-      manager,
-      target,
-      run: runTurn,
-    } = managerFixture(sessionKey, persisted.currentMeta, cfg);
-    mockMutableSession(sessionKey, persisted);
+    const f = createAcceptedFixture({
+      sessionKey: `agent:${overrides.agent ?? "codex"}:acp:runtime-handles`,
+      meta: overrides,
+      cfg,
+    });
     const input = {
-      ...target,
+      ...f.target,
       provenance: "system" as const,
       mode: "prompt" as const,
       text: "work",
     };
-    const run = (requestId = "turn", config = cfg) =>
-      runTurn({ text: "work", cfg: config, requestId });
-    return { state, persisted, manager, target, input, run };
+    return {
+      ...f,
+      state: f,
+      input,
+      run: (id = "turn", config = cfg) => f.run(id, { cfg: config }),
+    };
   }
 
   it("reuses idle handles across policy edits but replaces a changed backend owner", async () => {
@@ -355,19 +353,12 @@ describe("AcpSessionManager runtime handles", () => {
 function failoverFixture(primaryUnavailableError?: Error) {
   const sessionKey = "agent:codex:acp:failover";
   const cfg = { acp: { ...baseCfg.acp, backend: "primary", fallbacks: ["fallback"] } };
-  const persisted = {
-    currentMeta: readySessionMeta({ backend: "primary", runtimeSessionName: "primary-runtime" }),
-  };
-  const { runtimeState: primary, run } = managerFixture(sessionKey, persisted.currentMeta, cfg);
+  const primary = createAcceptedFixture({
+    sessionKey,
+    cfg,
+    meta: { backend: "primary", runtimeSessionName: "primary-runtime" },
+  });
   const fallback = createRuntime();
-  mockMutableSession(sessionKey, persisted);
-  const entry = () => ({ acp: persisted.currentMeta, sessionId: "failover", updatedAt: 1 });
-  hoisted.upsertAcpSessionMetaMock.mockImplementation(
-    async (input: Parameters<WriteManagerSessionMeta>[0]) => {
-      persisted.currentMeta = input.mutate(persisted.currentMeta, entry()) ?? persisted.currentMeta;
-      return entry();
-    },
-  );
   for (const [backend, runtime] of [
     ["primary", primary],
     ["fallback", fallback],
@@ -389,7 +380,7 @@ function failoverFixture(primaryUnavailableError?: Error) {
     primary,
     fallback,
     turn(requestId: string, observers: Pick<AcpRunTurnInput, "onEvent" | "onLifecycle"> = {}) {
-      return run({ text: requestId, requestId, ...observers });
+      return primary.run(requestId, { text: requestId, ...observers });
     },
   };
 }

@@ -145,7 +145,7 @@ describe("OpenClaw shell context lifecycle", () => {
   setupSidebarTest();
 
   it("restores a modal toast to a late-mounted shell after its navigation drawer closes", async () => {
-    await import("../components/modal-dialog.ts");
+    await import("../components/modal-dialog.tsx");
     vi.stubGlobal("requestIdleCallback", vi.fn());
     vi.stubGlobal("matchMedia", () => ({
       matches: true,
@@ -389,9 +389,11 @@ describe("OpenClaw shell source initialization", () => {
 
 describe("OpenClaw shell route session commits", () => {
   it("settles shell commits after the invalidating caller is disposed", async () => {
+    const runtime = bootstrapApplication();
+    onTestFinished(() => runtime.stop());
     const shell = createShellOwner();
-    const unmount = shell.mountPresentation();
-    onTestFinished(unmount);
+    shell.runtime = runtime;
+    const view = mountShellView(shell);
     flush();
 
     let disposeCaller!: () => void;
@@ -408,7 +410,7 @@ describe("OpenClaw shell route session commits", () => {
 
     shell.invalidate();
     const retiredCommit = shell.updateComplete;
-    unmount();
+    view.unmount();
     flush();
     await expect(retiredCommit).resolves.toBe(false);
   });

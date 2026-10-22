@@ -16,6 +16,8 @@ import {
   captureCronJobMessageActionAuthority,
   clearCronJobActive,
   getActiveCronJobCount,
+  isCronActiveJobMarkerCurrent,
+  isCronJobActive,
   markCronJobActive,
   noteActiveCronJobMessageActionAuthorityMutation,
   noteActiveCronJobRemoval,
@@ -25,6 +27,7 @@ import {
   resetCronActiveJobs,
 } from "./active-jobs.js";
 import { prepareCronRunAdmission } from "./run-admission.js";
+import { TEST_SCHEDULED_EXECUTION } from "./scheduled-occurrence.test-support.js";
 
 const admissions: ReturnType<typeof prepareAgentRunAdmission>[] = [];
 function prepareAdmission(
@@ -78,6 +81,7 @@ describe("cron message action authority", () => {
         sessionKey: "cron:long-message-read",
       };
       const owner = prepareCronRunAdmission({
+        scheduledExecution: TEST_SCHEDULED_EXECUTION,
         deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
         cfg: { agents: { defaults: { timeoutSeconds: 40 } } },
         ...identity,
@@ -254,7 +258,7 @@ describe.each(["same module", "reload before guard", "reload after guard"])(
           ? { noteActiveCronJobRemoval }
           : await reload("after-guard");
       expect(removalModule.noteActiveCronJobRemoval(jobId, removalGuard)).toBe(currentMarker);
-      expect(currentMarker.jobRemoved).toBe(true);
+      expect(currentMarker).toMatchObject({ jobRemoved: true, scheduleMutated: true });
       expect(assertMessageCurrent).toThrow();
       expect(getActiveCronJobCount()).toBeGreaterThan(0);
       if (scenario === "active owner") {
@@ -267,6 +271,28 @@ describe.each(["same module", "reload before guard", "reload after guard"])(
 );
 
 describe("active cron schedule ownership", () => {
+  it.each([false, true])("preserves a replacement marker (restart=%s)", (restart) => {
+    const jobId = "manual-reuse";
+    const oldMarker = markCronJobActive(jobId);
+    if (restart) {
+      advanceCronActiveJobGeneration();
+    }
+    const freshMarker = markCronJobActive(jobId);
+    clearCronJobActive(jobId, oldMarker);
+    expect(isCronJobActive(jobId)).toBe(true);
+    clearCronJobActive(jobId, freshMarker);
+    expect(isCronJobActive(jobId)).toBe(false);
+  });
+
+  it("retires preserved main-session markers at the lifecycle cutoff", () => {
+    const jobId = "manual-main-cutoff";
+    const marker = markCronJobActive(jobId, { preserveAcrossGenerationAdvance: true });
+    advanceCronActiveJobGeneration();
+    expect(isCronActiveJobMarkerCurrent(marker)).toBe(true);
+    resetCronActiveJobs();
+    expect([isCronActiveJobMarkerCurrent(marker), isCronJobActive(jobId)]).toEqual([false, false]);
+  });
+
   it("notifies only the removed marker when a same-id run replaces it", () => {
     const removedMarker = markCronJobActive("reused-job");
     const onRemovedInactive = vi.fn();
@@ -280,28 +306,21 @@ describe("active cron schedule ownership", () => {
     expect(onRemovedInactive).toHaveBeenCalledOnce();
   });
 
-  it("records durable job removal without releasing the active run marker", () => {
-    const marker = markCronJobActive("removed-job");
-
-    noteActiveCronJobRemoval("removed-job");
-
-    expect(marker).toMatchObject({
-      scheduleMutated: true,
-      jobRemoved: true,
-      cancellation: { kind: "requested", reason: "Cron job removed by operator." },
-    });
-    expect(getActiveCronJobCount()).toBeGreaterThan(0);
-  });
-
   it.each([
     ["schedule", noteActiveCronJobScheduleMutation, "scheduleMutated", "jobRemoved"],
     ["trigger", noteActiveCronJobTriggerMutation, "triggerMutated", "scheduleMutated"],
   ] as const)(
-    "records %s edits without changing other ownership",
+    "records %s edits only on the replacement run without changing other ownership",
     (_name, mutate, changed, untouched) => {
+      const retired = markCronJobActive("updated-job");
+      clearCronJobActive("updated-job", retired);
       const marker = markCronJobActive("updated-job");
       mutate("updated-job");
-      expect([marker?.[changed], marker?.[untouched]]).toEqual([true, undefined]);
+      expect([marker?.[changed], marker?.[untouched], retired?.[changed]]).toEqual([
+        true,
+        undefined,
+        undefined,
+      ]);
     },
   );
 
@@ -312,17 +331,6 @@ describe("active cron schedule ownership", () => {
   ] as const)("does not create idle markers for %s", (_name, mutate) => {
     mutate("idle-job");
     expect(getActiveCronJobCount()).toBe(0);
-  });
-
-  it("attributes later edits only to the replacement active run", () => {
-    const retiredMarker = markCronJobActive("rescheduled-job");
-    clearCronJobActive("rescheduled-job", retiredMarker);
-    const replacementMarker = markCronJobActive("rescheduled-job");
-
-    noteActiveCronJobScheduleMutation("rescheduled-job");
-
-    expect(retiredMarker?.scheduleMutated).toBeUndefined();
-    expect(replacementMarker?.scheduleMutated).toBe(true);
   });
 
   it("keeps schedule ownership isolated across concurrent active jobs", () => {

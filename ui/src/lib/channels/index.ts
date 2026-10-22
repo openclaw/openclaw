@@ -501,7 +501,7 @@ export function createChannelCapability(gateway: ChannelGateway) {
         state.channelsLoadingProbe = null;
         resolve(state.channelsError);
         if (channelsInvalidated) {
-          await loadChannels(false);
+          await refreshChannels();
         }
       }
     }

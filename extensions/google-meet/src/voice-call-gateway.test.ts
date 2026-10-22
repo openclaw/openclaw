@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { setImmediate } from "node:timers/promises";
 import { getMeetingVoiceCallGatewayCall } from "openclaw/plugin-sdk/meeting-runtime";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import { resolveGoogleMeetConfig } from "./config.js";
@@ -7,6 +8,7 @@ import { createVoiceCallGateway, joinMeetViaVoiceCallGateway } from "./voice-cal
 type GatewayRuntime = typeof import("openclaw/plugin-sdk/gateway-runtime");
 type GatewayClientOptions = ConstructorParameters<GatewayRuntime["GatewayClient"]>[0];
 type GatewayClientInstance = InstanceType<GatewayRuntime["GatewayClient"]>;
+const ready = { ready: true, aborted: false, elapsedMs: 0, maxDriftMs: 0, checks: 1 };
 
 const mocks = vi.hoisted(() => ({
   runtimeRequest: vi.fn(),
@@ -52,8 +54,8 @@ function createGateway(config = voiceConfig()) {
     runtime: { gateway: { request: mocks.runtimeRequest } } as never,
   });
 }
-function getCall(gateway = createGateway()) {
-  return getMeetingVoiceCallGatewayCall({ gateway, callId: "call-1" });
+function getCall(config = voiceConfig()) {
+  return getMeetingVoiceCallGatewayCall({ gateway: createGateway(config), callId: "call-1" });
 }
 function join(
   config = voiceConfig(),
@@ -66,23 +68,12 @@ function join(
     ...options,
   });
 }
-function expectStartupStopped() {
-  expect(mocks.stopAndWait).toHaveBeenCalledOnce();
-  expect(mocks.startClient.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
-}
-
 beforeEach(() => {
   vi.useRealTimers();
   mocks.request.mockReset().mockResolvedValue({ success: true });
   mocks.runtimeRequest.mockReset().mockResolvedValue({ callId: "call-1" });
   mocks.stopAndWait.mockReset().mockResolvedValue(undefined);
-  mocks.startClient.mockReset().mockResolvedValue({
-    ready: true,
-    aborted: false,
-    elapsedMs: 0,
-    maxDriftMs: 0,
-    checks: 1,
-  });
+  mocks.startClient.mockReset().mockResolvedValue(ready);
   mocks.autoHello = true;
   mocks.clientOptions = undefined;
   mocks.actualGatewayClient = undefined;
@@ -134,9 +125,7 @@ it("stops the real gateway client's referenced reconnect after a localhost conne
       gatewayUrl: `ws://127.0.0.1:${address.port}`,
       requestTimeoutMs: 3_000,
     });
-    const gateway = createGateway(config);
-
-    const rejected = expect(getCall(gateway)).rejects.toMatchObject({
+    const rejected = expect(getCall(config)).rejects.toMatchObject({
       code: "ECONNRESET",
       message: "socket hang up",
     });
@@ -144,9 +133,7 @@ it("stops the real gateway client's referenced reconnect after a localhost conne
     await rejected;
     expect(mocks.actualClients).toHaveLength(1);
 
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await setImmediate();
     const referencedRetry = setTimeoutSpy.mock.calls.some(([, delay], index) => {
       const timer = setTimeoutSpy.mock.results[index]?.value as NodeJS.Timeout | undefined;
       return (
@@ -160,11 +147,7 @@ it("stops the real gateway client's referenced reconnect after a localhost conne
       stopCalls: stopAndWait.mock.calls.length,
       connectionCount,
       referencedRetry,
-    }).toEqual({
-      stopCalls: 1,
-      connectionCount: 1,
-      referencedRetry: false,
-    });
+    }).toEqual({ stopCalls: 1, connectionCount: 1, referencedRetry: false });
     expect(mocks.runtimeRequest).not.toHaveBeenCalled();
   } finally {
     await Promise.all(mocks.actualClients.map((client) => client.stopAndWait()));
@@ -185,14 +168,7 @@ it.each([
   [
     "readiness",
     "gateway event loop readiness timeout",
-    () =>
-      mocks.startClient.mockResolvedValueOnce({
-        ready: false,
-        aborted: false,
-        elapsedMs: 0,
-        maxDriftMs: 0,
-        checks: 1,
-      }),
+    () => mocks.startClient.mockResolvedValueOnce({ ...ready, ready: false }),
     () => {},
   ],
   [
@@ -207,7 +183,7 @@ it.each([
     mocks.autoHello = false;
     prepare();
     const request = getCall(
-      createGateway(failure === "deadline" ? voiceConfig({ requestTimeoutMs: 25 }) : undefined),
+      failure === "deadline" ? voiceConfig({ requestTimeoutMs: 25 }) : undefined,
     );
     const rejected =
       expected instanceof Error
@@ -215,7 +191,8 @@ it.each([
         : expect(request).rejects.toThrow(expected);
     await settle();
     await rejected;
-    expectStartupStopped();
+    expect(mocks.stopAndWait).toHaveBeenCalledOnce();
+    expect(mocks.startClient.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
     if (failure === "connection") {
       expect(mocks.request).not.toHaveBeenCalled();
     }
@@ -226,46 +203,22 @@ it.each([
 );
 
 it("starts Twilio Meet calls with pre-connect DTMF, then speaks the intro without TwiML fallback", async () => {
-  const config = resolveGoogleMeetConfig({
-    voiceCall: {
-      gatewayUrl: "ws://127.0.0.1:18789",
-      dtmfDelayMs: 1,
-      postDtmfSpeechDelayMs: 2,
-    },
-    realtime: { introMessage: "Say exactly: I'm here and listening." },
-  });
-
+  const config = voiceConfig({ postDtmfSpeechDelayMs: 2 });
+  const routing = {
+    dtmfSequence: "123456#",
+    requesterSessionKey: "agent:main:discord:channel:general",
+    sessionKey: "voice:google-meet:meet-1",
+  };
+  const message = "Say exactly: I'm here and listening.";
+  const timeout = { timeoutMs: 30_000 };
   mocks.request
     .mockResolvedValueOnce({ callId: "call-1" })
     .mockResolvedValueOnce({ success: true });
-  await join(config, {
-    dtmfSequence: "123456#",
-    message: "Say exactly: I'm here and listening.",
-    requesterSessionKey: "agent:main:discord:channel:general",
-    sessionKey: "voice:google-meet:meet-1",
-  });
+  await join(config, { ...routing, message });
 
   expect(mocks.request.mock.calls).toEqual([
-    [
-      "voicecall.start",
-      {
-        to: "+15551234567",
-        mode: "conversation",
-        dtmfSequence: "123456#",
-        requesterSessionKey: "agent:main:discord:channel:general",
-        sessionKey: "voice:google-meet:meet-1",
-      },
-      { timeoutMs: 30_000 },
-    ],
-    [
-      "voicecall.speak",
-      {
-        callId: "call-1",
-        allowTwimlFallback: false,
-        message: "Say exactly: I'm here and listening.",
-      },
-      { timeoutMs: 30_000 },
-    ],
+    ["voicecall.start", { to: "+15551234567", mode: "conversation", ...routing }, timeout],
+    ["voicecall.speak", { callId: "call-1", allowTwimlFallback: false, message }, timeout],
   ]);
   expect(mocks.runtimeRequest).not.toHaveBeenCalled();
 });

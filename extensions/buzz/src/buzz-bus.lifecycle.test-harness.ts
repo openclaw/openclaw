@@ -3,7 +3,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { finalizeEvent, getPublicKey, type Event } from "nostr-tools";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { sendBuzzTextOneShot, startBuzzBus, type BuzzBus } from "./buzz-bus.js";
 import { relayMocks } from "./buzz-bus.test-helpers.js";
@@ -20,11 +22,12 @@ const SENDER_PUBLIC_KEY = getPublicKey(Uint8Array.from(Buffer.from(SENDER_PRIVAT
 const SENDER_SECRET_KEY = Uint8Array.from(Buffer.from(SENDER_PRIVATE_KEY, "hex"));
 const RELAY_PUBLIC_KEY = "f".repeat(64);
 let stateDir: string;
+const buses: BuzzBus[] = [];
 
-function startTestBus(
+async function startTestBus(
   overrides: Partial<Parameters<typeof startBuzzBus>[0]> = {},
 ): Promise<BuzzBus> {
-  return startBuzzBus({
+  const bus = await startBuzzBus({
     scheduler: createTestPluginServiceScheduler(),
     accountId: ACCOUNT_ID,
     relayUrl: "wss://buzz.example.com",
@@ -33,6 +36,8 @@ function startTestBus(
     onMessage: async () => {},
     ...overrides,
   });
+  buses.push(bus);
+  return bus;
 }
 
 function sendTestTextOneShot(
@@ -54,15 +59,22 @@ function signSenderEvent(template: Parameters<typeof finalizeEvent>[0]): Event {
 function senderMessage(
   content: string,
   overrides: Partial<Parameters<typeof finalizeEvent>[0]> = {},
+  secretKey = SENDER_SECRET_KEY,
 ) {
-  return signSenderEvent({
-    kind: 9,
-    created_at: 1_700_000_000,
-    tags: [["h", CHANNEL_ID]],
-    content,
-    ...overrides,
-  });
+  return finalizeEvent(
+    {
+      kind: 9,
+      created_at: 1_700_000_000,
+      tags: [["h", CHANNEL_ID]],
+      content,
+      ...overrides,
+    },
+    secretKey,
+  );
 }
+
+const botMessage = (content: string, overrides: Parameters<typeof senderMessage>[1] = {}) =>
+  senderMessage(content, overrides, Uint8Array.from(Buffer.from(PRIVATE_KEY, "hex")));
 
 function relayEvent(kind: number, overrides: Partial<Event>): Event {
   return {
@@ -86,6 +98,7 @@ function hasSubscription(kind: number) {
 }
 
 function inboundFixture(config: ResolvedBuzzAccount["config"], name?: string) {
+  let completion = createDeferred<void>();
   const runtime = createPluginRuntimeMock();
   setBuzzRuntime(runtime);
   const account: ResolvedBuzzAccount = {
@@ -105,17 +118,29 @@ function inboundFixture(config: ResolvedBuzzAccount["config"], name?: string) {
     signal,
     assertCurrent,
   ) => {
-    await handleBuzzInbound({
-      account,
-      cfg: {},
-      bus,
-      message,
-      signal,
-      assertCurrent,
-      historyMap: new Map(),
-    });
+    try {
+      await handleBuzzInbound({
+        account,
+        cfg: {},
+        bus,
+        message,
+        signal,
+        assertCurrent,
+        historyMap: new Map(),
+      });
+      completion.resolve();
+    } catch (error) {
+      completion.reject(error);
+      throw error;
+    }
   };
-  return { runtime, account, onMessage };
+  const receive = async (event: Event, signal: AbortSignal) => {
+    completion = createDeferred<void>();
+    signal.throwIfAborted();
+    findSubscription(9)?.handlers.onevent(event);
+    await withinTest(completion.promise, signal);
+  };
+  return { runtime, account, onMessage, receive };
 }
 
 function roomMetadata(
@@ -141,12 +166,25 @@ function subscriptionIncludesKind(
   return subscription.filters.some((filter) => filter.kinds?.includes(kind));
 }
 
+export const buzzTestData = {
+  PRIVATE_KEY,
+  ACCOUNT_ID,
+  CHANNEL_ID,
+  BOT_PUBLIC_KEY,
+  SENDER_PUBLIC_KEY,
+  RELAY_PUBLIC_KEY,
+  senderMessage,
+  botMessage,
+  relayEvent,
+};
+
 export function useBuzzBusLifecycleFixture() {
   beforeEach(() => {
     // openclaw-temp-dir: allow extension tests cannot import root test helpers.
     stateDir = mkdtempSync(path.join(tmpdir(), "openclaw-buzz-dedupe-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     vi.clearAllMocks();
+    buses.length = 0;
     relayMocks.subscriptions.length = 0;
     relayMocks.profileEvents = [];
     relayMocks.roomMetadataEvents = [];
@@ -182,24 +220,23 @@ export function useBuzzBusLifecycleFixture() {
     );
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.unstubAllEnvs();
-    rmSync(stateDir, { recursive: true, force: true });
+  afterEach(async () => {
+    try {
+      for (const bus of buses.toReversed()) {
+        await bus.close();
+      }
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllEnvs();
+      rmSync(stateDir, { recursive: true, force: true });
+    }
   });
   return {
-    PRIVATE_KEY,
-    ACCOUNT_ID,
-    CHANNEL_ID,
-    BOT_PUBLIC_KEY,
-    SENDER_PUBLIC_KEY,
-    RELAY_PUBLIC_KEY,
+    ...buzzTestData,
     startTestBus,
     sendTestTextOneShot,
     signSenderEvent,
     subscriptionIncludesKind,
-    senderMessage,
-    relayEvent,
     findSubscription,
     hasSubscription,
     inboundFixture,

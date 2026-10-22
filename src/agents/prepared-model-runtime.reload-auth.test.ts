@@ -23,11 +23,7 @@ const fixture = usePreparedModelRuntimeHarness({ label: "prepared-model-runtime"
 const { mocks } = fixture;
 type Dispatch = ReturnType<typeof loadDispatch>;
 type Refresh = ReturnType<typeof refreshRuntime>;
-const buildResult = (agentId = "default") => ({
-  agentDir: fixture.state.agentDir(agentId),
-  wrote: false as const,
-});
-const build = () => createDeferred<ReturnType<typeof buildResult>>();
+const build = () => createDeferred<Record<string, never>>();
 const refresh = (config: OpenClawConfig = {}) => refreshRuntime(config, { gatewayLifecycle: true });
 async function start(agentIds = ["default"], config: OpenClawConfig = {}) {
   mocks.configuredAgentIds = agentIds;
@@ -49,9 +45,9 @@ function pendingWork() {
     defer: (cleanup: () => void) => {
       cleanups.push(cleanup);
     },
-    build(agentId = "default") {
+    build() {
       const deferred = build();
-      releases.push(() => deferred.resolve(buildResult(agentId)));
+      releases.push(() => deferred.resolve({}));
       return deferred;
     },
     track<T>(operation: Promise<T>): Promise<T> {
@@ -171,7 +167,7 @@ describe("prepared model runtime reload auth adoption", () => {
     let defaultBuildCount = 0;
     mocks.ensureOpenClawModelsJson.mockImplementation(async (_config, agentDir) => {
       if (agentDir !== fixture.state.agentDir("default")) {
-        return { agentDir: String(agentDir), wrote: false };
+        return {};
       }
       defaultBuildCount += 1;
       if (defaultBuildCount === 1) {
@@ -194,13 +190,13 @@ describe("prepared model runtime reload auth adoption", () => {
     );
     const siblingRead = work.track(loadDispatch({ agentId: "worker" }));
     order.push("config-build-finish");
-    configBuild.resolve(buildResult());
+    configBuild.resolve({});
     await vi.waitFor(() => expect(order).toContain("auth-drain-start"));
     await expectPending(publication);
     await expectPending(affectedRead);
 
     order.push("auth-drain-finish");
-    authBuild.resolve(buildResult());
+    authBuild.resolve({});
     await expect(publication).resolves.toBeUndefined();
     const [affectedRuntime, siblingRuntime] = await Promise.all([affectedRead, siblingRead]);
     unregister();
@@ -246,7 +242,7 @@ describe("prepared model runtime reload auth adoption", () => {
     await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2));
     const authWaiter = work.track(loadDispatch({ agentId: "default" }));
     const reload = work.track(refresh(replacementConfig));
-    authBuild.resolve(buildResult());
+    authBuild.resolve({});
 
     await expect(reload).rejects.toBe(reloadError);
     await expect(authWaiter).rejects.toBe(reloadError);
@@ -277,7 +273,7 @@ describe("prepared model runtime reload auth adoption", () => {
     await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(3));
     await expectPending(dispatch);
 
-    secondBuild.resolve({ agentDir, wrote: false });
+    secondBuild.resolve({});
     await expect(dispatch).resolves.toMatchObject({ agentId: "default", agentDir });
     expect(mocks.warn).not.toHaveBeenCalled();
   });
@@ -292,17 +288,15 @@ describe("prepared model runtime reload auth adoption", () => {
     } as const;
     const builds = {
       default: work.build(),
-      research: work.build("research"),
-      worker: work.build("worker"),
+      research: work.build(),
+      worker: work.build(),
     };
     const refreshError = new Error("inherited research auth build failed");
     mocks.ensureOpenClawModelsJson.mockImplementation(async (_config, agentDir) => {
       const entry = Object.entries(agentDirs).find(
         ([, configuredDir]) => configuredDir === agentDir,
       );
-      return entry
-        ? await builds[entry[0] as keyof typeof builds].promise
-        : { agentDir: String(agentDir), wrote: false };
+      return entry ? await builds[entry[0] as keyof typeof builds].promise : {};
     });
 
     mutate("worker");
@@ -311,8 +305,8 @@ describe("prepared model runtime reload auth adoption", () => {
     const dispatches = Object.fromEntries(
       Object.keys(agentDirs).map((agentId) => [agentId, work.track(loadDispatch({ agentId }))]),
     ) as Record<keyof typeof agentDirs, Dispatch>;
-    builds.default.resolve({ agentDir: agentDirs.default, wrote: false });
-    builds.worker.resolve({ agentDir: agentDirs.worker, wrote: false });
+    builds.default.resolve({});
+    builds.worker.resolve({});
     await vi.waitFor(() =>
       expect(mocks.ensureOpenClawModelsJson.mock.calls.length).toBeGreaterThanOrEqual(6),
     );
@@ -328,8 +322,8 @@ describe("prepared model runtime reload auth adoption", () => {
   it("commits a successful owner when the final independent owner fails", async () => {
     await using work = pendingWork();
     await start(["default", "worker", "research"]);
-    const workerBuild = work.build("worker");
-    const researchBuild = work.build("research");
+    const workerBuild = work.build();
+    const researchBuild = work.build();
     const researchError = new Error("final research auth build failed");
     const { events, unregister } = observePhases();
     work.defer(unregister);
@@ -340,7 +334,7 @@ describe("prepared model runtime reload auth adoption", () => {
       if (agentDir === fixture.state.agentDir("research")) {
         return await researchBuild.promise;
       }
-      return { agentDir: String(agentDir), wrote: false };
+      return {};
     });
 
     mutate("worker");
@@ -350,7 +344,7 @@ describe("prepared model runtime reload auth adoption", () => {
     void workerDispatch.then(workerSettled, () => undefined);
     mutate("research");
     const researchDispatch = work.track(loadDispatch({ agentId: "research" }));
-    workerBuild.resolve(buildResult("worker"));
+    workerBuild.resolve({});
     await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(5));
     await vi.waitFor(() => expect(workerSettled).toHaveBeenCalledOnce());
     await expectPending(researchDispatch);
@@ -414,7 +408,7 @@ describe("prepared model runtime reload auth adoption", () => {
     await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(3));
     await expectPending(authWaiter);
 
-    configBuild.resolve(buildResult());
+    configBuild.resolve({});
     await expect(reload).resolves.toBeUndefined();
     await expect(authWaiter).resolves.toMatchObject({ config: replacementConfig });
     expect(mocks.warn).not.toHaveBeenCalled();
@@ -537,9 +531,9 @@ describe("prepared model runtime reload auth adoption", () => {
     const initialConfig = {};
     const replacementConfig = { plugins: {} };
     await start(["default", "worker", "research"], initialConfig);
-    const workerAuthBuild = work.build("worker");
-    const researchAuthBuild = work.build("research");
-    const replacementWorkerBuild = work.build("worker");
+    const workerAuthBuild = work.build();
+    const researchAuthBuild = work.build();
+    const replacementWorkerBuild = work.build();
     const workerAuthStarted = createDeferred();
     const researchAuthStarted = createDeferred();
     const replacementWorkerStarted = createDeferred();
@@ -567,7 +561,7 @@ describe("prepared model runtime reload auth adoption", () => {
         replacementWorkerStarted.resolve();
         return await replacementWorkerBuild.promise;
       }
-      return { agentDir: String(agentDir), wrote: false };
+      return {};
     });
 
     mutate("worker");
@@ -575,7 +569,7 @@ describe("prepared model runtime reload auth adoption", () => {
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(4);
     const firstWorkerRead = work.track(loadDispatch({ agentId: "worker" }));
     mutate("research");
-    workerAuthBuild.resolve(buildResult("worker"));
+    workerAuthBuild.resolve({});
     await researchAuthStarted.promise;
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(5);
     await expect(firstWorkerRead).resolves.toMatchObject({ config: initialConfig });
@@ -587,10 +581,10 @@ describe("prepared model runtime reload auth adoption", () => {
     await Promise.resolve();
     expect(adoptedWorkerSettled).not.toHaveBeenCalled();
 
-    researchAuthBuild.resolve(buildResult("research"));
+    researchAuthBuild.resolve({});
     await replacementWorkerStarted.promise;
     expect(adoptedWorkerSettled).not.toHaveBeenCalled();
-    replacementWorkerBuild.resolve(buildResult("worker"));
+    replacementWorkerBuild.resolve({});
     await expect(reload).resolves.toBeUndefined();
     await expect(adoptedWorkerRead).resolves.toMatchObject({ config: replacementConfig });
     unregister();

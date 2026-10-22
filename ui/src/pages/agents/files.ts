@@ -10,6 +10,10 @@ import { formatUiError } from "../../lib/format-error.ts";
 
 type AgentFileVersion = { hash: string } | { missing: true };
 
+export type AgentFileOutcome =
+  | { result: boolean; error?: never }
+  | { error: string; result?: never };
+
 type AgentFileEditor = {
   workspace?: string;
   baseWorkspace?: string;
@@ -25,7 +29,8 @@ export type AgentFilesState = {
   requestGeneration: number;
   agents: Pick<AgentCapability, "recordFile">;
   agentFilesLoading: boolean;
-  agentFilesError: string | null;
+  agentFileRead: Promise<AgentFileOutcome> | null;
+  agentFileOutcome: Promise<AgentFileOutcome> | null;
   agentFileEditors: Record<string, AgentFileEditor>;
   agentFileConflict: string | null;
   agentFileSaving: boolean;
@@ -35,7 +40,8 @@ export type AgentFilesState = {
 export type AgentFilesViewState = Pick<
   AgentFilesState,
   | "agentFilesLoading"
-  | "agentFilesError"
+  | "agentFileRead"
+  | "agentFileOutcome"
   | "agentFileEditors"
   | "agentFileSaving"
   | "agentFileConflict"
@@ -47,7 +53,8 @@ export type AgentFilesViewState = Pick<
 /** Retire the selected agent's file cache and drafts with its request generation. */
 export function resetAgentFiles(state: AgentFilesState & AgentFilesViewState): void {
   state.agentFilesList = null;
-  state.agentFilesError = null;
+  state.agentFileRead = null;
+  state.agentFileOutcome = null;
   state.agentFileActive = null;
   state.agentFileEditors = {};
   state.agentFileConflict = null;
@@ -137,8 +144,12 @@ async function requestAgentFile(
     isConnected() && (saving || state.agentFileWriteRevisions.get(name) === revision);
   const { version, workspace } = state.agentFileEditors[name] ?? {};
   const resolution = operation.kind === "read" ? operation.resolution : undefined;
+  const completion = Promise.withResolvers<AgentFileOutcome>();
+  state.agentFileOutcome = completion.promise;
+  if (!saving) {
+    state.agentFileRead = completion.promise;
+  }
   state[busy] = true;
-  state.agentFilesError = null;
   try {
     const res = await client.request<AgentsFilesGetResult | AgentsFilesSetResult | null>(
       saving ? "agents.files.set" : "agents.files.get",
@@ -185,13 +196,15 @@ async function requestAgentFile(
       if (rebasesVersion && state.agentFileConflict === name) {
         state.agentFileConflict = null;
       }
-      state.agentFilesError = null;
+      state.agentFileOutcome = completion.promise;
       agents.recordFile(res);
+      completion.resolve({ result: true });
       return true;
     }
   } catch (err) {
     if (isCurrent()) {
-      state.agentFilesError = formatUiError(err);
+      state.agentFileOutcome = completion.promise;
+      completion.resolve({ error: formatUiError(err) });
       if (
         err instanceof GatewayRequestError &&
         isRecord(err.details) &&
@@ -202,6 +215,7 @@ async function requestAgentFile(
     }
     return false;
   } finally {
+    completion.resolve({ result: false });
     if (isConnected()) {
       if (saving) {
         advanceWriteRevision();
@@ -221,7 +235,7 @@ export function loadAgentFileContent(
   return requestAgentFile(state, agentId, name, { kind: "read", force: opts?.force });
 }
 
-export function saveAgentFile(
+function saveAgentFile(
   state: AgentFilesState,
   agentId: string,
   name: string,
@@ -230,7 +244,7 @@ export function saveAgentFile(
   return requestAgentFile(state, agentId, name, { kind: "write", content });
 }
 
-export function resetAgentFile(state: AgentFilesState, name: string): void {
+function resetAgentFile(state: AgentFilesState, name: string): void {
   const file = state.agentFileEditors[name];
   if (!file || !Object.hasOwn(file, "content")) {
     return;
@@ -246,15 +260,11 @@ export function resetAgentFile(state: AgentFilesState, name: string): void {
   };
   if (state.agentFileConflict === name) {
     state.agentFileConflict = null;
-    state.agentFilesError = null;
+    state.agentFileOutcome = null;
   }
 }
 
-export function reloadAgentFile(
-  state: AgentFilesState,
-  agentId: string,
-  name: string,
-): Promise<boolean> {
+function reloadAgentFile(state: AgentFilesState, agentId: string, name: string): Promise<boolean> {
   return requestAgentFile(state, agentId, name, {
     kind: "read",
     force: true,
@@ -262,7 +272,7 @@ export function reloadAgentFile(
   });
 }
 
-export async function overwriteAgentFile(
+async function overwriteAgentFile(
   state: AgentFilesState,
   agentId: string,
   name: string,
@@ -287,4 +297,48 @@ export async function overwriteAgentFile(
     return false;
   }
   return await requestAgentFile(state, agentId, name, { kind: "write", content });
+}
+
+export function createAgentFileActions(
+  state: AgentFilesState & { agentsSelectedId: string | null; agentFileActive: string | null },
+  selectedAgentId: string | null,
+  canWrite: () => boolean,
+) {
+  function save(name: string, write = saveAgentFile) {
+    if (!selectedAgentId || selectedAgentId !== state.agentsSelectedId || !canWrite()) {
+      return undefined;
+    }
+    return write(
+      state,
+      selectedAgentId,
+      name,
+      state.agentFileEditors[name]?.draft ?? state.agentFileEditors[name]?.content ?? "",
+    );
+  }
+  return {
+    onSelectFile(this: void, name: string) {
+      state.agentFileActive = name;
+      if (selectedAgentId) {
+        void loadAgentFileContent(state, selectedAgentId, name);
+      }
+    },
+    onFileDraftChange(name: string, content: string) {
+      if (selectedAgentId !== state.agentsSelectedId) {
+        return;
+      }
+      state.agentFileEditors = {
+        ...state.agentFileEditors,
+        [name]: { ...state.agentFileEditors[name], draft: content },
+      };
+    },
+    onFileReset(name: string) {
+      if (selectedAgentId === state.agentsSelectedId) {
+        resetAgentFile(state, name);
+      }
+    },
+    onFileSave: (name: string) => save(name),
+    onFileReload: (name: string) =>
+      selectedAgentId ? reloadAgentFile(state, selectedAgentId, name) : undefined,
+    onFileOverwrite: (name: string) => save(name, overwriteAgentFile),
+  };
 }

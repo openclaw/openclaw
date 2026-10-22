@@ -37,26 +37,21 @@ describe("shrink-ratchet", () => {
     );
   });
 
+  type BaselineCase = {
+    file: string;
+    source: string;
+    expected: unknown;
+    parse: (source: string) => unknown;
+  };
   it.each`
     file            | source                                           | expected                              | parse
     ${"paths.txt"}  | ${"# grandfathered files\nsrc/b.ts\nsrc/a.ts\n"} | ${["src/b.ts", "src/a.ts"]}           | ${(source: string) => [...ratchet.parseRatchetPaths(source)]}
     ${"counts.txt"} | ${"# per-file debt\nsrc/b.ts\t2\nsrc/a.ts\t1\n"} | ${[["src/b.ts", 2], ["src/a.ts", 1]]} | ${(source: string) => [...ratchet.parseRatchetCounts(source, "counts.txt")]}
   `(
     "loads the existing $file baseline format",
-    ({
-      file,
-      source,
-      expected,
-      parse,
-    }: {
-      file: string;
-      source: string;
-      expected: unknown;
-      parse: (source: string) => unknown;
-    }) => {
+    ({ file, source, expected, parse }: BaselineCase) => {
       const root = tempDirs.make("openclaw-shrink-ratchet-");
       fs.writeFileSync(path.join(root, file), source);
-
       expect(ratchet.loadRatchetSnapshot<unknown>(root, file, false, parse)).toEqual(expected);
     },
   );

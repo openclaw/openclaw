@@ -211,6 +211,8 @@ memory sources to rebuild the PostgreSQL index and may re-embed them. See
 
     Stale OAuth shadow cleanup preserves profiles with sidecar references in either the legacy file or the canonical store. If a legacy auth file cannot be read or parsed, Doctor skips that agent's shadow cleanup and warns with the file path; inspect or restore it before retrying. A missing legacy file does not prevent cleanup of ordinary SQLite-only profiles.
 
+    Legacy auth-profile JSON, retired `identity/*device-auth.json` files, and `logs/config-health.json` must contain valid UTF-8. Doctor refuses malformed bytes before importing them, preserves the source, and reports the affected path. Keep the original bytes and restore valid UTF-8 JSON from a verified backup before rerunning `openclaw doctor --fix`; do not use a lossy conversion. Valid Unicode, including a literal replacement character, remains supported. Malformed auth archives cannot authorize recovered profile mappings.
+
   </Accordion>
   <Accordion title="6. Hooks model validation">
     If `hooks.gmail.model` is set, doctor validates the model reference against the catalog and allowlist and warns when it will not resolve or is disallowed.

@@ -109,5 +109,10 @@ it("retains the pinned model directory after an environment change", async () =>
   setRuntimeConfigSnapshot(config);
   const pending = ensureOpenClawModelsJson();
   vi.stubEnv("OPENCLAW_STATE_DIR", path.join(state, "replacement-state"));
-  expect((await pending).agentDir).toBe(agentDir);
+  await pending;
+  expect(await readModels(agentDir)).toEqual({ providers: config.models?.providers });
+  const replacementAgentDir = path.join(state, "replacement-state", "agents", "worker", "agent");
+  await expect(fs.access(path.join(replacementAgentDir, "models.json"))).rejects.toMatchObject({
+    code: "ENOENT",
+  });
 });

@@ -544,6 +544,7 @@ export function runCronSchedulerInWorker(
           maxConcurrentRuns: DEFAULT_CRON_MAX_CONCURRENT_RUNS,
           schedulingPaused: input.paused,
           preparingAgentIds: snapshot.config.preparingAgentIds,
+          hostProcessId: snapshot.config.hostProcessId,
         },
         jobs,
       );

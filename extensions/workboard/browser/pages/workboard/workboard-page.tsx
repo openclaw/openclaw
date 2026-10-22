@@ -351,7 +351,13 @@ export function createWorkboardPage(
                 <WorkboardBoardGlyph board={selected()} class="workboard-board-glyph--header" />
               )}
             </Show>
-            <span>{board() ? workboardBoardName(board()!) : "Workboard"}</span>
+            <span>
+              {board()
+                ? workboardBoardName(board()!)
+                : presentation()?.selectedBoard === null
+                  ? t("workboard.allBoards")
+                  : "Workboard"}
+            </span>
             <Show when={board() && presentation()?.workboardProps.canWrite}>
               <button
                 class="btn btn--icon workboard-board-edit"

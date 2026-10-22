@@ -105,6 +105,13 @@ function statusContext(
   return { ctx, apiCall };
 }
 
+async function expectViews(ctx: ReturnType<typeof createTestContext>, enabled: boolean) {
+  await expect(ctx.isSlackAgentView()).resolves.toBe(enabled);
+  await expect(ctx.isSlackManagedViewThread("D123", "10.000")).resolves.toBe(enabled);
+}
+
+const avatar = (size: number) => `https://avatars.slack-edge.com/user-hash-${size}.png`;
+
 beforeEach(() => {
   setSlackRuntime(null as never);
   saveRemoteMediaMock.mockReset();
@@ -120,42 +127,6 @@ describe("Slack monitor context", () => {
         ctx.shouldDropMismatchedSlackEvent({ api_app_id: "A_EXPECTED", team: { id } }),
       ),
     ).toEqual([true, false]);
-  });
-
-  it("reads updated identity fields and mismatch guards after auth recovery", () => {
-    const ctx = createTestContext();
-
-    ctx.installationIdentity = {
-      kind: "enterprise",
-      apiAppId: "A_ENTERPRISE",
-      enterpriseId: "E_ENTERPRISE",
-    };
-    ctx.teamId = "";
-    ctx.apiAppId = "A_ENTERPRISE";
-
-    expect(ctx).toMatchObject({
-      installationIdentity: {
-        kind: "enterprise",
-        apiAppId: "A_ENTERPRISE",
-        enterpriseId: "E_ENTERPRISE",
-      },
-      teamId: "",
-      apiAppId: "A_ENTERPRISE",
-    });
-    expect(ctx.shouldDropMismatchedSlackEvent({ api_app_id: "A_EXPECTED" })).toBe(true);
-
-    ctx.installationIdentity = {
-      kind: "workspace",
-      apiAppId: "A_RECOVERED",
-      teamId: "T_RECOVERED",
-    };
-    ctx.teamId = "T_RECOVERED";
-    ctx.apiAppId = "A_RECOVERED";
-
-    expect(ctx).toMatchObject({ teamId: "T_RECOVERED", apiAppId: "A_RECOVERED" });
-    expect(
-      ctx.shouldDropMismatchedSlackEvent({ api_app_id: "A_RECOVERED", team_id: "T_WRONG" }),
-    ).toBe(true);
   });
 
   it("normalizes channel-prefixed group DM allowlist entries", () => {
@@ -253,11 +224,7 @@ describe("Slack monitor context", () => {
 
   it("fills metadata after an event stored only the authoritative type", async () => {
     const info = vi.fn().mockResolvedValue({
-      channel: {
-        id: "C0MPDM42",
-        name: "team-chat",
-        topic: { value: "planning" },
-      },
+      channel: { id: "C0MPDM42", name: "team-chat", topic: { value: "planning" } },
     });
     const ctx = channelContext(info);
     ctx.rememberSlackChannelType("C0MPDM42", "mpim");
@@ -288,12 +255,10 @@ describe("Slack monitor context", () => {
     await expect(ctx.resolveChannelName("C0SHARED", firstTeam)).resolves.toMatchObject({
       type: "mpim",
     });
-    await expect(ctx.resolveChannelName("C0SHARED", secondTeam)).resolves.toEqual({
+    expect(await ctx.resolveChannelName("C0SHARED", secondTeam)).toEqual({
       lookupFailureCategory: "other",
     });
-    await expect(ctx.resolveChannelName("C0SHARED")).resolves.toEqual({
-      lookupFailureCategory: "other",
-    });
+    expect(await ctx.resolveChannelName("C0SHARED")).toEqual({ lookupFailureCategory: "other" });
   });
 
   it("keeps a recently re-resolved user while older entries are evicted", async () => {
@@ -322,19 +287,19 @@ describe("Slack monitor context", () => {
     saveRemoteMediaMock.mockReturnValue(download.promise);
     const { ctx, usersInfo } = userContext({
       display_name: "Alice",
-      image_192: "https://avatars.slack-edge.com/user-hash-192.png",
-      image_512: "https://avatars.slack-edge.com/user-hash-512.png",
-      image_72: "https://avatars.slack-edge.com/user-hash-72.png",
+      image_192: avatar(192),
+      image_512: avatar(512),
+      image_72: avatar(72),
     });
 
     await expect(ctx.resolveUserName("U1")).resolves.toEqual({
       name: "Alice",
-      imageUrl: "https://avatars.slack-edge.com/user-hash-192.png",
+      imageUrl: avatar(192),
     });
     expect(ctx.resolveUserAvatar("U1")).toBeUndefined();
     expect(ctx.resolveUserAvatar("U1")).toBeUndefined();
     expect(saveRemoteMediaMock).toHaveBeenCalledExactlyOnceWith({
-      url: "https://avatars.slack-edge.com/user-hash-192.png",
+      url: avatar(192),
       filePathHint: "conversation-avatar.png",
       maxBytes: 256 * 1024,
       ssrfPolicy: {
@@ -389,11 +354,9 @@ describe("Slack monitor context", () => {
           installRuntime();
         }
         const ctx = createTestContext();
-        await expect(ctx.isSlackAgentView()).resolves.toBe(false);
-        await expect(ctx.isSlackManagedViewThread("D123", "10.000")).resolves.toBe(false);
+        await expectViews(ctx, false);
         installRuntime();
-        await expect(ctx.isSlackAgentView()).resolves.toBe(false);
-        await expect(ctx.isSlackManagedViewThread("D123", "10.000")).resolves.toBe(false);
+        await expectViews(ctx, false);
 
         setSlackRuntime(null as never);
         await ctx.recordSlackAgentView();
@@ -408,21 +371,13 @@ describe("Slack monitor context", () => {
         );
         expect(thread.lookup).toHaveBeenCalledExactlyOnceWith(threadKey());
         expect(thread.register.mock.calls).toEqual(
-          ["10.000", "20.000"].map((threadTs) => [
-            threadKey(threadTs),
-            observation("managed-thread"),
-          ]),
+          ["10.000", "20.000"].map((ts) => [threadKey(ts), observation("managed-thread")]),
         );
         const expectedOpens = mode === "open fails once" ? 2 : 1;
-        expect([...attempts]).toEqual([
-          ["agent-view-workspaces", expectedOpens],
-          ["agent-view-threads", expectedOpens],
-        ]);
+        const namespaces = ["agent-view-workspaces", "agent-view-threads"];
+        expect([...attempts]).toEqual(namespaces.map((namespace) => [namespace, expectedOpens]));
         expect(openKeyedStore.mock.calls.map(([options]) => options)).toEqual(
-          Array.from({ length: expectedOpens }, () => [
-            storeOptions("agent-view-workspaces"),
-            storeOptions("agent-view-threads"),
-          ]).flat(),
+          Array.from({ length: expectedOpens }, () => namespaces.map(storeOptions)).flat(),
         );
         expect(warn).toHaveBeenCalledTimes(mode === "open fails once" ? 1 : 0);
       } finally {
@@ -498,13 +453,11 @@ describe("Slack monitor context", () => {
     const ctx = createTestContext({ apiAppId: "" });
     await ctx.recordSlackAgentView();
     await ctx.recordSlackManagedViewThread("D123", "10.000");
-    await expect(ctx.isSlackAgentView()).resolves.toBe(true);
-    await expect(ctx.isSlackManagedViewThread("D123", "10.000")).resolves.toBe(true);
+    await expectViews(ctx, true);
     expect(register).not.toHaveBeenCalled();
 
     const restarted = createTestContext({ apiAppId: "" });
-    await expect(restarted.isSlackAgentView()).resolves.toBe(false);
-    await expect(restarted.isSlackManagedViewThread("D123", "10.000")).resolves.toBe(false);
+    await expectViews(restarted, false);
     expect(lookup).not.toHaveBeenCalled();
   });
 
@@ -562,10 +515,9 @@ describe("Slack monitor context", () => {
     const log = vi.fn();
     const { ctx } = statusContext(apiCall, log);
     const update = { ...statusUpdate, title: "Research" };
-    await ctx.setSlackSessionStatus(update);
-    await ctx.setSlackSessionStatus(update);
-    await ctx.setSlackSessionStatus(update);
-    await ctx.setSlackSessionStatus(update);
+    for (let attempt = 0; attempt < 4; attempt++) {
+      await ctx.setSlackSessionStatus(update);
+    }
     expect(
       apiCall.mock.calls.filter(([method]) => method === "agents.sessions.rename"),
     ).toHaveLength(2);

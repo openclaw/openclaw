@@ -478,8 +478,6 @@ export function createSessionWorkspaceProps(
     presentation?: "desktop" | "mobile";
     openIntent?: "navigate";
     transcriptAttachments?: TranscriptAttachments;
-    /** Mobile host owns persistent expansion on editable focus. */
-    onSearchFocus?: () => void;
     draftScope?: string;
     draftContext?: SessionWorkspaceHost["sessionWorkspaceDraftContext"];
     expanded?: boolean;
@@ -551,7 +549,6 @@ export function createSessionWorkspaceProps(
         mobile.scrollTop = top;
       }
     },
-    onSearchFocus: options?.onSearchFocus,
     directories: workspace.directories,
     onToggleDirectory: (path: string) => {
       const tree = workspace.tree!;

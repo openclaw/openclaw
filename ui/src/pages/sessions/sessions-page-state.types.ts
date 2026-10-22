@@ -21,9 +21,10 @@ export type SessionsPageState = {
   page: number;
   pageSize: number;
   result: SessionsListResult | null;
+  roster: Promise<null> | null;
   loading: boolean;
   refreshing: boolean;
-  error: string | null;
+  error: unknown;
   activeMinutes: string;
   limit: string;
   includeGlobal: boolean;

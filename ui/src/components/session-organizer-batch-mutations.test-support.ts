@@ -16,13 +16,17 @@ import type {
 } from "./app-sidebar-session-types.ts";
 import type { SessionOrganizerDependencies } from "./session-organizer.ts";
 
-export function sessionRow(index: number): SidebarRecentSession {
+export function sessionRow(
+  index: number,
+  overrides: Partial<SidebarRecentSession> = {},
+): SidebarRecentSession {
   return {
     key: `agent:main:batch-${index}`,
     label: `Batch ${index}`,
     sessionId: `session-${index}`,
     sharingRole: "owner",
     pinned: index === 0 || index === 100,
+    ...overrides,
   } as SidebarRecentSession;
 }
 

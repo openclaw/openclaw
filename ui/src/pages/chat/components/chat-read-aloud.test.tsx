@@ -121,7 +121,7 @@ it.each([false, true])(
     flush();
     expect(pause).toHaveBeenCalledTimes(2);
     expect(revoke).toHaveBeenCalledWith("blob:synthetic-speech");
-    expect(readButton(view)).toBe(button);
+    await waitForSolid(() => expect(readButton(view)).toBe(button));
   },
 );
 
@@ -251,7 +251,9 @@ it("does not play a synthesis result after the message is unmounted", async () =
 });
 
 it("shows a Gateway synthesis failure instead of starting another speech provider", async () => {
-  request.mockRejectedValue(new Error("Local speech endpoint unavailable"));
+  request
+    .mockRejectedValueOnce(new Error("Local speech endpoint unavailable"))
+    .mockResolvedValue(speech);
   const view = mount();
   readButton(view).click();
   await waitForSolid(() =>
@@ -259,4 +261,30 @@ it("shows a Gateway synthesis failure instead of starting another speech provide
   );
   expect(request).toHaveBeenCalledOnce();
   expect(play).toHaveBeenCalledOnce();
+  readButton(view).click();
+  await waitForSolid(() => expect(audio[0]?.src).toBe("blob:synthetic-speech"));
+  expect(view.queryByRole("status")).toBeNull();
+  expect(request).toHaveBeenCalledTimes(2);
+});
+
+it("stops same-tick playback and ignores its late synthesis during a new playback", async () => {
+  const view = mount();
+  const button = readButton(view);
+  button.click();
+  button.click();
+  expect(request).toHaveBeenCalledOnce();
+  await waitForSolid(() => expect(readButton(view)).toBe(button));
+
+  const next = createDeferred<TtsSpeakResult>();
+  request.mockReturnValueOnce(next.promise);
+  button.click();
+  await waitForSolid(() => expect(readButton(view, "Stop reading")).toBe(button));
+  pending.resolve(speech);
+  await pending.promise;
+  await Promise.resolve();
+  expect(createUrl).not.toHaveBeenCalled();
+  expect(readButton(view, "Stop reading")).toBe(button);
+  next.resolve(speech);
+  await waitForSolid(() => expect(audio[0]?.src).toBe("blob:synthetic-speech"));
+  expect(request).toHaveBeenCalledTimes(2);
 });

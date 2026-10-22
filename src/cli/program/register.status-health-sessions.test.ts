@@ -2,6 +2,7 @@ import "../../test-utils/prepare-compiled-subprocesses.js";
 import { Command } from "commander";
 import { beforeEach, expect, it, vi } from "vitest";
 import { ExpectedCliError } from "../failure-output.js";
+import { expectNoCalls } from "./program.test-helpers.js";
 import { registerStatusHealthSessionsCommands } from "./register.status-health-sessions.js";
 
 const mocks = vi.hoisted(() => ({
@@ -107,10 +108,7 @@ it.each([
   const execution = run(args);
   await expect(execution).rejects.toBeInstanceOf(ExpectedCliError);
   await expect(execution).rejects.toMatchObject({ message });
-  expect(owner).not.toHaveBeenCalled();
-  expect(mocks.ownerLoaded).not.toHaveBeenCalled();
-  expect(mocks.runtime.error).not.toHaveBeenCalled();
-  expect(mocks.runtime.exit).not.toHaveBeenCalled();
+  expectNoCalls(owner, mocks.ownerLoaded, mocks.runtime.error, mocks.runtime.exit);
 });
 
 it.each([

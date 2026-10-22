@@ -79,12 +79,14 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
       readAccess.allowed || visibilityDisabledReason === undefined ? undefined : readAccess.reason;
     const state = this.collaboration.sharingStates.get(this.sessionSharingCacheKey(row.key));
     const allowedVisibilities = snapshot.hello?.policy?.allowedSessionVisibilities;
+    const operationSignal = this.headerSessionMutationAbortController.signal;
     return this.sessionSharingPropsMemo.read(
       [
         row,
         ...Object.entries(row).flat(),
         state,
         allowedVisibilities,
+        operationSignal,
         readAccess.allowed,
         openDisabledReason,
         visibilityDisabledReason,
@@ -99,6 +101,7 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
         session: row,
         state,
         allowedVisibilities,
+        operationSignal,
         membersAvailable: readAccess.allowed,
         openDisabledReason,
         visibilityDisabledReason,
@@ -215,34 +218,43 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
     // overwrite the new connection's menu with the previous account's data.
     // Object identity also owns this key's request slot: same-key session
     // replacement or a forced reload must not let an older request win.
-    const loadingState = { ...current, loading: true, error: undefined };
+    const completion = Promise.withResolvers<void>();
+    const loadingState = { ...current, loading: true, error: undefined, read: completion.promise };
     const ownsLoadingState = () => this.collaboration.sharingStates.get(cacheKey) === loadingState;
     this.setSessionSharingState(cacheKey, loadingState);
-    let next: ChatSessionSharingState;
     try {
-      const result = await scope.client.request<SessionSharingResult>(SESSION_MEMBERS_LIST_METHOD, {
-        sessionKey: currentRow.key,
-        ...(this.sessionSharingAgentId(currentRow.key)
-          ? { agentId: this.sessionSharingAgentId(currentRow.key) }
-          : {}),
-      });
-      next = {
-        loading: false,
-        result,
-        ...(result.publicShare ? { publicUrl: this.sessionPublicUrl(scope, currentRow) } : {}),
-      };
-    } catch (error) {
-      next = { ...current, loading: false, error: formatUiError(error) };
-    }
-    if (!this.ownsSessionSharing(scope, currentRow) || !ownsLoadingState()) {
-      if (this.isConnectionScopeCurrent(scope) && ownsLoadingState()) {
-        const sharingStates = new Map(this.collaboration.sharingStates);
-        sharingStates.delete(cacheKey);
-        this.collaboration.sharingStates = sharingStates;
+      let next: ChatSessionSharingState;
+      try {
+        const result = await scope.client.request<SessionSharingResult>(
+          SESSION_MEMBERS_LIST_METHOD,
+          {
+            sessionKey: currentRow.key,
+            ...(this.sessionSharingAgentId(currentRow.key)
+              ? { agentId: this.sessionSharingAgentId(currentRow.key) }
+              : {}),
+          },
+        );
+        next = {
+          loading: false,
+          result,
+          ...(result.publicShare ? { publicUrl: this.sessionPublicUrl(scope, currentRow) } : {}),
+        };
+      } catch (error) {
+        next = { ...current, loading: false, error: formatUiError(error) };
       }
-      return;
+      if (!this.ownsSessionSharing(scope, currentRow) || !ownsLoadingState()) {
+        if (this.isConnectionScopeCurrent(scope) && ownsLoadingState()) {
+          const sharingStates = new Map(this.collaboration.sharingStates);
+          sharingStates.delete(cacheKey);
+          this.collaboration.sharingStates = sharingStates;
+        }
+        return;
+      }
+      delete next.read;
+      this.setSessionSharingState(cacheKey, next);
+    } finally {
+      completion.resolve();
     }
-    this.setSessionSharingState(cacheKey, next);
   }
 
   protected failSharing(

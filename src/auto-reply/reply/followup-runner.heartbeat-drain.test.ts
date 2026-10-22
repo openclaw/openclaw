@@ -100,8 +100,6 @@ it("keeps heartbeat cleanup options out of a deferred queued user turn", async (
       isHeartbeat: true,
       useHeartbeatFailureCopy: true,
       cleanupBundleMcpOnRunEnd: true,
-      enableHeartbeatTool: true,
-      forceHeartbeatTool: true,
       sourceReplyDeliveryMode: "message_tool_only",
       bootstrapContextMode: "lightweight",
     },
@@ -160,13 +158,11 @@ it("keeps heartbeat cleanup options out of a deferred queued user turn", async (
       opts: { isHeartbeat: false },
     });
     expect([
-      retriedExecution.opts?.enableHeartbeatTool,
-      retriedExecution.opts?.forceHeartbeatTool,
       retriedExecution.opts?.useHeartbeatFailureCopy,
       retriedExecution.opts?.cleanupBundleMcpOnRunEnd,
       retriedExecution.opts?.bootstrapContextMode,
       retriedExecution.opts?.sourceReplyDeliveryMode,
-    ]).toEqual(Array(6).fill(undefined));
+    ]).toEqual(Array(4).fill(undefined));
   } finally {
     releaseFirst.resolve();
     heartbeatOperation.complete();

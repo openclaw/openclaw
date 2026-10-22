@@ -51,7 +51,6 @@ export type RunCliAgentParams = Pick<
   | "conversationToolPolicy"
   | "trustedInternalHandoff"
   | "trigger"
-  | "continuesConversation"
   | "finalizePromptForResolvedTools"
   | "currentInboundContext"
   | "runtimeContextFragments"

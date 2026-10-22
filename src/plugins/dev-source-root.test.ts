@@ -8,6 +8,7 @@ import {
   resolvePluginInstallSourcePlan,
 } from "./install-source-plan.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
+import { writeTree } from "./plugin-generation-capture.test-support.js";
 
 const host = vi.hoisted(() => ({ root: "" }));
 vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
@@ -22,31 +23,23 @@ afterEach(() => vi.unstubAllEnvs());
 function fixture(stagedCommit?: string) {
   host.root = tempDirs.make("staged-official-plugins-");
   const pluginRoot = path.join(host.root, "dist", "extensions", "codex");
-  fs.mkdirSync(pluginRoot, { recursive: true });
-  for (const [file, value] of [
-    ["package.json", { name: "openclaw", version: "2026.10.2" }],
-    [
-      "dist/build-info.json",
-      {
-        commit,
-        ...(stagedCommit
-          ? { stagedOfficialPlugins: { commit: stagedCommit, pluginIds: ["codex"] } }
-          : {}),
-      },
-    ],
-    [
-      "dist/extensions/codex/package.json",
-      {
-        name: "@openclaw/codex",
-        version: "2026.10.2",
-        openclaw: { extensions: ["./index.js"] },
-      },
-    ],
-    ["dist/extensions/codex/openclaw.plugin.json", { id: "codex", configSchema: {} }],
-  ] as const) {
-    fs.writeFileSync(path.join(host.root, file), JSON.stringify(value));
-  }
-  fs.writeFileSync(path.join(pluginRoot, "index.js"), "export default {};\n");
+  const identity = { name: "openclaw", version: "2026.10.2" };
+  writeTree(host.root, {
+    "package.json": identity,
+    "dist/build-info.json": {
+      commit,
+      ...(stagedCommit
+        ? { stagedOfficialPlugins: { commit: stagedCommit, pluginIds: ["codex"] } }
+        : {}),
+    },
+    "dist/extensions/codex/package.json": {
+      ...identity,
+      name: "@openclaw/codex",
+      openclaw: { extensions: ["./index.js"] },
+    },
+    "dist/extensions/codex/openclaw.plugin.json": { id: "codex", configSchema: {} },
+    "dist/extensions/codex/index.js": "export default {};\n",
+  });
   vi.stubEnv("OPENCLAW_DEV_SOURCE_ROOT", undefined);
   vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", undefined);
   vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.dirname(pluginRoot));

@@ -2806,6 +2806,16 @@ select.input {
   text-transform: inherit;
 }
 
+@media (forced-colors: active) {
+  /* Forced colors suppresses shadows; outrank the lazy page outline resets. */
+  button.channels-item__detail:focus-visible,
+  button.plugins-item__detail-button:focus-visible,
+  button.session-bar-selection:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+}
+
 .data-table-sort-icon {
   display: inline-flex;
   vertical-align: middle;

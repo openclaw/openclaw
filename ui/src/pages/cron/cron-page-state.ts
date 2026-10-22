@@ -129,6 +129,15 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
   function bindContext() {
     cleanups.splice(0).forEach((stop) => stop());
     const currentContext = context();
+    let location = currentContext.router.getState().location;
+    cleanups.push(
+      currentContext.router.subscribe((state) => {
+        if (state.location !== location) {
+          location = state.location;
+          presentation.retire();
+        }
+      }),
+    );
     const sourceChanged = boundContext !== null && boundContext.gateway !== currentContext.gateway;
     let first = boundContext === null || sourceChanged;
     boundContext = currentContext;
@@ -301,6 +310,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     routeSearch = search;
     runTranscript.close();
     cron.cronError = null;
+    cron.cronNotice = null;
     const routeData = resolveCronRouteData(search);
     if (JSON.stringify(cron.cronSessionFilter) !== JSON.stringify(routeData.session)) {
       resetGatewayState(context().gateway.snapshot);
@@ -645,6 +655,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     inventories: { agents, channels, runtimeConfig },
     cron: projection.read,
     saving: presentation.saving,
+    getActionRetired: () => presentation.retired,
     reads: presentation.reads,
     canManageCron,
     cronModelSuggestions: presentation.modelSuggestions,

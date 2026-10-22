@@ -213,45 +213,35 @@ it.each(["sibling", "managed"])(
   },
 );
 
-it("reselects a trimmed older run before evicting newer budget-only history", async () => {
-  const current = startCurrent();
-  const history = await addHistory(["older", "older", "newer"]);
-  const { trigger, maxGlobalRuntimeBytes } = nextWindow(
-    current,
-    expectDefined(history[2], "newer history event"),
-  );
-  withCompetingSelectionWrite(
-    (competing) =>
-      competing.exec(
-        "DELETE FROM trajectory_runtime_events WHERE session_id = 'history' AND seq = 0",
-      ),
-    () => append("session-1", [trigger], maxGlobalRuntimeBytes),
-  );
-  await expectTypes({ history: ["newer"] });
-});
-
-it.each(["expired", "recent"] as const)(
-  "reselects older %s arrivals before evicting newer history",
-  async (age) => {
+it.each(["trimmed", "expired", "recent"] as const)(
+  "reselects older history after a competing %s mutation",
+  async (mutation) => {
     const current = startCurrent();
     const expiredAt = now - 15 * 24 * 60 * 60 * 1000;
-    const history = await addHistory(["older", "newer"], (index) =>
-      age === "expired" && index === 0 ? expiredAt : now - 1000 + index,
+    const history = await addHistory(
+      mutation === "trimmed" ? ["older", "older", "newer"] : ["older", "newer"],
+      (index) => (mutation === "expired" && index === 0 ? expiredAt : now - 1000 + index),
     );
     const { trigger, maxGlobalRuntimeBytes } = nextWindow(
       current,
-      expectDefined(history[1], "newer history event"),
+      expectDefined(history.at(-1), "newer history event"),
     );
     const arrival = createTrajectoryEvent({
       sessionId: "history",
       runId: "arrival",
       type: "arrival",
       payloadSize: 4096,
-      ts: new Date(age === "expired" ? expiredAt : now - 2000).toISOString(),
+      ts: new Date(mutation === "expired" ? expiredAt : now - 2000).toISOString(),
     });
     withCompetingSelectionWrite(
       (competing) => {
-        if (age === "recent") {
+        if (mutation === "trimmed") {
+          competing.exec(
+            "DELETE FROM trajectory_runtime_events WHERE session_id = 'history' AND seq = 0",
+          );
+          return;
+        }
+        if (mutation === "recent") {
           competing.exec(
             "DELETE FROM trajectory_runtime_events WHERE session_id = 'history' AND seq = 1",
           );
@@ -263,7 +253,7 @@ it.each(["expired", "recent"] as const)(
       },
       () => append("session-1", [trigger], maxGlobalRuntimeBytes),
     );
-    await expectTypes({ history: [age === "expired" ? "newer" : "older"] });
+    await expectTypes({ history: [mutation === "recent" ? "older" : "newer"] });
   },
 );
 

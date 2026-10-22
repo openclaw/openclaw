@@ -2,6 +2,7 @@
 
 import { createComponent, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.ts";
 import {
   parseApprovalRequestedEvent,
   resolveApprovalRequest,
@@ -11,7 +12,7 @@ import {
 import { i18n } from "../i18n/index.ts";
 import { projectSessionApprovalReplay } from "../pages/chat/session-approval-projection.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
-import { flush } from "../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import {
   ExecApprovalCard,
   SidebarApprovalRow,
@@ -94,6 +95,41 @@ describe("exec approval card", () => {
     container.remove();
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it("retires a held decision when the displayed approval changes", async () => {
+    const pending = createDeferred();
+    const request = approval({ expiresAtMs: Date.now() + 60_000 });
+    const [props, setProps] = createSignal<ExecApprovalCardProps>({
+      approval: request,
+      variant: "inline",
+      busy: false,
+      connected: true,
+      canGrant: true,
+      error: null,
+      onDecision: () => pending.promise,
+    });
+    const view = mountSolid(
+      () =>
+        createComponent(ExecApprovalCard, {
+          get props() {
+            return props();
+          },
+        }),
+      { container },
+    );
+    const allow = () => view.getByRole("button", { name: "Allow once" }) as HTMLButtonElement;
+    allow().click();
+    await waitForSolid(() => expect(allow().disabled).toBe(true));
+    setProps({ ...props(), approval: { ...request, id: "replacement" } });
+    await waitForSolid(() => {
+      expect(
+        view.container.querySelector(".exec-approval-card")?.getAttribute("data-approval-id"),
+      ).toBe("replacement");
+      expect(allow().disabled).toBe(false);
+    });
+    pending.resolve();
+    view.unmount();
   });
 
   it("maps plugin error severity to the danger accent", () => {

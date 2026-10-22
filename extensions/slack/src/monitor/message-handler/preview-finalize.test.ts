@@ -70,12 +70,7 @@ describe("finalizeSlackPreviewEdit", () => {
         latest,
         inclusive,
         limit,
-      }: {
-        oldest?: string;
-        latest?: string;
-        inclusive?: boolean;
-        limit?: number;
-      }) => ({
+      }: Parameters<WebClient["conversations"]["replies"]>[0]) => ({
         messages: threadMessages
           .filter(
             (message) =>
@@ -97,21 +92,20 @@ describe("finalizeSlackPreviewEdit", () => {
     await expect(finalize(client)).rejects.toThrow("socket closed");
   });
 
-  it("accepts native-data fallback blocks after an ambiguous retry response", async () => {
-    const fallbackBlocks = [
-      {
-        type: "section",
-        text: { type: "mrkdwn", text: fallbackText, verbatim: true },
-      },
-    ];
-    const client = createClient([{ ts: "171234.567", text: fallbackText, blocks: fallbackBlocks }]);
+  it.each([true, false])(
+    "accepts native-data fallback after an ambiguous response (blocks=%s)",
+    async (withBlocks) => {
+      const fallbackBlocks = [
+        {
+          type: "section",
+          text: { type: "mrkdwn", text: fallbackText, verbatim: true },
+        },
+      ];
+      const client = createClient([
+        { ts: "171234.567", text: fallbackText, ...(withBlocks ? { blocks: fallbackBlocks } : {}) },
+      ]);
 
-    await expect(finalize(client, { text: "", blocks: nativeBlocks })).resolves.toBeUndefined();
-  });
-
-  it("accepts native-data text fallback without blocks after an ambiguous retry response", async () => {
-    const client = createClient([{ ts: "171234.567", text: fallbackText }]);
-
-    await expect(finalize(client, { text: "", blocks: nativeBlocks })).resolves.toBeUndefined();
-  });
+      await expect(finalize(client, { text: "", blocks: nativeBlocks })).resolves.toBeUndefined();
+    },
+  );
 });

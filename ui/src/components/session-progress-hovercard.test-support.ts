@@ -36,8 +36,9 @@ export function createHovercard(
     holdProgress = false,
     triggerKind = "sidebar",
     browser = false,
+    card,
   } = options;
-  let { card, rowDetails = {} } = options;
+  let { rowDetails = {} } = options;
   let selectedId = "research";
   let releaseProgress: (() => void) | undefined;
   const selection = subscriptions<ApplicationContext["agentSelection"]["state"]>();
@@ -149,7 +150,6 @@ export function createHovercard(
   return {
     provider,
     gateway,
-    row,
     trigger,
     request,
     getReads: () => reads("progressCard.get"),
@@ -166,10 +166,6 @@ export function createHovercard(
     select(agentId: string) {
       selectedId = agentId;
       selection.emit(context.agentSelection.state);
-    },
-    change(next: ProgressCard) {
-      card = next;
-      emitProgressChange(next.revision);
     },
     updateRow(details: Partial<SidebarSessionHovercardRow>) {
       rowDetails = { ...rowDetails, ...details };

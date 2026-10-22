@@ -113,6 +113,7 @@ async function openPage(context: BrowserContext) {
   await page.goto(`${suite.server.baseUrl}chat`);
   await page.locator("openclaw-app-sidebar").waitFor();
   await gateway.waitForRequest("chat.startup");
+  await waitForControlUiRoute(page, { routeId: "chat" });
   return { gateway, page };
 }
 
@@ -127,7 +128,7 @@ suite.define(() => {
         : {}),
     });
     try {
-      const { page: firstPage } = await openPage(context);
+      const { gateway: firstGateway, page: firstPage } = await openPage(context);
       const sidebar = firstPage.locator("openclaw-app-sidebar");
       await expect.poll(() => selectedAgentName(firstPage)).toBe("Dummy");
       await screenshot(firstPage, "01-default-agent.png");
@@ -137,7 +138,16 @@ suite.define(() => {
         .locator(".sidebar-agent-menu")
         .getByRole("menuitem", { name: "OpenClaw" })
         .click();
-      await waitForControlUiRoute(firstPage, { pathname: "/chat/openclaw", routeId: "chat" });
+      try {
+        await waitForControlUiRoute(firstPage, { pathname: "/chat/openclaw", routeId: "chat" });
+      } catch (error) {
+        console.error("Agent switch did not reach OpenClaw", {
+          diagnostics: await firstPage.evaluate(() => window.openclawControlUi?.diagnostics()),
+          resolutions: await firstGateway.getRequests("sessions.resolve", { agentId: "openclaw" }),
+          startups: await firstGateway.getRequests("chat.startup", { agentId: "openclaw" }),
+        });
+        throw error;
+      }
       await expectOpenClaw(firstPage);
       await screenshot(firstPage, "02-selected-openclaw.png");
 

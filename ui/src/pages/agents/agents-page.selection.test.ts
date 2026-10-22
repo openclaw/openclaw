@@ -487,6 +487,7 @@ describe("AgentsPage routing", () => {
       page.read().overview.onIdentityFieldChange("name", "Lunar museum curator");
       page.read().overview.onIdentitySave();
       await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+      const currentOutcome = page.read().readData().identityOutcome;
       if (stage === "request") {
         oldRequest.reject(new Error("Retired identity request"));
         await mutations[0]?.catch(() => undefined);
@@ -500,7 +501,7 @@ describe("AgentsPage routing", () => {
       await Promise.resolve();
       expect(page.read().readData().identitySaving).toBe(true);
       expect(page.read().readData().identityDraft.name).toBe("Lunar museum curator");
-      expect(page.read().readData().identityError).toBeNull();
+      expect(page.read().readData().identityOutcome).toBe(currentOutcome);
 
       newRequest.resolve();
       await waitForFast(() => expect(page.read().readData().identitySaving).toBe(false));
@@ -509,7 +510,7 @@ describe("AgentsPage routing", () => {
         emoji: null,
         avatar: null,
       });
-      expect(page.read().readData().identityError).toBeNull();
+      expect(await page.read().readData().identityOutcome).toBeNull();
     },
   );
 

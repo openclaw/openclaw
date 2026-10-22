@@ -29,6 +29,20 @@ const originalEnv = process.env;
 const originalProcess = process;
 const stopBeforeHandshake = new Error("fixture stops at the ACP spawn boundary");
 
+async function expectInvocation(
+  options: Parameters<typeof runAcpClientInteractive>[0],
+  command: string,
+  args: string[],
+  env?: Record<string, unknown>,
+) {
+  await expect(runAcpClientInteractive(options)).rejects.toBe(stopBeforeHandshake);
+  expect(spawnMock).toHaveBeenCalledExactlyOnceWith(
+    command,
+    args,
+    env ? expect.objectContaining({ env }) : expect.any(Object),
+  );
+}
+
 describe("ACP client self-invocation", () => {
   beforeEach(() => {
     process.env = { PATH: "/usr/bin:/bin", ACP_FIXTURE_API_KEY: "fixture-provider-key" };
@@ -51,15 +65,11 @@ describe("ACP client self-invocation", () => {
       vi.stubGlobal("__openclawStandaloneRootUrl", pathToFileURL(runtime).href);
       process.argv = argv1 ? [process.execPath, argv1] : [process.execPath];
 
-      await expect(runAcpClientInteractive({ serverVerbose: true })).rejects.toBe(
-        stopBeforeHandshake,
-      );
-      expect(spawnMock).toHaveBeenCalledExactlyOnceWith(
+      await expectInvocation(
+        { serverVerbose: true },
         process.execPath,
         ["acp", "--verbose"],
-        expect.objectContaining({
-          env: expect.not.objectContaining({ ACP_FIXTURE_API_KEY: expect.anything() }),
-        }),
+        expect.not.objectContaining({ ACP_FIXTURE_API_KEY: expect.anything() }),
       );
     },
   );
@@ -69,15 +79,11 @@ describe("ACP client self-invocation", () => {
     vi.stubGlobal("__openclawStandaloneRootUrl", pathToFileURL(runtime).href);
     process.argv = [process.execPath, "/$bunfs/root/openclaw"];
 
-    await expect(
-      runAcpClientInteractive({ serverCommand: "custom-acp", serverArgs: ["--custom"] }),
-    ).rejects.toBe(stopBeforeHandshake);
-    expect(spawnMock).toHaveBeenCalledExactlyOnceWith(
+    await expectInvocation(
+      { serverCommand: "custom-acp", serverArgs: ["--custom"] },
       "custom-acp",
       ["acp", "--custom"],
-      expect.objectContaining({
-        env: expect.objectContaining({ ACP_FIXTURE_API_KEY: "fixture-provider-key" }),
-      }),
+      expect.objectContaining({ ACP_FIXTURE_API_KEY: "fixture-provider-key" }),
     );
   });
 
@@ -86,14 +92,7 @@ describe("ACP client self-invocation", () => {
     await writeFile(entry, "export {};\n");
     process.argv = [process.execPath, entry];
 
-    await expect(runAcpClientInteractive({ serverVerbose: true })).rejects.toBe(
-      stopBeforeHandshake,
-    );
-    expect(spawnMock).toHaveBeenCalledExactlyOnceWith(
-      process.execPath,
-      [entry, "acp", "--verbose"],
-      expect.any(Object),
-    );
+    await expectInvocation({ serverVerbose: true }, process.execPath, [entry, "acp", "--verbose"]);
   });
 
   it.each([
@@ -112,23 +111,19 @@ describe("ACP client self-invocation", () => {
     };
     getActiveSkillEnvKeysCore.mockReturnValue(["SKILL_SECRET", "OPENCLAW_SHELL"]);
 
-    await expect(
-      runAcpClientInteractive({
+    await expectInvocation(
+      {
         serverCommand:
           server === "default" ? undefined : server === "self" ? process.execPath : "custom-acp",
-      }),
-    ).rejects.toBe(stopBeforeHandshake);
-    expect(spawnMock).toHaveBeenCalledExactlyOnceWith(
+      },
       server === "custom" ? "custom-acp" : process.execPath,
       ["acp"],
-      expect.objectContaining({
-        env: {
-          PATH: "/usr/bin",
-          OPENCLAW_SHELL: "acp-client",
-          OPENCLAW_API_KEY: "keep-me",
-          ...(strip ? {} : { ACP_FIXTURE_API_KEY: "provider-fixture" }),
-        },
-      }),
+      {
+        PATH: "/usr/bin",
+        OPENCLAW_SHELL: "acp-client",
+        OPENCLAW_API_KEY: "keep-me",
+        ...(strip ? {} : { ACP_FIXTURE_API_KEY: "provider-fixture" }),
+      },
     );
   });
 

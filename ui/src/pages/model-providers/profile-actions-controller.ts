@@ -42,6 +42,7 @@ type ProfileActionsOptions = {
   refresh: () => Promise<void>;
   getConfig: () => RuntimeConfigCapability;
   isCurrentClient: (client: GatewayBrowserClient, epoch: number) => boolean;
+  onLogoutStarted: (receipt: { cardId: string; completion: Promise<void> }) => void;
 };
 
 export function createModelProviderProfileActions(options: ProfileActionsOptions) {
@@ -155,10 +156,20 @@ export function createModelProviderProfileActions(options: ProfileActionsOptions
     if (!client || !options.canMutate() || options.isBusy(key)) {
       return;
     }
-    const { agentId, isCurrent } = captureScope(client);
+    const scope = captureScope(client);
     clearProbe(cardId);
     options.setBusy(key, true);
     options.clearMessage(cardId);
+    const completion = settleLogout(key, target, scope);
+    options.onLogoutStarted({ cardId, completion });
+    return completion;
+  }
+
+  async function settleLogout(
+    key: string,
+    target: ModelProviderLogoutTarget,
+    { agentId, isCurrent }: ReturnType<typeof captureScope>,
+  ): Promise<void> {
     try {
       const result = await options.getConfig().runExternalMutation(
         async (activeClient) => {

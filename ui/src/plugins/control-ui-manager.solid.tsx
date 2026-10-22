@@ -7,6 +7,7 @@ import {
   createMemo,
   createOptimistic,
   createSignal,
+  isPending,
 } from "solid-js";
 import { SettingsRow, SettingsSection } from "../components/solid/settings-ui.tsx";
 import { useApplication } from "../lib/reactive/context.ts";
@@ -17,8 +18,27 @@ import { CustomPluginUiDisabled } from "./control-ui-disabled.solid.tsx";
 export function PluginManager() {
   const context = useApplication();
   const [reloading, setReloading] = createOptimistic(false);
-  const [reloadRead, setReloadRead] = createSignal<Promise<void> | null>(null);
+  const [operationRead, setOperationRead] = createSignal<{
+    result: Promise<void>;
+    revision: number;
+    kind: "reload" | "refresh";
+  } | null>(null);
   const source = projectOwner(context.plugins, (runtime) => runtime);
+  const connection = projectOwner(
+    context.gateway,
+    (gateway) => gateway.connectionRevision,
+    Object.is,
+  );
+  const completion = createMemo(() => {
+    const read = operationRead();
+    return read?.revision === connection.read() ? read.result.then(() => null) : null;
+  });
+  const refreshing = () => isPending(completion) && operationRead()?.kind === "refresh";
+  const observe = (result: Promise<void>, kind: "reload" | "refresh") => {
+    // The surface can disappear before the admitted operation settles.
+    void result.catch(() => undefined);
+    setOperationRead({ result, kind, revision: context.gateway.connectionRevision });
+  };
   const reload = action(function* () {
     setReloading(true);
     yield source.read().reload();
@@ -48,12 +68,7 @@ export function PluginManager() {
                     class="btn btn--sm oc-action oc-action-secondary"
                     type="button"
                     disabled={reloading()}
-                    onClick={() => {
-                      const read = reload();
-                      // The settings surface can disappear before this action settles.
-                      void read.catch(() => undefined);
-                      void setReloadRead(read);
-                    }}
+                    onClick={() => observe(reload(), "reload")}
                   >
                     {t("pluginUi.reload")}
                   </button>
@@ -61,8 +76,12 @@ export function PluginManager() {
                 <button
                   class="btn btn--sm oc-action oc-action-secondary"
                   type="button"
-                  onClick={() => void source.read().refresh()}
+                  aria-busy={refreshing() ? "true" : "false"}
+                  onClick={() => observe(source.read().refresh(), "refresh")}
                 >
+                  <Show when={refreshing()}>
+                    <span class="btn__spinner" aria-hidden="true" />
+                  </Show>
                   {t("common.retry")}
                 </button>
               </>
@@ -117,8 +136,8 @@ export function PluginManager() {
               />
             )}
           </For>
-          <For each={!reloading() && reloadRead() ? [reloadRead()!] : []}>
-            {(read) => (
+          <For each={!reloading() && operationRead() ? [operationRead()!] : []}>
+            {() => (
               <Errored
                 fallback={(error) => {
                   const message = () => {
@@ -128,9 +147,7 @@ export function PluginManager() {
                   return <SettingsRow title={message()} role="alert" carapace />;
                 }}
               >
-                <Loading>
-                  <ReloadCompletion read={read} />
-                </Loading>
+                <Loading>{completion()}</Loading>
               </Errored>
             )}
           </For>
@@ -138,9 +155,4 @@ export function PluginManager() {
       </Show>
     </openclaw-plugin-manager>
   );
-}
-
-function ReloadCompletion(props: { read: Promise<void> }) {
-  const completion = createMemo(() => props.read.then(() => null));
-  return <>{completion()}</>;
 }

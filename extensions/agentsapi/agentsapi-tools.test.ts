@@ -1,9 +1,13 @@
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type {
+  AgentHarnessAttemptParamsV2,
+  AnyAgentTool,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createAgentHarnessHostCapabilitiesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
+import { Type } from "typebox";
 import { afterEach, assert, expect, it, vi } from "vitest";
 import { createAttemptParams } from "./agentsapi-attempt.test-helpers.js";
 import { buildAgentsApiToolSurface } from "./agentsapi-tools.js";
@@ -12,6 +16,143 @@ import { buildAgentsApiToolSurface } from "./agentsapi-tools.js";
 vi.mock("./agentsapi-transcript.js", () => ({ recordAgentsApiToolTranscript: vi.fn() }));
 
 afterEach(() => vi.restoreAllMocks());
+
+it("records source payloads separately from outbound message targets", async () => {
+  const tool: AnyAgentTool = {
+    name: "message",
+    label: "Fixture message",
+    description: "Returns a synthetic messaging transport result",
+    parameters: Type.Object(
+      {
+        action: Type.Literal("send"),
+        message: Type.String(),
+        final: Type.Boolean(),
+        channel: Type.Optional(Type.String()),
+        target: Type.Optional(Type.String()),
+      },
+      { additionalProperties: false },
+    ),
+    execute: async (id) => ({
+      content: [{ type: "text", text: "Sent" }],
+      details:
+        id === "outbound"
+          ? { messageId: "fixture-outbound" }
+          : {
+              sourceReplySink: "internal-ui",
+              deliveryStatus: "sent",
+              sourceReply: { text: "Delivered source reply" },
+            },
+    }),
+  };
+  await withFixtureTool(tool, async (surface) => {
+    await surface.execute({
+      type: "function_call",
+      turn_id: "fixture-turn",
+      call_id: "source",
+      name: "message",
+      arguments: { action: "send", message: "Requested source reply", final: false },
+    });
+    await surface.execute({
+      type: "function_call",
+      turn_id: "fixture-turn",
+      call_id: "outbound",
+      name: "message",
+      arguments: {
+        action: "send",
+        message: "Outbound text",
+        final: true,
+        channel: "slack",
+        target: "C123",
+      },
+    });
+    expect(surface.delivery).toMatchObject({
+      didSendViaMessagingTool: true,
+      messagingToolSourceReplyPayloads: [
+        { text: "Delivered source reply", sourceReplyFinal: false },
+      ],
+      messagingToolSentTexts: ["Outbound text"],
+      messagingToolSentMediaUrls: [],
+      messagingToolSentTargets: [
+        { tool: "message", provider: "slack", to: "C123", text: "Outbound text" },
+      ],
+    });
+  });
+});
+
+it("serializes mixed tool output and supplies the empty-output fallback", async () => {
+  const tool: AnyAgentTool = {
+    name: "fixture_output",
+    label: "Fixture output",
+    description: "Returns synthetic external tool content",
+    parameters: Type.Object({ empty: Type.Boolean() }, { additionalProperties: false }),
+    execute: async (id) => ({
+      content:
+        id === "output-true"
+          ? []
+          : [
+              { type: "text", text: "First" },
+              { type: "image", data: "AA==", mimeType: "image/png" },
+              { type: "text", text: "Last" },
+            ],
+      details: {},
+    }),
+  };
+  await withFixtureTool(tool, async (surface) => {
+    for (const [empty, output] of [
+      [false, "First\n[Image result omitted from Agents API function output]\nLast"],
+      [true, "Tool completed with no text output."],
+    ] as const) {
+      expect(
+        await surface.execute({
+          type: "function_call",
+          turn_id: "fixture-turn",
+          call_id: `output-${empty}`,
+          name: tool.name,
+          arguments: { empty },
+        }),
+      ).toEqual({ success: true, output });
+    }
+  });
+});
+
+async function withFixtureTool(
+  tool: AnyAgentTool,
+  run: (surface: Awaited<ReturnType<typeof buildAgentsApiToolSurface>>) => Promise<void>,
+) {
+  await withOpenClawTestState({ label: "agentsapi-tool-results" }, async (state) => {
+    const attempt = createAttemptParams({
+      workspaceDir: state.workspaceDir,
+      agentDir: state.agentDir(),
+      sessionFile: state.statePath("fixture-session.jsonl"),
+      config: { plugins: { allow: [] } },
+    });
+    const host = await createAgentHarnessHostCapabilitiesForTest({
+      attempt,
+      pluginId: "agentsapi",
+    });
+    const cleanups: Array<(reason: string) => Promise<void>> = [];
+    try {
+      const surface = await buildAgentsApiToolSurface(
+        {
+          ...attempt,
+          hostCapabilities: {
+            ...host.capabilities,
+            createToolSurfaceAsync: async () => host.capabilities.bindToolSurface([tool]),
+          },
+        },
+        new AbortController().signal,
+        host.capabilities.assertActive,
+        (cleanup) => cleanups.push(cleanup),
+      );
+      await run(surface);
+    } finally {
+      for (const cleanup of cleanups.toReversed()) {
+        await cleanup("Tool result test complete");
+      }
+      host.close();
+    }
+  });
+}
 
 it.each([
   ["guarded", true],

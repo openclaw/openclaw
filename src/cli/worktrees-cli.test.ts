@@ -4,6 +4,7 @@ import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { ManagedWorktreeService } from "../agents/worktrees/service.js";
+import { makeWorktreeRecord } from "../agents/worktrees/service.test-support.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
 import { parseCliProfileArgs } from "./profile.js";
@@ -100,18 +101,15 @@ describe("worktrees cli", () => {
     "passes source profiles through early parsing: %j %j",
     async (runtime, selected, profiles, state) => {
       const repoRoot = await fs.realpath(tempDirs.make("openclaw-cli-profile-input-"));
-      const create = vi.spyOn(owner, "create").mockResolvedValue({
-        id: "created",
-        name: "task",
-        repoFingerprint: "fingerprint",
-        repoRoot,
-        path: "/state/task",
-        branch: "openclaw/task",
-        baseRef: "HEAD",
-        ownerKind: "manual",
-        createdAt: 1,
-        lastActiveAt: 1,
-      });
+      const create = vi.spyOn(owner, "create").mockResolvedValue(
+        makeWorktreeRecord(repoRoot, "created", {
+          name: "task",
+          repoFingerprint: "fingerprint",
+          path: "/state/task",
+          branch: "openclaw/task",
+          ownerKind: "manual",
+        }),
+      );
       muteOutput();
       const parsed = parseProfile([
         ...runtime,

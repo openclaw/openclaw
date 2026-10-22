@@ -1,109 +1,78 @@
-// Root Dependency Ownership Audit tests cover root dependency ownership audit script behavior.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   classifyRootDependencyOwnership,
   collectRootDependencyOwnershipAudit,
   collectRootDependencyOwnershipCheckErrors,
-  collectModuleSpecifiers,
 } from "../../scripts/root-dependency-ownership-audit.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { force: true, recursive: true });
+function audit(files: Record<string, unknown>, scanRoots = ["extensions"]) {
+  const repoRoot = tempDirs.make("openclaw-root-deps-audit-");
+  for (const [relativePath, value] of Object.entries(files)) {
+    const filePath = path.join(repoRoot, relativePath);
+    mkdirSync(path.dirname(filePath), { recursive: true });
+    writeFileSync(filePath, typeof value === "string" ? value : JSON.stringify(value), "utf8");
   }
-});
-
-function makeTempRepo() {
-  const dir = mkdtempSync(path.join(tmpdir(), "openclaw-root-deps-audit-"));
-  tempDirs.push(dir);
-  return dir;
+  return collectRootDependencyOwnershipAudit({ repoRoot, scanRoots });
 }
 
-function writeRepoFile(repoRoot: string, relativePath: string, value: string) {
-  const filePath = path.join(repoRoot, relativePath);
-  mkdirSync(path.dirname(filePath), { recursive: true });
-  writeFileSync(filePath, value, "utf8");
+function record(
+  depName: string,
+  spec: string,
+  sampleFile: string,
+  category: string,
+  recommendation: string,
+  declaredInExtensions: string[] = [],
+  internalizedBundledRuntimeOwners: string[] = [],
+) {
+  return {
+    category,
+    declaredInExtensions,
+    depName,
+    fileCount: 1,
+    internalizedBundledRuntimeOwners,
+    recommendation,
+    sampleFiles: [sampleFile],
+    sections: [sampleFile.split("/")[0]],
+    spec,
+  };
 }
-
-describe("collectModuleSpecifiers", () => {
-  it("resolves simple string constants used by lazy runtime imports", () => {
-    expect([
-      ...collectModuleSpecifiers(`
-        const READABILITY_MODULE = "@mozilla/readability";
-        const CLAWPDF_MODULE = "clawpdf";
-        const CIAO_MODULE_ID = "@homebridge/ciao";
-        let SQLITE_VEC_MODULE_ID = "sqlite-vec";
-        import(READABILITY_MODULE);
-        import(CLAWPDF_MODULE);
-        require(CIAO_MODULE_ID);
-        require.resolve(SQLITE_VEC_MODULE_ID);
-      `),
-    ]).toEqual(["@mozilla/readability", "clawpdf", "@homebridge/ciao", "sqlite-vec"]);
-  });
-});
 
 describe("classifyRootDependencyOwnership", () => {
-  it("treats scripts and tests as dev-only candidates", () => {
-    expect(
-      classifyRootDependencyOwnership({
-        sections: ["scripts", "test"],
-      }),
-    ).toEqual({
-      category: "script_or_test_only",
-      recommendation: "consider moving from dependencies to devDependencies",
-    });
-  });
-
-  it("treats extension-only deps as localizable", () => {
-    expect(
-      classifyRootDependencyOwnership({
-        depName: "vendor-sdk",
-        sections: ["extensions", "test"],
-      }),
-    ).toEqual({
-      category: "extension_only_localizable",
-      recommendation:
-        "remove from root package.json and rely on owning extension manifests plus doctor --fix",
-    });
-  });
-
-  it("treats unreferenced deps as removal candidates", () => {
-    expect(
-      classifyRootDependencyOwnership({
-        sections: [],
-      }),
-    ).toEqual({
-      category: "unreferenced",
-      recommendation: "investigate removal; no direct source imports found in scanned files",
-    });
-  });
+  it.each([
+    [
+      ["scripts", "test"],
+      "script_or_test_only",
+      "consider moving from dependencies to devDependencies",
+    ],
+    [
+      ["extensions", "test"],
+      "extension_only_localizable",
+      "remove from root package.json and rely on owning extension manifests plus doctor --fix",
+    ],
+    [[], "unreferenced", "investigate removal; no direct source imports found in scanned files"],
+  ] satisfies [string[], string, string][])(
+    "classifies %j as %s",
+    (sections, category, recommendation) => {
+      expect(classifyRootDependencyOwnership({ depName: "vendor-sdk", sections })).toEqual({
+        category,
+        recommendation,
+      });
+    },
+  );
 });
 
 describe("collectRootDependencyOwnershipCheckErrors", () => {
   it("catches dependencies mirrored at root but only imported by one extension", () => {
-    const repoRoot = makeTempRepo();
-    writeRepoFile(
-      repoRoot,
-      "package.json",
-      JSON.stringify({ dependencies: { "vendor-sdk": "^1.0.0" } }),
-    );
-    writeRepoFile(
-      repoRoot,
-      "extensions/demo-channel/package.json",
-      JSON.stringify({ dependencies: { "vendor-sdk": "^1.0.0" } }),
-    );
-    writeRepoFile(
-      repoRoot,
-      "extensions/demo-channel/src/setup.ts",
-      'const sdk = await import("vendor-sdk");\n',
-    );
-
-    const records = collectRootDependencyOwnershipAudit({ repoRoot, scanRoots: ["extensions"] });
+    const records = audit({
+      "package.json": { dependencies: { "vendor-sdk": "^1.0.0" } },
+      "extensions/demo-channel/package.json": { dependencies: { "vendor-sdk": "^1.0.0" } },
+      "extensions/demo-channel/src/setup.ts": 'const sdk = await import("vendor-sdk");\n',
+    });
 
     expect(collectRootDependencyOwnershipCheckErrors(records)).toEqual([
       "root dependency 'vendor-sdk' is extension-owned (remove from root package.json and rely on owning extension manifests plus doctor --fix); extension declarations: demo-channel:dependencies; sample imports: extensions/demo-channel/src/setup.ts",
@@ -111,183 +80,105 @@ describe("collectRootDependencyOwnershipCheckErrors", () => {
   });
 
   it("classifies root dependencies referenced through constant dynamic imports", () => {
-    const repoRoot = makeTempRepo();
-    writeRepoFile(
-      repoRoot,
-      "package.json",
-      JSON.stringify({ dependencies: { clawpdf: "^0.2.0", "sqlite-vec": "0.1.9" } }),
-    );
-    writeRepoFile(
-      repoRoot,
-      "src/media/pdf-extract.ts",
-      `
+    const records = audit(
+      {
+        "package.json": { dependencies: { clawpdf: "^0.2.0", "sqlite-vec": "0.1.9" } },
+        "src/media/pdf-extract.ts": `
         const CLAWPDF_MODULE = "clawpdf";
         export async function loadPdf() {
           return import(CLAWPDF_MODULE);
         }
       `,
-    );
-    writeRepoFile(
-      repoRoot,
-      "packages/memory-host-sdk/src/host/sqlite-vec.ts",
-      `
-        const SQLITE_VEC_MODULE_ID = "sqlite-vec";
+        "packages/memory-host-sdk/src/host/sqlite-vec.ts": `
+        let SQLITE_VEC_MODULE_ID = "sqlite-vec";
         export async function loadSqliteVecModule() {
-          return import(SQLITE_VEC_MODULE_ID);
+          return require.resolve(SQLITE_VEC_MODULE_ID);
         }
       `,
+      },
+      ["src", "packages"],
     );
 
-    const records = collectRootDependencyOwnershipAudit({
-      repoRoot,
-      scanRoots: ["src", "packages"],
-    });
-
     expect(records).toEqual([
-      {
-        category: "core_runtime",
-        declaredInExtensions: [],
-        depName: "clawpdf",
-        fileCount: 1,
-        internalizedBundledRuntimeOwners: [],
-        recommendation: "keep at root",
-        sampleFiles: ["src/media/pdf-extract.ts"],
-        sections: ["src"],
-        spec: "^0.2.0",
-      },
-      {
-        category: "core_runtime",
-        declaredInExtensions: [],
-        depName: "sqlite-vec",
-        fileCount: 1,
-        internalizedBundledRuntimeOwners: [],
-        recommendation: "keep at root",
-        sampleFiles: ["packages/memory-host-sdk/src/host/sqlite-vec.ts"],
-        sections: ["packages"],
-        spec: "0.1.9",
-      },
+      record("clawpdf", "^0.2.0", "src/media/pdf-extract.ts", "core_runtime", "keep at root"),
+      record(
+        "sqlite-vec",
+        "0.1.9",
+        "packages/memory-host-sdk/src/host/sqlite-vec.ts",
+        "core_runtime",
+        "keep at root",
+      ),
     ]);
   });
 
   it("does not fail explicitly root-owned internal extension runtime dependencies", () => {
-    const repoRoot = makeTempRepo();
-    writeRepoFile(
-      repoRoot,
-      "package.json",
-      JSON.stringify({
+    const records = audit({
+      "package.json": {
         dependencies: {
           "@homebridge/ciao": "^1.3.7",
           "@opentelemetry/semantic-conventions": "1.43.0",
           "playwright-core": "1.59.1",
         },
-      }),
-    );
-    writeRepoFile(
-      repoRoot,
-      "extensions/bonjour/package.json",
-      JSON.stringify({ dependencies: { "@homebridge/ciao": "^1.3.7" } }),
-    );
-    writeRepoFile(
-      repoRoot,
-      "extensions/bonjour/src/advertiser.ts",
-      'const CIAO_MODULE_ID = "@homebridge/ciao";\nimport(CIAO_MODULE_ID);\n',
-    );
-    writeRepoFile(
-      repoRoot,
-      "extensions/diagnostics-otel/src/service.ts",
-      'import { ATTR_ERROR_TYPE } from "@opentelemetry/semantic-conventions";\n',
-    );
-    writeRepoFile(
-      repoRoot,
-      "extensions/browser/package.json",
-      JSON.stringify({ dependencies: { "playwright-core": "1.59.1" } }),
-    );
-    writeRepoFile(
-      repoRoot,
-      "extensions/browser/src/browser/playwright-core.runtime.ts",
-      'const runtime = require("playwright-core");\n',
-    );
-
-    const records = collectRootDependencyOwnershipAudit({ repoRoot, scanRoots: ["extensions"] });
+      },
+      "extensions/bonjour/package.json": { dependencies: { "@homebridge/ciao": "^1.3.7" } },
+      "extensions/bonjour/src/advertiser.ts":
+        'const CIAO_MODULE_ID = "@homebridge/ciao";\nrequire(CIAO_MODULE_ID);\n',
+      "extensions/diagnostics-otel/src/service.ts":
+        'import { ATTR_ERROR_TYPE } from "@opentelemetry/semantic-conventions";\n',
+      "extensions/browser/package.json": { dependencies: { "playwright-core": "1.59.1" } },
+      "extensions/browser/src/browser/playwright-core.runtime.ts":
+        'const runtime = require("playwright-core");\n',
+    });
 
     expect(records).toEqual([
-      {
-        category: "root_owned_extension_runtime",
-        declaredInExtensions: ["bonjour:dependencies"],
-        depName: "@homebridge/ciao",
-        fileCount: 1,
-        internalizedBundledRuntimeOwners: [],
-        recommendation:
-          "keep at root; the Bonjour runtime is shipped with packaged startup surfaces even though the bundled plugin also declares it",
-        sampleFiles: ["extensions/bonjour/src/advertiser.ts"],
-        sections: ["extensions"],
-        spec: "^1.3.7",
-      },
-      {
-        category: "root_owned_extension_runtime",
-        declaredInExtensions: [],
-        depName: "@opentelemetry/semantic-conventions",
-        fileCount: 1,
-        internalizedBundledRuntimeOwners: [],
-        recommendation:
-          "keep at root; the bundled Mistral runtime in @openclaw/ai imports these constants even though only the diagnostics plugin imports them directly in repository source",
-        sampleFiles: ["extensions/diagnostics-otel/src/service.ts"],
-        sections: ["extensions"],
-        spec: "1.43.0",
-      },
-      {
-        category: "root_owned_extension_runtime",
-        declaredInExtensions: ["browser:dependencies"],
-        depName: "playwright-core",
-        fileCount: 1,
-        internalizedBundledRuntimeOwners: [],
-        recommendation:
-          "keep at root; the internal browser runtime is shipped with core even though downloadable browser-adjacent plugins also declare it",
-        sampleFiles: ["extensions/browser/src/browser/playwright-core.runtime.ts"],
-        sections: ["extensions"],
-        spec: "1.59.1",
-      },
+      record(
+        "@homebridge/ciao",
+        "^1.3.7",
+        "extensions/bonjour/src/advertiser.ts",
+        "root_owned_extension_runtime",
+        "keep at root; the Bonjour runtime is shipped with packaged startup surfaces even though the bundled plugin also declares it",
+        ["bonjour:dependencies"],
+      ),
+      record(
+        "@opentelemetry/semantic-conventions",
+        "1.43.0",
+        "extensions/diagnostics-otel/src/service.ts",
+        "root_owned_extension_runtime",
+        "keep at root; the bundled Mistral runtime in @openclaw/ai imports these constants even though only the diagnostics plugin imports them directly in repository source",
+      ),
+      record(
+        "playwright-core",
+        "1.59.1",
+        "extensions/browser/src/browser/playwright-core.runtime.ts",
+        "root_owned_extension_runtime",
+        "keep at root; the internal browser runtime is shipped with core even though downloadable browser-adjacent plugins also declare it",
+        ["browser:dependencies"],
+      ),
     ]);
     expect(collectRootDependencyOwnershipCheckErrors(records)).toStrictEqual([]);
   });
 
   it("allows runtime deps for bundled plugins that are still packaged in core", () => {
-    const repoRoot = makeTempRepo();
-    writeRepoFile(
-      repoRoot,
-      "package.json",
-      JSON.stringify({
+    const records = audit({
+      "package.json": {
         dependencies: { "vendor-sdk": "^1.0.0" },
         files: ["dist/", "!dist/extensions/externalized/**"],
-      }),
-    );
-    writeRepoFile(
-      repoRoot,
-      "extensions/internal/package.json",
-      JSON.stringify({ dependencies: { "vendor-sdk": "^1.0.0" } }),
-    );
-    writeRepoFile(repoRoot, "extensions/internal/openclaw.plugin.json", JSON.stringify({}));
-    writeRepoFile(
-      repoRoot,
-      "extensions/internal/src/setup.ts",
-      'const sdk = await import("vendor-sdk");\n',
-    );
-
-    const records = collectRootDependencyOwnershipAudit({ repoRoot, scanRoots: ["extensions"] });
+      },
+      "extensions/internal/package.json": { dependencies: { "vendor-sdk": "^1.0.0" } },
+      "extensions/internal/openclaw.plugin.json": {},
+      "extensions/internal/src/setup.ts": 'const sdk = await import("vendor-sdk");\n',
+    });
 
     expect(records).toEqual([
-      {
-        category: "root_owned_extension_runtime",
-        declaredInExtensions: ["internal:dependencies"],
-        depName: "vendor-sdk",
-        fileCount: 1,
-        internalizedBundledRuntimeOwners: ["internal:dependencies"],
-        recommendation:
-          "keep at root while bundled plugin runtime dependencies are internalized; owners: internal:dependencies",
-        sampleFiles: ["extensions/internal/src/setup.ts"],
-        sections: ["extensions"],
-        spec: "^1.0.0",
-      },
+      record(
+        "vendor-sdk",
+        "^1.0.0",
+        "extensions/internal/src/setup.ts",
+        "root_owned_extension_runtime",
+        "keep at root while bundled plugin runtime dependencies are internalized; owners: internal:dependencies",
+        ["internal:dependencies"],
+        ["internal:dependencies"],
+      ),
     ]);
     expect(collectRootDependencyOwnershipCheckErrors(records)).toStrictEqual([]);
   });

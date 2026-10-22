@@ -590,7 +590,6 @@ describe("standalone channel launch", () => {
     materializeMcpAppChannelPresentation({
       sessionKey: "agent:main:main",
       view: { viewId: view.viewId },
-      nowMs,
     });
   beforeEach(() => {
     resetStandaloneMcpAppTestState();

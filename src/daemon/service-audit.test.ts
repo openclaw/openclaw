@@ -113,17 +113,15 @@ it.each([undefined, "Cannot use SQLite library /opt/broken/libsqlite3.dylib: mis
 );
 
 it.each([false, true])("reports Node capability status (supported=%s)", async (supported) => {
-  const message = supported
-    ? "Vendor Node capability check passed."
-    : "SQLite truncates TEXT at NUL.";
+  const message = "SQLite truncates TEXT at NUL.";
   resolveNodeRuntimeInfoMock.mockResolvedValue({
-    ...runtimeInfo(supported ? "24.15.0" : "26.8.1", "3.53.4", supported),
+    ...runtimeInfo("26.12.1", "3.53.4", supported),
     status: supported ? "supported" : "unsupported",
-    ...(supported ? { note: message } : { capabilityError: message }),
+    ...(!supported ? { capabilityError: message } : {}),
   });
   const result = await audit();
   if (supported) {
-    expect(result.runtimeNote).toBe(message);
+    expect(result.runtimeNote).toBeUndefined();
     expect(hasIssue(result, codes.gatewayRuntimeNode)).toBe(false);
   } else {
     expectIssue(result, codes.gatewayRuntimeNode, { message, detail: "/usr/bin/node" });

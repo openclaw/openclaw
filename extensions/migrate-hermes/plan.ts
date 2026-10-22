@@ -15,7 +15,7 @@ import type {
 import { filterStringRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildAuthItems } from "./auth.js";
 import { buildConfigItems } from "./config.js";
-import { exists, parseEnv, parseHermesConfig, readText } from "./helpers.js";
+import { exists, parseEnv, parseHermesConfig, readUtf8Text } from "./helpers.js";
 import {
   createHermesModelItem,
   findHermesModelProviderDependency,
@@ -44,14 +44,14 @@ export async function buildHermesPlan(ctx: MigrationProviderContext): Promise<Mi
   const targets = resolvePlannedMigrationTargets(ctx);
   let config: Record<string, unknown>;
   try {
-    config = parseHermesConfig(await readText(source.configPath));
+    config = parseHermesConfig(await readUtf8Text(source.configPath));
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     throw new Error(`Failed to parse Hermes config at ${source.configPath}: ${reason}`, {
       cause: err,
     });
   }
-  const env = parseEnv(await readText(source.envPath));
+  const env = parseEnv(await readUtf8Text(source.envPath));
   const modelRef = resolveHermesModelRef(config, env);
   const runtimeEnv = filterStringRecord(process.env) ?? {};
   const items: MigrationItem[] = [];
