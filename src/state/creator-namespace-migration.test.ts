@@ -23,6 +23,10 @@ import {
   withStateMigrationBackupForTest,
 } from "./openclaw-state-schema.test-support.js";
 
+const actor = { type: "human", id: "same-id", label: "Retain me" } as const;
+const version = (db: ReturnType<typeof openNodeSqliteDatabase>) =>
+  db.prepare("PRAGMA user_version").get()?.user_version;
+
 describe("creator namespace upgrades", () => {
   it("qualifies only proven historical seams atomically and keeps a restorable backup", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -45,7 +49,7 @@ describe("creator namespace upgrades", () => {
             updatedAt: 10,
             createdAt: 5,
             createdVia: via,
-            createdActor: { type: "human", source: "unknown", id: "same-id", label: "Retain me" },
+            createdActor: { ...actor, source: "unknown" },
             sandbox: "required",
             visibility: "draft",
           },
@@ -90,7 +94,7 @@ describe("creator namespace upgrades", () => {
         } finally {
           fault.mockRestore();
         }
-        expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(18);
+        expect(version(db)).toBe(18);
         expect(
           db
             .prepare(
@@ -100,9 +104,7 @@ describe("creator namespace upgrades", () => {
             .every((row) => row.source === null),
         ).toBe(true);
         await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => migrate());
-        expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(
-          OPENCLAW_AGENT_SCHEMA_VERSION,
-        );
+        expect(version(db)).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
         expect(
           db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get()
             ?.schema_version,
@@ -116,7 +118,7 @@ describe("creator namespace upgrades", () => {
         expect(
           loadSessionEntry({ ...options, sessionKey: `agent:main:${via ?? "unknown"}` }),
         ).toMatchObject({
-          createdActor: { type: "human", source, id: "same-id", label: "Retain me" },
+          createdActor: { ...actor, source },
           sandbox: "required",
           visibility: "draft",
           createdAt: 5,
@@ -127,7 +129,7 @@ describe("creator namespace upgrades", () => {
       });
       const restored = openNodeSqliteDatabase(backupPath, { readOnly: true });
       try {
-        expect(restored.prepare("PRAGMA user_version").get()?.user_version).toBe(18);
+        expect(version(restored)).toBe(18);
         expect(restored.prepare("PRAGMA integrity_check").get()?.integrity_check).toBe("ok");
         expect(restored.prepare("SELECT count(*) AS count FROM session_nodes").get()?.count).toBe(
           cases.length + 1,
@@ -147,12 +149,7 @@ describe("creator namespace upgrades", () => {
         jobs: [
           {
             ...makeCronJob({}),
-            createdActor: {
-              type: "human",
-              source: "profile",
-              id: "same-id",
-              label: "Retain me",
-            },
+            createdActor: { ...actor, source: "profile" },
           },
         ],
       });
@@ -170,12 +167,7 @@ describe("creator namespace upgrades", () => {
         OPENCLAW_STATE_SCHEMA_VERSION,
       );
       expect((await loadCronStore(storePath)).jobs[0]).toMatchObject({
-        createdActor: {
-          type: "human",
-          source: "unknown",
-          id: "same-id",
-          label: "Retain me",
-        },
+        createdActor: { ...actor, source: "unknown" },
       });
     });
   });

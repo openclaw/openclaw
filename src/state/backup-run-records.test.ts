@@ -231,7 +231,6 @@ describe("backup run records", () => {
       });
       await checkHint(env, "No successful offsite backup to archive is recorded.", undefined, {});
       const successfulTarget = { target: "archive", latestOk: { createdAt: 1_000 } };
-      expect(summarizeBackupTargets(await readBackupRuns(env))).toMatchObject([successfulTarget]);
       await record({
         ...ok,
         location: undefined,

@@ -28,6 +28,7 @@ const SECURITY_ACKNOWLEDGED_AT = "2026-08-02T00:00:00.000Z";
 const acknowledgedConfig = {
   wizard: { securityAcknowledgedAt: SECURITY_ACKNOWLEDGED_AT },
 };
+const replacementAcknowledgement = "2026-08-03T00:00:00.000Z";
 
 function onboarding(state: OpenClawTestState) {
   const database = { env: state.env };
@@ -51,7 +52,15 @@ function onboarding(state: OpenClawTestState) {
       agents: { defaults: { workspace: state.workspaceDir }, entries: { main: {} } },
       ...acknowledgedConfig,
     });
-  return { database, begin, complete, read, recover, writeConfig };
+  const replace = (runId: string, expectedRunId: string) =>
+    begin({
+      workspace: state.path("replacement-workspace"),
+      securityAcknowledgedAt: replacementAcknowledgement,
+      runId,
+      replace: true,
+      expectedRunId,
+    });
+  return { database, begin, complete, read, recover, writeConfig, replace };
 }
 
 void describe("local onboarding state", () => {
@@ -119,15 +128,9 @@ void describe("local onboarding state", () => {
 
   void it("prevents an interrupted pre-reset run from completing its replacement", async () => {
     await withOpenClawTestState({ label: "local-onboarding-reset" }, async (state) => {
-      const { begin, complete, read } = onboarding(state);
+      const { begin, complete, read, replace } = onboarding(state);
       begin({ runId: "stale-run" });
-      const replacement = begin({
-        workspace: state.path("replacement-workspace"),
-        securityAcknowledgedAt: "2026-08-03T00:00:00.000Z",
-        runId: "new-run",
-        replace: true,
-        expectedRunId: "stale-run",
-      });
+      const replacement = replace("new-run", "stale-run");
 
       assert.equal(await complete("stale-run"), false);
       assert.deepEqual(read(), replacement);
@@ -237,15 +240,9 @@ void describe("local onboarding state", () => {
 
   void it("does not let a concurrent missing-config run replace the active owner", async () => {
     await withOpenClawTestState({ label: "local-onboarding-concurrent" }, async (state) => {
-      const { begin, read } = onboarding(state);
+      const { begin, read, replace } = onboarding(state);
       const active = begin({ runId: "active-run" });
-      const concurrent = begin({
-        workspace: state.path("concurrent-workspace"),
-        securityAcknowledgedAt: "2026-08-03T00:00:00.000Z",
-        runId: "concurrent-run",
-        replace: true,
-        expectedRunId: "stale-reset-run",
-      });
+      const concurrent = replace("concurrent-run", "stale-reset-run");
 
       assert.deepEqual(concurrent, active);
       assert.deepEqual(read(), active);
@@ -278,17 +275,11 @@ void describe("local onboarding state", () => {
 
   void it("replaces a completed owner only when reset observed its exact run", async () => {
     await withOpenClawTestState({ label: "local-onboarding-completed-reset" }, async (state) => {
-      const { begin, complete, read } = onboarding(state);
+      const { begin, complete, read, replace } = onboarding(state);
       const first = begin({ runId: "observed-completed-run" });
       assert.equal(await complete(first.runId), true);
 
-      const replacement = begin({
-        workspace: state.path("replacement-workspace"),
-        securityAcknowledgedAt: "2026-08-03T00:00:00.000Z",
-        runId: "replacement-run",
-        replace: true,
-        expectedRunId: first.runId,
-      });
+      const replacement = replace("replacement-run", first.runId);
 
       assert.partialDeepStrictEqual(replacement, { status: "pending", runId: "replacement-run" });
       assert.deepEqual(read(), replacement);
