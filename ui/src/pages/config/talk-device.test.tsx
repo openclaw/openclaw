@@ -67,7 +67,7 @@ it.each(["document", "event", "edit"])(
         publish(snapshot);
       } else {
         post.mockResolvedValueOnce(snapshot);
-        capability.set("voice.wakeEnabled", false);
+        await capability.set("voice.wakeEnabled", false);
       }
     }
     await expect(capability.initialSnapshot).resolves.toEqual(snapshot);
@@ -81,7 +81,7 @@ it("retires a pending snapshot without letting an old edit settle the replacemen
   const previous = installBridge();
   const reply = Promise.withResolvers<unknown>();
   previous.post.mockReturnValueOnce(reply.promise);
-  previous.capability.set("voice.wakeEnabled", true);
+  void previous.capability.set("voice.wakeEnabled", true);
   previous.capability.dispose();
   await expect(previous.capability.initialSnapshot).resolves.toBeNull();
 
