@@ -1,5 +1,4 @@
-import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   defaultActionOptions,
   discordConfig,
@@ -41,32 +40,42 @@ async function expectRejected(error: string | RegExp, ...args: Parameters<typeof
   expect(handleDiscordActionMock).not.toHaveBeenCalled();
 }
 
-function sendPayload(overrides: Record<string, unknown>) {
-  return {
-    action: "sendMessage",
-    accountId: undefined,
-    to: "channel:123",
-    content: "hello",
-    mediaUrl: undefined,
-    filename: undefined,
-    replyTo: undefined,
-    components: undefined,
-    embeds: undefined,
-    asVoice: false,
-    silent: false,
-    __sessionKey: undefined,
-    __agentId: undefined,
-    ...overrides,
-  };
-}
-
 function threadAction(action: "thread-create" | "thread-reply", params: Record<string, unknown>) {
   return runAction(action, params, { cfg: discordConfig({ threads: true }), ...threadContext });
 }
 
+const cleanupRoutes: Array<() => void> = [];
+function beginRoute(
+  options: Partial<Parameters<typeof beginDiscordActiveTurnThreadRoute>[1]> = {},
+) {
+  const route = {
+    ...sourceRoute,
+    onThreadAdopted: vi.fn(),
+    onThreadReplyDelivered: vi.fn(),
+    ...options,
+  };
+  cleanupRoutes.push(beginDiscordActiveTurnThreadRoute(sessionKey, route));
+  return route;
+}
+function mockResult(details: Record<string, unknown> = { ok: true }) {
+  const result = { content: [], details };
+  handleDiscordActionMock.mockResolvedValueOnce(result);
+  return result;
+}
+const threadParams = {
+  channelId: "channel-1",
+  messageId: "message-1",
+  threadName: "investigation",
+};
+
 describe("handleDiscordMessageAction", () => {
   beforeEach(() => {
     handleDiscordActionMock.mockClear();
+  });
+  afterEach(() => {
+    for (const cleanup of cleanupRoutes.splice(0)) {
+      cleanup();
+    }
   });
 
   it.each([
@@ -171,11 +180,7 @@ describe("handleDiscordMessageAction", () => {
     "keeps %s available from non-Discord requesters",
     async (action, runtimeAction, params) => {
       const cfg = discordConfig({ channelInfo: true });
-      await runAction(action, params, {
-        cfg,
-        requesterSenderId: "telegram-user-id",
-        toolContext: { currentChannelProvider: "telegram" },
-      });
+      await runAction(action, params, { cfg, ...foreignRequester });
 
       expectDiscordActionCall({
         payload: { action: runtimeAction, accountId: undefined, ...params },
@@ -213,44 +218,6 @@ describe("handleDiscordMessageAction", () => {
     });
   });
 
-  it("forwards attested current-conversation context to Discord reads", async () => {
-    const cfg = discordConfig();
-    await runAction(
-      "read",
-      { channelId: "channel:123", messageId: "1542546825066577940" },
-      {
-        cfg,
-        accountId: "ops",
-        requesterAccountId: "ops",
-        conversationReadOrigin: "delegated",
-        toolContext: { currentChannelProvider: "discord", currentChannelId: "channel:123" },
-      },
-    );
-
-    expectDiscordActionCall({
-      payload: {
-        action: "readMessages",
-        accountId: "ops",
-        channelId: "123",
-        limit: undefined,
-        before: undefined,
-        after: undefined,
-        around: undefined,
-        messageId: "1542546825066577940",
-      },
-      cfg,
-      options: {
-        ...defaultActionOptions(),
-        conversationReadOrigin: "delegated",
-        readContext: {
-          requesterAccountId: "ops",
-          currentChannelProvider: "discord",
-          currentChannelId: "channel:123",
-        },
-      },
-    });
-  });
-
   it("forwards attested current-conversation context to Discord channel info", async () => {
     const cfg = discordConfig({ channelInfo: true });
     await runAction(
@@ -276,21 +243,6 @@ describe("handleDiscordMessageAction", () => {
           currentChannelId: "channel:123",
         },
       },
-    });
-  });
-
-  it("forwards threadName on sends", async () => {
-    const cfg = discordConfig();
-    await runAction(
-      "send",
-      { target: "channel:thread-1", message: "hello", threadName: "Renamed thread" },
-      { cfg },
-    );
-
-    expectDiscordActionCall({
-      payload: sendPayload({ to: "channel:thread-1", threadName: "Renamed thread" }),
-      cfg,
-      options: defaultActionOptions(),
     });
   });
 
@@ -382,274 +334,108 @@ describe("handleDiscordMessageAction", () => {
   });
 
   it("adopts a thread created from the active source message and confirms replies there", async () => {
-    const onThreadAdopted = vi.fn();
-    const onThreadReplyDelivered = vi.fn();
-    const endRoute = beginDiscordActiveTurnThreadRoute(sessionKey, {
-      ...sourceRoute,
-      onThreadAdopted,
-      onThreadReplyDelivered,
+    const { onThreadAdopted, onThreadReplyDelivered } = beginRoute();
+    expect(notifyDiscordActiveTurnThreadReplyDelivered(threadContext)).toBe(false);
+    mockResult({ ok: true, thread: { id: "thread-1" } });
+    await threadAction("thread-create", threadParams);
+    expect(onThreadAdopted).toHaveBeenCalledWith("thread-1");
+    mockResult();
+    const mismatchedResult = await threadAction("thread-reply", {
+      threadId: "thread-2",
+      message: "unrelated",
     });
-    try {
-      expect(notifyDiscordActiveTurnThreadReplyDelivered({ ...threadContext })).toBe(false);
-
-      handleDiscordActionMock.mockResolvedValueOnce({
-        content: [],
-        details: { ok: true, thread: { id: "thread-1" } },
-      });
-      await threadAction("thread-create", {
-        channelId: "channel-1",
-        messageId: "message-1",
-        threadName: "investigation",
-      });
-
-      expect(onThreadAdopted).toHaveBeenCalledWith("thread-1");
-
-      handleDiscordActionMock.mockResolvedValueOnce({ content: [], details: { ok: true } });
-      const mismatchedResult = await threadAction("thread-reply", {
-        threadId: "thread-2",
-        message: "unrelated",
-      });
-
-      expect(mismatchedResult.details).toEqual({ ok: true });
-      expect(onThreadReplyDelivered).not.toHaveBeenCalled();
-
-      handleDiscordActionMock.mockResolvedValueOnce({ content: [], details: { ok: true } });
-      const result = await threadAction("thread-reply", { threadId: "thread-1", message: "done" });
-
-      expect(result.details).toEqual({ ok: true, sourceReplyRoute: "current-source" });
-      expect(onThreadReplyDelivered).toHaveBeenCalledWith("thread-1");
-    } finally {
-      endRoute();
-    }
+    expect(mismatchedResult.details).toEqual({ ok: true });
+    expect(onThreadReplyDelivered).not.toHaveBeenCalled();
+    mockResult();
+    const result = await threadAction("thread-reply", { threadId: "thread-1", message: "done" });
+    expect(result.details).toEqual({ ok: true, sourceReplyRoute: "current-source" });
+    expect(onThreadReplyDelivered).toHaveBeenCalledWith("thread-1");
   });
 
   it("confirms only the matching adopted thread across concurrent routes", async () => {
-    const firstReplyDelivered = vi.fn();
-    const secondReplyDelivered = vi.fn();
-    const endFirstRoute = beginDiscordActiveTurnThreadRoute(sessionKey, {
-      ...sourceRoute,
-      onThreadAdopted: vi.fn(),
-      onThreadReplyDelivered: firstReplyDelivered,
+    const { onThreadReplyDelivered: firstReplyDelivered } = beginRoute();
+    const { onThreadReplyDelivered: secondReplyDelivered } = beginRoute({
+      sourceMessageId: "message-2",
     });
-    const endSecondRoute = beginDiscordActiveTurnThreadRoute(sessionKey, {
+    await notifyDiscordActiveTurnThreadCreated({
+      sessionKey,
+      ...sourceRoute,
+      threadId: "thread-1",
+    });
+    await notifyDiscordActiveTurnThreadCreated({
+      sessionKey,
       ...sourceRoute,
       sourceMessageId: "message-2",
-      onThreadAdopted: vi.fn(),
-      onThreadReplyDelivered: secondReplyDelivered,
+      threadId: "thread-2",
     });
-    try {
-      await notifyDiscordActiveTurnThreadCreated({
-        sessionKey,
-        ...sourceRoute,
-        threadId: "thread-1",
-      });
-      await notifyDiscordActiveTurnThreadCreated({
-        sessionKey,
-        ...sourceRoute,
-        sourceMessageId: "message-2",
-        threadId: "thread-2",
-      });
-
-      expect(
-        notifyDiscordActiveTurnThreadReplyDelivered({ ...threadContext, threadId: "thread-2" }),
-      ).toBe(true);
-      expect(firstReplyDelivered).not.toHaveBeenCalled();
-      expect(secondReplyDelivered).toHaveBeenCalledWith("thread-2");
-    } finally {
-      endFirstRoute();
-      endSecondRoute();
-    }
+    expect(
+      notifyDiscordActiveTurnThreadReplyDelivered({ ...threadContext, threadId: "thread-2" }),
+    ).toBe(true);
+    expect(firstReplyDelivered).not.toHaveBeenCalled();
+    expect(secondReplyDelivered).toHaveBeenCalledWith("thread-2");
   });
 
   it("keeps a successful thread-create result when progress migration fails", async () => {
     const onThreadAdoptionError = vi.fn();
-    const endRoute = beginDiscordActiveTurnThreadRoute(sessionKey, {
-      sourceChannelId: "channel-1",
-      sourceMessageId: "message-1",
+    beginRoute({
+      accountId: undefined,
       onThreadAdopted: async () => {
         throw new Error("preview move failed");
       },
       onThreadAdoptionError,
     });
-    try {
-      const expectedResult = { content: [], details: { ok: true, thread: { id: "thread-1" } } };
-      handleDiscordActionMock.mockResolvedValueOnce(expectedResult);
-
-      const result = await handleDiscordMessageAction({
-        action: "thread-create",
-        params: { channelId: "channel-1", messageId: "message-1", threadName: "investigation" },
-        cfg: discordConfig({ threads: true }),
-        sessionKey,
-      });
-
-      expect(result).toBe(expectedResult);
-      expect(onThreadAdoptionError).toHaveBeenCalledWith(expect.any(Error));
-    } finally {
-      endRoute();
-    }
-  });
-
-  it("forwards top-level components on sends", async () => {
-    const components = { blocks: [{ type: "text", text: "Pick one" }] };
-    const cfg = discordConfig();
-
-    await runAction(
-      "send",
-      { message: "hello", components: JSON.stringify(components) },
-      { cfg, toolContext: { currentChannelProvider: "discord", currentChannelId: "channel:123" } },
-    );
-
-    expectDiscordActionCall({
-      payload: sendPayload({ components }),
-      cfg,
-      options: defaultActionOptions(),
+    const expectedResult = mockResult({ ok: true, thread: { id: "thread-1" } });
+    const result = await runAction("thread-create", threadParams, {
+      cfg: discordConfig({ threads: true }),
+      sessionKey,
     });
+    expect(result).toBe(expectedResult);
+    expect(onThreadAdoptionError).toHaveBeenCalledWith(expect.any(Error));
   });
 
-  it("does not use another provider's current target for Discord sends", async () => {
-    await expectRejected(
-      /channel target is required/i,
-      "send",
-      { message: "hello" },
-      { toolContext: { currentChannelProvider: "telegram", currentChannelId: "channel:123" } },
-    );
-  });
-
-  it("does not use another provider's current target for Discord reactions", async () => {
-    await expectRejected(
-      /channel target is required/i,
-      "react",
-      { emoji: "ok" },
-      {
-        toolContext: {
-          currentChannelProvider: "telegram",
-          currentChannelId: "user:U1",
-          currentMessageId: "9001",
-        },
-      },
-    );
-  });
+  it.each([
+    ["send", { message: "hello" }, { currentChannelId: "channel:123" }],
+    ["react", { emoji: "ok" }, { currentChannelId: "user:U1", currentMessageId: "9001" }],
+  ] as const)(
+    "does not use another provider's current target for Discord %s",
+    async (action, params, target) => {
+      await expectRejected(/channel target is required/i, action, params, {
+        toolContext: { currentChannelProvider: "telegram", ...target },
+      });
+    },
+  );
 
   it("rejects reactions when no message id source is available", async () => {
     await expectRejected(/messageId required/i, "react", { channelId: "123", emoji: "ok" });
   });
 
-  it("does not inject session channel when guildId is explicit and no channel filters are provided", async () => {
-    handleDiscordActionMock.mockResolvedValueOnce({ content: [], details: { ok: true } });
-    await handleDiscordMessageAction({
-      action: "search",
-      params: { query: "guild-wide query", guildId: "g1" },
-      cfg: discordConfig(),
-      toolContext: { currentChannelProvider: "discord", currentChannelId: "session-ch" },
-    });
-
-    expect(handleDiscordActionMock).toHaveBeenCalledTimes(1);
-    const payload = expectDefined(
-      handleDiscordActionMock.mock.calls[0]?.[0],
-      "Discord guild search action payload",
-    );
-    expect(payload).toMatchObject({
-      action: "searchMessages",
-      content: "guild-wide query",
-      guildId: "g1",
-    });
-    // Guild-wide search must NOT be narrowed to the session channel.
-    expect(payload.channelId).toBeUndefined();
-    expect(payload.channelIds).toBeUndefined();
-  });
-
   it("classifies generic sends only when targeting the active adopted thread", async () => {
-    const onThreadReplyDelivered = vi.fn();
-    const endRoute = beginDiscordActiveTurnThreadRoute(sessionKey, {
+    const { onThreadReplyDelivered } = beginRoute();
+    await notifyDiscordActiveTurnThreadCreated({
+      sessionKey,
       ...sourceRoute,
-      onThreadAdopted: vi.fn(),
-      onThreadReplyDelivered,
+      threadId: "thread-1",
     });
-    try {
-      await notifyDiscordActiveTurnThreadCreated({
-        sessionKey,
-        ...sourceRoute,
-        threadId: "thread-1",
-      });
-
-      const unrelatedResult = await handleDiscordMessageAction({
-        action: "send",
-        params: { to: "channel:thread-2", message: "unrelated" },
-        cfg: discordConfig(),
-        ...threadContext,
-      });
-
-      expect(unrelatedResult.details).toEqual({ ok: true });
-      expect(onThreadReplyDelivered).not.toHaveBeenCalled();
-
-      const result = await handleDiscordMessageAction({
-        action: "send",
-        params: { to: "channel:thread-1", message: "done" },
-        cfg: discordConfig(),
-        ...threadContext,
-      });
-
-      expect(result.details).toEqual({ ok: true, sourceReplyRoute: "current-source" });
-      expect(onThreadReplyDelivered).toHaveBeenCalledWith("thread-1");
-    } finally {
-      endRoute();
-    }
+    const unrelatedResult = await runAction(
+      "send",
+      { to: "channel:thread-2", message: "unrelated" },
+      threadContext,
+    );
+    expect(unrelatedResult.details).toEqual({ ok: true });
+    expect(onThreadReplyDelivered).not.toHaveBeenCalled();
+    const result = await runAction(
+      "send",
+      { to: "channel:thread-1", message: "done" },
+      threadContext,
+    );
+    expect(result.details).toEqual({ ok: true, sourceReplyRoute: "current-source" });
+    expect(onThreadReplyDelivered).toHaveBeenCalledWith("thread-1");
   });
 
   it("preserves a successful send when route-only target parsing rejects the target", async () => {
-    const result = await handleDiscordMessageAction({
-      action: "send",
-      params: { to: "@alice", message: "hello" },
-      cfg: discordConfig(),
-    });
+    const result = await runAction("send", { to: "@alice", message: "hello" });
 
     expect(result.details).toEqual({ ok: true });
-  });
-
-  it("preserves trusted workspace authority for thread replies and rejects forged action capabilities", async () => {
-    const mediaReadFile = vi.fn(async () => Buffer.from("trusted report"));
-    const mediaAccess = {
-      localRoots: ["/tmp/agent-workspace"],
-      readFile: mediaReadFile,
-      workspaceDir: "/tmp/agent-workspace",
-    };
-    const forgedMediaAccess = {
-      localRoots: ["/tmp/forged-root"],
-      readFile: vi.fn(async () => Buffer.from("forged report")),
-      workspaceDir: "/tmp/forged-root",
-    };
-    const cfg = discordConfig({ threads: true });
-
-    await runAction(
-      "thread-reply",
-      {
-        threadId: "thread-123",
-        message: "thread update",
-        filePath: "./report.md",
-        mediaAccess: forgedMediaAccess,
-      },
-      { cfg, mediaAccess, mediaLocalRoots: mediaAccess.localRoots, mediaReadFile },
-    );
-
-    expect(handleDiscordActionMock).toHaveBeenCalledTimes(1);
-    expect(handleDiscordActionMock).toHaveBeenCalledWith(
-      {
-        action: "threadReply",
-        accountId: undefined,
-        channelId: "thread-123",
-        content: "thread update",
-        mediaUrl: "./report.md",
-        replyTo: undefined,
-      },
-      cfg,
-      { mediaAccess, mediaLocalRoots: mediaAccess.localRoots, mediaReadFile },
-    );
-    expect(handleDiscordActionMock.mock.calls[0]?.[1]).toBe(cfg);
-    const actionOptions = handleDiscordActionMock.mock.calls[0]?.[2];
-    expect(actionOptions?.mediaAccess).toBe(mediaAccess);
-    expect(actionOptions?.mediaLocalRoots).toBe(mediaAccess.localRoots);
-    expect(actionOptions?.mediaReadFile).toBe(mediaReadFile);
-    expect(forgedMediaAccess.readFile).not.toHaveBeenCalled();
   });
 
   it("downgrades oversized table presentations to complete text", async () => {
@@ -694,27 +480,27 @@ describe("handleDiscordMessageAction", () => {
   });
 
   it.each([
-    {
-      name: "keeps an explicitly empty message empty instead of using the caption",
-      params: { message: "", caption: "caption text" },
-      expected: "",
-    },
-    {
-      name: "preserves caption indentation and trailing newline",
-      params: { caption: "    example();\n" },
-      expected: "    example();\n",
-    },
-    {
-      name: "preserves an explicit padded message over the caption",
-      params: { message: "    example();\n", caption: "caption text" },
-      expected: "    example();\n",
-    },
-    {
-      name: "preserves the content alias over the caption",
-      params: { content: "    example();\n", caption: "caption text" },
-      expected: "    example();\n",
-    },
-  ])("$name", async ({ params, expected }) => {
+    [
+      "keeps an explicitly empty message empty instead of using the caption",
+      { message: "", caption: "caption text" },
+      "",
+    ],
+    [
+      "preserves caption indentation and trailing newline",
+      { caption: "    example();\n" },
+      "    example();\n",
+    ],
+    [
+      "preserves an explicit padded message over the caption",
+      { message: "    example();\n", caption: "caption text" },
+      "    example();\n",
+    ],
+    [
+      "preserves the content alias over the caption",
+      { content: "    example();\n", caption: "caption text" },
+      "    example();\n",
+    ],
+  ] as const)("%s", async (_name, params, expected) => {
     const mediaReadFile = vi.fn(async () => Buffer.from("image"));
     const cfg = discordConfig();
     const mediaAccess = { localRoots: ["/tmp/agent-root"], readFile: mediaReadFile };
