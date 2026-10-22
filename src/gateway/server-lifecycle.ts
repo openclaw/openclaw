@@ -485,6 +485,7 @@ export async function prepareGatewayLifecycle(params: {
         getEventLoopHealth: readinessEventLoopHealth.snapshot,
         getConfigReloaderHotReloadStatus: kernel.getConfigReloaderHotReloadStatus,
         getSessionRowProjection: runtime.getSessionRowProjection,
+        getCronStorePath: () => runtimeState.cronState.storePath,
       }),
     );
   };
