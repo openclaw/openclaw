@@ -165,6 +165,11 @@ updates or park card-local popovers. New selections consume ordinary readiness a
 show the existing loading fallback. Keep selection identity in the plain owner;
 do not synchronize a second accepted-selection snapshot in the renderer.
 
+A provider row's failure badge does not replace the catalog error boundary's
+Retry action. Keep that actionable error slot unless the row exposes the same
+owner retry. Do not suppress a completion error just because a row also reports
+failure.
+
 ## Mutate with an optimistic presentation
 
 Use a generator action to retain the transition context across async work.
