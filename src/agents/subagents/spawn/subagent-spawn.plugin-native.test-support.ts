@@ -462,7 +462,7 @@ export function registerNativePluginSpawnCases(options: NativePluginSpawnTestOpt
   });
 }
 
-export function registerNativePluginSandboxCases(options: NativePluginSpawnTestOptions) {
+function registerNativePluginSandboxCases(options: NativePluginSpawnTestOptions) {
   it.each([
     { tool: "sessions_spawn", required: false },
     { tool: "agents_wait", required: false },
