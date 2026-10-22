@@ -4,7 +4,6 @@ import type { WorkboardCard } from "@openclaw/workboard-contract";
 import type { Browser, Locator, Page } from "playwright";
 import { expect, it, onTestFinished } from "vitest";
 import { WORKBOARD_STATUSES as statuses } from "../../../../packages/workboard-contract/src/index.js";
-import { createRequireRecord } from "../../../../test/helpers/record.js";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
 import {
   installMockGateway,
@@ -12,7 +11,14 @@ import {
   type MockGatewayRequest,
 } from "../../test-helpers/control-ui-e2e.ts";
 import { workboardUi } from "../../test-helpers/control-ui-workboard-fixture.ts";
-import { button, createWorkboardProof, makeCard, moved } from "./workboard.e2e.test-support.ts";
+import {
+  button,
+  createWorkboardProof,
+  makeCard,
+  moved,
+  requestParams,
+  expectVisible,
+} from "./workboard.e2e.test-support.ts";
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const artifactParent = path.resolve(".artifacts/control-ui-e2e/workboard-status-persistence");
@@ -85,12 +91,12 @@ const initialCard = makeCard(
   manualTodoAt,
 );
 
-const productRunningCard = {
+const productCard = {
   ...runningCard("product-running-card", "Product board running card", 9_000),
   metadata: { automation: { boardId: "product" } },
 } satisfies WorkboardCard;
 
-const archivedDefaultRunningCard = {
+const archivedCard = {
   ...runningCard("archived-default-running-card", "Archived default board running card", 3_000),
   metadata: { archivedAt: 1_000 },
 } satisfies WorkboardCard;
@@ -107,7 +113,7 @@ const editedCard = {
   events: [...manualTodoEvents, { id: "event-edited", kind: "edited", at: editedAt }],
 } satisfies WorkboardCard;
 
-const draggedRunningCard = {
+const draggedCard = {
   ...editedCard,
   status: "running",
   position: 6_000,
@@ -119,29 +125,23 @@ const draggedRunningCard = {
 } satisfies WorkboardCard;
 
 const staleReviewCard = {
-  ...draggedRunningCard,
+  ...draggedCard,
   status: "review",
   updatedAt: draggedRunningAt + 500,
   events: [
-    ...draggedRunningCard.events,
+    ...draggedCard.events,
     moved("event-stale-review", draggedRunningAt + 500, "running", "review"),
   ],
 } satisfies WorkboardCard;
 
-const requireRecord = createRequireRecord("record", "expected-object-value");
-
-function requestParams(request: MockGatewayRequest): Record<string, unknown> {
-  return requireRecord(request.params);
-}
-
-function workboardColumn(page: Page, title: string) {
+function column(page: Page, title: string) {
   return page.locator(".workboard-column", {
     has: page.getByRole("heading", { name: title }),
   });
 }
 
-function workboardCard(page: Page, columnTitle: string, title: string) {
-  return workboardColumn(page, columnTitle).locator(".workboard-card", { hasText: title });
+function cardAt(page: Page, columnTitle: string, title: string) {
+  return column(page, columnTitle).locator(".workboard-card", { hasText: title });
 }
 
 async function openCardEditor(card: Locator): Promise<void> {
@@ -207,7 +207,7 @@ async function waitForRequestCount(
 
 suite.define(() => {
   it("preserves an execution-owned session when editing a linked Workboard card", async () => {
-    const executionLinkedCard: WorkboardCard = {
+    const executionCardData: WorkboardCard = {
       ...initialCard,
       title: "Keep my execution-linked session",
       status: "running",
@@ -223,9 +223,9 @@ suite.define(() => {
         updatedAt: manualTodoAt,
       },
     };
-    delete executionLinkedCard.sessionKey;
+    delete executionCardData.sessionKey;
     const updatedCard: WorkboardCard = {
-      ...executionLinkedCard,
+      ...executionCardData,
       title: "Renamed without unlinking the execution",
       updatedAt: editedAt,
     };
@@ -236,7 +236,7 @@ suite.define(() => {
         "config.get": configSnapshot("execution-linked-workboard-e2e-config"),
         "sessions.list": sessionList("Execution linked session", "running", manualTodoAt),
         "workboard.cards.list": {
-          cards: [executionLinkedCard],
+          cards: [executionCardData],
           statuses,
         },
         "workboard.cards.update": { card: updatedCard },
@@ -245,30 +245,22 @@ suite.define(() => {
 
     const response = await page.goto(`${suite.server.baseUrl}workboard`);
     expect(response?.status()).toBe(200);
-    const executionCard = page.locator(".workboard-card", {
-      hasText: executionLinkedCard.title,
-    });
+    const executionCard = page.locator(".workboard-card", { hasText: executionCardData.title });
     await executionCard.waitFor({ timeout: 10_000 });
 
     await openCardEditor(executionCard);
     const editDialog = page.getByRole("dialog", { name: "Edit card" });
     await editDialog.waitFor({ timeout: 10_000 });
     const draft = page.locator(".workboard-card-draft");
-    await expect
-      .poll(() =>
-        draft
-          .getByRole("button", { name: "Session: Execution linked session", exact: true })
-          .isVisible(),
-      )
-      .toBe(true);
+    await expectVisible(button(draft, "Session: Execution linked session"));
 
     await page.getByLabel("Title").fill(updatedCard.title);
     await page.getByRole("button", { name: "Save" }).click();
 
     const requests = await waitForRequestCount(gateway, "workboard.cards.update", 1);
     expect(requestParams(expectDefined(requests[0], "execution-linked card update"))).toEqual({
-      id: executionLinkedCard.id,
-      expectedUpdatedAt: executionLinkedCard.updatedAt,
+      id: executionCardData.id,
+      expectedUpdatedAt: executionCardData.updatedAt,
       patch: { title: updatedCard.title },
     });
     await editDialog.waitFor({ state: "detached", timeout: 10_000 });
@@ -295,12 +287,10 @@ suite.define(() => {
         "config.get": configSnapshot("workboard-e2e-config"),
         "sessions.list": sessionList("Completed linked session", "done", staleCompletedSessionAt),
         "workboard.cards.list": {
-          cards: [initialCard, productRunningCard, archivedDefaultRunningCard],
+          cards: [initialCard, productCard, archivedCard],
           statuses,
         },
-        "workboard.cards.move": {
-          card: draggedRunningCard,
-        },
+        "workboard.cards.move": { card: draggedCard },
         "workboard.cards.update": {
           cases: [
             {
@@ -325,14 +315,17 @@ suite.define(() => {
 
     const response = await page.goto(`${suite.server.baseUrl}workboard`);
     expect(response?.status()).toBe(200);
-    await workboardCard(page, "Todo", "Persist queue status").waitFor({ timeout: 10_000 });
-    await workboardCard(page, "Running", productRunningCard.title).waitFor({
+    const todo = () => cardAt(page, "Todo", initialCard.title);
+    const renamed = () => cardAt(page, "Todo", editedCard.title);
+    const running = () => cardAt(page, "Running", editedCard.title);
+    await todo().waitFor({ timeout: 10_000 });
+    await cardAt(page, "Running", productCard.title).waitFor({
       timeout: 10_000,
     });
-    await expect.poll(() => page.getByText(archivedDefaultRunningCard.title).count()).toBe(0);
+    await expect.poll(() => page.getByText(archivedCard.title).count()).toBe(0);
     await waitForRequestCount(gateway, "workboard.cards.update", 0);
 
-    await openCardEditor(workboardCard(page, "Todo", "Persist queue status"));
+    await openCardEditor(todo());
     const editDialog = page.getByRole("dialog", { name: "Edit card" });
     await editDialog.waitFor({ timeout: 10_000 });
     await page.getByLabel("Title").fill(editPatch.title);
@@ -359,9 +352,9 @@ suite.define(() => {
         { cause: err },
       );
     }
-    await workboardCard(page, "Todo", "Persisted renamed card").waitFor({ timeout: 10_000 });
+    await renamed().waitFor({ timeout: 10_000 });
 
-    await openCardEditor(workboardCard(page, "Todo", "Persisted renamed card"));
+    await openCardEditor(renamed());
     await editDialog.waitFor({ timeout: 10_000 });
     await expect
       .poll(async () => ({
@@ -374,39 +367,25 @@ suite.define(() => {
       page.getByLabel("Title"),
       page.getByLabel("Notes"),
     ]);
-    await page
-      .locator(".workboard-draft > .workboard-modal__actions")
-      .last()
-      .getByRole("button", { name: "Cancel" })
-      .click();
+    const actions = page.locator(".workboard-draft > .workboard-modal__actions").last();
+    await actions.getByRole("button", { name: "Cancel" }).click();
     await editDialog.waitFor({ state: "detached", timeout: 10_000 });
 
-    await dispatchHtml5Drag(
-      workboardCard(page, "Todo", "Persisted renamed card"),
-      workboardCard(page, "Running", productRunningCard.title),
-    );
+    await dispatchHtml5Drag(renamed(), cardAt(page, "Running", productCard.title));
     const moveRequest = await gateway.waitForRequest("workboard.cards.move");
     const move = requestParams(moveRequest);
-    expect(move).toMatchObject({
-      id: "card-1",
-      status: "running",
-    });
-    expect(move.position).toBeGreaterThan(archivedDefaultRunningCard.position);
-    expect(move.position).toBeLessThan(productRunningCard.position);
-    await workboardCard(page, "Running", "Persisted renamed card").waitFor({
-      timeout: 10_000,
-    });
+    expect(move).toMatchObject({ id: "card-1", status: "running" });
+    expect(move.position).toBeGreaterThan(archivedCard.position);
+    expect(move.position).toBeLessThan(productCard.position);
+    await running().waitFor({ timeout: 10_000 });
     await expect
       .poll(() =>
-        workboardColumn(page, "Running")
-          .locator(".workboard-card")
-          .getByRole("heading")
-          .allTextContents(),
+        column(page, "Running").locator(".workboard-card").getByRole("heading").allTextContents(),
       )
-      .toEqual([editedCard.title, productRunningCard.title]);
+      .toEqual([editedCard.title, productCard.title]);
     await waitForRequestCount(gateway, "workboard.cards.update", 1);
     await proof.capture(page, "workboard-drag-running-persisted", page.locator(".shell"), [
-      workboardCard(page, "Running", "Persisted renamed card"),
+      running(),
     ]);
   });
 });

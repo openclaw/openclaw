@@ -6,8 +6,11 @@ import type {
   WorkboardEvent,
   WorkboardStatus,
 } from "@openclaw/workboard-contract";
+import { WORKBOARD_STATUSES } from "@openclaw/workboard-contract";
 import type { Browser, Locator, Page } from "playwright";
 import { expect } from "vitest";
+import { createRequireRecord } from "../../../../test/helpers/record.js";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   takeControlUiElementScreenshot,
@@ -15,12 +18,62 @@ import {
   takeControlUiViewportScreenshot,
   waitForControlUiProofSurface,
 } from "../../test-helpers/control-ui-e2e-screenshot.ts";
-import { controlUiE2eWaitTimeoutMs } from "../../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiE2eWaitTimeoutMs,
+  installMockGateway,
+  type MockGatewayRequest,
+} from "../../test-helpers/control-ui-e2e.ts";
+import { workboardUi } from "../../test-helpers/control-ui-workboard-fixture.ts";
 
 const captureEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 export const button = (scope: Page | Locator, name: string) =>
   scope.getByRole("button", { name, exact: true });
+export const dialog = (page: Page, name: string) => page.getByRole("dialog", { name, exact: true });
+export const expectVisible = (locator: Locator) =>
+  expect.poll(() => locator.isVisible()).toBe(true);
+export const expectCount = (locator: Locator, count: number) =>
+  expect.poll(() => locator.count()).toBe(count);
+const requireRecord = createRequireRecord("record", "expected-object-value");
+export const requestParams = (request: MockGatewayRequest) => requireRecord(request.params);
+
+export function cardsListResponse(
+  cards: WorkboardCard[],
+  boards = [makeBoard("default", { total: cards.length, active: cards.length })],
+  statuses: readonly WorkboardStatus[] = WORKBOARD_STATUSES,
+) {
+  return { boards, cards, statuses };
+}
+
+export function sessionsListResponse(
+  sessions: GatewaySessionRow[],
+  ts = Date.parse("2026-06-01T18:00:00.000Z"),
+) {
+  return {
+    count: sessions.length,
+    defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
+    path: "",
+    sessions,
+    ts,
+  };
+}
+
+export function installWorkboard(
+  page: Page,
+  cards: WorkboardCard[] = [],
+  extra: Parameters<typeof installMockGateway>[1] = {},
+) {
+  return installMockGateway(page, {
+    ...workboardUi,
+    ...extra,
+    methodResponses: {
+      "config.get": configSnapshot("workboard-e2e-config", true, 2),
+      "sessions.list": sessionsListResponse([]),
+      "workboard.cards.list": cardsListResponse(cards),
+      ...extra.methodResponses,
+    },
+  });
+}
 
 export function configSnapshot(hash: string, enabled = true, indent?: number) {
   const config = { plugins: { entries: { workboard: { enabled } } } };
