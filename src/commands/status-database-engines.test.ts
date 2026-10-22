@@ -1,50 +1,60 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDatabaseStoreDiagnostic } from "../infra/database-engine/diagnostic-record.js";
 import type { DatabaseStoreDiagnostic } from "../infra/database-engine/diagnostics.js";
+import type { describeDatabaseEngineSelection } from "../infra/database-engine/report.js";
 import { resolveStatusDatabaseEngines } from "./status-database-engines.js";
-import { resolveStatusJsonOutput } from "./status-json-runtime.js";
+import { runStatusJsonCommand } from "./status-json-command.ts";
 import { buildStatusCommandOverviewRows } from "./status-overview-rows.js";
 import { createStatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
 import {
   createStatusCommandOverviewRowsParams,
   createStatusScanResultFixture,
 } from "./status.test-support.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
-const mocks = vi.hoisted(() => ({ describe: vi.fn() }));
+type StatusDatabaseJson = {
+  databaseEngines: Awaited<ReturnType<typeof resolveStatusDatabaseEngines>> & {
+    families: ReturnType<typeof describeDatabaseEngineSelection>;
+  };
+};
+const mocks = vi.hoisted(() => ({
+  describe: vi.fn(),
+  scanStatusJsonFast: vi.fn(),
+}));
+// mock-isolation: Project fixed facts without live Gateway, service, or backup I/O.
+vi.mock("./status.scan.fast-json.js", () => ({ scanStatusJsonFast: mocks.scanStatusJsonFast }));
+vi.mock("../infra/update-run-status.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/update-run-status.js")>()),
+  readUpdateRunStatus: async () => ({}),
+}));
 
-// mock-isolation: These tests own status projection/target routing, not physical store inspection.
+// mock-isolation: project synthetic admitted store facts without opening host databases.
 vi.mock("../infra/database-engine/admitted-diagnostics.js", () => ({
   describeAdmittedDatabaseStores: mocks.describe,
 }));
 
-// mock-isolation: Database projection does not need Gateway, service-manager, or usage probes.
+// mock-isolation: shared runtime and usage probes must not inspect the operator Gateway.
 vi.mock("./status-runtime-shared.js", () => ({
   resolveStatusRuntimeSnapshot: async () => ({}),
   resolveStatusUsageSummary: vi.fn(),
 }));
 
-// mock-isolation: Backup-store I/O is unrelated to admitted database diagnostics.
+// mock-isolation: backup freshness is unrelated and must not read host backup records.
 vi.mock("../state/backup-run-records.js", () => ({
   readBackupRunFreshness: async () => ({}),
 }));
 
 const store: DatabaseStoreDiagnostic = {
-  family: "state",
-  path: "/fixture/openclaw-state.sqlite",
-  configured: { default: "postgres", override: null, effective: "postgres", fixedLocal: false },
+  ...createDatabaseStoreDiagnostic({
+    family: "state",
+    path: "/fixture/openclaw-state.sqlite",
+    configured: { default: "postgres", override: null, effective: "postgres", fixedLocal: false },
+  }),
   observed: "sqlite",
   mismatch: true,
   schema: { versioning: "versioned", version: 5, expectedVersion: null, pending: null },
   connectivity: "local",
-  namespace: null,
-  storeId: null,
-  database: null,
-  extensions: null,
-  admittedExtensions: null,
-  degraded: null,
-  custody: "unverifiable",
-  lease: "unverifiable",
-  backup: null,
-  legacyMigrations: { state: "unknown", pending: [] },
   issues: ["Configured PostgreSQL, observed SQLite."],
   nextSteps: ["Run openclaw doctor on the Gateway host to inspect physical stores."],
 };
@@ -59,12 +69,16 @@ describe("status database diagnostics", () => {
   afterEach(() => vi.unstubAllEnvs());
 
   it("projects the same physical store facts in text and JSON", async () => {
+    const runtime = createTestRuntime();
     const config = { database: { engine: "postgres" as const } };
-    const payload = await resolveStatusJsonOutput({
-      scan: createStatusScanResultFixture({ cfg: config }),
+    mocks.scanStatusJsonFast.mockResolvedValueOnce(createStatusScanResultFixture({ cfg: config }));
+    await runStatusJsonCommand({
+      runtime,
       opts: createStatusGatewayProbeBudget(),
-      includeSecurityAudit: false,
     });
+    const payload: StatusDatabaseJson = JSON.parse(
+      String(expectDefined(runtime.log.mock.lastCall, "status JSON output")[0]),
+    );
     const params = createStatusCommandOverviewRowsParams();
     const surface = { ...params.surface, cfg: {}, databaseEngines: payload.databaseEngines };
     const rows = buildStatusCommandOverviewRows({ ...params, surface });
@@ -83,43 +97,35 @@ describe("status database diagnostics", () => {
     expect(mocks.describe).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["remote", "url-override"])(
-    "never substitutes local stores for %s targets",
+  it.each(["remote", "url-override", "admitted", "failed"])(
+    "preserves store authority and redaction for %s targets",
     async (target) => {
       if (target === "url-override") {
         vi.stubEnv("OPENCLAW_GATEWAY_URL", "wss://gateway.example.invalid");
       }
+      if (target === "failed") {
+        mocks.describe.mockImplementationOnce(() => {
+          throw new Error("connect postgres://fixture:private@localhost/db");
+        });
+      }
       const result = await resolveStatusDatabaseEngines(
-        target === "remote" ? { gateway: { mode: "remote" } } : {},
+        target === "remote" || target === "admitted" ? { gateway: { mode: "remote" } } : {},
+        target === "admitted" ? [store] : undefined,
       );
-      expect(result).toEqual({
-        source: "unavailable",
-        stores: [],
-        reason:
-          "Physical stores unknown: the selected Gateway has not supplied admitted database facts. Run openclaw doctor on the Gateway host.",
-      });
-      expect(mocks.describe).not.toHaveBeenCalled();
+      expect(result).toEqual(
+        target === "admitted"
+          ? { source: "admitted", stores: [store] }
+          : {
+              source: "unavailable",
+              stores: [],
+              reason:
+                target === "failed"
+                  ? "Physical stores unknown: admitted facts unavailable. Run openclaw doctor for recovery steps."
+                  : "Physical stores unknown: the selected Gateway has not supplied admitted database facts. Run openclaw doctor on the Gateway host.",
+            },
+      );
+      expect(mocks.describe).toHaveBeenCalledTimes(target === "failed" ? 1 : 0);
+      expect(JSON.stringify(result)).not.toContain("private");
     },
   );
-
-  it("uses the selected Gateway's admitted projection without reading local stores", async () => {
-    const result = await resolveStatusDatabaseEngines({ gateway: { mode: "remote" } }, [store]);
-    expect(result.source).toBe("admitted");
-    expect(result.stores[0]?.path).toBe("/fixture/openclaw-state.sqlite");
-    expect(mocks.describe).not.toHaveBeenCalled();
-  });
-
-  it("keeps unavailable admissions unknown and suppresses connection secrets", async () => {
-    mocks.describe.mockImplementationOnce(() => {
-      throw new Error("connect postgres://fixture:private@localhost/db");
-    });
-    const result = await resolveStatusDatabaseEngines({});
-    expect(result).toEqual({
-      source: "unavailable",
-      stores: [],
-      reason:
-        "Physical stores unknown: admitted facts unavailable. Run openclaw doctor for recovery steps.",
-    });
-    expect(JSON.stringify(result)).not.toContain("private");
-  });
 });

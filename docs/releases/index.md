@@ -9,6 +9,7 @@ who contributed, with links to the source changes.
 
 ## Releases
 
+- [v2026.10.5](/releases/2026.10.5)
 - [v2026.10.4](/releases/2026.10.4)
 - [v2026.10.3](/releases/2026.10.3)
 - [v2026.10.2](/releases/2026.10.2)

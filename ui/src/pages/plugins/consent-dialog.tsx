@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal, onCleanup, onSettled, Show, For } from "solid-js";
+import { createMemo, createSignal, onSettled, Show, For } from "solid-js";
 import type { CapabilityConsentErrorDetails } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import {
   PLUGIN_DECLARED_SURFACE_GROUPS,
@@ -73,8 +73,15 @@ type ArtTileProps = {
 };
 
 export function PluginArtTile(props: ArtTileProps): JSX.Element {
-  const slug = createMemo(() => props.slug);
-  onSettled(() => props.registerIcon?.(slug));
+  const slug = () => props.slug;
+  let disposed = false;
+  onSettled(() => {
+    const unregister = props.registerIcon?.(slug);
+    return () => {
+      disposed = true;
+      unregister?.();
+    };
+  });
   type ImageState = { source: string | undefined; status: "loading" | "ready" | "failed" };
   const [packageImage, setPackageImage] = createSignal<ImageState>((previous) => {
     const source = props.iconUrl;
@@ -84,15 +91,11 @@ export function PluginArtTile(props: ArtTileProps): JSX.Element {
     const source = props.authorIconUrl;
     return previous && previous.source === source ? previous : { source, status: "loading" };
   });
-  let disposed = false;
-  onCleanup(() => {
-    disposed = true;
-  });
   const currentImage = () =>
     packageImage().source && packageImage().status !== "failed"
       ? { state: packageImage(), update: setPackageImage, package: true }
       : { state: authorImage(), update: setAuthorImage, package: false };
-  const gradient = createMemo(() => pluginFallbackGradient(slug()));
+  const gradient = () => pluginFallbackGradient(slug());
   const monogram = createMemo(() => pluginMonogram(props.name));
   const source = () =>
     currentImage().state.status === "failed" ? undefined : currentImage().state.source;
@@ -480,7 +483,7 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.
             <button
               type="button"
               class="btn btn--sm oc-action oc-action-secondary"
-              onClick={props.onRetry}
+              onClick={() => props.onRetry()}
             >
               {t("pluginsPage.tryAgain")}
             </button>

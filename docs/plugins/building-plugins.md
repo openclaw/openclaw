@@ -69,7 +69,7 @@ local proof.
   "version": "1.0.0",
   "type": "module",
   "dependencies": {
-    "typebox": "1.3.36"
+    "typebox": "1.3.37"
   },
   "peerDependencies": {
     "openclaw": ">=2026.3.24-beta.2"

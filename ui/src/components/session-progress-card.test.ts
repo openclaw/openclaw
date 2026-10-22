@@ -28,6 +28,9 @@ function renderTranscriptCard(
   );
 }
 
+// Identify the approved CircleDashed glyph independently of the production icon registry.
+const pendingMarkerSelector = 'path[d="M10.1 2.182a10 10 0 0 1 3.8 0"]';
+
 const runWindow = { startedAt: RUN_STARTED_MS, endedAt: RUN_ENDED_MS };
 
 describe("renderSessionProgressCard", () => {
@@ -130,7 +133,7 @@ describe("renderSessionProgressCard", () => {
         ".session-run-spinner",
         "session-run-spinner",
       ],
-      ["Run focused tests, pending", "pending", "polyline", "<polyline"],
+      ["Run focused tests, pending", "pending", pendingMarkerSelector, "<path"],
     ] as const;
     expected.forEach(([label, status, selector, markup], index) => {
       const step = steps[index]!;
@@ -146,7 +149,7 @@ describe("renderSessionProgressCard", () => {
 
   it.each([
     ["in_progress", ".session-run-spinner"],
-    ["pending", "polyline"],
+    ["pending", pendingMarkerSelector],
   ] as const)("uses the %s marker in the composer summary", (status, markerSelector) => {
     const container = createContainer();
     const card = { ...progressCard, steps: [{ step: "Current step", status }] };
@@ -563,13 +566,24 @@ describe("renderSessionProgressCard", () => {
     ["failed", "Failed"],
     ["timeout", "Failed"],
     ["killed", "Stopped"],
-  ] as const)("shows %s as %s in the closed summary", (status, expected) => {
-    const container = mountCard({
-      sessionStatus: status,
-      ...runWindow,
-    });
+  ] as const)("announces %s as %s in collapsed progress summaries", (status, expected) => {
+    for (const placement of ["composer", "details"] as const) {
+      const container = mountCard({
+        placement,
+        desktopDetails: placement === "details",
+        collapseComposerByDefault: true,
+        sessionStatus: status,
+        ...runWindow,
+      });
 
-    expect(cardPart(container, "summary-count--collapsed")?.textContent).toBe(expected);
+      expect(container.querySelector("details")?.open).toBe(false);
+      expect(container.querySelector("summary")?.getAttribute("aria-label")).toBe(
+        `Wire the checklist. ${status === "running" ? "1 of 3 completed" : expected}`,
+      );
+      if (placement === "composer") {
+        expect(cardPart(container, "summary-count--collapsed")?.textContent).toBe(expected);
+      }
+    }
   });
 
   it("uses a terminal circle-x instead of pausing after the run stops", () => {

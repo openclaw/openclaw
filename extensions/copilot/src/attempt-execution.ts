@@ -102,7 +102,6 @@ export async function runCopilotExecution(context: {
   // session created under this journal can be deleted after incomplete cleanup.
   let nativeSessionCreatedFresh = false;
   let nativeSessionHistoryValidated = false;
-  let disconnectError: Error | undefined;
   let handle: PooledClient | undefined;
   let session: SessionLike | undefined;
   let bridge: ReturnType<typeof attachEventBridge> | undefined;
@@ -327,7 +326,6 @@ export async function runCopilotExecution(context: {
       hookContext,
       modelRef,
       messages,
-      operation: deps.operation,
       poolAcquire,
       ringZeroSystemAgentRun,
       promptToolPolicy,
@@ -570,14 +568,10 @@ export async function runCopilotExecution(context: {
       (bridge?.hasObservedCompaction() || (timedOut && bridge?.hasObservedSessionIdle() === false));
     if (retainSessionForDeferredCleanup && bridge && session && handle) {
       const cleanupAbort = new AbortController();
-      const abortCleanup = () => cleanupAbort.abort();
-      if (params.abortSignal?.aborted) {
-        abortCleanup();
-      } else {
-        params.abortSignal?.addEventListener("abort", abortCleanup, { once: true });
-      }
       const cleanup = deferBackgroundCompactionCleanup({
-        abortSignal: cleanupAbort.signal,
+        abortSignal: params.abortSignal
+          ? AbortSignal.any([params.abortSignal, cleanupAbort.signal])
+          : cleanupAbort.signal,
         awaitSessionIdle: !bridge.hasObservedSessionIdle(),
         bridge,
         cleanupToolBridge,
@@ -589,11 +583,7 @@ export async function runCopilotExecution(context: {
         session,
         timeoutMs: resolveCompactionTimeoutMs(input.config),
       });
-      void cleanup
-        .finally(() => {
-          params.abortSignal?.removeEventListener("abort", abortCleanup);
-        })
-        .catch(() => undefined);
+      void cleanup.catch(() => undefined);
       if (sdkSessionId && !settledToolFinalization) {
         try {
           await deps.onDeferredCompaction?.({
@@ -617,9 +607,8 @@ export async function runCopilotExecution(context: {
         try {
           await session.disconnect();
         } catch (error: unknown) {
-          disconnectError = toCopilotError(error);
           if (!promptError && !timedOut) {
-            promptError = disconnectError;
+            promptError = toCopilotError(error);
           }
         }
       }

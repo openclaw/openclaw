@@ -24,28 +24,26 @@ it.each([
     ...target,
     sessionId: "session-current",
     kind: "direct",
-    updatedAt: 1,
     visibility: "draft",
     sharingRole: "owner",
-    label: "Design review",
   };
-  const sharingResult: SessionMembersListEvidenceResult = {
+  const evidence = (token?: string): SessionMembersListEvidenceResult => ({
     sessionKey: row.key,
     members: [],
     identities: [],
     role: "owner",
     allowedVisibilities: ["shared", "draft"],
-  };
+    ...(token ? { publicShare: { token, createdAt: 1 } } : {}),
+  });
   const mounted = createMountedPanes([row], row.agentId, undefined, {
     "sessions.list": () => sessionsResult([row], 1),
   });
   const client = mounted.context.gateway.snapshot.client!;
   const originalRequest = client.request.bind(client);
   let published = false;
-  const sharingRead = vi.fn(async () => ({
-    ...sharingResult,
-    ...(published ? { publicShare: { token: "synthetic-public-locator", createdAt: 1 } } : {}),
-  }));
+  const sharingRead = vi.fn(async () =>
+    evidence(published ? "synthetic-public-locator" : undefined),
+  );
   const request = vi
     .spyOn(client, "request")
     .mockImplementation(async (method, params, options) =>
@@ -78,49 +76,38 @@ it.each([
       ),
       container,
     );
+  const settle = async () => {
+    await Promise.all(request.mock.results.map((result) => result.value));
+    draw();
+  };
+  const indicator = () =>
+    container.querySelector(".chat-pane__sharing-trigger[data-public='true']");
+  const changed = (key: string | null = row.key, agentId = row.agentId) => {
+    mounted.emitGatewayEvent("sessions.changed", {
+      reason: "sharing",
+      ...(key ? { sessionKey: key, agentId } : {}),
+    });
+    draw();
+  };
   draw();
-  await Promise.all(request.mock.results.map((result) => result.value));
-  draw();
+  await settle();
   expect(sharingRead).toHaveBeenCalledOnce();
-  expect(container.querySelector(".chat-pane__public-share-indicator")).toBeNull();
+  expect(indicator()).toBeNull();
 
   published = true;
-  mounted.emitGatewayEvent("sessions.changed", {
-    reason: "sharing",
-    sessionKey: row.key === "global" ? "global" : "agent:unrelated:current",
-    agentId: "unrelated",
-  });
-  draw();
+  changed(row.key === "global" ? "global" : "agent:unrelated:current", "unrelated");
   expect(sharingRead).toHaveBeenCalledOnce();
-  expect(container.querySelector(".chat-pane__public-share-indicator")).toBeNull();
-  mounted.emitGatewayEvent("sessions.changed", {
-    reason: "sharing",
-    sessionKey: row.key,
-    agentId: row.agentId,
-  });
-  draw();
-  await Promise.all(request.mock.results.map((result) => result.value));
-  draw();
-  expect(
-    container.querySelector(".chat-pane__public-share-indicator")?.textContent ?? "",
-  ).toContain("Public");
+  expect(indicator()).toBeNull();
+  changed();
+  await settle();
+  expect(indicator()?.textContent ?? "").toContain("Public");
 
   const staleRead = createDeferred<SessionMembersListEvidenceResult>();
   sharingRead.mockImplementationOnce(() => staleRead.promise);
-  mounted.emitGatewayEvent("sessions.changed", {
-    reason: "sharing",
-    sessionKey: row.key,
-    agentId: row.agentId,
-  });
-  draw();
+  changed();
   published = false;
-  mounted.emitGatewayEvent("sessions.changed", { reason: "sharing" });
-  draw();
-  staleRead.resolve({
-    ...sharingResult,
-    publicShare: { token: "synthetic-retired-locator", createdAt: 1 },
-  });
-  await Promise.all(request.mock.results.map((result) => result.value));
-  draw();
-  expect(container.querySelector(".chat-pane__public-share-indicator")).toBeNull();
+  changed(null);
+  staleRead.resolve(evidence("synthetic-retired-locator"));
+  await settle();
+  expect(indicator()).toBeNull();
 });

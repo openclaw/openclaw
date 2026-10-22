@@ -6,13 +6,13 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { tryResolveCronJobEffectiveAgentId } from "../../../cron/agent-id.js";
 import type { CronInferenceBinding } from "../../../cron/inference-binding.js";
 import { noteCronJobsStoreCommit } from "../../../cron/store.js";
+import { resolveCronJobGrantDefinitionRevision } from "../../../cron/store/job-config-codec.js";
 import { cronStoreKey } from "../../../cron/store/key.js";
 import { inspectCronJobsReadOnly } from "../../../cron/store/read-only.js";
 import {
   deleteCronJobRowInDatabase,
   loadCronRows,
   resolveCronJobGrantDefinitionGenerationFloor,
-  resolveCronJobGrantDefinitionRevision,
   rowToCronJob,
   upsertCronJobRow,
 } from "../../../cron/store/row-codec.js";

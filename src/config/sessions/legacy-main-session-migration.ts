@@ -4,6 +4,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { listAgentIds, tryResolveSoleAgentId } from "../../agents/agent-scope-config.js";
 import { withEngineStoreAdmission } from "../../infra/database-engine/admission-scope.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { groupPluginRecords as groupRecords } from "../../plugins/record-groups.js";
 import { normalizeAgentId, normalizeMainKey } from "../../routing/session-key.js";
 import {
   createOpenClawAgentDatabasePathMatcher,
@@ -311,16 +312,6 @@ function writeLedger(params: {
   );
 }
 
-function groupLegacyClaims<Claim extends SessionComparisonClaim>(claims: Claim[]) {
-  const grouped = new Map<string, Claim[]>();
-  for (const claim of claims) {
-    const group = grouped.get(claim.canonicalKey) ?? [];
-    group.push(claim);
-    grouped.set(claim.canonicalKey, group);
-  }
-  return grouped;
-}
-
 function compareClaimGroup<Claim extends SessionComparisonClaim>(
   aliases: Claim[],
   canonicalClaims: Claim[],
@@ -531,7 +522,7 @@ async function migrateLegacyMainSessionKeysInternal(
         `session: ${legacy.length} retained legacy ${legacyAgentId} session claim(s) require Doctor repair; run openclaw doctor --fix`,
       );
     }
-    for (const [canonicalKey, aliases] of groupLegacyClaims(legacy)) {
+    for (const [canonicalKey, aliases] of groupRecords(legacy, (claim) => claim.canonicalKey)) {
       const compared = compareClaimGroup(
         aliases,
         canonical.filter((claim) => claim.key === canonicalKey),
@@ -577,7 +568,7 @@ async function migrateLegacyMainSessionKeysInternal(
           path.join(resolveSessionArtifactDirectory(destinationResolved.path), "cold"),
         );
 
-  for (const [canonicalKey, aliases] of groupLegacyClaims(allLegacy)) {
+  for (const [canonicalKey, aliases] of groupRecords(allLegacy, (claim) => claim.canonicalKey)) {
     const canonicalClaims = allCanonical.filter((claim) => claim.key === canonicalKey);
     if (
       params.mode === "doctor-fix" &&

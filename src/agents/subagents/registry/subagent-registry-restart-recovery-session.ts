@@ -33,17 +33,19 @@ function retainSessionOwner(storePath: string, sessionKey: string, sessionId: st
     : undefined;
 }
 
-export async function loadSubagentRecoverySession(params: {
-  entry: SubagentRunRecord;
-  isOwnerCurrent: () => boolean;
-}): Promise<{
+type SubagentRecoverySession = {
   agentId: string;
   storePath: string;
   sessionEntry: InternalSessionEntry | undefined;
   currentRead: ReturnType<typeof captureSessionEntryCurrentRead>;
   retained?: Extract<RestartRecoveryResult, { status: "handled" }>["retained"];
   replacementReason?: string;
-} | null> {
+};
+
+export async function loadSubagentRecoverySession(params: {
+  entry: SubagentRunRecord;
+  isOwnerCurrent: () => boolean;
+}): Promise<SubagentRecoverySession | null> {
   const sessionKey = params.entry.childSessionKey.trim();
   if (resolveSubagentChildAuthority(params.entry).status === "mismatch") {
     return null;
@@ -74,15 +76,24 @@ export async function loadSubagentRecoverySession(params: {
     return { agentId, storePath, sessionEntry, currentRead, replacementReason: authority.error };
   }
   const retained = retainSessionOwner(storePath, sessionKey, sessionEntry?.sessionId);
+  return { agentId, storePath, sessionEntry, currentRead, retained };
+}
+
+export async function markSubagentRecoverySessionInterrupted(params: {
+  entry: SubagentRunRecord;
+  session: SubagentRecoverySession;
+  isOwnerCurrent: () => boolean;
+}): Promise<SubagentRecoverySession | null> {
+  const { agentId, storePath, sessionEntry, currentRead, retained } = params.session;
   if (
-    authority.status === "legacy-unverified" ||
     retained ||
     params.entry.execution.restartRecovery ||
     sessionEntry?.abortedLastRun === true ||
     !isRetiredSubagentSessionOwner(params.entry, sessionEntry)
   ) {
-    return { agentId, storePath, sessionEntry, currentRead, retained };
+    return params.session;
   }
+  const sessionKey = params.entry.childSessionKey.trim();
   const { sessionId, lifecycleRevision, updatedAt } = sessionEntry;
   const target = { sessionKey, sessionId };
   const isCurrent = () =>
@@ -118,5 +129,5 @@ export async function loadSubagentRecoverySession(params: {
     },
     skipMaintenance: true,
   });
-  return interrupted ? { agentId, storePath, sessionEntry: interrupted, currentRead } : null;
+  return interrupted ? { ...params.session, sessionEntry: interrupted } : null;
 }

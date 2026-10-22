@@ -1,83 +1,50 @@
-import { mkdir } from "node:fs/promises";
-import path from "node:path";
-import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { ownerRoster } from "./session-ownership-fixtures.test-support.ts";
 import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI owner-first session roster" });
 const rosterMatch = { includeGlobal: true, ownerFirst: true };
 const mineMatch = { includeGlobal: true, ownerId: "profile-ada" };
-const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-
-function sessionRoster(ownerId: string, key: string, label: string, updatedAt: number) {
-  const owner = {
-    type: "human" as const,
-    id: ownerId,
-    label: ownerId === "profile-ada" ? "Ada" : "Bob",
-  };
-  return {
-    key,
-    kind: "direct" as const,
-    label,
-    createdActor: owner,
-    owner: { actor: owner },
-    updatedAt,
-  };
-}
+const rosterParams = { ownerFirst: true, limit: SIDEBAR_SESSION_ROSTER_LIMIT };
 
 function sessionsList() {
-  const sessions = [
-    sessionRoster("profile-ada", "agent:main:ada", "Ada research", 2),
-    sessionRoster("profile-bob", "agent:main:bob", "Bob operations", 1),
-  ];
-  return {
-    count: sessions.length,
-    owners: sessions.map((session) => session.owner.actor),
-    defaults: { contextTokens: null, model: null, modelProvider: null },
-    path: "",
-    sessions,
-    ts: 1,
-  };
-}
-
-async function captureSidebar(page: Page, fileName: string) {
-  if (!captureProof) {
-    return;
-  }
-  await mkdir(path.join(suite.artifactDir, "session-owner-stack"), { recursive: true });
-  await page.locator(".sidebar-sessions").screenshot({
-    animations: "disabled",
-    path: path.join(path.join(suite.artifactDir, "session-owner-stack"), fileName),
+  const sessions = ["ada", "bob"].map((name, index) => {
+    const owner = { type: "human" as const, id: `profile-${name}`, label: index ? "Bob" : "Ada" };
+    return {
+      key: `agent:main:${name}`,
+      kind: "direct" as const,
+      label: index ? "Bob operations" : "Ada research",
+      createdActor: owner,
+      owner: { actor: owner },
+      updatedAt: 2 - index,
+    };
   });
+  return ownerRoster(
+    sessions,
+    sessions.map((session) => session.owner.actor),
+  );
 }
 
 suite.define(() => {
   it("hydrates the owner-first roster separately from the event subscription", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const page = await context.newPage();
-    const sharedRoster = sessionsList();
     const gateway = await installMockGateway(page, {
       heldMethods: ["sessions.list"],
       presenceUsers: [{ self: true, id: "profile-ada", name: "Ada" }],
       sessionKey: "agent:main:ada",
-      methodResponses: { "sessions.list": sharedRoster },
+      methodResponses: { "sessions.list": sessionsList() },
     });
 
     try {
       // A literal key avoids the independent slug lookup while the roster is deferred.
       await page.goto(`${suite.server?.baseUrl ?? ""}chat/main/~key/ada`);
-      const subscribe = await gateway.waitForRequest("sessions.subscribe");
-      expect(subscribe.params).toEqual({});
+      expect((await gateway.waitForRequest("sessions.subscribe")).params).toEqual({});
       const roster = await gateway.waitForRequest("sessions.list", { match: rosterMatch });
-      expect(roster.params).toEqual(
-        expect.objectContaining({
-          ownerFirst: true,
-          limit: SIDEBAR_SESSION_ROSTER_LIMIT,
-        }),
-      );
+      expect(roster.params).toMatchObject(rosterParams);
       const adaRow = page.locator('[data-session-key="agent:main:ada"]');
       const bobRow = page.locator('[data-session-key="agent:main:bob"]');
       // The selected session can resolve independently while the roster is deferred.
@@ -101,15 +68,12 @@ suite.define(() => {
         after: 1,
         match: rosterMatch,
       });
-      expect(allRoster.params).toEqual(
-        expect.objectContaining({ ownerFirst: true, limit: SIDEBAR_SESSION_ROSTER_LIMIT }),
-      );
+      expect(allRoster.params).toMatchObject(rosterParams);
       expect(allRoster.params).not.toHaveProperty("ownerId");
       await bobRow.waitFor();
       expect(await gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(2);
       expect(await gateway.getRequests("sessions.list", mineMatch)).toHaveLength(1);
       expect(await gateway.getRequests("sessions.list", { includeGlobal: true })).toHaveLength(3);
-      await captureSidebar(page, "owner-first-bootstrap.png");
     } finally {
       await context.close();
     }

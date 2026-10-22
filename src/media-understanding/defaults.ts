@@ -1,5 +1,3 @@
-// Media-understanding default model/provider selection from config, manifest
-// metadata, and capability declarations.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
@@ -9,12 +7,13 @@ import {
 import type { OpenClawConfig } from "../config/types.js";
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { listImageCapableConfiguredProviders } from "./config-provider-models.js";
 import {
   resolveAutoMediaKeyProvidersFromRegistry,
   resolveDefaultMediaModelFromRegistry,
 } from "./provider-registry-metadata.js";
 import type { MediaUnderstandingCapability, MediaUnderstandingProvider } from "./types.js";
-export { CLI_OUTPUT_MAX_BUFFER, DEFAULT_TIMEOUT_SECONDS } from "./defaults.constants.js";
+export { CLI_OUTPUT_MAX_BUFFER } from "./defaults.constants.js";
 
 // Defaults follow the selected immutable manifest generation, including retained
 // owners. Configured model overrides remain outside this projection.
@@ -73,20 +72,12 @@ function resolveConfiguredImageProviderModel(params: {
   providerId: string;
 }): string | undefined {
   const normalizedProviderId = normalizeMediaProviderId(params.providerId);
-  const providers = params.cfg?.models?.providers;
-  if (!providers || typeof providers !== "object") {
-    return undefined;
-  }
-  for (const [providerKey, providerCfg] of Object.entries(providers)) {
+  for (const [providerKey, providerCfg] of Object.entries(params.cfg?.models?.providers ?? {})) {
     if (normalizeMediaProviderId(providerKey) !== normalizedProviderId) {
       continue;
     }
-    const models = providerCfg?.models ?? [];
-    const match = models.find(
-      (model) =>
-        Boolean(normalizeOptionalString(model?.id)) &&
-        Array.isArray(model?.input) &&
-        model.input.includes("image"),
+    const match = (providerCfg.models ?? []).find(
+      (model) => Boolean(normalizeOptionalString(model.id)) && model.input?.includes("image"),
     );
     return normalizeOptionalString(match?.id);
   }
@@ -94,25 +85,9 @@ function resolveConfiguredImageProviderModel(params: {
 }
 
 function resolveConfiguredImageProviderIds(cfg?: OpenClawConfig): string[] {
-  const providers = cfg?.models?.providers;
-  if (!providers || typeof providers !== "object") {
-    return [];
-  }
-  const configured: string[] = [];
-  for (const [providerKey, providerCfg] of Object.entries(providers)) {
-    const normalizedProviderId = normalizeMediaExecutionProviderId(providerKey);
-    if (!normalizedProviderId || configured.includes(normalizedProviderId)) {
-      continue;
-    }
-    const models = providerCfg?.models ?? [];
-    const hasImageModel = models.some(
-      (model) => Array.isArray(model?.input) && model.input.includes("image"),
-    );
-    if (hasImageModel) {
-      configured.push(normalizedProviderId);
-    }
-  }
-  return configured;
+  return uniqueStrings(
+    listImageCapableConfiguredProviders(cfg).map(normalizeMediaExecutionProviderId),
+  );
 }
 
 function isExecutionAliasProvider(providerId: string): boolean {

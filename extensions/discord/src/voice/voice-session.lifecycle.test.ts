@@ -461,18 +461,14 @@ defineDiscordVoiceTests((h) => {
     },
   );
 
-  it.each(["retry", "timeout", "destroyed"] as const)(
-    "handles aborted readiness after %s",
+  it.each(["early-abort", "timeout", "destroyed"] as const)(
+    "fails aborted readiness after %s without another join",
     async (outcome) => {
       const firstConnection = h.useConnection();
       const secondConnection = outcome === "timeout" ? undefined : h.useConnection();
       const now =
         outcome === "timeout"
-          ? vi
-              .spyOn(performance, "now")
-              .mockReturnValueOnce(0)
-              .mockReturnValueOnce(0)
-              .mockReturnValueOnce(30_000)
+          ? vi.spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValue(30_000)
           : undefined;
       const manager = h.createManager();
       h.entersStateMock.mockImplementationOnce(async () => {
@@ -482,19 +478,14 @@ defineDiscordVoiceTests((h) => {
         throw new Error("The operation was aborted");
       });
       try {
-        expect((await manager.join({ guildId: "g1", channelId: "1001" })).ok).toBe(
-          outcome === "retry",
-        );
-        expect(h.joinVoiceChannelMock).toHaveBeenCalledTimes(outcome === "retry" ? 2 : 1);
+        expect((await manager.join({ guildId: "g1", channelId: "1001" })).ok).toBe(false);
+        expect(h.joinVoiceChannelMock).toHaveBeenCalledOnce();
         if (outcome !== "destroyed") {
-          expect(h.entersStateMock).toHaveBeenCalledTimes(outcome === "retry" ? 2 : 1);
+          expect(h.entersStateMock).toHaveBeenCalledOnce();
         }
         expect(firstConnection.destroy).toHaveBeenCalledOnce();
         if (secondConnection) {
           expect(secondConnection.destroy).not.toHaveBeenCalled();
-        }
-        if (outcome === "retry") {
-          h.expectConnectedStatus(manager, "1001");
         }
       } finally {
         now?.mockRestore();

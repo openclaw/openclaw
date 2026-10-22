@@ -215,10 +215,7 @@ export async function connectWireClient(params: {
   timeoutMs?: number;
   nodeManifest?: { caps: string[]; commands: string[] };
 }): Promise<GatewayClient> {
-  const [{ prepareGatewayClientDeviceAuth }, { acquireGatewayTestClient }] = await Promise.all([
-    import("../../../../src/gateway/client.js"),
-    import("../../../helpers/gateway-client.js"),
-  ]);
+  const { acquireGatewayTestClient } = await import("../../../helpers/gateway-client.js");
   const node = params.role === "node";
   const connectionOptions = {
     url: params.gateway.wsUrl,
@@ -226,8 +223,6 @@ export async function connectWireClient(params: {
     env: params.gateway.runtimeEnv,
     deviceIdentity: params.identity,
   };
-  // Source QA must prepare the auth worker before starting the handshake budget.
-  await prepareGatewayClientDeviceAuth(connectionOptions);
   return await acquireGatewayTestClient(
     {
       ...connectionOptions,
@@ -333,7 +328,6 @@ type WireWorkerHostOptions = {
   root: string;
   label?: string;
   capacity?: number;
-  capacityWaitMs?: number;
   containerEngine?: NodeWorkerContainerEngine;
   containerImage?: string;
   workerGatewayUrl?: string;
@@ -424,9 +418,7 @@ export async function createPairedNodeWorkerHost(
   const invokeErrors: unknown[] = [];
   const commands: string[] = [];
   const frames: NodeInvokeRequestPayload[] = [];
-  const identity = loadOrCreateDeviceIdentity({
-    path: path.join(options.root, `${label}-identity.sqlite`),
-  });
+  const identity = loadOrCreateDeviceIdentity({ env: nodeEnv });
 
   const inventory = () => ({
     protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
@@ -449,7 +441,6 @@ export async function createPairedNodeWorkerHost(
     env: nodeEnv,
     workspace,
     capacity: options.capacity,
-    capacityWaitMs: options.capacityWaitMs,
     nativeInferenceSnapshot,
     ...(options.containerEngine ? { containerEngine: options.containerEngine } : {}),
     ...(options.containerImage ? { containerImage: options.containerImage } : {}),

@@ -26,6 +26,7 @@ import {
   captureChatRunAbortPresentation,
   type RestartRecoveryCandidate,
 } from "./chat-abort.js";
+import { measureGatewayCloseStep } from "./restart-trace.js";
 import type { ChatRunEntry, ChatRunState } from "./server-chat-state.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { recordGatewayShutdownWarning } from "./server-shutdown.js";
@@ -356,6 +357,19 @@ export async function prepareGatewayRunShutdown(
   const capturedEffects = captureGatewaySessionWorkAdmissionInterruption(
     params.resolveGatewayContext,
   );
+  const pendingInputs = new Set(capture.inputs);
+  const pendingOperations = new Set([
+    ...capture.operations,
+    ...capture.inputs.flatMap((input) => (input.claim?.operation ? [input.claim.operation] : [])),
+  ]);
+  for (const input of pendingInputs) {
+    const released = () => pendingInputs.delete(input);
+    void input.settlement.promise.then(released, released);
+  }
+  for (const operation of pendingOperations) {
+    const released = () => pendingOperations.delete(operation);
+    void operation.ownerSettlement.then(released, released);
+  }
   const cancelCaptured = (selection = capture) =>
     stopSession({
       capture: selection,
@@ -419,5 +433,28 @@ export async function prepareGatewayRunShutdown(
   }
   params.cancelReceivedWork?.(createAgentRunRestartAbortError());
   const effects = capturedEffects.interrupt(createAgentRunRestartAbortError());
-  return { released: Promise.all([capture.settled, effects.released]).then(() => undefined) };
+  return {
+    released: Promise.all([
+      measureGatewayCloseStep(
+        "restart.close.session-sources",
+        () => capture.settled,
+        () => {
+          const custody = {
+            sources: pendingInputs.size,
+            operations: pendingOperations.size,
+            sourceWork: 0,
+          };
+          for (const input of pendingInputs) {
+            custody.sourceWork += input.custody.work?.size ?? 0;
+          }
+          return custody;
+        },
+      ),
+      measureGatewayCloseStep(
+        "restart.close.session-effects",
+        () => effects.released,
+        effects.inspectPending,
+      ),
+    ]).then(() => undefined),
+  };
 }

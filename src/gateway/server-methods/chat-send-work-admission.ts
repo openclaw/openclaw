@@ -16,6 +16,7 @@ import { composeSessionSourceAssertion } from "../../config/sessions/session-sou
 import { withSessionTranscriptSourcePublication } from "../../config/sessions/transcript-write-context.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
 import {
   isCompetingSessionControllerWorkActive,
   type SessionEffectRef,
@@ -28,12 +29,12 @@ import {
 import type { registerChatAbortController } from "../chat-abort.js";
 import { ExpectedProfileMismatchError } from "../expected-profile.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
-import { PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
 import { formatForLog } from "../ws-log.js";
 import { readPreRegisteredRun, writePreRegisteredChatAbort } from "./chat-abort-authorization.js";
+import { broadcastChatError } from "./chat-broadcast.js";
 import {
   terminalizeRestartSafeChatAdmission,
   type RestartSafeChatTerminalState,
@@ -97,7 +98,6 @@ export function consumeChatSendAdmissionRetry(
     const pending = readPreRegisteredRun({
       key: params.session.pendingChatSendKey,
       entry: params.context.dedupe.get(params.session.pendingChatSendKey),
-      keyPrefix: PENDING_CHAT_SEND_DEDUPE_PREFIX,
     });
     if (pending?.payload.goalFingerprint) {
       params.respond(
@@ -237,7 +237,20 @@ export function respondChatSendWorkAdmissionFailure(
     respond(aborted.ok, aborted.payload, aborted.error, { cached: true, runId: clientRunId });
     return;
   }
-  respondChatSendAdmissionError(error, respond);
+  respondChatSendAdmissionError(error, respond, (errorMessage) => {
+    if (isProgressCardRefreshInputProvenance(params.request.systemInputProvenance)) {
+      return;
+    }
+    // Admission can fail before the transcript/setup error owner exists.
+    broadcastChatError({
+      context,
+      terminalEntry: admission.runAbort.entry,
+      runId: clientRunId,
+      sessionKey: session.sessionKey,
+      agentId: session.agentId,
+      errorMessage,
+    });
+  });
 }
 
 /** New input is checked only after the chat owner has reconciled prior receipts. */

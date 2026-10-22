@@ -15,7 +15,6 @@ import type {
   runUtilityCompletion,
   prepareUtilityCompletionForAgent,
 } from "../agents/utility-completion.js";
-import type { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { resolveSessionObserverDigestForLifecycle } from "../config/sessions/observer-digest.js";
 import {
   applySessionEntryOperation,
@@ -229,7 +228,6 @@ export type SessionObserverDeps = {
     connIds: ReadonlySet<string>,
     opts?: { dropIfSlow?: boolean },
   ) => void;
-  resolveUtilityModelRef?: typeof resolveUtilityModelRefForAgent;
   prepareModel?: PrepareModel;
   completeModel?: CompleteModel;
   readSession?: (sessionKey: string, agentId: string) => SessionEntry | undefined;

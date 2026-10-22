@@ -6,6 +6,11 @@ import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import type { ControlUiRootState } from "./server-control-ui-root.js";
 import { AUTH_TOKEN, createTestGatewayServer } from "./server-http.test-harness.js";
 
+function expectPublic(response: Response, status = 200, context?: string) {
+  expect(response.status, context).toBe(status);
+  expect(response.headers.get("x-robots-tag"), context).toBe("noindex, nofollow");
+}
+
 describe("public Control UI previews", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   it.each(["", "/control"])("serves a private-data-free preview under %s", async (basePath) => {
@@ -40,8 +45,7 @@ describe("public Control UI previews", () => {
     try {
       const route = "/share/dashboard/example/private-name";
       const response = await fetch(`${origin}${route}?token=secret-value&draft=private-draft`);
-      expect(response.status).toBe(200);
-      expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+      expectPublic(response);
       expect(response.headers.get("content-type")).toContain("text/html");
       const html = await response.text();
       expect(html).toContain('<meta name="robots" content="noindex, nofollow">');
@@ -52,13 +56,11 @@ describe("public Control UI previews", () => {
       expect(response.headers.get("content-security-policy")).toContain("default-src 'none'");
       expect(response.headers.get("referrer-policy")).toBe("no-referrer");
       const head = await fetch(`${origin}${route}`, { method: "HEAD" });
-      expect(head.status).toBe(200);
-      expect(head.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+      expectPublic(head);
       expect(await head.text()).toBe("");
       expect(Number(head.headers.get("content-length"))).toBe(Buffer.byteLength(html));
       const card = await fetch(`${origin}/share/card.png`);
-      expect(card.status).toBe(200);
-      expect(card.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+      expectPublic(card);
       expect(card.headers.get("cache-control")).toBe("no-cache");
       expect(card.headers.get("content-type")).toContain("image/png");
       const png = Buffer.from(await card.arrayBuffer());
@@ -87,8 +89,7 @@ describe("public Control UI previews", () => {
         `/share/chat/a/${"x".repeat(8192)}`,
       ]) {
         const rejected = await fetch(`${origin}${invalid}`);
-        expect(rejected.status, invalid).toBe(404);
-        expect(rejected.headers.get("x-robots-tag"), invalid).toBe("noindex, nofollow");
+        expectPublic(rejected, 404, invalid);
       }
       for (const [requestPath, options, status] of [
         ["/share/card.png", { method: "HEAD" }, 200],
@@ -101,20 +102,17 @@ describe("public Control UI previews", () => {
         ["/share/session/card.png?token=invalid", {}, 200],
       ] as const) {
         const reply = await fetch(`${origin}${requestPath}`, options);
-        expect(reply.status, requestPath).toBe(status);
-        expect(reply.headers.get("x-robots-tag"), requestPath).toBe("noindex, nofollow");
+        expectPublic(reply, status, requestPath);
         await reply.arrayBuffer();
       }
       fs.unlinkSync(path.join(root, "social-card.png"));
       for (const requestPath of ["/share/card.png", "/share/session/card.png?token=invalid"]) {
         const missing = await fetch(`${origin}${requestPath}`);
-        expect(missing.status).toBe(404);
-        expect(missing.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+        expectPublic(missing, 404);
       }
       Object.assign(rootState, { kind: "preparing" });
       const preparing = await fetch(`${origin}/share/card.png`);
-      expect(preparing.status).toBe(503);
-      expect(preparing.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+      expectPublic(preparing, 503);
     } finally {
       server.closeAllConnections();
       try {

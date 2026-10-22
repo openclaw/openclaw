@@ -79,12 +79,11 @@ describe("client voice mutation digest owner", () => {
     record(owner, 1, "first");
     record(owner, 2, "second");
     await flushMicrotasks();
-    expect(owner.snapshot()).toMatchObject({ active: 0, retained: 2 });
+    expect(attempt).toHaveBeenCalledTimes(2);
     retrying = true;
     expect(() => owner.retryAgent("a", 0)).toThrow(refused);
     await flushMicrotasks();
     expect(attempt).toHaveBeenCalledTimes(3);
-    expect(owner.snapshot()).toMatchObject({ active: 0, pending: 0, retained: 1 });
     expect(releases).toHaveLength(3);
     expectReleased(releases);
   });
@@ -94,7 +93,7 @@ describe("client voice mutation digest owner", () => {
       owner.record({ agentId: "a", voiceSessionId: `v${index}`, context: index });
     }
     record(owner, 99);
-    expect(owner.snapshot()).toEqual({ active: 2, pending: 62, retained: 64 });
+    expect(attempts).toHaveLength(2);
     let resolved = 0;
     while (resolved < 64) {
       await flushMicrotasks();
@@ -106,7 +105,6 @@ describe("client voice mutation digest owner", () => {
       }
     }
     await flushMicrotasks();
-    expect(owner.snapshot()).toEqual({ active: 0, pending: 0, retained: 0 });
     expect(attempts.map((attempt) => attempt.id)).toEqual(
       Array.from({ length: 64 }, (_, index) => `v${index + 1}`),
     );
@@ -115,6 +113,43 @@ describe("client voice mutation digest owner", () => {
       ["voice mutation digest retry owner is full"],
       ["voice mutation digest retry owner is full"],
     ]);
+    record(owner, 67, "after-completion");
+    expect(attempts.at(-1)?.id).toBe("after-completion");
+    attempts.at(-1)?.completion.resolve(true);
+    await flushMicrotasks();
+  });
+
+  it("expires a full failed-intent inventory before admitting a fresh inventory", async () => {
+    const warn = vi.fn();
+    const attempt = vi.fn<() => Promise<boolean>>().mockRejectedValue(new Error("offline"));
+    const owner = makeOwner<number>({ attempt, warn });
+    for (let index = 1; index <= 64; index++) {
+      record(owner, index, `failed-${index}`);
+    }
+    await flushMicrotasks();
+    expect(attempt).toHaveBeenCalledTimes(64);
+    record(owner, 65, "refused-before-expiry");
+    expect(warn).toHaveBeenLastCalledWith("voice mutation digest retry owner is full");
+    expect(attempt).toHaveBeenCalledTimes(64);
+
+    warn.mockClear();
+    await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
+    expect(warn.mock.calls).toEqual(
+      Array.from({ length: 64 }, () => [
+        "voice mutation digest dropped after retry retention expired (1 failed attempts)",
+      ]),
+    );
+
+    attempt.mockResolvedValue(true);
+    for (let index = 1; index <= 64; index++) {
+      record(owner, index, `fresh-after-expiry-${index}`);
+    }
+    await flushMicrotasks();
+    expect(attempt).toHaveBeenCalledTimes(128);
+    expect(attempt).toHaveBeenLastCalledWith(
+      expect.objectContaining({ voiceSessionId: "fresh-after-expiry-64" }),
+    );
+    expect(warn).toHaveBeenCalledTimes(64);
   });
 
   it.each([
@@ -131,7 +166,6 @@ describe("client voice mutation digest owner", () => {
       expect(attempts).toHaveLength(expectedAttempts);
       attempts[1]?.completion.resolve(true);
       await flushMicrotasks();
-      expect(owner.snapshot()).toMatchObject({ active: 0, pending: 0 });
     },
   );
 
@@ -174,14 +208,12 @@ describe("client voice mutation digest owner", () => {
       }
       await flushMicrotasks();
       expect(attempt).toHaveBeenCalledTimes(expectedAttempts);
-      expect(owner.snapshot()).toMatchObject({ active: 0, pending: 0, retained: 1 });
       expectReleased(releases);
       if (!confirmed) {
         expect(releases).toHaveLength(2);
         owner.record({ agentId: "a", voiceSessionId: "v2", context: 1 });
         await flushMicrotasks();
         expect(attempt).toHaveBeenCalledTimes(3);
-        expect(owner.snapshot()).toMatchObject({ active: 0, pending: 0, retained: 1 });
       }
     },
   );
@@ -195,14 +227,12 @@ describe("client voice mutation digest owner", () => {
       await vi.advanceTimersByTimeAsync(30_000);
       expect(attempts).toHaveLength(2);
       expect(attempts[0]?.signal.aborted).toBe(true);
-      expect(owner.snapshot()).toMatchObject({ active: 2, pending: 1, retained: 3 });
       attempts[0]?.completion.resolve(true);
       await vi.advanceTimersByTimeAsync(0);
       expect(attempts).toHaveLength(3);
       attempts[1]?.completion.resolve(true);
       attempts[2]?.completion.resolve(true);
       await vi.advanceTimersByTimeAsync(0);
-      expect(owner.snapshot().retained).toBe(0);
     } finally {
       for (const attempt of attempts) {
         attempt.completion.resolve(true);
@@ -231,7 +261,6 @@ describe("client voice mutation digest owner", () => {
     attempts[1]!.resolve(true);
     await flushMicrotasks();
     expect(releases.map((release) => release.mock.calls.length)).toEqual([1, 1, 1]);
-    expect(owner.snapshot()).toMatchObject({ active: 0, pending: 0, retained: 0 });
   });
 
   it("drops a permanently failing intent after bounded lifecycle retries", async () => {
@@ -249,22 +278,20 @@ describe("client voice mutation digest owner", () => {
     });
     owner.record({ agentId: "first", voiceSessionId: "v1", context: 1 });
     await flushMicrotasks();
-    expect(owner.snapshot()).toMatchObject({ active: 0, pending: 0, retained: 1 });
     owner.retry({ agentId: "first", voiceSessionId: "v1" });
     await flushMicrotasks();
     expect(attempts).toHaveLength(2);
     await flushMicrotasks();
-    expect(owner.snapshot().active).toBe(0);
     owner.retry({ agentId: "first", voiceSessionId: "v1" });
     await flushMicrotasks();
-    expect(owner.snapshot().retained).toBe(0);
-    owner.record({ agentId: "second", voiceSessionId: "v2", context: 2 });
-    await flushMicrotasks();
-    expect(owner.snapshot().retained).toBe(0);
-    expect(attempts).toEqual(["first", "first", "first", "second"]);
     expect(warn).toHaveBeenLastCalledWith(
       "voice mutation digest dropped after 3 failed attempts: permanent",
     );
+    owner.record({ agentId: "first", voiceSessionId: "v1", context: 3 });
+    await flushMicrotasks();
+    owner.record({ agentId: "second", voiceSessionId: "v2", context: 2 });
+    await flushMicrotasks();
+    expect(attempts).toEqual(["first", "first", "first", "first", "second"]);
   });
 
   it("suspends failure expiry while a legitimate defer owns the retry", async () => {
@@ -278,16 +305,13 @@ describe("client voice mutation digest owner", () => {
     const owner = makeOwner<number>({ attempt });
     record(owner, 1);
     await vi.advanceTimersByTimeAsync(0);
-    expect(owner.snapshot()).toMatchObject({ active: 0, pending: 0, retained: 1 });
     outcome = "defer";
     owner.retry(identity);
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(300_001);
-    expect(owner.snapshot()).toMatchObject({ active: 0, pending: 0, retained: 1 });
     outcome = "succeed";
     owner.retry(identity);
     await vi.advanceTimersByTimeAsync(0);
-    expect(owner.snapshot().retained).toBe(0);
     expect(attempt).toHaveBeenCalledTimes(3);
   });
 
@@ -304,6 +328,5 @@ describe("client voice mutation digest owner", () => {
     expect(attempts[2]?.context).toBe(3);
     attempts[2]?.completion.resolve(true);
     await flushMicrotasks();
-    expect(owner.snapshot().retained).toBe(0);
   });
 });

@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { materializeSkill } from "../../skills/loading/skill-materializer.js";
+import { createCanonicalFixtureSkill } from "../../skills/test-support/test-helpers.js";
 import type { SkillEntry } from "../../skills/types.js";
 import { skillsFilesHandlers } from "./skills-files.js";
 import { callGatewayHandler } from "./skills.test-helpers.js";
@@ -42,18 +42,15 @@ beforeEach(async () => {
   await fs.mkdir(skillDir, { recursive: true });
   await fs.mkdir(workspace);
   await fs.writeFile(skillPath, content);
-  const frontmatter = { name: "release-notes", description: "Write clear release notes." };
   entries = [
     {
-      frontmatter,
-      skill: materializeSkill({
-        content,
-        frontmatter,
-        ...frontmatter,
+      frontmatter: {},
+      skill: createCanonicalFixtureSkill({
+        name: "release-notes",
+        description: "Write clear release notes.",
         filePath: skillPath,
         baseDir: skillDir,
         source: "openclaw-managed",
-        sourceOptions: { source: "openclaw-managed", scope: "project", origin: "top-level" },
       }),
     },
   ];
@@ -91,12 +88,11 @@ describe("skills.files.get", () => {
     expect((await read(path.join(alias, "SKILL.md"))).ok).toBe(true);
     const privateFile = path.join(directory, "private.md");
     await fs.writeFile(privateFile, "private");
-    await fs.unlink(skillPath);
-    await fs.symlink(privateFile, skillPath);
-    expect((await read()).ok).toBe(false);
-    await fs.unlink(skillPath);
-    await fs.link(privateFile, skillPath);
-    expect((await read()).ok).toBe(false);
+    for (const link of [fs.symlink, fs.link]) {
+      await fs.unlink(skillPath);
+      await link(privateFile, skillPath);
+      expect((await read()).ok).toBe(false);
+    }
   });
 
   it("preserves bundled hardlink support and rejects files over the discovery byte limit", async () => {

@@ -341,14 +341,27 @@ it.each([
   },
 );
 
-it.each([
+it.each<{
+  capable: boolean;
+  migrating: boolean;
+  omittedTimeout: boolean;
+  local?: { family: "client" | "daemon"; version: number };
+}>([
   { capable: true, migrating: true, omittedTimeout: false },
   { capable: false, migrating: false, omittedTimeout: false },
   { capable: false, migrating: true, omittedTimeout: false },
   { capable: true, migrating: true, omittedTimeout: true },
+  ...(["client", "daemon"] as const).flatMap((family) =>
+    [1, 2].map((version) => ({
+      capable: false,
+      migrating: false,
+      omittedTimeout: false,
+      local: { family, version },
+    })),
+  ),
 ])(
-  "parks foreground activation after candidate admission (capable=$capable, migrating=$migrating, omittedTimeout=$omittedTimeout)",
-  async ({ capable, migrating, omittedTimeout }) => {
+  "parks foreground activation after candidate admission (capable=$capable, migrating=$migrating, omittedTimeout=$omittedTimeout, local=$local)",
+  async ({ capable, migrating, omittedTimeout, local }) => {
     const root = dirs.make("foreground-candidate-");
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
     vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "openclaw.json"));
@@ -383,6 +396,17 @@ it.each([
     });
     vi.spyOn(candidateState, "readUpdateStateSchemaVersions").mockResolvedValue([
       { path: path.join(root, "state", "openclaw.sqlite"), userVersion: migrating ? 14 : 15 },
+      ...(local
+        ? [
+            {
+              path: path.join(
+                root,
+                local.family === "client" ? "client/credentials.sqlite" : "control/services.sqlite",
+              ),
+              userVersion: local.version,
+            },
+          ]
+        : []),
     ]);
     mocks.validateCanary.mockResolvedValue({
       status: "ok",
@@ -411,7 +435,7 @@ it.each([
       });
       return executeMutableUpdate(await bindExecutionGuards(params));
     });
-    if (!capable && migrating) {
+    if (!capable && (migrating || (local !== undefined && local.version !== 1))) {
       expect(result?.result).toMatchObject({
         status: "error",
         reason: "target-native-unsupported",

@@ -2,7 +2,6 @@ import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { FEISHU_HTTP_TIMEOUT_MS } from "./client-timeout.js";
 import { FeishuConfigSchema } from "./config-schema.js";
-import { withFeishuRequestContext } from "./send-context.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 const effectGate = vi.hoisted(() => ({ prepare: undefined as (() => Promise<void>) | undefined }));
@@ -77,11 +76,10 @@ const proxyEnvKeys = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"] 
 let createFeishuClient: ClientModule["createFeishuClient"];
 let createFeishuWSClient: ClientModule["createFeishuWSClient"];
 let getFeishuUserAgent: ClientModule["getFeishuUserAgent"];
-let resetFeishuProxyAgentForTest: ClientModule["resetFeishuProxyAgentForTest"];
+let withFeishuRequestContext: (typeof import("./send-context.js"))["withFeishuRequestContext"];
 
 const baseAccount: ResolvedFeishuAccount = {
   accountId: "main",
-  selectionSource: "explicit",
   enabled: true,
   configured: true,
   appId: "app_123",
@@ -136,7 +134,7 @@ function expectProxyRequest(url: string) {
   });
 }
 
-beforeAll(async () => {
+beforeAll(() => {
   vi.doMock("@larksuiteoapi/node-sdk", () => ({
     AppType: { SelfBuild: "self" },
     Domain: { Feishu: 0, Lark: 1 },
@@ -152,23 +150,21 @@ beforeAll(async () => {
       Boolean(proxyEnvKeys.map((key) => process.env[key]).find((value) => value !== undefined)),
     ),
   }));
-
-  ({ createFeishuClient, createFeishuWSClient, getFeishuUserAgent, resetFeishuProxyAgentForTest } =
-    await import("./client.js"));
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   for (const key of [...proxyEnvKeys, FEISHU_HTTP_TIMEOUT_ENV_VAR, "OPENCLAW_PROXY_ACTIVE"]) {
     vi.stubEnv(key, undefined);
   }
-  resetFeishuProxyAgentForTest();
   vi.clearAllMocks();
+  vi.resetModules();
+  ({ createFeishuClient, createFeishuWSClient, getFeishuUserAgent } = await import("./client.js"));
+  ({ withFeishuRequestContext } = await import("./send-context.js"));
 });
 
 afterEach(() => vi.unstubAllEnvs());
 
 afterAll(() => {
-  resetFeishuProxyAgentForTest();
   vi.doUnmock("@larksuiteoapi/node-sdk");
   vi.doUnmock("@openclaw/proxyline");
   vi.resetModules();

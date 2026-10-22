@@ -11,6 +11,7 @@ import { executePreparedCliRun as executePreparedCliRunImpl } from "./execute.js
 import { wrapPreparedCliRunWithTestAdmission } from "./execute.test-support.js";
 
 const executePreparedCliRun = wrapPreparedCliRunWithTestAdmission(executePreparedCliRunImpl);
+afterEach(() => vi.useRealTimers());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function runVerifiedFixture(command: string, args: string[], abortSignal: AbortSignal) {
@@ -50,8 +51,6 @@ async function runVerifiedFixture(command: string, args: string[], abortSignal: 
       modelArg: undefined,
       sessionArgs: undefined,
       systemPromptFileArg: undefined,
-      input: "stdin",
-      output: "jsonl",
       jsonlDialect: "claude-stream-json",
     },
     onSuccessfulAuthBinding: () => {},
@@ -65,14 +64,9 @@ async function runVerifiedFixture(command: string, args: string[], abortSignal: 
   context.params.abortSignal = abortSignal;
   context.authBindingFingerprint = "fixture-owner";
   context.executionTarget = { kind: "plugin", execute };
-  // Invocation correctness must not race the helper's one-second watchdog.
-  // Vitest's real deadline still aborts the run and reaps the actual child.
+  // Freeze the helper's watchdog; Vitest still aborts and reaps the real child.
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  try {
-    return await executePreparedCliRun(context);
-  } finally {
-    vi.useRealTimers();
-  }
+  return executePreparedCliRun(context);
 }
 
 it("runs a verified plugin CLI script through its resolved interpreter", async ({ signal }) => {

@@ -29,7 +29,7 @@ import {
   type AgentMessage,
   type SessionTreeEntry as CoreSessionTreeEntry,
 } from "../runtime/index.js";
-import { repairToolUseResultPairing } from "../session-transcript-repair.js";
+import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
 import type { SessionModelUsageSink } from "../sessions/compaction/runtime.js";
 import type { ExtensionAPI, ExtensionContext } from "../sessions/index.js";
 import { recordSessionModelUsage } from "../sessions/session-model-usage.js";
@@ -487,7 +487,7 @@ function splitPreservedRecentTurns(params: {
   // Preserving recent assistant turns can orphan downstream toolResult messages.
   // Repair pairings here so compaction summarization doesn't trip strict providers.
   return {
-    summarizableMessages: repairToolUseResultPairing(summarizableMessages).messages,
+    summarizableMessages: sanitizeToolUseResultPairing(summarizableMessages),
     preservedMessages,
   };
 }
@@ -522,11 +522,11 @@ function formatContextMessage(message: AgentMessage): string | null {
 }
 
 function formatContextSegments(messages: AgentMessage[]): string[] {
-  const pairing = classifyToolUseResultPairing(messages);
+  const frames = classifyToolUseResultPairing(messages);
   // A call-bearing assistant and all occurrence-matched results are one context
   // atom; keeping remainder messages separate lets later terminal text survive.
   const toolSegments = new Map<AgentMessage, AgentMessage[]>(
-    pairing.frames.map((frame) => [
+    frames.map((frame) => [
       frame.assistant,
       [
         frame.assistant,

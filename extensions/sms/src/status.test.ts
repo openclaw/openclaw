@@ -4,6 +4,19 @@ import { formatSmsProbeLines, probeSmsAccount } from "./status.js";
 import type { ResolvedSmsAccount } from "./types.js";
 import { createSmsTestAccount } from "./webhook.test-support.js";
 
+const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
+  fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
+}));
+
+function mockTwilioFetch(fetchImpl: typeof fetch) {
+  fetchWithSsrFGuardMock.mockImplementation(async ({ url, init, beforeRequest }) => {
+    beforeRequest?.();
+    return { response: await fetchImpl(url, init), release: async () => {} };
+  });
+}
+
 function createWebhookResponse(overrides: Record<string, string> = {}) {
   return {
     incoming_phone_numbers: [
@@ -24,12 +37,16 @@ function createFetch(responses: Array<unknown>): typeof fetch {
 function probe(
   responses: unknown[],
   account: Partial<ResolvedSmsAccount> = {},
-  options: Parameters<typeof probeSmsAccount>[0]["options"] = {},
+  options: NonNullable<Parameters<typeof probeSmsAccount>[0]["options"]> & {
+    fetchImpl?: typeof fetch;
+  } = {},
 ) {
+  const { fetchImpl = createFetch(responses), ...probeOptions } = options;
+  mockTwilioFetch(fetchImpl);
   return probeSmsAccount({
     account: createSmsTestAccount({ accountId: "default", ...account }),
     timeoutMs: 1000,
-    options: { fetchImpl: createFetch(responses), ...options },
+    options: probeOptions,
   });
 }
 
@@ -89,7 +106,7 @@ function fetchInputUrl(input: Parameters<typeof fetch>[0]): string {
 }
 
 afterEach(() => {
-  vi.useRealTimers();
+  fetchWithSsrFGuardMock.mockReset();
 });
 
 describe("SMS status probe", () => {
@@ -281,16 +298,29 @@ describe("SMS status probe", () => {
     });
   });
 
-  it("returns durable delivery state before the outer probe deadline when Twilio hangs", async () => {
-    vi.useFakeTimers();
-    const fetchImpl = vi.fn<typeof fetch>(async () => await new Promise<Response>(() => {}));
-    const outbound = { messageSid: "SM-timeout", status: "delivered", lastObservedAt: 2 };
-    const pending = probeDelivery(outbound, fetchImpl);
+  it.each(["webhook", "history"] as const)(
+    "preserves sibling and durable delivery facts when the %s request times out",
+    async (lookup) => {
+      const webhookTimedOut = lookup === "webhook";
+      const fetchImpl = vi.fn<typeof fetch>(async (input) => {
+        if (fetchInputUrl(input).includes("IncomingPhoneNumbers.json") === webhookTimedOut) {
+          throw Object.assign(new Error("request timed out"), { name: "TimeoutError" });
+        }
+        return Response.json(webhookTimedOut ? inbound("SM-inbound") : createWebhookResponse());
+      });
+      const outbound = { messageSid: "SM-timeout", status: "delivered", lastObservedAt: 2 };
+      const result = await probeDelivery(outbound, fetchImpl);
+      const error = `Twilio ${webhookTimedOut ? "webhook" : "message history"} check failed: timed out after 900ms`;
 
-    await vi.advanceTimersByTimeAsync(900);
-
-    const result = await pending;
-    expectUnavailable(result, "timed out after 900ms");
-    expect(result.recentOutbound).toMatchObject(outbound);
-  });
+      expect(result).toMatchObject({
+        ok: false,
+        error,
+        webhook: webhookTimedOut ? { status: "unavailable", reason: error } : { status: "matches" },
+        recentOutbound: outbound,
+      });
+      if (webhookTimedOut) {
+        expect(result.recentInbound).toMatchObject({ sid: "SM-inbound", status: "received" });
+      }
+    },
+  );
 });

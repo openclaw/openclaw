@@ -10,9 +10,12 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { WORKER_PROTOCOL_MAX_PAYLOAD_BYTES } from "../../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import { bindAgentToolExecutionLocation } from "../../agents/agent-tool-metadata.js";
+import { wrapToolWithBeforeToolCallHook } from "../../agents/agent-tools.before-tool-call.js";
+import { stringEnum } from "../../agents/schema/string-enum.js";
 import { createToolSurfacePresentationForTest } from "../../agents/tool-surface-plan.test-support.js";
 import type { AnyAgentTool } from "../../agents/tools/common.js";
 import { createSessionsYieldTool } from "../../agents/tools/sessions-yield-tool.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
@@ -129,6 +132,37 @@ function request(
   const { generation } = surface;
   return { generation, toolId: entry.id, toolCallId: call, arguments: { value: "input" } };
 }
+
+it("enforces the deployment action policy when dispatching an issued worker handle", async () => {
+  const config: OpenClawConfig = {
+    tools: { gatewayPolicy: { allow: ["remote"], actions: { remote: ["list"] } } },
+  };
+  const execute = vi.fn().mockResolvedValue(success);
+  const source = tool("remote", execute);
+  source.parameters = Type.Object(
+    { action: stringEnum(["list", "patch"]), value: Type.String() },
+    { additionalProperties: false },
+  );
+  const { runtime } = fixture([wrapToolWithBeforeToolCallHook(source, { config })]);
+  const surface = await runtime.getSurface(identity);
+  await expect(
+    runtime.invoke(
+      identity,
+      { ...request(surface, "allowed"), arguments: { action: "list", value: "input" } },
+      sink,
+    ),
+  ).resolves.toEqual(success);
+  await expect(
+    runtime.invoke(
+      identity,
+      { ...request(surface, "denied"), arguments: { action: "patch", value: "input" } },
+      sink,
+    ),
+  ).resolves.toMatchObject({
+    details: { status: "error", error: expect.stringContaining("Gateway tool policy denies") },
+  });
+  expect(execute).toHaveBeenCalledTimes(1);
+});
 
 it("prepares deferred discovery guidance with the model tool projection", async () => {
   const { runtime } = fixture([], async () => ({
@@ -412,6 +446,7 @@ it("preserves error text through worker tool execution", async () => {
   expect(result).toEqual({
     content: [{ type: "text", text: JSON.stringify({ status: "error", error: message }, null, 2) }],
     details: { status: "error", error: message },
+    isError: true,
   });
   expect(execute).toHaveBeenCalledOnce();
 });

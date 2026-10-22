@@ -30,6 +30,7 @@ import { formatForLog } from "../ws-log.js";
 import { buildAbortedChatSendPayload } from "./chat-abort-authorization.js";
 import { broadcastChatError, broadcastChatTerminal } from "./chat-broadcast.js";
 import type { RestartSafeChatTerminalState } from "./chat-restart-recovery.js";
+import { resolveChatSendStorageErrorMessage } from "./chat-send-admission-errors.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import {
   readChatSendReplyPayload,
@@ -138,6 +139,7 @@ function formatChatSendError(error: unknown): string {
   }
   return (
     resolveStateContentionPresentation(error)?.errorMessage ??
+    resolveChatSendStorageErrorMessage(error) ??
     renderAgentHarnessPreflightUserMessage(error) ??
     renderFailoverCodeUserCopy(describeFailoverError(error).code) ??
     String(error)

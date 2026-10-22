@@ -235,7 +235,6 @@ export async function buildPreparedCompactionRuntime(
     const runtimePlan = reuseFullRuntimePlan
       ? preparedRuntimePlan
       : { ...preparedRuntimePlan, auth: resolvedRuntimeAuthPlan };
-    const runAbortController = new AbortController();
     const spawnWorkspaceDir =
       effectiveCwd !== effectiveWorkspace
         ? resolvedWorkspace
@@ -312,7 +311,6 @@ export async function buildPreparedCompactionRuntime(
             oneShotCliRun: params.oneShotCliRun,
             allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
             webSearchEnabled: params.toolOverrides?.webSearch !== false,
-            abortSignal: runAbortController.signal,
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
             modelHasVision: effectiveModel.input?.includes("image") ?? false,
             modelCompat: extractModelCompat(effectiveModel),
@@ -573,7 +571,6 @@ export async function buildPreparedCompactionRuntime(
       effectiveModel,
       runtimePlan,
       runtimePlanModelContext,
-      runAbortController,
       effectiveTools,
       allowedToolNames,
       buildSystemPromptText,

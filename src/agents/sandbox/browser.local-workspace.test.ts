@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -43,6 +44,7 @@ describe("managed browser workspace custody", () => {
           databasePath: resolveOpenClawStateSqlitePath(),
           payload: {
             pid: process.pid,
+            processNamespace: readGatewayLockProcessNamespace(),
             createdAt: new Date().toISOString(),
             configPath: "openclaw.json",
             role: "gateway",

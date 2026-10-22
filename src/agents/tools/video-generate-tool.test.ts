@@ -38,6 +38,7 @@ import * as videoGenerateBackground from "./media-generate-background.js";
 import {
   defineMediaGenerationCancellationTests,
   defineMediaGenerationDuplicateTests,
+  withHeldMediaGenerationResult,
 } from "./media-generation-lifecycle.test-support.js";
 import { createVideoGenerateStatusActionResult } from "./video-generate-tool.actions.js";
 import { createVideoGenerateTool } from "./video-generate-tool.js";
@@ -483,7 +484,7 @@ describe("createVideoGenerateTool", () => {
     const saveSpy = vi
       .spyOn(mediaStore, "saveMediaBuffer")
       .mockResolvedValueOnce(savedMedia(savedId, sizeBytes));
-    mockGeneratedVideo({
+    const generate = mockGeneratedVideo({
       provider: "vydra",
       model: "veo3",
       videos: [
@@ -493,51 +494,51 @@ describe("createVideoGenerateTool", () => {
       metadata: { taskId: "task-1" },
     });
 
-    let scheduledWork: (() => Promise<void>) | undefined;
     const tool = createConfiguredVideoTool("vydra/veo3", {
       agentSessionKey: "agent:main:discord:direct:123",
       requesterOrigin: { channel: "discord", to: "channel:1" },
-      scheduleBackgroundWork: (work) => {
-        scheduledWork = work;
-      },
     });
 
-    const { result, text, details } = await executeVideo(tool);
+    await withHeldMediaGenerationResult(generate, taskExecutorMocks, async (complete) => {
+      const { result, text, details } = await executeVideo(tool);
 
-    expect(text).toContain("Background task started for video generation (task-123).");
-    expect(text).toContain("Do not call video_generate again for this request.");
-    expect(details).toMatchObject({ async: true, status: "started", task: { taskId: "task-123" } });
-    expect((result as { terminate?: boolean }).terminate).toBeUndefined();
-    if (!scheduledWork) {
-      throw new Error("expected scheduled video generation work");
-    }
-    expect(saveSpy).not.toHaveBeenCalled();
-    await scheduledWork();
-    expect(saveSpy).toHaveBeenCalledOnce();
-    expect(saveSpy).toHaveBeenCalledWith(
-      savedVideo,
-      "video/mp4",
-      "tool-video-generation",
-      MAX_VIDEO_BYTES,
-      name,
-    );
-    const runId = expect.stringMatching(/^tool:video_generate:/);
-    expect(firstMockCallArg(taskExecutorMocks.recordProgress)).toMatchObject({
-      runId,
-      progressSummary: "Generating video",
+      expect(text).toContain("Background task started for video generation (task-123).");
+      expect(text).toContain("Do not call video_generate again for this request.");
+      expect(details).toMatchObject({
+        async: true,
+        status: "started",
+        task: { taskId: "task-123" },
+      });
+      expect((result as { terminate?: boolean }).terminate).toBeUndefined();
+      expect(saveSpy).not.toHaveBeenCalled();
+      await complete();
+      expect(generate).toHaveBeenCalledOnce();
+      expect(saveSpy).toHaveBeenCalledOnce();
+      expect(saveSpy).toHaveBeenCalledWith(
+        savedVideo,
+        "video/mp4",
+        "tool-video-generation",
+        MAX_VIDEO_BYTES,
+        name,
+      );
+      const runId = expect.stringMatching(/^tool:video_generate:/);
+      expect(firstMockCallArg(taskExecutorMocks.recordProgress)).toMatchObject({
+        runId,
+        progressSummary: "Generating video",
+      });
+      expect(firstMockCallArg(taskExecutorMocks.completeOperation)).toMatchObject({ runId });
+      const wake = firstMockCallArg(wakeSpy);
+      expect(wake).toMatchObject({ handle: { taskId: "task-123" }, status: "ok" });
+      expect(wake.attachments).toEqual([
+        { type: "video", url, mimeType: "video/mp4", name: "lobster.mp4" },
+        { type: "video", path: savedPath, mimeType: "video/mp4", name, sizeBytes },
+      ]);
+      expect(wake.mediaUrls).toEqual([url, savedPath]);
+      expect(wake.result).toContain(`mediaUrl="${url}"`);
+      expect(wake.result).toContain(`path="${savedPath}"`);
+      expect(wake.result).toContain(`name="${name}"`);
+      expect(wake.result).not.toContain("MEDIA:");
     });
-    expect(firstMockCallArg(taskExecutorMocks.completeOperation)).toMatchObject({ runId });
-    const wake = firstMockCallArg(wakeSpy);
-    expect(wake).toMatchObject({ handle: { taskId: "task-123" }, status: "ok" });
-    expect(wake.attachments).toEqual([
-      { type: "video", url, mimeType: "video/mp4", name: "lobster.mp4" },
-      { type: "video", path: savedPath, mimeType: "video/mp4", name, sizeBytes },
-    ]);
-    expect(wake.mediaUrls).toEqual([url, savedPath]);
-    expect(wake.result).toContain(`mediaUrl="${url}"`);
-    expect(wake.result).toContain(`path="${savedPath}"`);
-    expect(wake.result).toContain(`name="${name}"`);
-    expect(wake.result).not.toContain("MEDIA:");
   });
 
   defineMediaGenerationCancellationTests({
@@ -586,6 +587,15 @@ describe("createVideoGenerateTool", () => {
         generateVideo: vi.fn(async () => {
           throw new Error("not used");
         }),
+      });
+      vi.spyOn(
+        videoGenerateBackground.videoGenerationTaskLifecycle,
+        "wakeTaskCompletion",
+      ).mockResolvedValue({ status: "delivered" });
+      return mockGeneratedVideo({
+        provider: "google",
+        model: "veo-3.1-pro-generate-preview",
+        videos: [{ url: "https://example.test/proof.mp4", mimeType: "video/mp4" }],
       });
     },
     cases: [
@@ -779,7 +789,7 @@ describe("createVideoGenerateTool", () => {
     mockVideoPluginProvider({ imageToVideo: { enabled: true, maxInputImages: 2 } });
     const generateSpy = mockSavedVideoResult();
     const tool = createConfiguredVideoTool();
-    await tool.execute("call-1", {
+    const result = await tool.execute("call-1", {
       prompt: "lobster",
       aspectRatio: "17:9",
       resolution: "draft-large",
@@ -792,6 +802,7 @@ describe("createVideoGenerateTool", () => {
     expect(call.inputImages?.map((image) => image.buffer?.toString())).toEqual(["first", "first"]);
     expect(call.inputImages?.map((image) => image.role)).toEqual(["first_frame", "last_frame"]);
     expect(call).toMatchObject({ aspectRatio: "17:9", resolution: "draft-large" });
+    expect(resultDetails(result)).toMatchObject({ aspectRatio: "17:9", resolution: "draft-large" });
   });
 
   it.each([

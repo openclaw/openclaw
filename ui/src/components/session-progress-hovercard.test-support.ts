@@ -21,24 +21,25 @@ function subscriptions<T>() {
   };
 }
 
-export function createHovercard({
-  sessionKey = "global",
-  card: initialCard,
-  holdProgress = false,
-  rowDetails: initialRowDetails = {},
-  triggerKind = "sidebar",
-  browser = false,
-}: {
-  sessionKey?: string;
-  card?: ProgressCard | null;
-  holdProgress?: boolean;
-  rowDetails?: Partial<SidebarSessionHovercardRow>;
-  triggerKind?: "sidebar" | "markdown";
-  browser?: boolean;
-} = {}) {
+export function createHovercard(
+  options: {
+    sessionKey?: string;
+    card?: ProgressCard | null;
+    holdProgress?: boolean;
+    rowDetails?: Partial<SidebarSessionHovercardRow>;
+    triggerKind?: "sidebar" | "markdown";
+    browser?: boolean;
+  } = {},
+) {
+  const {
+    sessionKey = "global",
+    holdProgress = false,
+    triggerKind = "sidebar",
+    browser = false,
+    card,
+  } = options;
+  let { rowDetails = {} } = options;
   let selectedId = "research";
-  let card = initialCard;
-  let rowDetails = initialRowDetails;
   let releaseProgress: (() => void) | undefined;
   const selection = subscriptions<ApplicationContext["agentSelection"]["state"]>();
   const sessions = subscriptions<void>();
@@ -62,15 +63,11 @@ export function createHovercard({
       if (card !== undefined) {
         return { card };
       }
+      const key = params.sessionKey?.startsWith("agent:")
+        ? params.sessionKey
+        : `agent:${params.agentId}:${params.sessionKey}`;
       return {
-        card: {
-          sessionKey: params.sessionKey?.startsWith("agent:")
-            ? params.sessionKey
-            : `agent:${params.agentId}:${params.sessionKey}`,
-          revision: 1,
-          updatedAt: 1,
-          markdown: `${owner} progress`,
-        },
+        card: { sessionKey: key, revision: 1, updatedAt: 1, markdown: `${owner} progress` },
       };
     },
   );
@@ -101,24 +98,10 @@ export function createHovercard({
     },
   } as unknown as ApplicationContext;
   if (browser || triggerKind === "markdown") {
-    Object.assign(context, {
-      agents: {
-        state: {
-          agentsList: {
-            agents: [{ id: "research" }],
-            defaultId: "research",
-            mainKey: "main",
-          },
-        },
-      },
-    });
-    Object.assign(context.sessions, {
-      state: {
-        result: {
-          sessions: [{ key: sessionKey, displayName: "Synthetic provider session" }],
-        },
-      },
-    });
+    const agentsList = { agents: [{ id: "research" }], defaultId: "research", mainKey: "main" };
+    const result = { sessions: [{ key: sessionKey, displayName: "Synthetic provider session" }] };
+    Object.assign(context, { agents: { state: { agentsList } } });
+    Object.assign(context.sessions, { state: { result } });
   }
   const provider = document.createElement(
     "openclaw-session-progress-hovercard-provider",
@@ -150,19 +133,15 @@ export function createHovercard({
     href: browser ? "#synthetic-provider-session" : "#",
     textContent: browser ? "Synthetic provider session" : "Session",
   });
+  provider.append(sidebar);
   if (triggerKind === "markdown") {
     trigger.dataset.sessionKey = sessionKey;
     const thread = Object.assign(document.createElement("div"), { className: "chat-thread" });
     thread.append(trigger);
-    provider.append(sidebar, thread);
+    provider.append(thread);
   } else {
     row.append(trigger);
-    if (browser) {
-      provider.append(sidebar, row);
-    } else {
-      sidebar.append(row);
-      provider.append(sidebar);
-    }
+    (browser ? provider : sidebar).append(row);
   }
   const emitProgressChange = (revision = 2) =>
     emit("progressCard.changed", { sessionKey, revision });
@@ -171,7 +150,6 @@ export function createHovercard({
   return {
     provider,
     gateway,
-    row,
     trigger,
     request,
     getReads: () => reads("progressCard.get"),
@@ -188,10 +166,6 @@ export function createHovercard({
     select(agentId: string) {
       selectedId = agentId;
       selection.emit(context.agentSelection.state);
-    },
-    change(next: ProgressCard) {
-      card = next;
-      emitProgressChange(next.revision);
     },
     updateRow(details: Partial<SidebarSessionHovercardRow>) {
       rowDetails = { ...rowDetails, ...details };

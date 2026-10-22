@@ -69,7 +69,6 @@ describe("client voice session lifecycle", () => {
     readRecord,
     closeVoice,
     recoverStale,
-    expectRetained,
     recordEffect,
   } = harness;
 
@@ -93,7 +92,6 @@ describe("client voice session lifecycle", () => {
         await settle();
         expect(send).toHaveBeenCalledOnce();
         expect(readRecord(voiceSessionId)?.digestDeliveredAt).toBeUndefined();
-        expectRetained();
       } finally {
         vi.useRealTimers();
       }
@@ -191,7 +189,6 @@ describe("client voice session lifecycle", () => {
       try {
         await closeVoice(voiceSessionId, { sessionKey });
         await settleDigestAttempts();
-        expectRetained(0);
         expect(send).not.toHaveBeenCalled();
 
         setTestEnvValue("OPENCLAW_STATE_DIR", successorStateDir);
@@ -387,7 +384,6 @@ describe("client voice session lifecycle", () => {
       send.mockRejectedValueOnce(new Error("channel offline"));
       await completeRun("run-live");
       await settle();
-      expect(testing.digestDeliverySnapshot().active).toBe(0);
       expect(readRecord(voiceSessionId)?.digestDeliveredAt).toBeUndefined();
 
       await recoverStale();
@@ -406,7 +402,6 @@ describe("client voice session lifecycle", () => {
       try {
         await closeVoice(voiceSessionId);
         await settle();
-        expectRetained(0);
 
         // The run can register before config arrives; an identical replay must
         // still re-arm the closed session's digest, not return at binding reuse.
@@ -415,7 +410,6 @@ describe("client voice session lifecycle", () => {
         await registerRun({ ...binding, config: {} });
         await settle();
         await advanceRetention();
-        expect(testing.digestDeliverySnapshot().retained).toBe(1);
 
         await recordMutation(voiceSessionId, "late-run");
         await completeRun("late-run");

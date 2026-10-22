@@ -8,10 +8,38 @@ import type {
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { vi } from "vitest";
-import type { ClickClackClient } from "../http-client.js";
-import type { ClickClackChannel, ClickClackMessage, CoreConfig } from "../types.js";
-import { discussionExternalRef } from "./naming.js";
+import { ClickClackHttpError, type ClickClackClient } from "../http-client.js";
+import type { ClickClackChannel, CoreConfig } from "../types.js";
+import { reserveDiscussionBindingGeneration } from "./binding-generation.js";
+import { discussionCredentialFingerprint, discussionExternalRef } from "./naming.js";
+import {
+  registerDiscussionTestTransport,
+  type DiscussionMessagePage,
+} from "./service-http-transport.test-support.js";
 import { ClickClackDiscussionService } from "./service.js";
+
+const { reservedGenerations } = vi.hoisted(() => ({
+  reservedGenerations: new WeakMap<PluginRuntime, Map<string, string>>(),
+}));
+// Observe actual owner decisions without supplying generations or persistence outcomes.
+vi.mock("./binding-generation.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./binding-generation.js")>();
+  return {
+    ...actual,
+    async reserveDiscussionBindingGeneration(
+      params: Parameters<typeof actual.reserveDiscussionBindingGeneration>[0],
+    ) {
+      const generation = await actual.reserveDiscussionBindingGeneration(params);
+      let sessions = reservedGenerations.get(params.runtime);
+      if (!sessions) {
+        sessions = new Map();
+        reservedGenerations.set(params.runtime, sessions);
+      }
+      sessions.set(params.sessionKey, generation);
+      return generation;
+    },
+  };
+});
 
 const TEST_INSTALLATION_ID = "11111111-2222-4333-8444-555555555555";
 const TEST_BINDING_GENERATION = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
@@ -166,10 +194,8 @@ export function createHarness(
       }
     | undefined,
   options: {
-    bindingGenerationFactory?: () => string;
     gatewayEvents?: Pick<OpenClawPluginGatewayEvents, "onSessionsChanged">;
     startTimer?: boolean;
-    maxRetainedDetachedBindings?: number;
     openSyncKeyedStore?: PluginRuntime["state"]["openSyncKeyedStore"];
   } = {},
 ) {
@@ -178,9 +204,14 @@ export function createHarness(
   const store = createDiscussionMemoryStore<unknown>();
   const generationStore = createDiscussionMemoryStore<unknown>();
   const revokedStore = createDiscussionMemoryStore<unknown>();
+  const installationStore = createDiscussionMemoryStore<{ id: string }>();
+  installationStore.register("current", { id: TEST_INSTALLATION_ID });
   const openSyncKeyedStore =
     options.openSyncKeyedStore ??
     (vi.fn((storeOptions: { namespace: string }) => {
+      if (storeOptions.namespace === "discussion-installation") {
+        return installationStore;
+      }
       if (storeOptions.namespace === "discussion-binding-generations") {
         return generationStore;
       }
@@ -237,12 +268,9 @@ export function createHarness(
       created_at: "2026-07-19T00:00:00.000Z",
     }),
   );
-  const latestChannelMessages = vi.fn<
-    (
-      channelId: string,
-      limit: number,
-    ) => Promise<{ messages: ClickClackMessage[]; truncated: boolean }>
-  >(async () => ({ messages: [], truncated: false }));
+  const messagePage = vi.fn<(channelId: string, limit: number) => Promise<DiscussionMessagePage>>(
+    async () => ({ messages: [], oldest_seq: 0, has_older: false }),
+  );
   const channels = vi.fn<() => Promise<ClickClackChannel[]>>(async () => [
     {
       id: "chn_general",
@@ -254,39 +282,32 @@ export function createHarness(
       created_at: "2026-07-19T00:00:00.000Z",
     },
   ]);
-  const client = {
-    workspaces: vi.fn(async () => [
-      {
-        id: "wsp_team",
-        route_id: "team-route",
-        slug: "team",
-        name: "Team",
-        created_at: "2026-07-19T00:00:00.000Z",
-      },
-    ]),
-    createChannel,
-    updateChannel,
-    latestChannelMessages,
-    channels,
-  } as unknown as ClickClackClient;
-  const service = new ClickClackDiscussionService(runtime, {
-    clientFactory: () => client,
-    installationId: TEST_INSTALLATION_ID,
-    bindingGenerationFactory: options.bindingGenerationFactory ?? (() => TEST_BINDING_GENERATION),
-    ...(options.maxRetainedDetachedBindings !== undefined
-      ? { maxRetainedDetachedBindings: options.maxRetainedDetachedBindings }
-      : {}),
-  });
+  const workspaces = vi.fn(async () => [
+    {
+      id: "wsp_team",
+      route_id: "team-route",
+      slug: "team",
+      name: "Team",
+      created_at: "2026-07-19T00:00:00.000Z",
+    },
+  ]);
+  const transportBaseUrl = registerDiscussionTestTransport(
+    { workspaces, channels, createChannel, updateChannel, messagePage },
+    ClickClackHttpError,
+  );
+  config.channels!.clickclack!.apiBaseUrl = transportBaseUrl;
+  const service = new ClickClackDiscussionService(runtime);
   if (options.gatewayEvents || options.startTimer) {
     void service.bindGatewayEvents(options.gatewayEvents, createTestPluginServiceScheduler());
   }
   return {
     runtime,
     service,
-    client,
+    workspaces,
+    transportBaseUrl,
     createChannel,
     updateChannel,
-    latestChannelMessages,
+    messagePage,
     channels,
     config,
     store,
@@ -298,11 +319,36 @@ export function createHarness(
   };
 }
 
-export function testExternalRef(sessionKey: string): string {
+export function testBindingGeneration(runtime: PluginRuntime, sessionKey: string): string {
+  const generation = reservedGenerations.get(runtime)?.get(sessionKey);
+  if (!generation) {
+    throw new Error(`No real discussion generation was reserved for ${sessionKey}`);
+  }
+  return generation;
+}
+
+// A supplied runtime observes real reservation; omitted runtime describes seeded rows only.
+export function testExternalRef(sessionKey: string, runtime?: PluginRuntime): string {
   return discussionExternalRef(
     TEST_INSTALLATION_ID,
     sessionKey,
     TEST_DESTINATION_IDENTITY,
-    TEST_BINDING_GENERATION,
+    runtime ? testBindingGeneration(runtime, sessionKey) : TEST_BINDING_GENERATION,
+  );
+}
+
+export async function reserveTestExternalRef(runtime: PluginRuntime, sessionKey: string) {
+  const generation = await reserveDiscussionBindingGeneration({
+    runtime,
+    sessionKey,
+    accountId: "default",
+    credentialFingerprint: discussionCredentialFingerprint("test-token"),
+    destinationIdentity: TEST_DESTINATION_IDENTITY,
+  });
+  return discussionExternalRef(
+    TEST_INSTALLATION_ID,
+    sessionKey,
+    TEST_DESTINATION_IDENTITY,
+    generation,
   );
 }

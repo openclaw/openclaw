@@ -29,6 +29,7 @@ import {
   type Admission,
   type AdmissionFactValue,
   type SqliteDatabaseAdmissionKey,
+  type SqliteDatabaseFactKey,
   type StagedAdmissionFact,
 } from "./sqlite-database-admission-record.js";
 import {
@@ -37,7 +38,7 @@ import {
 } from "./sqlite-database-admission-seal.js";
 import { createSqliteDatabaseWriteReceipts } from "./sqlite-database-write-receipts.js";
 import { getSqliteNativeAdmissionFacts } from "./sqlite-native-admission.js";
-import { stageSqliteTransactionState } from "./sqlite-post-commit.js";
+import { hasSqlitePostCommitScope, stageSqliteTransactionState } from "./sqlite-post-commit.js";
 
 export {
   readSqliteDatabaseAdmissions,
@@ -47,6 +48,7 @@ export {
 export type {
   SqliteDatabaseAdmissions,
   SqliteDatabaseAdmissionKey,
+  SqliteDatabaseFactKey,
 } from "./sqlite-database-admission-record.js";
 export { beginSqliteDatabaseAdmissionOperation } from "./sqlite-native-admission.js";
 
@@ -128,6 +130,7 @@ export const {
   getSqliteDatabaseAdmission,
   getSqliteDatabaseSchemaRevision,
   getOrLoadSqliteDatabaseAdmissionForPath,
+  peekSqliteDatabaseAdmissionForPath,
   hasSqliteDatabaseSchemaAdmissionForPath,
   getSqliteDatabaseAdmissionIdentityForPath,
   hasSqliteDatabaseSchemaAdmissionForIdentity,
@@ -550,7 +553,7 @@ export function hasPendingSqliteDatabaseSchemaMutation(
 
 export function publishSqliteDatabaseAdmission<T>(
   database: DatabaseSync | PostgresSqlConnection,
-  key: SqliteDatabaseAdmissionKey<T>,
+  key: SqliteDatabaseFactKey<T>,
   value: T,
   options: { schemaRevision?: number } = {},
 ): void {
@@ -569,7 +572,7 @@ export function publishSqliteDatabaseAdmission<T>(
     ? undefined
     : getSqliteNativeAdmissionFacts(database);
   const admitted = admitSqliteDatabaseFactValue(key, value);
-  if (!native && !database.isTransaction) {
+  if (!native && !database.isTransaction && !hasSqlitePostCommitScope(database)) {
     publishFact(record, key, admitted, revision);
     return;
   }

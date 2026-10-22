@@ -408,8 +408,8 @@ export async function executeFastAbortRequest(
     readChannelContextGatewayContextResolver(ctx) ??
     getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
   const assertCurrent = () => {
-    if (params.isCommandTargetCurrent?.sessionSource?.assertScopeCurrent) {
-      params.isCommandTargetCurrent.sessionSource.assertScopeCurrent();
+    if (params.isCommandTargetCurrent?.sessionSource) {
+      params.isCommandTargetCurrent.sessionSource();
       return;
     }
     if (params.isCommandTargetCurrent?.() === false) {

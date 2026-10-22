@@ -49,21 +49,8 @@ type CommandResult = {
   stdout: string;
 };
 
-type CommandFailureDiagnostics = CommandResult & { recoveryLeaseCandidates: string[] };
-
 // Keep private command output out of Error serialization and routine Mantis reports.
-const commandFailureDiagnostics = new WeakMap<Error, CommandFailureDiagnostics>();
-
-function getCommandFailureDiagnostics(error: unknown) {
-  return error instanceof Error ? commandFailureDiagnostics.get(error) : undefined;
-}
-
-function boundedFailureOutput(output: string) {
-  const halfLimit = 8_192;
-  return output.length <= halfLimit * 2
-    ? output
-    : `${output.slice(0, halfLimit)}\n[output truncated]\n${output.slice(-halfLimit)}`;
-}
+const commandRecoveryLeases = new WeakMap<Error, string[]>();
 
 export type CommandRunner = typeof defaultCommandRunner;
 
@@ -125,7 +112,7 @@ export async function defaultCommandRunner(
           `${command} ${args.join(" ")} failed with ${detail}${stderr ? `\n${stderr.trimEnd()}` : ""}`,
         );
       // These native acquisition markers identify recovery candidates, not ready
-      // leases. Parse before truncation so verbose bootstrap cannot erase them.
+      // leases. Inspect the full output so verbose bootstrap cannot erase them.
       const recoveryLeaseCandidates: string[] = [];
       for (const match of stderr.matchAll(
         /^(?:leased (cbx_[a-f0-9]{12}) slug=|provisioned lease=(cbx_[a-f0-9]{12}) server=)/gmu,
@@ -138,11 +125,7 @@ export async function defaultCommandRunner(
           }
         }
       }
-      commandFailureDiagnostics.set(error, {
-        stdout: boundedFailureOutput(stdout),
-        stderr: boundedFailureOutput(stderr),
-        recoveryLeaseCandidates,
-      });
+      commandRecoveryLeases.set(error, recoveryLeaseCandidates);
       reject(error);
     });
   });
@@ -223,7 +206,7 @@ export async function createMantisCrabboxSession(
         "inherit",
       ).catch((error: unknown) => {
         recoveryLeaseCandidates =
-          getCommandFailureDiagnostics(error)?.recoveryLeaseCandidates ?? [];
+          error instanceof Error ? (commandRecoveryLeases.get(error) ?? []) : [];
         throw error;
       });
       const acquired = extractLeaseId(`${result.stdout}\n${result.stderr}`);

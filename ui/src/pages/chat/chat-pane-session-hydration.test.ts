@@ -6,6 +6,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../lib/session-pull-requests.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { setChatHistoryLoad } from "./chat-history-state.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 import type { AfterCommitEffect } from "./render-lifecycle.ts";
 
@@ -55,6 +56,22 @@ function createSecondaryHydrationPane() {
     const transcript = deferred<boolean>();
     pane.deferSessionHydrationUntilTranscript(state.sessionKey, transcript.promise);
     return async (committed = true) => {
+      if (committed) {
+        const client = state.client;
+        if (!client) {
+          throw new Error("Hydration fixture requires a connected client");
+        }
+        state.currentSessionId = "hydration-session";
+        setChatHistoryLoad(state, {
+          phase: "committed",
+          sessions: state.sessions,
+          client,
+          connectionEpoch: state.connectionEpoch,
+          sessionKey: state.sessionKey,
+          requestAgentId: undefined,
+          sessionInfo: { key: state.sessionKey, sessionId: state.currentSessionId, kind: "direct" },
+        });
+      }
       transcript.resolve(committed);
       await transcript.promise;
       await Promise.resolve();

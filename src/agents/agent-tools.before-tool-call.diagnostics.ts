@@ -133,7 +133,8 @@ export function prepareToolTerminalPresentation({
   }
   let project: ToolTerminalPresentationProjector | undefined;
   if (formatter) {
-    // Retain isolated formatter inputs, not the executable tool or its hook context.
+    // Formatters observe post-execution mutations, then stay isolated from later middleware.
+    // The pre-execution custody snapshot intentionally cannot replace this capture.
     const formatterParams = observer ? structuredClone(toolParams) : toolParams;
     project = (result) => {
       try {
@@ -638,7 +639,7 @@ export async function reconcileLoopCallExecutionParams(args: {
       sessionKey: args.ctx.sessionKey,
       sessionId: args.ctx.sessionId,
     });
-    const churn = reconcileToolCallExecutionParams(sessionState, {
+    const active = reconcileToolCallExecutionParams(sessionState, {
       toolName: args.toolName,
       toolParams: args.toolParams,
       toolCallId: args.toolCallId,
@@ -650,7 +651,7 @@ export async function reconcileLoopCallExecutionParams(args: {
       sessionKey: args.ctx.sessionKey,
       sessionId: args.ctx.sessionId,
       runId: args.ctx.runId,
-      active: churn.active,
+      active,
     });
   } catch (err) {
     log.warn(

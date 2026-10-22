@@ -172,6 +172,86 @@ export function registerCryptoStartupAbortTest(context: CryptoPersistenceContext
   });
 }
 
+export function registerCryptoOneOffInitializationTests(
+  context: CryptoPersistenceContext,
+  prepareReadAuthority: () => void,
+): void {
+  it("single-flights host-authorized one-off crypto initialization", async () => {
+    prepareReadAuthority();
+    const fixture = createCryptoFixture(context);
+    context.clearMatrixSyncApiForNeverStartedClient();
+    const matrixJsClient = vi.mocked(context.getMatrixJsClient());
+    const initStarted = createDeferred<void>();
+    const finishInit = createDeferred<void>();
+    matrixJsClient.initRustCrypto.mockImplementation(async () => {
+      initStarted.resolve();
+      await finishInit.promise;
+    });
+    const client = fixture.create();
+    const preparations = Promise.allSettled([client.prepareForOneOff(), client.prepareForOneOff()]);
+    try {
+      await initStarted.promise;
+      await setImmediate();
+      expect(matrixJsClient.initRustCrypto).toHaveBeenCalledTimes(1);
+      finishInit.resolve();
+      await expect(preparations).resolves.toEqual([
+        { status: "fulfilled", value: undefined },
+        { status: "fulfilled", value: undefined },
+      ]);
+      expect(matrixJsClient.initRustCrypto).toHaveBeenCalledTimes(1);
+    } finally {
+      finishInit.reject(new Error("crypto initialization fixture cleanup"));
+      await preparations;
+      await client.stopWithoutPersist();
+      await fixture.cleanup();
+    }
+  });
+
+  it("joins pending one-off crypto initialization before completing discard shutdown", async () => {
+    prepareReadAuthority();
+    const fixture = createCryptoFixture(context);
+    context.clearMatrixSyncApiForNeverStartedClient();
+    const matrixJsClient = vi.mocked(context.getMatrixJsClient());
+    const initStarted = createDeferred<void>();
+    const finishInit = createDeferred<void>();
+    let backendLive = false;
+    matrixJsClient.initRustCrypto.mockImplementation(async () => {
+      initStarted.resolve();
+      await finishInit.promise;
+      backendLive = true;
+    });
+    matrixJsClient.stopClient.mockImplementation(() => {
+      backendLive = false;
+    });
+    const client = fixture.create();
+    const preparation = client.prepareForOneOff();
+    const preparationSettled = Promise.allSettled([preparation]);
+    let shutdown: Promise<void> | undefined;
+    try {
+      await initStarted.promise;
+      let shutdownFinished = false;
+      shutdown = client.stopWithoutPersist().then(() => {
+        shutdownFinished = true;
+      });
+      const shutdownSettled = Promise.allSettled([shutdown]);
+      await setImmediate();
+      const finishedBeforeInit = shutdownFinished;
+      finishInit.resolve();
+      await Promise.all([preparationSettled, shutdownSettled]);
+      expect(backendLive).toBe(false);
+      expect(finishedBeforeInit).toBe(false);
+      await expect(shutdown).resolves.toBeUndefined();
+      await context.expectAbortError(preparation);
+    } finally {
+      finishInit.reject(new Error("crypto initialization fixture cleanup"));
+      await preparationSettled;
+      await shutdown?.catch(() => undefined);
+      await client.stopWithoutPersist();
+      await fixture.cleanup();
+    }
+  });
+}
+
 export function registerCryptoPeriodicShutdownTest(context: CryptoPersistenceContext): void {
   it("awaits and cancels active periodic crypto persistence during discard shutdown", async () => {
     const fixture = createCryptoFixture(context, "openclaw-matrix-interval");

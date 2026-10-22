@@ -498,7 +498,11 @@ it.each(
         const stale = runCommand(commandA, action);
         commandOutput(stale, 1);
         expect(stale.stderr).toContain("different operation");
-        expect(snapshot()).toEqual(before);
+        const after = snapshot();
+        expect(after.map(({ ino }) => ino)).toEqual(before.map(({ ino }) => ino));
+        for (const [index, { bytes }] of after.entries()) {
+          expect(bytes.equals(before[index]!.bytes)).toBe(true);
+        }
       }
       assertPhases(commands[1]!, recordB.descriptor.operationId, [
         ["status", "prepared"],

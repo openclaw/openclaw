@@ -3,7 +3,7 @@ import type {
   EnvironmentsListResult,
   SystemInfoResult,
 } from "@openclaw/gateway-protocol";
-import { createEffect, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
+import { createEffect, createMemo, createSignal, onSettled } from "solid-js";
 import { GATEWAY_EVENT_DEVICE_PAIR_CHANGED } from "../../../../src/gateway/events.js";
 import type { PresenceEntry } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
@@ -42,7 +42,7 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage, type GatewayPageChange } from "../../lib/reactive/gateway-page.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { projectMutableSource } from "../../lib/reactive/projection.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { canReadSystemInfo, readSystemInfo } from "../../lib/system-info.ts";
 import { createDevicesDialogs } from "./devices-dialogs.ts";
@@ -86,7 +86,6 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
   let canManagePairing = false;
   let canAdmin = false;
   let canRead = true;
-  // RuntimeConfig owns the draft; only accepted presentation custody lives here.
   let configGateway: ApplicationContext["gateway"] | null = null;
   let configClient: ApplicationGatewaySnapshot["client"] = null;
   let execApprovalsTarget: "gateway" | "node" = "gateway";
@@ -95,16 +94,11 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
   let stopGatewayEvents: (() => void) | undefined;
   let publishData = () => {};
   // Request admission and policy drafts retain their synchronous mutation contract.
-  const pageData = projectSource(() => dataState, {
-    read: (readState) => readState(),
-    subscribe: (_source, notify) => {
-      publishData = notify;
-      return () => {
-        publishData = () => {};
-      };
-    },
-    equality: "revision",
-  });
+  const pageData = projectMutableSource(
+    () => dataState,
+    (readState) => readState(),
+  );
+  publishData = pageData.publish;
   const configProjection = projectRuntimeConfig(context.runtimeConfig);
   const dialogs = createDevicesDialogs({
     canManagePairing: () => gatewayBinding.connected && canManagePairing,
@@ -191,16 +185,18 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
   });
   onSettled(() => {
     syncConfigCustody();
-    return configProjection.subscribe(syncConfigCustody);
-  });
-  onCleanup(() => {
-    stopGatewayEvents?.();
-    dialogs.cancel();
-    presenceTask.cancel();
-    systemInfoTask.cancel();
-    environmentsTask.cancel();
-    canManagePairing = false;
-    canAdmin = false;
+    // Config receipts record which connection owns the accepted policy draft.
+    const stopConfig = configProjection.subscribe(syncConfigCustody);
+    return () => {
+      stopConfig();
+      stopGatewayEvents?.();
+      dialogs.cancel();
+      presenceTask.cancel();
+      systemInfoTask.cancel();
+      environmentsTask.cancel();
+      canManagePairing = false;
+      canAdmin = false;
+    };
   });
 
   function setRouteData(data: DevicesRouteData | undefined) {
@@ -506,10 +502,8 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
     setDesktopEnvironments([]);
   }
 
-  // A rotation always ends in a dialog: with the replacement when the Gateway issued it
-  // to this operator, otherwise with what it did instead. The reveal sits deliberately
-  // outside the identity-scoped confirmation slot — aborting a shown secret
-  // would destroy the only copy the Gateway can hand out.
+  // Always show the replacement or rotation outcome, outside the identity-scoped confirmation:
+  // aborting a shown secret would destroy the only copy the Gateway can hand out.
   async function reportRotationOutcome(
     device: { id: string; name: string },
     role: string,
@@ -538,9 +532,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
           dismissHint: t("devices.inventory.rotateDismissHint"),
         })
       : showSecretRevealDialog({
-          // The title carries the announcement and the device, so the body is only the
-          // reassurance. Naming the transient disconnect here would raise an alarm the
-          // very next line has to walk back.
+          // The title names the device; the body reassures about the outcome.
           title: t("devices.inventory.rotateWithheldTitle", { device: device.name }),
           status: "success",
           message: t("devices.inventory.rotateWithheldNext"),
@@ -550,11 +542,8 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
         }));
   }
 
-  // Retargeting discards the draft for the target being left, so a dirty form
-  // asks first. Cancelling restores nothing because nothing is written until the
-  // operator confirms: the target, the form, the scope and the dirty flag are
-  // still the ones the selector was rendered from, and the re-render puts the
-  // selector itself back on that target.
+  // Confirm before discarding a target's dirty draft. Cancellation retains the target, form,
+  // scope, and dirty flag; rendering restores the selector to that retained target.
   async function changeExecApprovalsTarget(kind: "gateway" | "node", nodeId: string | null) {
     const devices = dataState;
     if (devices.execApprovalsDirty && !(await dialogs.confirmExecApprovalsDiscard())) {
@@ -679,7 +668,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
       <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
         <section class="content-header">
           <div>
-            <div class="page-title">{titleForRoute("devices", t)}</div>
+            <h1 class="page-title">{titleForRoute("devices", t)}</h1>
             <div class="page-subtitle">
               {subtitleForRoute("devices", t)} <LearnMoreLink url={DEVICES_DOCS_URL} />
             </div>

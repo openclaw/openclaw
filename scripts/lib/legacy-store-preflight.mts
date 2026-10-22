@@ -1,4 +1,4 @@
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 
 function bindsFs(name: ts.BindingName): boolean {
   return ts.isIdentifier(name)

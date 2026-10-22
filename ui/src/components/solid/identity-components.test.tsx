@@ -6,7 +6,7 @@ import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { AgentIdentityAvatar } from "./identity-avatar.tsx";
-import { SessionOwnerChipContent } from "./session-owner-chip.tsx";
+import { SessionOwnerChip } from "./session-owner-chip.tsx";
 import {
   ViewerAvatarContent,
   ViewerFacepileContent,
@@ -103,7 +103,7 @@ it("updates Solid owner attribution and participant stacks from the current prop
   disposals.push(
     mountSolid(
       () => (
-        <SessionOwnerChipContent
+        <SessionOwnerChip
           owner={{ type: "human", id: "ada", label: "Ada" }}
           attribution="owned"
           participantCount={count()}

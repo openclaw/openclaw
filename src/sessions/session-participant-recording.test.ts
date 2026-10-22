@@ -48,117 +48,107 @@ const target = {
   promptedAt: 1,
 };
 
-it("reports best-effort persistence failure when the caller supplies no reporter", async () => {
-  recordParticipant.mockRejectedValue(new Error("synthetic participant write failure"));
-  recordSessionParticipantBestEffort(target);
-  await waitForSessionParticipantRecording(target);
-  expect(warnParticipant).toHaveBeenCalledExactlyOnceWith(
-    "failed to record session participant: Error: synthetic participant write failure",
-  );
-});
-
-it("reports persistence failure outside its caller's still-active Gateway root", async () => {
-  const root = tryBeginGatewayRootWorkAdmission("test:participant-reporter");
+function participantRoot() {
+  const root = tryBeginGatewayRootWorkAdmission("test:participant");
   if (!root) {
     throw new Error("Participant fixture could not acquire its root");
   }
-  const reportedActiveRoots: number[] = [];
-  recordParticipant.mockRejectedValue(new Error("synthetic participant write failure"));
-  try {
-    await root.run(async () => {
-      recordSessionParticipantBestEffort({
-        ...target,
-        onError: () => {
-          reportedActiveRoots.push(getActiveGatewayRootWorkCount({ excludeCurrent: true }));
-        },
-      });
-      await waitForSessionParticipantRecording(target);
-      expect(reportedActiveRoots).toEqual([1]);
-    });
-  } finally {
-    root.release();
-  }
-});
+  return Object.assign(root, { [Symbol.dispose]: () => root.release() });
+}
 
-it.each(["resolve", "reject"] as const)(
-  "joins participant persistence without retaining its caller root when it %ss",
-  async (outcome) => {
-    const persistence = createDeferredCore<"inserted">();
-    const started = createDeferredCore();
-    const failures = new Set<unknown>();
-    const reported: unknown[] = [];
-    const work = new AsyncWorkScope(failures);
-    const root = tryBeginGatewayRootWorkAdmission("test:participant");
-    if (!root) {
-      throw new Error("Participant fixture could not acquire its root");
-    }
+class PendingRecording {
+  persistence = createDeferredCore<"inserted">();
+  started = createDeferredCore();
+  failures = new Set<unknown>();
+  work = new AsyncWorkScope(this.failures);
+  constructor() {
     recordParticipant.mockImplementation(() => {
-      started.resolve();
-      return persistence.promise;
+      this.started.resolve();
+      return this.persistence.promise;
     });
-    try {
-      await root.run(async () => {
-        work.run(() => {
-          expect(
-            recordSessionParticipantBestEffort({
-              ...target,
-              onError: (error) => reported.push(error),
-            }),
-          ).toBeUndefined();
-          expect(recordParticipant).not.toHaveBeenCalled();
-        });
-      });
-      root.release();
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
-      await started.promise;
-      let joined = false;
-      const joinedRecording = waitForSessionParticipantRecording(target).then(() => {
-        joined = true;
-      });
-      let drained = false;
-      const drainage = work.drain().then(() => {
-        drained = true;
-      });
-      await Promise.resolve();
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
-      expect(drained).toBe(false);
-      expect(joined).toBe(false);
-      const failure = new Error("Participant persistence failed");
-      if (outcome === "reject") {
-        persistence.reject(failure);
-      } else {
-        persistence.resolve("inserted");
-      }
-      await drainage;
-      await joinedRecording;
-      expect(joined).toBe(true);
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
-      expect(reported).toEqual(outcome === "reject" ? [failure] : []);
-      expect(failures.size).toBe(0);
-    } finally {
-      persistence.resolve("inserted");
-      await work.drain();
-      root.release();
+  }
+  async [Symbol.asyncDispose]() {
+    this.persistence.resolve("inserted");
+    await this.work.drain();
+  }
+}
+
+it.each([false, true])(
+  "reports persistence failure with a caller-owned reporter: %s",
+  async (rooted) => {
+    using root = rooted ? participantRoot() : undefined;
+    const reportedActiveRoots: number[] = [];
+    recordParticipant.mockRejectedValue(new Error("synthetic participant write failure"));
+    const record = async () => {
+      const onError = rooted
+        ? () => reportedActiveRoots.push(getActiveGatewayRootWorkCount({ excludeCurrent: true }))
+        : undefined;
+      recordSessionParticipantBestEffort({ ...target, onError });
+      await waitForSessionParticipantRecording(target);
+    };
+    if (root) {
+      await root.run(record);
+      expect(reportedActiveRoots).toEqual([1]);
+    } else {
+      await record();
+      expect(warnParticipant).toHaveBeenCalledExactlyOnceWith(
+        "failed to record session participant: Error: synthetic participant write failure",
+      );
     }
   },
 );
 
-it("keeps unrooted participant work unrooted while Gateway admission is closed", async () => {
-  const persistence = createDeferredCore<"inserted">();
-  const started = createDeferredCore();
-  const work = new AsyncWorkScope();
-  recordParticipant.mockImplementation(() => {
-    started.resolve();
-    return persistence.promise;
-  });
-  markGatewayRestartDraining();
-  try {
-    work.run(() => recordSessionParticipantBestEffort(target));
-    await started.promise;
+it.each(["resolve", "reject"] as const)(
+  "joins participant persistence without retaining its caller root when it %ss",
+  async (outcome) => {
+    using root = participantRoot();
+    await using fixture = new PendingRecording();
+    const { persistence, started, failures, work } = fixture;
+    const reported: unknown[] = [];
+    await root.run(async () =>
+      work.run(() => {
+        const result = recordSessionParticipantBestEffort({
+          ...target,
+          onError: (error) => reported.push(error),
+        });
+        expect(result).toBeUndefined();
+        expect(recordParticipant).not.toHaveBeenCalled();
+      }),
+    );
+    root.release();
     expect(getActiveGatewayRootWorkCount()).toBe(0);
-    expect(isGatewayWorkAdmissionClosed()).toBe(true);
-  } finally {
-    persistence.resolve("inserted");
-    await work.drain();
-  }
+    await started.promise;
+    let joined = false;
+    const joinedRecording = waitForSessionParticipantRecording(target).then(() => {
+      joined = true;
+    });
+    let drained = false;
+    const drainage = work.drain().then(() => {
+      drained = true;
+    });
+    await Promise.resolve();
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+    expect({ drained, joined }).toEqual({ drained: false, joined: false });
+    const failure = new Error("Participant persistence failed");
+    if (outcome === "reject") {
+      persistence.reject(failure);
+    } else {
+      persistence.resolve("inserted");
+    }
+    await drainage;
+    await joinedRecording;
+    expect(joined).toBe(true);
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+    expect(reported).toEqual(outcome === "reject" ? [failure] : []);
+    expect(failures.size).toBe(0);
+  },
+);
+
+it("keeps unrooted participant work unrooted while Gateway admission is closed", async () => {
+  await using fixture = new PendingRecording();
+  markGatewayRestartDraining();
+  fixture.work.run(() => recordSessionParticipantBestEffort(target));
+  await fixture.started.promise;
+  expect(getActiveGatewayRootWorkCount()).toBe(0);
+  expect(isGatewayWorkAdmissionClosed()).toBe(true);
 });

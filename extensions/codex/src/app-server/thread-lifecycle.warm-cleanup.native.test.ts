@@ -39,12 +39,18 @@ afterEach(() => {
 // The loopback provider chooses deterministic actions; the pinned native binary
 // owns threads, subscriptions, shell execution, inventory, and notifications.
 describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () => {
-  it.for(["publication failure", "protected rotation", "protected publication failure"] as const)(
+  it.for([
+    "publication failure",
+    "protected rotation",
+    "protected publication failure",
+    "context refresh",
+  ] as const)(
     "%s permits continuation without disturbing sibling ownership",
     { timeout: 90_000 },
     async (scenario, context) => {
       const backgroundWork = scenario !== "publication failure";
-      const publicationFailure = scenario !== "protected rotation";
+      const contextRefresh = scenario === "context refresh";
+      const publicationFailure = scenario !== "protected rotation" && !contextRefresh;
       const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
         context.onTestFinished(async () => {
           await closeOpenClawStateDatabaseAsync();
@@ -233,6 +239,15 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
         agentDir,
         modelId: "gpt-5.6-luna",
         disableTools: false,
+        ...(contextRefresh
+          ? {
+              contextEngine: {
+                info: { id: "test", name: "Test", ownsCompaction: true },
+                assemble: vi.fn(),
+                compact: vi.fn(),
+              } as never,
+            }
+          : {}),
       };
       const bindingStore = sessionBinding.createCodexAppServerBindingStore(
         createCodexSqliteTestBindingStateStore({
@@ -248,6 +263,9 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
         params,
         cwd: native.cwd,
         dynamicTools: [],
+        contextEngineProjection: contextRefresh
+          ? { mode: "thread_bootstrap" as const, epoch: "before", fingerprint: "before" }
+          : undefined,
         appServer,
         userMcpServersEnabled: false,
         signal: AbortSignal.timeout(75_000),
@@ -413,7 +431,7 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
         }
         publicationClaimed = isCodexAppServerLiveThreadClaimed(client, first.threadId);
         record("failed-publication-claim-state", { claimed: publicationClaimed });
-      } else {
+      } else if (!contextRefresh) {
         pluginFingerprint = "changed-policy";
         await expect(startOrResumeThread(common)).rejects.toThrow(
           `Codex thread ${first.threadId} is claimed by active work; stop it first.`,
@@ -424,9 +442,54 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
       }
       sibling!.assertCurrent();
       record("sibling-owner-current-after-refusal", { threadId: siblingBinding.threadId });
+      if (contextRefresh) {
+        common.contextEngineProjection = {
+          mode: "thread_bootstrap",
+          epoch: "after",
+          fingerprint: "after",
+        };
+      }
+      if (contextRefresh) {
+        pluginFingerprint = "changed-policy";
+        await expect(startOrResumeThread(common)).rejects.toThrow(
+          "claimed by active work; stop it first",
+        );
+        expect(bindingStore.read(sessionBinding.sessionBindingIdentity(params))).toEqual(saved);
+        pluginFingerprint = "original-policy";
+      }
+      if (contextRefresh) {
+        const beforePolicyChange = requests.length;
+        await expect(
+          startOrResumeThread({
+            ...common,
+            developerInstructions: "Changed persistent thread policy",
+          }),
+        ).rejects.toThrow("claimed by active work; stop it first");
+        expect(bindingStore.read(sessionBinding.sessionBindingIdentity(params))).toEqual(saved);
+        expect(
+          requests
+            .slice(beforePolicyChange)
+            .some(({ method }) =>
+              ["thread/start", "thread/unsubscribe", "turn/start"].includes(method),
+            ),
+        ).toBe(false);
+        record("persistent-policy-refresh-refused", { threadId: first.threadId });
+      }
       const resumed = await startOrResumeThread(common);
-      expect(resumed.threadId).toBe(first.threadId);
-      expect(resumed.lifecycle.action).toBe("resumed");
+      if (contextRefresh) {
+        expect(resumed.threadId).not.toBe(first.threadId);
+        expect(resumed.contextEngine?.projection?.epoch).toBe("after");
+        expect(bindingStore.read(sessionBinding.sessionBindingIdentity(params))?.threadId).toBe(
+          resumed.threadId,
+        );
+        record("context-refreshed-with-background-owner", {
+          predecessor: first.threadId,
+          successor: resumed.threadId,
+        });
+      } else {
+        expect(resumed.threadId).toBe(first.threadId);
+        expect(resumed.lifecycle.action).toBe("resumed");
+      }
       record("warm-retry-prepared", { threadId: resumed.threadId });
       await runTurn(resumed.threadId);
       expect(publicationClaimed).toBe(false);
@@ -437,13 +500,13 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
       expect(JSON.stringify(history.thread.turns)).toContain("NATIVE_CONTINUATION_OK");
       record("native-continuation-persisted", { threadId: resumed.threadId });
       const transitionRequests = requests.slice(before);
-      if (backgroundWork) {
+      if (backgroundWork && !contextRefresh) {
         expect(
           transitionRequests.some(({ method }) =>
             ["thread/start", "thread/resume", "thread/unsubscribe"].includes(method),
           ),
         ).toBe(false);
-      } else {
+      } else if (!contextRefresh) {
         expect(transitionRequests).toContainEqual({
           method: "thread/unsubscribe",
           threadId: first.threadId,
@@ -452,6 +515,14 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
           method: "thread/resume",
           threadId: first.threadId,
         });
+      }
+      if (contextRefresh) {
+        expect(
+          transitionRequests.some(
+            ({ method, threadId }) =>
+              method === "thread/unsubscribe" && threadId === first.threadId,
+          ),
+        ).toBe(false);
       }
       expect(
         transitionRequests.some(

@@ -131,7 +131,11 @@ export function normalizeMessageActionInput(params: {
     (!actionHasTarget(action, normalizedArgs, targetAliasOptions) ||
       (hasResourceReference && !hasCanonicalTarget && !params.allowResourceOnly))
   ) {
-    throw missingMessageActionTargetError(action);
+    throw missingMessageActionTargetError(action, {
+      hasCurrentSourceConversation: Boolean(
+        resolveImplicitMessageActionTarget(toolContext, "send"),
+      ),
+    });
   }
 
   return normalizedArgs;

@@ -1,11 +1,10 @@
 import { ComponentType } from "discord-api-types/v10";
 import { parseDiscordComponentCustomIdForInteraction } from "../component-custom-id.js";
 import type { DiscordComponentSelectType } from "../components.types.js";
-import {
+import type {
   BaseMessageInteractiveComponent,
-  Button,
-  type BaseComponentInteraction,
-  type ComponentData,
+  BaseComponentInteraction,
+  ComponentData,
 } from "../internal/discord.js";
 import { parseDiscordComponentData, resolveInteractionCustomId } from "./agent-components-data.js";
 import type {
@@ -48,21 +47,12 @@ function createDiscordComponentSelectControl(
   ctx: AgentComponentContext,
   handlers: DiscordComponentControlHandlers,
 ): BaseMessageInteractiveComponent {
-  return new (class extends BaseMessageInteractiveComponent {
-    override customIdParser = parseDiscordComponentCustomIdForInteraction;
-    readonly type = spec.type;
-    readonly customId = `__openclaw_discord_component_${spec.kind}_select_wildcard__`;
+  return {
+    customIdParser: parseDiscordComponentCustomIdForInteraction,
+    type: spec.type,
+    customId: `__openclaw_discord_component_${spec.kind}_select_wildcard__`,
 
-    serialize(): unknown {
-      return this.type === ComponentType.StringSelect
-        ? { type: this.type, custom_id: this.customId, options: [] }
-        : { type: this.type, custom_id: this.customId };
-    }
-
-    override async run(
-      interaction: AgentComponentMessageInteraction,
-      data: ComponentData,
-    ): Promise<void> {
+    async run(interaction: AgentComponentMessageInteraction, data: ComponentData): Promise<void> {
       await handlers.handleComponentEvent({
         ctx,
         interaction,
@@ -74,20 +64,20 @@ function createDiscordComponentSelectControl(
             : `discord component ${spec.kind} select`,
         values: interaction.values ?? [],
       });
-    }
-  })();
+    },
+  };
 }
 
 function createDiscordComponentButton(
   ctx: AgentComponentContext,
   handlers: DiscordComponentControlHandlers,
-): Button {
-  return new (class extends Button {
-    override label = "component";
-    override customId = "__openclaw_discord_component_button_wildcard__";
-    override customIdParser = parseDiscordComponentCustomIdForInteraction;
+): BaseMessageInteractiveComponent {
+  return {
+    type: ComponentType.Button,
+    customId: "__openclaw_discord_component_button_wildcard__",
+    customIdParser: parseDiscordComponentCustomIdForInteraction,
 
-    override async run(interaction: BaseComponentInteraction, data: ComponentData): Promise<void> {
+    async run(interaction: BaseComponentInteraction, data: ComponentData): Promise<void> {
       const parsed = parseDiscordComponentData(data, resolveInteractionCustomId(interaction));
       if (parsed?.modalId) {
         await handlers.handleModalTrigger({
@@ -105,8 +95,8 @@ function createDiscordComponentButton(
         componentLabel: "button",
         label: "discord component button",
       });
-    }
-  })();
+    },
+  };
 }
 
 export const discordComponentControlFactories = [

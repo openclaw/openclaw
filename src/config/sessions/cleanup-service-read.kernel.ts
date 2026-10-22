@@ -8,7 +8,7 @@ import type {
 } from "./cleanup-service-read.types.js";
 import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
 import { listSqliteSessionEntriesFromDatabase } from "./session-accessor.sqlite-entry-list.read.js";
-import { readTranscriptSnapshot } from "./session-accessor.sqlite-read.js";
+import { findTranscriptEventInDatabase } from "./session-accessor.sqlite-read.js";
 import { readWithCanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 
 function isTranscriptMessageRole(role: unknown): boolean {
@@ -74,8 +74,15 @@ export function readSessionCleanupSnapshotInDatabase(
         }
         try {
           // Cold, malformed, or unavailable transcripts cannot prove absence.
-          const { events } = readTranscriptSnapshot(database, entry.sessionId);
-          if (events.some(isTranscriptMessageRecord)) {
+          if (
+            findTranscriptEventInDatabase(
+              database,
+              entry.sessionId,
+              isTranscriptMessageRecord,
+              undefined,
+              { malformed: "throw" },
+            )
+          ) {
             continue;
           }
           missing.push({

@@ -10,6 +10,7 @@ import {
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asFiniteNumber as readFiniteNumber,
+  asOptionalRecord,
   isRecord as isMessageRecord,
   normalizeOptionalString as readNonEmptyString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -19,6 +20,7 @@ import {
   type GatewayLogSentinelFinding,
 } from "./gateway-log-sentinel.js";
 import { readQaJsonResponse } from "./ignored-response-body.js";
+import { safeParseQaJson } from "./json.js";
 import * as parity from "./parity-shared.js";
 import type { RuntimeId } from "./runtime-id.js";
 import {
@@ -281,18 +283,6 @@ function extractAssistantText(message: Record<string, unknown>) {
   );
 }
 
-function parseJsonRecord(value: string): Record<string, unknown> | undefined {
-  if (!value.trim()) {
-    return undefined;
-  }
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    return isMessageRecord(parsed) ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 function extractToolResults(message: Record<string, unknown>): Array<{
   id?: string;
   tool?: string;
@@ -477,7 +467,7 @@ function resolveToolCallOrderFromMockRequests(
     const rawToolOutput = request.toolOutput ?? "";
     if (rawToolOutput) {
       const pendingIndex = unresolvedOrder.shift();
-      const parsedOutput = parseJsonRecord(rawToolOutput);
+      const parsedOutput = asOptionalRecord(safeParseQaJson(rawToolOutput));
       capture.result(pendingIndex, {
         value: parsedOutput ?? rawToolOutput,
         errorClass: classifyToolResultError({ rawOutput: rawToolOutput, parsedOutput }),

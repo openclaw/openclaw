@@ -114,6 +114,7 @@ export class ShellGatewayOwner {
       synchronizeTitle();
     };
     synchronize();
+    // Deletion receipts retire handoffs and reconcile selection before the next render.
     const unsubscribe = sessions.subscribe(synchronize);
     return () => {
       active = false;
@@ -237,7 +238,11 @@ export class ShellGatewayOwner {
           : undefined,
         undefined,
         modelInvalidation ?? "preserve",
-        commandsChanged,
+        {
+          commandsChanged,
+          // Fulfillment observations change speed hints, not session descriptor facts.
+          refreshSessionFacts: metadataChange?.authChanged !== false,
+        },
       );
     }
     if (event.event === "sessions.changed") {

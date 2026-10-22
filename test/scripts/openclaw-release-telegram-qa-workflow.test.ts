@@ -476,7 +476,7 @@ describe("release Telegram QA workflow", () => {
 
     const runJob = job("run_telegram");
     expect(runJob.environment).toBe("qa-live-shared");
-    expect(runJob["timeout-minutes"]).toBe(60);
+    expect(runJob["timeout-minutes"]).toBe(90);
     const advisoryStatusStep = step("advisory_status", "Record advisory status");
     expect(advisoryStatusStep.env?.CANDIDATE_RUN_ATTEMPT).toBe(
       "${{ needs.build_candidate.outputs.run_attempt }}",

@@ -11,6 +11,7 @@ import { readWorkerEnvironmentFacts } from "../gateway/worker-environments/store
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { readAgentDeletionJournalStatusInDatabase } from "./agent-deletion-journal.read.js";
+import { readRetainedAgentDeletionIds } from "./agent-deletion-journal.snapshot.worker.js";
 import type { OpenClawStateReadCommand } from "./openclaw-state-read.types.js";
 
 export function readStateRegistryCommand(
@@ -22,6 +23,7 @@ export function readStateRegistryCommand(
         | "preparedPoolPresence.read"
         | "workerEnvironments.snapshot"
         | "agentDeletionJournal.status"
+        | "agentDeletionJournal.retainedIds"
         | "worktrees.cleanupState"
         | "sandboxRegistry.list"
         | "sandboxRegistry.get"
@@ -44,6 +46,9 @@ export function readStateRegistryCommand(
       type: command.type,
       status: readAgentDeletionJournalStatusInDatabase(db, command.agentId),
     };
+  }
+  if (command.type === "agentDeletionJournal.retainedIds") {
+    return { type: command.type, agentIds: readRetainedAgentDeletionIds(db) };
   }
   if (command.type === "sandboxRegistry.list") {
     return { type: command.type, entries: readSandboxRegistryInDatabase(db) };

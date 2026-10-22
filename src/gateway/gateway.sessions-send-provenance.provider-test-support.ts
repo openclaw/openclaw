@@ -55,14 +55,15 @@ export function respond(
   ]);
 }
 
-export function toolResult(body: Record<string, unknown>): Record<string, unknown> | undefined {
+export function toolOutput(body: Record<string, unknown>): unknown {
   const inputs = Array.isArray(body.input) ? body.input : [];
   const result = inputs.findLast((item) => isRecord(item) && item.type === "function_call_output");
-  if (!isRecord(result)) {
-    return undefined;
-  }
-  const parsed: unknown =
-    typeof result.output === "string" ? JSON.parse(result.output) : result.output;
+  return isRecord(result) ? result.output : undefined;
+}
+
+export function toolResult(body: Record<string, unknown>): Record<string, unknown> | undefined {
+  const output = toolOutput(body);
+  const parsed: unknown = typeof output === "string" ? JSON.parse(output) : output;
   return isRecord(parsed) ? parsed : undefined;
 }
 

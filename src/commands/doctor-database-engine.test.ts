@@ -46,7 +46,7 @@ describe("Doctor database engines", () => {
     expect(findings).toEqual([]);
   });
 
-  it("reports selected and unported engines with one actionable warning", async () => {
+  it("reports supported PostgreSQL selections without a blanket warning", async () => {
     const cfg = { database: { engine: "postgres" as const } };
     const findings = await noteDatabaseEngines(cfg);
     expect(note).toHaveBeenCalledExactlyOnceWith(
@@ -62,18 +62,11 @@ describe("Doctor database engines", () => {
     expect(output).toContain(
       "Logbook: default=postgres, override=inherit, effective=postgres (configured)",
     );
-    expect(output.match(/experimental/g)).toHaveLength(1);
-    expect(output).toContain("Stores without a registered PostgreSQL schema remain on SQLite");
-    expect(findings).toEqual([
-      expect.objectContaining({
-        severity: "warning",
-        path: "database.engine",
-        fixHint: expect.stringContaining("/reference/database-engines"),
-      }),
-    ]);
+    expect(output).not.toContain("experimental");
+    expect(findings).toEqual([]);
   });
 
-  it("reports mixed overrides and warns even with a SQLite default", async () => {
+  it("reports supported mixed overrides with a SQLite default", async () => {
     const cfg = {
       database: {
         engine: "sqlite" as const,
@@ -95,7 +88,7 @@ describe("Doctor database engines", () => {
     expect(output).toContain(
       "Database quarantine: default=sqlite, override=fixed local, effective=sqlite (configured)",
     );
-    expect(findings).toHaveLength(1);
+    expect(findings).toEqual([]);
   });
 
   it("distinguishes configured choices from conflicting physical stores without exposing connection details", async () => {
@@ -118,7 +111,6 @@ describe("Doctor database engines", () => {
     );
     expect(output).not.toContain("secret");
     expect(findings).toEqual([
-      expect.objectContaining({ message: expect.stringContaining("experimental") }),
       expect.objectContaining({
         path: "database.families.workboard.engine",
         message: expect.stringContaining("configured postgres, observed sqlite"),

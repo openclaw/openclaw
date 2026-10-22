@@ -10,7 +10,10 @@ import type {
   OpenKeyedStoreOptions,
   PluginDoctorStateMigrationContext,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
-import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  closeOpenClawStateDatabaseAsync,
+  withStateMigrationBackupForTest,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionStoreAgentIds, stateMigrations } from "./doctor-contract-api.js";
@@ -159,11 +162,15 @@ describe("voice-call doctor state migration", () => {
         "- Voice Call SQLite schema: subagent recovery -> original operator authority required",
         "- Voice Call SQLite schema: replay, skill usage, and lease writes -> smaller index maintenance",
         "- Voice Call SQLite schema: GitHub publication requests -> durable draft choice",
+        "- Voice Call SQLite schema: client credentials and native socket material -> local owner",
+        "- Voice Call SQLite schema: heartbeat monitors -> ordinary automation timing and delivery policy fence",
         "- Voice Call SQLite schema: audit event ledger -> versioned message lifecycle schema",
         "- Voice Call SQLite schema: tables -> SQLite STRICT typing",
       ],
     });
-    await expect(migration.migrateLegacyState(params)).resolves.toEqual({
+    await expect(
+      withStateMigrationBackupForTest({ env }, () => migration.migrateLegacyState(params)),
+    ).resolves.toEqual({
       changes: [
         "Migrated Voice Call SQLite audit event ledger -> versioned message lifecycle schema",
         "Replaced retained task indexes with ordered cron history indexes (v24)",

@@ -347,7 +347,7 @@ describe("transcript input order", () => {
     ({ state, timestamps }) => {
       const notice =
         state === "interrupted"
-          ? "Interrupted before the agent started it. It will not run automatically; copy it and send again."
+          ? "Interrupted before the agent started it. If it does not resume, copy it and send again."
           : state === "cancelled"
             ? "Cancelled before the agent started it. It will not run automatically; copy it and send again."
             : null;

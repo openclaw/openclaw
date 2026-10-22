@@ -22,10 +22,7 @@ export default definePluginEntry({
     api.registerService({
       id: "imap-watch",
       apiVersion: 2,
-      async start(context: OpenClawPluginServiceContextV2) {
-        const previous = watchers;
-        watchers = [];
-        await Promise.all(previous.map((watcher) => watcher.stop()));
+      start(context: OpenClawPluginServiceContextV2) {
         if (context.scheduler.signal.aborted) {
           return;
         }

@@ -1,4 +1,4 @@
-import { createMemo, createSignal, onSettled, untrack } from "solid-js";
+import { createMemo, createStore, onSettled, untrack } from "solid-js";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectSessionList } from "../../lib/reactive/domain-capabilities.ts";
@@ -10,7 +10,7 @@ type DashboardsPageProps = { routeData?: DashboardsRouteData };
 
 export function DashboardsPage(props: DashboardsPageProps) {
   const context = useApplication();
-  const [filters, setFilters] = createSignal<DashboardGalleryFilters>({
+  const [filters, setFilters] = createStore<DashboardGalleryFilters>({
     query: "",
     ownerId: "",
     sort: "updated",
@@ -53,6 +53,7 @@ export function DashboardsPage(props: DashboardsPageProps) {
         list.replaceSource({ sessions: context.sessions, scope });
       }
     };
+    // Selection receipts replace the list scope before it can request another agent's page.
     const stopScope = context.agentSelection.subscribe(synchronizeScope);
     synchronizeScope();
     // Append during the owner's completion notification, before its request drain settles.
@@ -68,9 +69,12 @@ export function DashboardsPage(props: DashboardsPageProps) {
     <openclaw-dashboards-page>
       <DashboardsView
         data={data()}
-        filters={filters()}
+        filters={filters}
         handlers={{
-          onFilterChange: (filter) => setFilters((current) => ({ ...current, ...filter })),
+          onFilterChange: (filter) =>
+            setFilters((draft) => {
+              Object.assign(draft, filter);
+            }),
           onNavigate: context.navigate,
         }}
         gatewaySnapshot={gateway.read().snapshot}

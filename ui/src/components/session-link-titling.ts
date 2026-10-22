@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type {
   SessionsResolveParams,
@@ -57,18 +56,13 @@ type ReferenceEntry = {
   value?: SessionTitleTarget | null;
 };
 
-function titleFromPreview(value: unknown): SessionTitle {
-  if (!isRecord(value) || value.status !== "ok") {
+function titleFromPreview(value: ControlUiSessionPreview): SessionTitle {
+  if (value.status !== "ok") {
     throw new Error("Session title unavailable");
   }
-  const sessionKey = readNonBlankString(value.sessionKey);
-  const agentId = readNonBlankString(value.agentId);
-  if (!sessionKey || !agentId) {
-    throw new Error("Session title response was incomplete");
-  }
   return {
-    sessionKey,
-    agentId,
+    sessionKey: value.sessionKey,
+    agentId: value.agentId,
     namespace: "chat",
     title: readNonBlankString(value.title) ?? readNonBlankString(value.derivedTitle),
   };
@@ -148,7 +142,7 @@ export class SessionLinkTitler {
     // A code link can acquire an anchor, changing its registration key below.
     const registrations = [...this.registered.values()];
     for (const entry of registrations) {
-      void this.decorate(entry.element, true, targets);
+      void this.decorate(entry.element, targets);
     }
   }
 
@@ -160,7 +154,6 @@ export class SessionLinkTitler {
 
   async decorate(
     element: HTMLElement,
-    load = false,
     targets?: Map<string, SessionTitleTarget | SessionReference | null>,
   ): Promise<void> {
     const entry = this.registered.get(element);
@@ -195,9 +188,6 @@ export class SessionLinkTitler {
       this.titledAnchors.delete(anchor);
     }
     if (target && !("sessionKey" in target)) {
-      if (!load) {
-        return;
-      }
       try {
         target = await this.resolveReference(target, scope);
       } catch {
@@ -213,7 +203,7 @@ export class SessionLinkTitler {
     }
     const cached = this.cachedOrSeededEntry(target);
     this.stampAnchor(entry, target, cached?.value);
-    if (!load || cached?.value) {
+    if (cached?.value) {
       return;
     }
     try {

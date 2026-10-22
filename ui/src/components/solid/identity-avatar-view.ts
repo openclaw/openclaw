@@ -7,17 +7,13 @@ import { resolveIdentityAvatarView } from "../../lib/identity-avatar-view.ts";
 import type { IdentityAvatarInput } from "../../lib/identity-avatar.ts";
 import { profileDirectory } from "../../lib/profile-directory.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
 
 export function useIdentityAvatarView(identity: Accessor<IdentityAvatarInput>) {
   const gateway = useAvatarGatewayContext();
   const application = useOptionalApplication();
   const directory = application
-    ? projectSource(profileDirectory(application.gateway), {
-        read: (source) => source,
-        subscribe: (source, notify) => source.subscribe(notify),
-        equality: "revision",
-      })
+    ? projectOwner(profileDirectory(application.gateway), (source) => source)
     : undefined;
   return createMemo(() => {
     gateway();

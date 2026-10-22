@@ -2,6 +2,7 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
 import type { ModelProviderConfig } from "../config/types.models.js";
+import { fetchLiveProviderModelIds } from "../plugin-sdk/provider-catalog-live-runtime.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import {
@@ -457,66 +458,6 @@ it("fills static catalog keys from Vertex ADC", async () => {
   expect(providers?.["google-vertex"]?.apiKey).toBe("gcp-vertex-credentials");
 });
 
-it("inherits discovered input when the configured source omitted it", async () => {
-  const explicitProvider = {
-    baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-    apiKey: "AWS_PROFILE",
-    models: [createTextModel("vision-model", "Vision Model")],
-  };
-  mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([
-    createProvider("amazon-bedrock"),
-  ]);
-  mocks.runProviderCatalog.mockResolvedValue({
-    provider: {
-      baseUrl: explicitProvider.baseUrl,
-      models: [
-        { ...createTextModel("vision-model", "Vision Model"), input: ["text", "image"] },
-        createTextModel("discovered-only", "Discovered Only"),
-      ],
-    },
-  });
-  const providers = await discover({
-    config: { models: { providers: { "amazon-bedrock": explicitProvider } } },
-    env: { ...state.env, AWS_PROFILE: "default" },
-    explicitProviders: { "amazon-bedrock": explicitProvider },
-    sourceModelFields: new Map([
-      [JSON.stringify(["amazon-bedrock", "vision-model"]), { inputOmitted: true, cost: undefined }],
-    ]),
-  });
-  expect(providers?.["amazon-bedrock"]?.models).toMatchObject([
-    { id: "vision-model", input: ["text", "image"] },
-    { id: "discovered-only" },
-  ]);
-});
-
-it("keeps discovered models beyond configured selections", async () => {
-  const explicitProvider = {
-    baseUrl: "http://vllm.example/v1",
-    api: "openai-completions" as const,
-    models: [createTextModel("manual-model", "Manual Model")],
-  };
-  mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([createProvider("vllm")]);
-  mocks.runProviderCatalog.mockResolvedValue({
-    provider: {
-      baseUrl: "http://vllm.example/v1",
-      api: "openai-completions" as const,
-      models: [createTextModel("discovered-model", "Discovered Model")],
-    },
-  });
-
-  const providers = await discover({
-    config: {
-      agents: { defaults: { models: { "vllm/manual-model": {} } } },
-      models: { providers: { vllm: explicitProvider } },
-    },
-    explicitProviders: { vllm: explicitProvider },
-  });
-
-  expect(providers?.vllm?.models.map((model) => model.id)).toEqual([
-    "manual-model",
-    "discovered-model",
-  ]);
-});
 it("reuses prepared results within provider scope", async () => {
   const openai = { ...createStaticOnlyProvider("openai"), pluginId: "openai" };
   const anthropic = { ...createStaticOnlyProvider("anthropic"), pluginId: "anthropic" };
@@ -556,3 +497,54 @@ it("reuses prepared results within provider scope", async () => {
   expect(mocks.resolveRuntimePluginDiscoveryProviders).not.toHaveBeenCalled();
   expect(mocks.runProviderStaticCatalog).not.toHaveBeenCalled();
 });
+
+it.each([
+  [0, false],
+  [5_000, false],
+  [180_000, true],
+])(
+  "lets a six-second catalog complete only within its %ims acquisition",
+  async (timeoutMs, ready) => {
+    const fetchGuard = vi.fn(async (request: { timeoutMs?: number; url: string }) => {
+      const response = await new Promise<Response>((resolve, reject) => {
+        const completion = setTimeout(() => {
+          clearTimeout(deadline);
+          resolve(new Response(JSON.stringify({ data: [{ id: "slow-healthy" }] })));
+        }, 6_000);
+        const deadline = setTimeout(() => {
+          clearTimeout(completion);
+          reject(new Error("catalog transport exceeded its admitted deadline"));
+        }, request.timeoutMs);
+      });
+      return { response, finalUrl: request.url, release: async () => undefined };
+    });
+    mocks.runProviderCatalog.mockImplementation(async () => {
+      const modelIds = await fetchLiveProviderModelIds({
+        providerId: "openai",
+        endpoint: "https://catalog.example.test/v1/models",
+        fetchGuard,
+      });
+      return {
+        providers: {
+          openai: catalogConfig(
+            "https://catalog.example.test/v1",
+            modelIds.map((id) => createTextModel(id, id)),
+          ),
+        },
+      };
+    });
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      const result = discover({ providerDiscoveryTimeoutMs: timeoutMs });
+      await vi.waitFor(() => expect(fetchGuard).toHaveBeenCalledOnce());
+      await vi.advanceTimersByTimeAsync(6_100);
+      const providers = await result;
+      expect(providers?.openai?.models.map((model) => model.id) ?? []).toEqual(
+        ready ? ["slow-healthy"] : [],
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);

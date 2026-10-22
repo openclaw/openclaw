@@ -59,14 +59,18 @@ afterEach(() => {
 function createView(avatar: string | null = null) {
   const container = document.body.appendChild(document.createElement("div"));
   let props = createProps({
-    agentsList: {
-      defaultId: "beta",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [{ id: "beta", name: "Beta" }],
-    },
     agentIdentityById: identity(1),
-    overview: { ...createProps().overview, identityDraft: { name: null, emoji: null, avatar } },
+    overview: { ...createProps().overview },
+    readData: () => ({
+      ...createProps().readData(),
+      agentsList: {
+        defaultId: "beta",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [{ id: "beta", name: "Beta" }],
+      },
+      identityDraft: { name: null, emoji: null, avatar },
+    }),
   });
   const view = mountSolid(Agents, props, container);
   disposals.push(() => {
@@ -100,10 +104,11 @@ function createView(avatar: string | null = null) {
     revision: (revision: number) => update({ agentIdentityById: identity(revision) }),
     rename: () =>
       update({
-        overview: {
-          ...props.overview,
+        overview: { ...props.overview },
+        readData: () => ({
+          ...createProps().readData(),
           identityDraft: { name: "Renamed Beta", emoji: null, avatar: null },
-        },
+        }),
       }),
   };
 }

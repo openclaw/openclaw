@@ -11,6 +11,7 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import * as exec from "./exec-request-context.js";
 import { getLastHeartbeatEvent } from "./heartbeat-events.js";
 import * as heartbeatOutcomes from "./heartbeat-outcome-store.js";
+import { bindHeartbeatReply, bindHeartbeatSend } from "./heartbeat-runner.boundary-test-support.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import {
   heartbeatTestConfig,
@@ -56,17 +57,14 @@ async function custodyFixture(
     lastAccountId: destination.accountId,
     ...(personal || legacy ? {} : { lastThreadId: 47 }),
   });
-  const run = (
-    telegram: NonNullable<Parameters<typeof runHeartbeatOnce>[0]["deps"]>["telegram"],
-    options: Omit<Parameters<typeof runHeartbeatOnce>[0], "cfg" | "deps" | "sessionKey"> = {},
-  ) =>
+  bindHeartbeatReply(replySpy);
+  const run = (options: Omit<Parameters<typeof runHeartbeatOnce>[0], "cfg" | "sessionKey"> = {}) =>
     runHeartbeatOnce({
       cfg,
       sessionKey,
       source: "exec-event",
       reason: "exec-event",
       ...options,
-      deps: { getReplyFromConfig: replySpy, telegram },
     });
   const enqueue = (name: string, text: string, route = capturedRoute) =>
     events.enqueueSystemEvent(`Exec completed (${name}, code 0) :: ${text}`, {
@@ -226,7 +224,8 @@ it.for([
             },
           );
         }
-        const run = () => runWith(telegram, { intent: "event" });
+        bindHeartbeatSend("telegram", telegram);
+        const run = () => runWith({ intent: "event" });
         const pending = run();
         try {
           await withinTest(
@@ -318,6 +317,7 @@ it("recovers original-route custody after queue transaction rollback", async () 
     enqueue("queue-admission", "original result");
     replySpy.mockResolvedValue({ text: "Original completion without a pending-final marker" });
     const telegram = delivered();
+    bindHeartbeatSend("telegram", telegram);
     // Admit the schema before injecting failure at queue publication.
     const warmup = await enqueueDelivery({
       ...route,
@@ -329,7 +329,7 @@ it("recovers original-route custody after queue transaction rollback", async () 
       "CREATE TRIGGER reject_test_delivery BEFORE INSERT ON delivery_queue_entries WHEN NEW.queue_name = 'outbound-prepared-v1' BEGIN SELECT RAISE(ABORT, 'synthetic required queue publication failure'); END",
     );
     try {
-      const failed = await run(telegram);
+      const failed = await run();
       expect(getLastHeartbeatEvent()?.reason).toContain(
         "Delivery queue admission rejected before publication",
       );
@@ -344,7 +344,7 @@ it("recovers original-route custody after queue transaction rollback", async () 
     expect(telegram).not.toHaveBeenCalled();
     expect(await loadPendingDeliveries()).toHaveLength(0);
     expect(events.peekDeliverableSystemEventEntries(sessionKey)).toHaveLength(1);
-    await run(telegram);
+    await run();
     expect(telegram).toHaveBeenCalledExactlyOnceWith(
       route.to,
       expect.stringContaining("Original completion"),
@@ -362,7 +362,8 @@ it.each(["rejected", "ambiguous"] as const)(
       const telegram = delivered().mockRejectedValueOnce(
         kind === "ambiguous" ? new Error("response lost after dispatch") : rejectBeforeDispatch(),
       );
-      await run(telegram);
+      bindHeartbeatSend("telegram", telegram);
+      await run();
       expect(telegram).toHaveBeenCalledOnce();
       const held = await loadPendingDeliveries();
       expect(held).toHaveLength(1);
@@ -373,7 +374,7 @@ it.each(["rejected", "ambiguous"] as const)(
         to: "telegram:-1003774691294:topic:48",
         threadId: 48,
       });
-      await run(telegram);
+      await run();
       expect(replySpy).toHaveBeenCalledTimes(2);
       expect(replySpy.mock.calls[1]?.[0].Body).not.toContain("ORIGINAL_QUEUED_RESULT");
       expect(telegram).toHaveBeenCalledTimes(2);
@@ -399,14 +400,15 @@ it.each(["exec", "notice", "invalid-exec"] as const)(
       });
       echoSelected("LEGACY_ONLY", "CAPTURED_ONLY");
       const telegram = delivered("123456789");
-      await run(telegram);
+      bindHeartbeatSend("telegram", telegram);
+      await run();
       expect(replySpy.mock.calls[0]?.[0].Body).toContain("LEGACY_ONLY");
       expect(replySpy.mock.calls[0]?.[0].Body).not.toContain("CAPTURED_ONLY");
       if (kind !== "exec") {
         expect(telegram.mock.calls[0]?.[0]).toBe("telegram:123456789");
         return;
       }
-      await run(telegram);
+      await run();
       expect(replySpy.mock.calls[1]?.[0].Body).toContain("CAPTURED_ONLY");
       expect(replySpy.mock.calls[1]?.[0].Body).not.toContain("LEGACY_ONLY");
       expect(telegram.mock.calls[1]?.[0]).toBe("telegram:-1003774691294:topic:47");
@@ -423,13 +425,13 @@ it("continues deferred routes after permanent rejection without replay", async (
     }
     echoSelected("REJECTED", "DEFERRED");
     const telegram = delivered().mockRejectedValueOnce(rejectBeforeDispatch(false));
+    bindHeartbeatSend("telegram", telegram);
     const done = createDeferred();
     let calls = 0;
     setHeartbeatWakeHandler(async (options) => {
       const result = await runHeartbeatOnce({
         ...options,
         cfg,
-        deps: { getReplyFromConfig: replySpy, telegram },
       });
       if (++calls === 2) {
         done.resolve();
@@ -470,7 +472,8 @@ it("does not let an uninspected exec route retarget an interval heartbeat", asyn
     enqueue("not-selected", "PRIVATE_EXEC_RESULT");
     replySpy.mockResolvedValue({ text: "Scheduled monitor output" });
     const telegram = delivered("123456789");
-    await run(telegram, { source: "interval", reason: "interval" });
+    bindHeartbeatSend("telegram", telegram);
+    await run({ source: "interval", reason: "interval" });
     expect(replySpy.mock.calls[0]?.[0].Body).not.toContain("PRIVATE_EXEC_RESULT");
     expect(telegram).toHaveBeenCalledExactlyOnceWith(
       "123456789",
@@ -496,11 +499,12 @@ it.each([true, false])(
       }
       echoSelected("TAGGED_RESULT", "UNTRUSTED_RESULT");
       const telegram = delivered("123456789");
-      await run(telegram);
+      bindHeartbeatSend("telegram", telegram);
+      await run();
       expect(replySpy.mock.calls[0]?.[0].Body).not.toContain(
         taggedFirst ? "UNTRUSTED_RESULT" : "TAGGED_RESULT",
       );
-      await run(telegram);
+      await run();
       expect(replySpy.mock.calls[1]?.[0].Body).not.toContain(
         taggedFirst ? "TAGGED_RESULT" : "UNTRUSTED_RESULT",
       );

@@ -155,49 +155,94 @@ async function convertContentBlocks(
   return blocks;
 }
 
-async function convertAnthropicMessages(
-  transformedMessages: Context["messages"],
+/** Assemble both public Messages routes without changing their replay/default profiles. */
+export async function buildAnthropicRequest(
   model: Model<"anthropic-messages">,
+  context: Context,
+  options: (AnthropicOptions & { authProfileId?: string }) | undefined,
+  profile: "provider" | "transport",
   isOAuthToken: boolean,
-  options: {
-    allowReasoningContentReplay?: boolean;
-    compaction?: AnthropicCompactionBlock;
-    replayThinkingEnabled?: boolean;
-    allowEmptySignature?: boolean;
-    profile: "provider" | "transport";
-    context: Context;
-    /** Emitted indexes of transient carriers that cannot anchor the cached prefix. */
-    cacheBreakpointOptOutMessageIndexes?: Set<number>;
-  },
-): Promise<AnthropicWireMessage[]> {
-  const params: AnthropicWireMessage[] = [];
+  serverSideFallback: boolean,
+  claudeCodeVersion?: string,
+) {
+  const managed = profile === "transport";
+  const maxTokens = managed
+    ? resolveAnthropicMessagesMaxTokens({
+        modelContextWindow: model.contextWindow,
+        modelMaxTokens: model.maxTokens,
+        requestedMaxTokens: options?.maxTokens,
+      })
+    : (options?.maxTokens ?? model.maxTokens);
+  if (managed && maxTokens === undefined) {
+    throw new Error(
+      `Anthropic Messages transport requires a positive maxTokens value for ${model.provider}/${model.id}`,
+    );
+  }
+  const { cacheControl, supportsCacheControlOnTools } = resolveAnthropicCacheOptions(
+    model,
+    options?.cacheRetention,
+  );
+  const system = buildAnthropicSystemBlocks(
+    context.systemPrompt,
+    isOAuthToken,
+    cacheControl,
+    claudeCodeVersion,
+  );
+  let toolProjection: AnthropicToolProjection | undefined;
+  let eagerToolInputStreaming = false;
+  if (context.tools) {
+    const tools = context.tools;
+    eagerToolInputStreaming =
+      !managed && (model.compat?.supportsEagerToolInputStreaming ?? model.provider !== "fireworks");
+    toolProjection = projectAnthropicTools(tools, (name) =>
+      isOAuthToken ? toClaudeCodeToolName(name) : name,
+    );
+  }
+  const replayPlan = buildAnthropicReplayPlan(context.messages, model, {
+    enabled: !isOAuthToken && options?.anthropicServerCompaction === true,
+    authProfileId: options?.authProfileId,
+    sessionId: options?.sessionId,
+  });
+  const cacheBreakpointOptOutMessageIndexes = new Set<number>();
+  const transformed = managed
+    ? getAiTransportHost().transformTransportMessages(
+        replayPlan.messages,
+        model,
+        normalizeAnthropicToolCallId,
+        { preserveUnframedToolResults: preparedRequestSuffix.has(context) },
+      )
+    : transformProviderMessages(replayPlan.messages, model, normalizeAnthropicToolCallId);
+  const allowReasoningContentReplay =
+    managed && resolveProviderEndpoint(model).endpointClass === "xiaomi-native";
+  const allowEmptySignature = model.compat?.allowEmptySignature;
+  const compaction = replayPlan.compaction;
+  const replayThinkingEnabled =
+    requiresClaudeAdaptiveThinking(model) || options?.thinkingEnabled === true;
+  const messages: AnthropicWireMessage[] = [];
   const appendMessage = (message: AnthropicWireMessage) => {
-    if (message.role === "system" && (!params.length || params.at(-1)?.role === "assistant")) {
+    if (message.role === "system" && (!messages.length || messages.at(-1)?.role === "assistant")) {
       // Replay can exclude a consult's user anchor. Preserve its updates in place
       // without moving them into the pinned system prompt or dropping instructions.
-      params.push({ role: "user", content: "." });
+      messages.push({ role: "user", content: "." });
     }
     // Interrupted turns can leave a system update last; retain it before the next user turn.
-    if (message.role === "user" && params.at(-1)?.role === "system") {
-      params.push({
+    if (message.role === "user" && messages.at(-1)?.role === "system") {
+      messages.push({
         role: "assistant",
         content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
       });
     }
-    params.push(message);
+    messages.push(message);
   };
   const modelRetainsRuntimeContext = bindsClaudeThinkingPrefix(model);
   const inHistorySystemUpdates =
     !isOAuthToken && isDirectAnthropicModel(model) && supportsClaudeInHistorySystemMessages(model);
   const imageBudget = createAnthropicInlineImageBudget();
-  const allowReasoningContentReplay = options.allowReasoningContentReplay === true;
-  const replayThinkingEnabled = options.replayThinkingEnabled !== false;
-  const managed = options.profile === "transport";
   const activeToolTurnAssistantIndex = replayThinkingEnabled
     ? -1
-    : findActiveAnthropicToolTurnAssistantIndex(transformedMessages);
-  for (let i = 0; i < transformedMessages.length; i += 1) {
-    const msg = transformedMessages[i];
+    : findActiveAnthropicToolTurnAssistantIndex(transformed);
+  for (let i = 0; i < transformed.length; i += 1) {
+    const msg = transformed[i];
     if (!msg) {
       continue;
     }
@@ -257,13 +302,12 @@ async function convertAnthropicMessages(
           ? msg.runtimeContext.retained
           : msg.runtimeContextCarrierRetained;
       if (hasRuntimeContextMarker(msg) && !(runtimeContextRetained ?? modelRetainsRuntimeContext)) {
-        options.cacheBreakpointOptOutMessageIndexes?.add(params.length - 1);
+        cacheBreakpointOptOutMessageIndexes.add(messages.length - 1);
       }
       continue;
     }
     if (msg.role === "assistant") {
-      const blocks: AnthropicReplayBlock[] =
-        i === 0 && options.compaction ? [options.compaction] : [];
+      const blocks: AnthropicReplayBlock[] = i === 0 && compaction ? [compaction] : [];
       const reasoningContent: string[] = [];
       let omittedThinking = false;
       for (const block of msg.content) {
@@ -301,7 +345,7 @@ async function convertAnthropicMessages(
           if (block.thinking.trim().length === 0 && !hasNativeThinkingSignature) {
             continue;
           }
-          if (!thinkingSignature && !options.allowEmptySignature) {
+          if (!thinkingSignature && !allowEmptySignature) {
             blocks.push({
               type: "text",
               text: sanitizeTransportPayloadText(block.thinking),
@@ -342,23 +386,23 @@ async function convertAnthropicMessages(
             signature: "reasoning_content",
           });
         }
-        params.push(assistantMsg);
+        messages.push(assistantMsg);
       }
       continue;
     }
     if (msg.role === "toolResult") {
       const toolResults: ToolResultBlockParam[] = [];
       let j = i;
-      while (j < transformedMessages.length) {
-        const nextMsg = transformedMessages.at(j);
+      while (j < transformed.length) {
+        const nextMsg = transformed.at(j);
         if (nextMsg?.role !== "toolResult") {
           break;
         }
         toolResults.push({
           type: "tool_result",
-          tool_use_id: preparedRequestSuffix.has(options.context)
+          tool_use_id: preparedRequestSuffix.has(context)
             ? preparedRequestSuffix.toolCallId(
-                options.context,
+                context,
                 nextMsg.toolCallId,
                 normalizeAnthropicToolCallId(nextMsg.toolCallId),
               )
@@ -367,7 +411,7 @@ async function convertAnthropicMessages(
             nextMsg.content,
             model,
             imageBudget,
-            options.profile,
+            profile,
             nextMsg.isError,
           ),
           is_error: nextMsg.isError,
@@ -381,179 +425,6 @@ async function convertAnthropicMessages(
       });
     }
   }
-  return params;
-}
-
-/** Shared generation contract, after each entry point resolves its defaults and tool policy. */
-function buildAnthropicGenerationParams({
-  model,
-  options,
-  toolProjection,
-  eagerToolInputStreaming,
-  profile,
-}: {
-  model: Model<"anthropic-messages">;
-  options?: AnthropicOptions;
-  toolProjection?: AnthropicToolProjection;
-  eagerToolInputStreaming: boolean;
-  profile: "provider" | "transport";
-}) {
-  const params: Pick<
-    MessageCreateParamsStreaming,
-    "temperature" | "stop_sequences" | "tools" | "output_config" | "metadata" | "tool_choice"
-  > & {
-    // SDK 0.127.0 does not yet include Sonnet 5.5's between_tools setting.
-    thinking?: MessageCreateParamsStreaming["thinking"] | { type: "between_tools" };
-  } = {};
-  const mandatoryAdaptiveThinking = requiresClaudeAdaptiveThinking(model);
-  // Thinking and post-4.6 Claude models reject custom temperature values.
-  if (
-    options?.temperature !== undefined &&
-    !options?.thinkingEnabled &&
-    !supportsClaudeNativeXhighEffort(model)
-  ) {
-    params.temperature = options.temperature;
-  }
-
-  if (options?.stop !== undefined && options.stop.length > 0) {
-    params.stop_sequences = options.stop;
-  }
-
-  if (toolProjection && toolProjection.tools.length > 0) {
-    params.tools = toolProjection.tools.map((tool) => ({
-      name: tool.wireName,
-      description: tool.description,
-      input_schema: tool.inputSchema,
-      ...(eagerToolInputStreaming ? { eager_input_streaming: true } : {}),
-    }));
-  }
-
-  // Configure thinking mode: always-on adaptive (Fable 5 and Mythos 5),
-  // adaptive (Opus 4.6+ and Sonnet 4.6),
-  // budget-based (older models), or explicitly disabled.
-  if (mandatoryAdaptiveThinking || model.reasoning || supportsClaudeAdaptiveThinking(model)) {
-    if (mandatoryAdaptiveThinking || options?.thinkingEnabled) {
-      // Default to "summarized" so Opus 4.7+ and Mythos Preview behave like
-      // older Claude 4 models (whose API default is also "summarized").
-      const display: AnthropicThinkingDisplay = options?.thinkingDisplay ?? "summarized";
-      if (supportsClaudeAdaptiveThinking(model)) {
-        params.thinking = { type: "adaptive", display };
-        const effort =
-          options?.effort ??
-          (mandatoryAdaptiveThinking
-            ? resolveAnthropicThinkingEffort(model, undefined)
-            : undefined);
-        if (effort) {
-          params.output_config = { effort };
-        }
-      } else {
-        params.thinking = {
-          type: "enabled",
-          budget_tokens: options?.thinkingBudgetTokens ?? 1024,
-          ...(profile === "provider" ? { display } : {}),
-        };
-      }
-    } else if (options?.thinkingEnabled === false) {
-      params.thinking = requiresClaudeBetweenToolsThinking(model)
-        ? { type: "between_tools" }
-        : { type: "disabled" };
-    }
-  }
-
-  if (options?.metadata) {
-    const userId = options.metadata.user_id;
-    if (typeof userId === "string") {
-      params.metadata = { user_id: userId };
-    }
-  }
-
-  if (options?.toolChoice) {
-    const normalizedToolChoice = normalizeAnthropicToolChoice(
-      resolveClaudeHaiku55ModelIdentity(model) === undefined &&
-        (mandatoryAdaptiveThinking ||
-          options?.thinkingEnabled === true ||
-          resolveClaudeSonnet55ModelIdentity(model) !== undefined),
-      options.toolChoice,
-    );
-    const projectedToolChoice = toolProjection
-      ? reconcileAnthropicToolChoice(normalizedToolChoice, toolProjection)
-      : normalizedToolChoice;
-    if (projectedToolChoice) {
-      params.tool_choice = projectedToolChoice;
-    }
-  }
-
-  return params;
-}
-
-/** Assemble both public Messages routes without changing their replay/default profiles. */
-export async function buildAnthropicRequest(
-  model: Model<"anthropic-messages">,
-  context: Context,
-  options: (AnthropicOptions & { authProfileId?: string }) | undefined,
-  profile: "provider" | "transport",
-  isOAuthToken: boolean,
-  serverSideFallback: boolean,
-  claudeCodeVersion?: string,
-) {
-  const managed = profile === "transport";
-  const maxTokens = managed
-    ? resolveAnthropicMessagesMaxTokens({
-        modelContextWindow: model.contextWindow,
-        modelMaxTokens: model.maxTokens,
-        requestedMaxTokens: options?.maxTokens,
-      })
-    : (options?.maxTokens ?? model.maxTokens);
-  if (managed && maxTokens === undefined) {
-    throw new Error(
-      `Anthropic Messages transport requires a positive maxTokens value for ${model.provider}/${model.id}`,
-    );
-  }
-  const { cacheControl, supportsCacheControlOnTools } = resolveAnthropicCacheOptions(
-    model,
-    options?.cacheRetention,
-  );
-  const system = buildAnthropicSystemBlocks(
-    context.systemPrompt,
-    isOAuthToken,
-    cacheControl,
-    claudeCodeVersion,
-  );
-  let toolProjection: AnthropicToolProjection | undefined;
-  let eagerToolInputStreaming = false;
-  if (context.tools) {
-    const tools = context.tools;
-    eagerToolInputStreaming =
-      !managed && (model.compat?.supportsEagerToolInputStreaming ?? model.provider !== "fireworks");
-    toolProjection = projectAnthropicTools(tools, (name) =>
-      isOAuthToken ? toClaudeCodeToolName(name) : name,
-    );
-  }
-  const replayPlan = buildAnthropicReplayPlan(context.messages, model, {
-    enabled: !isOAuthToken && options?.anthropicServerCompaction === true,
-    authProfileId: options?.authProfileId,
-    sessionId: options?.sessionId,
-  });
-  const cacheBreakpointOptOutMessageIndexes = new Set<number>();
-  const transformed = managed
-    ? getAiTransportHost().transformTransportMessages(
-        replayPlan.messages,
-        model,
-        normalizeAnthropicToolCallId,
-        { preserveUnframedToolResults: preparedRequestSuffix.has(context) },
-      )
-    : transformProviderMessages(replayPlan.messages, model, normalizeAnthropicToolCallId);
-  const messages = await convertAnthropicMessages(transformed, model, isOAuthToken, {
-    profile,
-    context,
-    allowReasoningContentReplay:
-      managed && resolveProviderEndpoint(model).endpointClass === "xiaomi-native",
-    allowEmptySignature: model.compat?.allowEmptySignature,
-    compaction: replayPlan.compaction,
-    replayThinkingEnabled:
-      requiresClaudeAdaptiveThinking(model) || options?.thinkingEnabled === true,
-    cacheBreakpointOptOutMessageIndexes,
-  });
   if (managed && messages.length === 0) {
     messages.push({ role: "user", content: "." });
   }
@@ -571,16 +442,92 @@ export async function buildAnthropicRequest(
   if (serverSideFallback) {
     Object.assign(params, { fallbacks: ANTHROPIC_SERVER_SIDE_FALLBACKS });
   }
-  Object.assign(
-    params,
-    buildAnthropicGenerationParams({
-      model,
-      options,
-      toolProjection,
-      eagerToolInputStreaming,
-      profile,
-    }),
-  );
+  const generationParams: Pick<
+    MessageCreateParamsStreaming,
+    "temperature" | "stop_sequences" | "tools" | "output_config" | "metadata" | "tool_choice"
+  > & {
+    // SDK 0.127.0 does not yet include Sonnet 5.5's between_tools setting.
+    thinking?: MessageCreateParamsStreaming["thinking"] | { type: "between_tools" };
+  } = {};
+  const mandatoryAdaptiveThinking = requiresClaudeAdaptiveThinking(model);
+  // Thinking and post-4.6 Claude models reject custom temperature values.
+  if (
+    options?.temperature !== undefined &&
+    !options?.thinkingEnabled &&
+    !supportsClaudeNativeXhighEffort(model)
+  ) {
+    generationParams.temperature = options.temperature;
+  }
+
+  if (options?.stop !== undefined && options.stop.length > 0) {
+    generationParams.stop_sequences = options.stop;
+  }
+
+  if (toolProjection && toolProjection.tools.length > 0) {
+    generationParams.tools = toolProjection.tools.map((tool) => ({
+      name: tool.wireName,
+      description: tool.description,
+      input_schema: tool.inputSchema,
+      ...(eagerToolInputStreaming ? { eager_input_streaming: true } : {}),
+    }));
+  }
+
+  // Configure thinking mode: always-on adaptive (Fable 5 and Mythos 5),
+  // adaptive (Opus 4.6+ and Sonnet 4.6),
+  // budget-based (older models), or explicitly disabled.
+  if (mandatoryAdaptiveThinking || model.reasoning || supportsClaudeAdaptiveThinking(model)) {
+    if (mandatoryAdaptiveThinking || options?.thinkingEnabled) {
+      // Default to "summarized" so Opus 4.7+ and Mythos Preview behave like
+      // older Claude 4 models (whose API default is also "summarized").
+      const display: AnthropicThinkingDisplay = options?.thinkingDisplay ?? "summarized";
+      if (supportsClaudeAdaptiveThinking(model)) {
+        generationParams.thinking = { type: "adaptive", display };
+        const effort =
+          options?.effort ??
+          (mandatoryAdaptiveThinking
+            ? resolveAnthropicThinkingEffort(model, undefined)
+            : undefined);
+        if (effort) {
+          generationParams.output_config = { effort };
+        }
+      } else {
+        generationParams.thinking = {
+          type: "enabled",
+          budget_tokens: options?.thinkingBudgetTokens ?? 1024,
+          ...(profile === "provider" ? { display } : {}),
+        };
+      }
+    } else if (options?.thinkingEnabled === false) {
+      generationParams.thinking = requiresClaudeBetweenToolsThinking(model)
+        ? { type: "between_tools" }
+        : { type: "disabled" };
+    }
+  }
+
+  if (options?.metadata) {
+    const userId = options.metadata.user_id;
+    if (typeof userId === "string") {
+      generationParams.metadata = { user_id: userId };
+    }
+  }
+
+  if (options?.toolChoice) {
+    const normalizedToolChoice = normalizeAnthropicToolChoice(
+      resolveClaudeHaiku55ModelIdentity(model) === undefined &&
+        (mandatoryAdaptiveThinking ||
+          options?.thinkingEnabled === true ||
+          resolveClaudeSonnet55ModelIdentity(model) !== undefined),
+      options.toolChoice,
+    );
+    const projectedToolChoice = toolProjection
+      ? reconcileAnthropicToolChoice(normalizedToolChoice, toolProjection)
+      : normalizedToolChoice;
+    if (projectedToolChoice) {
+      generationParams.tool_choice = projectedToolChoice;
+    }
+  }
+
+  Object.assign(params, generationParams);
   applyAnthropicRequestCacheControl(
     params,
     cacheControl,

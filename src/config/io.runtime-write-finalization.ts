@@ -162,9 +162,9 @@ export async function finalizeCommittedConfigWrite(params: {
         });
         try {
           if (isMainThread) {
-            await loadDotEnvAsync({ env: stage.env, quiet: true });
+            await loadDotEnvAsync({ env: stage.env });
           } else {
-            loadDotEnv({ env: stage.env, quiet: true });
+            loadDotEnv({ env: stage.env });
           }
         } finally {
           stage.captureDotEnvBaseline();

@@ -237,7 +237,7 @@ it("expires an old runtime-file baseline while preserving unaccepted source", as
   await proveGeneratedWorkspaceExpiry(owner);
 });
 
-it.each([false, true])("settles stopped commands (parent disposed: %s)", async (disposed) => {
+it.each([false, true])("settles command checkpoints (parent disposed: %s)", async (disposed) => {
   const { proveStoppedLocalWorkspaceCheckpoint } =
     await import("./local-workspace-cancellation.test-support.js");
   await proveStoppedLocalWorkspaceCheckpoint(owner, disposed);
@@ -337,7 +337,7 @@ it("seeds independent source-only Git and reconciles edits without host metadata
   await writeText(canonical, "source.txt", "canonical edit\n");
   await writeText(canonical, "untracked.txt", "admitted source\n");
   const manifests = await import("./workspace-manifest-worker.js");
-  const capture = vi.spyOn(manifests, "captureWorkspaceSnapshot");
+  const capture = vi.spyOn(manifests, "captureWorkspaceManifestDocument");
   const projection = await prepare();
   // The unpublished guest needs one baseline traversal; it cannot have guest edits yet.
   expect(capture.mock.calls.filter(([input]) => input.root !== canonical)).toHaveLength(1);
@@ -647,6 +647,8 @@ it.for([false, true])(
     }
     const paused = createDeferred();
     const settle = createDeferred();
+    vi.stubEnv("DOCKER_HOST", "unix:///synthetic/checkpoint-docker.sock");
+    vi.stubEnv("DOCKER_CONTEXT", undefined);
     let runtimePaused = false;
     const events: string[] = [];
     const entry = {
@@ -660,6 +662,9 @@ it.for([false, true])(
     };
     await registry.updateRegistry(entry);
     vi.spyOn(engine, "execContainer").mockImplementation(async (_engine, args) => {
+      if (args[0] === "info") {
+        return { code: 0, stdout: "checkpoint-daemon", stderr: "" };
+      }
       if (args[0] === "inspect") {
         if (args.some((arg) => arg.includes("{{json .Mounts}}"))) {
           return { code: 0, stdout: JSON.stringify({ Mounts: [], Tmpfs: {} }), stderr: "" };
@@ -667,7 +672,12 @@ it.for([false, true])(
         if (args.includes("{{json .State}}")) {
           return {
             code: 0,
-            stdout: JSON.stringify({ Running: true, Paused: runtimePaused, Pid: 1 }),
+            stdout: JSON.stringify({
+              Running: true,
+              Paused: runtimePaused,
+              Pid: 1,
+              StartedAt: "2026-01-01T00:00:00.000Z",
+            }),
             stderr: "",
           };
         }
@@ -703,6 +713,9 @@ it.for([false, true])(
     vi.spyOn(docker, "ensureSandboxContainer").mockResolvedValue({
       containerName: entry.containerName,
       containerId: "a".repeat(64),
+      configHash: "checkpoint-fixture-config",
+      mountPlan: { binds: [], skippedBinds: [], readOnlyWorkspaceSkillMounts: [], tmpfs: [] },
+      currentConfig: true,
     });
     vi.spyOn(docker, "execContainerRaw").mockImplementation(async (_engine, args) => {
       if (runtimePaused) {
@@ -794,7 +807,6 @@ it.for([false, true])(
           throw outcome.reason;
         }
       }
-      await acceptedFinalization;
       await expectText(canonical, "term-output.txt", "final descendant output\n");
       expect(events.slice(0, 2)).toEqual(["paused", "resumed"]);
       expect(

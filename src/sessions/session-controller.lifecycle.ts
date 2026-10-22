@@ -12,6 +12,7 @@ import {
   GatewayDrainingError,
   isGatewaySubordinateWorkAdmissionClosed,
 } from "../process/gateway-work-admission.js";
+import { runWithAsyncStore } from "../shared/async-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { readAgentDeletionJournalStatusInWorker } from "../state/agent-deletion-journal.read.js";
 import {
@@ -272,7 +273,7 @@ export async function runSessionMutation<T>(
     effects: current?.effects ?? new Set(),
     mutations: new Set([...(current?.mutations ?? []), mutation]),
   };
-  return await ownerContext.run(context, async () => {
+  return await runWithAsyncStore(ownerContext, context, async () => {
     let stopCompetitionWait: (() => void) | undefined;
     let pendingEffects: Set<Effect> | undefined;
     const runObserved = () => {
@@ -514,7 +515,8 @@ export async function beginSessionEffect(
       }
       running++;
       try {
-        return await ownerContext.run(
+        return await runWithAsyncStore(
+          ownerContext,
           {
             sourceInput: caller?.sourceInput ?? current?.sourceInput ?? effect.sourceInput,
             operation,
@@ -621,24 +623,7 @@ export async function beginSessionEffect(
     effect.phase = "writer";
     logAdmission("waiting", "store-writer");
     let writerStarted = false;
-    let removeAbort = () => {};
-    const aborted = new Promise<never>((_, reject) => {
-      const abort = () => {
-        if (!writerStarted) {
-          reject(
-            signal.reason instanceof Error
-              ? signal.reason
-              : new Error("Session effect cancelled", { cause: signal.reason }),
-          );
-        }
-      };
-      signal.addEventListener("abort", abort, { once: true });
-      removeAbort = () => signal.removeEventListener("abort", abort);
-      if (signal.aborted) {
-        abort();
-      }
-    });
-    const writer = runExclusiveSessionStoreWrite(
+    await runExclusiveSessionStoreWrite(
       target.storeScope,
       async () => {
         // A withdrawn queue callback has no writer capability or user work left.
@@ -655,12 +640,14 @@ export async function beginSessionEffect(
         signal.throwIfAborted();
       },
       { reentrant: true, identities: params.storeWriterIdentities, signal },
-    );
-    try {
-      await Promise.race([writer, aborted]);
-    } finally {
-      removeAbort();
-    }
+    ).catch((error: unknown) => {
+      if (!writerStarted && signal.aborted && Object.is(error, signal.reason)) {
+        throw error instanceof Error
+          ? error
+          : new Error("Session effect cancelled", { cause: error });
+      }
+      throw error;
+    });
     effect.phase = "acquired";
     diagnostic?.mark("run");
     logAdmission("settled", "acquired");

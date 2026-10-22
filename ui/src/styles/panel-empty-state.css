@@ -58,8 +58,67 @@ openclaw-panel-empty-state {
     line-height: 1.45;
   }
 
-  .empty-state__icon > [slot="action"] {
+  .empty-state > [slot="action"] {
     grid-area: 4 / 1;
     margin-top: 16px;
+  }
+}
+
+/* Session opt-ins only. The host owns available space and scrolling; the
+   desktop frame keeps Portal's proportional placement without moving content. */
+openclaw-panel-empty-state:has(> .empty-state[data-presentation]) {
+  flex-direction: column;
+  overflow: auto;
+}
+
+openclaw-panel-empty-state:has(> .empty-state[data-presentation="desktop"]) {
+  padding: 12px;
+}
+
+openclaw-panel-empty-state .empty-state[data-presentation="desktop"] {
+  min-height: 220px;
+  max-height: 100%;
+  flex: none;
+  aspect-ratio: 8 / 5;
+  align-content: safe center;
+  transform: none;
+
+  &::before,
+  .empty-state__icon > :not([slot="action"]) {
+    margin-bottom: var(--space-3);
+  }
+}
+
+openclaw-panel-empty-state .empty-state[data-presentation="mobile"] {
+  min-height: min-content;
+  align-content: safe center;
+  padding: 36px 24px;
+  transform: none;
+
+  &::before,
+  .empty-state__icon > :not([slot="action"]) {
+    width: 36px;
+    height: 36px;
+    margin-bottom: 24px;
+    opacity: 0.8;
+  }
+
+  .empty-state__title {
+    font-size: calc(20px * var(--control-ui-text-scale, 1));
+    line-height: 1.3;
+  }
+
+  .empty-state__description {
+    max-width: 340px;
+    margin-top: 10px;
+    font-size: calc(14px * var(--control-ui-text-scale, 1));
+    line-height: 1.4286;
+  }
+
+  .empty-state__icon > [slot="action"] {
+    display: block;
+    width: 100%;
+    max-width: 440px;
+    margin-top: 24px;
   }
 }

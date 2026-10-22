@@ -9,7 +9,7 @@ import {
   resolveCallVoicemailMessage,
 } from "../call-brief.js";
 import { resolveVoiceCallEffectiveConfig, resolveVoiceCallSessionKey } from "../config.js";
-import { TerminalStates, type CallRecord, type NormalizedEvent } from "../types.js";
+import { TerminalStates, type CallRecord, type EndReason, type NormalizedEvent } from "../types.js";
 import { buildCallbackMetadata, findRecentOutboundCallback } from "./callbacks.js";
 import type { CallManagerContext } from "./context.js";
 import { finalizeCall } from "./lifecycle.js";
@@ -63,6 +63,17 @@ function shouldAcceptInbound(
 
     default:
       return false;
+  }
+}
+
+async function endDetectedCall(
+  ctx: CallManagerContext,
+  callId: string,
+  reason: EndReason,
+): Promise<void> {
+  const result = await endCall(ctx, callId, { reason });
+  if (!result.success) {
+    log.warn(`Detected-call cleanup failed for ${callId}; inspect voice-call status and logs.`);
   }
 }
 
@@ -134,7 +145,7 @@ async function playDetectedCallMessage(
         };
       });
       if (current()) {
-        await endCall(ctx, call.callId, { reason: "error" });
+        await endDetectedCall(ctx, call.callId, "error");
       }
     }
   }
@@ -392,7 +403,7 @@ async function processEventInQueue(
         activeCall.metadata = { ...activeCall.metadata, voicemailStatus: "hang-up" };
         delete activeCall.metadata.pendingNotifyAmd;
         effects.push(() =>
-          ctx.trackCallWork(endCall(ctx, detectedCall.callId, { reason: "voicemail" })),
+          ctx.trackCallWork(endDetectedCall(ctx, detectedCall.callId, "voicemail")),
         );
       } else if (event.answeredBy.startsWith("machine_end_")) {
         activeCall.metadata = { ...activeCall.metadata, voicemailStatus: "pending" };
@@ -415,9 +426,7 @@ async function processEventInQueue(
         notifyError: "A fax answered the call",
       };
       delete activeCall.metadata.pendingNotifyAmd;
-      effects.push(() =>
-        ctx.trackCallWork(endCall(ctx, detectedCall.callId, { reason: "failed" })),
-      );
+      effects.push(() => ctx.trackCallWork(endDetectedCall(ctx, detectedCall.callId, "failed")));
     }
   }
   const carrierStatusKey =

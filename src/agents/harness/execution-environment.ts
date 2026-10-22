@@ -25,11 +25,9 @@ import {
   type PreparedSessionCapabilityEntry,
   type SessionCapabilitySnapshot,
 } from "../subagents/spawn/subagent-session-store.js";
-import { isKnownCoreToolId } from "../tool-catalog.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../tool-fs-policy.js";
 import { isToolAllowedByPolicies } from "../tool-policy-match.js";
 import {
-  expandToolGroups,
   mergeAlsoAllowPolicy,
   normalizeToolPolicyName,
   readToolAllowlistIntersection,
@@ -37,6 +35,12 @@ import {
 } from "../tool-policy.js";
 import { resolveWebSearchToolPolicy } from "../web-search-tool-policy.js";
 import { AgentHarnessPreflightError } from "./errors.js";
+import {
+  collectHarnessSafeDeniedToolNames,
+  policyDeniesAllTools,
+  toolPolicyRestrictsHarnessNativeTools,
+  type PluginHarnessToolPolicy,
+} from "./native-tool-deny-policy.js";
 import type { AgentHarness } from "./types.js";
 
 type ExecutionEnvironmentFacts = {
@@ -380,8 +384,6 @@ type PluginHarnessToolPolicyContext = Pick<
   preparedSessionCapabilityEntry?: PreparedSessionCapabilityEntry;
 };
 
-type PluginHarnessToolPolicy = { allow?: string[]; deny?: string[] };
-
 export type ResolvedPluginHarnessToolPolicies = {
   webSearchPolicy?: EmbeddedRunAttemptParams["preparedWebSearchPolicy"];
   senderPolicy?: PluginHarnessToolPolicy;
@@ -394,10 +396,9 @@ export type ResolvedPluginHarnessToolPolicies = {
   toolPolicyRestricted: boolean;
 };
 
-export async function preparePluginHarnessPolicyToolsAllow(
-  params: PluginHarnessToolPolicyContext,
-): Promise<[] | undefined> {
-  const policies = await preparePluginHarnessToolPolicies(params);
+export function resolvePluginHarnessPolicyToolsAllow(
+  policies: ResolvedPluginHarnessToolPolicies,
+): [] | undefined {
   return [policies.senderPolicy, policies.groupPolicy, ...policies.runtimePolicies].some(
     toolPolicyRestrictsTools,
   )
@@ -423,7 +424,7 @@ export async function preparePluginHarnessToolPolicies(
   params: PluginHarnessToolPolicyContext,
   safeDenyToolNames?: readonly string[],
   nativeToolNames?: readonly string[],
-  webSearchModel?: ModelRef,
+  webSearchModel?: ModelRef | null,
 ): Promise<ResolvedPluginHarnessToolPolicies> {
   const consume = (sandbox: ReturnType<typeof resolveSandboxRuntimeStatus>) => {
     const requesterFacts = new Map<string, SessionCapabilitySnapshot>();
@@ -455,11 +456,14 @@ export async function preparePluginHarnessToolPolicies(
           : undefined;
         return {
           ...policies,
-          webSearchPolicy: webSearchPolicy && {
-            ...webSearchPolicy,
-            modelRef: webSearchModel,
-            requesterFacts: [...requesterFacts.values()],
-          },
+          webSearchPolicy:
+            webSearchModel === null
+              ? { allowed: false, persistentAllowed: false }
+              : webSearchPolicy && {
+                  ...webSearchPolicy,
+                  modelRef: webSearchModel,
+                  requesterFacts: [...requesterFacts.values()],
+                },
         };
       },
       {
@@ -469,26 +473,23 @@ export async function preparePluginHarnessToolPolicies(
       },
     );
   };
+  const runtimeParams = {
+    cfg: params.config,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey ?? (params.agentId ? undefined : params.sandboxSessionKey),
+    classificationSessionKey: params.sandboxSessionKey ?? params.sessionKey,
+    classificationAgentId: params.sandboxAgentId,
+  };
   if (params.preparedSessionEntry !== undefined) {
     return consume(
       resolveSandboxRuntimeStatus({
-        cfg: params.config,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey ?? (params.agentId ? undefined : params.sandboxSessionKey),
-        classificationSessionKey: params.sandboxSessionKey ?? params.sessionKey,
-        classificationAgentId: params.sandboxAgentId,
+        ...runtimeParams,
         preparedSessionEntry: params.preparedSessionEntry,
       }),
     );
   }
   return withSandboxRuntimeStatusInWorker(
-    {
-      cfg: params.config,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey ?? (params.agentId ? undefined : params.sandboxSessionKey),
-      classificationSessionKey: params.sandboxSessionKey ?? params.sessionKey,
-      classificationAgentId: params.sandboxAgentId,
-    },
+    runtimeParams,
     { env: process.env, cwd: process.cwd(), assertCurrent() {} },
     consume,
   );
@@ -686,36 +687,6 @@ export function isSystemAgentOnlyAllowlist(toolsAllow: readonly string[] | undef
   return toolsAllow?.length === 1 && normalizeToolPolicyName(toolsAllow[0] ?? "") === "openclaw";
 }
 
-function collectHarnessSafeDeniedToolNames(
-  policies: Array<PluginHarnessToolPolicy | undefined>,
-  safeDenyToolNames: ReadonlySet<string> | undefined,
-): string[] {
-  if (!safeDenyToolNames) {
-    return [];
-  }
-  return [
-    ...new Set(
-      policies
-        .flatMap((policy) => expandToolGroups(policy?.deny ?? []))
-        .map(normalizeToolPolicyName)
-        .filter((name) => isKnownCoreToolId(name) && safeDenyToolNames.has(name)),
-    ),
-  ].toSorted();
-}
-
-function toolPolicyRestrictsHarnessNativeTools(
-  policy: PluginHarnessToolPolicy | undefined,
-  safeDenyToolNames: ReadonlySet<string> | undefined,
-): boolean {
-  if (!safeDenyToolNames || !policy || toolPolicyRestrictsTools({ allow: policy.allow })) {
-    return toolPolicyRestrictsTools(policy);
-  }
-  return expandToolGroups(policy.deny ?? []).some((deniedName) => {
-    const normalized = normalizeToolPolicyName(deniedName);
-    return !isKnownCoreToolId(normalized) || !safeDenyToolNames.has(normalized);
-  });
-}
-
 function resolveSenderScopedGroupToolPolicy(
   params: PluginHarnessToolPolicyContext,
   groupPolicyParams: Parameters<typeof resolveRequesterConversationToolPolicy>[0],
@@ -750,11 +721,5 @@ function hasSenderIdentity(params: PluginHarnessToolPolicyContext): boolean {
     requester.senderName?.trim() ||
     requester.senderUsername?.trim() ||
     requester.senderE164?.trim(),
-  );
-}
-
-function policyDeniesAllTools(policy?: { deny?: string[] }): boolean {
-  return expandToolGroups(policy?.deny ?? []).some(
-    (entry) => normalizeToolPolicyName(entry) === "*",
   );
 }

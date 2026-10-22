@@ -384,7 +384,6 @@ describe("qa suite runtime agent session helpers", () => {
       hasDirectReplySelfMessage: true,
       lastAssistantErrorMessage: "Request was aborted",
       lastAssistantStopReason: "aborted",
-      lastMessageRole: "assistant",
     });
   });
 

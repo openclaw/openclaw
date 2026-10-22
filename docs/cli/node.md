@@ -262,7 +262,10 @@ Gateway reports a terminal token/password/bootstrap auth pause, the node host
 logs the close detail and exits non-zero so launchd/systemd/Task Scheduler can
 restart it with fresh config and credentials. While device pairing is pending,
 the node keeps reconnecting with exponential backoff capped at 30 seconds and
-connects automatically after approval.
+connects automatically after approval. Startup failures, such as an expired
+setup code or an unavailable Gateway credential, print a redacted
+`[openclaw] Reason:` without requiring debug mode, including in service logs.
+Set `OPENCLAW_DEBUG=1` to include stack traces.
 
 ## Automatic updates
 
@@ -333,7 +336,10 @@ openclaw node identity --json
 ```
 
 It prints the device ID and public key from the `primary` row in
-`state/openclaw.sqlite` and never creates the database or a new identity.
+`client/credentials.sqlite` and never creates the database or a new identity.
+Use `--identity node` or `--identity shareExtension` to inspect the corresponding
+native identity profile. An incomplete credential migration requires
+`openclaw doctor --fix` from the matching installation.
 
 On tightly controlled node networks, the Gateway operator can explicitly opt in
 to auto-approving first-time node pairing from trusted CIDRs:
@@ -369,11 +375,11 @@ identity that the Gateway uses for pairing and routing. This state lives in the
 OpenClaw state directory (`~/.openclaw` by default, or `$OPENCLAW_STATE_DIR`
 when set):
 
-| State                                                                   | Purpose                                                                                                                          |
-| ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `state/openclaw.sqlite` (`config_machine_state`, key `nodeHost.config`) | Client instance ID, display name, and Gateway connection metadata. The client sends this ID as `instanceId`.                     |
-| `state/openclaw.sqlite` (`device_identities`, `primary`)                | Signed Ed25519 keypair and derived device ID. For signed connections, this device ID is the routed node ID and pairing identity. |
-| `state/openclaw.sqlite` (`device_auth_tokens`)                          | Paired device tokens, keyed by cryptographic device ID and role.                                                                 |
+| State                                                                              | Purpose                                                                                                                          |
+| ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `state/openclaw.sqlite` (`config_machine_state`, key `nodeHost.config`)            | Client instance ID, display name, and Gateway connection metadata. The client sends this ID as `instanceId`.                     |
+| `client/credentials.sqlite` (`device_identities`, `primary`)                       | Signed Ed25519 keypair and derived device ID. For signed connections, this device ID is the routed node ID and pairing identity. |
+| `client/credentials.sqlite` (`device_auth_tokens`, `gateway_origin_device_tokens`) | Paired device tokens, keyed by cryptographic device ID, role, and Gateway scope.                                                 |
 
 `gatewayLocal` in `node.list` and `node.describe` marks an exact match with the
 primary device identity in the Gateway's state directory. Overriding `--node-id`
@@ -406,16 +412,15 @@ a separate check.
 
 Older OpenClaw releases stored node-host state in `node.json`, the signed
 identity in `identity/device.json`, and paired auth in
-`identity/device-auth.json`. Stop the node host and run
-`openclaw doctor --fix` once; Doctor validates the retired inputs, imports and
-verifies their stored SQLite rows, then removes the old files. Node startup,
-including the macOS app's worker, leaves these inputs for Doctor. Pending device
-auth or exec approvals stop startup before capabilities are prepared. A missing
-stored identity plus retired identity data or an interrupted import claim
-also stops startup before a new key can be created. An existing valid stored
-identity remains authoritative when an older release recreates `identity/device.json`;
-Doctor owns that stale file's cleanup. Keep `state/openclaw.sqlite` private;
-it contains the device keypair and auth tokens.
+`identity/device-auth.json`. Node startup, including the macOS app's worker,
+automatically prepares legacy credentials and exec approvals before capabilities
+are prepared. It uses the same backup and migration owner as Doctor, preserving
+the existing keypair and pairing tokens. Retained credential JSON stays consumed
+even if an older release recreates it; an existing valid stored identity remains
+authoritative. Malformed or conflicting sources remain unchanged and require the
+repair described in the diagnostic. Keep `client/credentials.sqlite` private;
+it contains the device keypair and auth tokens. Other retired node state remains
+part of `openclaw doctor --fix`.
 
 ## Exec approvals
 

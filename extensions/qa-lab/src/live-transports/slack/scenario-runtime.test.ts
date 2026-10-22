@@ -151,11 +151,11 @@ it("returns structured RTT evidence for a matched reply", async () => {
 });
 
 it.each([
-  ["native", "exec", "approval", "SLACK_QA_APPROVAL", "approval-1", 1_250],
-  ["Codex", "plugin", "codex-approval", "SLACK_QA_CODEX_APPROVAL", "approval-2", 2_500],
+  ["native", "exec", "approval", "SLACK_QA_APPROVAL", 1_250],
+  ["Codex", "plugin", "codex-approval", "SLACK_QA_CODEX_APPROVAL", 2_500],
 ] as const)(
   "returns structured RTT evidence for a %s approval",
-  async (_label, approvalKind, kind, token, approvalId, rttMs) => {
+  async (_label, approvalKind, kind, token, rttMs) => {
     const base = { approvalKind, decision: "allow-once" as const, token };
     const runtime = fixture(
       kind === "codex-approval"
@@ -169,7 +169,6 @@ it.each([
     );
     const runner = kind === "approval" ? runSlackApprovalScenario : runSlackCodexApprovalScenario;
     runner.mockResolvedValueOnce({
-      artifact: { approvalId },
       requestStartedAt: new Date(requestStartedAt),
       responseObservedAt: new Date(Date.parse(requestStartedAt) + rttMs),
       rttMs,

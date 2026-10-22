@@ -7,6 +7,11 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 vi.mock("../../infra/device-identity-async.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/device-identity-async.js")>()),
   loadChatRequestIdentityKeyAsync: vi.fn(async (): Promise<Buffer | null> => Buffer.alloc(32, 7)),
+  loadOrCreateProcessDeviceIdentityAsync: vi.fn(async () => ({
+    deviceId: "chat-normalization-device",
+    publicKeyPem: "chat-normalization-public-key",
+    privateKeyPem: "chat-normalization-private-key",
+  })),
 }));
 
 function copilotClient(caps: string[] = []): NonNullable<GatewayRequestHandlerOptions["client"]> {
@@ -76,6 +81,43 @@ function humanClient(): NonNullable<GatewayRequestHandlerOptions["client"]> {
   };
   return client;
 }
+
+it.each([
+  "openclaw-control-ui",
+  "openclaw-macos",
+  "openclaw-linux",
+  "openclaw-ios",
+  "openclaw-android",
+] as const)("accepts the embedded Control UI reconnect envelope from %s", async (id) => {
+  const client = humanClient();
+  client.connect.client.id = id;
+  client.pairedClientId = id;
+  const params = {
+    sessionKey: "agent:main:main",
+    message: " hello ",
+    idempotencyKey: "request-1",
+    __controlUiReconnectResume: true,
+  };
+  const result = await normalizeChatSendRequest({ params, client });
+  expect(result).toMatchObject({ ok: true, value: { reconnectResumeRequested: true } });
+  if (result.ok) {
+    expect(result.value.p).not.toHaveProperty("__controlUiReconnectResume");
+  }
+  expect(params).toHaveProperty("__controlUiReconnectResume", true);
+});
+
+it.each(["cli", "node-host", "openclaw-macos"] as const)(
+  "rejects reconnect metadata from non-UI %s clients",
+  async (id) => {
+    const client = humanClient();
+    client.connect.client.id = id;
+    client.connect.client.mode = "backend";
+    expect(await normalize({ __controlUiReconnectResume: true }, client)).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("unexpected property"),
+    });
+  },
+);
 
 it("fingerprints input with the purpose-specific identity key", async () => {
   expect((await normalizeValue({}, null)).requestIdentity).toBe(

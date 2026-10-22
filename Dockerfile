@@ -13,9 +13,9 @@ ARG OPENCLAW_BUNDLED_PLUGIN_DIR=extensions
 ARG OPENCLAW_DOCKER_BUILD_NODE_OPTIONS="--max-old-space-size=8192"
 ARG OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB=""
 ARG OPENCLAW_DOCKER_BUILD_SKIP_DTS=1
-ARG OPENCLAW_NODE_TRIXIE_IMAGE="docker.io/library/node:24-trixie@sha256:ff054b356ab93ed540518ca23cfcd9840e5256dd04db5a8d8afc43f4ecc7c9f8"
-ARG OPENCLAW_NODE_TRIXIE_SLIM_IMAGE="docker.io/library/node:24-trixie-slim@sha256:7f486cabe892bff8fef04c0f7da8dba84a560be3e4e2740b7a86afc57ebec315"
-ARG OPENCLAW_NODE_TRIXIE_SLIM_DIGEST="sha256:7f486cabe892bff8fef04c0f7da8dba84a560be3e4e2740b7a86afc57ebec315"
+ARG OPENCLAW_NODE_TRIXIE_IMAGE="docker.io/library/node:24.22.1-trixie@sha256:e8bc2eedd0e82fb45a4d9a68aff03d1fbe478fc5794a67d7dc06b72a2caaa2ec"
+ARG OPENCLAW_NODE_TRIXIE_SLIM_IMAGE="docker.io/library/node:24.22.1-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea"
+ARG OPENCLAW_NODE_TRIXIE_SLIM_DIGEST="sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea"
 # Keep in sync with .github/actions/setup-node-env/action.yml and seed-bun-from-image.mjs.
 # To update: docker buildx imagetools inspect docker.io/oven/bun:<version> and use the manifest-list digest.
 ARG OPENCLAW_BUN_IMAGE="docker.io/oven/bun:1.4.3@sha256:ec06c3b6cea04192ae6770c434f668ca41d343ad19fa6472216c7b48be39c598"
@@ -232,7 +232,7 @@ RUN node scripts/postinstall-bundled-plugins.mjs && \
 # ── Runtime base image ──────────────────────────────────────────
 FROM ${OPENCLAW_NODE_TRIXIE_SLIM_IMAGE} AS base-runtime
 ARG OPENCLAW_NODE_TRIXIE_SLIM_DIGEST
-LABEL org.opencontainers.image.base.name="docker.io/library/node:24-trixie-slim" \
+LABEL org.opencontainers.image.base.name="docker.io/library/node:24.22.1-trixie-slim" \
   org.opencontainers.image.base.digest="${OPENCLAW_NODE_TRIXIE_SLIM_DIGEST}"
 
 # ── Stage 3: Runtime ────────────────────────────────────────────

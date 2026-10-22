@@ -28,7 +28,6 @@ type McpLoopbackToolCallObservers = {
   onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
   onRequestStart?: () => void;
   onRequestClassified?: () => void;
-  onRequestFinish?: () => void;
   onToolCallStart?: (call: McpLoopbackToolCallStart) => string | void;
   onToolCallUpdate?: (calls: {
     previous: McpLoopbackToolCallStart;
@@ -175,7 +174,6 @@ export function markMcpLoopbackRequestFinished(
   markMcpLoopbackRequestClassified(captureHandle);
   captureHandle.finished = true;
   const { capture } = captureHandle;
-  observeCapture(() => capture.onRequestFinish?.());
   capture.inFlight = Math.max(0, capture.inFlight - 1);
   notifyMcpLoopbackToolCallCaptureActivity(capture);
 }

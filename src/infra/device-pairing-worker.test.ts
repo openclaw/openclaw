@@ -13,6 +13,12 @@ import {
   resolveNodePairingGeneration,
 } from "./device-pairing-identity.js";
 import { withDevicePairingLock } from "./device-pairing-lock.js";
+import { updatePairedNodeBins, updatePairedNodeSessionHost } from "./device-pairing-node-facts.js";
+import {
+  recordPairedNodeConnection,
+  recordPairedNodeDisconnection,
+  recordPairedNodeHostStats,
+} from "./device-pairing-node.js";
 import { getPublishedPairedDeviceBinding } from "./device-pairing-publication.js";
 import { loadPairedDevicePairingStoreRecordReadOnly } from "./device-pairing-store-readonly.js";
 import {
@@ -390,6 +396,85 @@ test.each(["metadata", "presence"] as const)(
     }
   },
 );
+
+test("persists token use and node connection facts without reading unrelated devices", async () => {
+  await listDevicePairing(baseDir);
+  const device = await getPairedDevice("paired-rich", baseDir);
+  const generation = resolveNodePairingGeneration(device);
+  if (!generation) {
+    throw new Error("expected fixture node generation");
+  }
+  const originalBinding = getPublishedPairedDeviceBinding("paired-rich", baseDir);
+  database.db
+    .prepare("UPDATE device_pairing_paired SET tokens_json = ? WHERE device_id = ?")
+    .run("synthetic-unreadable-json", "paired-minimal");
+  try {
+    await expect(
+      verifyDeviceToken({
+        deviceId: "paired-rich",
+        role: "operator",
+        token: "synthetic-operator-token",
+        scopes: ["operator.read"],
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: true });
+    await withDevicePairingLock(async () => {});
+    expect(
+      (await getPairedDevice("paired-rich", baseDir))?.tokens?.operator?.lastUsedAtMs,
+    ).toBeGreaterThan(3);
+    await expect(
+      recordPairedNodeConnection("paired-rich", 100, baseDir, generation),
+    ).resolves.toEqual({ recorded: true, firstConnection: true });
+    await expect(
+      recordPairedNodeDisconnection({
+        nodeId: "paired-rich",
+        connectedAtMs: 100,
+        disconnectedAtMs: 200,
+        expectedPairingGeneration: generation,
+        baseDir,
+      }),
+    ).resolves.toEqual({ recorded: true });
+    await expect(updatePairedNodeBins("paired-rich", ["git"], generation, baseDir)).resolves.toBe(
+      true,
+    );
+    const hostStats = {
+      cpuCount: 8,
+      memoryTotalBytes: 1024,
+      memoryFreeBytes: 512,
+      updatedAtMs: 300,
+    };
+    await expect(
+      recordPairedNodeHostStats({
+        nodeId: "paired-rich",
+        hostStats,
+        expectedPairingGeneration: generation,
+        baseDir,
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      updatePairedNodeSessionHost({
+        nodeId: "paired-rich",
+        sessionHost: true,
+        expectedPairingGeneration: generation,
+        isConnectionCurrent: () => true,
+        baseDir,
+      }),
+    ).resolves.toBe(true);
+    expect((await getPairedDevice("paired-rich", baseDir))?.nodeSurface).toMatchObject({
+      lastConnectedAtMs: 100,
+      lastDisconnectedAtMs: 200,
+      bins: ["git"],
+      sessionHost: true,
+      lastHostStats: hostStats,
+    });
+    expect(getPublishedPairedDeviceBinding("paired-rich", baseDir)).toEqual(originalBinding);
+  } finally {
+    await withDevicePairingLock(async () => {});
+    database.db
+      .prepare("UPDATE device_pairing_paired SET tokens_json = NULL WHERE device_id = ?")
+      .run("paired-minimal");
+  }
+});
 
 test("serves reconnect lookups from committed rows while the read worker is unavailable", async () => {
   const device = await getPairedDevice("paired-rich", baseDir);

@@ -32,7 +32,7 @@ export function ChannelConfig(params: { channelId: string; props: ChannelsProps 
   const value = createMemo(
     () => resolveChannelConfigValue(params.props.config.configForm ?? {}, params.channelId) ?? {},
   );
-  const extraFields = createMemo(() => EXTRA_CHANNEL_FIELDS.filter((field) => field in value()));
+  const extraFields = () => EXTRA_CHANNEL_FIELDS.filter((field) => field in value());
   const unsupported = createMemo(() => new Set(analysis().unsupportedPaths));
   const disabled = createMemo(
     () => params.props.config.configSaving || params.props.config.configSchemaLoading,

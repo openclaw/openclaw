@@ -15,6 +15,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
+import { requireAcpRuntimeBackend } from "../../acp/runtime/registry.js";
 import {
   buildExternalRunFailureReply,
   buildKnownAgentRunFailureReplyPayload,
@@ -67,7 +68,8 @@ async function withNativeAttempt(
   peer: Parameters<typeof registerNative>[3] = {},
   agent = "opencode",
 ) {
-  await withOpenClawTestState({ label: "acp-native-execution" }, async (state) => {
+  const env = { OPENCLAW_SKIP_ACPX_RUNTIME_PROBE: "1" };
+  await withOpenClawTestState({ label: "acp-native-execution", env }, async (state) => {
     const config = {
       ...overrides,
       session: { store: path.join(state.sessionsDir(), "sessions.json") },
@@ -307,7 +309,10 @@ it.for([
         let holdingControl: Promise<void> | undefined;
         let run: ReturnType<typeof runAgentHarnessAttempt> | undefined;
         try {
-          const runtime = await native.service.getRuntime(native.context);
+          await native.service.start(native.context);
+          const runtime = requireAcpRuntimeBackend("acpx").runtime;
+          assert(typeof runtime.getStatus === "function", "ACPX status control missing");
+          assert(typeof runtime.setMode === "function", "ACPX mode control missing");
           const nativeTarget = {
             agentId: "main",
             sessionKey: `agent:main:harness:acp-opencode:${attempt.input.sessionId}`,
@@ -324,7 +329,9 @@ it.for([
           };
           const handle = await runtime.ensureSession(nativeTarget);
           const getStatus = runtime.getStatus.bind(runtime);
-          expect((await getStatus({ handle })).models?.currentModelId).toBe(nativeTarget.model);
+          expect(await getStatus({ handle })).toMatchObject({
+            models: { currentModelId: nativeTarget.model },
+          });
           const before = await peerStates(native.peerDirectory);
           holdingControl = runtime.setMode({ handle, mode: "review" });
           void holdingControl.catch(() => {});
@@ -378,7 +385,7 @@ it.for([
           const active = kind === "active";
           const model = active ? "selected" : nativeTarget.model;
           expect.soft(outcome?.terminal.kind).toBe(active ? "ok" : "failed");
-          expect.soft(persisted.models?.currentModelId).toBe(model);
+          expect.soft(persisted).toMatchObject({ models: { currentModelId: model } });
           expect.soft(records[0]).toMatchObject({
             currentModelId: model,
             modelChanges: active ? ["selected"] : before[0]?.modelChanges,

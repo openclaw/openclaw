@@ -8,7 +8,7 @@ import { resolveThemeBranding } from "../../../../packages/gateway-protocol/src/
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry, ModelCatalogResult } from "../../api/types.ts";
-import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import { mountRouterOutlet } from "../../app/router-outlet.test-support.tsx";
 import { resetServerUiPrefsSync } from "../../app/server-prefs.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
@@ -16,12 +16,14 @@ import { createGatewayHarness } from "../../lib/config/config-test-harness.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import * as modelCatalogStore from "../../lib/model-catalog-store.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { meetingStatus } from "../../test-helpers/transcripts.test-support.ts";
+import { mountAppearanceCatalogPage as mount } from "./config-page-catalog.test-support.ts";
 import {
   completeConfigContext,
   mountConfigPage,
@@ -133,7 +135,7 @@ describe("ConfigPage navigation", () => {
         ensureSchemaLoaded: async () => undefined,
         subscribe,
       },
-      theme: { branding: resolveThemeBranding(undefined), serverSelection: null, subscribe },
+      theme: { branding: resolveThemeBranding(undefined), subscribe },
       overlays: { snapshot: {}, subscribe },
       webPush: { snapshot: undefined, subscribe },
     } as unknown as ApplicationContext;
@@ -559,37 +561,6 @@ describe("ConfigPage model catalog lifecycle", () => {
     vi.useRealTimers();
   });
 
-  async function mount(
-    client: GatewayBrowserClient,
-    scopes: readonly string[] = ["operator.admin"],
-  ) {
-    const source = createApplicationGateway({
-      client,
-      phase: "connected",
-      hello: gatewayHelloForMethods(["system.info"], scopes),
-    } as ApplicationGatewaySnapshot);
-    const subscribe = () => () => undefined;
-    const context = {
-      gateway: source.gateway,
-      settingsAgentSelection: { state: { selectedId: "main" }, subscribe },
-      agentSelection: { state: { selectedId: "main" }, subscribe },
-      agents: { state: { agentsList: null }, subscribe },
-      agentIdentity: { ensure: async () => undefined, subscribe },
-      runtimeConfig: { state: { configSnapshot: {}, configSchema: {} }, subscribe },
-      theme: { branding: resolveThemeBranding(undefined), serverSelection: null, subscribe },
-      overlays: { snapshot: {}, subscribe },
-      config: { current: { assistantIdentity: { name: "OpenClaw" } }, subscribe },
-      webPush: { subscribe },
-    } as unknown as ApplicationContext;
-    const view = mountConfigPage(context, { pageId: "appearance" });
-    await waitForSolid(() =>
-      expect(
-        view.page.querySelector("#settings-appearance-sidebar openclaw-select-picker"),
-      ).not.toBeNull(),
-    );
-    return { view, source, context };
-  }
-
   function observerModels(view: ReturnType<typeof mountConfigPage>) {
     const picker = expectDefined(
       view.page.querySelector<
@@ -815,6 +786,44 @@ describe("ConfigPage model catalog lifecycle", () => {
       flush();
       await waitForSolid(() => expect(observerModels(remounted)).toEqual(expectedModels(fresh)));
       expect(catalogReads).toBe(3);
+    });
+
+    it("recovers a rejected catalog on the next admitted poll without replacing other controls", async () => {
+      const failed = deferred<ModelCatalogResult>();
+      const models = [{ id: "small", name: "Small", provider: "openai" }];
+      const load = vi
+        .spyOn(modelCatalogStore, "loadModelCatalog")
+        .mockReturnValueOnce(failed.promise)
+        .mockResolvedValue({ models });
+      const request = vi.fn().mockResolvedValue({});
+      const { view } = await mount(createTestGatewayClient(request));
+      await waitForSolid(() => expect(load).toHaveBeenCalledOnce());
+      const toggle = expectDefined(
+        view.page.querySelector<HTMLInputElement>("#settings-appearance-sidebar input"),
+        "sidebar toggle",
+      );
+      failed.reject(new Error("catalog temporarily unavailable"));
+      await waitForSolid(() =>
+        expect(view.page.textContent).toContain("Explicit model catalog unavailable"),
+      );
+      expect(observerModels(view)).toEqual([]);
+      const picker = expectDefined(
+        view.page.querySelector<
+          HTMLElement & { params: { options: Array<{ value: string; disabled?: boolean }> } }
+        >("#settings-appearance-sidebar openclaw-select-picker"),
+        "observer model picker",
+      );
+      expect(picker.params.options.slice(0, 2).map((option) => option.disabled === true)).toEqual([
+        false,
+        false,
+      ]);
+      expect(view.page.querySelector("#settings-appearance-sidebar input")).toBe(toggle);
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      await waitForSolid(() => expect(observerModels(view)).toEqual(expectedModels(models)));
+      expect(view.page.textContent).not.toContain("Explicit model catalog unavailable");
+      expect(view.page.querySelector("#settings-appearance-sidebar input")).toBe(toggle);
+      expect(load).toHaveBeenCalledTimes(2);
     });
 
     it("stops status polling outside Appearance while the page remains mounted", async () => {

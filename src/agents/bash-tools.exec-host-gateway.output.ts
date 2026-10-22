@@ -7,6 +7,7 @@ import type {
   ExecApprovalFollowupOutcome,
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
+import { formatExecDeniedReasonMessage } from "./exec-approval-result.js";
 import type { AgentToolResult } from "./runtime/index.js";
 
 function formatOutcomeExitLabel(outcome: { exitCode: number | null; timedOut: boolean }): string {
@@ -156,7 +157,7 @@ export function buildGatewayExecApprovalDeniedToolResult(params: {
   const denialContext = params.approvalId
     ? `gateway id=${params.approvalId}, ${params.deniedReason}`
     : params.deniedReason;
-  const text = `Exec denied (${denialContext}): ${params.command}`;
+  const text = `Exec denied (${denialContext}): ${params.command}\n${formatExecDeniedReasonMessage(params.deniedReason)}`;
   return {
     content: [{ type: "text", text }],
     details: {

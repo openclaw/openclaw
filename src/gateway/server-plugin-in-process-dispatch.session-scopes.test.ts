@@ -172,6 +172,10 @@ async function createHostedCreation(state: OpenClawTestState, source: HostedSour
   const caller = expectDefined(
     createAdmittedGatewayToolCallerIdentity({
       admittedRunContext: admitted,
+      // Operator scenarios start with a human request, not only an execution grant.
+      // Keep those causal facts separate from the authority captured above.
+      requesterOrigin:
+        source === "operator" ? { sessionKey: parentKey, operatorProfileId: profileId } : undefined,
       agentId: "main",
       sessionKey: parentKey,
       approvalSignals: [sourceController.signal],

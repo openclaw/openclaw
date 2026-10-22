@@ -36,15 +36,10 @@ const configFor = (plugin: ReturnType<typeof writePlugin>): OpenClawConfig => ({
 });
 const preparedHandle = (config: OpenClawConfig, workspaceDir: string) =>
   loadAgentRuntimePluginRegistryHandle({ basePluginIds: [], config, workspaceDir });
-const turnLease = (
-  config: OpenClawConfig,
-  name: string,
-  options: Partial<Parameters<typeof createContextEngineLogicalTurnLease>[0]> = {},
-) =>
+const turnLease = (config: OpenClawConfig, name: string) =>
   createContextEngineLogicalTurnLease({
     identity: { runId: `${name}-turn`, sessionId: `${name}-session` },
     config,
-    ...options,
   });
 function enginePlugin(id: string, members: string, fullOnly = true, asynchronous = false) {
   return writePlugin({
@@ -148,15 +143,15 @@ it.each([false, true])(
     expect(discovery.contextEngines.has("ce-probe")).toBe(!fullOnly);
     expect(handle.contextEngines.get("ce-probe")?.lifecycle).toBe("runtime");
 
-    const warn = (message: string) => {
+    using warnings = vi.spyOn(console, "warn");
+    warnings.mockImplementation((message: string) => {
       throw new Error(`unexpected context-engine degrade: ${message}`);
-    };
+    });
     // Cron prepare loads this handle, then run-executor selects the engine inside the scoped registry.
     const lease = await withPluginRuntimeRegistryScope(handle, () =>
       createContextEngineLogicalTurnLease({
         identity: { runId: "test-run", sessionId: "test-session" },
         config,
-        warn,
         workspaceDir,
       }),
     );
@@ -310,9 +305,8 @@ it("uses an unchanged adopted instance after its original cache retires", async 
   );
   expect(successor.plugins[0]).toBe(root.plugins[0]);
   await retirePluginCache(originalCache);
-  const warn = () => {};
   const lease = await withPluginRuntimeRegistryScope(successor, () =>
-    turnLease(config, "unchanged", { warn }),
+    turnLease(config, "unchanged"),
   );
   try {
     expect(lease.degraded).toBe(false);
@@ -343,9 +337,7 @@ it.each(["factory", "contract"] as const)(
     const config = configFor(plugin);
     const root = await loadAndActivateRootPluginRegistry({ config, cache: false });
     const handle = preparedHandle(config, plugin.dir);
-    const lease = await withPluginRuntimeRegistryScope(handle, () =>
-      turnLease(config, "failed", { warn: () => {} }),
-    );
+    const lease = await withPluginRuntimeRegistryScope(handle, () => turnLease(config, "failed"));
     try {
       expect(lease.degraded).toBe(true);
       expect(lease.degradedReason).toContain(

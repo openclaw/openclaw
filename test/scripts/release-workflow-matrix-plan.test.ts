@@ -66,8 +66,12 @@ function requiredStep(job: WorkflowJob, name: string): WorkflowStep {
   );
 }
 
-function bashRun(command: string, env: NodeJS.ProcessEnv) {
-  return spawnSync("bash", ["--noprofile", "--norc", "-c", command], { encoding: "utf8", env });
+function bashRun(command: string, env: NodeJS.ProcessEnv, cwd?: string) {
+  return spawnSync("bash", ["--noprofile", "--norc", "-c", command], {
+    encoding: "utf8",
+    env,
+    cwd,
+  });
 }
 
 function runFixture(command: string, args: string[], env: NodeJS.ProcessEnv, cwd?: string) {
@@ -268,18 +272,20 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
     ],
     [
       "Verify live agent prompt prefix reuse",
-      "test:live src/agents/embedded-agent-runner.cache.live.test.ts --testNamePattern release prompt-prefix gate",
+      "test:live src/agents/embedded-agent-runner.cache.live.test.ts --testNamePattern release prompt-prefix gate --reporter=default --reporter=json --outputFile.json=.artifacts/live-cache/agent-prefix-reuse.vitest.json",
     ],
   ])("propagates harness results from %s to the release gate", (stepName, args) => {
     const job = requiredJob(workflow(), "validate_release_live_cache");
     const step = requiredStep(job, stepName);
     for (const code of [0, 23]) {
+      const cwd = tempDirs.make("openclaw-live-cache-shell-replay-");
       const result = bashRun(
         `timeout() { while [[ "$1" == --* ]]; do shift; done; shift; "$@"; }
 node() { printf '%s\\n' "$*"; return "$HARNESS_EXIT"; }
 pnpm() { node "$@"; }
 ${expectDefined(step.run, "prompt-prefix command")}`,
         { PATH: process.env.PATH, HARNESS_EXIT: String(code) },
+        cwd,
       );
       expect({ stdout: result.stdout.trim(), status: result.status }, result.stderr).toEqual({
         stdout: args,
@@ -287,6 +293,27 @@ ${expectDefined(step.run, "prompt-prefix command")}`,
       });
     }
     expect(step["continue-on-error"]).not.toBe(true);
+  });
+
+  it("retains exact-candidate live cache diagnostics on failure", () => {
+    const job = requiredJob(workflow(), "validate_release_live_cache");
+    expect(requiredStep(job, "Verify live prompt cache floors").run).toContain(
+      "cache-floors.vitest.json",
+    );
+    expect(requiredStep(job, "Verify live agent prompt prefix reuse").run).toContain(
+      "agent-prefix-reuse.vitest.json",
+    );
+    const upload = requiredStep(job, "Upload live cache diagnostics");
+    expect(upload).toMatchObject({
+      if: "always()",
+      uses: "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+      with: {
+        name: "live-cache-${{ needs.validate_selected_ref.outputs.selected_sha }}-${{ github.run_id }}-${{ github.run_attempt }}",
+        path: ".artifacts/live-cache/",
+        "retention-days": 14,
+        "if-no-files-found": "warn",
+      },
+    });
   });
 
   it.each([
@@ -391,7 +418,7 @@ ${expectDefined(step.run, "prompt-prefix command")}`,
     const { steps } = plannerJob;
     const setup = requiredStep(plannerJob, "Setup admission Node.js");
     expect(setup.if).toBeUndefined();
-    expect(setup.env).toMatchObject({ REQUESTED_NODE_VERSION: "24.x" });
+    expect(setup.env).toMatchObject({ REQUESTED_NODE_VERSION: "24.22.1" });
     expect(setup.run).toContain("source .github/actions/setup-pnpm-store-cache/ensure-node.sh");
     expect(setup.run).toContain('openclaw_ensure_node "$REQUESTED_NODE_VERSION"');
     const planner = requiredStep(plannerJob, "Plan shared live image plugins");
@@ -495,7 +522,7 @@ ${expectDefined(step.run, "prompt-prefix command")}`,
       releaseProfile: "stable",
     };
     const plan = createReleaseWorkflowMatrixPlan(options);
-    expectStableMatrices(plan.dockerE2e.matrix.include, plan.liveModels.matrix.include);
+    // The CLI normalization case owns the exact stable chunk/provider inventory.
     for (const [chunk, timeout] of [
       ["package-update-openai", 60],
       ["package-update-restart-auth", 75],
@@ -504,13 +531,6 @@ ${expectDefined(step.run, "prompt-prefix command")}`,
         plan.dockerE2e.matrix.include.find((entry: MatrixEntry) => entry.chunk_id === chunk),
       ).toMatchObject({ timeout_minutes: timeout });
     }
-    expect(plan.liveModels.matrix.include).toContainEqual({
-      provider_label: "MiniMax",
-      providers: "minimax",
-      models: "minimax/MiniMax-M3,minimax-portal/MiniMax-M3",
-      max_models: "2",
-      profiles: "stable full",
-    });
     const admission = createReleaseSourceSelection(options);
     expect(admission.docker.map((entry) => ("chunk" in entry ? entry.chunk : undefined))).toEqual(
       FULL_DOCKER_CHUNKS,

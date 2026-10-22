@@ -52,7 +52,6 @@ export type GatewayRestartSnapshot = {
     expected: string;
     actual: string | null;
   };
-  expectedBuildId?: string;
   buildIdMismatch?: {
     expected: string;
     actual: string | null;

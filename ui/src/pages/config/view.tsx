@@ -64,18 +64,23 @@ export function Config(props: ConfigProps) {
     revision();
     return props.viewState;
   };
+  const schema = createMemo(() => asConfigSchema(props.schema));
+  const includeSections = createMemo(() => props.includeSections);
+  const excludeSections = createMemo(() => props.excludeSections);
+  const includedSections = createMemo(() =>
+    includeSections()?.length ? new Set(includeSections()) : null,
+  );
+  const excludedSections = createMemo(() =>
+    excludeSections()?.length ? new Set(excludeSections()) : null,
+  );
+  const schemaAnalysis = createMemo(() =>
+    getConfigSchemaAnalysis(schema(), includedSections(), excludedSections()),
+  );
   const state = createMemo(() => {
     const viewState = view();
     const showModeToggle = props.showModeToggle ?? false;
     const includeVirtualSections = props.includeVirtualSections ?? true;
-    const include = props.includeSections?.length ? new Set(props.includeSections) : null;
-    const exclude = props.excludeSections?.length ? new Set(props.excludeSections) : null;
-    const analysis = getConfigSchemaAnalysis(
-      viewState,
-      asConfigSchema(props.schema),
-      include,
-      exclude,
-    );
+    const analysis = schemaAnalysis();
     const unsupportedActivePaths = analysis.unsupportedPaths.filter(
       (path) =>
         path !== "<root>" &&
@@ -105,7 +110,7 @@ export function Config(props: ConfigProps) {
     const visibleVirtual = (key: string) =>
       includeVirtualSections &&
       virtualSections.has(key) &&
-      (key === "__appearance__" || include?.has(key) === true);
+      (key === "__appearance__" || includedSections()?.has(key) === true);
     const sectionLabel = (key: string) =>
       t(
         `configView.sections.${key === "__appearance__" ? "theme" : key === "__notifications__" ? "notifications" : key}`,
@@ -117,8 +122,8 @@ export function Config(props: ConfigProps) {
         .filter(
           (key) =>
             (visibleVirtual(key) || key in schemaProps) &&
-            (!include || include.has(key)) &&
-            (!exclude || !exclude.has(key)),
+            includedSections()?.has(key) !== false &&
+            !excludedSections()?.has(key),
         )
         .map((key) => ({ key, label: sectionLabel(key) })),
     })).filter((category) => category.sections.length > 0);
@@ -195,7 +200,7 @@ export function Config(props: ConfigProps) {
     return {
       showModeToggle,
       includeVirtualSections,
-      include,
+      include: includedSections(),
       analysis,
       unsupportedActivePaths,
       rawAvailable,

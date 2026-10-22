@@ -1,4 +1,3 @@
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { useBrowserDashboardTestHarness } from "../../browser-dashboard.test-harness.js";
 import type { BrowserTab } from "../client.types.js";
@@ -10,8 +9,9 @@ import {
   setPwToolsCoreCurrentRefLocator,
   setPwToolsCoreDownloadCapture,
 } from "../pw-tools-core.test-harness.js";
+import { atBarrier, gate as createGate, startRoute } from "./agent-route.test-support.js";
 import { createDashboardRouteContext } from "./dashboard-ownership.test-support.js";
-import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
+import { createBrowserRouteApp } from "./test-helpers.js";
 
 const browser = vi.hoisted(() => ({
   open: vi.fn(),
@@ -87,14 +87,7 @@ const cases = [
   ["download waiter", "/wait/download", { path: "/tmp/download.txt" }, "output"],
 ] as const;
 
-async function untilEntered(entered: Promise<void>, operation: Promise<unknown>) {
-  await Promise.race([
-    entered,
-    operation.then(() => {
-      throw new Error("Operation completed before its held boundary");
-    }),
-  ]);
-}
+const boundaryFailure = "Operation completed before its held boundary";
 
 describe("dashboard transfer authority", () => {
   const fixture = useBrowserDashboardTestHarness(browser, sessionKey);
@@ -114,12 +107,8 @@ describe("dashboard transfer authority", () => {
       for (const prepare of Object.values(preparation)) {
         prepare.mockResolvedValue(undefined);
       }
-      const entered = createDeferred<void>();
-      const release = createDeferred<void>();
-      preparation[gate].mockImplementationOnce(async () => {
-        entered.resolve();
-        await release.promise;
-      });
+      const ready = createGate();
+      preparation[gate].mockImplementationOnce(ready.block);
       const dashboard = await requestBrowserDashboard(request);
       const targetId = dashboard.browserTab!.targetId;
       const tab: BrowserTab = { targetId, type: "page", title: "Service", url: dashboard.url };
@@ -139,40 +128,31 @@ describe("dashboard transfer authority", () => {
         }),
         cancel: vi.fn(),
       });
-      const closeEntered = createDeferred<void>();
-      const releaseClose = createDeferred<void>();
+      const closing = createGate();
       browser.closeOwned.mockImplementation(async () => {
-        closeEntered.resolve();
-        await releaseClose.promise;
+        closing.enter();
+        await closing.promise;
         fixture.tabs = fixture.tabs.filter((entry) => entry.targetId !== targetId);
         return { status: "closed" };
       });
-      const response = createBrowserRouteResponse();
-      const operation = Promise.resolve(
-        transferRoutes(tab).get(path)!(
-          {
-            params: {},
-            query: {},
-            body: { ...body, targetId },
-            ...(authority === "absent"
-              ? {}
-              : {
-                  assertCurrent: async (profile?: ResolvedBrowserProfile) =>
-                    await assertBrowserDashboardTargetCurrent(dashboard, "main", {}, profile),
-                }),
-          },
-          response.res,
-        ),
-      );
+      const { response, completion: operation } = startRoute(transferRoutes(tab).get(path), {
+        body: { ...body, targetId },
+        ...(authority === "absent"
+          ? {}
+          : {
+              assertCurrent: async (profile?: ResolvedBrowserProfile) =>
+                await assertBrowserDashboardTargetCurrent(dashboard, "main", {}, profile),
+            }),
+      });
       let retirement: Promise<unknown> | undefined;
       try {
-        await untilEntered(entered.promise, operation);
+        await atBarrier(ready.entered, operation, boundaryFailure);
         if (authority === "Stop") {
           retirement = stopBrowserDashboard(request);
-          await untilEntered(closeEntered.promise, retirement);
+          await atBarrier(closing.entered, retirement, boundaryFailure);
         }
         expect(fixture.tabs.map((entry) => entry.targetId)).toContain(targetId);
-        release.resolve();
+        ready.resolve();
         await operation;
         if (authority === "Stop") {
           expect(nativeEffect).not.toHaveBeenCalled();
@@ -187,8 +167,8 @@ describe("dashboard transfer authority", () => {
           expect(response.body).toMatchObject({ ok: true });
         }
       } finally {
-        release.resolve();
-        releaseClose.resolve();
+        ready.resolve();
+        closing.resolve();
         await Promise.allSettled([operation, retirement]);
       }
     },

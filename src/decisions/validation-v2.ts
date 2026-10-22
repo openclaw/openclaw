@@ -5,8 +5,9 @@ import {
   decisionJsonLimits,
   finiteJson,
   isPlainDecisionRecord,
+  validDecisionCriteria,
 } from "./validation-common.js";
-import { DecisionContractError } from "./validation.js";
+import { DecisionContractError, exactKeys } from "./validation.js";
 
 const MAX_JSON_BYTES = decisionJsonLimits.maxBytes;
 const MAX_IMAGE_BYTES = 4 * 1_048_576;
@@ -14,12 +15,6 @@ const MAX_ENVELOPE_BYTES = 4 * Math.ceil(MAX_IMAGE_BYTES / 3) + MAX_JSON_BYTES +
 
 function fields(value: Record<string, unknown>, allowed: readonly string[]): boolean {
   return Object.keys(value).every((key) => allowed.includes(key));
-}
-function exactKeys(left: object, right: object): boolean {
-  const keys = Object.keys(left);
-  return (
-    keys.length === Object.keys(right).length && keys.every((key) => Object.hasOwn(right, key))
-  );
 }
 function finite(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
@@ -144,36 +139,15 @@ export function validateDecisionBatchV2(batch: unknown): batch is DecisionBatchV
     ) {
       throw new DecisionContractError();
     }
-    if (q.type === "choice" || q.type === "tags") {
-      if (
-        !isPlainDecisionRecord(q.criteria) ||
-        Object.keys(q.criteria).length < (q.type === "choice" ? 2 : 1) ||
-        !Object.entries(q.criteria).every(
-          ([label, entry]) => label.length > 0 && decisionEntry(entry),
-        )
-      ) {
-        throw new DecisionContractError();
-      }
-    } else if (q.type === "score") {
-      if (!Array.isArray(q.criteria) || q.criteria.length < 2 || !q.criteria.every(decisionEntry)) {
-        throw new DecisionContractError();
-      }
-    } else if (q.type === "boolean") {
-      if (
-        q.criteria !== undefined &&
-        q.criteria !== null &&
-        (!isPlainDecisionRecord(q.criteria) ||
-          !Object.entries(q.criteria).every(
-            ([key, entry]) => (key === "true" || key === "false") && decisionEntry(entry),
-          ))
-      ) {
-        throw new DecisionContractError();
-      }
-    } else if (q.type === "box") {
+    if (q.type === "box") {
       if (state.type !== "image" || q.instructions == null) {
         throw new DecisionContractError();
       }
-    } else if (q.type !== "sort" || state.type !== "list") {
+    } else if (q.type === "sort") {
+      if (state.type !== "list") {
+        throw new DecisionContractError();
+      }
+    } else if (!validDecisionCriteria(q.type, q.criteria)) {
       throw new DecisionContractError();
     }
   }

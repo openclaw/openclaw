@@ -1705,19 +1705,18 @@ async function sendGatewayUserMessage(
   sessionKey: string,
   message: string,
 ): Promise<string> {
-  const result: { runId?: string; status?: string } = await client.request(
-    "chat.send",
-    {
-      sessionKey,
-      message,
-      idempotencyKey: `sqlite-send-${randomUUID()}`,
-    },
-    { timeoutMs: SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS },
-  );
-  if (result?.status !== "started" || typeof result.runId !== "string") {
-    throw new Error(`chat.send did not start correctly: ${JSON.stringify(result)}`);
-  }
-  return result.runId;
+  const idempotencyKey = `sqlite-send-${randomUUID()}`;
+  return waitForAssertion(async () => {
+    const result = await client.request<{ runId?: string; status?: string }>(
+      "chat.send",
+      { sessionKey, message, idempotencyKey },
+      { timeoutMs: SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS },
+    );
+    if (result?.status !== "started" || typeof result.runId !== "string") {
+      throw new Error(`chat.send did not start correctly: ${JSON.stringify(result)}`);
+    }
+    return result.runId;
+  });
 }
 
 async function waitForAgentRunOk(client: GatewayClient, runId: string): Promise<void> {
@@ -1841,7 +1840,7 @@ async function waitForHistoryRoleContains(
   await waitForAssertion(() => requireHistoryRoleContains(client, sessionKey, role, expected));
 }
 
-async function waitForAssertion(assertion: () => Promise<void>): Promise<void> {
+async function waitForAssertion<T>(assertion: () => Promise<T>): Promise<T> {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
     try {
@@ -1850,7 +1849,7 @@ async function waitForAssertion(assertion: () => Promise<void>): Promise<void> {
       await sleep(50);
     }
   }
-  await assertion();
+  return assertion();
 }
 
 async function pollUntil<T>(

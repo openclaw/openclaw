@@ -9,8 +9,14 @@ import {
 import { prepareCliHistoryBoundary } from "../agents/cli-runner/history-boundary.js";
 import { loadCliSessionPromptContext } from "../agents/cli-runner/session-history.js";
 import type { PreparedCliRunContext } from "../agents/cli-runner/types.js";
+import { createAgentCommandLifecycle } from "../agents/command/lifecycle.js";
+import {
+  buildRunEntryTerminal,
+  resolveRunEntryTerminalOutcome,
+} from "../agents/embedded-agent-runner/run-entry-terminal.js";
 import { resolveEmbeddedRunTerminal } from "../agents/embedded-agent-runner/run/terminal-resolution.js";
 import { makeTerminalInput } from "../agents/embedded-agent-runner/run/terminal-resolution.test-support.js";
+import type { EmbeddedAgentRunResult } from "../agents/embedded-agent-runner/types.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { buildEmbeddedRunnerAssistant } from "../agents/test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import {
@@ -36,7 +42,11 @@ import {
   withOwnedSessionTranscriptWrites,
 } from "../config/sessions/transcript-write-context.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
-import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
+import {
+  getAgentEventLifecycleGeneration,
+  onAgentEvent,
+  type AgentEventPayload,
+} from "../infra/agent-events.js";
 import {
   captureAgentRunTerminalPersistence,
   clearAgentRunTerminalWriteContext,
@@ -147,6 +157,43 @@ async function seed(
   ]);
 }
 
+function emitCommandResult(
+  result: EmbeddedAgentRunResult,
+  commandRunId: string,
+  onTerminalEvent: (event: Pick<AgentEventPayload, "stream" | "data">) => void,
+) {
+  const unsubscribe = onAgentEvent((terminalEvent) => {
+    if (terminalEvent.runId === commandRunId && terminalEvent.stream === "lifecycle") {
+      onTerminalEvent(terminalEvent);
+    }
+  });
+  try {
+    const terminal = buildRunEntryTerminal({
+      result,
+      outcome: resolveRunEntryTerminalOutcome({
+        result,
+        fallbackExhausted: true,
+      }),
+      behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
+      runId: commandRunId,
+      sessionId: target.sessionId,
+      requested: { provider: "test-provider", model: "test-model" },
+    });
+    const lifecycle = createAgentCommandLifecycle({
+      runId: commandRunId,
+      lifecycleGeneration: getAgentEventLifecycleGeneration,
+      startedAt: 1_000,
+      state: {
+        lifecycleFinishing: false,
+        lifecycleEnded: false,
+      },
+    });
+    lifecycle.emitResultError(result, true, terminal);
+  } finally {
+    unsubscribe();
+  }
+}
+
 async function reports() {
   return (await loadTranscriptEvents(target)).filter(
     (entry) => isRecord(entry) && entry.customType === "run-failed-before-reply",
@@ -154,126 +201,149 @@ async function reports() {
 }
 
 describe("durable pre-reply run failure", () => {
-  it("keeps an internal missing result failed without blaming the prior successful user request", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      setRuntimeConfigSnapshot({});
-      await seed("success");
-      const previous = await loadTranscriptEvents(target);
-      for (const entry of previous) {
-        if (isRecord(entry) && isRecord(entry.message) && entry.message.role === "assistant") {
-          entry.message["__openclaw"] = { runId: "successful-user-run" };
+  it.each(["embedded", "command-rpc"] as const)(
+    "keeps an internal missing result failed without blaming the prior successful user request through %s",
+    async (route) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
+        await seed("success");
+        const previous = await loadTranscriptEvents(target);
+        for (const entry of previous) {
+          if (isRecord(entry) && isRecord(entry.message) && entry.message.role === "assistant") {
+            entry.message["__openclaw"] = { runId: "successful-user-run" };
+          }
         }
-      }
-      await replaceTranscriptEvents(target, previous);
-      const input = makeTerminalInput({
-        runParams: {
-          ...target,
-          runId,
-          messageChannel: "internal",
-          inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
-        },
-      });
-      expect(await resolveEmbeddedRunTerminal(input)).toEqual({ action: "retry" });
-      const resolved = await resolveEmbeddedRunTerminal(input);
-      assert(resolved.action === "complete");
-      expect(resolved.result.payloads ?? []).toEqual([]);
-      expect(resolved.result.meta).toMatchObject({
-        stopReason: "error",
-        terminalReplyExpectation: "result-required",
-        error: { kind: "incomplete_turn" },
-      });
-      let persistence: Promise<void> | undefined;
-      const h = createAgentEventTestHarness({
-        lifecycleErrorRetryGraceMs: 0,
-        persistGatewaySessionLifecycleEventForEvent: (params) =>
-          persistGatewaySessionLifecycleEvent({ ...params, ...target }),
-        trackTrackedRunTerminalPersistence: (params) => {
-          persistence = params.persistence;
-        },
-      });
-      onTestFinished(() => h.handler.dispose());
-      h.register(runId, target.sessionKey, runId, { agentId: target.agentId });
-      const deliveries: Promise<void>[] = [];
-      const terminal = createAgentLifecycleTerminalBackstop({
-        runId,
-        sessionKey: target.sessionKey,
-        startedAt: 1_000,
-        getLifecycleGeneration: () => "internal-result-generation",
-        resolveTerminationFields: () => ({}),
-        onTerminalEvent: (terminalEvent) => {
-          expect(
-            classifyAgentRunTerminalOutcome(
-              buildAgentRunTerminalOutcomeFromLifecycleEvent({
-                phase: "error",
-                data: terminalEvent.data,
-              }),
-            ),
-          ).toBe("failure");
-          deliveries.push(
-            Promise.resolve(
-              h.emit(runId, terminalEvent.stream, terminalEvent.data, {
-                ...target,
-                seq: 2,
-                ts: 2_000,
-              }),
-            ),
+        await replaceTranscriptEvents(target, previous);
+        const attemptRunIds = route === "command-rpc" ? [runId, `${runId}:retry-1`] : [runId];
+        for (const [index, attemptRunId] of attemptRunIds.entries()) {
+          await patchSessionEntryCore(target, () => ({
+            lifecycleRunId: attemptRunId,
+            activeWriterRunId: attemptRunId,
+          }));
+          const input = makeTerminalInput({
+            runParams: {
+              ...target,
+              runId: attemptRunId,
+              messageChannel: "internal",
+              inputProvenance: {
+                kind: "inter_session",
+                sourceTool: "subagent_settle",
+                sourceChannel: "internal",
+              },
+            },
+          });
+          expect(await resolveEmbeddedRunTerminal(input)).toEqual({ action: "retry" });
+          const resolved = await resolveEmbeddedRunTerminal(input);
+          assert(resolved.action === "complete");
+          expect(resolved.result.payloads ?? []).toEqual([]);
+          expect(resolved.result.meta).toMatchObject({
+            stopReason: "error",
+            terminalReplyExpectation: "result-required",
+            error: { kind: "incomplete_turn" },
+          });
+          let persistence: Promise<void> | undefined;
+          const h = createAgentEventTestHarness({
+            lifecycleErrorRetryGraceMs: 0,
+            persistGatewaySessionLifecycleEventForEvent: (params) =>
+              persistGatewaySessionLifecycleEvent({ ...params, ...target }),
+            trackTrackedRunTerminalPersistence: (params) => {
+              persistence = params.persistence;
+            },
+          });
+          onTestFinished(() => h.handler.dispose());
+          h.register(attemptRunId, target.sessionKey, attemptRunId, { agentId: target.agentId });
+          const deliveries: Promise<void>[] = [];
+          const onTerminalEvent = (terminalEvent: Pick<AgentEventPayload, "stream" | "data">) => {
+            expect(
+              classifyAgentRunTerminalOutcome(
+                buildAgentRunTerminalOutcomeFromLifecycleEvent({
+                  phase: "error",
+                  data: terminalEvent.data,
+                }),
+              ),
+            ).toBe("failure");
+            deliveries.push(
+              Promise.resolve(
+                h.emit(attemptRunId, terminalEvent.stream, terminalEvent.data, {
+                  ...target,
+                  seq: 2,
+                  ts: 2_000,
+                }),
+              ),
+            );
+          };
+          if (route === "command-rpc") {
+            emitCommandResult(resolved.result, attemptRunId, onTerminalEvent);
+          } else {
+            const terminal = createAgentLifecycleTerminalBackstop({
+              runId: attemptRunId,
+              sessionKey: target.sessionKey,
+              startedAt: 1_000,
+              getLifecycleGeneration: () => "internal-result-generation",
+              resolveTerminationFields: () => ({}),
+              onTerminalEvent,
+            });
+            terminal.emit(
+              "error",
+              new Error(resolved.result.meta.error?.message),
+              resolveAgentLifecycleTerminalMetadata(resolved.result.meta),
+            );
+          }
+          await Promise.all(deliveries);
+          await persistence;
+          expect(h.chat().map(([, payload]) => payload)).toMatchObject([
+            { state: "error", suppressErrorNotice: true },
+          ]);
+          expect(await reports()).toMatchObject(
+            attemptRunIds
+              .slice(0, index + 1)
+              .map((id) => ({ display: false, details: { runId: id } })),
           );
-        },
-      });
-      terminal.emit(
-        "error",
-        new Error(resolved.result.meta.error?.message),
-        resolveAgentLifecycleTerminalMetadata(resolved.result.meta),
-      );
-      await Promise.all(deliveries);
-      await persistence;
-      expect(h.chat().map(([, payload]) => payload)).toMatchObject([
-        { state: "error", suppressErrorNotice: true },
-      ]);
-      expect(await reports()).toMatchObject([{ display: false, details: { runId } }]);
-      const history = projectChatDisplayMessages(
-        await readSessionMessagesAsync(target, { mode: "recent", maxMessages: 10 }),
-      );
-      expect(JSON.stringify(history)).not.toContain("No answer was returned");
-      expect(JSON.stringify(history)).toContain("Running it now.");
-      expect(loadSessionEntry(target)).toMatchObject({
-        status: "failed",
-        lastRunId: runId,
-        suppressErrorNotice: true,
-      });
-      const stored = loadSessionEntry(target);
-      assert(stored);
-      expect(
-        buildGatewaySessionSnapshot({
-          sessionRow: {
-            key: target.sessionKey,
-            kind: "direct",
-            sessionId: stored.sessionId,
-            updatedAt: stored.updatedAt,
-            status: stored.status,
-            lastRunId: stored.lastRunId,
-            lastRunError: stored.lastRunError,
-            suppressErrorNotice: stored.suppressErrorNotice,
+          const history = projectChatDisplayMessages(
+            await readSessionMessagesAsync(target, { mode: "recent", maxMessages: 10 }),
+          );
+          expect(JSON.stringify(history)).not.toContain("No answer was returned");
+          expect(JSON.stringify(history)).toContain("Running it now.");
+          expect(loadSessionEntry(target)).toMatchObject({
+            status: "failed",
+            lastRunId: attemptRunId,
+            suppressErrorNotice: true,
+          });
+          const stored = loadSessionEntry(target);
+          assert(stored);
+          expect(
+            buildGatewaySessionSnapshot({
+              sessionRow: {
+                key: target.sessionKey,
+                kind: "direct",
+                sessionId: stored.sessionId,
+                updatedAt: stored.updatedAt,
+                status: stored.status,
+                lastRunId: stored.lastRunId,
+                lastRunError: stored.lastRunError,
+                suppressErrorNotice: stored.suppressErrorNotice,
+              },
+            }),
+          ).toMatchObject({
+            status: "failed",
+            suppressErrorNotice: true,
+            session: { status: "failed", suppressErrorNotice: true },
+          });
+        }
+        expect((await loadTranscriptEvents(target)).slice(0, previous.length)).toEqual(previous);
+        await persistGatewaySessionLifecycleEvent({
+          ...target,
+          event: {
+            ...event,
+            runId: "next-user-run",
+            ts: 3_000,
+            data: { phase: "start", startedAt: 3_000 },
           },
-          includeSession: true,
-        }),
-      ).toMatchObject({
-        status: "failed",
-        suppressErrorNotice: true,
-        session: { status: "failed", suppressErrorNotice: true },
+        });
+        expect(loadSessionEntry(target)?.suppressErrorNotice).toBe(false);
       });
-      await persistGatewaySessionLifecycleEvent({
-        ...target,
-        event: {
-          ...event,
-          runId: "next-user-run",
-          ts: 3_000,
-          data: { phase: "start", startedAt: 3_000 },
-        },
-      });
-      expect(loadSessionEntry(target)?.suppressErrorNotice).toBe(false);
-    });
-  });
+    },
+  );
 
   it("publishes and persists one incomplete-turn notice after the model stops without an answer", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -315,40 +385,24 @@ describe("durable pre-reply run failure", () => {
         agentId: target.agentId,
       });
       const deliveries: Promise<void>[] = [];
-      const terminal = createAgentLifecycleTerminalBackstop({
-        runId,
-        sessionKey: target.sessionKey,
-        startedAt: 1_000,
-        getLifecycleGeneration: () => "incomplete-turn-generation",
-        resolveTerminationFields: () => ({}),
-        onTerminalEvent: (terminalEvent) => {
-          deliveries.push(
-            Promise.resolve(
-              h.emit(runId, terminalEvent.stream, terminalEvent.data, {
-                ...target,
-                seq: 2,
-                ts: 2_000,
-              }),
-            ),
-          );
-        },
+      emitCommandResult(result, runId, (terminalEvent) => {
+        deliveries.push(
+          Promise.resolve(
+            h.emit(runId, terminalEvent.stream, terminalEvent.data, {
+              ...target,
+              seq: 2,
+              ts: 2_000,
+            }),
+          ),
+        );
       });
-      terminal.note({
-        stream: "lifecycle",
-        data: { phase: "finishing", stopReason: "stop", aborted: false },
-      });
-      terminal.emit(
-        "error",
-        new Error(result.meta.error?.message),
-        resolveAgentLifecycleTerminalMetadata(result.meta),
-      );
-      terminal.emit("error", new Error("Duplicate terminal"));
       await Promise.all(deliveries);
       await persistence;
 
       expect(h.chat().map(([, payload]) => payload)).toEqual([
         expect.objectContaining({ runId, state: "error", errorMessage: notice }),
       ]);
+      expect(h.chat()[0]?.[1]).not.toHaveProperty("suppressErrorNotice");
       expect(await reports()).toMatchObject([
         {
           content: `Your request couldn't be completed: ${notice}`,
@@ -444,7 +498,6 @@ describe("durable pre-reply run failure", () => {
                 lifecycleRunId: runId,
                 activeRunState: { active: true, runIds: [runId] },
                 event: queuedEvent,
-                includeSession: true,
                 lifecycle: true,
               }),
             ).toMatchObject({

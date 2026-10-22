@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import type { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 export function defineGatewayModuleBoundaryTests(
@@ -43,7 +43,12 @@ export function defineGatewayModuleBoundaryTests(
             await expect.poll(() => blockedSidebarRequests).toBeGreaterThan(0);
             expect(await page.locator(".sidebar-identity-card").isVisible()).toBe(false);
 
+            await page.clock.install();
+            await pauseVirtualClock(page);
+            const connectedSocketCount = await gateway.getSocketCount();
             await gateway.setOnline(false);
+            await page.clock.runFor(2_001);
+            await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(connectedSocketCount);
             const connectionStatus = page.locator(
               width === 390
                 ? ".mobile-connection-status .gateway-status:visible"
@@ -53,10 +58,9 @@ export function defineGatewayModuleBoundaryTests(
               .locator(".gateway-status__label")
               .getByText("Reconnecting…", { exact: true })
               .waitFor({ state: "visible" });
-            const socketCount = await gateway.getSocketCount();
-            await connectionStatus.getByRole("button", { name: /Retry now/ }).click();
-            await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
+            expect(await connectionStatus.getByRole("button").count()).toBe(0);
             await gateway.setOnline(true);
+            await page.clock.resume();
             await waitForControlUiGatewayReady(page);
             await connectionStatus.waitFor({ state: "detached" });
           },

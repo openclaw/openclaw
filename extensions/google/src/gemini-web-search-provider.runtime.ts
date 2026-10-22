@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import {
   createProviderHttpError,
   formatProviderHttpErrorMessage,
@@ -88,94 +88,10 @@ function toGeminiTimeRangeTimestamp(date: Date): string {
   return date.toISOString().replace(/\.\d+Z$/, "Z");
 }
 
-function isoDateStart(value: string): string {
-  return `${value}T00:00:00Z`;
-}
-
 function isoDateExclusiveEnd(value: string): string {
   const end = new Date(`${value}T00:00:00Z`);
   end.setUTCDate(end.getUTCDate() + 1);
   return toGeminiTimeRangeTimestamp(end);
-}
-
-function freshnessStartTime(freshness: GeminiFreshness, now: Date): string {
-  const start = new Date(now);
-  start.setUTCDate(start.getUTCDate() - GEMINI_FRESHNESS_DAYS[freshness]);
-  return toGeminiTimeRangeTimestamp(start);
-}
-
-function queryWithSoftFreshness(query: string, freshness?: GeminiFreshness): string {
-  if (freshness !== "day") {
-    return query;
-  }
-  return `${query}\n\nSearch recency instruction: ${GEMINI_DAY_FRESHNESS_HINT} If no matching recent sources are available, state that limitation and use the most relevant available sources.`;
-}
-
-function resolveGeminiTimeRangeFilter(args: Record<string, unknown>):
-  | {
-      timeRangeFilter?: GeminiTimeRangeFilter;
-      freshness?: GeminiFreshness;
-      dateAfter?: string;
-      dateBefore?: string;
-    }
-  | {
-      error:
-        | "invalid_freshness"
-        | "invalid_date"
-        | "invalid_date_range"
-        | "conflicting_time_filters";
-      message: string;
-      docs: string;
-    } {
-  const now = new Date();
-  const rawFreshness = readStringParam(args, "freshness");
-  const rawDateAfter = readStringParam(args, "date_after");
-  const rawDateBefore = readStringParam(args, "date_before");
-  const parsedTimeFilters = parseWebSearchTimeFilters({
-    rawDateAfter,
-    rawDateBefore,
-    rawFreshness,
-    freshnessProvider: "perplexity",
-    invalidFreshnessMessage:
-      "freshness must be day, week, month, year, or the shortcuts pd, pw, pm, py.",
-    invalidDateAfterMessage: "date_after must be YYYY-MM-DD format.",
-    invalidDateBeforeMessage: "date_before must be YYYY-MM-DD format.",
-    invalidDateRangeMessage: "date_after must be before date_before.",
-  });
-  if ("error" in parsedTimeFilters) {
-    return parsedTimeFilters;
-  }
-
-  const { freshness, dateAfter, dateBefore } = parsedTimeFilters;
-  if (freshness) {
-    // Gemini rejects 24-hour google_search.timeRangeFilter windows, while
-    // wider freshness windows still preserve the hard grounding contract.
-    if (freshness === "day") {
-      return {
-        freshness,
-      };
-    }
-    return {
-      freshness,
-      timeRangeFilter: {
-        startTime: freshnessStartTime(freshness, now),
-        endTime: toGeminiTimeRangeTimestamp(now),
-      },
-    };
-  }
-
-  if (!dateAfter && !dateBefore) {
-    return {};
-  }
-
-  return {
-    dateAfter,
-    dateBefore,
-    timeRangeFilter: {
-      startTime: dateAfter ? isoDateStart(dateAfter) : "1970-01-01T00:00:00Z",
-      endTime: dateBefore ? isoDateExclusiveEnd(dateBefore) : toGeminiTimeRangeTimestamp(now),
-    },
-  };
 }
 
 function resolveGeminiRuntimeApiKey(gemini?: GeminiConfig): string | undefined {
@@ -224,60 +140,134 @@ function resolveGeminiWebSearchHeaders(gemini?: GeminiConfig): Record<string, st
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
-function buildGeminiRequestHeaders(params: {
-  apiKey: string;
-  baseUrl: string;
-  operatorHeaders?: Record<string, string>;
-}): HeadersInit {
+export async function executeGeminiSearch(
+  args: Record<string, unknown>,
+  searchConfig?: SearchConfigRecord,
+  context?: { signal?: AbortSignal },
+): Promise<Record<string, unknown>> {
+  context?.signal?.throwIfAborted();
+  const unsupportedResponse = buildUnsupportedSearchFilterResponse(
+    {
+      country: args.country,
+      language: args.language,
+    },
+    "gemini",
+  );
+  if (unsupportedResponse) {
+    return unsupportedResponse;
+  }
+
+  const now = new Date();
+  const rawFreshness = readStringParam(args, "freshness");
+  const rawDateAfter = readStringParam(args, "date_after");
+  const rawDateBefore = readStringParam(args, "date_before");
+  const parsedTimeFilters = parseWebSearchTimeFilters({
+    rawDateAfter,
+    rawDateBefore,
+    rawFreshness,
+    freshnessProvider: "perplexity",
+    invalidFreshnessMessage:
+      "freshness must be day, week, month, year, or the shortcuts pd, pw, pm, py.",
+    invalidDateAfterMessage: "date_after must be YYYY-MM-DD format.",
+    invalidDateBeforeMessage: "date_before must be YYYY-MM-DD format.",
+    invalidDateRangeMessage: "date_after must be before date_before.",
+  });
+  if ("error" in parsedTimeFilters) {
+    return parsedTimeFilters;
+  }
+
+  const { freshness, dateAfter, dateBefore } = parsedTimeFilters;
+  let timeRangeFilter: GeminiTimeRangeFilter | undefined;
+  // Gemini rejects 24-hour google_search.timeRangeFilter windows, while
+  // wider freshness windows still preserve the hard grounding contract.
+  if (freshness && freshness !== "day") {
+    const freshnessStart = new Date(now);
+    freshnessStart.setUTCDate(freshnessStart.getUTCDate() - GEMINI_FRESHNESS_DAYS[freshness]);
+    timeRangeFilter = {
+      startTime: toGeminiTimeRangeTimestamp(freshnessStart),
+      endTime: toGeminiTimeRangeTimestamp(now),
+    };
+  } else if (!freshness && (dateAfter || dateBefore)) {
+    timeRangeFilter = {
+      startTime: dateAfter ? `${dateAfter}T00:00:00Z` : "1970-01-01T00:00:00Z",
+      endTime: dateBefore ? isoDateExclusiveEnd(dateBefore) : toGeminiTimeRangeTimestamp(now),
+    };
+  }
+
+  const geminiConfig = resolveGeminiConfig(searchConfig);
+  const apiKey = resolveGeminiRuntimeApiKey(geminiConfig);
+  if (!apiKey) {
+    return {
+      error: "missing_gemini_api_key",
+      message:
+        "web_search (gemini) needs an API key. Set GEMINI_API_KEY in the Gateway environment, configure plugins.entries.google.config.webSearch.apiKey, or reuse models.providers.google.apiKey. If you do not want to configure a search API key, use web_fetch for a specific URL or the browser tool for interactive pages.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
+  }
+
+  const query = readStringParam(args, "query", { required: true });
+  void readPositiveIntegerParam(args, "count", {
+    max: MAX_SEARCH_COUNT,
+    message: `count must be an integer from 1 to ${MAX_SEARCH_COUNT}.`,
+  });
+  const model = resolveGeminiModel(geminiConfig);
+  const baseUrl = resolveGeminiBaseUrl(geminiConfig);
+  const operatorHeaders = resolveGeminiWebSearchHeaders(geminiConfig);
+  const headersCacheKey = sha256Hex(JSON.stringify([apiKey, operatorHeaders]));
+  const cacheKey = buildSearchCacheKey([
+    "gemini",
+    query,
+    baseUrl,
+    model,
+    freshness,
+    dateAfter,
+    dateBefore,
+    headersCacheKey,
+  ]);
+  const cacheTtlMs = resolveSearchCacheTtlMs(searchConfig);
+  const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
+  if (cached) {
+    return cached;
+  }
+
+  const start = Date.now();
+  const searchQuery =
+    freshness === "day"
+      ? `${query}\n\nSearch recency instruction: ${GEMINI_DAY_FRESHNESS_HINT} If no matching recent sources are available, state that limitation and use the most relevant available sources.`
+      : query;
+  const timeoutSeconds = resolveSearchTimeoutSeconds(searchConfig);
+  const signal = context?.signal;
+  const endpoint = `${baseUrl}/models/${model}:generateContent`;
+  const googleSearch = timeRangeFilter === undefined ? {} : { timeRangeFilter };
   const providerHeaders = {
     "Content-Type": "application/json",
-    "x-goog-api-key": params.apiKey,
+    "x-goog-api-key": apiKey,
     ...resolveGoogleApiClientHeaders({
-      baseUrl: params.baseUrl,
+      baseUrl,
       api: "google-generative-ai",
       capability: "other",
       transport: "http",
     }),
   };
-  if (!params.operatorHeaders) {
-    return providerHeaders;
+  let requestHeaders: HeadersInit = providerHeaders;
+  if (operatorHeaders) {
+    const mergedHeaders = new Headers(operatorHeaders);
+    for (const [name, value] of Object.entries(providerHeaders)) {
+      mergedHeaders.set(name, value);
+    }
+    requestHeaders = mergedHeaders;
   }
-  const headers = new Headers(params.operatorHeaders);
-  for (const [name, value] of Object.entries(providerHeaders)) {
-    headers.set(name, value);
-  }
-  return headers;
-}
 
-async function runGeminiSearch(params: {
-  query: string;
-  apiKey: string;
-  baseUrl: string;
-  model: string;
-  timeoutSeconds: number;
-  signal?: AbortSignal;
-  timeRangeFilter?: GeminiTimeRangeFilter;
-  headers?: Record<string, string>;
-}): Promise<{ content: string; citations: Array<{ url: string; title?: string }> }> {
-  const endpoint = `${params.baseUrl}/models/${params.model}:generateContent`;
-  const googleSearch =
-    params.timeRangeFilter === undefined ? {} : { timeRangeFilter: params.timeRangeFilter };
-  const headers = buildGeminiRequestHeaders({
-    apiKey: params.apiKey,
-    baseUrl: params.baseUrl,
-    operatorHeaders: params.headers,
-  });
-
-  return withTrustedWebSearchEndpoint(
+  const result = await withTrustedWebSearchEndpoint(
     {
       url: endpoint,
-      timeoutSeconds: params.timeoutSeconds,
-      signal: params.signal,
+      timeoutSeconds,
+      signal,
       init: {
         method: "POST",
-        headers,
+        headers: requestHeaders,
         body: JSON.stringify({
-          contents: [{ parts: [{ text: params.query }] }],
+          contents: [{ parts: [{ text: searchQuery }] }],
           tools: [{ google_search: googleSearch }],
         }),
       },
@@ -285,8 +275,8 @@ async function runGeminiSearch(params: {
     async (res) => {
       if (!res.ok) {
         const error = await createProviderHttpError(res, "Gemini API error", {
-          signal: params.signal,
-          requestHeaders: headers,
+          signal,
+          requestHeaders,
         });
         error.message = error.message.replace(/key=[^&\s]+/giu, "key=***");
         throw error;
@@ -307,7 +297,7 @@ async function runGeminiSearch(params: {
           formatProviderHttpErrorMessage({
             label: "Gemini API error",
             status,
-            detail: redactProviderResponseErrorText(rawMessage, headers).replace(
+            detail: redactProviderResponseErrorText(rawMessage, requestHeaders).replace(
               /key=[^&\s]+/giu,
               "key=***",
             ),
@@ -388,85 +378,6 @@ async function runGeminiSearch(params: {
       return { content, citations };
     },
   );
-}
-
-export async function executeGeminiSearch(
-  args: Record<string, unknown>,
-  searchConfig?: SearchConfigRecord,
-  context?: { signal?: AbortSignal },
-): Promise<Record<string, unknown>> {
-  context?.signal?.throwIfAborted();
-  const unsupportedResponse = buildUnsupportedSearchFilterResponse(
-    {
-      country: args.country,
-      language: args.language,
-    },
-    "gemini",
-  );
-  if (unsupportedResponse) {
-    return unsupportedResponse;
-  }
-
-  const timeRange = resolveGeminiTimeRangeFilter(args);
-  if ("error" in timeRange) {
-    return timeRange;
-  }
-
-  const geminiConfig = resolveGeminiConfig(searchConfig);
-  const apiKey = resolveGeminiRuntimeApiKey(geminiConfig);
-  if (!apiKey) {
-    return {
-      error: "missing_gemini_api_key",
-      message:
-        "web_search (gemini) needs an API key. Set GEMINI_API_KEY in the Gateway environment, configure plugins.entries.google.config.webSearch.apiKey, or reuse models.providers.google.apiKey. If you do not want to configure a search API key, use web_fetch for a specific URL or the browser tool for interactive pages.",
-      docs: "https://docs.openclaw.ai/tools/web",
-    };
-  }
-
-  const query = readStringParam(args, "query", { required: true });
-  void readPositiveIntegerParam(args, "count", {
-    max: MAX_SEARCH_COUNT,
-    message: `count must be an integer from 1 to ${MAX_SEARCH_COUNT}.`,
-  });
-  const model = resolveGeminiModel(geminiConfig);
-  const baseUrl = resolveGeminiBaseUrl(geminiConfig);
-  const headers = resolveGeminiWebSearchHeaders(geminiConfig);
-  const headersCacheKey = headers
-    ? createHash("sha256")
-        .update(
-          JSON.stringify(
-            Object.entries(headers).toSorted(([left], [right]) => left.localeCompare(right)),
-          ),
-        )
-        .digest("hex")
-    : undefined;
-  const cacheKey = buildSearchCacheKey([
-    "gemini",
-    query,
-    baseUrl,
-    model,
-    timeRange.freshness,
-    timeRange.dateAfter,
-    timeRange.dateBefore,
-    headersCacheKey,
-  ]);
-  const cacheTtlMs = resolveSearchCacheTtlMs(searchConfig);
-  const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
-  if (cached) {
-    return cached;
-  }
-
-  const start = Date.now();
-  const result = await runGeminiSearch({
-    query: queryWithSoftFreshness(query, timeRange.freshness),
-    apiKey,
-    baseUrl,
-    model,
-    timeoutSeconds: resolveSearchTimeoutSeconds(searchConfig),
-    signal: context?.signal,
-    timeRangeFilter: timeRange.timeRangeFilter,
-    headers,
-  });
   context?.signal?.throwIfAborted();
   const payload = {
     query,

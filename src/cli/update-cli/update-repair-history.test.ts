@@ -19,7 +19,7 @@ import {
 import { isAcknowledgedAbandonedUpdateRun } from "../../infra/update-run-record.js";
 import { ABANDONED_UPDATE_RUN_MS } from "../../infra/update-run-timeouts.js";
 import { defaultRuntime } from "../../runtime.js";
-import { resolveOpenClawStateSqliteDir } from "../../state/openclaw-state-db.paths.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { updateRepairCommand } from "./update-repair-command.js";
 
@@ -140,7 +140,10 @@ it.each([
   },
   {
     phase: "retained recovery",
-    setup: () => fs.mkdir(path.join(resolveOpenClawStateSqliteDir(), ".openclaw-restore-retained")),
+    setup: () =>
+      fs.mkdir(
+        path.join(path.dirname(resolveOpenClawStateSqlitePath()), ".openclaw-restore-retained"),
+      ),
   },
 ])("preserves history when repair fails in $phase", async ({ phase, setup }) => {
   const [old, recent] = seedPair();

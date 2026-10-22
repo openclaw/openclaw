@@ -1,290 +1,230 @@
 /* @vitest-environment jsdom */
 
-import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { makeChatHost } from "../chat-host.test-support.ts";
 import { stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { lockChatScroll } from "../scroll.ts";
 import { mountTestTranscript } from "../test-helpers/chat-transcript-native.tsx";
 import { createChatTranscript } from "./chat-transcript-controller.ts";
 import {
+  contentRows,
+  emitTranscriptResize,
+  setTranscriptViewport,
+} from "./chat-transcript-fixture.test-support.tsx";
+import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
   resetTranscriptTestDom,
-  resizeObservers,
+  requireElement,
   transcriptDomState,
   transcriptSize,
-  type TestContentRow,
 } from "./chat-transcript.test-support.ts";
 
-describe("transcript follow continuity", () => {
-  beforeEach(installTranscriptDomMocks);
-  afterEach(resetTranscriptTestDom);
+function scrollReader(container: HTMLElement, top: number) {
+  container.scrollTop = top;
+  container.dispatchEvent(new Event("scroll"));
+}
 
-  it("remeasures skipped rows when automatic follow replaces smooth scrolling", async () => {
+function mockScroll(container: HTMLElement, notify = false) {
+  return (container.scrollTo = vi.fn((options?: ScrollToOptions | number) => {
+    if (typeof options === "object" && options.top !== undefined) {
+      const previous = container.scrollTop;
+      container.scrollTop = options.top;
+      if (notify && previous !== container.scrollTop) {
+        container.dispatchEvent(new Event("scroll"));
+      }
+    }
+  }));
+}
+
+const mounted: ReturnType<typeof createChatTranscript>[] = [];
+async function mountFollow(
+  id: string,
+  count = 40,
+  options?: Parameters<typeof createChatTranscript>[1],
+  ownerId = id,
+) {
+  const rows = contentRows(count);
+  const transcript = createChatTranscript(() => ownerId, options);
+  const fixture = await mountTestTranscript(id, rows, transcript);
+  mounted.push(fixture.transcript);
+  return { ...fixture, rows };
+}
+beforeEach(installTranscriptDomMocks);
+afterEach(() => {
+  mounted.splice(0).forEach((transcript) => transcript.dispose());
+  vi.useRealTimers();
+  resetTranscriptTestDom();
+});
+
+it("remeasures skipped rows when automatic follow replaces smooth scrolling", async () => {
+  const flushFrames = stubAnimationFrames();
+  transcriptDomState.measuredRowHeight = 120;
+  const { container, transcript, renderRows, rows } = await mountFollow("follow-remeasure");
+  setTranscriptViewport(container, 4800);
+  scrollReader(container, 2400);
+  renderRows(rows);
+  await flushDeferredRowPrune();
+  renderRows(rows);
+  const row = requireElement(container, ".chat-virtual-row");
+  const before = transcriptSize(container);
+  container.scrollTo = vi.fn();
+  transcript.scrollToEnd({ source: "auto", behavior: "smooth" });
+  row.style.height = "180px";
+  // TanStack suppresses ResizeObserver deliveries outside the smooth target's buffer.
+  emitTranscriptResize(row, 800, 180);
+  renderRows(rows);
+  expect(transcriptSize(container)).toBe(before);
+
+  transcript.scrollToEnd({ source: "auto", behavior: "auto" });
+  flushFrames();
+  renderRows(rows);
+  expect(transcriptSize(container)).toBe(before + 60);
+});
+
+it.each(["none", "wheel", "programmatic"] as const)(
+  "keeps measured growth after a no-op smooth follow, reader departure=%s",
+  async (departure) => {
     const flushFrames = stubAnimationFrames();
     transcriptDomState.measuredRowHeight = 120;
-    const rows: TestContentRow[] = Array.from({ length: 40 }, (_, index) => ({
-      kind: "content",
-      key: "row:" + index,
-      content: <div>row {index}</div>,
-    }));
-    const { container, transcript, renderRows } = await mountTestTranscript(
-      "follow-remeasure",
-      rows,
-    );
-    Object.defineProperties(container, {
-      clientHeight: { configurable: true, value: 600 },
-      scrollHeight: { configurable: true, value: 4800 },
-    });
-    container.scrollTop = 2400;
-    container.dispatchEvent(new Event("scroll"));
-    renderRows(rows);
-    await flushDeferredRowPrune();
-    renderRows(rows);
-    const row = expectDefined(
-      container.querySelector<HTMLElement>(".chat-virtual-row"),
-      "overscan row outside the smooth target buffer",
-    );
-    const before = transcriptSize(container);
-    container.scrollTo = vi.fn();
-    try {
-      transcript.scrollToEnd({ source: "auto", behavior: "smooth" });
-      row.style.height = "180px";
-      // TanStack suppresses ResizeObserver deliveries outside the smooth target's buffer.
-      for (const observer of resizeObservers) {
-        observer.emitTarget(row, 800, 180);
-      }
-      renderRows(rows);
-      expect(transcriptSize(container)).toBe(before);
-
-      transcript.scrollToEnd({ source: "auto", behavior: "auto" });
-      flushFrames();
-      renderRows(rows);
-      expect(transcriptSize(container)).toBe(before + 60);
-    } finally {
-      transcript.dispose();
-    }
-  });
-
-  it.each(["none", "wheel", "programmatic"] as const)(
-    "keeps measured growth after a no-op smooth follow, reader departure=%s",
-    async (departure) => {
-      const flushFrames = stubAnimationFrames();
-      transcriptDomState.measuredRowHeight = 120;
-      let followEnabled = true;
-      const transcript = createChatTranscript(() => "smooth-no-op", {
+    let followEnabled = true;
+    const { container, transcript, session, renderRows, rows } = await mountFollow(
+      "smooth-no-op",
+      40,
+      {
         canFollowEnd: () => followEnabled,
         onReaderScroll: () => {
           followEnabled = false;
         },
-      });
-      const rows: TestContentRow[] = Array.from({ length: 40 }, (_, index) => ({
-        kind: "content",
-        key: "row:" + index,
-        content: <div>row {index}</div>,
-      }));
-      const { container, session, renderRows } = await mountTestTranscript(
-        "smooth-no-op",
-        rows,
-        transcript,
-      );
-      let scrollHeight = 4800;
-      Object.defineProperties(container, {
-        clientHeight: { configurable: true, value: 600 },
-        scrollHeight: { configurable: true, get: () => scrollHeight },
-      });
-      const scrollTo = vi.fn((options?: ScrollToOptions | number) => {
-        if (typeof options === "object" && options.top !== undefined) {
-          const previous = container.scrollTop;
-          container.scrollTop = options.top;
-          if (previous !== container.scrollTop) {
-            container.dispatchEvent(new Event("scroll"));
-          }
-        }
-      });
-      container.scrollTo = scrollTo;
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      try {
-        session.setContentReady(true);
-        container.scrollTop = 4200;
-        container.dispatchEvent(new Event("scroll"));
-        renderRows(rows);
-        await vi.advanceTimersByTimeAsync(150);
-        flushFrames();
-        renderRows(rows);
-        flushFrames();
-        scrollTo.mockClear();
+      },
+    );
+    let scrollHeight = 4800;
+    setTranscriptViewport(container, () => scrollHeight);
+    const scrollTo = mockScroll(container, true);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    session.setContentReady(true);
+    scrollReader(container, 4200);
+    renderRows(rows);
+    await vi.advanceTimersByTimeAsync(150);
+    flushFrames();
+    renderRows(rows);
+    flushFrames();
+    scrollTo.mockClear();
 
-        // The old maximum is still current. Retire the no-op native target
-        // immediately, without depending on a native offset/idle handoff.
-        transcript.scrollToEnd({ source: "auto", behavior: "smooth" });
-        flushFrames();
-        expect(scrollTo.mock.calls).toEqual([
-          [{ top: 4200, behavior: "smooth" }],
-          [{ top: 4200, behavior: "instant" }],
-        ]);
-        if (departure === "wheel") {
-          container.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
-        }
-        if (departure !== "none") {
-          container.scrollTop -= 100;
-          container.dispatchEvent(new Event("scroll"));
-        }
-        const readerOffset = container.scrollTop;
-        const lastRow = expectDefined(
-          container.querySelector<HTMLElement>('[data-virtual-row-key="row:39"]'),
-          "measured final row",
-        );
-        lastRow.style.height = "155px";
-        for (const observer of resizeObservers) {
-          observer.emitTarget(lastRow, 800, 155);
-        }
-        scrollHeight += 35;
-        renderRows(rows);
-        flushFrames();
-        expect(container.scrollTop).toBe(departure === "none" ? 4235 : readerOffset);
-        expect(followEnabled).toBe(departure !== "wheel");
-      } finally {
-        transcript.dispose();
-        vi.useRealTimers();
-      }
-    },
-  );
+    transcript.scrollToEnd({ source: "auto", behavior: "smooth" });
+    flushFrames();
+    expect(scrollTo.mock.calls).toEqual([
+      [{ top: 4200, behavior: "smooth" }],
+      [{ top: 4200, behavior: "instant" }],
+    ]);
+    if (departure === "wheel") {
+      container.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
+    }
+    if (departure !== "none") {
+      scrollReader(container, container.scrollTop - 100);
+    }
+    const readerOffset = container.scrollTop;
+    const lastRow = requireElement(container, '[data-virtual-row-key="row:39"]');
+    lastRow.style.height = "155px";
+    emitTranscriptResize(lastRow, 800, 155);
+    scrollHeight += 35;
+    renderRows(rows);
+    flushFrames();
+    expect(container.scrollTop).toBe(departure === "none" ? 4235 : readerOffset);
+    expect(followEnabled).toBe(departure !== "wheel");
+  },
+);
 
-  it.each([
-    { source: "auto", settled: false },
-    { source: "manual", settled: false },
-    { source: "manual", settled: true },
-  ] as const)(
-    "allows reader takeover after retargeting $source follow (settled=$settled)",
-    async ({ source, settled }) => {
-      stubAnimationFrames();
-      const policy = makeChatHost({ chatHasAutoScrolled: true });
-      const transcript = createChatTranscript(() => "follow-continuity", {
-        canFollowEnd: () => !policy.chatFollowLocked,
-      });
-      Object.assign(policy, {
-        chatCancelScroll: () => transcript.cancelScroll(),
-      });
-      const rows: TestContentRow[] = Array.from({ length: 40 }, (_, index) => ({
-        kind: "content",
-        key: "row:" + index,
-        content: <div>row {index}</div>,
-      }));
-      const { container } = await mountTestTranscript("follow-continuity", rows, transcript);
-      Object.defineProperties(container, {
-        clientHeight: { configurable: true, value: 600 },
-        scrollHeight: { configurable: true, value: 4800 },
-      });
-      container.scrollTop = 1000;
-      const writes: ScrollToOptions[] = [];
-      container.scrollTo = (options?: ScrollToOptions | number) => {
-        if (typeof options === "object") {
-          writes.push(options);
-        }
-      };
-      transcript.scrollToEnd({ source, behavior: "smooth" });
-      expect(writes.some((write) => write.behavior === "smooth")).toBe(true);
-      writes.length = 0;
-      transcript.scrollToEnd({ source: "auto", behavior: "smooth" });
-      expect(writes.length).toBeGreaterThan(0);
-      expect(writes.every((write) => write.behavior === "smooth")).toBe(true);
-      if (settled) {
-        container.scrollTop = 4200;
+it.each([
+  ["auto", false],
+  ["manual", false],
+  ["manual", true],
+] as const)(
+  "allows reader takeover after retargeting %s follow (settled=%s)",
+  async (source, settled) => {
+    stubAnimationFrames();
+    const policy = makeChatHost({ chatHasAutoScrolled: true });
+    const { container, transcript } = await mountFollow("follow-continuity", 40, {
+      canFollowEnd: () => !policy.chatFollowLocked,
+    });
+    Object.assign(policy, { chatCancelScroll: () => transcript.cancelScroll() });
+    setTranscriptViewport(container, 4800);
+    container.scrollTop = 1000;
+    const writes: ScrollToOptions[] = [];
+    container.scrollTo = (options?: ScrollToOptions | number) => {
+      if (typeof options === "object") {
+        writes.push(options);
       }
-      writes.length = 0;
-      lockChatScroll(policy);
-      expect(policy.chatFollowLocked).toBe(true);
-      expect(writes).toEqual([
-        expect.objectContaining({ behavior: "instant", top: settled ? 4200 : 1000 }),
-      ]);
-      transcript.dispose();
-    },
-  );
-  it.each([
-    { distance: 0, followEnabled: true, nativePending: false },
-    { distance: 8, followEnabled: true, nativePending: false },
-    { distance: 50, followEnabled: true, nativePending: false },
-    { distance: 0, followEnabled: false, nativePending: false },
-    { distance: 8, followEnabled: false, nativePending: false },
-    { distance: 0, followEnabled: true, nativePending: true },
-  ])(
-    "follows typing growth only from the resting end ($distance, $followEnabled, native movement pending=$nativePending)",
-    async ({ distance, followEnabled, nativePending }) => {
-      const flushFrames = stubAnimationFrames();
-      const rows: TestContentRow[] = Array.from({ length: 12 }, (_, index) => ({
-        kind: "content",
-        key: "row:" + index,
-        content: <div>row {index}</div>,
-      }));
-      const { container, renderRows, transcript } = await mountTestTranscript(
-        `typing-distance-${distance}`,
-        rows,
-        createChatTranscript(() => `typing-distance-${distance}-${followEnabled}`, {
-          canFollowEnd: () => followEnabled,
-        }),
-      );
-      try {
-        const padding = nativePending ? 88 : 84;
-        let scrollHeight = transcriptSize(container) + padding;
-        Object.defineProperties(container, {
-          clientHeight: { configurable: true, value: 600 },
-          scrollHeight: { configurable: true, get: () => scrollHeight },
-        });
-        for (const observer of resizeObservers) {
-          observer.emitTarget(container, 800, 600);
-        }
-        // Measure the initial range before isolating the typing row's growth.
-        container.scrollTop = 0;
-        container.dispatchEvent(new Event("scroll"));
-        renderRows(rows);
-        await flushDeferredRowPrune();
-        renderRows(rows);
-        flushFrames();
-        const total = transcriptSize(container);
-        scrollHeight = total + padding;
-        container.scrollTop = container.scrollHeight - container.clientHeight - distance;
-        container.dispatchEvent(new Event("scroll"));
-        if (nativePending) {
-          // Native movement can precede the offset observer.
-          container.scrollTop -= 100;
-        }
-        const readerOffset = container.scrollTop;
-        const scrollTo = vi.fn((options?: ScrollToOptions | number) => {
-          if (typeof options === "object" && options.top !== undefined) {
-            container.scrollTop = options.top;
-          }
-        });
-        container.scrollTo = scrollTo;
-        renderRows([
-          ...rows,
-          { kind: "content", key: "presence:typing", content: <div>Typing</div> },
-        ]);
-        expect(scrollTo).not.toHaveBeenCalled();
-        expect(container.scrollTop).toBe(readerOffset);
-        scrollHeight += 100;
-        flushFrames();
-        expect(container.scrollTop).toBe(
-          distance === 0 && followEnabled && !nativePending ? readerOffset + 100 : readerOffset,
-        );
-        if (nativePending) {
-          container.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
-          expect(scrollTo).not.toHaveBeenCalled();
-          container.scrollTop -= 100;
-          container.dispatchEvent(new Event("scroll"));
-          scrollTo.mockClear();
-          Object.defineProperty(container, "scrollHeight", {
-            configurable: true,
-            value: total + 188,
-          });
-          flushFrames();
-          expect(scrollTo).not.toHaveBeenCalled();
-          expect(container.scrollTop).toBe(readerOffset - 100);
-        }
-      } finally {
-        transcript.dispose();
-      }
-    },
-  );
-});
+    };
+    transcript.scrollToEnd({ source, behavior: "smooth" });
+    expect(writes.some((write) => write.behavior === "smooth")).toBe(true);
+    writes.length = 0;
+    transcript.scrollToEnd({ source: "auto", behavior: "smooth" });
+    expect(writes.length).toBeGreaterThan(0);
+    expect(writes.every((write) => write.behavior === "smooth")).toBe(true);
+    if (settled) {
+      container.scrollTop = 4200;
+    }
+    writes.length = 0;
+    lockChatScroll(policy);
+    expect(policy.chatFollowLocked).toBe(true);
+    expect(writes).toEqual([
+      expect.objectContaining({ behavior: "instant", top: settled ? 4200 : 1000 }),
+    ]);
+  },
+);
+it.each([
+  [0, true, false],
+  [8, true, false],
+  [50, true, false],
+  [0, false, false],
+  [8, false, false],
+  [0, true, true],
+] as const)(
+  "follows typing growth only from the resting end (distance=%s, follow=%s, pending=%s)",
+  async (distance, followEnabled, nativePending) => {
+    const flushFrames = stubAnimationFrames();
+    const { container, renderRows, rows } = await mountFollow(
+      `typing-distance-${distance}`,
+      12,
+      { canFollowEnd: () => followEnabled },
+      `typing-distance-${distance}-${followEnabled}`,
+    );
+    const padding = nativePending ? 88 : 84;
+    let scrollHeight = transcriptSize(container) + padding;
+    setTranscriptViewport(container, () => scrollHeight);
+    emitTranscriptResize(container, 800, 600);
+    scrollReader(container, 0);
+    renderRows(rows);
+    await flushDeferredRowPrune();
+    renderRows(rows);
+    flushFrames();
+    const total = transcriptSize(container);
+    scrollHeight = total + padding;
+    scrollReader(container, container.scrollHeight - container.clientHeight - distance);
+    if (nativePending) {
+      // Native movement can precede the offset observer.
+      container.scrollTop -= 100;
+    }
+    const readerOffset = container.scrollTop;
+    const scrollTo = mockScroll(container);
+    renderRows([...rows, { kind: "content", key: "presence:typing", content: <div>Typing</div> }]);
+    expect(scrollTo).not.toHaveBeenCalled();
+    expect(container.scrollTop).toBe(readerOffset);
+    scrollHeight += 100;
+    flushFrames();
+    expect(container.scrollTop).toBe(
+      distance === 0 && followEnabled && !nativePending ? readerOffset + 100 : readerOffset,
+    );
+    if (nativePending) {
+      container.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
+      expect(scrollTo).not.toHaveBeenCalled();
+      scrollReader(container, container.scrollTop - 100);
+      scrollTo.mockClear();
+      setTranscriptViewport(container, total + 188);
+      flushFrames();
+      expect(scrollTo).not.toHaveBeenCalled();
+      expect(container.scrollTop).toBe(readerOffset - 100);
+    }
+  },
+);

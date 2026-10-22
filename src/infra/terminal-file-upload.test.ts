@@ -1,4 +1,5 @@
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
@@ -8,6 +9,8 @@ import {
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { ensureTerminalUploadCleanup, stageTerminalUpload } from "./terminal-file-upload.js";
+
+vi.mock("node:os", { spy: true });
 
 vi.mock("node:fs/promises", async () => {
   const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
@@ -91,23 +94,20 @@ beforeEach(() => {
   root = tempDirs.make("openclaw-terminal-upload-test-");
 });
 afterEach(() => {
+  vi.restoreAllMocks();
+  vi.mocked(os.homedir).mockReset();
+  vi.mocked(os.tmpdir).mockReset();
   lstatMock.mockImplementation(actualFs.lstat);
   rmMock.mockImplementation(actualFs.rm);
   writeMock.mockImplementation(actualFs.writeFile);
   vi.useRealTimers();
 });
-function stage(
-  name: string,
-  contentBase64 = "",
-  options: NonNullable<Parameters<typeof stageTerminalUpload>[1]> = {},
-) {
-  return stageTerminalUpload({ name, contentBase64 }, { tempRoot: root, ...options });
+function stage(name: string, contentBase64 = "") {
+  return stageTerminalUpload({ name, contentBase64 }, { tempRoot: root });
 }
 it("stages arbitrary bytes under a private temporary directory", async () => {
   const content = Buffer.from([0, 1, 2, 255]);
-  const result = await stage("../report final.pdf", content.toString("base64"), {
-    cleanupAfterMs: 60_000,
-  });
+  const result = await stage("../report final.pdf", content.toString("base64"));
   expect(path.basename(result.path)).toBe("report final.pdf");
   expect(result.path.startsWith(`${root}${path.sep}`)).toBe(true);
   expect(result.size).toBe(content.length);
@@ -121,9 +121,11 @@ it("stages arbitrary bytes under a private temporary directory", async () => {
 it("uses the user-profile ACL boundary instead of a configurable Windows temp directory", async () => {
   const homeDir = tempDirs.make("openclaw-terminal-upload-windows-home-");
   const sharedTemp = tempDirs.make("openclaw-terminal-upload-windows-shared-");
+  vi.mocked(os.homedir).mockReturnValue(homeDir);
+  vi.mocked(os.tmpdir).mockReturnValue(sharedTemp);
   const result = await stageTerminalUpload(
     { name: "report.pdf", contentBase64: "" },
-    { platform: "win32", homeDir, tempDir: sharedTemp },
+    { platform: "win32" },
   );
   expect(result.path.startsWith(path.join(homeDir, ".openclaw", "tmp"))).toBe(true);
   expect(result.path.startsWith(sharedTemp)).toBe(false);
@@ -216,7 +218,7 @@ it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
 
 it("normalizes hostile and oversized names", async () => {
   const stagedName = async (name: string) => {
-    const result = await stage(name, "ZmlsZQ==", { cleanupAfterMs: 60_000 });
+    const result = await stage(name, "ZmlsZQ==");
     expect(await fs.readFile(result.path, "utf8")).toBe("file");
     return path.basename(result.path);
   };

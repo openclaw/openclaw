@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
 import type { ChannelInboundEventRunnerParams } from "openclaw/plugin-sdk/channel-inbound";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
@@ -12,7 +13,6 @@ import type { createTwitchIngress } from "./twitch-ingress.js";
 import type { TwitchChatMessage } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
-  checkAccess: vi.fn(async () => ({ allowed: true })),
   createIngress: vi.fn(),
   getClient: vi.fn(async () => ({})),
   getRuntime: vi.fn(),
@@ -24,9 +24,6 @@ const mocks = vi.hoisted(() => ({
   sendMessage: vi.fn(),
   unregister: vi.fn(),
 }));
-
-// mock-isolation: Drive admission outcomes independently of configured access policy.
-vi.mock("./access-control.js", () => ({ checkTwitchAccessControl: mocks.checkAccess }));
 
 vi.mock("./client-manager-registry.js", () => ({
   getOrCreateClientManager: () => ({
@@ -99,7 +96,7 @@ describe("monitorTwitchProvider", () => {
       id,
       username: "viewer",
       userId: "viewer-1",
-      message: "hello bot",
+      message: "@testbot hello bot",
       channel: "testchannel",
     });
     expect(mocks.ingressAccept).toHaveBeenCalledOnce();
@@ -134,7 +131,11 @@ describe("monitorTwitchProvider", () => {
         shouldLogVerbose: () => false,
       },
       channel: {
-        inbound: { run: mocks.runInbound, buildContext: vi.fn(() => ({})) },
+        inbound: {
+          ingress: createPluginRuntimeMock().channel.inbound.ingress,
+          run: mocks.runInbound,
+          buildContext: vi.fn(() => ({})),
+        },
         routing: {
           resolveAgentRoute: vi.fn(() => ({
             agentId: "main",

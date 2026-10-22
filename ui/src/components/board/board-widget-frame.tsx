@@ -1,5 +1,6 @@
 import { createMemo, Match, Show, Switch } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
+import { registerBoardEnglish } from "../../i18n/locales/en-board.ts";
 import { EventStream } from "../../lib/board/provider-signals.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import type { BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
@@ -8,7 +9,7 @@ import { remainingBoardWidgetTicketTtlMs } from "../../lib/board/widget-ticket-l
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import { isLoopbackHostname } from "../../lib/gateway-locality.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { WidgetRenderTimeoutError } from "../../lib/widget-sandbox-host.ts";
@@ -18,6 +19,8 @@ import { McpAppConfirmation } from "../mcp-app-confirm-solid.tsx";
 import { createMcpAppConfirm } from "../mcp-app-confirm.ts";
 import { resolveGatewayHttpOrigin, resolveSandboxHostUrl } from "../sandbox-host.ts";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
+
+registerEnglishCatalog(registerBoardEnglish);
 
 // Keep in sync with the identical literal in chat widget-card.ts: a shared
 // module is not worth its startup-bundle cost for one string.
@@ -145,6 +148,8 @@ class BoardWidgetTicketRefresh {
 export type BoardWidgetFrameOwner = ReturnType<typeof createBoardWidgetFrame>;
 export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
   const changes = new EventStream<void>();
+  let initialTheme = document.documentElement.dataset.themeMode === "light" ? "light" : "dark";
+  let sandboxRequestUrl = "";
   let frameError = "";
   let frameElement: HTMLIFrameElement | undefined;
   let releaseTheme: (() => void) | undefined;
@@ -159,7 +164,7 @@ export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
   let sandboxOrigin = "";
   let sandboxHost: BoardWidgetSandboxHost | null = null;
   let contentVisible = false;
-  let revealFrame = 0;
+  let initialPaint = true;
   const confirmation = createMcpAppConfirm();
   const ticketRefresh = new BoardWidgetTicketRefresh(
     () => host.widget()?.viewTicket,
@@ -237,6 +242,17 @@ export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
     return !snapshot || isGatewayAvailable(snapshot);
   }
 
+  function documentAvailable(): boolean {
+    const snapshot = host.context()?.gateway.snapshot;
+    // A restored ticket authorizes HTTP independently of the first socket handshake.
+    return (
+      gatewayAvailable() ||
+      (snapshot?.phase === "connecting" &&
+        !snapshot.hello &&
+        (remainingBoardWidgetTicketTtlMs(host.widget() ?? {}) ?? 0) > 0)
+    );
+  }
+
   function suspend(): void {
     stopWork();
     sandboxHost?.setActive(false);
@@ -263,33 +279,13 @@ export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
     confirmation.cancel();
     waiting = false;
     renderStalled = false;
-    resetPresentation();
+    contentVisible = false;
+    initialPaint = false;
     frameProbeGeneration += 1;
     frameFailureKey = "";
     frameRefreshAttempts = 0;
     setError("", notify);
     sandboxHost?.reset();
-  }
-
-  function resetPresentation(): void {
-    window.cancelAnimationFrame(revealFrame);
-    revealFrame = 0;
-    contentVisible = false;
-  }
-
-  function revealContent(): void {
-    if (contentVisible || revealFrame) {
-      return;
-    }
-    // Apply the reported height before revealing the cross-origin frame; its
-    // compositor needs a paint opportunity at the final size to avoid a white flash.
-    revealFrame = window.requestAnimationFrame(() => {
-      revealFrame = window.requestAnimationFrame(() => {
-        revealFrame = 0;
-        contentVisible = true;
-        changes.emit();
-      });
-    });
   }
 
   function resolveSandboxFrameUrl(widget: BoardWidget): string | undefined {
@@ -302,15 +298,26 @@ export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
     ) {
       return undefined;
     }
-    const url = resolveSandboxHostUrl(
-      widget.sandboxUrl,
-      widget.sandboxPort,
-      widget.sandboxOrigin,
-      gatewayUrl,
-      window.location.origin,
+    const url = new URL(
+      resolveSandboxHostUrl(
+        widget.sandboxUrl,
+        widget.sandboxPort,
+        widget.sandboxOrigin,
+        gatewayUrl,
+        window.location.origin,
+      ),
     );
-    sandboxOrigin = new URL(url).origin;
-    return url;
+    if (url.href !== sandboxRequestUrl) {
+      sandboxRequestUrl = url.href;
+      initialTheme = document.documentElement.dataset.themeMode === "light" ? "light" : "dark";
+      if (frameElement) {
+        frameElement.style.colorScheme = initialTheme;
+      }
+    }
+    // Keep the seed stable until navigation; theme messages update the mounted shell.
+    url.hash = `theme=${initialTheme}`;
+    sandboxOrigin = url.origin;
+    return url.href;
   }
 
   function sandboxHostOptions(
@@ -331,6 +338,7 @@ export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
       bridgeEnabled: host.bridgeEnabled?.() ?? true,
       // A lifecycle pause does not retire this authenticated connection or its ticket.
       connected: !context || context.gateway.snapshot.phase === "connected",
+      documentActive: documentAvailable(),
       sandboxOrigin,
       sandboxUrl: frame.src,
       sourceOrigin: resolveGatewayHttpOrigin(
@@ -373,7 +381,7 @@ export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
       onPending: () => waitForConnection(),
       onLoaded: () => {
         waiting = false;
-        resetPresentation();
+        contentVisible = false;
         frameFailureKey = "";
         frameRefreshAttempts = 0;
         setError("", false);
@@ -387,10 +395,13 @@ export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
         waiting = false;
         renderStalled = false;
         setError("");
-        revealContent();
+        initialPaint = false;
+        contentVisible = true;
+        changes.emit();
       },
       onError: (error) => {
         if (error instanceof WidgetRenderTimeoutError) {
+          initialPaint = false;
           renderStalled = true;
           changes.emit();
           return;
@@ -430,7 +441,7 @@ export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
     if (!options) {
       return undefined;
     }
-    const active = host.active() && gatewayAvailable();
+    const active = host.active() && documentAvailable();
     // Pause before updating options, then resume only under current availability.
     // Reuse the existing inactive lifecycle so pending work is fenced without
     // requiring a new authorization ticket after suspension is canceled.
@@ -469,7 +480,7 @@ export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
       releaseTheme?.();
       releaseTheme = undefined;
       frameProbeGeneration += 1;
-      resetPresentation();
+      contentVisible = false;
       stopWork();
       stopMessages?.();
       stopMessages = undefined;
@@ -479,7 +490,7 @@ export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
     activityChanged(): void {
       if (host.active()) {
         api.connect();
-        sandboxHost?.setActive(gatewayAvailable());
+        sandboxHost?.setActive(documentAvailable());
         // The inner document may have finished loading while this tab was hidden.
         const frame = frameElement;
         if (frame?.isConnected) {
@@ -604,11 +615,13 @@ export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
         );
       }
     },
+    // Forward the widget owner's event stream to its projection subscribers.
     subscribe: (listener: () => void) => changes.subscribe(listener),
     confirmation,
     bindFrame(frame: HTMLIFrameElement) {
       releaseTheme?.();
       releaseTheme = undefined;
+      frame.style.colorScheme = initialTheme;
       frameElement = frame;
     },
     prepareView(value: BoardWidget) {
@@ -626,6 +639,7 @@ export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
         src,
         sandboxSrc,
         visible: contentVisible,
+        painting: initialPaint && !waiting && !renderStalled,
         waiting,
         stalled: renderStalled,
         covered: host.loadingCovered?.(),
@@ -714,7 +728,7 @@ export function BoardWidgetFrame(props: {
           ref={(frame) => props.state().bindFrame(frame)}
           class="board-widget__frame"
           allow="fullscreen"
-          style={{ opacity: view().visible ? undefined : 0 }}
+          style={{ opacity: view().visible || view().painting ? undefined : 0 }}
           inert={!view().visible}
           sandbox="allow-scripts allow-same-origin allow-forms"
           referrerpolicy="origin"

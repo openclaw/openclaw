@@ -2,8 +2,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, expect, it } from "vitest";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { prepareContextWindowCaches } from "../agents/context-cache-projection.js";
-import { getContextWindowCaches, replaceContextWindowCaches } from "../agents/context-cache.js";
+import { getContextWindowCaches } from "../agents/context-cache.js";
 import { resetContextWindowCacheForTest } from "../agents/context.test-support.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { initializeManagedWorktreeTestRepository } from "../agents/worktrees/service.test-support.js";
@@ -123,11 +122,8 @@ it("keeps unrelated work responsive during the real post-ready warmup", async ()
     };
     let probing = true;
 
-    const activeContextPreparation = prepareContextWindowCaches({
-      config: publishedOwner.config,
-      modelCatalog: publishedOwner.modelCatalog,
-    }).then((caches) => {
-      replaceContextWindowCaches(caches);
+    const activeContextPreparation = contextModule.prewarmContextWindowCacheAfterReady({
+      config: warmConfig,
     });
     const probeLoop = (async () => {
       while (true) {

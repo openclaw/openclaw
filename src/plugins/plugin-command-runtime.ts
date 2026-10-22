@@ -53,6 +53,8 @@ export type PluginCommandDispatchContext = Readonly<{
   diagnosticsPreviewOnly?: PluginCommandContext["diagnosticsPreviewOnly"];
   diagnosticsPrivateRouted?: PluginCommandContext["diagnosticsPrivateRouted"];
   runtimeContext?: {
+    /** Core-only factory; requester authority is captured by the dispatch owner. */
+    createSubagents?: import("./runtime/native-subagent-context.js").NativeSubagentCommandFactory;
     compactCurrent?: (
       signal?: AbortSignal,
       assertOwnerCurrent?: () => void,

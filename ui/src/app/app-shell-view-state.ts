@@ -2,18 +2,14 @@ import { isSettingsNavigationRoute, isSettingsTakeover } from "../app-navigation
 import { isSessionRouteId } from "../app-route-paths.ts";
 import { APP_ROUTE_IDS } from "../app-routes.ts";
 import type { GatewayStatusProps } from "../components/gateway-status.ts";
-import type {
-  SettingsSidebarFallbackProps,
-  SettingsSidebarLoader,
-} from "../components/settings-sidebar-lazy.tsx";
-import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
+import type { SettingsSidebarFallbackProps } from "../components/settings-sidebar-lazy.tsx";
 import { resolveGatewayStatus } from "../lib/gateway-status.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
+import { isClawsAvailable } from "../pages/claws/availability.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
-import type { DevicePairSetupLoader } from "./app-shell-device-pair-setup.tsx";
 import type { OutboxStoreRuntime } from "./app-shell-gateway.ts";
 import type { ShellLazyOverlayHost } from "./app-shell-lazy-view.tsx";
 import type { ShellViewCallbacks } from "./app-shell-view-callbacks.ts";
@@ -47,9 +43,7 @@ export interface ShellViewHost extends ShellLazyOverlayHost, ShellNavigationElem
   readonly connectionRecovery: boolean;
   routeOutlet?: ControlUiReadinessOutlet;
   terminalPanel?: HTMLElement & { readonly available?: boolean };
-  readonly devicePairSetup: DevicePairSetupLoader;
   readonly shellRevision: () => number;
-  readonly settingsSidebar: SettingsSidebarLoader;
   readonly runtime: ApplicationRuntime | undefined;
   readonly activeSessionKey: string;
   readonly custodianMinimizeRequestId: number;
@@ -71,7 +65,6 @@ export interface ShellViewHost extends ShellLazyOverlayHost, ShellNavigationElem
   exitSettings(): void;
   readonly handleNativeNewSession: () => void;
   handleSettingsSearchQueryChange(query: string): Promise<void>;
-  handleThemeChange(event: CustomEvent<ThemeModeChangeDetail>): void;
   nativeNavCollapsed(): boolean;
   readonly openPalette: () => void;
   readonly navigate: (routeId: string, options?: ApplicationNavigationOptions) => void;
@@ -214,7 +207,10 @@ export function readShellView(host: ShellViewHost) {
     activeRouteId: activeRoute,
     router: runtime.router,
     activePluginTabId: activePluginRef ? pluginTabKey(activePluginRef) : "",
-    enabledRouteIds: APP_ROUTE_IDS,
+    enabledRouteIds:
+      isClawsAvailable(context.runtimeConfig.state) === true
+        ? APP_ROUTE_IDS
+        : APP_ROUTE_IDS.filter((routeId) => routeId !== "claws"),
     sessionKey: host.activeSessionKey,
     connected: gatewayConnected,
     connectionStatus,
@@ -250,7 +246,9 @@ export function readShellView(host: ShellViewHost) {
   const gatewayStatus: GatewayStatusProps = {
     kind: shellConnectionStatus ?? (!nativeEmbed && gatewayConnected ? "connected" : null),
     lastError: shellConnectionStatus ? gatewaySnapshot.lastError : null,
-    queuedCount: shellConnectionStatus ? sidebarProperties.storedOutboxes?.total : 0,
+    queuedCount: shellConnectionStatus
+      ? (host.storedOutboxes?.total ?? 0) + (gatewaySnapshot.deferredIntentCount ?? 0)
+      : 0,
     onRetry: callbacks.retryGateway,
   };
   const mobileGatewayStatus =
@@ -338,6 +336,5 @@ export function readShellView(host: ShellViewHost) {
     connectionRecovery: host.connectionRecovery,
     floatingUpdateCard,
     settingsSidebarProps,
-    navigationSnapshot,
   };
 }

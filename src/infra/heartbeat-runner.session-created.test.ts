@@ -21,6 +21,7 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import * as request from "./exec-request-context.js";
+import { bindHeartbeatSend } from "./heartbeat-runner.boundary-test-support.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import {
   seedMainSessionStore,
@@ -93,10 +94,7 @@ async function createHeartbeatScenario(target: "none" | "telegram" = "none") {
     lastProvider: "telegram",
     lastTo: "-100155462274",
   });
-  const run = (
-    source: "cron" | "exec-event",
-    telegram?: NonNullable<Parameters<typeof runHeartbeatOnce>[0]["deps"]>["telegram"],
-  ) =>
+  const run = (source: "cron" | "exec-event") =>
     runHeartbeatOnce({
       cfg,
       agentId: "main",
@@ -104,7 +102,6 @@ async function createHeartbeatScenario(target: "none" | "telegram" = "none") {
       source,
       reason: source === "cron" ? "cron:queue-check" : "exec-event",
       ...(source === "exec-event" ? { intent: "event" as const } : {}),
-      deps: { getReplyFromConfig, telegram },
     });
   const humanReply = (Body: string) =>
     getReplyFromConfig(
@@ -224,7 +221,10 @@ it.for(["stopped", "failed"] as const)(
     });
     const completionText = "Exec completed (owned-command, code 0) :: ORIGINAL_COMMAND_RESULT";
     const completion = enqueue(completionText, [owner]);
-    const peers = ["First notification", "Second notification"].map((text) => enqueue(text));
+    const peers = [
+      "Reminder: investigate heartbeat wake failures",
+      "Reminder: review heartbeat poll results",
+    ].map((text) => enqueue(text));
     const gate = createGate();
     let selectedOwners: readonly Owner[] | undefined;
     const runAgent = mockAgent().mockImplementation(async (params) => {
@@ -264,7 +264,7 @@ it.for(["stopped", "failed"] as const)(
       const cancellation = captureExecRequestCancellation(identity);
       expect(cancellation.requestRunIds).toEqual([identity.runId, input.runId]);
       for (const peer of peers) {
-        expect(input.currentInboundContext?.text).toContain(peer.text);
+        expect(input.currentInboundContext?.text ?? "").toContain(peer.text);
       }
       const late = enqueue("Late unrelated notification");
       if (outcome === "stopped") {
@@ -296,7 +296,7 @@ it.for(["stopped", "failed"] as const)(
       expect(next.prompt).toContain(nextBody);
       expect(next.prompt).not.toContain(completionText);
       for (const peer of [...peers, late]) {
-        expect(next.currentInboundContext?.text).toContain(peer.text);
+        expect(next.currentInboundContext?.text ?? "").toContain(peer.text);
       }
       expect(events.peekSystemEventEntries(sessionKey)).toEqual([]);
     });
@@ -345,7 +345,8 @@ it.for(["confirmed", "recovery-owned", "deferred admission abort"] as const)(
         },
       );
     }
-    const pending = run("exec-event", telegram);
+    bindHeartbeatSend("telegram", telegram);
+    const pending = run("exec-event");
     await gate.during(pending, test.signal, async () => {
       const first = agentInput(runAgent);
       expect(first.currentInboundContext?.text).toContain(generic.text);

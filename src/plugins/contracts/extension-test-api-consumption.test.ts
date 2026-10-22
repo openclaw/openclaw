@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { afterAll, describe, expect, it } from "vitest";
 import { collectModuleReferencesFromSource } from "../../../scripts/lib/guard-inventory-utils.mjs";
 import { createNativeTypeScriptParser } from "../../../scripts/lib/native-typescript.mts";
@@ -128,14 +128,13 @@ function orphanTestApis(): string[] {
     }
     for (const sourceFile of parser.parseSourceFiles(pendingSources.splice(0))) {
       const references = collectReferences(sourceFile);
-      const pluginIds = [
+      for (const pluginId of [
         ...references.pluginIds,
         ...references.moduleSpecifiers.map((specifier) =>
           resolveTestApiPluginId(specifier, sourceFile.fileName, testApis),
         ),
-      ];
-      for (const pluginId of pluginIds) {
-        if (pluginId && testApis.some((testApi) => testApi.pluginId === pluginId)) {
+      ]) {
+        if (pluginId) {
           consumed.add(pluginId);
         }
       }

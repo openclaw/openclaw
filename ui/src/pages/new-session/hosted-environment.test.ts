@@ -2,9 +2,7 @@ import { createComponent } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ModelCatalogEntry, ModelCatalogResult } from "../../api/types.ts";
-import { settleModelCatalogRequests } from "../../lib/model-catalog-store.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { buildDraftSessionCreateParams } from "./create-params.ts";
 import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
 import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
@@ -155,15 +153,14 @@ it("retains the explicit API-key account through hosted selection and rejects a 
   await choose(api.authProfileId);
   await vi.waitFor(() => expect(control.accountSelectionReady()).toBe(true));
   expect(control.selectHostedEnvironment("agentsapi")).toBe(true);
-  expect(
-    buildDraftSessionCreateParams({
-      agentId: "main",
-      message: "hello",
-      worktree: false,
-      model: control.modelForSubmission(),
-      agentRuntime: control.agentRuntime,
-    }),
-  ).toMatchObject({ model: `${modelRef}@${api.authProfileId}`, agentRuntime: "agentsapi" });
+  const { state } = createRepositoryFixture();
+  managed.track(state.modelControl);
+  state.modelControl.agentRuntime = control.agentRuntime;
+  vi.spyOn(state.modelControl, "modelForSubmission").mockReturnValue(control.modelForSubmission());
+  expect(buildSelectedSessionCreateParams(state, createSelection)).toMatchObject({
+    model: `${modelRef}@${api.authProfileId}`,
+    agentRuntime: "agentsapi",
+  });
   await choose(subscription.authProfileId);
   expect(control.accountSelectionReady()).toBe(false);
   expect(control.modelSelectionBlockedReason(agent)).toBe("Loading models…");
@@ -238,7 +235,7 @@ it("describes Auto using the eligible host runtime while a hosted workspace is s
       catalog({ agentRuntime: nativeRuntime("remote-runtime", "remote-exec") }),
   });
   managed.track(f.place.modelControl);
-  await settleModelCatalogRequests(f.context.gateway.snapshot.client!, { agentId: "main" });
+  await vi.waitFor(() => expect(f.place.modelControl.hostedEnvironments()).toHaveLength(1));
   f.place.selectHostedEnvironment("agentsapi");
   expect(f.place.hostedEnvironment).toBeDefined();
   await f.gateway.refreshCloudProfiles();

@@ -116,7 +116,6 @@ export class MockProvider implements VoiceCallProvider {
           type: evt.type,
           transcript,
           isFinal: evt.isFinal ?? true,
-          confidence: evt.confidence,
         };
       }
 

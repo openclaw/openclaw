@@ -19,9 +19,6 @@ import { createDiscordLoopbackRest } from "../send.test-harness.js";
 import { handleDiscordMessageAction } from "./handle-action.js";
 import { handleDiscordGuildAction } from "./runtime.guild.js";
 import { handleDiscordAction } from "./runtime.js";
-import { handleDiscordMessagingAction } from "./runtime.messaging.js";
-import type { DiscordModerationAction } from "./runtime.moderation-shared.js";
-import { handleDiscordModerationAction } from "./runtime.moderation.js";
 import type { DiscordChannelInfoTest, DiscordSearchResult } from "./runtime.test-support.js";
 
 const {
@@ -205,11 +202,24 @@ function mockObjectArg(
 function handleMessagingAction(
   action: string,
   params: Record<string, unknown>,
-  isActionEnabled: (key: keyof DiscordActionConfig) => boolean = enableAllActions,
+  actions: DiscordActionConfig = {},
   cfg: OpenClawConfig = DISCORD_TEST_CFG,
-  options?: Parameters<typeof handleDiscordMessagingAction>[4],
+  options?: Parameters<typeof handleDiscordAction>[2],
 ) {
-  return handleDiscordMessagingAction(action, params, isActionEnabled, cfg, options);
+  const config =
+    Object.keys(actions).length === 0
+      ? cfg
+      : {
+          ...cfg,
+          channels: {
+            ...cfg.channels,
+            discord: {
+              ...cfg.channels?.discord,
+              actions: { ...cfg.channels?.discord?.actions, ...actions },
+            },
+          },
+        };
+  return handleDiscordAction({ ...params, action }, config, options);
 }
 
 function handleGuildAction(
@@ -222,18 +232,6 @@ function handleGuildAction(
   return handleDiscordGuildAction(action, params, isActionEnabled, cfg, options);
 }
 
-function handleModerationAction(
-  action: DiscordModerationAction,
-  params: Record<string, unknown>,
-  isActionEnabled: (
-    key: keyof DiscordActionConfig,
-    defaultValue?: boolean,
-  ) => boolean = enableAllActions,
-  cfg: OpenClawConfig = DISCORD_TEST_CFG,
-) {
-  return handleDiscordModerationAction(action, params, isActionEnabled, cfg);
-}
-
 async function expectBlockedRead(
   provider: MockCallSource,
   ...args: Parameters<typeof handleMessagingAction>
@@ -243,9 +241,7 @@ async function expectBlockedRead(
   );
   expect(provider).not.toHaveBeenCalled();
 }
-const disabledActions = (key: keyof DiscordActionConfig) => key !== "reactions";
 const channelInfoEnabled = (key: keyof DiscordActionConfig) => key === "channelInfo";
-const moderationEnabled = (key: keyof DiscordActionConfig): boolean => key === "moderation";
 const rolesEnabled = (key: keyof DiscordActionConfig) => key === "roles";
 
 beforeEach(() => {
@@ -257,7 +253,7 @@ beforeEach(() => {
   fetchMemberInfoDiscord.mockImplementation(defaultFetchMemberInfoDiscord);
 });
 
-describe("handleDiscordMessagingAction", () => {
+describe("handleDiscordAction messaging", () => {
   it.each([
     {
       name: "archived page with a cursor",
@@ -310,7 +306,7 @@ describe("handleDiscordMessagingAction", () => {
     },
   ])("reports thread pagination for $name", async ({ params, page, cfg, expected }) => {
     listThreadsDiscord.mockResolvedValueOnce(page);
-    const result = await handleMessagingAction("threadList", params, enableAllActions, cfg);
+    const result = await handleMessagingAction("threadList", params, {}, cfg);
     expect(mockCall(listThreadsDiscord, "listThreadsDiscord")).toEqual([
       {
         channelId: undefined,
@@ -349,7 +345,7 @@ describe("handleDiscordMessagingAction", () => {
         messageId: "M1",
         emoji: "✅",
       },
-      enableAllActions,
+      {},
       cfg,
     );
 
@@ -424,7 +420,7 @@ describe("handleDiscordMessagingAction", () => {
           messageId: "M1",
           ...params,
         },
-        enableAllActions,
+        {},
         cfg,
       ),
     ).rejects.toThrow("Discord read target channel is not allowed.");
@@ -463,7 +459,7 @@ describe("handleDiscordMessagingAction", () => {
         fetchReactionsDiscord,
         "reactions",
         { channelId: "444", messageId: "M1" },
-        enableAllActions,
+        {},
         cfg,
         options,
       );
@@ -472,7 +468,7 @@ describe("handleDiscordMessagingAction", () => {
     await handleMessagingAction(
       "reactions",
       { channelId: "444", messageId: "M1" },
-      enableAllActions,
+      {},
       cfg,
       options,
     );
@@ -572,7 +568,7 @@ describe("handleDiscordMessagingAction", () => {
       fetchReactionsDiscord,
       "reactions",
       { channelId: "444", messageId: "M1", accountId },
-      enableAllActions,
+      {},
       cfg,
       { conversationReadOrigin: "direct-operator" },
     );
@@ -596,13 +592,9 @@ describe("handleDiscordMessagingAction", () => {
     },
   ])("allows direct-operator reads of $name", async ({ channel, cfg }) => {
     fetchChannelInfoDiscord.mockResolvedValueOnce(channel);
-    await handleMessagingAction(
-      "reactions",
-      { channelId: "444", messageId: "M1" },
-      enableAllActions,
-      cfg,
-      { conversationReadOrigin: "direct-operator" },
-    );
+    await handleMessagingAction("reactions", { channelId: "444", messageId: "M1" }, {}, cfg, {
+      conversationReadOrigin: "direct-operator",
+    });
     expect(fetchReactionsDiscord).toHaveBeenCalledWith("444", "M1", {
       cfg,
       accountId: "default",
@@ -639,7 +631,7 @@ describe("handleDiscordMessagingAction", () => {
           messageId: "M1",
           emoji: "✅",
         },
-        disabledActions,
+        { reactions: false },
       ),
     ).rejects.toThrow(/Discord reactions are disabled/);
   });
@@ -723,7 +715,7 @@ describe("handleDiscordMessagingAction", () => {
 
     for (const testCase of cases) {
       await expect(
-        handleMessagingAction(testCase.action, testCase.params, enableAllActions, cfg, options),
+        handleMessagingAction(testCase.action, testCase.params, {}, cfg, options),
       ).rejects.toThrow("Discord read target channel is not allowed.");
       expect(testCase.runtime).not.toHaveBeenCalled();
     }
@@ -763,7 +755,7 @@ describe("handleDiscordMessagingAction", () => {
     });
 
     await expect(
-      handleMessagingAction("readMessages", { channelId: "444" }, enableAllActions, cfg),
+      handleMessagingAction("readMessages", { channelId: "444" }, {}, cfg),
     ).rejects.toThrow("Discord read target channel is not allowed.");
     expect(fetchChannelInfoDiscord.mock.calls.map((call) => call[0])).toEqual([
       "444",
@@ -789,7 +781,7 @@ describe("handleDiscordMessagingAction", () => {
     const cfg = discordGuildChannelsCfg({ private: { enabled: false }, "333": { enabled: true } });
 
     await expect(
-      handleMessagingAction("readMessages", { channelId: "333" }, enableAllActions, cfg),
+      handleMessagingAction("readMessages", { channelId: "333" }, {}, cfg),
     ).rejects.toThrow("Discord read target channel is not allowed.");
     expect(readMessagesDiscord).not.toHaveBeenCalled();
   });
@@ -836,7 +828,7 @@ describe("handleDiscordMessagingAction", () => {
     "fails closed for $name when channel metadata is unavailable",
     async ({ action, params, runtime, cfg, options }) => {
       fetchChannelInfoDiscord.mockRejectedValueOnce(new Error("metadata unavailable"));
-      await expectBlockedRead(runtime, action, params, enableAllActions, cfg, options);
+      await expectBlockedRead(runtime, action, params, {}, cfg, options);
     },
   );
 
@@ -869,7 +861,7 @@ describe("handleDiscordMessagingAction", () => {
       } else {
         fetchMessageDiscord.mockResolvedValueOnce({ id: "333", timestamp });
       }
-      const result = await handleMessagingAction(action, params, enableAllActions, cfg);
+      const result = await handleMessagingAction(action, params, {}, cfg);
       expect(fetchGuildInfoDiscord).toHaveBeenCalledWith("111", { cfg });
       if (action === "readMessages") {
         expect(readMessagesDiscord).toHaveBeenCalledWith(
@@ -888,7 +880,7 @@ describe("handleDiscordMessagingAction", () => {
     const cfg = {} as OpenClawConfig;
 
     await expect(
-      handleMessagingAction("readMessages", { channelId: "C1" }, enableAllActions, cfg),
+      handleMessagingAction("readMessages", { channelId: "C1" }, {}, cfg),
     ).rejects.toThrow("Discord read target channel is not allowed.");
     expect(readMessagesDiscord).not.toHaveBeenCalled();
 
@@ -896,7 +888,7 @@ describe("handleDiscordMessagingAction", () => {
       fetchMessageDiscord,
       "fetchMessage",
       { messageLink: "https://discord.com/channels/111/222/333" },
-      enableAllActions,
+      {},
       cfg,
     );
   });
@@ -927,7 +919,7 @@ describe("handleDiscordMessagingAction", () => {
     await handleMessagingAction(
       "fetchMessage",
       { messageLink: "https://discord.com/channels/111/333/444" },
-      enableAllActions,
+      {},
       cfg,
     );
 
@@ -961,7 +953,7 @@ describe("handleDiscordMessagingAction", () => {
     },
   ])("rejects Discord reads for $name", async ({ action, params, channel, cfg, runtime }) => {
     fetchChannelInfoDiscord.mockResolvedValueOnce(channel);
-    await expectBlockedRead(runtime, action, params, enableAllActions, cfg);
+    await expectBlockedRead(runtime, action, params, {}, cfg);
   });
 
   it("adds normalized timestamps to listPins payloads", async () => {
@@ -993,13 +985,7 @@ describe("handleDiscordMessagingAction", () => {
     },
   ])("requires explicit search targets for $name", async ({ cfg, content, options }) => {
     await expect(
-      handleMessagingAction(
-        "searchMessages",
-        { guildId: "111", content },
-        enableAllActions,
-        cfg,
-        options,
-      ),
+      handleMessagingAction("searchMessages", { guildId: "111", content }, {}, cfg, options),
     ).rejects.toThrow(
       "Discord message search requires channelId or channelIds so each read target can be authorized.",
     );
@@ -1009,12 +995,7 @@ describe("handleDiscordMessagingAction", () => {
   it("allows guild-wide Discord searches when the guild has a wildcard channel allowlist", async () => {
     const cfg = discordGuildChannelsCfg({ "*": { enabled: true } });
 
-    await handleMessagingAction(
-      "searchMessages",
-      { guildId: "111", content: "canary" },
-      enableAllActions,
-      cfg,
-    );
+    await handleMessagingAction("searchMessages", { guildId: "111", content: "canary" }, {}, cfg);
 
     expect(searchMessagesDiscord).toHaveBeenCalledWith(
       {
@@ -1091,7 +1072,7 @@ describe("handleDiscordMessagingAction", () => {
         silent: true,
         mediaAccess: forgedMediaAccess,
       },
-      enableAllActions,
+      {},
       DISCORD_TEST_CFG,
       { mediaAccess, mediaLocalRoots: mediaAccess.localRoots, mediaReadFile },
     );
@@ -1173,7 +1154,7 @@ describe("handleDiscordMessagingAction", () => {
         mediaUrl: "./report.md",
         mediaAccess: forgedMediaAccess,
       },
-      enableAllActions,
+      {},
       DISCORD_TEST_CFG,
       { mediaAccess, mediaLocalRoots: mediaAccess.localRoots },
     );
@@ -1203,7 +1184,7 @@ describe("handleDiscordMessagingAction", () => {
         replyTo: "custom-1",
         mediaUrl: "/tmp/image.png",
       },
-      enableAllActions,
+      {},
       DISCORD_TEST_CFG,
       { mediaAccess, mediaLocalRoots: ["/tmp/agent-root"], mediaReadFile },
     );
@@ -1305,7 +1286,7 @@ describe("handleDiscordMessagingAction", () => {
           components: { blocks: [{ type: "text", text: "Pick one" }] },
           replyTo: replyToId,
         },
-        enableAllActions,
+        {},
         DISCORD_TEST_CFG,
         reply ? { reply } : undefined,
       );
@@ -1398,7 +1379,7 @@ describe("handleDiscordMessagingAction", () => {
       const result = await handleMessagingAction(
         "sendMessage",
         { to: `channel:${channelId}`, content: "hello", threadName: "new-thread" },
-        enabled ? enableAllActions : (key) => key === "messages",
+        enabled ? {} : { channels: false },
       );
       expect(sendMessageDiscord).toHaveBeenCalledTimes(1);
       if (enabled) {
@@ -2071,56 +2052,55 @@ describe("Discord action numeric validation", () => {
     {
       action: "reactions",
       params: { channelId: "C1", messageId: "M1", limit: 2.5 },
-      handle: handleMessagingAction,
-      gate: enableAllActions,
+      handle: (params: Record<string, unknown>) => handleMessagingAction("reactions", params),
       call: fetchReactionsDiscord,
       error: "limit must be a positive integer",
     },
     {
       action: "readMessages",
       params: { channelId: "C1", limit: "3.5" },
-      handle: handleMessagingAction,
-      gate: enableAllActions,
+      handle: (params: Record<string, unknown>) => handleMessagingAction("readMessages", params),
       call: readMessagesDiscord,
       error: "limit must be a positive integer",
     },
     {
       action: "channelEdit",
       params: { channelId: "C1", position: 1.5 },
-      handle: handleGuildAction,
-      gate: channelsEnabled,
+      handle: (params: Record<string, unknown>) =>
+        handleGuildAction("channelEdit", params, channelsEnabled),
       call: editChannelDiscord,
       error: "position must be a non-negative integer",
     },
     {
       action: "channelMove",
       params: { guildId: "G1", channelId: "C1", position: "5.5" },
-      handle: handleGuildAction,
-      gate: channelsEnabled,
+      handle: (params: Record<string, unknown>) =>
+        handleGuildAction("channelMove", params, channelsEnabled),
       call: moveChannelDiscord,
       error: "position must be a non-negative integer",
     },
     {
       action: "timeout",
       params: { guildId: "G1", userId: "U1", durationMinutes: 5.5 },
-      handle: (_action: string, params: Record<string, unknown>, gate: typeof moderationEnabled) =>
-        handleModerationAction("timeout", params, gate),
-      gate: moderationEnabled,
+      handle: (params: Record<string, unknown>) =>
+        handleDiscordAction(
+          { ...params, action: "timeout" },
+          discordCfg({ token: "token", actions: { moderation: true } }),
+        ),
       call: timeoutMemberDiscord,
       error: "durationMinutes must be a non-negative integer",
     },
     {
       action: "threadCreate",
       params: { channelId: "C1", name: "thread", autoArchiveMinutes: 999 },
-      handle: handleMessagingAction,
-      gate: enableAllActions,
+      handle: (params: Record<string, unknown>) => handleMessagingAction("threadCreate", params),
       call: createThreadDiscord,
       error: "autoArchiveMinutes must be one of 60, 1440, 4320, or 10080 minutes",
     },
   ])(
     "rejects invalid $action integers before provider calls",
-    async ({ action, params, handle, gate, call, error }) => {
-      await expect(handle(action, params, gate)).rejects.toThrow(error);
+    async ({ params, handle, call, error }) => {
+      await expect(handle(params)).rejects.toThrow(error);
       expect(call).not.toHaveBeenCalled();
     },
   );

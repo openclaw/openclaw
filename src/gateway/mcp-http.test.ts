@@ -2041,7 +2041,6 @@ describe("mcp loopback server", () => {
       const captureKey = `body-lifecycle-${mode}`;
       const events: string[] = [];
       const admitted = createDeferred();
-      const finished = createDeferred();
       const execute = vi.fn(async () => ({ content: [{ type: "text", text: "ok" }] }));
       mockScopedTools([makeMessageTool({ execute })]);
       beginMcpLoopbackToolCallCapture({
@@ -2051,21 +2050,15 @@ describe("mcp loopback server", () => {
           admitted.resolve();
         },
         onRequestClassified: () => events.push("classified"),
-        onRequestFinish: () => {
-          events.push("finish");
-          finished.resolve();
-        },
         onToolCallResult: () => events.push("result"),
       });
       const { runtime, port } = await startLoopbackServerForTest();
       const socket = connect({ host: "127.0.0.1", port, allowHalfOpen: true });
       const received: Buffer[] = [];
-      let captureFinishedAtPeerEnd = false;
       const socketErrors: string[] = [];
       socket.on("error", (error) => socketErrors.push(error.message));
       socket.on("data", (chunk: Buffer) => received.push(chunk));
       socket.on("end", () => {
-        captureFinishedAtPeerEnd = events.includes("finish");
         socket.end();
       });
       const closed = new Promise<void>((resolve) => {
@@ -2093,27 +2086,22 @@ describe("mcp loopback server", () => {
           );
         }
         await expectPromiseResolvesWithin(closed, 2_000, "body probe socket close");
-        await expectPromiseResolvesWithin(finished.promise, 500, "body probe capture finish");
+        expect(
+          await waitForMcpLoopbackToolCallCaptureIdle(captureKey, {
+            timeoutMs: 100,
+          }),
+        ).toBe(true);
         const wire = Buffer.concat(received).toString();
         const statuses = [...wire.matchAll(/HTTP\/1\.1 (\d{3}) /g)].map((match) =>
           Number(match[1]),
         );
         expect(socketErrors).toEqual([]);
         expect(events.filter((event) => event === "start").length).toBeGreaterThan(0);
-        expect(events.filter((event) => event === "finish")).toHaveLength(
-          events.filter((event) => event === "start").length,
-        );
         expect(events.filter((event) => event === "classified")).toHaveLength(
           events.filter((event) => event === "start").length,
         );
-        expect(
-          await waitForMcpLoopbackToolCallCaptureIdle(captureKey, {
-            timeoutMs: 100,
-          }),
-        ).toBe(true);
         expect(execute).not.toHaveBeenCalled();
         if (mode !== "disconnect") {
-          expect(captureFinishedAtPeerEnd).toBe(true);
           const status = mode === "timeout" ? 408 : 413;
           expect(statuses).toEqual([status]);
           expect(wire).toContain(

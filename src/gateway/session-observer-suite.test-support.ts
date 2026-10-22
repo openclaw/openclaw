@@ -18,9 +18,9 @@ export function useObserverSuite() {
     vi.useFakeTimers();
     vi.setSystemTime(0);
   });
-  afterEach(() => {
+  afterEach(async () => {
     for (const harness of activeHarnesses) {
-      harness.observer.dispose();
+      await harness.observer.disposeAsync();
     }
     activeHarnesses.clear();
     vi.restoreAllMocks();
@@ -43,7 +43,7 @@ export function emitEvent(
   data: Record<string, unknown>,
   route: EventRoute = {},
 ) {
-  harness.observer.handleEvent(event({ ...route, stream, data }));
+  return harness.observer.handleEventAsync(event({ ...route, stream, data }));
 }
 
 export async function advanceAndFlush(ms: number) {

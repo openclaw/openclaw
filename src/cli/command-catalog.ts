@@ -2,7 +2,6 @@
 import { hasFlag } from "./argv.js";
 import { PASSIVE_STARTUP_POLICY } from "./command-catalog-policies.js";
 import type { CliCommandCatalogEntry } from "./command-catalog-types.js";
-import { updateCommandCatalog } from "./command-catalog-update.js";
 
 function hasCliOption(argv: readonly string[], name: string): boolean {
   for (const arg of argv.slice(2)) {
@@ -194,6 +193,12 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     route: { id: "gateway-status" },
   },
   {
+    commandPath: ["gateway", "recover-lock"],
+    exact: true,
+    // Recovery must reach the lock before config preflight can request state ownership.
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+  },
+  {
     commandPath: ["gateway", "call"],
     exact: true,
     policy: PASSIVE_STARTUP_POLICY,
@@ -368,9 +373,12 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: {
       configGuard: "skip",
       loadPlugins: "never",
-      // Shared-state maintenance must acquire exclusive ownership before any
-      // config-health observation can open the canonical SQLite database.
-      networkProxy: ({ argv }) => (hasCliOption(argv, "--state-sqlite") ? "bypass" : "default"),
+      // Local maintenance must acquire ownership before config-health observation
+      // can open the canonical database.
+      networkProxy: ({ argv }) =>
+        hasCliOption(argv, "--state-sqlite") || hasCliOption(argv, "--client-credentials")
+          ? "bypass"
+          : "default",
     },
   },
   {
@@ -498,7 +506,31 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { networkProxy: ({ argv }) => (hasFlag(argv, "--local") ? "default" : "bypass") },
   },
   { commandPath: ["uninstall"], policy: { networkProxy: "bypass" } },
-  ...updateCommandCatalog,
+  // Update commands retain their own config, state, and protocol admission boundaries.
+  ...["migrate", "restore", "finish"].map((action): CliCommandCatalogEntry => ({
+    commandPath: ["update", action],
+    exact: true,
+    policy: { ...PASSIVE_STARTUP_POLICY, hideBanner: true, ownsProtocolStdout: true },
+  })),
+  {
+    commandPath: ["update", "adopt-immutable"],
+    exact: true,
+    policy: { ...PASSIVE_STARTUP_POLICY, hideBanner: true },
+  },
+  {
+    commandPath: ["update", "cleanup"],
+    exact: true,
+    policy: { ...PASSIVE_STARTUP_POLICY, hideBanner: true },
+  },
+  {
+    commandPath: ["update"],
+    policy: { configGuard: "skip", hideBanner: true },
+  },
+  {
+    commandPath: ["update", "admit"],
+    // Malformed internal argv must keep protocol stdout and read-only startup policy too.
+    policy: { ...PASSIVE_STARTUP_POLICY, hideBanner: true, ownsProtocolStdout: true },
+  },
   {
     commandPath: ["config", "validate"],
     exact: true,

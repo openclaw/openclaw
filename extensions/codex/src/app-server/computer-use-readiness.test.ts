@@ -110,8 +110,8 @@ describe("Codex Computer Use readiness", () => {
         marketplaceName: "desktop-tools",
         tools: ["list_apps"],
         message: "Computer Use is ready.",
-        installation: { status: "installed", ok: true },
-        exposure: { status: "available", ok: true },
+        installation: "installed",
+        exposure: "available",
         liveTest: {
           status: "passed",
           ok: true,
@@ -171,7 +171,6 @@ describe("Codex Computer Use readiness", () => {
           ready: true,
           reason: "ready",
           liveTest: { status: "passed", attempts: 2, retried: true, repaired: !reloadFailures },
-          repair: { attempted: true, killedPids: [], warnings: reloadFailures ? [warning] : [] },
         });
         if (reloadFailures) {
           expect(status.warnings).toContain(warning);
@@ -225,7 +224,6 @@ describe("Codex Computer Use readiness", () => {
     expect(status.message).toContain(
       "Startup is allowed because computerUse.strictReadiness is false.",
     );
-    expect(status.repair).toBeUndefined();
     expectRequestMethodNotCalled(request, "config/mcpServer/reload");
   });
 
@@ -242,8 +240,8 @@ describe("Codex Computer Use readiness", () => {
         ready: false,
         reason: "live_test_failed",
         ...exposed,
-        installation: { status: "installed", ok: true },
-        exposure: { status: "available", ok: true },
+        installation: "installed",
+        exposure: "available",
         liveTest: {
           status: "failed",
           ok: false,

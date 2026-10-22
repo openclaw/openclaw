@@ -101,6 +101,15 @@ export function registerNostrGatewayAdmissionTests() {
             enqueued.resolve();
             return result;
           };
+          const enqueueAndClaim = queue.enqueueAndClaim?.bind(queue);
+          if (enqueueAndClaim) {
+            queue.enqueueAndClaim = async (...args) => {
+              const result = await enqueueAndClaim(...args);
+              ids.push(args[0]);
+              enqueued.resolve();
+              return result;
+            };
+          }
           return queue;
         },
       },

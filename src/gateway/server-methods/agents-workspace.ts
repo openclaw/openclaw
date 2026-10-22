@@ -15,7 +15,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { WORKSPACE_PREVIEW_MAX_BYTES } from "../workspace-file-limits.js";
 import { resolveConfiguredAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { defineValidatedGatewayHandler } from "./validation.js";
 import {
   decodeUtf8Strict,
   listWorkspacePath,
@@ -102,144 +102,137 @@ function resolveWorkspaceScopeOrRespond(
 }
 
 export const agentsWorkspaceHandlers: GatewayRequestHandlers = {
-  "agents.workspace.list": async ({ params, respond, context }) => {
-    if (
-      !assertValidParams(
-        params,
-        validateAgentsWorkspaceListParams,
-        "agents.workspace.list",
-        respond,
-      )
-    ) {
-      return;
-    }
-    const scope = resolveWorkspaceScopeOrRespond(params, context.getRuntimeConfig(), respond);
-    if (!scope) {
-      return;
-    }
-    const { agentId, workspaceDir, browserPath } = scope;
-    const stat = await statWorkspacePath(workspaceDir, browserPath);
-    const dirents = stat?.isDirectory
-      ? await listWorkspacePath(workspaceDir, browserPath)
-      : undefined;
-    if (!dirents) {
-      respond(
-        false,
-        undefined,
-        workspaceError("workspace_path_not_found", "workspace directory not found", {
-          path: browserPath,
-        }),
+  "agents.workspace.list": defineValidatedGatewayHandler(
+    "agents.workspace.list",
+    validateAgentsWorkspaceListParams,
+    async ({ params, respond, context }) => {
+      const scope = resolveWorkspaceScopeOrRespond(params, context.getRuntimeConfig(), respond);
+      if (!scope) {
+        return;
+      }
+      const { agentId, workspaceDir, browserPath } = scope;
+      const stat = await statWorkspacePath(workspaceDir, browserPath);
+      const dirents = stat?.isDirectory
+        ? await listWorkspacePath(workspaceDir, browserPath)
+        : undefined;
+      if (!dirents) {
+        respond(
+          false,
+          undefined,
+          workspaceError("workspace_path_not_found", "workspace directory not found", {
+            path: browserPath,
+          }),
+        );
+        return;
+      }
+      const entries = sortWorkspaceEntries(
+        dirents
+          .map((dirent) =>
+            toWorkspaceBrowserEntry(
+              browserPath ? `${browserPath}/${dirent.name}` : dirent.name,
+              dirent,
+            ),
+          )
+          .filter((entry): entry is AgentsWorkspaceEntry => entry !== undefined),
       );
-      return;
-    }
-    const entries = sortWorkspaceEntries(
-      dirents
-        .map((dirent) =>
-          toWorkspaceBrowserEntry(
-            browserPath ? `${browserPath}/${dirent.name}` : dirent.name,
-            dirent,
+      const offset = Math.min(params.offset ?? 0, entries.length);
+      const limit = Math.min(params.limit ?? DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT);
+      const parent = path.dirname(browserPath);
+      respond(true, {
+        agentId,
+        path: browserPath,
+        ...(browserPath ? { parentPath: parent === "." ? "" : parent } : {}),
+        entries: entries.slice(offset, offset + limit),
+        totalEntries: entries.length,
+        offset,
+      });
+    },
+  ),
+  "agents.workspace.get": defineValidatedGatewayHandler(
+    "agents.workspace.get",
+    validateAgentsWorkspaceGetParams,
+    async ({ params, respond, context }) => {
+      const scope = resolveWorkspaceScopeOrRespond(params, context.getRuntimeConfig(), respond);
+      if (!scope) {
+        return;
+      }
+      const { agentId, workspaceDir, browserPath } = scope;
+      const respondNotFound = () => {
+        respond(
+          false,
+          undefined,
+          workspaceError("workspace_file_not_found", "workspace file not found", {
+            path: browserPath,
+          }),
+        );
+      };
+      if (!browserPath) {
+        respondNotFound();
+        return;
+      }
+      const stat = await statWorkspacePath(workspaceDir, browserPath);
+      if (!stat?.isFile) {
+        respondNotFound();
+        return;
+      }
+      const expectsImage = IMAGE_EXTENSIONS.has(path.extname(browserPath).toLowerCase());
+      const maxBytes = expectsImage ? MAX_IMAGE_BYTES : WORKSPACE_PREVIEW_MAX_BYTES;
+      const read =
+        stat.size > maxBytes
+          ? "too-large"
+          : await readWorkspaceFile(workspaceDir, browserPath, { maxBytes });
+      if (read === "too-large") {
+        respond(
+          false,
+          undefined,
+          workspaceError("workspace_file_too_large", "workspace file is too large to preview", {
+            maxBytes,
+            path: browserPath,
+            size: stat.size,
+          }),
+        );
+        return;
+      }
+      if (!read) {
+        respondNotFound();
+        return;
+      }
+      const file = {
+        path: browserPath,
+        name: path.basename(browserPath),
+        size: read.stat.size,
+        updatedAtMs: toUpdatedAtMs(read.stat.mtimeMs),
+      };
+      // The extension only picks the byte cap; content decides what leaves the
+      // gateway. Magic-byte sniffing (no filename hints) keeps renamed binaries
+      // from riding the image path past the UTF-8 text gate.
+      const mimeType = expectsImage ? await detectMime({ buffer: read.buffer }) : "text/plain";
+      const content = expectsImage
+        ? mimeType && SUPPORTED_IMAGE_MIME_TYPES.has(mimeType)
+          ? read.buffer.toString("base64")
+          : undefined
+        : decodeUtf8Strict(read.buffer);
+      if (content === undefined) {
+        respond(
+          false,
+          undefined,
+          workspaceError(
+            "workspace_file_unsupported",
+            "workspace file is not UTF-8 text or a supported image",
+            { path: browserPath },
           ),
-        )
-        .filter((entry): entry is AgentsWorkspaceEntry => entry !== undefined),
-    );
-    const offset = Math.min(params.offset ?? 0, entries.length);
-    const limit = Math.min(params.limit ?? DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT);
-    const parent = path.dirname(browserPath);
-    respond(true, {
-      agentId,
-      path: browserPath,
-      ...(browserPath ? { parentPath: parent === "." ? "" : parent } : {}),
-      entries: entries.slice(offset, offset + limit),
-      totalEntries: entries.length,
-      offset,
-    });
-  },
-  "agents.workspace.get": async ({ params, respond, context }) => {
-    if (
-      !assertValidParams(params, validateAgentsWorkspaceGetParams, "agents.workspace.get", respond)
-    ) {
-      return;
-    }
-    const scope = resolveWorkspaceScopeOrRespond(params, context.getRuntimeConfig(), respond);
-    if (!scope) {
-      return;
-    }
-    const { agentId, workspaceDir, browserPath } = scope;
-    const respondNotFound = () => {
-      respond(
-        false,
-        undefined,
-        workspaceError("workspace_file_not_found", "workspace file not found", {
-          path: browserPath,
-        }),
-      );
-    };
-    if (!browserPath) {
-      respondNotFound();
-      return;
-    }
-    const stat = await statWorkspacePath(workspaceDir, browserPath);
-    if (!stat?.isFile) {
-      respondNotFound();
-      return;
-    }
-    const expectsImage = IMAGE_EXTENSIONS.has(path.extname(browserPath).toLowerCase());
-    const maxBytes = expectsImage ? MAX_IMAGE_BYTES : WORKSPACE_PREVIEW_MAX_BYTES;
-    const read =
-      stat.size > maxBytes
-        ? "too-large"
-        : await readWorkspaceFile(workspaceDir, browserPath, { maxBytes });
-    if (read === "too-large") {
-      respond(
-        false,
-        undefined,
-        workspaceError("workspace_file_too_large", "workspace file is too large to preview", {
-          maxBytes,
-          path: browserPath,
-          size: stat.size,
-        }),
-      );
-      return;
-    }
-    if (!read) {
-      respondNotFound();
-      return;
-    }
-    const file = {
-      path: browserPath,
-      name: path.basename(browserPath),
-      size: read.stat.size,
-      updatedAtMs: toUpdatedAtMs(read.stat.mtimeMs),
-    };
-    // The extension only picks the byte cap; content decides what leaves the
-    // gateway. Magic-byte sniffing (no filename hints) keeps renamed binaries
-    // from riding the image path past the UTF-8 text gate.
-    const mimeType = expectsImage ? await detectMime({ buffer: read.buffer }) : "text/plain";
-    const content = expectsImage
-      ? mimeType && SUPPORTED_IMAGE_MIME_TYPES.has(mimeType)
-        ? read.buffer.toString("base64")
-        : undefined
-      : decodeUtf8Strict(read.buffer);
-    if (content === undefined) {
-      respond(
-        false,
-        undefined,
-        workspaceError(
-          "workspace_file_unsupported",
-          "workspace file is not UTF-8 text or a supported image",
-          { path: browserPath },
-        ),
-      );
-      return;
-    }
-    respond(true, {
-      agentId,
-      file: {
-        ...file,
-        mimeType,
-        encoding: expectsImage ? "base64" : "utf8",
-        content,
-      },
-    });
-  },
+        );
+        return;
+      }
+      respond(true, {
+        agentId,
+        file: {
+          ...file,
+          mimeType,
+          encoding: expectsImage ? "base64" : "utf8",
+          content,
+        },
+      });
+    },
+  ),
 };

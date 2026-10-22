@@ -75,3 +75,27 @@ it("does not restore synthetic auth when the preferred credential owner is unava
     ownerId,
   } satisfies Partial<SecretSurfaceUnavailableError>);
 });
+
+it("rejects prepared native login as an HTTP credential while preserving availability", async () => {
+  const provider = "fixture-native";
+  const nativeAuth = {
+    apiKey: "synthetic-native-presence",
+    source: "Fixture native login",
+    mode: "oauth" as const,
+    nativeAuth: { runtime: provider, mode: "oauth" as const },
+  };
+  vi.spyOn(providerRuntime, "prepareProviderSyntheticAuthWithPlugin").mockResolvedValue(nativeAuth);
+  const params = {
+    provider,
+    cfg: { plugins: { enabled: false } },
+    store: createAuthProfileStoreFixture({}),
+    agentDir: await tempDirs.make("openclaw-native-http-auth-"),
+  };
+  const { prepareRuntimeAvailableProviderAuth } = await import("./model-auth-runtime.js");
+  expect(await prepareRuntimeAvailableProviderAuth(params)).toBe(true);
+  await expect(resolveApiKeyForProviderCore(params)).rejects.toMatchObject({
+    code: "missing-provider-auth",
+    provider,
+    message: expect.stringContaining(`Select that runtime or configure an API key`),
+  });
+});

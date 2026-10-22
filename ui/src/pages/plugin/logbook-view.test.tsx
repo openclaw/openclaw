@@ -39,9 +39,7 @@ describe("Logbook view", () => {
       stats: { trackedMs: 0, distractionMs: 0, categories: [], apps: [] },
     };
     const request = vi.fn(async (method: string) =>
-      structuredClone(
-        method === "logbook.status" ? status : method === "logbook.days" ? { days: [] } : timeline,
-      ),
+      structuredClone(method === "logbook.status" ? status : timeline),
     );
     // SAFETY: This view fixture only invokes request on the browser client.
     const client = { request } as unknown as GatewayBrowserClient;
@@ -113,9 +111,6 @@ describe("Logbook view", () => {
       }
       if (method === "logbook.status") {
         return serverStatus;
-      }
-      if (method === "logbook.days") {
-        return { days: [] };
       }
       if (method === "logbook.timeline") {
         return timeline;

@@ -46,17 +46,6 @@ describe("native Ollama output guards", () => {
     expected: number;
   }>([
     { name: "resolved model cap", model: { maxTokens: 3072 }, expected: 3072 },
-    { name: "incomplete model", model: { maxTokens: undefined }, expected: 8192 },
-    {
-      name: "incomplete model with a smaller context",
-      model: { maxTokens: undefined, contextWindow: 4096 },
-      expected: 4096,
-    },
-    {
-      name: "incomplete model with an effective context cap",
-      model: { maxTokens: undefined, contextTokens: 2048 },
-      expected: 2048,
-    },
     { name: "authored native cap", model: { params: { num_predict: 123 } }, expected: 123 },
     { name: "authored unlimited sentinel", model: { params: { num_predict: -1 } }, expected: -1 },
     {

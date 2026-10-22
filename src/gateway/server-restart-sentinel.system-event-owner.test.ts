@@ -2,11 +2,19 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi, type TestContext } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
+import { blockSubagentCompletionDelivery } from "../agents/subagents/completion/subagent-completion-admission.store.js";
+import {
+  seedSubagentCompletionOwner,
+  settleRequesterCompletionBatch,
+} from "../agents/subagents/completion/subagent-completion-admission.test-helpers.js";
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import type { SessionEventOutcome } from "../auto-reply/reply/session-event-contract.js";
 import type * as SessionEventHandoff from "../auto-reply/reply/session-event-handoff.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { getDeliveryQueueEntryStatus } from "../infra/delivery-queue-sqlite.test-support.js";
 import { drainPendingSessionDelivery } from "../infra/session-delivery-queue-recovery.js";
 import * as queueStorage from "../infra/session-delivery-queue-storage.js";
 import type { QueuedSessionDeliveryPayload } from "../infra/session-delivery-queue.records.js";
@@ -63,14 +71,6 @@ const agentTurn = {
 const cases = [
   ["legacy system event", { kind: "systemEvent", sessionKey: "global", text: "resume work" }],
   ["agent turn without a route", agentTurn],
-  [
-    "replaced agent-turn session",
-    {
-      ...agentTurn,
-      expectedSessionId: "old-session",
-      route: { ...deliveryContext, chatType: "direct" },
-    },
-  ],
 ] satisfies Array<[string, QueuedSessionDeliveryPayload]>;
 
 let state: OpenClawTestState;
@@ -270,6 +270,73 @@ it.each([
       }
     },
   ),
+);
+
+it.each([false, true])(
+  "reconciles a blocked completion notice retry after recovery=%s",
+  withFixture(async (recovered: boolean) => {
+    const subagent = createSubagentRunRecord({
+      runId: "blocked-completion",
+      generation: 2,
+      createdAt: 1,
+      requesterAgentId: "main",
+      requesterSessionKey: eventPayload.sessionKey,
+      completionTarget: "parent",
+      expectsCompletionMessage: true,
+      execution: { status: "terminal", endedAt: 2, outcome: { status: "ok" } },
+      completion: { required: true, resultText: "completed result" },
+      delivery: { status: "pending" },
+    });
+    seedSubagentCompletionOwner({ subagent });
+    try {
+      await blockSubagentCompletionDelivery({
+        subagent,
+        reason: "delivery path none did not complete",
+        suspendedReason: "expiry",
+      });
+      const [notice] = await queueStorage.loadPendingSessionDeliveries(queueContext);
+      expect(notice?.kind).toBe("systemEvent");
+      if (!notice) {
+        throw new Error("Blocked completion did not queue its notice");
+      }
+      // Admission can fail before adoption; recovery must retry the same durable intent.
+      mocks.enqueueSessionEvent.mockReturnValue({
+        id: "blocked-notice-attempt",
+        accepted: Promise.resolve({ ok: false, error: "session is busy" }),
+        cancel: () => true,
+        settled: Promise.resolve({
+          status: "failed",
+          executionStarted: false,
+          delivered: false,
+          error: "session is busy",
+        }),
+      });
+      await drainEvent(notice.id);
+      expect(await pending(notice.id)).toMatchObject({ retryCount: 1 });
+      expect(mocks.enqueueSessionEvent).toHaveBeenCalledOnce();
+
+      if (recovered) {
+        await settleRequesterCompletionBatch({
+          entries: [subagentRuns.get(subagent.runId)!],
+          outcome: { delivered: true, path: "direct" },
+          assertCurrent: () => {},
+        });
+        expect(subagentRuns.get(subagent.runId)?.delivery?.status).toBe("delivered");
+      }
+      // An empty resident registry after restart is not evidence that a notice is current.
+      subagentRuns.clear();
+      await drainEvent(notice.id);
+      expect(mocks.enqueueSessionEvent).toHaveBeenCalledTimes(recovered ? 1 : 2);
+      if (recovered) {
+        expect(await pending(notice.id)).toBeNull();
+        expect(getDeliveryQueueEntryStatus("session", notice.id)).toBe("completed");
+      } else {
+        expect(await pending(notice.id)).toMatchObject({ retryCount: 2 });
+      }
+    } finally {
+      subagentRuns.clear();
+    }
+  }),
 );
 
 it(

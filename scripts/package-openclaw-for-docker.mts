@@ -80,6 +80,7 @@ type PackageOptions = RunOptions & {
   outputName?: string;
   packJsonPath?: string;
   pnpmPack?: boolean;
+  runtimeOnly?: boolean;
   prepareBundledAiRuntime?: typeof prepareBundledAiRuntimePackage;
   prepareChangelog?: (cwd: string) => Promise<unknown>;
   prepareDocsMap?: (cwd: string) => Promise<unknown>;
@@ -198,6 +199,7 @@ export function parseArgs(argv: string[]) {
       outputName: "",
       packJson: "",
       pnpmPack: false,
+      runtimeOnly: false,
       skipBuild: false,
       sourceDir: ROOT_DIR,
     },
@@ -208,6 +210,7 @@ export function parseArgs(argv: string[]) {
       stringFlag("--output-name", "outputName", { rejectShortOptions: true }),
       stringFlag("--pack-json", "packJson", { rejectShortOptions: true }),
       booleanFlag("--pnpm-pack", "pnpmPack"),
+      booleanFlag("--runtime-only", "runtimeOnly"),
       booleanFlag("--skip-build", "skipBuild"),
       stringFlag("--source-dir", "sourceDir", { rejectShortOptions: true }),
     ],
@@ -415,7 +418,7 @@ export async function buildPackageArtifacts(
   const buildEnv: NodeJS.ProcessEnv = {
     ...process.env,
     OPENCLAW_BUILD_ALL_NO_PNPM: "1",
-    OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0",
+    OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: packageOptions.runtimeOnly ? "1" : "0",
   };
   for (const envName of PACKAGE_BUILD_PLUGIN_SELECTION_ENV_NAMES) {
     delete buildEnv[envName];
@@ -737,12 +740,26 @@ export async function prepareBundledAiRuntimePackage(
   }
 }
 
-async function normalizeOpenClawTarballModes(tarballPath: string) {
+async function normalizeOpenClawTarballModes(
+  tarballPath: string,
+  sourceDir: string,
+  normalizeModes: boolean,
+) {
   // npm can retain restrictive source read bits. Normalize those for non-root
   // installers while preserving the archive's executable intent.
   const stageDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-package-modes-"));
   try {
     await runPackageTar("extract", tarballPath, stageDir);
+    const { materializeMissingBundledDependencies } =
+      await import("./lib/package-bundled-links.mts");
+    const repaired = await materializeMissingBundledDependencies(
+      sourceDir,
+      path.join(stageDir, "package"),
+      resolveTimeoutMs("OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS", DEFAULT_PACKAGE_PACK_TIMEOUT_MS),
+    );
+    if (!normalizeModes && !repaired) {
+      return;
+    }
     let stagedFileCount = 0;
     const normalizeStagedModes = async (dir: string): Promise<void> => {
       for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
@@ -848,17 +865,26 @@ export async function packOpenClawPackageForDocker(
     packageOptions.restoreDocsMap ??
     sourceDocsMapLifecycle?.restorePackageDocsMap ??
     (async () => false);
+  const manifestPrepareMethod = packageOptions.runtimeOnly
+    ? "prepareRuntimePackageManifest"
+    : "preparePackageManifest";
   const sourceManifestLifecycle =
-    packageOptions.prepareManifest && packageOptions.restoreManifest
+    !packageOptions.runtimeOnly && packageOptions.prepareManifest && packageOptions.restoreManifest
       ? null
       : await loadSourcePackageLifecycle(sourcePath, "package-manifest.mjs", [
-          "preparePackageManifest",
+          manifestPrepareMethod,
           "restorePackageManifest",
         ]);
-  const prepareManifest =
+  const prepareTypedManifest =
     packageOptions.prepareManifest ??
     sourceManifestLifecycle?.preparePackageManifest ??
     (async () => false);
+  const prepareManifest = packageOptions.runtimeOnly
+    ? sourceManifestLifecycle?.prepareRuntimePackageManifest
+    : prepareTypedManifest;
+  if (typeof prepareManifest !== "function") {
+    throw new Error("Source package lifecycle does not support private runtime-only packaging.");
+  }
   const restoreManifest =
     packageOptions.restoreManifest ??
     sourceManifestLifecycle?.restorePackageManifest ??
@@ -1010,10 +1036,15 @@ export async function packOpenClawPackageForDocker(
         tarball = target;
       }
     }
-    // pnpm already writes portable file modes. Keep its archive intact instead
-    // of extracting and recompressing it; npm still needs source-mode repair.
-    if (!packageOptions.pnpmPack) {
-      await (packageOptions.normalizeTarballModes ?? normalizeOpenClawTarballModes)(tarball);
+    const { hasMissingBundledDependencies } = await import("./lib/package-bundled-links.mts");
+    // Preserve complete pnpm archives exactly. Only npm's source modes or an
+    // omitted declared bundle require rebuilding the private extracted archive.
+    if (!packageOptions.pnpmPack || (await hasMissingBundledDependencies(tarball))) {
+      if (packageOptions.normalizeTarballModes) {
+        await packageOptions.normalizeTarballModes(tarball);
+      } else {
+        await normalizeOpenClawTarballModes(tarball, sourcePath, !packageOptions.pnpmPack);
+      }
     }
     if (packageOptions.packJsonPath) {
       // npm's original receipt predates normalization. Inspect the finished bytes;
@@ -1105,7 +1136,10 @@ async function main() {
   await fs.mkdir(outputDir, { recursive: true });
 
   if (!options.skipBuild) {
-    await buildPackageArtifacts(sourceDir, { bundlePlugins: options.bundlePlugins });
+    await buildPackageArtifacts(sourceDir, {
+      bundlePlugins: options.bundlePlugins,
+      runtimeOnly: options.runtimeOnly,
+    });
   }
 
   const tarball = await packOpenClawPackageForDocker(sourceDir, outputDir, {
@@ -1114,6 +1148,7 @@ async function main() {
     outputName: options.outputName,
     packJsonPath: options.packJson,
     pnpmPack: options.pnpmPack,
+    runtimeOnly: options.runtimeOnly,
   });
 
   console.error("==> Checking OpenClaw package tarball");

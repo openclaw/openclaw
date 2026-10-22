@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
+import { CLI_PARENT_BOUND_PRELOAD } from "../../cli-parent-lifetime.mjs";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import {
   createOpenClawTestInstance,
@@ -35,7 +36,7 @@ it("recovers legacy dist/index.js Doctor before refusing its unsupported Node", 
      process.env.PATH = ${JSON.stringify(bin)};
      childProcess.spawnSync = (command, args) => ({
        status: command === ${JSON.stringify(node)} && args[0] === "-e" ? 0 : 1,
-       stdout: JSON.stringify({ version: "24.19.0", probe: { available: true, version: "3.53.4", text: true, blob: true, json: true } }),
+       stdout: JSON.stringify({ version: "24.22.1", probe: { available: true, version: "3.53.4", text: true, blob: true, json: true } }),
      });
      childProcess.spawn = (command, args, options) => {
        fs.writeFileSync(${JSON.stringify(calls)}, JSON.stringify({ command, args, stdio: options.stdio, marker: options.env.OPENCLAW_NODE_UPDATE_RESPAWNED }));
@@ -55,12 +56,14 @@ it("recovers legacy dist/index.js Doctor before refusing its unsupported Node", 
   expect(JSON.parse(await fs.readFile(calls, "utf8"))).toMatchObject({
     command: node,
     args: [
+      "--import",
+      CLI_PARENT_BOUND_PRELOAD,
       expect.stringMatching(/dist[/\\]index\.(?:m?js)$/),
       "doctor",
       "--non-interactive",
       "--fix",
     ],
-    stdio: "inherit",
+    stdio: ["inherit", "inherit", "inherit", "ipc"],
     marker: "1",
   });
   expect(result.stderr).not.toContain("Upgrade Node and re-run");
@@ -71,7 +74,10 @@ it.each([
   { name: "honors inherited NVM_DIR without forwarding workspace roots", source: "inherited" },
   { name: "rejects workspace PATH before runtime discovery", source: "path" },
   { name: "checks launcher admission before loading workspace dotenv", source: "launcher" },
-  { name: "keeps workspace roots out of compile-cache respawns", source: "compile-cache" },
+  {
+    name: "keeps compiled-entry compile caching through workspace-free startup respawns",
+    source: "compile-cache",
+  },
   { name: "keeps workspace roots out of startup-environment respawns", source: "startup-env" },
 ])(
   "$name",
@@ -80,7 +86,7 @@ it.each([
     instances.push(instance);
     const workspace = path.join(instance.homeDir, "checkout");
     const manager = path.join(instance.homeDir, "sibling-nvm");
-    const bin = path.join(manager, "versions/node/v24.19.0/bin");
+    const bin = path.join(manager, "versions/node/v24.22.1/bin");
     const node = path.join(bin, "node");
     const workspaceFnm = path.join(instance.homeDir, "workspace-fnm");
     await fs.mkdir(workspace);
@@ -111,7 +117,7 @@ it.each([
        result.probes.push(command);
        return {
          status: command === ${JSON.stringify(node)} ? 0 : 1,
-         stdout: JSON.stringify({ version: "24.19.0", probe: { available: true, version: "3.53.4", text: true, blob: true, json: true } }),
+         stdout: JSON.stringify({ version: "24.22.1", probe: { available: true, version: "3.53.4", text: true, blob: true, json: true } }),
        };
      };
      childProcess.spawn = (command, args, options) => {
@@ -174,9 +180,9 @@ it.each([
         expect(result.status, result.stdout + result.stderr).toBe(23);
         expect(observed.child.nvm).toBeUndefined();
         expect(observed.child.fnm).toBeUndefined();
-        if (source === "compile-cache") {
-          expect(observed.child.cacheMarker).toBe("1");
-        } else if (process.platform === "win32") {
+        // Compiled entries keep the build-scoped cache; only source entries disable it.
+        expect(observed.child.cacheMarker).toBeUndefined();
+        if (process.platform === "win32") {
           expect(observed.child.args).toContain("--stack-size=8192");
         } else {
           expect(observed.child.startupMarker).toBe("1");

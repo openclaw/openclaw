@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
-import { hasErrnoCode } from "./errno.js";
+import { ignoreMissingPath } from "./errno.js";
 import { executeGitCommand, gitNullConfigPath, normalizeGitPathForFilesystem } from "./git-exec.js";
 import {
   DEV_BRANCH,
@@ -163,11 +163,7 @@ export async function withGitTargetInspectionRoot<T>(
     );
     await fs
       .copyFile(path.resolve(params.root, shallow), path.join(inspectionRoot, "shallow"))
-      .catch((error: unknown) => {
-        if (!hasErrnoCode(error, "ENOENT")) {
-          throw error;
-        }
-      });
+      .catch(ignoreMissingPath);
     const objectIds = new Set<string>();
     const branchObjects = new Set<string>();
     for (const ref of refs.trim().split("\n").filter(Boolean)) {

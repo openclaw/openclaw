@@ -47,7 +47,7 @@ const admittedRunContext = {
 
 function transportEnvironment() {
   return {
-    settingsManager: { getGlobalSettings: () => ({}), getProjectSettings: () => ({}) },
+    settingsManager: { getGlobalSettings: () => ({}) },
     workspaceOnly: false,
     abortSignal: new AbortController().signal,
     codeModeControlsEnabled: false,
@@ -234,45 +234,6 @@ describe("prepareEmbeddedAttemptTransport", () => {
     expect(result.serverToolClearingEnabled).toBe(testCase.clearing);
   });
 
-  it("disables OpenAI inline compaction only for memory flushes", async () => {
-    const payloads: Record<string, unknown>[] = [];
-    for (const trigger of [undefined, "memory"] as const) {
-      const { input, session, streamFn } = createTransportFixture({
-        apiKey: "sk-openai-synthetic",
-      });
-      input.attempt.model = {
-        ...anthropicModel,
-        api: "openai-responses",
-        provider: "openai",
-        id: "gpt-5.4",
-        baseUrl: "https://api.openai.com/v1",
-      };
-      input.attempt.provider = input.attempt.model.provider;
-      input.attempt.modelId = input.attempt.model.id;
-      input.attempt.trigger = trigger;
-      input.attempt.runtimePlan!.transport.resolveExtraParams = (params = {}) => ({
-        responsesServerCompaction: true,
-        ...params.extraParamsOverride,
-      });
-      streamFn.mockImplementation(async (model, _context, options) => {
-        const payload: Record<string, unknown> = { input: [] };
-        await options?.onPayload?.(payload, model);
-        payloads.push(payload);
-        return createAssistantMessageEventStream();
-      });
-      registerProviderStreamForModel.mockReturnValue(streamFn);
-
-      await prepareEmbeddedAttemptTransport(input);
-      await session.agent.streamFn(input.attempt.model, { messages: [] }, {});
-    }
-
-    expect(payloads).toHaveLength(2);
-    expect(payloads[0]?.context_management).toEqual([
-      { type: "compaction", compact_threshold: 140_000 },
-    ]);
-    expect(payloads[1]).not.toHaveProperty("context_management");
-  });
-
   it.each(
     (["openai-responses", "anthropic-messages"] as const).flatMap((api) =>
       [
@@ -325,7 +286,11 @@ describe("prepareEmbeddedAttemptTransport", () => {
       },
     });
     const messages = [checkpoint];
-    streamFn.mockReturnValue(createAssistantMessageEventStream());
+    const payload: Record<string, unknown> = { input: [] };
+    streamFn.mockImplementation(async (model, _context, options) => {
+      await options?.onPayload?.(payload, model);
+      return createAssistantMessageEventStream();
+    });
     registerProviderStreamForModel.mockReturnValue(streamFn);
 
     const prepared = await prepareEmbeddedAttemptTransport(input);
@@ -346,6 +311,15 @@ describe("prepareEmbeddedAttemptTransport", () => {
       scenario.suppressed ? undefined : checkpoint.providerReplay,
     );
     expect(checkpoint.providerReplay).toBeDefined();
+    if (responses && scenario.configured === true) {
+      if (scenario.suppressed) {
+        expect(payload).not.toHaveProperty("context_management");
+      } else {
+        expect(payload.context_management).toEqual([
+          { type: "compaction", compact_threshold: 140_000 },
+        ]);
+      }
+    }
   });
 
   it.each([{ source: "resolved run", resolvedApiKey: "sk-ant-oat01-synthetic-run" }])(

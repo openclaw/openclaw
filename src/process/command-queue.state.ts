@@ -32,12 +32,6 @@ export type QueueEntry = {
   activeAheadAtEnqueue: number;
   taskIdentity?: CommandQueueEnqueueOptions["taskIdentity"];
   sessionTarget?: CommandQueueEnqueueOptions["sessionTarget"];
-  taskTimeoutMs?: number;
-  taskTimeoutProgressAtMs?: () => number | undefined;
-  taskTimeoutSubscribe?: CommandQueueEnqueueOptions["taskTimeoutSubscribe"];
-  taskTimeoutAbortSignal?: AbortSignal;
-  taskTimeoutAbortGraceMs?: number;
-  taskTimeoutReleaseSignal?: AbortSignal;
   onWait?: (waitMs: number, queuedAhead: number) => void;
   releaseQueuedAbort?: () => void;
 };

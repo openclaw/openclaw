@@ -12,21 +12,21 @@ import { createCodexSupervisionTools } from "./supervision-tools.js";
 type CodexSupervisionToolsOptions = Parameters<typeof createCodexSupervisionTools>[0];
 type TestOptions = Omit<
   CodexSupervisionToolsOptions,
-  | "resolveAuthProfileId"
-  | "resolveAuthProfileIdAtEffect"
-  | "resolveRuntimeOptions"
-  | "senderIsOwner"
-> & { senderIsOwner?: boolean };
+  "resolveAuthProfileId" | "withAuthProfileIdAtEffect" | "resolveRuntimeOptions" | "senderIsOwner"
+> & {
+  senderIsOwner?: boolean;
+  withAuthProfileIdAtEffect?: CodexSupervisionToolsOptions["withAuthProfileIdAtEffect"];
+};
 
 const auth = createCodexAuthProfileSelection(providerAuth);
 
 function createTestSupervisionTools(options: TestOptions) {
   return createCodexSupervisionTools({
     senderIsOwner: true,
-    ...options,
     resolveAuthProfileId: auth.resolveCodexAppServerAuthProfileIdForAgent,
-    resolveAuthProfileIdAtEffect: auth.resolveCodexAppServerAuthProfileIdAtEffect,
+    withAuthProfileIdAtEffect: auth.withCodexAppServerAuthProfileIdAtEffect,
     resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
+    ...options,
   });
 }
 
@@ -132,15 +132,17 @@ function endpointConfig(
 }
 
 function expectListError(request: EndpointRequest, detail: string, params = {}) {
-  return expect(
-    toolByName(createTools(request), "codex_sessions_list").execute("list", params),
-  ).resolves.toMatchObject({
+  return expect(listSessions(createTools(request), params)).resolves.toMatchObject({
     details: { sessions: [], errors: [{ endpointId: "local", ok: false, detail }] },
   });
 }
 
 function readSession(tools: ReturnType<typeof createCodexSupervisionTools>, params = {}) {
   return toolByName(tools, "codex_session_read").execute("read", { ...sessionParams, ...params });
+}
+
+function listSessions(tools: ReturnType<typeof createCodexSupervisionTools>, params = {}) {
+  return toolByName(tools, "codex_sessions_list").execute("list", params);
 }
 
 function mutateDuringRead(
@@ -158,6 +160,11 @@ function mutateDuringRead(
     return { thread };
   });
   return { tools: createTools(request, options), methods };
+}
+
+function expectChangedRead(mutate: () => void, options: Partial<CodexSupervisionToolsOptions>) {
+  const { tools } = mutateDuringRead(mutate, options);
+  return expect(readSession(tools)).rejects.toThrow("endpoint local was removed or changed");
 }
 
 describe("Codex supervision compatibility tools", () => {
@@ -243,7 +250,7 @@ describe("Codex supervision compatibility tools", () => {
   });
 
   it("retains the five shipped tool names and policy gates", async () => {
-    const { request } = createRequest({ id: "thread-1", status: { type: "idle" } });
+    const { request } = createRequest(idleThread());
     const tools = configuredTools({ enabled: true }, { request });
 
     expect(tools.map((tool) => tool.name)).toEqual([
@@ -289,14 +296,7 @@ describe("Codex supervision compatibility tools", () => {
         }
         if (method === "thread/list") {
           return {
-            data: [
-              {
-                id: "stored-thread",
-                name: privateName,
-                preview: privatePreview,
-                status: { type: "idle" },
-              },
-            ],
+            data: [{ ...idleThread("stored-thread"), name: privateName, preview: privatePreview }],
             nextCursor: null,
           };
         }
@@ -314,7 +314,7 @@ describe("Codex supervision compatibility tools", () => {
         { request },
       );
 
-      const result = await toolByName(tools, "codex_sessions_list").execute("list", {
+      const result = await listSessions(tools, {
         include_stored: true,
         max_stored_sessions: 1,
       });
@@ -352,8 +352,7 @@ describe("Codex supervision compatibility tools", () => {
   it("preserves raw tool arguments and output in permitted transcript reads", async () => {
     const output = "API_TOKEN = computeToken()\nOPENAI_API_KEY=sk-abcdefghijklmnopqrstuv\n";
     const thread = {
-      id: "thread-1",
-      status: { type: "idle" },
+      ...idleThread(),
       turns: [
         {
           id: "turn-1",
@@ -462,10 +461,8 @@ describe("Codex supervision compatibility tools", () => {
         nextCursor: `stored-page-${storedPageCalls + 1}`,
       };
     });
-    const tools = createTools(request);
-
     await expect(
-      toolByName(tools, "codex_sessions_list").execute("list", {
+      listSessions(createTools(request), {
         include_stored: true,
         max_stored_sessions: 2,
       }),
@@ -482,12 +479,10 @@ describe("Codex supervision compatibility tools", () => {
   });
 
   it("rejects a stored page that over-returns max_stored_sessions", async () => {
-    const request = storedPages(() => {
-      return {
-        data: [1, 2, 3].map((id) => idleThread(`stored-thread-${id}`)),
-        nextCursor: null,
-      };
-    });
+    const request = storedPages(() => ({
+      data: [1, 2, 3].map((id) => idleThread(`stored-thread-${id}`)),
+      nextCursor: null,
+    }));
     await expectListError(request, "Codex thread/list returned more than 1 entries", {
       include_stored: true,
       max_stored_sessions: 1,
@@ -498,12 +493,7 @@ describe("Codex supervision compatibility tools", () => {
     ["missing thread id", { data: [{}], nextCursor: null }, "thread id at data[0]"],
     ["blank cursor", { data: [], nextCursor: " " }, "nextCursor"],
   ])("rejects a stored page with %s", async (_name, response, detail) => {
-    const request = createEndpointRequest(async (_endpoint, method) => {
-      if (method === "thread/loaded/list") {
-        return { data: [], nextCursor: null };
-      }
-      return response;
-    });
+    const request = storedPages(() => response);
     await expectListError(request, `Codex thread/list returned an invalid ${detail}`, {
       include_stored: true,
     });
@@ -538,9 +528,7 @@ describe("Codex supervision compatibility tools", () => {
     });
     const tools = createTools(request, { getPluginConfig: () => pluginConfig });
 
-    await expect(toolByName(tools, "codex_sessions_list").execute("list", {})).rejects.toThrow(
-      error,
-    );
+    await expect(listSessions(tools)).rejects.toThrow(error);
     expect(requestCalls).toBe(1);
   });
 
@@ -602,7 +590,7 @@ describe("Codex supervision compatibility tools", () => {
 
   it("does not return a transcript when the effective agent directory changes in flight", async () => {
     let runtimeConfig = agentConfig("/tmp/codex-supervision-agent-a");
-    const { tools } = mutateDuringRead(
+    await expectChangedRead(
       () => {
         runtimeConfig = agentConfig("/tmp/codex-supervision-agent-b");
       },
@@ -611,8 +599,6 @@ describe("Codex supervision compatibility tools", () => {
         getRuntimeConfig: () => runtimeConfig,
       },
     );
-
-    await expect(readSession(tools)).rejects.toThrow("endpoint local was removed or changed");
   });
 
   it("does not return a transcript when the effective auth profile changes in flight", async () => {
@@ -638,29 +624,30 @@ describe("Codex supervision compatibility tools", () => {
       },
     ]);
     let runtimeConfig = agentConfig(agentDir, ["openai:first", "openai:second"]);
-    const { tools } = mutateDuringRead(
+    await expectChangedRead(
       () => {
         runtimeConfig = agentConfig(agentDir, ["openai:second", "openai:first"]);
       },
       {
         getPluginConfig: () => agentReadConfig,
         getRuntimeConfig: () => runtimeConfig,
+        withAuthProfileIdAtEffect: async (params, consume) =>
+          consume({
+            read: () => auth.resolveCodexAppServerAuthProfileIdForAgent(params),
+            assertCurrent() {},
+          }),
       },
     );
-
-    await expect(readSession(tools)).rejects.toThrow("endpoint local was removed or changed");
   });
 
   it("does not return a transcript when fallback API-key auth changes in flight", async () => {
     vi.stubEnv("OPENAI_API_KEY", "first-fallback-key");
-    const { tools } = mutateDuringRead(
+    await expectChangedRead(
       () => {
         vi.stubEnv("OPENAI_API_KEY", "second-fallback-key");
       },
       { getPluginConfig: () => ({ supervision: readPolicy }) },
     );
-
-    await expect(readSession(tools)).rejects.toThrow("endpoint local was removed or changed");
   });
 
   it("rechecks write policy before mutating an active turn", async () => {

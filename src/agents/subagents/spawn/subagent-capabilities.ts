@@ -157,8 +157,6 @@ export function resolveSubagentCapabilities(params: { depth: number; maxSpawnDep
     depth,
     role,
     controlScope,
-    canSpawn: role === "main" || role === "orchestrator",
-    canControlChildren: controlScope === "children",
   };
 }
 

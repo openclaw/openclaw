@@ -8,6 +8,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { getProcessSupervisor } from "../../process/supervisor/index.js";
@@ -166,6 +167,7 @@ describe("durable sandbox runtime generations", () => {
       databasePath: resolveOpenClawStateSqlitePath(),
       payload: {
         pid: process.pid,
+        processNamespace: readGatewayLockProcessNamespace(),
         createdAt: new Date().toISOString(),
         configPath: path.join(workspaceDir, "openclaw.json"),
         role: "gateway",

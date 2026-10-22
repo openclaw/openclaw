@@ -4,14 +4,13 @@ import {
 } from "openclaw/plugin-sdk/media-generation-runtime";
 import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import {
-  assertOkOrThrowHttpError,
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
   pollProviderOperationJson,
-  postJsonRequest,
-  readProviderJsonObjectResponse,
+  postJsonResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderApiKeyHttpRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   isRecord,
@@ -39,7 +38,6 @@ const MAX_DURATION_SECONDS = 10;
 type RunwayTaskStatus = "PENDING" | "RUNNING" | "THROTTLED" | "SUCCEEDED" | "FAILED" | "CANCELLED";
 
 type RunwayTaskDetailResponse = {
-  id?: unknown;
   status?: unknown;
   output?: unknown;
   failure?: unknown;
@@ -116,14 +114,6 @@ function resolveSourceUri(
   return `data:${mimeType};base64,${asset.buffer.toString("base64")}`;
 }
 
-function resolveDurationSeconds(value: number | undefined): number {
-  const duration = normalizeVideoGenerationDuration({ durationSeconds: value });
-  if (duration === undefined || !Number.isSafeInteger(value)) {
-    return 5;
-  }
-  return Math.max(2, Math.min(MAX_DURATION_SECONDS, duration));
-}
-
 const RUNWAY_RATIO_SIZES = new Map([
   ["9:16", "720:1280"],
   ["16:9", "1280:720"],
@@ -133,46 +123,26 @@ const RUNWAY_RATIO_SIZES = new Map([
   ["21:9", "1584:672"],
 ]);
 
-function resolveRunwayRatio(req: VideoGenerationRequest): string {
-  const hasImageInput = (req.inputImages?.length ?? 0) > 0;
-  const requested =
-    normalizeOptionalString(req.size) ||
-    RUNWAY_RATIO_SIZES.get(normalizeOptionalString(req.aspectRatio) ?? "");
-  if (requested) {
-    if (!hasImageInput && requested !== "1280:720" && requested !== "720:1280") {
-      throw new Error("Runway text-to-video currently supports only 16:9 or 9:16 output ratios.");
-    }
-    return requested;
-  }
-  return "1280:720";
-}
-
-function resolveEndpoint(
-  req: VideoGenerationRequest,
-): "/v1/text_to_video" | "/v1/image_to_video" | "/v1/video_to_video" {
-  const imageCount = req.inputImages?.length ?? 0;
-  const videoCount = req.inputVideos?.length ?? 0;
-  if (imageCount > 0 && videoCount > 0) {
-    throw new Error("Runway video generation does not support image and video inputs together.");
-  }
-  if (imageCount > 1 || videoCount > 1) {
-    throw new Error("Runway video generation supports at most one input image or one input video.");
-  }
-  if (videoCount > 0) {
-    return "/v1/video_to_video";
-  }
-  if (imageCount > 0) {
-    return "/v1/image_to_video";
-  }
-  return "/v1/text_to_video";
-}
-
 function buildCreateBody(
   req: VideoGenerationRequest,
-  endpoint: ReturnType<typeof resolveEndpoint>,
+  endpoint: "/v1/text_to_video" | "/v1/image_to_video" | "/v1/video_to_video",
 ): Record<string, unknown> {
-  const duration = resolveDurationSeconds(req.durationSeconds);
-  const ratio = resolveRunwayRatio(req);
+  const normalizedDuration = normalizeVideoGenerationDuration({
+    durationSeconds: req.durationSeconds,
+  });
+  const duration =
+    normalizedDuration === undefined || !Number.isSafeInteger(req.durationSeconds)
+      ? 5
+      : Math.max(2, Math.min(MAX_DURATION_SECONDS, normalizedDuration));
+  const hasReferenceInput =
+    (req.inputImages?.length ?? 0) > 0 || (req.inputVideos?.length ?? 0) > 0;
+  const ratio =
+    normalizeOptionalString(req.size) ||
+    RUNWAY_RATIO_SIZES.get(normalizeOptionalString(req.aspectRatio) ?? "") ||
+    "1280:720";
+  if (!hasReferenceInput && ratio !== "1280:720" && ratio !== "720:1280") {
+    throw new Error("Runway text-to-video currently supports only 16:9 or 9:16 output ratios.");
+  }
   const model = normalizeOptionalString(req.model) ?? DEFAULT_RUNWAY_MODEL;
   if (endpoint !== "/v1/video_to_video") {
     const imageToVideo = endpoint === "/v1/image_to_video";
@@ -245,16 +215,34 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
     },
     async generateVideo(req): Promise<VideoGenerationResult> {
       const fetchFn = fetch;
-      const endpoint = resolveEndpoint(req);
+      const imageCount = req.inputImages?.length ?? 0;
+      const videoCount = req.inputVideos?.length ?? 0;
+      if (imageCount > 0 && videoCount > 0) {
+        throw new Error(
+          "Runway video generation does not support image and video inputs together.",
+        );
+      }
+      if (imageCount > 1 || videoCount > 1) {
+        throw new Error(
+          "Runway video generation supports at most one input image or one input video.",
+        );
+      }
+      const endpoint =
+        videoCount > 0
+          ? "/v1/video_to_video"
+          : imageCount > 0
+            ? "/v1/image_to_video"
+            : "/v1/text_to_video";
       const requestBody = buildCreateBody(req, endpoint);
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         await resolveProviderApiKeyHttpRequestConfig({
           req,
           missingApiKeyMessage: "Runway API key missing",
-          baseUrl:
-            normalizeOptionalString(req.cfg?.models?.providers?.runway?.baseUrl) ??
-            DEFAULT_RUNWAY_BASE_URL,
+          baseUrl: req.cfg?.models?.providers?.runway?.baseUrl,
           defaultBaseUrl: DEFAULT_RUNWAY_BASE_URL,
+          request: sanitizeConfiguredModelProviderRequest(
+            req.cfg?.models?.providers?.runway?.request,
+          ),
           defaultHeaders: {
             "X-Runway-Version": RUNWAY_API_VERSION,
           },
@@ -265,7 +253,7 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
         timeoutMs: req.timeoutMs,
         label: "Runway video generation",
       });
-      const { response, release } = await postJsonRequest({
+      const submitted = await postJsonResponse({
         url: `${baseUrl}${endpoint}`,
         headers,
         body: requestBody,
@@ -276,79 +264,74 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
         fetchFn,
         allowPrivateNetwork,
         dispatcherPolicy,
+        errorLabel: "Runway video generation failed",
+        objectResponse: true,
       });
-      try {
-        await assertOkOrThrowHttpError(response, "Runway video generation failed");
-        const submitted = await readProviderJsonObjectResponse(
-          response,
-          "Runway video generation failed",
-        );
-        const taskId = normalizeOptionalString(submitted.id);
-        if (!taskId) {
-          throw new Error("Runway video generation response missing task id");
-        }
-        const completed = await pollProviderOperationJson<RunwayTaskDetailResponse>({
-          url: `${baseUrl}/v1/tasks/${taskId}`,
-          headers,
-          deadline:
-            deadline.deadlineAtMs === undefined
-              ? createProviderOperationDeadline({
-                  timeoutMs: DEFAULT_TIMEOUT_MS,
-                  label: `Runway video generation task ${taskId}`,
-                })
-              : { ...deadline, label: `Runway video generation task ${taskId}` },
-          defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-          fetchFn,
-          maxAttempts: MAX_POLL_ATTEMPTS,
-          pollIntervalMs: POLL_INTERVAL_MS,
-          requestFailedMessage: "Runway video status request failed",
-          timeoutMessage: `Runway video generation task ${taskId} did not finish in time`,
-          isComplete: (payload) => readRunwayTaskStatus(payload) === "SUCCEEDED",
-          getFailureMessage: (payload) => {
-            const status = readRunwayTaskStatus(payload);
-            return status === "FAILED" || status === "CANCELLED"
-              ? readRunwayFailureMessage(payload.failure) ||
-                  `Runway video generation ${normalizeLowercaseStringOrEmpty(status)}`
-              : undefined;
-          },
-        });
-        const outputUrls = readRunwayOutputUrls(completed);
-        const timeoutMs = createProviderOperationTimeoutResolver({
-          deadline,
-          defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-        });
-        const maxBytes = resolveGeneratedMediaMaxBytes(req.cfg, "video");
-        const videos: GeneratedVideoAsset[] = [];
-        for (const [index, url] of outputUrls.entries()) {
-          videos.push(
-            await downloadGeneratedVideoAsset({
-              url,
-              timeoutMs,
-              defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-              fetchFn,
-              provider: "runway",
-              label: "Runway generated video download",
-              requestFailedMessage: "Runway generated video download failed",
-              index,
-              maxBytes,
-              validateBinaryResponse: true,
-              metadata: { sourceUrl: url },
-            }),
-          );
-        }
-        return {
-          videos,
-          model: normalizeOptionalString(req.model) ?? DEFAULT_RUNWAY_MODEL,
-          metadata: {
-            taskId,
-            status: normalizeOptionalString(completed.status),
-            endpoint,
-            outputUrls,
-          },
-        };
-      } finally {
-        await release();
+      const taskId = normalizeOptionalString(submitted.id);
+      if (!taskId) {
+        throw new Error("Runway video generation response missing task id");
       }
+      const completed = await pollProviderOperationJson<RunwayTaskDetailResponse>({
+        url: `${baseUrl}/v1/tasks/${taskId}`,
+        headers,
+        deadline:
+          deadline.deadlineAtMs === undefined
+            ? createProviderOperationDeadline({
+                timeoutMs: DEFAULT_TIMEOUT_MS,
+                label: `Runway video generation task ${taskId}`,
+              })
+            : { ...deadline, label: `Runway video generation task ${taskId}` },
+        defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+        fetchFn,
+        ssrfPolicy: { allowPrivateNetwork },
+        dispatcherPolicy,
+        maxAttempts: MAX_POLL_ATTEMPTS,
+        pollIntervalMs: POLL_INTERVAL_MS,
+        requestFailedMessage: "Runway video status request failed",
+        timeoutMessage: `Runway video generation task ${taskId} did not finish in time`,
+        isComplete: (payload) => readRunwayTaskStatus(payload) === "SUCCEEDED",
+        getFailureMessage: (payload) => {
+          const status = readRunwayTaskStatus(payload);
+          return status === "FAILED" || status === "CANCELLED"
+            ? readRunwayFailureMessage(payload.failure) ||
+                `Runway video generation ${normalizeLowercaseStringOrEmpty(status)}`
+            : undefined;
+        },
+      });
+      const outputUrls = readRunwayOutputUrls(completed);
+      const timeoutMs = createProviderOperationTimeoutResolver({
+        deadline,
+        defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+      });
+      const maxBytes = resolveGeneratedMediaMaxBytes(req.cfg, "video");
+      const videos: GeneratedVideoAsset[] = [];
+      for (const [index, url] of outputUrls.entries()) {
+        videos.push(
+          await downloadGeneratedVideoAsset({
+            url,
+            timeoutMs,
+            defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+            fetchFn,
+            provider: "runway",
+            label: "Runway generated video download",
+            requestFailedMessage: "Runway generated video download failed",
+            index,
+            maxBytes,
+            validateBinaryResponse: true,
+            metadata: { sourceUrl: url },
+          }),
+        );
+      }
+      return {
+        videos,
+        model: normalizeOptionalString(req.model) ?? DEFAULT_RUNWAY_MODEL,
+        metadata: {
+          taskId,
+          status: normalizeOptionalString(completed.status),
+          endpoint,
+          outputUrls,
+        },
+      };
     },
   };
 }

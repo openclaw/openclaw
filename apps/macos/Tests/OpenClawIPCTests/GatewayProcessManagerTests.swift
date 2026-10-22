@@ -417,7 +417,7 @@ struct GatewayProcessManagerTests {
         commandHook: (@Sendable ([String]) async -> Void)? = nil,
         _ body: () async throws -> T) async throws -> T
     {
-        let marker = FileManager.default.temporaryDirectory
+        let marker = temporaryDirectoryForTests()
             .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
         return try await self.withGatewayConfig(mode: mode, port: port, homeDirectory: homeDirectory) {
             GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
@@ -2562,11 +2562,12 @@ struct GatewayProcessManagerTests {
     func `first run waits for persisted identity maintenance within its readiness budget`(
         maintenanceFinishes: Bool) async throws
     {
-        let stateDir = FileManager.default.temporaryDirectory
+        let stateDir = temporaryDirectoryForTests()
             .appendingPathComponent("openclaw-identity-maintenance-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: stateDir) }
         let databaseURL = stateDir.appendingPathComponent("state/openclaw.sqlite")
+        let credentialsURL = OpenClawClientCredentialStore.databaseURL(rootURL: stateDir)
         let ownerURL = try OpenClawNativeStateAdmission.processOwnerURL(databaseURL: databaseURL, uid: getuid())
         try FileManager.default.createDirectory(
             at: ownerURL.deletingLastPathComponent(),
@@ -2591,6 +2592,7 @@ struct GatewayProcessManagerTests {
                         // The first real handshake could not read or create an identity.
                         #expect(session.latestTask()?.snapshotSendCount() == 0)
                         #expect(!FileManager.default.fileExists(atPath: databaseURL.path))
+                        #expect(!FileManager.default.fileExists(atPath: credentialsURL.path))
                         if maintenanceFinishes { try FileManager.default.removeItem(at: ownerURL) }
                     }
                     return .init(config: (url: url, token: nil, password: nil), routeAuthority: nil)
@@ -2626,7 +2628,8 @@ struct GatewayProcessManagerTests {
             #expect(completed == maintenanceFinishes)
             #expect((fallback == nil) == maintenanceFinishes)
             #expect(!manager._testHasLaunchAgentReadinessFailure())
-            #expect(FileManager.default.fileExists(atPath: databaseURL.path) == maintenanceFinishes)
+            #expect(!FileManager.default.fileExists(atPath: databaseURL.path))
+            #expect(FileManager.default.fileExists(atPath: credentialsURL.path) == maintenanceFinishes)
             await connection.shutdown()
             await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
         }

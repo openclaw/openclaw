@@ -44,9 +44,13 @@ export const clawsHandlers: GatewayRequestHandlers = {
       const entries = params.query?.trim()
         ? await searchClawHubClaws({
             query: params.query,
+            ...(params.category ? { category: params.category } : {}),
             ...(params.limit ? { limit: params.limit } : {}),
           })
-        : await listClawHubClaws();
+        : await listClawHubClaws({
+            ...(params.category ? { category: params.category } : {}),
+            ...(params.featured ? { featured: true } : {}),
+          });
       assertClawsLabsEnabled(context.getRuntimeConfig());
       respond(true, { entries: entries.slice(0, params.limit ?? entries.length) });
     } catch (error) {

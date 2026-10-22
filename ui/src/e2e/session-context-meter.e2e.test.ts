@@ -60,16 +60,14 @@ suite.define(() => {
           });
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
           await gateway.waitForRequest("chat.startup");
-          const trigger = page.getByRole("button", { name: "Details", exact: true });
-          const details = page.locator(".chat-details");
-          const context = details.locator(".chat-details__context");
+          const details = await openChatDetails(page);
+          const context =
+            viewport.width <= 900
+              ? details.locator('[data-details-destination="context"]')
+              : details.locator('[data-details-group="context"]');
           const meter = context.locator("meter");
-          if (viewport.width <= 900) {
-            await openChatDetails(page);
-          } else {
-            await trigger.click();
-          }
           await meter.waitFor();
+          await meter.scrollIntoViewIfNeeded();
 
           for (const [percent, fresh, token] of [
             [14, true, "--ok"],
@@ -97,6 +95,11 @@ suite.define(() => {
               .poll(() => meter.getAttribute("aria-valuetext"))
               .toContain(`${fresh ? "" : "~"}${percent}%`);
             await expect.poll(() => meter.getAttribute("value")).toBe(String(percent));
+            if (viewport.width > 900) {
+              expect(await context.locator(":scope > summary").getAttribute("aria-expanded")).toBe(
+                "false",
+              );
+            }
             const meterBounds = await meter.boundingBox();
             const contextBounds = await context.boundingBox();
             expect(meterBounds).not.toBeNull();

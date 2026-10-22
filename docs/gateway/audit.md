@@ -475,13 +475,26 @@ what was recorded, not as proof of what happened:
 - **Absence of a row proves nothing.** Pre-admission inbound drops, sends from
   plugin-local or direct-send paths that bypass shared durable delivery, a
   dropped admission envelope, and crash-lost queued work can leave no record.
+- Agent-run starts are buffered until the run settles, then start and finish
+  commit together. A running turn's start becomes visible at turn end. Live
+  readers can see tool events before their enclosing run start; occurrence times
+  and source ordering are preserved. If no identity context or other audit event
+  exists yet, run inspection can report the running turn as unknown. A crash before
+  settlement can lose the buffered start. The oldest start flushes separately
+  when the 1,024-run buffer is full. An event that observes disabled collection,
+  or normal shutdown, also flushes accepted unmatched starts.
 - Writes go through a bounded asynchronous process-owned queue; queue
   saturation, storage failure, or a bounded shutdown timeout can drop records
   and log one operational warning.
   A rejected metadata record does not stop the queue from accepting later records.
 - Shutdown drops waiting metadata at its existing deadline but joins submitted
-  worker operations before releasing the writer. Unknown worker outcomes are
-  not replayed; ordinary native lock contention keeps the existing FIFO retry.
+  worker operations before releasing the writer.
+  The writer submits up to 32 already-queued items together, preserving each
+  item's independent commit. Lock contention retains the unprocessed suffix;
+  an unknown worker outcome replays the unacknowledged batch with its original
+  identities, so already committed records and their bindings are not duplicated.
+  After the third consecutive unknown outcome, the writer reports and drops that
+  batch so later queued work can proceed. Previously committed records remain.
 - Crash-ambiguous outbound sends are recorded as `unknown` rather than
   invented outcomes.
 

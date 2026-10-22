@@ -9,17 +9,16 @@ import type { CatalogBackingSessionDisplay } from "./app-sidebar-session-catalog
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { sidebarSessionMetaId, sidebarSessionStateId } from "./app-sidebar-session-types.ts";
+import { ElapsedTime } from "./elapsed-time.tsx";
 import { describeSessionState } from "./session-leading-indicator.ts";
 import { Icon } from "./solid/icon.tsx";
 import {
   renderSessionLeadingState,
   sessionRunVisibility,
   TeamSessionSlots,
-  type TeamSessionSlotsProps,
   SessionRowBadges,
 } from "./solid/session-presentation.tsx";
 import { EMPTY_VIEWER_IDENTITIES } from "./viewer-facepile.ts";
-import "./elapsed-time.tsx";
 import "./tooltip.ts";
 /** Compose independently owned session state and context indicators. */
 export function renderSidebarSessionIndicators(
@@ -98,17 +97,11 @@ export function renderSidebarSessionIndicators(
       (readSession().participantCount ?? readSession().participants?.length ?? 0) === 0
     );
   });
-  const leadingOwner = createMemo(() => {
-    const ownerRepeatedByFilterValue = ownerRepeatedByFilter();
-    const teamValue = team();
-    const ownerRepeatedBySectionValue = ownerRepeatedBySection();
-    const ownerViewingValue = ownerViewing();
-    const ownerActorValue = ownerActor();
-    return ownerRepeatedByFilterValue ||
-      (!teamValue && ownerRepeatedBySectionValue && ownerViewingValue !== true)
+  const leadingOwner = createMemo(() =>
+    ownerRepeatedByFilter() || (!team() && ownerRepeatedBySection() && ownerViewing() !== true)
       ? undefined
-      : ownerActorValue;
-  });
+      : ownerActor(),
+  );
   const gateway = createMemo(() => host().sessionDataContext?.gateway);
   const channelAvatarAuth = createMemo(() =>
     resolveControlUiAvatarAuth({
@@ -117,13 +110,7 @@ export function renderSidebarSessionIndicators(
       password: gateway()?.connection.password,
     }),
   );
-  const teamSummary = createMemo<TeamSessionSlotsProps>(() => ({
-    rows: [readSession()],
-    includeChildren: !childrenExpanded(),
-    childCount: readSession().childSessionKeys.length,
-    runVisibility: sessionRunVisibility,
-  }));
-  const leadingState = renderSessionLeadingState({
+  const { running, leadingIndicator, renderedIdentities } = renderSessionLeadingState({
     get session() {
       return readSession();
     },
@@ -147,9 +134,6 @@ export function renderSidebarSessionIndicators(
     },
     runVisibility: sessionRunVisibility,
   });
-  const running = createMemo(() => leadingState.running),
-    leadingIndicator = () => leadingState.leadingIndicator,
-    renderedIdentities = createMemo(() => leadingState.renderedIdentities);
   const stateDescription = createMemo(() => describeSessionState(readSession()));
   const snoozed = createMemo(
     () =>
@@ -163,22 +147,15 @@ export function renderSidebarSessionIndicators(
       (readSession().isChild &&
         (readSession().runtimeMs != null || readSession().startedAt != null)),
   );
-  const metaId = createMemo(() => {
-    const hasTrailValue = hasTrail();
-    const readSessionValue = readSession();
-    return hasTrailValue ? sidebarSessionMetaId(readSessionValue.key) : undefined;
-  });
-  const stateId = createMemo(() => {
-    const teamValue = team();
-    const stateDescriptionValue = stateDescription();
-    const readSessionValue = readSession();
-    return !teamValue && stateDescriptionValue
-      ? sidebarSessionStateId(readSessionValue.key)
-      : undefined;
-  });
+  const metaId = createMemo(() =>
+    hasTrail() ? sidebarSessionMetaId(readSession().key) : undefined,
+  );
+  const stateId = createMemo(() =>
+    !team() && stateDescription() ? sidebarSessionStateId(readSession().key) : undefined,
+  );
   const persistentIndicator = (
     <span class="sidebar-session-indicator">
-      {leadingIndicator()}
+      {leadingIndicator}
       {readSession().visibility === "draft" ? (
         <span class="session-row-draft-indicator" title={t("chat.sessionSharing.draft")}>
           👻
@@ -220,39 +197,24 @@ export function renderSidebarSessionIndicators(
           })
         ) : currentSession.runtimeMs != null ? (
           currentSession.hasActiveRun ? (
-            <openclaw-elapsed-time
-              prop:startMs={currentSession.runtimeSampledAt! - currentSession.runtimeMs}
-            />
+            <ElapsedTime startMs={currentSession.runtimeSampledAt! - currentSession.runtimeMs} />
           ) : (
             (formatDurationCompact(currentSession.runtimeMs) ?? "0ms")
           )
         ) : (
-          <openclaw-elapsed-time
-            prop:startMs={readSession().startedAt!}
-            prop:endMs={readSession().endedAt ?? null}
-          />
+          <ElapsedTime startMs={readSession().startedAt!} endMs={readSession().endedAt ?? null} />
         )}
       </span>
     ) : undefined;
   });
   return {
-    get running() {
-      return running();
-    },
-    get stateId() {
-      return stateId();
-    },
-    get metaId() {
-      return metaId();
-    },
-    get pullRequest() {
-      return pullRequest();
-    },
+    running,
+    stateId,
+    metaId,
+    pullRequest,
     persistentIndicator,
     originIndicators,
-    get childrenExpanded() {
-      return childrenExpanded();
-    },
+    childrenExpanded,
     content: (
       <>
         {" "}
@@ -290,26 +252,21 @@ export function renderSidebarSessionIndicators(
               <Icon name="clock" />
             </span>
           ) : undefined}
-          {
-            <SessionRowBadges
-              isChild={readSession().isChild}
-              incognito={readSession().incognito}
-              placementState={readSession().placementState}
-              placementProviderId={readSession().placementProviderId}
-              placementProfileId={readSession().placementProfileId}
-              placementMachine={readSession().placementMachine}
-              diskSpaceStatus={readSession().diskSpaceStatus}
-              workspaceConflictCount={readSession().workspaceConflictCount}
-              outboxAttentionCount={readSession().outboxAttentionCount}
-              hasComposerDraft={readSession().hasComposerDraft === true}
-              pullRequest={pullRequest()}
-              pullRequestCount={host().sessionPullRequests.count(readSession().key)}
-              hasApproval={hasApproval()}
-            />
-          }
+          <SessionRowBadges
+            {...readSession()}
+            hasComposerDraft={readSession().hasComposerDraft === true}
+            pullRequest={pullRequest()}
+            pullRequestCount={host().sessionPullRequests.count(readSession().key)}
+            hasApproval={hasApproval()}
+          />
           {team() ? trail() : undefined}{" "}
           <Show when={team()}>
-            <TeamSessionSlots {...teamSummary()} />
+            <TeamSessionSlots
+              rows={[readSession()]}
+              includeChildren={!childrenExpanded()}
+              childCount={readSession().childSessionKeys.length}
+              runVisibility={sessionRunVisibility}
+            />
           </Show>
           {!team() && stateDescription() ? (
             <span class="sr-only" id={stateId()} aria-hidden="true">

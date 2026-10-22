@@ -88,10 +88,8 @@ export function createClickClackActivityPublisher(params: {
   client: Pick<ClickClackClient, "createActivityMessage" | "updateMessageBody">;
   target: ClickClackActivityTarget;
   turnId: string;
-  flushMs?: number;
   onError?: (error: unknown) => void;
 }) {
-  const flushMs = params.flushMs ?? CLICKCLACK_COMMENTARY_FLUSH_MS;
   const commentaryByItem = new Map<string, CommentarySegment>();
   const toolRows = new Map<string, ToolRow>();
   let provenance: ClickClackMessageProvenance | undefined;
@@ -120,10 +118,8 @@ export function createClickClackActivityPublisher(params: {
     if (!segment) {
       return Promise.resolve();
     }
-    if (segment.timer) {
-      clearTimeout(segment.timer);
-      segment.timer = undefined;
-    }
+    clearTimeout(segment.timer);
+    segment.timer = undefined;
     if (!segment.dirty || !segment.body) {
       return Promise.resolve();
     }
@@ -174,7 +170,7 @@ export function createClickClackActivityPublisher(params: {
       segment.timer = setTimeout(() => {
         segment.timer = undefined;
         void flushCommentary(key);
-      }, flushMs);
+      }, CLICKCLACK_COMMENTARY_FLUSH_MS);
     }
   };
 

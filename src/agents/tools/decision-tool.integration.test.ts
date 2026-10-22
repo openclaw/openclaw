@@ -5,7 +5,11 @@ import { afterEach, expect, it, onTestFinished } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { DecisionBatchV2, ProviderDecisionOutcomeV2 } from "../../decisions/types-v2.js";
+import type {
+  DecisionBatchResultV2,
+  DecisionBatchV2,
+  ProviderDecisionOutcomeV2,
+} from "../../decisions/types-v2.js";
 import type { DecisionBatch } from "../../decisions/types.js";
 import {
   onTrustedInternalDiagnosticEvent,
@@ -18,6 +22,7 @@ import { resetPluginLoaderTestStateForTest } from "../../plugins/loader.test-fix
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import {
   createColdPluginFixture,
+  createColdPluginConfig,
   createColdPluginHermeticEnv,
 } from "../../plugins/test-helpers/cold-plugin-fixtures.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -35,6 +40,10 @@ type Trace = {
   batch?: DecisionBatchV2;
   outcome: ProviderDecisionOutcomeV2;
 };
+const nativeOutcome = (result: DecisionBatchResultV2): ProviderDecisionOutcomeV2 => ({
+  status: "ok",
+  result,
+});
 afterEach(async () => {
   await resetPreparedModelRuntimeSnapshotsForTest();
   resetDiagnosticEventsForTest();
@@ -58,9 +67,31 @@ it("returns rich native outcomes through the core tool, registered host and real
   const root = roots.make("decision-tool-native-");
   const pluginRoot = path.join(root, "plugin");
   const emptyBundled = path.join(root, "bundled");
+  const workspaceDir = path.join(root, "workspace");
   fs.mkdirSync(pluginRoot);
   fs.mkdirSync(emptyBundled);
   const id = "decision-tool-fixture";
+  const model = {
+    id: "native",
+    name: "Native fixture",
+    inference: {
+      chat: false,
+      decision: {
+        protocol: "fixture",
+        input: ["text", "image"],
+        questions: {
+          boolean: { probabilities: "none", abstention: true },
+          choice: { probabilities: "none", abstention: true },
+          score: { probabilities: "none", abstention: false },
+          box: { probabilities: "none", abstention: false },
+        },
+        limits: {
+          maxQuestions: 8,
+          image: { maxBytes: 4194304, mimeTypes: ["image/png", "image/jpeg"], remoteUrls: false },
+        },
+      },
+    },
+  };
   const fixture = createColdPluginFixture({
     rootDir: pluginRoot,
     pluginId: id,
@@ -70,40 +101,7 @@ it("returns rich native outcomes through the core tool, registered host and real
       channelConfigs: {},
       providerAuthChoices: [],
       contracts: { decisionProviders: [id] },
-      modelCatalog: {
-        providers: {
-          [id]: {
-            authScope: "plugin",
-            models: [
-              {
-                id: "native",
-                name: "Native fixture",
-                inference: {
-                  chat: false,
-                  decision: {
-                    protocol: "fixture",
-                    input: ["text", "image"],
-                    questions: {
-                      boolean: { probabilities: "none", abstention: true },
-                      choice: { probabilities: "none", abstention: true },
-                      score: { probabilities: "none", abstention: false },
-                      box: { probabilities: "none", abstention: false },
-                    },
-                    limits: {
-                      maxQuestions: 8,
-                      image: {
-                        maxBytes: 4194304,
-                        mimeTypes: ["image/png", "image/jpeg"],
-                        remoteUrls: false,
-                      },
-                    },
-                  },
-                },
-              },
-            ],
-          },
-        },
-      },
+      modelCatalog: { providers: { [id]: { authScope: "plugin", models: [model] } } },
     },
   });
   fs.writeFileSync(
@@ -119,25 +117,22 @@ it("returns rich native outcomes through the core tool, registered host and real
   const trace: Trace = {
     calls: 0,
     authenticated: false,
-    outcome: {
-      status: "ok",
-      result: {
-        model: "native-reported",
-        answers: {
-          explicit: { type: "boolean", answer: true, metadata: { evidence: "fixture" } },
-          abstained: { type: "choice", choice: null, confidence: null },
-          fractional: { type: "score", score: 1.25 },
-          failed: { type: "error", code: "provider-error", providerCode: "fixture-rejected" },
-        },
-        usage: {
-          inputTokens: 12,
-          costUsd: 0,
-          units: { unit: "decision-units", amount: 2 },
-          raw: { nativeUnits: 2 },
-        },
-        metadata: { providerRequestId: "fixture-request", latencyMs: 3 },
+    outcome: nativeOutcome({
+      model: "native-reported",
+      answers: {
+        explicit: { type: "boolean", answer: true, metadata: { evidence: "fixture" } },
+        abstained: { type: "choice", choice: null, confidence: null },
+        fractional: { type: "score", score: 1.25 },
+        failed: { type: "error", code: "provider-error", providerCode: "fixture-rejected" },
       },
-    },
+      usage: {
+        inputTokens: 12,
+        costUsd: 0,
+        units: { unit: "decision-units", amount: 2 },
+        raw: { nativeUnits: 2 },
+      },
+      metadata: { providerRequestId: "fixture-request", latencyMs: 3 },
+    }),
   };
   Reflect.set(globalThis, traceKey, trace);
   const cfg: OpenClawConfig = {
@@ -145,14 +140,10 @@ it("returns rich native outcomes through the core tool, registered host and real
       defaults: {
         model: "unrelated/not-configured",
         decisionModel: `${id}/native`,
-        workspace: path.join(root, "workspace"),
+        workspace: workspaceDir,
       },
     },
-    plugins: {
-      load: { paths: [pluginRoot] },
-      slots: { memory: "none" },
-      entries: { [id]: { enabled: true } },
-    },
+    plugins: { ...createColdPluginConfig(pluginRoot, id).plugins, slots: { memory: "none" } },
   };
   await withEnvAsync(
     {
@@ -162,16 +153,13 @@ it("returns rich native outcomes through the core tool, registered host and real
     },
     async () => {
       setRuntimeConfigSnapshot(cfg);
-      const registry = await loadAndActivateRootPluginRegistry({
-        config: cfg,
-        workspaceDir: path.join(root, "workspace"),
-      });
+      const registry = await loadAndActivateRootPluginRegistry({ config: cfg, workspaceDir });
       expect(registry.diagnostics.filter((item) => item.level === "error")).toEqual([]);
       expect(registry.decisionProviders).toHaveLength(1);
       await using prepared = await acquireReadOnlyPreparedModelRuntime({
         agentId: "main",
         agentDir: resolveAgentDir(cfg, "main"),
-        workspaceDir: path.join(root, "workspace"),
+        workspaceDir,
         config: cfg,
       });
       const tool = createDecisionTool("main", {
@@ -199,8 +187,7 @@ it("returns rich native outcomes through the core tool, registered host and real
           costUsd: 0,
         }),
       ]);
-      expect(trace.authenticated).toBe(true);
-      expect(trace.calls).toBe(1);
+      expect(trace).toMatchObject({ authenticated: true, calls: 1 });
       expect(trace.batch).toEqual({
         state: { type: "json", value: batch.state },
         questions: batch.questions,
@@ -218,11 +205,7 @@ it("returns rich native outcomes through the core tool, registered host and real
       expect(JSON.stringify(result)).not.toContain("synthetic-private-auth");
       expect(JSON.stringify(result)).not.toContain("authScope");
 
-      // Malformed rich answers still fail at the host; tool projection never bypasses validation.
-      trace.outcome = {
-        status: "ok",
-        result: { model: "native", answers: {}, usage: { costUsd: 0 } },
-      };
+      trace.outcome = nativeOutcome({ model: "native", answers: {}, usage: { costUsd: 0 } });
       await expect(tool!.execute("invalid-native", batch)).resolves.toMatchObject({
         details: { status: "unavailable", reason: "invalid-response" },
       });
@@ -241,13 +224,10 @@ it("returns rich native outcomes through the core tool, registered host and real
         questions: { target: { type: "box", instructions: "the square" } },
       };
       const nativeInput = { contractVersion: 2, ...imageBatch };
-      trace.outcome = {
-        status: "ok",
-        result: {
-          model: "native",
-          answers: { target: { type: "box", box: { top: 0, bottom: 1, left: 0, right: 1 } } },
-        },
-      };
+      trace.outcome = nativeOutcome({
+        model: "native",
+        answers: { target: { type: "box", box: { top: 0, bottom: 1, left: 0, right: 1 } } },
+      });
       expect(Value.Check(DecisionEvaluateInput, nativeInput)).toBe(true);
       expect(tool!.description).toContain("box");
       expect(tool!.description).toContain("Supported input modalities: text, image.");

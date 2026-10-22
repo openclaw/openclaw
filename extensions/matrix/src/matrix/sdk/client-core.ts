@@ -2,6 +2,7 @@ import { EventType, MatrixError, MsgType, Preset } from "matrix-js-sdk/lib/matri
 import { EventStatus } from "matrix-js-sdk/lib/models/event-status.js";
 import type { Direction } from "matrix-js-sdk/lib/models/event-timeline.js";
 import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
+import type { MatrixSyncIngressHandler } from "../client/file-sync-store.js";
 import { formatMatrixErrorReason } from "../errors.js";
 import { MATRIX_REACTION_EVENT_TYPE } from "../reaction-common.js";
 import { MatrixClientBase } from "./client-base.js";
@@ -447,6 +448,23 @@ export abstract class MatrixClientCore extends MatrixClientBase {
       nextBatch: result.nextBatch ?? null,
       prevBatch: result.prevBatch ?? null,
     };
+  }
+
+  async bindSyncIngress(handler: MatrixSyncIngressHandler): Promise<() => void> {
+    if (!this.syncStore) {
+      throw new Error("Matrix sync ingress requires a persistent sync store");
+    }
+    return await this.syncStore.bindSyncIngress(async (sync, context) => {
+      try {
+        await handler(sync, context);
+      } catch (error) {
+        const failure = error instanceof Error ? error : new Error(String(error));
+        // The SDK only logs a rejected store callback; the monitor must retire
+        // this generation instead of leaving a stopped sync loop marked healthy.
+        this.emitter.emit("sync.unexpected_error", failure);
+        throw failure;
+      }
+    });
   }
 
   async hydrateEvents(

@@ -31,7 +31,6 @@ import { logError, logWarn } from "../logger.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { isAcpSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
-import { resolveAssistantEventPhase } from "../shared/chat-message-content.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
 import { resolveAssistantTextInput } from "./agent-event-assistant-text.js";
 import {
@@ -45,7 +44,10 @@ import type {
   GatewayBroadcastOpts,
   GatewayBroadcastToConnIdsFn,
 } from "./server-broadcast-types.js";
-import { createAgentEventAdmission } from "./server-chat-event-admission.js";
+import {
+  createAgentEventAdmission,
+  shouldMirrorAgentEventToHiddenSessionMessages,
+} from "./server-chat-event-admission.js";
 import {
   normalizeHeartbeatChatFinalText,
   resolveHeartbeatFlag,
@@ -100,16 +102,6 @@ const CHAT_STATE_BY_TERMINAL_CLASSIFICATION = {
 // Keep the newest handles, independently of tool-progress verbosity and eviction.
 const MAX_LIVE_CANVAS_BLOCKS = 32;
 const MAX_LIVE_CANVAS_BYTES = 64 * 1024;
-
-function shouldMirrorAssistantEventToHiddenSessionMessages(
-  data: AgentEventPayload["data"],
-): boolean {
-  return (
-    ((typeof data.text === "string" && data.text.length > 0) ||
-      (typeof data.delta === "string" && data.delta.length > 0)) &&
-    resolveAssistantEventPhase(data) === "commentary"
-  );
-}
 
 const LIVE_TEXT_PACING_MS = 75;
 
@@ -1123,7 +1115,7 @@ export function createAgentEventHandler({
 
     const { chatLink, sessionAgentId, sessionKey } = resolveEventSession(evt);
     const runContext = getAgentRunContext(evt.runId);
-    const activeLifecycleGeneration = resolveActiveLifecycleGenerationForRun(evt.runId);
+    const generation = lifecyclePhase !== null && resolveActiveLifecycleGenerationForRun(evt.runId);
     const isControlUiVisible = evt.controlUiVisible ?? runContext?.isControlUiVisible ?? true;
     const projectSessionLifecycle =
       evt.projectSessionLifecycle ?? runContext?.projectSessionLifecycle ?? true;
@@ -1153,11 +1145,7 @@ export function createAgentEventHandler({
 
     const suppressRestartRecoveryLifecycle =
       lifecyclePhase !== null &&
-      (Boolean(
-        evt.lifecycleGeneration &&
-        activeLifecycleGeneration &&
-        evt.lifecycleGeneration !== activeLifecycleGeneration,
-      ) ||
+      (Boolean(evt.lifecycleGeneration && generation && evt.lifecycleGeneration !== generation) ||
         restartRecoveryState?.suppress === true);
     if (suppressRestartRecoveryLifecycle) {
       clearPendingTerminalLifecycleError(evt.runId, evt.lifecycleGeneration);
@@ -1413,13 +1401,7 @@ export function createAgentEventHandler({
         (isControlUiVisible ||
           (sessionKey &&
             hasSessionMessageSubscribers &&
-            (isItemEvent ||
-              evt.stream === "thinking" ||
-              evt.stream === "approval" ||
-              evt.stream === "lifecycle" ||
-              (!isAborted &&
-                evt.stream === "assistant" &&
-                shouldMirrorAssistantEventToHiddenSessionMessages(evt.data)))))
+            shouldMirrorAgentEventToHiddenSessionMessages(evt, isAborted)))
       ) {
         sendOrBufferAgentTextEvent(
           clientRunId,

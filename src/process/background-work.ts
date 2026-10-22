@@ -7,41 +7,28 @@ import { CommandLane } from "./lanes.js";
 const BACKGROUND_WORK_GROUP = "background-work";
 const BACKGROUND_WORK_MAX_CONCURRENT = 3;
 
-/** Register a stable core/plugin owner key, never a session or run identifier.
- * Only leaf work belongs here: a coordinator holding capacity must not await
- * another background task, which could need the same occupied capacity. */
-export function createBackgroundWorkOwner(params: { owner: string }) {
-  const owner = params.owner.trim();
-  if (!owner) {
-    throw new Error("Background work requires a stable owner key");
-  }
-  const lane = `${CommandLane.Background}:${owner}`;
-  const register = () => {
-    if (getLaneGroup(lane)) {
-      if ((getQueueState().lanes.get(lane)?.maxConcurrent ?? 1) !== 1) {
-        throw new Error(
-          `Background owner ${owner} is already registered with different concurrency`,
-        );
-      }
-    } else {
-      const group = getQueueState().laneGroups.get(BACKGROUND_WORK_GROUP);
-      publishLaneConfiguration({
-        lanes: { [lane]: 1 },
-        groups: {
-          [BACKGROUND_WORK_GROUP]: {
-            budget: BACKGROUND_WORK_MAX_CONCURRENT,
-            members: [...(group?.members ?? []), lane],
-          },
-        },
-      });
+/** Lazily register Workshop's serial lane, including after queue-state resets. */
+export function getSkillWorkshopReviewLane(): string {
+  const lane = `${CommandLane.Background}:core:skill-workshop`;
+  if (getLaneGroup(lane)) {
+    if ((getQueueState().lanes.get(lane)?.maxConcurrent ?? 1) !== 1) {
+      throw new Error(
+        "Background owner core:skill-workshop is already registered with different concurrency",
+      );
     }
-    return lane;
-  };
-  return {
-    get lane() {
-      return register();
-    },
-  };
+  } else {
+    const group = getQueueState().laneGroups.get(BACKGROUND_WORK_GROUP);
+    publishLaneConfiguration({
+      lanes: { [lane]: 1 },
+      groups: {
+        [BACKGROUND_WORK_GROUP]: {
+          budget: BACKGROUND_WORK_MAX_CONCURRENT,
+          members: [...(group?.members ?? []), lane],
+        },
+      },
+    });
+  }
+  return lane;
 }
 
 export function isBackgroundWorkLane(lane: string): boolean {

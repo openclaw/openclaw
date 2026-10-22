@@ -1,5 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { createSignal, onCleanup, Show } from "solid-js";
+import { createSignal, onSettled, Show } from "solid-js";
 import type {
   UserProfile,
   UsersSetAvatarResult,
@@ -59,7 +59,7 @@ type IdentityChange =
   | { kind: "git-coauthor"; enabled: boolean };
 
 class ProfileState {
-  private readonly targetListeners = new Set<() => void>();
+  private publishTarget?: () => void;
   readonly modelAccountsTarget: ModelAccountsTargetSource = {
     read: () => ({
       gateway: this.context.gateway.snapshot,
@@ -67,8 +67,10 @@ class ProfileState {
       profileId: this.ownProfile?.id ?? null,
     }),
     subscribe: (listener) => {
-      this.targetListeners.add(listener);
-      return () => this.targetListeners.delete(listener);
+      this.publishTarget = listener;
+      return () => {
+        this.publishTarget = undefined;
+      };
     },
   };
   selfUser: AuthenticatedUser | null = null;
@@ -95,12 +97,10 @@ class ProfileState {
   ) {}
   publish() {
     this.invalidate();
-    for (const listener of this.targetListeners) {
-      listener();
-    }
+    this.publishTarget?.();
   }
   dispose() {
-    this.targetListeners.clear();
+    this.publishTarget = undefined;
     this.identityRequestId += 1;
     this.client = null;
     this.connected = false;
@@ -374,24 +374,28 @@ export function ProfilePage() {
     revision();
     return state;
   };
-  // Retire identity requests synchronously when connection authority changes.
-  const stopGateway = context.gateway.subscribe((snapshot) => state.applyGatewaySnapshot(snapshot));
-  const stopEvents = context.gateway.subscribeEvents((event) => {
-    if (
-      !state.identityBusy &&
-      event.event === "sessions.changed" &&
-      asOptionalRecord(event.payload)?.reason === "profile-identity"
-    ) {
-      state.identityRequestId += 1;
-      state.identityLoading = false;
-      void state.loadIdentity();
-    }
-  });
-  state.applyGatewaySnapshot(context.gateway.snapshot);
-  onCleanup(() => {
-    stopGateway();
-    stopEvents();
-    state.dispose();
+  onSettled(() => {
+    // Retire identity requests synchronously when connection authority changes.
+    const stopGateway = context.gateway.subscribe((snapshot) =>
+      state.applyGatewaySnapshot(snapshot),
+    );
+    const stopEvents = context.gateway.subscribeEvents((event) => {
+      if (
+        !state.identityBusy &&
+        event.event === "sessions.changed" &&
+        asOptionalRecord(event.payload)?.reason === "profile-identity"
+      ) {
+        state.identityRequestId += 1;
+        state.identityLoading = false;
+        void state.loadIdentity();
+      }
+    });
+    state.applyGatewaySnapshot(context.gateway.snapshot);
+    return () => {
+      stopGateway();
+      stopEvents();
+      state.dispose();
+    };
   });
   const connected = () => view().connected && view().client !== null;
   const hasPresentation = () =>

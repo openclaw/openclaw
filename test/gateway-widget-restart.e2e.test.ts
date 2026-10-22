@@ -17,6 +17,7 @@ import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
 import { extractAssistantPhaseText } from "../src/shared/chat-message-content.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
 import {
+  connectRestartClient,
   readRestartSession,
   restartEnv,
   restartProviderServer,
@@ -25,7 +26,6 @@ import {
   writeRestartTitle,
   writeRestartToolCall,
 } from "./gateway-restart.test-support.js";
-import { acquireGatewayTestClient } from "./helpers/gateway-client.js";
 import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
 import { createDeferred, withinTest } from "./helpers/promise.js";
@@ -209,23 +209,31 @@ it.skipIf(process.platform === "win32")(
             await instance.state.writeConfig(config);
             await instance.startGateway();
             const deviceIdentity = loadOrCreateDeviceIdentity({
-              path: instance.state.path("proof-device.sqlite"),
+              path: instance.state.statePath(
+                "proof-identities",
+                "requester",
+                "client",
+                "credentials.sqlite",
+              ),
             });
             // A TEST observer must not replace the original Control UI token's issuer binding.
             const observerDeviceIdentity = loadOrCreateDeviceIdentity({
-              path: instance.state.path("proof-observer-device.sqlite"),
+              path: instance.state.statePath(
+                "proof-identities",
+                "observer",
+                "client",
+                "credentials.sqlite",
+              ),
             });
             const connect = (controlUi: boolean) =>
-              acquireGatewayTestClient(
+              connectRestartClient(
+                instance,
                 {
-                  url: instance.url,
-                  token: instance.gatewayToken,
                   deviceIdentity: controlUi ? deviceIdentity : observerDeviceIdentity,
                   origin: controlUi ? `http://127.0.0.1:${instance.port}` : undefined,
                   clientName: controlUi ? GATEWAY_CLIENT_IDS.CONTROL_UI : GATEWAY_CLIENT_IDS.TEST,
                   clientBuildId: controlUi && typeof buildId === "string" ? buildId : undefined,
                   mode: controlUi ? "webchat" : "test",
-                  scopes: ["operator.admin", "operator.read", "operator.write"],
                   caps: controlUi
                     ? [GATEWAY_CLIENT_CAPS.INLINE_WIDGETS, GATEWAY_CLIENT_CAPS.TOOL_EVENTS]
                     : [],
@@ -240,12 +248,7 @@ it.skipIf(process.platform === "win32")(
                     }
                   },
                 },
-                {
-                  timeoutMs: 30_000,
-                  timeoutMessage: "widget recovery connect timeout",
-                  closeMessage: "widget recovery connect closed",
-                  signal,
-                },
+                signal,
               );
             client = await connect(true);
             await client.request("sessions.create", {

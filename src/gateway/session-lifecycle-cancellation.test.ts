@@ -15,6 +15,7 @@ import {
   registerAgentRunContext,
   validateAgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
+import { heartbeatNotifications } from "../infra/heartbeat-events.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { abortChatRunById } from "./chat-abort.js";
 import { captureRpcTargetForTest } from "./server-methods/rpc-source-fixtures.test-support.js";
@@ -149,7 +150,7 @@ it.each([
         registration.cleanup();
         admission.close();
         await subscriptions.agentUnsub();
-        subscriptions.heartbeatUnsub();
+        heartbeatNotifications.onEvent = () => {};
         subscriptions.transcriptUnsub();
         subscriptions.lifecycleUnsub();
         await params.scheduler.stop();

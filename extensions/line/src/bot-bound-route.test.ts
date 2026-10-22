@@ -1,5 +1,4 @@
 import { createHmac } from "node:crypto";
-import { createServer } from "node:http";
 import type { webhook } from "@line/bot-sdk";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -8,7 +7,7 @@ import {
   unregisterSessionBindingAdapter,
   type SessionBindingRecord,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { withTempHome } from "openclaw/plugin-sdk/test-env";
+import { withServer, withTempHome } from "openclaw/plugin-sdk/test-env";
 import { expect, it, vi } from "vitest";
 import { handleLineWebhookEvents } from "./bot-handlers.js";
 import { setLineRuntime } from "./runtime.js";
@@ -32,8 +31,8 @@ it.each([
   { kind: "group", rejection: "allowlist" },
 ] as const)(
   "settles a signed $kind message (rejection=$rejection) with binding-first routing",
-  async ({ kind, rejection }) => {
-    await withTempHome(async () => {
+  ({ kind, rejection }) =>
+    withTempHome(async () => {
       const rejected = rejection !== "none";
       const disabled = rejection === "disabled";
       setLineRuntime(createPluginRuntimeMock());
@@ -117,79 +116,67 @@ it.each([
           },
         ],
       });
-      const server = createServer((req, res) => {
-        void handler(req, res);
-      });
       try {
-        await new Promise<void>((resolve) => {
-          server.listen(0, "127.0.0.1", resolve);
-        });
-        const address = server.address();
-        if (!address || typeof address === "string") {
-          throw new Error("Missing webhook listener");
-        }
-        const source: webhook.Source =
-          kind === "group"
-            ? { type: "group", groupId: conversationId, userId: "sender" }
-            : { type: "user", userId: "sender" };
-        const body = JSON.stringify({
-          events: [
-            {
-              type: "message",
-              source,
-              timestamp: 1_800_000_000_000,
-              mode: "active",
-              webhookEventId: "bound-route",
-              deliveryContext: { isRedelivery: false },
-              replyToken: "reply-token",
-              message: { type: "text", id: "bound-message", text: "hello helper" },
-            },
-          ],
-        });
-        const send = () =>
-          fetch(`http://127.0.0.1:${address.port}/line/webhook`, {
-            method: "POST",
-            body,
-            headers: {
-              "content-type": "application/json",
-              "x-line-signature": createHmac("sha256", account.channelSecret)
-                .update(body)
-                .digest("base64"),
-            },
-          });
-        const response = await send();
-        expect(response.status).toBe(200);
-        await response.text();
-        if (rejected) {
-          expect(processMessage).not.toHaveBeenCalled();
-          expect(failures).toEqual([]);
-          return;
-        }
-        expect(processMessage).toHaveBeenCalledWith(
-          expect.objectContaining({
-            route: expect.objectContaining({
-              agentId: "bound",
-              sessionKey: binding.targetSessionKey,
-            }),
-            ctxPayload: expect.objectContaining({
-              AgentId: "bound",
-              SessionKey: binding.targetSessionKey,
-            }),
-          }),
-          expect.anything(),
+        await withServer(
+          (req, res) => void handler(req, res),
+          async (baseUrl) => {
+            const source: webhook.Source =
+              kind === "group"
+                ? { type: "group", groupId: conversationId, userId: "sender" }
+                : { type: "user", userId: "sender" };
+            const body = JSON.stringify({
+              events: [
+                {
+                  type: "message",
+                  source,
+                  timestamp: 1_800_000_000_000,
+                  mode: "active",
+                  webhookEventId: "bound-route",
+                  deliveryContext: { isRedelivery: false },
+                  replyToken: "reply-token",
+                  message: { type: "text", id: "bound-message", text: "hello helper" },
+                },
+              ],
+            });
+            const send = async () => {
+              const response = await fetch(`${baseUrl}/line/webhook`, {
+                method: "POST",
+                body,
+                headers: {
+                  "content-type": "application/json",
+                  "x-line-signature": createHmac("sha256", account.channelSecret)
+                    .update(body)
+                    .digest("base64"),
+                },
+              });
+              await response.text();
+              return response.status;
+            };
+            expect(await send()).toBe(200);
+            if (rejected) {
+              expect(processMessage).not.toHaveBeenCalled();
+              expect(failures).toEqual([]);
+              return;
+            }
+            expect(processMessage.mock.calls).toMatchObject([
+              [
+                {
+                  route: { agentId: "bound", sessionKey: binding.targetSessionKey },
+                  ctxPayload: { AgentId: "bound", SessionKey: binding.targetSessionKey },
+                },
+                expect.anything(),
+              ],
+            ]);
+            processMessage.mockClear();
+            expect(await send()).toBe(500);
+            expect(processMessage).not.toHaveBeenCalled();
+            expect(failures).toEqual([
+              expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }),
+            ]);
+          },
         );
-        processMessage.mockClear();
-        const unbound = await send();
-        expect(unbound.status).toBe(500);
-        await unbound.text();
-        expect(processMessage).not.toHaveBeenCalled();
-        expect(failures).toEqual([expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" })]);
       } finally {
         unregisterSessionBindingAdapter({ channel: "line", accountId: account.accountId, adapter });
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        });
       }
-    });
-  },
+    }),
 );

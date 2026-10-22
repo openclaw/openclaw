@@ -4,7 +4,7 @@ import fsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { registerSignalExitFinalizer } from "../cli/signal-exit-barrier.js";
-import { hasErrnoCode } from "../infra/errno.js";
+import { hasErrnoCode, ignoreMissingPath } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayScheduler, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
@@ -103,9 +103,7 @@ function retireInstance(key: string, instance: Instance): string | undefined {
   try {
     instance.token?.(true);
   } catch (error) {
-    if (!hasErrnoCode(error, "ENOENT")) {
-      throw error;
-    }
+    ignoreMissingPath(error);
     // Enclosing state can disappear before deferred disposal. Missing ownership
     // permits closing our handle, never deleting residual or replacement files.
     instance.token?.();
@@ -154,22 +152,14 @@ async function reclaimInstances(
   try {
     entries = await fsPromises.readdir(root, { withFileTypes: true });
   } catch (error) {
-    if (!hasErrnoCode(error, "ENOENT")) {
-      throw error;
-    }
+    ignoreMissingPath(error);
     return;
   }
   if (entries.length === 0) {
     return;
   }
   const cutoff = Date.now() - CAPTURE_GRACE_MS;
-  const lstatIfPresent = (file: string) =>
-    fsPromises.lstat(file).catch((error: unknown) => {
-      if (!hasErrnoCode(error, "ENOENT")) {
-        throw error;
-      }
-      return undefined;
-    });
+  const lstatIfPresent = (file: string) => fsPromises.lstat(file).catch(ignoreMissingPath);
   for (const entry of entries) {
     if (
       !entry.isDirectory() ||
@@ -240,9 +230,7 @@ export async function hasPluginNativeCaptureCleanupCandidates(stateDir: string):
     try {
       entries = await fsPromises.readdir(root, { withFileTypes: true });
     } catch (error) {
-      if (!hasErrnoCode(error, "ENOENT")) {
-        throw error;
-      }
+      ignoreMissingPath(error);
       continue;
     }
     for (const entry of entries) {
@@ -254,9 +242,7 @@ export async function hasPluginNativeCaptureCleanupCandidates(stateDir: string):
           return true;
         }
       } catch (error) {
-        if (!hasErrnoCode(error, "ENOENT")) {
-          throw error;
-        }
+        ignoreMissingPath(error);
       }
     }
   }
@@ -352,9 +338,7 @@ function createCaptureDirectory(instance: Instance, prefix: string, kind = "capt
     try {
       return mkdtempPluginCaptureSync(path.join(captures, prefix));
     } catch (error) {
-      if (!hasErrnoCode(error, "ENOENT")) {
-        throw error;
-      }
+      ignoreMissingPath(error);
       // Repair only the payload directory; recreating its parent would lose native custody.
       fs.mkdirSync(captures, { mode: 0o700 });
       return mkdtempPluginCaptureSync(path.join(captures, prefix));
@@ -463,8 +447,20 @@ function scheduleCaptureCleanup(key: string, instance: Instance): void {
 export function retainPluginSourceCaptureInstance(
   stateDir?: string,
   placement?: PluginSourceCaptureStorage["placement"],
+  purpose: "source" | "native" = "source",
 ) {
-  const storage = resolvePluginSourceCaptureStorage(stateDir, placement);
+  const updateTmp = process.env.TMPDIR?.trim();
+  // Older update drivers already mark candidate helpers and select their TMPDIR.
+  // Native admissions can be published to the installed index; keep their durable placement.
+  const storage = resolvePluginSourceCaptureStorage(
+    stateDir,
+    purpose === "source" &&
+      process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1" &&
+      updateTmp &&
+      path.isAbsolute(updateTmp)
+      ? "temporary"
+      : placement,
+  );
   const key = JSON.stringify([storage.stateDir, storage.placement]);
   const maintenance = pluginSourceCaptureMaintenance.getStore();
   const scheduler = maintenance?.scheduler;
@@ -565,9 +561,7 @@ export function retainPluginSourceCaptureInstance(
           const native = await fsPromises
             .readdir(path.join(root, "native"))
             .catch((error: unknown) => {
-              if (!hasErrnoCode(error, "ENOENT")) {
-                throw error;
-              }
+              ignoreMissingPath(error);
               return [];
             });
           if (native.length === 0) {
@@ -586,7 +580,7 @@ export function createPluginNativeCaptureRoot(
   stateDir?: string,
   placement?: PluginSourceCaptureStorage["placement"],
 ) {
-  const instance = retainPluginSourceCaptureInstance(stateDir, placement);
+  const instance = retainPluginSourceCaptureInstance(stateDir, placement, "native");
   try {
     const root = instance.createNativeDirectory();
     let committed = false;

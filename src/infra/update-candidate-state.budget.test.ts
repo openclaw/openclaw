@@ -1,13 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as realSetTimeout } from "node:timers";
-import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { z } from "zod";
-import {
-  fixtureReceiptClientSource,
-  openFixtureReceiptChannel,
-  type FixtureReceiptChannel,
-} from "../../test/helpers/fixture-receipts.js";
+import { fixtureReceiptClientSource } from "../../test/helpers/fixture-receipts.js";
 import { isProcessAlive } from "../../test/helpers/process-wait.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -18,17 +14,19 @@ import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
 import { measureUpdateStateFiles } from "./update-candidate-io.js";
-import { prepareUpdateCandidateStateSnapshot } from "./update-candidate-snapshot.js";
+import {
+  useStateReceipts,
+  stateClock,
+  snapshotFixture,
+  captureStateOperation,
+} from "./update-candidate-state-fixtures.test-support.js";
 import {
   parseUpdateStateInspectionWorker,
   runUpdateStateInspectionWorker,
 } from "./update-candidate-state.inspection.js";
 import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
 import { readUpdateStateDatabaseSizes } from "./update-candidate-state.sizes.js";
-import {
-  captureUpdateCandidateDeadline,
-  materializeUpdateCandidateStateWorker,
-} from "./update-candidate-state.test-support.js";
+import { materializeUpdateCandidateStateWorker } from "./update-candidate-state.test-support.js";
 import { createUpdateErrorFact } from "./update-failure-facts.js";
 import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 
@@ -46,13 +44,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanupDirs) =>
     }
   }),
 );
-let receipts: FixtureReceiptChannel;
-beforeAll(async () => {
-  receipts = await openFixtureReceiptChannel();
-});
-afterAll(async () => {
-  await receipts.close();
-});
+const receipts = useStateReceipts();
 
 // Receipts and command settlement travel independently. The fixture publishes the
 // complete marker before it can reply, so that record decides a settlement race.
@@ -172,8 +164,9 @@ it.for([undefined, 600_000])(
       }
       if (timeoutMs !== undefined) {
         expect(() => process.kill(pid, 0)).not.toThrow();
+        await fs.writeFile(release, "continue");
       }
-      await fs.writeFile(release, "continue");
+      // Keep the default worker blocked until the deferred timeout decision settles.
       if (timeoutMs === undefined) {
         expect(await operation).toMatchObject({
           error: expect.objectContaining({
@@ -290,10 +283,7 @@ it.for([
     `,
     );
 
-    const now = Date.now.bind(Date);
-    let elapsed = 0;
-    vi.spyOn(Date, "now").mockImplementation(() => now() + elapsed);
-    const expireDeadline = captureUpdateCandidateDeadline();
+    const advanceClock = stateClock();
     const controller = new AbortController();
     const result = readUpdateStateSchemaVersions({
       root,
@@ -329,9 +319,9 @@ it.for([
           fixtureEventBeforeSettlement(ready, receipts.waitFor(ready, "ready"), result),
           signal,
         );
-        elapsed = elapsedMs;
+        advanceClock(elapsedMs);
         if (!completes) {
-          expireDeadline();
+          advanceClock(elapsedMs, true);
           await result;
         }
       } else {
@@ -374,14 +364,7 @@ it.each([false, true])(
         cleanup: "uncertain",
       };
     });
-    const operation = prepareUpdateCandidateStateSnapshot({
-      config: {},
-      stateDir,
-      candidateRoot: root,
-      env: { TMPDIR: root },
-      workerEnv: () => ({ ...process.env, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }),
-      signal: controller.signal,
-    });
+    const operation = snapshotFixture(root, stateDir, controller.signal);
     try {
       await expect(operation).rejects.toThrow(/cleanup.*confirmed|settlement.*uncertain/);
       const retained = (await fs.readdir(root)).filter((name) =>
@@ -435,14 +418,12 @@ it.each(["stdout", "stderr"] as const)(
       controller.abort(new Error("test output deadline"));
     }, 10_000);
     try {
-      const failure = await prepareUpdateCandidateStateSnapshot({
-        config: {},
-        stateDir: path.join(root, "source"),
-        candidateRoot: root,
-        env: { TMPDIR: root },
-        workerEnv: () => ({ ...process.env }),
-        signal: controller.signal,
-      }).catch((error: unknown) => error);
+      const failure = await snapshotFixture(
+        root,
+        path.join(root, "source"),
+        controller.signal,
+        () => ({ ...process.env }),
+      ).catch((error: unknown) => error);
       expect(failure).toMatchObject({
         code: "output-limit",
         message: expect.stringMatching(/^Update state snapshot failed \(output-limit\):/),
@@ -620,18 +601,7 @@ it("refuses a grown WAL family at the post-inventory capacity gate", async () =>
       return result;
     });
     const controller = new AbortController();
-    const operation = prepareUpdateCandidateStateSnapshot({
-      config: {},
-      stateDir,
-      candidateRoot: root,
-      env: { TMPDIR: root },
-      workerEnv: () => ({ ...process.env, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }),
-      signal: controller.signal,
-    });
-    const outcome = operation.then(
-      (value) => ({ value }),
-      (error: unknown) => ({ error }),
-    );
+    const outcome = captureStateOperation(snapshotFixture(root, stateDir, controller.signal));
     try {
       expect(await outcome).toMatchObject({
         error: {

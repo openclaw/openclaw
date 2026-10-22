@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { extractSocket, type ApprovalRow } from "../infra/client-credential-migration-data.js";
 import { sanitizeOpenClawGlobalStateSnapshot } from "./openclaw-state-snapshot-sanitizer.js";
 
 describe("OpenClaw state snapshot sanitizer", () => {
@@ -47,7 +48,7 @@ describe("OpenClaw state snapshot sanitizer", () => {
 
     const row = database
       .prepare("SELECT * FROM exec_approvals_config WHERE config_key = 'current'")
-      .get() as Record<string, unknown> & { raw_json: string };
+      .get() as ApprovalRow;
     expect(row).toMatchObject({
       socket_path: "/tmp/exec.sock",
       has_socket_token: 0,
@@ -65,6 +66,18 @@ describe("OpenClaw state snapshot sanitizer", () => {
       agents: {},
     });
     expect(row.raw_json).not.toContain("secret-token");
+    const migrated = extractSocket(row);
+    expect(migrated.socket).toEqual({
+      socket_key: "current",
+      socket_path: "/tmp/exec.sock",
+      socket_token: null,
+      updated_at_ms: 1,
+    });
+    expect(JSON.parse(migrated.policy!)).toEqual({
+      version: 1,
+      defaults: { security: "allowlist" },
+      agents: {},
+    });
   });
 
   it.each([

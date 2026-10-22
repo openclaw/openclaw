@@ -12,8 +12,6 @@ import { WizardSession } from "../wizard/session.js";
 import {
   ensureCodexRuntimePluginForModelSelection,
   ensureCodexRuntimePluginForSupervision,
-} from "./codex-runtime-plugin-install.js";
-import {
   ensureModelSelectionRuntimePlugins,
   repairModelSelectionRuntimePlugins,
 } from "./runtime-plugin-install.js";

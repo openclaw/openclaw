@@ -363,7 +363,6 @@ function renderPanel(
   props: RunInspectorProps,
   state: Exclude<RunInspectorState, { status: "ready" }>,
 ) {
-  const key = state.status === "loading" && state.waitingForGateway ? "waiting" : state.status;
   const action =
     state.status === "error"
       ? state.recovery === "restart"
@@ -375,8 +374,8 @@ function renderPanel(
       class="run-inspector__panel"
       role={state.status === "error" || state.status === "unauthorized" ? "alert" : "status"}
     >
-      <h3>{t(`activity.runInspector.panels.${key}.title`)}</h3>
-      <p>{t(`activity.runInspector.panels.${key}.description`)}</p>
+      <h3>{t(`activity.runInspector.panels.${state.status}.title`)}</h3>
+      <p>{t(`activity.runInspector.panels.${state.status}.description`)}</p>
       {action ? (
         <button
           type="button"

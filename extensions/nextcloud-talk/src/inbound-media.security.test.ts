@@ -186,7 +186,7 @@ describe("nextcloud-talk inbound media security", () => {
 
     expect(coreRuntime.channel.media.saveRemoteMedia).not.toHaveBeenCalled();
     expect(runtime.log).toHaveBeenCalledWith(
-      `nextcloud-talk: inbound media non-outcome reason=${reason} account=default message=msg-1 sender=user-1`,
+      `nextcloud-talk: inbound media non-outcome reason=${reason} account=default message=msg-1 sender=users/user-1`,
     );
     expect(coreRuntime.channel.inbound.buildContext).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -349,7 +349,7 @@ describe("nextcloud-talk inbound media security", () => {
     );
 
     const request = requireFirstMockArg(
-      coreRuntime.channel.inbound.dispatchReply as ReturnType<typeof vi.fn>,
+      coreRuntime.channel.inbound.dispatch as ReturnType<typeof vi.fn>,
       "Nextcloud Talk group staged-media dispatch",
     ) as {
       accountId?: string;
@@ -357,7 +357,11 @@ describe("nextcloud-talk inbound media security", () => {
       replyPipeline?: unknown;
       replyOptions?: { skillFilter?: string[]; disableBlockStreaming?: boolean };
       record?: { onRecordError?: unknown };
-      delivery?: { preparePayload?: unknown; deliver?: unknown; onError?: unknown };
+      delivery?: {
+        preparePayload?: unknown;
+        deliverWithProviderMessageSending?: unknown;
+        onError?: unknown;
+      };
     };
     expect(request.accountId).toBe("default");
     expect(request.route).toEqual({
@@ -375,7 +379,7 @@ describe("nextcloud-talk inbound media security", () => {
     expect(request.delivery).toEqual(
       expect.objectContaining({
         preparePayload: expect.any(Function),
-        deliver: expect.any(Function),
+        deliverWithProviderMessageSending: expect.any(Function),
         onError: expect.any(Function),
       }),
     );

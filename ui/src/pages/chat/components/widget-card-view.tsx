@@ -1,9 +1,20 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { createMemo, createSignal, onSettled, Show, untrack, useContext } from "solid-js";
+import {
+  createMemo,
+  createSignal,
+  Errored,
+  lazy,
+  Loading,
+  onSettled,
+  Show,
+  untrack,
+  useContext,
+} from "solid-js";
 import { ensureCustomElementDefined } from "../../../app/lazy-custom-element.ts";
 import type { OpenClawCanvasWidgetView } from "../../../components/canvas-widget-view.tsx";
 import { dispatchWidgetPrompt } from "../../../components/mcp-app-security.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerMcpAppEnglish } from "../../../i18n/locales/en-mcp-app.ts";
 import {
   canvasWidgetNameForDocument,
@@ -24,14 +35,14 @@ import {
 } from "../../../lib/chat/tool-display.ts";
 import { parseYouTubeVideoUrl } from "../../../lib/chat/youtube-video.ts";
 import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { createResizeObserver } from "../../../lib/reactive/observers.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { showToast } from "../../../lib/toast.ts";
 import { postWidgetTheme, registerWidgetThemeFrame } from "../../../lib/widget-theme.ts";
+import { BrowserTabCardHost } from "./browser-tab-card.tsx";
 import { CanvasWidgetMount } from "./canvas-widget-mount.tsx";
-import "./browser-tab-card.tsx";
 import {
   WidgetCardMenu,
   type WidgetAction,
@@ -39,7 +50,13 @@ import {
 } from "./widget-card-menu.tsx";
 import { exportWidget } from "./widget-export.ts";
 
+registerEnglishCatalog(registerChatSessionEnglish);
+
 registerMcpAppEnglish();
+
+const YouTubeVideoCard = lazy(() => import("./youtube-video-card.tsx"), {
+  export: "YouTubeVideoCard",
+});
 
 type WidgetCardOptions = {
   rawText?: string | null;
@@ -380,7 +397,6 @@ function PreviewFrame(props: {
 const loadMcpAppView = () => import("../../../components/mcp-app-view-registration.ts");
 
 const loadCanvasWidgetView = () => import("../../../components/canvas-widget-view.tsx");
-const loadYouTubeVideo = () => import("./youtube-video-card.tsx");
 
 function WidgetContent(props: {
   preview: CanvasToolPreview;
@@ -672,29 +688,29 @@ export function ToolPreview(props: ToolPreviewProps) {
                 }
               >
                 {(item) => {
-                  void ensureCustomElementDefined("openclaw-youtube-video", loadYouTubeVideo).catch(
-                    (error: unknown) =>
-                      console.error("[openclaw] failed to load YouTube player", error),
-                  );
-                  const key = createMemo(
-                    () => `${props.options?.sessionKey ?? ""}\0${item().watchUrl}`,
+                  const Fallback = () => (
+                    <openclaw-youtube-video>
+                      <a href={item().watchUrl} target="_blank" rel="noopener noreferrer">
+                        {preview().title?.trim() || t("chat.youtube.video")}
+                        <Icon name="externalLink" />
+                      </a>
+                    </openclaw-youtube-video>
                   );
                   return (
-                    <Show when={key()} keyed>
+                    <Show when={`${props.options?.sessionKey ?? ""}\0${item().watchUrl}`} keyed>
                       {(_key) => (
-                        <openclaw-youtube-video
-                          prop:video={item()}
-                          prop:videoTitle={preview().title ?? ""}
-                          prop:enabled={
-                            props.options?.embedSandboxMode !== "strict" &&
-                            preview().sandbox !== "strict"
-                          }
-                        >
-                          <a href={item().watchUrl} target="_blank" rel="noopener noreferrer">
-                            {preview().title?.trim() || t("chat.youtube.video")}
-                            <Icon name="externalLink" />
-                          </a>
-                        </openclaw-youtube-video>
+                        <Errored fallback={<Fallback />}>
+                          <Loading fallback={<Fallback />}>
+                            <YouTubeVideoCard
+                              video={item()}
+                              videoTitle={preview().title ?? ""}
+                              enabled={
+                                props.options?.embedSandboxMode !== "strict" &&
+                                preview().sandbox !== "strict"
+                              }
+                            />
+                          </Loading>
+                        </Errored>
                       )}
                     </Show>
                   );
@@ -705,7 +721,7 @@ export function ToolPreview(props: ToolPreviewProps) {
         </Show>
       }
     >
-      {(preview) => <openclaw-browser-tab-card prop:preview={preview()} prop:latest={false} />}
+      {(preview) => <BrowserTabCardHost preview={preview()} latest={false} />}
     </Show>
   );
 }
@@ -713,16 +729,7 @@ export function ToolPreview(props: ToolPreviewProps) {
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "openclaw-browser-tab-card": HTMLAttributes<HTMLElement> & {
-        "prop:preview": Extract<ToolPreviewModel, { kind: "browser-tab" }>;
-        "prop:revision"?: string;
-        "prop:latest": boolean;
-      };
-      "openclaw-youtube-video": HTMLAttributes<HTMLElement> & {
-        "prop:video": import("../../../lib/chat/youtube-video.ts").YouTubeVideo;
-        "prop:videoTitle": string;
-        "prop:enabled": boolean;
-      };
+      "openclaw-youtube-video": HTMLAttributes<HTMLElement>;
     }
   }
 }

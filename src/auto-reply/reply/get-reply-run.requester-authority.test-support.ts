@@ -124,11 +124,14 @@ export function registerPendingRequesterAuthorityCases({
       ...turn("continue the work", { ...createProviderSurface("discord"), ...context }),
     });
     const { followupRun } = requireRunReplyAgentCall();
-    expect(followupRun.run.requesterOrigin).toMatchObject({ senderId, senderE164 });
-    expect(readUserTurnRequesterOrigin(followupRun.userTurnTranscriptRecorder)).toMatchObject({
-      senderId,
-      senderE164,
-    });
+    for (const origin of [
+      followupRun.run.requesterOrigin,
+      readUserTurnRequesterOrigin(followupRun.userTurnTranscriptRecorder),
+    ]) {
+      expect(origin).toBeDefined();
+      expect(origin?.senderId).toBe(senderId);
+      expect(origin?.senderE164).toBe(senderE164);
+    }
   });
   it.each(["fresh-non-owner", "fresh-owner", "inter-session", "heartbeat", "replay"] as const)(
     "retires pending owner task authority only for new channel input: %s",

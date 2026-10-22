@@ -36,7 +36,6 @@ import {
   gatewayServiceCommandUsesRoot,
   resolveUpdatedGatewayRestartPort,
 } from "./update-command-service-plan.js";
-import { hasLoadedLaunchdKeepAliveSupervisor } from "./update-command-supervisor.js";
 
 export async function verifyPreviousGatewayForUpdate(params: {
   root: string;
@@ -90,7 +89,7 @@ export async function verifyPreviousGatewayForUpdate(params: {
       detail,
     };
     if (run) {
-      recordUpdateRunStep(run.runId, fact, { env: run.env });
+      recordUpdateRunStep(run.runId, fact, run);
     }
     defaultRuntime[params.opts.json ? "error" : "log"](`${fact.step}: ${detail}`);
   };
@@ -108,7 +107,7 @@ export async function verifyPreviousGatewayForUpdate(params: {
       }
       const expectedVersion = params.expectedVersion ?? installedVersion;
       progress("readiness", `checking service and listener identity on port ${port}`);
-      const { health, readyz } = await observeUpdateGatewayReadiness({
+      const { health, readyz, http } = await observeUpdateGatewayReadiness({
         serviceEnv: env,
         gatewayPort: port,
         expectedVersion: expectedVersion ?? undefined,
@@ -123,7 +122,7 @@ export async function verifyPreviousGatewayForUpdate(params: {
         assertCurrent,
         onProgress: progress,
       });
-      if (!health.healthy || !readyz) {
+      if (!health.healthy || !(http?.coreReady ?? readyz)) {
         progress(health.waitOutcome ?? "unverified", health.probeError ?? lastReason, true);
         return false;
       }
@@ -292,8 +291,12 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
       assertCurrent();
       return inspectedHealth;
     }
-    const supervisorKeepsAlive = await deadline.read("service supervisor", () =>
-      hasLoadedLaunchdKeepAliveSupervisor({ service, env: params.serviceEnv }),
+    // Read the canonical LaunchAgent KeepAlive policy once before polling so an
+    // unloaded agent can still reach the existing recovery path promptly.
+    const supervisorKeepsAlive = await deadline.read("service supervisor", async () =>
+      process.platform === "darwin"
+        ? service.isLoaded({ env: params.serviceEnv }).catch(() => false)
+        : false,
     );
     assertCurrent();
     const observed = await waitForGatewayHealthyRestart({
@@ -349,6 +352,7 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
       assertCurrent();
       http = await deadline.read("HTTP readiness", () =>
         waitForGatewayHttpReadiness({
+          requireChannelHealth: false,
           config: context.config,
           port: params.gatewayPort,
           attempts: waitForStartup ? Math.ceil(remainingMs() / DEFAULT_RESTART_HEALTH_DELAY_MS) : 1,
@@ -388,7 +392,7 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
           health.healthy = false;
         }
       }
-      if (!readyz || remainingMs() === 0) {
+      if (!(http.coreReady ?? readyz) || remainingMs() === 0) {
         health = {
           ...health,
           healthy: false,

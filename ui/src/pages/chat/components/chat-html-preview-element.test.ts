@@ -1,4 +1,3 @@
-/* @vitest-environment jsdom */
 import type {
   CanvasDocumentViewResult,
   SessionsFilesAssetsResult,
@@ -9,6 +8,8 @@ import { bumpCanvasWidgetFrameConnectionGeneration } from "../../../lib/chat/can
 import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import type { ChatHtmlPreviewElement } from "./chat-html-preview-element.tsx";
+/* @vitest-environment jsdom */
+import panelLoadingStyles from "../../../styles/panel-loading-skeleton.css?inline";
 import "./chat-html-preview-element.tsx";
 
 const source =
@@ -224,7 +225,10 @@ describe("ordinary HTML preview transport", () => {
     );
     expect(frame.src).toBe("http://gateway.example:8444/mcp-app-sandbox?frames=none");
     expect(frame.hasAttribute("srcdoc")).toBe(false);
-    expect(view.querySelector("h1, style, script")).toBeNull();
+    expect(view.querySelector("h1, script")).toBeNull();
+    expect(Array.from(view.querySelectorAll("style"), (style) => style.textContent)).toEqual([
+      panelLoadingStyles,
+    ]);
     const post = vi.spyOn(frame.contentWindow!, "postMessage");
     message(frame, ready(frame), { origin: "https://wrong.example" });
     message(frame, ready(frame), { source: window });

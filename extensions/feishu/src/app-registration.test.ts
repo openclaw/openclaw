@@ -71,7 +71,7 @@ const beginPayload = {
   interval: 5,
   expire_in: 300,
 };
-const beginResult = { deviceCode: "dev", userCode: "user", interval: 5, expireIn: 300 };
+const beginResult = { deviceCode: "dev", interval: 5, expireIn: 300 };
 const pollParams = { deviceCode: "dev", interval: 30, expireIn: 600 };
 
 function beginRegistrationJson<T>(

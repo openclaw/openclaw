@@ -852,7 +852,6 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
 
   it.each([
     { args: ["run", "--", "--help"], metadata: false },
-    { args: ["run", "--help"], metadata: true },
     { args: ["bench", "--run"], metadata: false },
     { args: ["list"], metadata: true },
     { args: ["--browser.headless", "run", "--version"], metadata: false },

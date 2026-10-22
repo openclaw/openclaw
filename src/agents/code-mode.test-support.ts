@@ -4,7 +4,6 @@ import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { codeModeReplayIdForToolCall } from "./code-mode-bridge.js";
 import type { CodeModeExecutorContinuation } from "./code-mode-executor-types.js";
 import { runCodeModeExecutor } from "./code-mode-executor.js";
-import { resolveCodeModeHeadlessConfig } from "./code-mode-runtime.js";
 import type { CodeModeSkill } from "./code-mode-skills.js";
 import {
   activeRuns,
@@ -35,7 +34,6 @@ export const testing = {
     }
     return result;
   },
-  resolveCodeModeHeadlessConfig,
 };
 
 export async function resetCodeModeTestState(): Promise<void> {
@@ -103,6 +101,7 @@ export function mcpTool(params: {
   description?: string;
   parameters?: AnyAgentTool["parameters"];
   operation?: "tool" | "resources_list" | "resources_read" | "prompts_list" | "prompts_get";
+  instructions?: string;
   execute?: AnyAgentTool["execute"];
 }): AnyAgentTool {
   const tool: AnyAgentTool = {
@@ -124,6 +123,7 @@ export function mcpTool(params: {
       safeServerName: params.safeServerName ?? params.serverName,
       toolName: params.toolName,
       operation: params.operation ?? "tool",
+      ...(params.instructions ? { instructions: params.instructions } : {}),
     },
   });
   return tool;

@@ -1,6 +1,6 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Owns catalog-row menu state, actions, focus anchor, and rendering for AppSidebar.
-import { Show } from "solid-js";
+import { Show, type Component } from "solid-js";
 import { pathForRoute } from "../app-route-paths.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { t } from "../lib/reactive/i18n.ts";
@@ -40,8 +40,8 @@ type SidebarCatalogMenuHost = Pick<
 
 export function createSidebarCatalogMenu(host: SidebarCatalogMenuHost, beforeOpen: () => void) {
   let state: { menu: SidebarCatalogSessionMenuState; trigger: HTMLElement | null } | null = null;
-  const listeners = new Set<() => void>();
-  const publish = () => listeners.forEach((notify) => notify());
+  let notify: (() => void) | undefined;
+  const publish = () => notify?.();
   const isOpenFor = (key: CatalogSessionKey) => matchesMenu(state?.menu, key);
 
   function open(
@@ -200,17 +200,17 @@ export function createSidebarCatalogMenu(host: SidebarCatalogMenuHost, beforeOpe
     close,
     retargetTrigger,
     createView(viewHost: SidebarCatalogMenuHost) {
-      const snapshot = projectSource(listeners, {
+      const snapshot = projectSource(null, {
         read: () => state,
-        subscribe: (source, notify) => {
-          source.add(notify);
-          return () => source.delete(notify);
+        subscribe: (_, listener) => {
+          notify = listener;
+          return () => (notify = undefined);
         },
         equality: "revision",
       });
       return {
         isOpenFor: (key: CatalogSessionKey) => matchesMenu(snapshot.read()?.menu, key),
-        render: (CatalogMenu: typeof CatalogSessionMenu) => (
+        render: (CatalogMenu: Component<Parameters<typeof CatalogSessionMenu>[0]>) => (
           <Show when={snapshot.read()?.menu} keyed>
             {(menu) => (
               <CatalogMenu

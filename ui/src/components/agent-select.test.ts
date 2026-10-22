@@ -53,7 +53,6 @@ async function createAgentSelect(
   const element = document.createElement(AGENT_SELECT_TEST_TAG);
   element.options = options;
   element.value = "alpha";
-  element.onCreateAgent = vi.fn();
   Object.assign(element, overrides);
   document.body.append(element);
   await element.updateComplete;

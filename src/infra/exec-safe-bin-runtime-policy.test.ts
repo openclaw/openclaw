@@ -208,20 +208,13 @@ describe("exec safe-bin runtime policy", () => {
       try {
         await fs.chmod(dir, 0o777);
         const onWarning = vi.fn();
-        const policy = resolveExecSafeBinRuntimePolicy({
+        resolveExecSafeBinRuntimePolicy({
           global: {
             safeBinTrustedDirs: [dir],
           },
           onWarning,
         });
 
-        expect(policy.writableTrustedSafeBinDirs).toEqual([
-          {
-            dir: path.resolve(dir),
-            groupWritable: true,
-            worldWritable: true,
-          },
-        ]);
         expect(onWarning).toHaveBeenCalledExactlyOnceWith(
           `exec: safeBinTrustedDirs includes world-writable directory '${path.resolve(dir)}'; remove trust or tighten permissions (for example chmod 755).`,
         );

@@ -250,7 +250,6 @@ it(
           defaults: {
             workspace: state.workspaceDir,
             skipBootstrap: true,
-            heartbeat: { every: "0m" },
             model: { primary: provider.modelRef },
             models: {
               [provider.modelRef]: { agentRuntime: { id: "openclaw" }, params: modelParams },
@@ -305,7 +304,7 @@ it(
           url: gatewayUrl,
           edgeAuthHeaders: edgeHeaders(user, ip),
           deviceIdentity: loadOrCreateDeviceIdentity({
-            path: state.statePath("test-device-identities", `${name}.sqlite`),
+            path: state.statePath("test-device-identities", name, "client", "credentials.sqlite"),
           }),
         });
       const historyFor = (agentId: string) =>

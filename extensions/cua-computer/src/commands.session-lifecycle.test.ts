@@ -1,7 +1,6 @@
 import { createSolidPngBuffer } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
-import { createCuaComputerProvider } from "./commands.js";
-import { driver, result } from "./commands.test-helpers.js";
+import { createTestProvider, driver, result } from "./commands.test-helpers.js";
 
 describe("execution authority preflight", () => {
   it("revokes stale input refs on renewal and accepts a fresh screenshot", async () => {
@@ -14,10 +13,9 @@ describe("execution authority preflight", () => {
       },
     ];
     getDesktopState.mockResolvedValue(desktop);
-    const computer = await createCuaComputerProvider({
-      platform: "linux",
-      driver: session,
-    }).openExecution({ executionId: "123e4567-e89b-42d3-a456-426614174000" });
+    const computer = await createTestProvider(session).openExecution({
+      executionId: "123e4567-e89b-42d3-a456-426614174000",
+    });
     const before = JSON.parse(await computer.snapshot('{"format":"png","maxWidth":100}'));
     session.prepareExecution = vi.fn(async () => setGeneration("renewed-session"));
     const action = {
@@ -42,10 +40,9 @@ describe("execution authority preflight", () => {
     session.prepareExecution = vi.fn(async () => {
       throw new Error("Desktop scope denied");
     });
-    const computer = await createCuaComputerProvider({
-      platform: "linux",
-      driver: session,
-    }).openExecution({ executionId: "123e4567-e89b-42d3-a456-426614174000" });
+    const computer = await createTestProvider(session).openExecution({
+      executionId: "123e4567-e89b-42d3-a456-426614174000",
+    });
     await expect(computer.snapshot('{"format":"png"}')).rejects.toThrow("Desktop scope denied");
     expect(getDesktopState).not.toHaveBeenCalled();
     await expect(
@@ -83,10 +80,9 @@ describe("execution authority preflight", () => {
         owner: null,
       });
     });
-    const computer = await createCuaComputerProvider({
-      platform: "linux",
-      driver: session,
-    }).openExecution({ executionId: "123e4567-e89b-42d3-a456-426614174000" });
+    const computer = await createTestProvider(session).openExecution({
+      executionId: "123e4567-e89b-42d3-a456-426614174000",
+    });
     const first = JSON.parse(await computer.act('{"action":"start_recording"}'));
     expect(first.details.recording).toBe(true);
     expect(first.details.resourceHandle).toBeDefined();
@@ -116,10 +112,9 @@ describe("execution authority preflight", () => {
       entered.resolve();
       await release.promise;
     };
-    const computer = await createCuaComputerProvider({
-      platform: "linux",
-      driver: session,
-    }).openExecution({ executionId: "123e4567-e89b-42d3-a456-426614174000" });
+    const computer = await createTestProvider(session).openExecution({
+      executionId: "123e4567-e89b-42d3-a456-426614174000",
+    });
     const acting = computer.act('{"action":"type","text":"MUST_NOT_TYPE"}');
     const rejected = expect(acting).rejects.toThrow(/closing|closed/);
     await entered.promise;
@@ -144,10 +139,9 @@ describe("execution authority preflight", () => {
       }),
     );
     session.callTool = callTool;
-    const computer = await createCuaComputerProvider({
-      platform: "linux",
-      driver: session,
-    }).openExecution({ executionId: "123e4567-e89b-42d3-a456-426614174099" });
+    const computer = await createTestProvider(session).openExecution({
+      executionId: "123e4567-e89b-42d3-a456-426614174099",
+    });
     await computer.act('{"action":"start_recording"}');
     const entered = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();

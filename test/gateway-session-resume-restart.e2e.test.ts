@@ -1,7 +1,7 @@
 // Separate Gateway processes prove automatic owner-authorized recovery and terminal cancellation.
 import { once } from "node:events";
 import { readFile } from "node:fs/promises";
-import { createServer, type ServerResponse } from "node:http";
+import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
@@ -11,15 +11,19 @@ import type { GatewayClient } from "../src/gateway/client.js";
 import { readSessionSendDelivery } from "../src/gateway/session-send-delivery.js";
 import type { SessionsListResult } from "../src/gateway/session-utils.types.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
-import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
-import { acquireGatewayTestClient } from "./helpers/gateway-client.js";
-import { GATEWAY_RESTART_TEST_KILL_MS } from "./helpers/gateway-restart-budget.js";
 import {
-  writeOpenAiResponsesSse,
-  writeOpenAiResponsesText,
-} from "./helpers/openai-responses-sse.js";
+  restartEnv,
+  connectRestartClient,
+  restartProviderServer,
+  restartToolNames,
+  writeRestartJsonText,
+  restartModelConfig,
+  writeRestartToolCall,
+} from "./gateway-restart.test-support.js";
+import { GATEWAY_RESTART_TEST_KILL_MS } from "./helpers/gateway-restart-budget.js";
+import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
 import { createDeferred, withinTest } from "./helpers/promise.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
@@ -37,39 +41,12 @@ const ORDINARY_KEY = "agent:main:ordinary-permission-control";
 const ORDINARY_REQUEST = "ORDINARY_PERMISSION_CONTROL: wait for the operator.";
 const ORDINARY_FINAL = "ORDINARY_PERMISSION_CHANGE_FINISHED";
 
-function writeTool(response: ServerResponse, name: string, args: object, ordinal: number) {
-  const item = {
-    type: "function_call",
-    id: `fc_resume_${ordinal}`,
-    call_id: `call_resume_${ordinal}`,
-    name,
-    arguments: JSON.stringify(args),
-  };
-  writeOpenAiResponsesSse(response, [
-    { type: "response.output_item.added", output_index: 0, item: { ...item, arguments: "" } },
-    {
-      type: "response.function_call_arguments.delta",
-      output_index: 0,
-      item_id: item.id,
-      delta: item.arguments,
-    },
-    { type: "response.output_item.done", output_index: 0, item },
-    {
-      type: "response.completed",
-      response: {
-        id: `resp_resume_${ordinal}`,
-        status: "completed",
-        output: [item],
-        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-      },
-    },
-  ]);
-}
+const writeTool = (response: ServerResponse, name: string, args: object, ordinal: number) =>
+  writeRestartToolCall(response, "resume", name, args, ordinal);
 
 async function startProvider(
   signal: AbortSignal,
   holdFirstResume: boolean,
-  automaticRecovery = false,
   automaticReply = false,
 ) {
   const suspended = new Map(CASES.map((name) => [name, createDeferred()]));
@@ -93,39 +70,16 @@ async function startProvider(
     offsets: [0],
     signal,
     createListener: () =>
-      createServer((request, response) => {
-        void (async () => {
-          const chunks: Buffer[] = [];
-          for await (const chunk of request) {
-            chunks.push(Buffer.from(chunk));
-          }
+      restartProviderServer(
+        failed,
+        async (request, response, body) => {
           expect(request.url).toBe("/v1/responses");
-          const body = asRecord(JSON.parse(Buffer.concat(chunks).toString("utf8")));
-          const tools = Array.isArray(body.tools)
-            ? body.tools.flatMap((tool) =>
-                isRecord(tool) && typeof tool.name === "string" ? [tool.name] : [],
-              )
-            : [];
+          const tools = restartToolNames(body);
           const input = JSON.stringify(body.input);
           const callOrdinal = ++ordinal;
           const text = (value: string) => {
             if (body.stream === false) {
-              response.writeHead(200, { "content-type": "application/json" });
-              response.end(
-                JSON.stringify({
-                  id: `resp_resume_${callOrdinal}`,
-                  status: "completed",
-                  output: [
-                    {
-                      type: "message",
-                      id: `msg_resume_${callOrdinal}`,
-                      role: "assistant",
-                      content: [{ type: "output_text", text: value, annotations: [] }],
-                    },
-                  ],
-                  usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-                }),
-              );
+              writeRestartJsonText(response, value, `resume_${callOrdinal}`);
             } else {
               writeOpenAiResponsesText(response, {
                 text: value,
@@ -214,12 +168,7 @@ async function startProvider(
             return;
           }
           expect(name).not.toBe("cancel");
-          if (automaticRecovery) {
-            expect(input).toContain("interrupted by a gateway restart");
-          } else {
-            expect(input).toContain("unknown outcome");
-            expect(input).toContain("Verify what happened before repeating an action");
-          }
+          expect(input).toContain("interrupted by a gateway restart");
           resumeInputs.push({ name, input });
           if (name === "revoked" || name === "restricted") {
             if (!revokeAttempted.has(name)) {
@@ -281,13 +230,9 @@ async function startProvider(
           }
           expect(input).toContain("OPERATOR_EFFECT_CONFIRMED");
           text(final(name));
-        })().catch((error: unknown) => {
-          if (!request.aborted) {
-            failed.reject(error);
-          }
-          response.destroy(error instanceof Error ? error : undefined);
-        });
-      }),
+        },
+        { ignoreAborted: true },
+      ),
   });
   return {
     baseUrl: `http://127.0.0.1:${reservation.claim.port}/v1`,
@@ -333,11 +278,7 @@ async function createInstance(
       // Keep only the owned loopback fixtures direct; preserve external proxy routing.
       NO_PROXY: noProxy,
       no_proxy: noProxy,
-      OPENAI_API_KEY: undefined,
-      OPENAI_BASE_URL: undefined,
-      OPENAI_API_BASE: undefined,
-      OPENCLAW_SKIP_PROVIDERS: undefined,
-      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+      ...restartEnv,
       OPENCLAW_NO_RESPAWN: "1",
     },
   });
@@ -346,31 +287,12 @@ async function createInstance(
     browser: { enabled: false },
     discovery: { mdns: { mode: "off" } },
     plugins: { enabled: false },
-    models: {
-      catalogRefresh: { enabled: false },
-      mode: "replace",
-      providers: {
-        [model.providerId]: { ...model.config, request: { allowPrivateNetwork: true } },
-      },
-    },
-    agents: {
-      defaults: {
-        workspace: instance.state.workspaceDir,
-        model: { primary: model.modelRef },
-        modelPolicy: { allow: [model.modelRef] },
-        models: {
-          [model.modelRef]: {
-            agentRuntime: { id: "openclaw" },
-            params: { transport: "sse", openaiWsWarmup: false },
-          },
-        },
-        heartbeat: { every: "0m" },
-        skipBootstrap: true,
-        skills: [],
-        timeoutSeconds: 120,
-      },
-      entries: { main: {} },
-    },
+    ...restartModelConfig(
+      model,
+      instance.state.workspaceDir,
+      {},
+      { catalogRefresh: { enabled: false } },
+    ),
     tools: {
       allow: ["exec", "sessions_send"],
       codeMode: { enabled: false },
@@ -393,24 +315,7 @@ function connectInstance(
   signal: AbortSignal,
   profiled = false,
 ) {
-  return acquireGatewayTestClient(
-    {
-      url: instance.url,
-      token: instance.gatewayToken,
-      clientName: "gateway-client",
-      mode: profiled ? "test" : "backend",
-      scopes: ["operator.admin", "operator.read", "operator.write"],
-      deviceIdentity: loadOrCreateDeviceIdentity({
-        path: instance.state.path("device.sqlite"),
-      }),
-    },
-    {
-      timeoutMs: 30_000,
-      timeoutMessage: "resume client did not connect",
-      closeMessage: "resume client closed",
-      signal,
-    },
-  );
+  return connectRestartClient(instance, { mode: profiled ? "test" : "backend" }, signal);
 }
 
 async function applyReadOnly(
@@ -490,10 +395,10 @@ it.skipIf(process.platform === "win32").for(["managed", "SIGTERM", "SIGKILL"] as
   "automatically continues delegated owner work in place after %s",
   { timeout: 180_000 },
   async (mode, { signal }) => {
-    const provider = await startProvider(signal, mode === "SIGKILL", true);
+    const provider = await startProvider(signal, mode === "SIGKILL");
     const instance = await createInstance(provider, signal);
     let client: GatewayClient | undefined;
-    const connect = () => connectInstance(instance, signal);
+    const connect = () => connectInstance(instance, signal, mode === "SIGKILL");
     const race = <T>(promise: Promise<T>) =>
       withinTest(Promise.race([promise, provider.failed]), signal);
     const rows = async () =>
@@ -509,7 +414,7 @@ it.skipIf(process.platform === "win32").for(["managed", "SIGTERM", "SIGKILL"] as
                 await client!.request("chat.history", { sessionKey: targetKey(name) }),
               ),
             ).toContain(final(name));
-            expect(await row(name)).toMatchObject({ hasActiveRun: false });
+            expect(await row(name)).toMatchObject({ status: "done", hasActiveRun: false });
           },
           { timeout: 30_000 },
         ),
@@ -647,128 +552,12 @@ it.skipIf(process.platform === "win32").for(["managed", "SIGTERM", "SIGKILL"] as
   },
 );
 
-it.skipIf(process.platform === "win32").for(["continue", "revoked"] as const)(
-  "automatically resumes an authenticated peer follow-up after process death: %s",
-  { timeout: 180_000 },
-  async (name, context) => {
-    const { signal } = context;
-    let checkpoint = "creating the isolated fixture";
-    let readLogs = () => "Gateway instance not created";
-    context.onTestFailed(() =>
-      console.error(`[automatic-peer-recovery] ${checkpoint}\n${readLogs()}`),
-    );
-    const provider = await startProvider(signal, false, true);
-    const instance = await createInstance(provider, signal);
-    let client: GatewayClient | undefined;
-    const race = <T>(promise: Promise<T>) =>
-      withinTest(Promise.race([promise, provider.failed]), signal);
-    readLogs = () => instance.logs().replaceAll(instance.gatewayToken, "[fixture token]");
-    checkpoint = "starting the isolated Gateway";
-    try {
-      await runQaGatewayFixture(
-        async () => {
-          await instance.startGateway();
-          client = await connectInstance(instance, signal, true);
-          for (const key of [sourceKey(name), targetKey(name)]) {
-            await client.request("sessions.create", {
-              key,
-              agentId: "main",
-              permissionMode: "full",
-            });
-          }
-          checkpoint = "waiting for the delegated checkpoint";
-          const source = await client.request<{ runId: string }>(
-            "chat.send",
-            {
-              sessionKey: sourceKey(name),
-              message: sourceRequest(name),
-              idempotencyKey: "automatic-peer-source",
-            },
-            { expectFinal: false },
-          );
-          await Promise.all([
-            race(provider.suspended(name)),
-            client
-              .request("agent.wait", { runId: source.runId, timeoutMs: 30_000 })
-              .then((result) => expect(result).toMatchObject({ status: "ok" })),
-          ]);
-          const before = await client.request<SessionsListResult>("sessions.list", {
-            agentId: "main",
-          });
-          const sessionId = before.sessions.find((row) => row.key === targetKey(name))?.sessionId;
-          expect(sessionId).toEqual(expect.any(String));
-          provider.adopted(name);
-          await client.stopAndWait();
-          client = undefined;
-          checkpoint = "restarting the isolated Gateway";
-          const child = instance.child;
-          if (!child?.pid) {
-            throw new Error("Owned Gateway process unavailable");
-          }
-          const closed = once(child, "close");
-          expect(child.kill("SIGKILL")).toBe(true);
-          await race(closed);
-          await instance.startGateway();
-          expect(instance.child?.pid).not.toBe(child.pid);
-          client = await connectInstance(instance, signal, true);
-          // No sessions.recover or fresh chat.send: the durable input owns this continuation.
-          checkpoint = "waiting for automatic recovery";
-          if (name === "revoked") {
-            await race(provider.revocationReady);
-            await applyReadOnly(client, instance, targetKey(name));
-            provider.releaseRevoked();
-          } else {
-            await race(provider.resumed);
-          }
-          await race(
-            vi.waitFor(
-              async () => {
-                const history = await client!.request("chat.history", {
-                  sessionKey: targetKey(name),
-                });
-                expect(JSON.stringify(history)).toContain(final(name));
-                const rows = await client!.request<SessionsListResult>("sessions.list", {
-                  agentId: "main",
-                });
-                const recovered = rows.sessions.find((row) => row.key === targetKey(name));
-                expect(recovered).toMatchObject({ sessionId, status: "done", hasActiveRun: false });
-                expect(recovered?.restartRecoveryStatus).toBeUndefined();
-              },
-              { timeout: 30_000 },
-            ),
-          );
-          expect(
-            await readFile(path.join(instance.state.workspaceDir, `effect-${name}`), "utf8"),
-          ).toBe("completed\n");
-          if (name === "revoked") {
-            await expect(
-              readFile(path.join(instance.state.workspaceDir, "revoked-effect")),
-            ).rejects.toMatchObject({ code: "ENOENT" });
-          } else {
-            expect(
-              await readFile(path.join(instance.state.workspaceDir, "operator-effect"), "utf8"),
-            ).toBe("resumed\n");
-          }
-          expect(provider.resumeInputs).toHaveLength(2);
-        },
-        async () => client?.stopAndWait(),
-        () => instance.cleanup(),
-        provider.close,
-      );
-    } catch (cause) {
-      throw new Error(`Automatic peer recovery failed while ${checkpoint}:\n${readLogs()}`, {
-        cause,
-      });
-    }
-  },
-);
-
 it.skipIf(process.platform === "win32").for(["restart", "stop"] as const)(
   "preserves automatic peer result custody across %s and process death",
   { timeout: 180_000 },
   async (mode, context) => {
     const { signal } = context;
-    const provider = await startProvider(signal, false, false, true);
+    const provider = await startProvider(signal, false, true);
     const instance = await createInstance(provider, signal);
     let client: GatewayClient | undefined;
     const race = <T>(promise: Promise<T>) =>

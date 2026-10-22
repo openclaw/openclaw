@@ -152,9 +152,15 @@ work.
 ## PostgreSQL memory search
 
 The built-in `memory-core` plugin can index and search a PostgreSQL agent database.
-SQLite remains the default. PostgreSQL memory search is experimental: text ranking
-is engine-local, so result ordering and scores can differ from SQLite. Hybrid
-search retains the same vector/text weights.
+SQLite remains the default. PostgreSQL memory search is supported on the
+[qualified runtime](/gateway/postgresql#support-matrix). Text ranking is
+engine-local, so result ordering and scores can differ from SQLite. PostgreSQL
+calibrates unnormalized cover-density rank `r` as `r / (r + 0.1)` before the
+shared hybrid merge. This gives keywords a useful weight without penalizing
+long chunks by their full length. It is not BM25: PostgreSQL's native rank lacks
+corpus-wide inverse document frequency (IDF), so common and mixed-frequency
+queries can still rank differently. Hybrid search retains the same vector/text
+weights.
 
 Install `unaccent` in the selected PostgreSQL database for full text, `pg_trgm`
 when using the trigram tokenizer, and `vector` for semantic search. For keyword-only
@@ -185,6 +191,11 @@ The agent can answer directly when the conversation, bootstrap files, or supplie
 recall fully answers the question. It uses memory tools to retrieve missing facts
 when that context is absent or only answers part of the question. Partial, stale,
 or unavailable recall still requires disclosure.
+
+If `memory_search` reports that its storage scope closed, run
+`openclaw plugins reload memory-core`, or restart the Gateway, then retry.
+This is a storage lifecycle failure, not an embedding provider error. See
+[Plugin reload](/cli/plugins/uninstall-and-update#reload) for reload behavior.
 
 When session indexing is enabled, `memory_search` can also return session
 transcript hits. Their `sessions/...jsonl` paths are search references, not files

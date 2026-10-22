@@ -27,7 +27,7 @@ import {
   preparePaneSessionHandoff,
 } from "./chat-pane-shared.ts";
 import { canCreateChatSession, selectedChatSessionRow } from "./chat-state-route.ts";
-import { resolveChatPaneParentSession } from "./components/chat-pane-header.ts";
+import { resolveChatPaneParentSession } from "./components/chat-pane-header-identity.tsx";
 
 /** Creates or resets a conversation while guarding its asynchronous ownership. */
 export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentation {
@@ -328,9 +328,12 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
       return resetResult !== "failed";
     }
     this.sessionCreation.creatingIncognito = expiredIncognito;
+    const signal = this.headerSessionMutationAbortController.signal;
     try {
-      const nextSessionKey = await sessions.create(createParams);
-      if (!isCurrent()) {
+      const nextSessionKey = await sessions.create(createParams, {
+        signal,
+      });
+      if (signal.aborted || !isCurrent()) {
         return false;
       }
       if (

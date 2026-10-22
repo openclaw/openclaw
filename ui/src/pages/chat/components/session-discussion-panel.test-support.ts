@@ -10,6 +10,7 @@ type DiscussionPanelElement = HTMLElement & {
   sessionKey: string;
   canOpen: boolean;
   sourceGeneration: number;
+  presentation?: "desktop" | "mobile";
   loadInfo: SessionDiscussionInfoLoader;
   openDiscussion: SessionDiscussionOpener;
   onStateChange: SessionDiscussionStateListener;
@@ -44,6 +45,7 @@ export function mount(params: {
   openDiscussion: SessionDiscussionOpener;
   onStateChange?: SessionDiscussionStateListener;
   canOpen?: boolean;
+  presentation?: "desktop" | "mobile";
 }): DiscussionPanelElement {
   const panel = document.createElement("openclaw-session-discussion") as DiscussionPanelElement;
   panel.sessionKey = "agent:main:first";
@@ -51,6 +53,7 @@ export function mount(params: {
   panel.openDiscussion = params.openDiscussion;
   panel.onStateChange = params.onStateChange ?? vi.fn();
   panel.canOpen = params.canOpen ?? true;
+  panel.presentation = params.presentation;
   document.body.append(panel);
   panels.push(panel);
   return panel;

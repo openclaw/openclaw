@@ -1,5 +1,12 @@
 import type { SQLInputValue, SQLOutputValue } from "node:sqlite";
-import type { MessagePort } from "node:worker_threads";
+import type { MessagePort, Worker } from "node:worker_threads";
+
+export type PostgresBridge = {
+  port: MessagePort;
+  control: Int32Array;
+  worker: Worker;
+  requestId: number;
+};
 
 export type PostgresResult = {
   inTransaction: boolean;
@@ -91,7 +98,7 @@ export function preparePostgresQuery(sql: string): {
       }
     } else {
       if (statementStart && /^pragma\b/i.test(rest)) {
-        throw new Error("The experimental PostgreSQL engine does not support PRAGMA statements");
+        throw new Error("The PostgreSQL engine does not support PRAGMA statements");
       }
       const number = /^(?:\d[\d_]*(?:\.[\d_]*)?|\.[\d_]+)(?:[eE][+-]?[\d_]+)?/.exec(rest)?.[0];
       if (number) {

@@ -10,6 +10,7 @@ import * as decisionRuntime from "../decisions/runtime.js";
 import { prepareDecisionProviderReload } from "../decisions/runtime.js";
 import type {
   DecisionBatchV2,
+  DecisionEvaluateOptionsV2,
   DecisionProviderV2,
   ProviderDecisionOutcomeV2,
 } from "../decisions/types-v2.js";
@@ -248,16 +249,19 @@ type Entry = (typeof entries)[number];
 function invoke(
   entry: Entry,
   host: ReturnType<typeof registered>,
-  signal: AbortSignal,
+  signal: AbortSignal | DecisionEvaluateOptionsV2,
   assertActive = () => {},
 ) {
-  const options = {
-    purpose: "accounting-fixture",
-    rubricVersion: "v2",
-    timeoutMs: 5000,
-    signal,
-    agentId: "operation-owner",
-  };
+  const options =
+    signal instanceof AbortSignal
+      ? {
+          purpose: "accounting-fixture",
+          rubricVersion: "v2",
+          timeoutMs: 5000,
+          signal,
+          agentId: "operation-owner",
+        }
+      : signal;
   switch (entry) {
     case "core-v1":
       return decisionRuntime.evaluateDecision(v1Batch, options);
@@ -275,7 +279,7 @@ function invoke(
       return createDecisionTool("operation-owner", { config })!.execute(
         "accounting",
         v1Batch,
-        signal,
+        options.signal,
       );
     case "prefilter":
       break;
@@ -286,7 +290,7 @@ function invoke(
     supportsTurnScopedToolRestrictions: true,
     assertActive,
     userMessage: "Hello",
-    signal,
+    signal: options.signal,
   });
 }
 function ready(entry: Entry) {
@@ -335,6 +339,142 @@ it.each(entries)("records exactly one accepted observation at %s", async (entry)
   expect(host.events[0]!.event).not.toHaveProperty("sessionKey");
   expect(host.registry.decisionProviders[0]!.host.inspect(config).activeRequests).toBe(0);
 });
+
+const directEntries = ["core-v1", "core-v2", "registry-v1", "registry-v2"] as const;
+
+it.each(directEntries)(
+  "keeps admitted cancellation and exactly-once accounting after %s replaces its signal",
+  async (entry) => {
+    const started = createDeferredCore();
+    const release = createDeferredCore();
+    const evaluate = vi.fn<DecisionProviderV2["evaluate"]>(async () => {
+      started.resolve();
+      await release.promise;
+      return accepted();
+    });
+    const host = registered(evaluate);
+    const admitted = new AbortController();
+    const replacement = new AbortController();
+    const options = {
+      purpose: "signal-replacement",
+      rubricVersion: "v2",
+      timeoutMs: 5000,
+      signal: admitted.signal,
+      agentId: "operation-owner",
+    };
+    const pending = invoke(entry, host, options);
+    try {
+      await started.promise;
+      options.signal = replacement.signal;
+      replacement.abort(new Error("replacement cancelled"));
+      expect(host.events).toEqual([]);
+      release.resolve();
+      await expect(pending).resolves.toMatchObject({ status: "ok", result: accepted().result });
+      expect(host.events).toEqual([
+        {
+          trusted: true,
+          hostPluginId: undefined,
+          event: expect.objectContaining({
+            type: "model.usage",
+            agentId: "operation-owner",
+            provider: "fixture",
+            model: "native",
+            usage: { input: 100 },
+            costUsd: 0.0002,
+          }),
+        },
+      ]);
+      expect(evaluate).toHaveBeenCalledOnce();
+      expect(host.registry.decisionProviders[0]!.host.inspect(config).activeRequests).toBe(0);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([pending]);
+    }
+  },
+);
+
+it.each(directEntries)(
+  "still cancels %s under its admitted signal after replacement with a live signal",
+  async (entry) => {
+    const started = createDeferredCore();
+    const release = createDeferredCore();
+    const evaluate = vi.fn<DecisionProviderV2["evaluate"]>(async () => {
+      started.resolve();
+      await release.promise;
+      return accepted();
+    });
+    const host = registered(evaluate);
+    const admitted = new AbortController();
+    const options = {
+      purpose: "signal-replacement",
+      rubricVersion: "v2",
+      timeoutMs: 5000,
+      signal: admitted.signal,
+    };
+    const pending = invoke(entry, host, options);
+    const rejected = expect(pending).rejects.toThrow("admitted cancelled");
+    try {
+      await started.promise;
+      options.signal = new AbortController().signal;
+      admitted.abort(new Error("admitted cancelled"));
+      release.resolve();
+      await rejected;
+      expect(evaluate).toHaveBeenCalledOnce();
+      expect(host.events).toEqual([]);
+      expect(host.registry.decisionProviders[0]!.host.inspect(config).activeRequests).toBe(0);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([pending]);
+    }
+  },
+);
+
+it.each(directEntries)(
+  "reads %s caller signal accessor once for dispatch and completion",
+  async (entry) => {
+    const host = ready(entry);
+    const admitted = new AbortController();
+    const replacement = new AbortController();
+    replacement.abort(new Error("unadmitted accessor signal"));
+    let reads = 0;
+    await expect(
+      invoke(entry, host, {
+        purpose: "signal-accessor",
+        rubricVersion: "v2",
+        timeoutMs: 5000,
+        get signal() {
+          return ++reads === 1 ? admitted.signal : replacement.signal;
+        },
+      }),
+    ).resolves.toMatchObject({ status: "ok" });
+    expect(reads).toBe(1);
+    expect(host.evaluate).toHaveBeenCalledOnce();
+    expect(host.events).toHaveLength(1);
+  },
+);
+
+it.each(["registry-v1", "registry-v2"] as const)(
+  "preserves %s contract errors for absent options or signal",
+  async (entry) => {
+    const host = ready(entry);
+    const evaluate =
+      entry === "registry-v1"
+        ? decisionRuntime.evaluateDecisionInRegistry
+        : decisionRuntime.evaluateDecisionV2InRegistry;
+    const input = entry === "registry-v1" ? v1Batch : batch;
+    for (const options of [
+      undefined,
+      null,
+      { purpose: "missing-signal", rubricVersion: "v2", timeoutMs: 5000 },
+    ]) {
+      await expect(
+        Reflect.apply(evaluate, undefined, [input, options, host.registry, config]),
+      ).rejects.toThrow("Invalid decision contract");
+    }
+    expect(host.evaluate).not.toHaveBeenCalled();
+    expect(host.events).toEqual([]);
+  },
+);
 
 function onOperationSettled(callback: () => void) {
   const v1 = decisionRuntime.evaluateDecisionOperation;

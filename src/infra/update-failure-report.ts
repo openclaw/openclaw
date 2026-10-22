@@ -22,14 +22,12 @@ import {
   type UpdateFailureReportReceipt,
 } from "./restart-sentinel.js";
 import {
-  cleanRetiredUpdateFailureReportArtifacts,
-  type UpdateFailureReportSweepReceipt,
-} from "./update-failure-report-artifact-sweep.js";
-import {
   bindSavedReportArtifact,
   discardSavedUpdateFailureReport,
   discardSavedUpdateFailureReportBestEffort,
+  listRetiredUpdateFailureReportArtifacts,
   publishPreparedUpdateFailureReport,
+  removeRetiredUpdateFailureReportArtifacts,
   savePreparedUpdateFailureReport,
 } from "./update-failure-report-artifact.js";
 import {
@@ -46,6 +44,11 @@ export type {
   PreparedUpdateFailureReport,
   UpdateFailureReportInput,
 } from "./update-failure-report-prepare.js";
+
+type UpdateFailureReportSweepReceipt = Pick<
+  UpdateFailureReportReceipt,
+  "artifactSweep" | "previewDigest" | "replacementReady" | "reservationId"
+>;
 
 export type UpdateFailureReportSubmitResult =
   | { message?: string; savedReportPath: string; status: "created"; url: string }
@@ -140,8 +143,37 @@ export async function submitUpdateFailureReport(
   };
   ensureAuthority("submission");
   const ensureReconciliationAuthority = () => ensureAuthority("reconciliation");
-  const cleanRetiredArtifacts = (receipt: UpdateFailureReportSweepReceipt, keepCurrent: boolean) =>
-    cleanRetiredUpdateFailureReportArtifacts(prepared, receipt, stateEnv, keepCurrent, context);
+  const cleanRetiredArtifacts = async (
+    receipt: UpdateFailureReportSweepReceipt,
+    keepCurrent: boolean,
+  ): Promise<void> => {
+    const candidates = await listRetiredUpdateFailureReportArtifacts(prepared);
+    const current = await readUpdateFailureReportReceipt(prepared.attemptId, stateEnv, context);
+    const keep = [
+      ...(keepCurrent && !receipt.replacementReady ? [receipt] : []),
+      ...(current &&
+      current.status !== "created" &&
+      current.cleanup !== "pending" &&
+      !current.replacementReady
+        ? [current]
+        : []),
+    ];
+    const keepPaths = new Set(
+      keep.flatMap((owner) => {
+        const { savedReportPath } = bindSavedReportArtifact(
+          prepared,
+          owner.reservationId,
+          owner.previewDigest,
+        );
+        return [savedReportPath, `${savedReportPath}.pending`];
+      }),
+    );
+    // Protect a successor already listed; later reservations use names outside this captured set.
+    context.admission.assertCurrent();
+    await removeRetiredUpdateFailureReportArtifacts(
+      candidates.filter((candidate) => !keepPaths.has(candidate)),
+    );
+  };
   const cleanOwnedArtifact = async (receipt: UpdateFailureReportSweepReceipt): Promise<boolean> => {
     if (receipt.artifactSweep) {
       await cleanRetiredArtifacts(receipt, false);

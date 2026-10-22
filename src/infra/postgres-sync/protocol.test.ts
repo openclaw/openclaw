@@ -7,7 +7,7 @@ import {
   validatePostgresBindings,
 } from "./protocol.js";
 
-describe("experimental PostgreSQL SQL boundary", () => {
+describe("PostgreSQL SQL boundary", () => {
   it.each([["XX000", false]] as const)(
     "classifies server SQLSTATE %s as connection-level: %s",
     (code, expected) => {
@@ -28,7 +28,7 @@ describe("experimental PostgreSQL SQL boundary", () => {
     "refuses unsupported PRAGMA commands: %s",
     (input) => {
       expect(() => preparePostgresQuery(input)).toThrow(
-        "The experimental PostgreSQL engine does not support PRAGMA statements",
+        "The PostgreSQL engine does not support PRAGMA statements",
       );
     },
   );

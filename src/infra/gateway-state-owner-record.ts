@@ -21,19 +21,29 @@ import {
 } from "./gateway-state-owner-errors.js";
 import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
 
-/** Admission and reclamation use the same namespace-qualified PID evidence. */
-export function isGatewayStateOwnerDefinitelyStale(value: unknown, lockPath: string): boolean {
-  const payload = isRecord(value) ? value : null;
-  const namespace = classifyGatewayLockProcessNamespace(payload?.processNamespace, lockPath);
-  if (namespace === "unknown") {
-    throw new GatewayLockNamespaceError(payload ?? {}, lockPath);
-  }
+function isComparableStateOwnerStale(
+  payload: Record<string, unknown>,
+  namespace: "same" | "dead" | "unknown",
+): boolean {
   return (
     namespace === "dead" ||
-    isLockOwnerDefinitelyStale({
-      payload: payload ? { pid: payload.pid, starttime: payload.startTime } : null,
-    })
+    (namespace === "same" &&
+      isLockOwnerDefinitelyStale({ payload: { pid: payload.pid, starttime: payload.startTime } }))
   );
+}
+
+/** Reclamation requires proof that the recorded owner stopped. */
+export function isGatewayStateOwnerDefinitelyStale(value: unknown, lockPath: string): boolean {
+  const payload = isRecord(value) ? value : null;
+  if (!payload) {
+    // Exclusive creation precedes publication; an incomplete record still owns its lock.
+    return false;
+  }
+  const namespace = classifyGatewayLockProcessNamespace(payload.processNamespace, lockPath);
+  if (namespace === "unknown") {
+    throw new GatewayLockNamespaceError(payload, lockPath);
+  }
+  return isComparableStateOwnerStale(payload, namespace);
 }
 
 export {
@@ -74,22 +84,25 @@ export function assertPersistedStateDatabaseAccessAllowed(params: {
   if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0) {
     throw new StateDatabaseAccessError(unavailable);
   }
-  if (isGatewayStateOwnerDefinitelyStale(owner, ownerPath)) {
+  // Ordinary SQLite access does not reclaim the owner or borrow schema custody.
+  // Unknown namespaces retain maintenance contention without probing a local PID.
+  const namespace = classifyGatewayLockProcessNamespace(owner.processNamespace, ownerPath);
+  if (isComparableStateOwnerStale(owner, namespace)) {
     return;
   }
   // Workers share the process PID, but their schema authority still comes from
   // the host operation's retained lease and is never inferred from this record.
-  if (owner.pid === process.pid && !isMainThread) {
+  if (namespace === "same" && owner.pid === process.pid && !isMainThread) {
     return;
   }
-  if (!isPidAlive(owner.pid)) {
+  if (namespace === "same" && !isPidAlive(owner.pid)) {
     throw new StateDatabaseAccessError(unavailable);
   }
   const role = owner.role ?? "gateway";
   if (role === "gateway" || role === "agent-embedded") {
     return;
   }
-  if (owner.pid === process.pid) {
+  if (namespace === "same" && owner.pid === process.pid) {
     assertMaintenance();
     return;
   }

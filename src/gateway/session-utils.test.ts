@@ -95,6 +95,26 @@ function catalogModel(
   return { provider, id, name: id, ...fields };
 }
 
+const mainAgentConfig: OpenClawConfig = { agents: { entries: { main: {} } } };
+
+function imessageEntry(chatType: "direct" | "group", to: string, label: string, from = to) {
+  return {
+    chatType,
+    delivery: normalizeSessionDeliveryState({
+      context: { channel: "imessage", to },
+      origin: { provider: "imessage", label, from },
+    }),
+  };
+}
+function slackChannelEntry(): Partial<SessionEntry> {
+  return {
+    chatType: "channel",
+    groupChannel: "general",
+    space: "Acme",
+    delivery: normalizeSessionDeliveryState({ context: { channel: "slack", to: "channel:C1" } }),
+  };
+}
+
 function installConfig(cfg: OpenClawConfig) {
   setRuntimeConfigSnapshot(cfg);
   onTestFinished(() => resetConfigRuntimeState());
@@ -738,8 +758,7 @@ describe("gateway session utils", () => {
 
   test("strips retired thinking provenance from Gateway patch results", () => {
     const entry = {
-      sessionId: "private-fallback",
-      updatedAt: 1,
+      ...makeSession("private-fallback"),
       thinkingLevelSelection: { retired: true },
       modelFallback: {
         prevModel: "gpt-5.6-sol",
@@ -752,9 +771,7 @@ describe("gateway session utils", () => {
     const result = projectSessionPatchResult({
       preparedAcpMeta: null,
       canonicalKey: "agent:main:main",
-      cfg: {
-        agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } },
-      } as OpenClawConfig,
+      cfg: { agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } } },
       entry,
       modelCatalog: [
         catalogModel("openai", "gpt-5.6-sol", { name: "GPT 5.6 Sol", reasoning: true }),
@@ -874,97 +891,51 @@ describe("gateway session utils", () => {
 
   test("session rows preserve fresh zero-token usage", () => {
     const row = buildGatewaySessionRow({
-      cfg: {} as OpenClawConfig,
-      entry: {
-        sessionId: "fresh-zero-token-session",
-        updatedAt: 1,
+      cfg: {},
+      entry: makeSession("fresh-zero-token-session", {
         totalTokens: 0,
         totalTokensFresh: true,
         totalTokensVersion: 1,
-      },
+      }),
     });
-
-    expect(row.totalTokens).toBe(0);
-    expect(row.totalTokensFresh).toBe(true);
+    expect(row).toMatchObject({ totalTokens: 0, totalTokensFresh: true });
   });
 
-  test.each<{
-    name: string;
-    key: string;
-    fields: Partial<SessionEntry>;
-    expected: string | undefined;
-  }>([
-    {
-      name: "opaque direct route",
-      key: "imessage:direct:+15551234567",
-      fields: {
-        chatType: "direct",
-        delivery: normalizeSessionDeliveryState({
-          context: { channel: "imessage", to: "auto:+15551234567" },
-          origin: { provider: "imessage", label: "+15551234567", from: "auto:+15551234567" },
-        }),
-      },
-      expected: undefined,
-    },
-    {
-      name: "human contact alias matching the route tail",
-      key: "imessage:direct:Alice",
-      fields: {
-        chatType: "direct",
-        delivery: normalizeSessionDeliveryState({
-          context: { channel: "imessage", to: "imessage:Alice" },
-          origin: { provider: "imessage", label: "Alice", from: "imessage:Alice" },
-        }),
-      },
-      expected: "Alice",
-    },
-    {
-      name: "compact group route fallback",
-      key: "imessage:group:13",
-      fields: {
-        chatType: "group",
+  test.each<[string, string, Partial<SessionEntry>, string | undefined]>([
+    [
+      "opaque direct route",
+      "imessage:direct:+15551234567",
+      imessageEntry("direct", "auto:+15551234567", "+15551234567"),
+      undefined,
+    ],
+    [
+      "human contact alias matching the route tail",
+      "imessage:direct:Alice",
+      imessageEntry("direct", "imessage:Alice", "Alice"),
+      "Alice",
+    ],
+    [
+      "compact group route fallback",
+      "imessage:group:13",
+      {
+        ...imessageEntry("group", "chat_id:13", "Group id:13", "imessage:group:13"),
         groupId: "13",
         displayName: "imessage:g-13",
-        delivery: normalizeSessionDeliveryState({
-          context: { channel: "imessage", to: "chat_id:13" },
-          origin: { provider: "imessage", label: "Group id:13", from: "imessage:group:13" },
-        }),
       },
-      expected: undefined,
-    },
-    {
-      name: "channel title",
-      key: "slack:channel:C1",
-      fields: {
-        chatType: "channel",
-        delivery: normalizeSessionDeliveryState({
-          context: { channel: "slack", to: "channel:C1" },
-        }),
-        groupChannel: "general",
-        space: "Acme",
-      },
-      expected: "Acme #general",
-    },
-    {
-      name: "explicit label overriding channel metadata",
-      key: "slack:channel:C1",
-      fields: {
-        chatType: "channel",
-        delivery: normalizeSessionDeliveryState({
-          context: { channel: "slack", to: "channel:C1" },
-        }),
-        groupChannel: "general",
-        space: "Acme",
-        label: "Team room",
-      },
-      expected: "Team room",
-    },
-  ])("projects $name as the session display name", ({ key: suffix, fields, expected }) => {
-    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+      undefined,
+    ],
+    ["channel title", "slack:channel:C1", slackChannelEntry(), "Acme #general"],
+    [
+      "explicit label overriding channel metadata",
+      "slack:channel:C1",
+      { ...slackChannelEntry(), label: "Team room" },
+      "Team room",
+    ],
+  ])("projects %s as the session display name", (_name, suffix, fields, expected) => {
     const key = `agent:main:${suffix}`;
-    const entry: SessionEntry = { sessionId: "display-name", updatedAt: 1, ...fields };
+    const entry = makeSession("display-name", fields);
     const row = buildGatewaySessionRow({
-      cfg,
+      cfg: mainAgentConfig,
       store: { [key]: entry },
       key,
       entry,
@@ -1077,49 +1048,33 @@ describe("gateway session utils", () => {
   });
 
   test("buildGatewaySessionRow falls back to an opaque group token", () => {
-    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
-    const opaque: SessionEntry = {
-      sessionId: "group-opaque",
-      updatedAt: 1,
+    const key = "agent:main:telegram:group:99";
+    const entry = makeSession("group-opaque", {
       chatType: "group",
       delivery: normalizeSessionDeliveryState({ context: { channel: "telegram", to: "group:99" } }),
-    };
-    const opaqueRow = buildGatewaySessionRow({
-      cfg,
-      store: { "agent:main:telegram:group:99": opaque },
-      key: "agent:main:telegram:group:99",
-      entry: opaque,
     });
-    expect(opaqueRow.displayName).toMatch(/^telegram:/);
+    expect(
+      buildGatewaySessionRow({
+        cfg: mainAgentConfig,
+        key,
+        entry,
+        store: { [key]: entry },
+      }).displayName,
+    ).toMatch(/^telegram:/);
   });
 
   test("buildGatewaySessionRow projects the session root only for an explicit permission mode", () => {
-    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
-    const ordinaryEntry: SessionEntry = {
-      sessionId: "ordinary",
-      sessionRoot: "/workspace/private",
-      updatedAt: 1,
+    const row = (permissionMode?: "workspace") => {
+      const name = permissionMode ? "permission" : "ordinary";
+      const key = `agent:main:${name}`;
+      const entry = makeSession(name, {
+        sessionRoot: "/workspace/private",
+        ...(permissionMode ? { permissionMode } : {}),
+      });
+      return buildGatewaySessionRow({ cfg: mainAgentConfig, entry, key, store: { [key]: entry } });
     };
-    const ordinaryRow = buildGatewaySessionRow({
-      cfg,
-      store: { "agent:main:ordinary": ordinaryEntry },
-      key: "agent:main:ordinary",
-      entry: ordinaryEntry,
-    });
-    expect(ordinaryRow).not.toHaveProperty("sessionRoot");
-
-    const permissionEntry: SessionEntry = {
-      ...ordinaryEntry,
-      permissionMode: "workspace",
-      sessionId: "permission",
-    };
-    const permissionRow = buildGatewaySessionRow({
-      cfg,
-      store: { "agent:main:permission": permissionEntry },
-      key: "agent:main:permission",
-      entry: permissionEntry,
-    });
-    expect(permissionRow).toMatchObject({
+    expect(row()).not.toHaveProperty("sessionRoot");
+    expect(row("workspace")).toMatchObject({
       permissionMode: "workspace",
       sessionRoot: "/workspace/private",
     });
@@ -1836,13 +1791,14 @@ describe("session list selected model display", () => {
       opts: { agentId: "work", includeGlobal: true, search: "claude-opus" },
     });
 
-    expect(result.sessions).toHaveLength(1);
-    expect(result.sessions[0]).toMatchObject({
-      key: "global",
-      agentId: "work",
-      modelProvider: "anthropic",
-      model: "claude-opus-4-6",
-    });
+    expect(result.sessions).toMatchObject([
+      {
+        key: "global",
+        agentId: "work",
+        modelProvider: "anthropic",
+        model: "claude-opus-4-6",
+      },
+    ]);
   });
 
   test("filters phantom agent store placeholder rows from session lists", async () => {
@@ -1885,6 +1841,11 @@ describe("resolveGatewayModelSupportsImages", () => {
     name: "GPT-5.4",
     input: ["text", "image"],
   });
+  const routeVision = (
+    api: "openai-completions" | "openai-responses",
+    baseUrl = "https://api.openai.com/v1",
+  ) => ({ ...vision, api, baseUrl });
+  const textOnly = (model: Model): Model => ({ ...model, input: ["text"] });
   const query = { agentId: "qa", model: vision.id, provider: vision.provider };
   const snapshot = (
     overrides: Partial<GatewayModelCatalogSnapshot> = {},
@@ -1964,7 +1925,7 @@ describe("resolveGatewayModelSupportsImages", () => {
       if (params?.readOnly !== true) {
         throw new Error("full catalog discovery must not start during attachment admission");
       }
-      return snapshot({ entries: [{ ...vision, input: ["text"] }], staticEntries: [vision] });
+      return snapshot({ entries: [textOnly(vision)], staticEntries: [vision] });
     });
     await expect(
       resolveGatewayModelSupportsImages({
@@ -2006,7 +1967,7 @@ describe("resolveGatewayModelSupportsImages", () => {
                 },
               },
             },
-            entries: [{ ...vision, baseUrl: "https://api.openai.com/v1", input: ["text"] }],
+            entries: [textOnly({ ...vision, baseUrl: "https://api.openai.com/v1" })],
             staticEntries: [{ ...vision, baseUrl: "https://api.openai.com/v1" }],
           });
         },
@@ -2031,33 +1992,15 @@ describe("resolveGatewayModelSupportsImages", () => {
     {
       boundary: "visible API",
       facts: {
-        entries: [
-          {
-            ...vision,
-            api: "openai-completions",
-            baseUrl: "https://api.openai.com/v1",
-            input: ["text"],
-          },
-        ],
-        staticEntries: [
-          { ...vision, api: "openai-responses", baseUrl: "https://api.openai.com/v1" },
-        ],
+        entries: [textOnly(routeVision("openai-completions"))],
+        staticEntries: [routeVision("openai-responses")],
       },
     },
     {
       boundary: "visible base URL",
       facts: {
-        entries: [
-          {
-            ...vision,
-            api: "openai-responses",
-            baseUrl: "https://custom.example.test/v1",
-            input: ["text"],
-          },
-        ],
-        staticEntries: [
-          { ...vision, api: "openai-responses", baseUrl: "https://api.openai.com/v1" },
-        ],
+        entries: [textOnly(routeVision("openai-responses", "https://custom.example.test/v1"))],
+        staticEntries: [routeVision("openai-responses")],
       },
     },
   ])("does not borrow static vision across the $boundary", async ({ facts }) => {
@@ -2099,32 +2042,26 @@ describe("resolveGatewayModelSupportsImages", () => {
     {
       model: "deployment-gpt5",
       provider: "microsoft-foundry",
-      entry: {
-        id: "deployment-gpt5",
+      entry: catalogModel("microsoft-foundry", "deployment-gpt5", {
         name: "gpt-5.4",
-        provider: "microsoft-foundry",
         input: ["text"],
-      },
+      }),
     },
     {
       model: "claude-sonnet-4-6",
       provider: "claude-cli",
-      entry: {
-        id: "claude-sonnet-4-6",
+      entry: catalogModel("claude-cli", "claude-sonnet-4-6", {
         name: "Claude Sonnet 4.6",
-        provider: "claude-cli",
         input: ["text"],
-      },
+      }),
     },
     {
       model: "Qwen/Qwen3.5-35B-A3B",
       provider: undefined,
-      entry: {
-        id: "qwen/qwen3.5-35b-a3b",
+      entry: catalogModel("modelscope", "qwen/qwen3.5-35b-a3b", {
         name: "Qwen3.5 35B",
-        provider: "modelscope",
         input: ["text", "image"],
-      },
+      }),
     },
   ] satisfies Array<{ model: string; provider?: string; entry: Model }>)(
     "resolves legacy or providerless vision for $model",

@@ -47,7 +47,7 @@ export function ChatAttachmentInputs(
                   type="file"
                   tabindex="-1"
                   aria-hidden="true"
-                  accept={kind === "file" ? undefined : "image/*"}
+                  accept={kind === "file" && !props.imagesOnly ? undefined : "image/*"}
                   multiple={kind !== "camera"}
                   capture={kind === "camera" ? "environment" : undefined}
                   class={[`agent-chat__${kind}-input`]}

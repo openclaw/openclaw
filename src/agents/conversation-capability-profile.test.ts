@@ -22,7 +22,10 @@ import {
   isConversationToolAllowed as allows,
   projectConversationToolNames,
 } from "./conversation-tool-policy-pipeline.js";
-import { preparePluginHarnessPolicyToolsAllow } from "./harness/execution-environment.js";
+import {
+  preparePluginHarnessToolPolicies,
+  resolvePluginHarnessPolicyToolsAllow,
+} from "./harness/execution-environment.js";
 import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
 import { resolveWebSearchToolPolicy } from "./web-search-tool-policy.js";
 
@@ -304,14 +307,16 @@ describe("resolveConversationCapabilityProfile scheduled account authority", () 
         );
       const webSearch = () =>
         resolveWebSearchToolPolicy({ ...params, runtimeToolAllowlist: ["web_search"] });
-      const harnessTools = () =>
-        preparePluginHarnessPolicyToolsAllow({
-          ...params,
-          provider: "fixture",
-          modelId: "fixture-model",
-          senderId: "sender",
-          conversationToolPolicy: { deny: ["*"] },
-        });
+      const harnessTools = async () =>
+        resolvePluginHarnessPolicyToolsAllow(
+          await preparePluginHarnessToolPolicies({
+            ...params,
+            provider: "fixture",
+            modelId: "fixture-model",
+            senderId: "sender",
+            conversationToolPolicy: { deny: ["*"] },
+          }),
+        );
 
       if (origin === "unknown" || !configured) {
         for (const resolve of [conversationTools, webSearch]) {

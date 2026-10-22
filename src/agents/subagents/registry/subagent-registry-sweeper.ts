@@ -668,8 +668,12 @@ export function createSubagentRegistrySweeper(params: {
     ) =>
       trackWork(() =>
         runWithGatewayDetachedWorkAdmission(async () => {
-          for (const entry of entries) {
-            await recovery.recover(entry.runId, entry);
+          const results = await Promise.allSettled(
+            entries.map((entry) => recovery.recover(entry.runId, entry)),
+          );
+          const failure = results.find((result) => result.status === "rejected");
+          if (failure) {
+            throw failure.reason;
           }
         }, "subagents:restart-recovery"),
       ),

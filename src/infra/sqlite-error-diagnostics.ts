@@ -1,5 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { coerceErrorMessage, extractErrorCode } from "@openclaw/normalization-core/error-coercion";
+import {
+  coerceErrorMessage,
+  collectNestedErrorCandidates,
+  extractErrorCode,
+} from "@openclaw/normalization-core/error-coercion";
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
@@ -8,17 +12,45 @@ const STORAGE_ERRORS = [
   ["SQLITE_LOCKED", "database table is locked", 6],
   ["SQLITE_READONLY", "attempt to write a readonly database", 8],
   ["SQLITE_IOERR", "disk I/O error", 10],
+  ["SQLITE_IOERR", "unable to open database file", 14],
   ["SQLITE_FULL", "database or disk is full", 13],
   ["transcript_writer_fenced", "session writer claim changed before transcript persistence", -1],
+  [
+    "session_actor_reconciliation",
+    "Session actor requires reconciliation before another command",
+    -2,
+  ],
 ] as const;
 export type GatewayStorageFailure = (typeof STORAGE_ERRORS)[number][0];
 
 /** Classify native errors before flattening; legacy rows require exact known messages. */
 export function classifyGatewayStorageFailure(error: unknown): GatewayStorageFailure | undefined {
+  let reconciliation: GatewayStorageFailure | undefined;
+  for (const candidate of collectNestedErrorCandidates(error)) {
+    const failure = classifyStorageFailure(candidate);
+    if (failure === "session_actor_reconciliation") {
+      reconciliation = failure;
+    } else if (failure) {
+      return failure;
+    }
+  }
+  return reconciliation;
+}
+
+function classifyStorageFailure(error: unknown): GatewayStorageFailure | undefined {
   const fields = typeof error === "string" ? { message: error } : isRecord(error) ? error : {};
   const code = fields.errorCode ?? fields.code;
   if (code === "ENOSPC") {
     return "SQLITE_FULL";
+  }
+  if (code === "EIO") {
+    return "SQLITE_IOERR";
+  }
+  if (
+    typeof code === "string" &&
+    (code === "SQLITE_CANTOPEN" || code.startsWith("SQLITE_CANTOPEN_"))
+  ) {
+    return "SQLITE_IOERR";
   }
   const nativeCode = fields.errcode;
   const primaryCode =

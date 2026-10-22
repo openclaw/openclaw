@@ -1,7 +1,7 @@
 import { For, Show, createMemo } from "solid-js";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
+import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { PanelRefreshStatus } from "../../components/solid/panel-refresh-status.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
@@ -92,7 +92,7 @@ function DashboardCard(props: {
         })
       : null,
   );
-  const author = createMemo(() => dashboardAuthor(props.row, props.data.fallbackAgentId));
+  const author = () => dashboardAuthor(props.row, props.data.fallbackAgentId);
   const title = createMemo(() => resolveSessionDisplayName(props.row.key, props.row));
   const Content = () => (
     <>
@@ -327,20 +327,20 @@ export function DashboardsView(props: {
 }) {
   return (
     <>
-      <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
-        <section class="content-header dashboards-header">
-          <div>
-            <h1 class="page-title">{t("tabs.dashboards")}</h1>
-            <div class="page-subtitle">{t("subtitles.dashboards")}</div>
-          </div>
+      <HubPageHeader
+        active="dashboards"
+        wide
+        docsUrl="https://docs.openclaw.ai/web/dashboards"
+        class="dashboards-header"
+        actions={
           <Show when={props.data?.result}>
             <div class="dashboards-header__count">
               <strong>{props.data?.result?.sessions.length}</strong>
               <span>{t("dashboardsPage.totalLabel")}</span>
             </div>
           </Show>
-        </section>
-      </ShellLayoutBoundary>
+        }
+      />
       <SettingsWorkspace>
         <Show
           when={props.data && (props.data.result || props.data.error) ? props.data : undefined}

@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
@@ -13,7 +14,8 @@ import {
   resolveEmbeddedAgentProjectSettingsPolicy,
   type AgentSettingsSnapshot,
 } from "./agent-project-settings-snapshot.js";
-import { FileSettingsStorage, readSettingsScope } from "./sessions/settings-storage.js";
+import { CONFIG_DIR_NAME } from "./package-metadata.js";
+import { readSettingsScope } from "./sessions/settings-storage.js";
 
 type PreparedSettingsParams = {
   sessionId: string;
@@ -59,9 +61,12 @@ export function prepareAgentSettingsSnapshot(params: PreparedSettingsParams): Pr
     prepared.configKey !== configKey ||
     prepared.pluginMetadataSnapshot !== params.pluginMetadataSnapshot
   ) {
-    const storage = new FileSettingsStorage(params.cwd, params.agentDir);
-    const globalSettings = freezeJsonSnapshot(readSettingsScope(storage, "global").settings);
-    const projectSettings = freezeJsonSnapshot(readSettingsScope(storage, "project").settings);
+    const globalSettings = freezeJsonSnapshot(
+      readSettingsScope(join(params.agentDir, "settings.json")).settings,
+    );
+    const projectSettings = freezeJsonSnapshot(
+      readSettingsScope(join(params.cwd, CONFIG_DIR_NAME, "settings.json")).settings,
+    );
     const metadata =
       params.pluginMetadataSnapshot ??
       loadPluginMetadataSnapshot({ workspaceDir: params.cwd, config: params.cfg ?? {} });

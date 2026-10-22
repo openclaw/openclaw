@@ -21,6 +21,7 @@ export function showSecretRevealDialog(options: SecretRevealDialogOptions): Prom
   return withPromiseModalHost<void>(undefined, (modal) => {
     modal.render(() => {
       const [dismissRefused, setDismissRefused] = createSignal(false);
+      let acknowledgeButton!: HTMLButtonElement;
       const acknowledge = () => modal.finish();
       const cancel = (event: Event) => {
         if (!options.secret) {
@@ -32,6 +33,7 @@ export function showSecretRevealDialog(options: SecretRevealDialogOptions): Prom
       };
       return (
         <openclaw-modal-dialog
+          prop:initialFocus={() => acknowledgeButton}
           label={options.title}
           description={options.message}
           onModal-cancel={cancel}
@@ -69,6 +71,9 @@ export function showSecretRevealDialog(options: SecretRevealDialogOptions): Prom
             </Show>
             <openclaw-modal-actions class="exec-approval-actions">
               <button
+                ref={(element) => {
+                  acknowledgeButton = element;
+                }}
                 type="button"
                 class={options.secret ? "btn primary" : "btn secret-reveal__dismiss"}
                 autofocus

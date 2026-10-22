@@ -99,13 +99,12 @@ import {
 } from "./doctor-auth-legacy-paths.js";
 import {
   acquireAuthProfileMigrationSourceLocks,
-  archiveAuthProfileMigrationSource,
+  archivePreviouslyMigratedAuthProfileSource,
   prepareAuthProfileSourceReceipt,
   parseAuthProfileMigrationSource,
   assertAuthProfileMigrationSourcesUnchanged,
   digestAuthProfileMigrationValue,
   finalizeAuthProfileMigrationSource,
-  hasTerminalAuthProfileMigrationReceipt,
   resumePendingAuthProfileMigrationArchives,
   type AuthProfileMigrationSourceReceipt,
 } from "./doctor-auth-migration-receipts.js";
@@ -535,20 +534,6 @@ function hasImportableAuthProfileStore(store: AuthProfileStore | null): store is
   return Boolean(store && (Object.keys(store.profiles).length > 0 || hasAuthProfileState(store)));
 }
 
-function archivePreviouslyMigratedAuthProfileSource(
-  receipt: AuthProfileMigrationSourceReceipt,
-  result: LegacyFlatAuthProfileRepairResult,
-): boolean {
-  if (!hasTerminalAuthProfileMigrationReceipt(receipt.sourceKey, receipt.env)) {
-    return false;
-  }
-  archiveAuthProfileMigrationSource(receipt);
-  result.changes.push(
-    `Archived a previously migrated legacy auth source without replaying credentials (${shortenHomePath(receipt.archivePath)}).`,
-  );
-  return true;
-}
-
 function loadAuthProfileMigrationTargetStore(
   agentDir: string | undefined,
   database?: AuthProfileDatabase,
@@ -798,9 +783,16 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
           env,
         }),
       );
-      sourceReceipts = sourceReceipts.filter(
-        (receipt) => !archivePreviouslyMigratedAuthProfileSource(receipt, result),
-      );
+      sourceReceipts = sourceReceipts.filter((receipt) => {
+        const archivePath = archivePreviouslyMigratedAuthProfileSource(receipt);
+        if (!archivePath) {
+          return true;
+        }
+        result.changes.push(
+          `Preserved a previously migrated legacy auth source without replaying credentials (${shortenHomePath(archivePath)}).`,
+        );
+        return false;
+      });
       assertAuthProfileMigrationSourcesUnchanged(candidateSourcePaths, sourceReceipts);
       if (sourceReceipts.length === 0 && !configStore) {
         continue;
@@ -1154,7 +1146,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
         openAIProfileIdMap.forEach((_target, id) => blockedProfileIds.add(id));
       }
       result.warnings.push(
-        `Failed to migrate auth profile JSON for ${shortenHomePath(candidate.authPath)}: ${String(err)}`,
+        `Failed to migrate auth profile JSON for ${shortenHomePath(candidate.authPath)}: ${String(err)} Preserve the source; restore valid UTF-8 JSON from a verified backup if unreadable, then rerun ${formatCliCommand("openclaw doctor --fix")}.`,
       );
     } finally {
       if (!completed) {
@@ -1742,7 +1734,7 @@ function recoverArchivedAuthProfileMappings(params: {
         ) {
           continue;
         }
-        const archivedStore = JSON.parse(sourceBytes.toString("utf8")) as unknown;
+        const archivedStore = parseAuthProfileMigrationSource({ sourceBytes, sourcePath });
         const sourceStore =
           coerceLegacyAuthProfileStore(archivedStore) ??
           coerceLegacyFlatAuthProfileStore(archivedStore);

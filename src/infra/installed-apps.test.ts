@@ -124,7 +124,6 @@ describe("scanInstalledApps", () => {
     mockProcessPlatform("linux");
     await expect(scanInstalledApps()).resolves.toEqual({
       status: "unsupported",
-      platform: "linux",
       apps: [],
     });
   });

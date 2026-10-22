@@ -16,6 +16,7 @@ import {
 } from "../config/sessions/session-accessor.sqlite-read.js";
 import { readCommittedTranscriptMessageSequence } from "../config/sessions/session-accessor.sqlite-transcript-sequences.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { readSessionTranscriptAnchorsAsync } from "../config/sessions/session-transcript-anchor-read.js";
 import { findTranscriptEvent } from "../config/sessions/session-transcript-match.js";
 import { resolveMirroredTranscriptText } from "../config/sessions/transcript-mirror.js";
 import { captureOwnedTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
@@ -93,6 +94,31 @@ export async function publishHeartbeatSessionReply(params: {
       }
     };
     assertCurrent();
+    const assertCurrentEntry = async (entryId: string) => {
+      assertCurrent();
+      await readSessionTranscriptAnchorsAsync(
+        scope,
+        {
+          entryIds: [entryId],
+          activePathEntryId: entryId,
+          contextAuthority: true,
+        },
+        params.signal,
+        (facts) => {
+          assertCurrent();
+          const entry = facts.contextAuthority?.entry;
+          if (
+            !entry ||
+            entry.sessionId !== scope.sessionId ||
+            entry.lifecycleRevision !== params.expectedGeneration.lifecycleRevision ||
+            entry.activeWriterRunId !== writerRunId ||
+            !["exact", "ancestor"].includes(facts.activePathRelation ?? "")
+          ) {
+            throw new Error("heartbeat publication no longer owns the active transcript");
+          }
+        },
+      );
+    };
     const mirror = metadata?.sourceReplyTranscriptMirror?.transcriptOwner
       ? metadata.sourceReplyTranscriptMirror
       : undefined;
@@ -255,10 +281,11 @@ export async function publishHeartbeatSessionReply(params: {
         const completion = attachMedia({
           messageId: receipt.messageId,
           blocks: readAssistantDisplayContent(receipt.message),
-        }).then((attached) => {
+        }).then(async (attached) => {
           if (!attached) {
             throw new Error("heartbeat source receipt media custody is unavailable");
           }
+          await assertCurrentEntry(receipt.messageId);
           return publish();
         });
         acceptedPublication = completion.catch((error: unknown) => ({

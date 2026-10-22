@@ -387,6 +387,7 @@ describe("ensureConfigReady", () => {
         expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toMatchObject({
           ok: false,
           error: { type: "cli_error", message: "OpenClaw config is invalid: /tmp/openclaw.json" },
+          repairHint: "Run `openclaw doctor --fix` to repair, then retry.",
           issues: [{ path: "channels.quietchat", message: "invalid" }],
         });
       } else if (mode === "mcp") {

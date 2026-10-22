@@ -28,7 +28,12 @@ import {
 } from "../tts/tts-runtime.test-support.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
 import * as heartbeatOutcomeStore from "./heartbeat-outcome-store.js";
-import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";
+import {
+  bindHeartbeatReply,
+  bindHeartbeatSend,
+  observeHeartbeatClock,
+} from "./heartbeat-runner.boundary-test-support.js";
+import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
   type HeartbeatReplySpy,
@@ -50,7 +55,7 @@ vi.mock("../tts/tts.runtime.js", async () => {
 
 installHeartbeatRunnerTestRuntime();
 const TELEGRAM_GROUP = "-1001234567890";
-type RunOptions = Omit<Parameters<typeof runHeartbeatOnce>[0], "cfg" | "deps">;
+type RunOptions = Omit<Parameters<typeof runHeartbeatOnce>[0], "cfg">;
 function createCase({
   tmpDir,
   storePath,
@@ -69,6 +74,8 @@ function createCase({
     session: { store: storePath },
   };
   const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+  bindHeartbeatReply(replySpy);
+  bindHeartbeatSend("telegram", sendTelegram);
   return {
     cfg,
     storePath,
@@ -81,16 +88,10 @@ function createCase({
         lastTo: TELEGRAM_GROUP,
         ...entry,
       }),
-    run: (options: RunOptions = {}, deps: Partial<HeartbeatDeps> = {}) =>
+    run: (options: RunOptions = {}) =>
       runHeartbeatOnce({
         cfg,
         ...options,
-        deps: {
-          telegram: sendTelegram,
-          nowMs: () => 0,
-          getReplyFromConfig: replySpy,
-          ...deps,
-        },
       }),
     read: (sessionKey: string) =>
       expectDefined(
@@ -318,7 +319,7 @@ describe("runHeartbeatOnce structured heartbeat delivery", () => {
   it.each(["none", "same-id"] as const)(
     "records the first delivery only for its initialized session: %s",
     async (replacement) =>
-      heartbeatCase(async ({ cfg, storePath, sendTelegram, run, read }) => {
+      heartbeatCase(async ({ cfg, storePath, replySpy, sendTelegram, run, read }) => {
         cfg.agents!.defaults!.heartbeat!.to = TELEGRAM_GROUP;
         const sessionKey = "agent:main:main";
         expect(readSessionStoreForTest(storePath)[sessionKey]).toBeUndefined();
@@ -350,16 +351,20 @@ describe("runHeartbeatOnce structured heartbeat delivery", () => {
           }
           return { messageId: "first-alert" };
         });
-        expect((await run({}, { getReplyFromConfig: replyResolver })).status).toBe("ran");
+        replySpy.mockImplementation(replyResolver);
+        const clock = observeHeartbeatClock();
+        const first = await clock.run(() => run());
+        expect(first.result.status).toBe("ran");
         expect(sendTelegram).toHaveBeenCalledOnce();
         const stored = read(sessionKey);
         if (replacement === "none") {
           expect(stored).toMatchObject({
             lastHeartbeatText: "Deployment requires attention.",
-            lastHeartbeatSentAt: 0,
+            lastHeartbeatSentAt: first.startedAt,
           });
-          await run({}, { getReplyFromConfig: replyResolver });
+          await run();
           expect(sendTelegram).toHaveBeenCalledOnce();
+          expect(read(sessionKey).lastHeartbeatSentAt).toBe(first.startedAt);
         } else {
           expect(stored.lifecycleRevision).toBe("replacement-revision");
           expect(stored.lastHeartbeatText).toBeUndefined();

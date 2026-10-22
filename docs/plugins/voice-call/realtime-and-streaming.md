@@ -190,6 +190,11 @@ Notify calls wait for detection before playing their opening message to a human
 or their voicemail message to a machine. `onMachine: "hang-up"` ends machine calls immediately.
 The mock provider can simulate detection; other carriers are unchanged.
 
+If detected-call cleanup fails, OpenClaw logs a warning with the affected call ID.
+The failure can come from carrier hangup or local finalization after hangup succeeds.
+Inspect that call's status and logs before retrying; an active local record does not
+necessarily mean the carrier call is still connected.
+
 ### Hangup detection
 
 Realtime calls normally end when the carrier sends a stream stop event or closes

@@ -111,9 +111,9 @@ describe.skipIf(!connection)("offline CLI on PostgreSQL", () => {
               runtime: defaultRuntime,
               commandPath: ["models", "auth", "paste-api-key"],
             });
-            await expect(
-              agentsDeleteCommand({ id: "main", force: true }, defaultRuntime),
-            ).rejects.toBeInstanceOf(ExitError);
+            await expect(agentsDeleteCommand({ id: "main", force: true })).rejects.toBeInstanceOf(
+              ExitError,
+            );
             expect(error).toHaveBeenCalledWith(
               'Agent "main" owns the legacy shared auth store and cannot be deleted. Run openclaw doctor --fix to migrate shared auth, then retry.',
             );

@@ -9,6 +9,14 @@ import { createControlUiPaneRuntimeTestAdapterScript } from "./control-ui-pane-r
 import { createTestGatewayClient } from "./gateway-client.ts";
 import { mockGatewayTest as it } from "./mock-gateway-page.test-support.ts";
 
+function renderMethod(element: HTMLElement) {
+  const method: unknown = Reflect.get(element, "render");
+  if (typeof method !== "function") {
+    throw new Error("Expected the pane's render operation");
+  }
+  return method;
+}
+
 it("keeps private pane probes on the reported runtime while composing stream instrumentation", ({
   gatewayPage,
 }) => {
@@ -92,23 +100,13 @@ it("keeps private pane probes on the reported runtime while composing stream ins
   expect(streamProbe).toHaveBeenCalledWith(runtime, "commit");
 
   const ownerMethod = vi.spyOn(runtime, "render");
-  const original: unknown = Reflect.get(element, "render");
-  if (typeof original !== "function") {
-    throw new Error("Expected the recorded pane's render operation");
-  }
+  const original = renderMethod(element);
   let probeCalls = 0;
   Reflect.set(element, "render", (...args: unknown[]) => {
-    probeCalls += 1;
-    if (probeCalls > 1) {
-      throw new Error("The saved owner method recursed through its replacement");
-    }
+    expect(++probeCalls, "saved owner method must not recurse through its replacement").toBe(1);
     return Reflect.apply(original, element, args);
   });
-  const instrumented: unknown = Reflect.get(element, "render");
-  if (typeof instrumented !== "function") {
-    throw new Error("Expected the instrumented pane's render operation");
-  }
-  const result: unknown = Reflect.apply(instrumented, element, []);
+  const result: unknown = Reflect.apply(renderMethod(element), element, []);
   expect(result).toHaveProperty("layout");
   expect(probeCalls).toBe(1);
   expect(ownerMethod).toHaveBeenCalledWith();

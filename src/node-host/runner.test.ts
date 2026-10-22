@@ -257,7 +257,7 @@ describe("runNodeHost", () => {
     });
 
     it("offers the saved endpoint for resume only with a paired node credential", async () => {
-      mocks.loadDeviceIdentityIfPresent.mockReturnValue(deviceIdentity);
+      mocks.loadDeviceIdentityIfPresent.mockResolvedValue(deviceIdentity);
       await expect(loadResumableNodeHostGateway()).resolves.toEqual(gateway);
 
       // A failed first enrollment saves the endpoint without issuing a device token.
@@ -275,7 +275,7 @@ describe("runNodeHost", () => {
       };
 
       beforeEach(() => {
-        mocks.loadDeviceIdentityIfPresent.mockReturnValue(deviceIdentity);
+        mocks.loadDeviceIdentityIfPresent.mockResolvedValue(deviceIdentity);
       });
 
       it("never falls back to shared auth if the saved token disappears before connect", async () => {
@@ -309,7 +309,7 @@ describe("runNodeHost", () => {
       });
 
       it.each<[string, () => unknown, Partial<Parameters<typeof runNodeHost>[0]>]>([
-        ["missing identity", () => mocks.loadDeviceIdentityIfPresent.mockReturnValue(null), {}],
+        ["missing identity", () => mocks.loadDeviceIdentityIfPresent.mockResolvedValue(null), {}],
         ["missing token", () => mocks.loadDeviceAuthTokenReadOnly.mockResolvedValue(null), {}],
         ["missing gateway", () => mocks.loadNodeHostConfig.mockResolvedValue(null), {}],
         [

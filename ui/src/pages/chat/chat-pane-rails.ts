@@ -48,21 +48,27 @@ export function releaseAttachmentWorkspaceOwner(state: ChatPageHost, slot: Sideb
 export function createChatPaneRails(params: {
   state: ChatPageHost;
   sidebarLayout: ChatPaneSidebarLayout;
+  /** Visibility only; all mutations still use sidebarLayout. */
+  visibleLayout?: ChatPaneSidebarLayout;
   presentationId: string;
+  presentation?: "desktop" | "mobile";
   sessionTitle?: string;
   paneLabel?: string;
   presented: boolean;
   gatewaySnapshot: Parameters<typeof isDesktopPanelAvailable>[0];
   setObserverVisibility: (visible: boolean) => void;
   updateSidebarLayout: ChatPageHost["updateSidebarLayout"];
+  onOpenPanel?: (slot: SidebarSlotId) => void;
 }) {
   const { state, sidebarLayout } = params;
-  const isPanelVisible = (slot: SidebarSlotId) => isSidebarSlotVisible(sidebarLayout, slot);
+  const isPanelVisible = (slot: SidebarSlotId) =>
+    isSidebarSlotVisible(params.visibleLayout ?? sidebarLayout, slot);
   const openPanelSlot = (slot: SidebarSlotId) => {
     params.updateSidebarLayout(openPreferredSidebarPanel(state, sidebarLayout, slot));
     if (slot === "companion") {
       params.setObserverVisibility(true);
     }
+    params.onOpenPanel?.(slot);
   };
   const closePanelSlot = (slot: SidebarSlotId) => {
     if (slot === "companion") {
@@ -79,11 +85,13 @@ export function createChatPaneRails(params: {
     sessionWorkspace: {
       ...createSessionWorkspaceProps(state, {
         draftScope: params.presentationId,
+        presentation: params.presentation,
+        openIntent: "navigate",
         draftContext: {
           sessionTitle: params.sessionTitle,
           paneLabel: params.paneLabel,
         },
-        expanded: isSidebarSlotVisible(sidebarLayout, "workspace"),
+        expanded: isPanelVisible("workspace"),
         presented: params.presented,
       }),
       collapsed: !isPanelVisible("workspace"),

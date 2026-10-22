@@ -131,7 +131,7 @@ it("retries one transient inspection timeout before stopping", async () => {
 it("keeps the original Gateway serving when both bounded manager inspections time out", async () => {
   const f = await fixture();
   f.manager(Number.POSITIVE_INFINITY);
-  await expect(f.stop()).rejects.toThrow(/inspection.*Version/i);
+  await expect(f.stop()).rejects.toThrow(/Stalled check: machine Manager\.Version\./);
   expect(f.running()).toBe(true);
   expect(f.commands).not.toContain("stop");
   expect(f.warn).toHaveBeenCalledOnce();

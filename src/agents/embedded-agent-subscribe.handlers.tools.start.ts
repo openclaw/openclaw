@@ -107,7 +107,6 @@ export function buildToolCallSummary(
     meta,
     commandBearing: isCommandBearingToolCall(toolName, args),
     instanceReplaySafe,
-    mutatingAction: mutation.mutatingAction,
     ...(ownerKey ? { ownerKey } : {}),
     replaySafe:
       (instanceReplaySafe && !mutation.mutatingAction) ||

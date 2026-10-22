@@ -29,6 +29,7 @@ import {
 } from "./update-check-lifecycle.js";
 import type { UpdateCheckResult } from "./update-check.js";
 import { getUpdateRun, listUpdateRuns } from "./update-run-ledger.js";
+import type { AutoUpdateRunner } from "./update-startup-auto-run.js";
 import {
   createDevGitStatus,
   writeDevGitInstallReceipt,
@@ -97,6 +98,7 @@ describe("update-startup", () => {
   let refreshGatewayUpdateStatus: (typeof import("./update-status-schedule.js"))["refreshGatewayUpdateStatus"];
   let resetUpdateAvailableStateForTest: (typeof import("./update-startup.js"))["resetUpdateAvailableStateForTest"];
   let loaded = false;
+  let autoRun: typeof import("./update-startup-auto-run.js");
   const updateChecks = new Set<ReturnType<typeof createGatewayUpdateCheck>>();
 
   type CheckOptions = {
@@ -152,7 +154,7 @@ describe("update-startup", () => {
 
   function expectLastTelemetryConfig(config: OpenClawConfig) {
     const call = telemetry.mock.lastCall;
-    expect([call?.[0](), call?.[1]]).toEqual([config, { surface: "gateway" }]);
+    expect(call?.[0]()).toEqual(config);
   }
 
   function writePersistedUpdateCheckState(state: PersistedUpdateCheckState): void {
@@ -191,6 +193,7 @@ describe("update-startup", () => {
 
     // Perf: load mocked modules once (after clock/env are set up).
     if (!loaded) {
+      autoRun = await import("./update-startup-auto-run.js");
       ({ resolveOpenClawPackageRoot } = await import("./openclaw-root.js"));
       ({ checkUpdateStatus, resolveNpmChannelTag } = await import("./update-check.js"));
       ({ runCommandWithTimeout } = await import("../process/exec.js"));
@@ -288,11 +291,13 @@ describe("update-startup", () => {
 
   function mockPackageInstallStatus(root = "/opt/openclaw") {
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
-    vi.mocked(checkUpdateStatus).mockResolvedValue({
+    const status = {
       root,
       installKind: "package",
       packageManager: "npm",
-    } satisfies UpdateCheckResult);
+    } satisfies UpdateCheckResult;
+    vi.mocked(checkUpdateStatus).mockResolvedValue(status);
+    return status;
   }
 
   function mockNpmChannelTag(tag: string, version: string) {
@@ -307,12 +312,42 @@ describe("update-startup", () => {
     return status;
   }
 
-  function createAutoUpdateSuccessMock() {
-    return vi.fn().mockResolvedValue({ status: "handoff" });
+  function mockAutoUpdate(implementation: AutoUpdateRunner = async () => ({ status: "handoff" })) {
+    const run = vi.fn(implementation);
+    vi.spyOn(autoRun, "runAutoUpdateCommand").mockImplementation((params) => run(params));
+    return run;
   }
 
-  function createBetaAutoUpdateConfig() {
-    return { update: { channel: "beta" as const, auto: { enabled: true } } };
+  function autoConfig(channel: "stable" | "beta" | "dev" = "beta"): OpenClawConfig {
+    return { update: { channel, auto: { enabled: true } } };
+  }
+
+  function checkAutomatically(
+    cfg: CheckOptions["cfg"],
+    params: Partial<Parameters<typeof runGatewayUpdateCheck>[0]> = {},
+  ) {
+    return runGatewayUpdateCheck({
+      cfg,
+      activeWorkInspectors: idleActiveWorkInspectors(),
+      ...params,
+    });
+  }
+
+  function observeTerminalSentinels() {
+    const sentinels: Array<ReturnType<typeof readRestartSentinel>> = [];
+    return {
+      sentinels,
+      onUpdateScheduleChange: (
+        schedule: Parameters<
+          NonNullable<Parameters<typeof runGatewayUpdateCheck>[0]["onUpdateScheduleChange"]>
+        >[0],
+      ) => {
+        if (!schedule.campaign) {
+          // The observer outlives the campaign job publishing its terminal schedule.
+          sentinels.push(runOutsideAsyncWorkScope(() => readRestartSentinel()));
+        }
+      },
+    };
   }
 
   function createExtendedStableConfig(params?: { autoEnabled?: boolean }) {
@@ -345,26 +380,25 @@ describe("update-startup", () => {
   function seedStableAutoRolloutState() {
     writePersistedUpdateCheckState({
       ...readPersistedUpdateCheckState(),
-      autoInstallId: "stable-install-id",
-      autoFirstSeenVersion: "3.0.0",
-      autoFirstSeenTag: "latest",
-      autoFirstSeenAt: "2026-01-16T10:00:00.000Z",
+      ...stableRolloutState,
     });
   }
 
+  const stableRolloutState = {
+    autoInstallId: "stable-install-id",
+    autoFirstSeenVersion: "3.0.0",
+    autoFirstSeenTag: "latest",
+    autoFirstSeenAt: "2026-01-16T10:00:00.000Z",
+  };
+
   function expectStableAutoRolloutStatePreserved() {
-    expect(readPersistedUpdateCheckState()).toMatchObject({
-      autoInstallId: "stable-install-id",
-      autoFirstSeenVersion: "3.0.0",
-      autoFirstSeenTag: "latest",
-      autoFirstSeenAt: "2026-01-16T10:00:00.000Z",
-    });
+    expect(readPersistedUpdateCheckState()).toMatchObject(stableRolloutState);
   }
 
   async function runAutoUpdateCheckWithDefaults(
     params: Parameters<typeof runGatewayUpdateCheck>[0],
   ) {
-    await runGatewayUpdateCheck({ activeWorkInspectors: idleActiveWorkInspectors(), ...params });
+    await checkAutomatically(params.cfg, params);
     await clock.advanceBy(60_000);
   }
 
@@ -381,7 +415,7 @@ describe("update-startup", () => {
     supervisor.mockReturnValue("systemd");
     process.env.NODE_ENV = "production";
     const stop = scheduleGatewayUpdateCheck({
-      cfg: createBetaAutoUpdateConfig(),
+      cfg: autoConfig(),
       log: params.log,
       activeWorkInspectors: idleActiveWorkInspectors(),
     });
@@ -530,7 +564,7 @@ describe("update-startup", () => {
 
   it("discovers and deduplicates an exact extended-stable update without auto-applying", async () => {
     const onUpdateAvailableChange = vi.fn();
-    const runAutoUpdate = createAutoUpdateSuccessMock();
+    const runAutoUpdate = mockAutoUpdate();
     mockPackageUpdateStatus("extended-stable", "2.0.0");
     const log = { info: vi.fn() };
 
@@ -538,14 +572,12 @@ describe("update-startup", () => {
       cfg: createExtendedStableConfig({ autoEnabled: true }),
       log,
       onUpdateAvailableChange,
-      runAutoUpdate,
     });
     clock.setTime(Date.parse("2026-01-18T11:00:00Z"));
     await runExtendedStableUpdateCheck({
       cfg: createExtendedStableConfig({ autoEnabled: true }),
       log,
       onUpdateAvailableChange,
-      runAutoUpdate,
     });
 
     expect(telemetry).toHaveBeenCalledTimes(2);
@@ -602,10 +634,10 @@ describe("update-startup", () => {
       installKind: "git",
       packageManager: "unknown",
     } satisfies UpdateCheckResult);
-    const runAutoUpdate = createAutoUpdateSuccessMock();
+    const runAutoUpdate = mockAutoUpdate();
     const onUpdateAvailableChange = vi.fn();
 
-    await runExtendedStableUpdateCheck({ onUpdateAvailableChange, runAutoUpdate });
+    await runExtendedStableUpdateCheck({ onUpdateAvailableChange });
 
     expect(checkUpdateStatus).toHaveBeenCalledTimes(1);
     expectNoCalls(resolveNpmChannelTag, runAutoUpdate, onUpdateAvailableChange);
@@ -618,9 +650,9 @@ describe("update-startup", () => {
   });
 
   it("skips all extended-stable work in Nix mode", async () => {
-    const runAutoUpdate = createAutoUpdateSuccessMock();
+    const runAutoUpdate = mockAutoUpdate();
 
-    await runExtendedStableUpdateCheck({ isNixMode: true, runAutoUpdate });
+    await runExtendedStableUpdateCheck({ isNixMode: true });
 
     expectNoCalls(
       resolveOpenClawPackageRoot,
@@ -633,6 +665,11 @@ describe("update-startup", () => {
   });
 
   it("announces and applies a dev git campaign without consulting npm", async () => {
+    writeDevGitInstallReceipt({
+      status: "error",
+      ts: Date.now() - 60_000,
+      reason: "managed-service-handoff-failed",
+    });
     mockDevGitStatus({
       branch: "HEAD",
       repositoryUrl: "https://github.com/example/openclaw",
@@ -651,14 +688,22 @@ describe("update-startup", () => {
       ),
     );
     vi.mocked(resolveNpmChannelTag).mockResolvedValue({ tag: "dev", version: "99.0.0-dev.1" });
-    const runAutoUpdate = createAutoUpdateSuccessMock();
+    const runAutoUpdate = mockAutoUpdate();
 
-    await runGatewayUpdateCheck({
-      cfg: { update: { channel: "dev", auto: { enabled: true } } },
-      activeWorkInspectors: idleActiveWorkInspectors(),
-      runAutoUpdate,
+    await checkAutomatically(autoConfig("dev"));
+
+    expect(checkUpdateStatus).toHaveBeenCalledWith({
+      root: "/opt/openclaw",
+      signal: expect.any(AbortSignal),
+      fetchGit: true,
+      includeRegistry: false,
+      useDetachedDevUpstream: true,
+      gitSourceHint: expect.objectContaining({
+        root: "/opt/openclaw",
+        sha: "current-sha",
+        upstreamRef: "origin/main",
+      }),
     });
-
     expect(resolveNpmChannelTag).not.toHaveBeenCalled();
     expect(getUpdateAvailable()).toEqual({
       currentVersion: "1.0.0",
@@ -698,11 +743,7 @@ describe("update-startup", () => {
     supervisor.mockReturnValue("launchd");
     const onUpdateRunCreated = vi.fn();
 
-    await runGatewayUpdateCheck({
-      cfg: { update: { channel: "dev", auto: { enabled: true } } },
-      activeWorkInspectors: idleActiveWorkInspectors(),
-      onUpdateRunCreated,
-    });
+    await checkAutomatically(autoConfig("dev"), { onUpdateRunCreated });
     await clock.advanceBy(60_000);
     await handoffTransferStarted.promise;
 
@@ -728,21 +769,15 @@ describe("update-startup", () => {
   it("records an already-current dev campaign without restarting or triage", async () => {
     mockDevGitStatus({ upstreamSha: "frozen-upstream-sha" });
     const reason = "already-current";
-    const runAutoUpdate = vi.fn().mockResolvedValue({
+    mockAutoUpdate(async () => ({
       status: "skipped",
       result: updateResult({ status: "skipped", mode: "git", reason, durationMs: 1 }),
       message: "The selected version is already current.",
-    });
-    const terminalSentinels: Array<ReturnType<typeof readRestartSentinel>> = [];
+    }));
+    const { sentinels: terminalSentinels, onUpdateScheduleChange } = observeTerminalSentinels();
     await runAutoUpdateCheckWithDefaults({
-      cfg: { update: { channel: "dev", auto: { enabled: true } } },
-      runAutoUpdate,
-      onUpdateScheduleChange: (schedule) => {
-        if (!schedule.campaign) {
-          // This observer outlives the campaign job that publishes its terminal schedule.
-          terminalSentinels.push(runOutsideAsyncWorkScope(() => readRestartSentinel()));
-        }
-      },
+      cfg: autoConfig("dev"),
+      onUpdateScheduleChange,
     });
     expectNoCalls(startHandoff, transferHandoff, restart);
     expect(getUpdateSchedule()?.campaign).toBeUndefined();
@@ -761,42 +796,6 @@ describe("update-startup", () => {
       message: expect.stringContaining("already current"),
     });
     expect(triage).not.toHaveBeenCalled();
-  });
-
-  it("continues automatic dev campaigns despite a failed handoff receipt", async () => {
-    writeDevGitInstallReceipt({
-      status: "error",
-      ts: Date.now() - 60_000,
-      reason: "managed-service-handoff-failed",
-    });
-    mockDevGitStatus({ branch: "HEAD" });
-    const runAutoUpdate = createAutoUpdateSuccessMock();
-
-    await runGatewayUpdateCheck({
-      cfg: { update: { channel: "dev", auto: { enabled: true } } },
-      activeWorkInspectors: idleActiveWorkInspectors(),
-      runAutoUpdate,
-    });
-
-    expect(checkUpdateStatus).toHaveBeenCalledWith({
-      root: "/opt/openclaw",
-      signal: expect.any(AbortSignal),
-      fetchGit: true,
-      includeRegistry: false,
-      useDetachedDevUpstream: true,
-      gitSourceHint: expect.objectContaining({
-        root: "/opt/openclaw",
-        sha: "current-sha",
-        upstreamRef: "origin/main",
-      }),
-    });
-    expect(getUpdateSchedule()?.campaign?.state).toBe("countdown");
-    await clock.advanceBy(60_000);
-    expect(runAutoUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        devTarget: { mode: "tracked", upstreamRef: "origin/main", upstreamSha: "upstream-sha" },
-      }),
-    );
   });
 
   it("reports current checkout metadata from its matching receipt", async () => {
@@ -838,7 +837,7 @@ describe("update-startup", () => {
   ])("reports $name without fabricating current", async ({ git, expected }) => {
     mockDevGitStatus(git);
 
-    await runGatewayUpdateCheck({ cfg: { update: { channel: "dev", auto: { enabled: true } } } });
+    await runGatewayUpdateCheck({ cfg: autoConfig("dev") });
 
     expect(getUpdateSchedule()?.install?.git).toEqual({ currentSha: "current-sha", ...expected });
     expect(getUpdateSchedule()?.campaign).toBeUndefined();
@@ -850,14 +849,10 @@ describe("update-startup", () => {
       autoLastAttemptAt: new Date(Date.now()).toISOString(),
     });
     mockDevGitStatus({ upstreamSha: "upstream-two", behind: 3 });
-    const runAutoUpdate = createAutoUpdateSuccessMock();
-    const cfg = { update: { channel: "dev" as const, auto: { enabled: true } } };
+    const runAutoUpdate = mockAutoUpdate();
+    const cfg = autoConfig("dev");
 
-    await runGatewayUpdateCheck({
-      cfg,
-      activeWorkInspectors: idleActiveWorkInspectors(),
-      runAutoUpdate,
-    });
+    await checkAutomatically(cfg);
 
     expect(getUpdateAvailable()).toMatchObject({ upstreamSha: "upstream-two" });
     expect(getUpdateSchedule()?.target).toMatchObject({ upstreamSha: "upstream-two" });
@@ -865,11 +860,7 @@ describe("update-startup", () => {
     expect(runAutoUpdate).not.toHaveBeenCalled();
 
     clock.setTime(Date.now() + 60 * 60 * 1000 + 1);
-    await runGatewayUpdateCheck({
-      cfg,
-      activeWorkInspectors: idleActiveWorkInspectors(),
-      runAutoUpdate,
-    });
+    await checkAutomatically(cfg);
 
     expect(getUpdateSchedule()?.campaign?.state).toBe("countdown");
     expect(runAutoUpdate).not.toHaveBeenCalled();
@@ -985,14 +976,7 @@ describe("update-startup", () => {
       onUpdateAvailableChange,
     });
     let stopped = false;
-    const result = {
-      stdout: "abc123\tsynthetic commit\n",
-      stderr: "",
-      code: 0,
-      signal: null,
-      killed: false,
-      termination: "exit" as const,
-    };
+    const result = commandSuccess("abc123\tsynthetic commit\n");
     const checking = clock.advanceBy(0);
     try {
       await withinTest(entered.promise, signal);
@@ -1018,7 +1002,7 @@ describe("update-startup", () => {
     mockDevGitStatus();
     process.env.NODE_ENV = "production";
     const stop = scheduleGatewayUpdateCheck({
-      cfg: { update: { channel: "dev", auto: { enabled: true } } },
+      cfg: autoConfig("dev"),
     });
     await clock.advanceBy(0);
     expect(checkUpdateStatus).toHaveBeenCalledTimes(2);
@@ -1053,15 +1037,10 @@ describe("update-startup", () => {
   });
 
   it("reads telemetry consent after awaited install discovery", async ({ signal }) => {
-    mockPackageInstallStatus();
+    const status = mockPackageInstallStatus();
     const discovery = createDeferred<UpdateCheckResult>();
     const entered = createDeferred();
     vi.mocked(checkUpdateStatus).mockImplementationOnce(pauseAt(entered, discovery));
-    const status: UpdateCheckResult = {
-      root: "/opt/openclaw",
-      installKind: "package",
-      packageManager: "npm",
-    };
     let cfg: OpenClawConfig = { telemetry: { enabled: true } };
     const params = {
       cfg: () => cfg,
@@ -1090,11 +1069,10 @@ describe("update-startup", () => {
     async ({ channel, change }) => {
       mockPackageUpdateStatus("beta", "2.0.0-beta.1");
       let cfg: OpenClawConfig = { update: { channel, auto: { enabled: true } } };
-      const runAutoUpdate = createAutoUpdateSuccessMock();
+      const runAutoUpdate = mockAutoUpdate();
       const params = {
         cfg: () => cfg,
         activeWorkInspectors: idleActiveWorkInspectors(),
-        runAutoUpdate,
       };
       await runGatewayUpdateCheck(params);
       expect(getUpdateSchedule()?.campaign?.state).toBe("countdown");
@@ -1118,12 +1096,11 @@ describe("update-startup", () => {
     mockPackageUpdateStatus("beta", "2.0.0-beta.1");
     const applying = createDeferred<{ status: "handoff" }>();
     const entered = createDeferred();
-    const runAutoUpdate = vi.fn(pauseAt(entered, applying));
-    let cfg: OpenClawConfig = createBetaAutoUpdateConfig();
+    mockAutoUpdate(pauseAt(entered, applying));
+    let cfg = autoConfig();
     const params = {
       cfg: () => cfg,
       activeWorkInspectors: idleActiveWorkInspectors(),
-      runAutoUpdate,
     };
     let applyingWake: ReturnType<typeof clock.advanceBy> = undefined;
     try {
@@ -1152,7 +1129,7 @@ describe("update-startup", () => {
     const onOldSchedule = vi.fn();
     const onOldAvailable = vi.fn();
     const stopOld = scheduleGatewayUpdateCheck({
-      cfg: { update: { channel: "dev", auto: { enabled: true } } },
+      cfg: autoConfig("dev"),
       activeWorkInspectors: idleActiveWorkInspectors(),
       onUpdateScheduleChange: onOldSchedule,
       onUpdateAvailableChange: onOldAvailable,
@@ -1165,7 +1142,7 @@ describe("update-startup", () => {
       const stoppingOld = stopOld();
       mockDevGitStatus({ upstreamSha: "new-upstream", behind: 3 });
       stopReplacement = scheduleGatewayUpdateCheck({
-        cfg: { update: { channel: "dev", auto: { enabled: true } } },
+        cfg: autoConfig("dev"),
         activeWorkInspectors: idleActiveWorkInspectors(),
       });
       replacementChecking = clock.advanceBy(0);
@@ -1304,22 +1281,14 @@ describe("update-startup", () => {
   it("defers stable auto-update until rollout window is due", async () => {
     mockPackageUpdateStatus("latest", "2.0.0");
 
-    const runAutoUpdate = vi.fn().mockResolvedValue({ status: "handoff" });
-    const stableAutoConfig = { update: { channel: "stable" as const, auto: { enabled: true } } };
+    const runAutoUpdate = mockAutoUpdate();
+    const stableAutoConfig = autoConfig("stable");
 
-    await runGatewayUpdateCheck({
-      cfg: stableAutoConfig,
-      activeWorkInspectors: idleActiveWorkInspectors(),
-      runAutoUpdate,
-    });
+    await checkAutomatically(stableAutoConfig);
     expect(runAutoUpdate).not.toHaveBeenCalled();
 
     clock.setTime(Date.parse("2026-01-18T07:00:00Z"));
-    await runGatewayUpdateCheck({
-      cfg: stableAutoConfig,
-      activeWorkInspectors: idleActiveWorkInspectors(),
-      runAutoUpdate,
-    });
+    await checkAutomatically(stableAutoConfig);
     await clock.advanceBy(60_000);
 
     expect(runAutoUpdate).toHaveBeenCalledExactlyOnceWith({
@@ -1337,8 +1306,8 @@ describe("update-startup", () => {
   it("ends a held stable campaign when its replacement target is not yet due", async () => {
     const campaign = new UpdateCampaignController(scheduler);
     currentUpdateCheckLifecycle().campaign = campaign;
-    const runAutoUpdate = createAutoUpdateSuccessMock();
-    const cfg = { update: { channel: "stable" as const, auto: { enabled: true } } };
+    const runAutoUpdate = mockAutoUpdate();
+    const cfg = autoConfig("stable");
     mockPackageUpdateStatus("latest", "2.0.0");
     writePersistedUpdateCheckState({
       autoInstallId: "stable-held-install",
@@ -1346,12 +1315,7 @@ describe("update-startup", () => {
       autoFirstSeenTag: "latest",
       autoFirstSeenAt: new Date(Date.now() - 24 * 60 * 60_000).toISOString(),
     });
-    const check = () =>
-      runGatewayUpdateCheck({
-        cfg,
-        activeWorkInspectors: idleActiveWorkInspectors(),
-        runAutoUpdate,
-      });
+    const check = () => checkAutomatically(cfg);
 
     try {
       await check();
@@ -1377,17 +1341,16 @@ describe("update-startup", () => {
       if (optOut === "OPENCLAW_NO_AUTO_UPDATE") {
         process.env.OPENCLAW_NO_AUTO_UPDATE = "1";
       }
-      const runAutoUpdate = createAutoUpdateSuccessMock();
+      const runAutoUpdate = mockAutoUpdate();
       const log = { info: vi.fn() };
 
       await runGatewayUpdateCheck({
         cfg: {
           update: {
-            ...createBetaAutoUpdateConfig().update,
+            ...autoConfig().update,
             ...(optOut === "checkOnStart" ? { checkOnStart: false } : {}),
           },
         },
-        runAutoUpdate,
         log,
       });
 
@@ -1407,9 +1370,9 @@ describe("update-startup", () => {
     process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
     supervisor.mockReturnValue("systemd");
     const log = { info: vi.fn() };
-    const runAutoUpdate = createAutoUpdateSuccessMock();
+    const runAutoUpdate = mockAutoUpdate();
 
-    await runGatewayUpdateCheck({ cfg: createBetaAutoUpdateConfig(), log, runAutoUpdate });
+    await runGatewayUpdateCheck({ cfg: autoConfig(), log });
 
     expect(runAutoUpdate).not.toHaveBeenCalled();
     expect(log.info).toHaveBeenCalledWith("auto-update delegated to external supervisor", {
@@ -1423,7 +1386,7 @@ describe("update-startup", () => {
     process.env.OPENCLAW_PROFILE = "work";
     mockPackageInstallStatus();
     mockNpmChannelTag("beta", "2.0.0-beta.1");
-    await runAutoUpdateCheckWithDefaults({ cfg: createBetaAutoUpdateConfig() });
+    await runAutoUpdateCheckWithDefaults({ cfg: autoConfig() });
 
     expectNoCalls(runCommandWithTimeout, startHandoff, restart);
     expect(getUpdateSchedule()?.campaign).toBeUndefined();
@@ -1453,18 +1416,13 @@ describe("update-startup", () => {
       hint: "Triage could not complete: collector failed. Run openclaw triage.",
     });
     const log = { info: vi.fn() };
-    const terminalSentinels: Array<ReturnType<typeof readRestartSentinel>> = [];
+    const { sentinels: terminalSentinels, onUpdateScheduleChange } = observeTerminalSentinels();
 
     await runGatewayUpdateCheck({
-      cfg: createBetaAutoUpdateConfig(),
+      cfg: autoConfig(),
       log,
       activeWorkInspectors: idleActiveWorkInspectors(),
-      onUpdateScheduleChange: (schedule) => {
-        if (!schedule.campaign) {
-          // This observer outlives the campaign job that publishes its terminal schedule.
-          terminalSentinels.push(runOutsideAsyncWorkScope(() => readRestartSentinel()));
-        }
-      },
+      onUpdateScheduleChange,
     });
     await clock.advanceBy(60_000);
 
@@ -1502,7 +1460,7 @@ describe("update-startup", () => {
       handoffId: "handoff-existing",
     });
 
-    await runAutoUpdateCheckWithDefaults({ cfg: createBetaAutoUpdateConfig() });
+    await runAutoUpdateCheckWithDefaults({ cfg: autoConfig() });
 
     expectNoCalls(restart, transferHandoff, triage);
     expect(listUpdateRuns()).toEqual(

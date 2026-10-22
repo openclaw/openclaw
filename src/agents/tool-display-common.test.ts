@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { resolveToolVerbAndDetailForArgs } from "./tool-display-common.js";
+import { resolveToolDetailForArgs } from "./tool-display-common.js";
 import { formatToolDetail, formatToolSummary, resolveToolDisplay } from "./tool-display.js";
 
 function preview(value: unknown, includeFalsy = false) {
-  return resolveToolVerbAndDetailForArgs({
+  return resolveToolDetailForArgs({
     toolKey: "custom_tool",
     args: { note: value },
     fallbackDetailKeys: ["note"],
     detailMode: "first",
     detailCoerce: { includeFalsy },
-  }).detail;
+  });
 }
 
 function nested(depth: number) {
@@ -22,27 +22,18 @@ function nested(depth: number) {
 
 describe("tool detail separators", () => {
   it.each([
-    {
-      input: { name: "read", args: { path: "/notes/Project · Notes.md" } },
-      expected: "from /notes/Project · Notes.md",
-    },
-    {
-      input: { name: "web_search", args: { query: "Project · Notes" } },
-      expected: 'for "Project · Notes"',
-    },
-    {
-      input: {
-        name: "image",
-        args: { path: "/notes/Project · Notes.png", prompt: "Summarize A · B" },
-      },
-      expected: "path /notes/Project · Notes.png, prompt Summarize A · B",
-    },
-    {
-      input: { name: "custom_tool", meta: "Project · Notes" },
-      expected: "Project · Notes",
-    },
-    {
-      input: {
+    [
+      { name: "read", args: { path: "/notes/Project · Notes.md" } },
+      "from /notes/Project · Notes.md",
+    ],
+    [{ name: "web_search", args: { query: "Project · Notes" } }, 'for "Project · Notes"'],
+    [
+      { name: "image", args: { path: "/notes/Project · Notes.png", prompt: "Summarize A · B" } },
+      "path /notes/Project · Notes.png, prompt Summarize A · B",
+    ],
+    [{ name: "custom_tool", meta: "Project · Notes" }, "Project · Notes"],
+    [
+      {
         name: "exec",
         args: {
           command: 'cat "/notes/Project · Notes.md"',
@@ -51,19 +42,21 @@ describe("tool detail separators", () => {
           workdir: "/app",
         },
       },
-      expected:
-        'show /notes/Project · Notes.md (in /app), node: preview-node, `cat "/notes/Project · Notes.md"`',
-    },
-    {
-      input: {
+      'show /notes/Project · Notes.md (in /app), node: preview-node, `cat "/notes/Project · Notes.md"`',
+    ],
+    [
+      {
         name: "exec",
         args: { command: "npm install", host: "node", node: "preview-node", workdir: "/app" },
       },
-      expected: "install dependencies (in /app), node: preview-node, `npm install`",
+      "install dependencies (in /app), node: preview-node, `npm install`",
+    ],
+  ] satisfies Array<[Parameters<typeof resolveToolDisplay>[0], string]>)(
+    "preserves literal details and formats owned separators: %j",
+    (input, expected) => {
+      expect(formatToolDetail(resolveToolDisplay(input))).toBe(expected);
     },
-  ])("preserves literal details and formats owned separators: $expected", ({ input, expected }) => {
-    expect(formatToolDetail(resolveToolDisplay(input))).toBe(expected);
-  });
+  );
 });
 
 describe("bounded tool detail previews", () => {

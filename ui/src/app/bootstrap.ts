@@ -169,7 +169,6 @@ export function bootstrapApplication(): ApplicationRuntime {
     settings,
     startup.password ?? "",
     hasPendingGateway ? "" : (startup.pendingBootstrapToken ?? ""),
-    undefined,
     {
       persistDefaultConnectionSettings: documentMode === null,
       ownsWarmBoot,
@@ -289,6 +288,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     }
   }
   let firstPreferencesConnection = true;
+  // Seed profile preferences before later connected observers start their reads.
   const stopBootstrapPreferences = gateway.subscribe((snapshot) => {
     if (snapshot.phase !== "connected" || !snapshot.client || !firstPreferencesConnection) {
       return;
@@ -437,6 +437,7 @@ export function bootstrapApplication(): ApplicationRuntime {
   );
   const initialConnectionRevision = gateway.connectionRevision;
   let firstConfigConnection = true;
+  // Start shared reads and connection recovery independently of mounted views.
   const stopPostConnect = gateway.subscribe((snapshot) => {
     if (snapshot.phase === "connected") {
       browserBootstrapAttempted = true;

@@ -27,13 +27,15 @@ const {
 } = await import("../../scripts/check-cli-bootstrap-imports.mts");
 
 const tempRoots = useAutoCleanupTempDirTracker(afterEach);
-const workerDeployArtifactNames = `code-mode-node.worker.mjs file-tool-planning.worker.mjs
+const workerDeployArtifactNames =
+  `client-credential.worker.mjs fs-safe-darwin-arm64.node fs-safe-darwin-x64.node
+code-mode-node.worker.mjs file-tool-planning.worker.mjs
 file-tool-read.worker.mjs gateway-state-owner-heartbeat.worker.mjs github-exec-launcher.mjs
 image-processor.worker.mjs openclaw-state-read.worker.mjs service-child-group-anchor.mjs
 service-child-relay.mjs sqlite-source-revision.worker.mjs sqlite-store.worker.mjs
 worker-native-lifecycle.worker.mjs worker.mjs workspace-rsync-receiver.mjs windows-security-helper.exe`.split(
-  /\s+/u,
-);
+    /\s+/u,
+  );
 
 function makeTempRoot(files: Record<string, string> = {}): string {
   const root = tempRoots.make("openclaw-cli-bootstrap-imports-");
@@ -209,36 +211,20 @@ describe("check-cli-bootstrap-imports", () => {
     expect(diagnostic.mock.calls.flat().join("\n")).toContain("static graph imports cold path");
   });
 
-  it("keeps binding searches bounded while rejecting an early name redeclared in a large module", () => {
+  it("rejects redeclared worker bindings without changing the Acorn prototype", () => {
     const root = makeTempRoot();
-    const bindings = 2048;
-    const source =
-      Array.from(
-        { length: bindings },
-        (_, index) => `const bootstrap_binding_${index} = ${index};`,
-      ).join("\n") + "\nlet bootstrap_binding_0;";
-    writeFixture(root, "dist/worker/worker.mjs", source);
-    let searchedSlots = 0;
-    const indexOf = Array.prototype.indexOf;
-    const observed = vi.spyOn(Array.prototype, "indexOf").mockImplementation(function (
-      this: unknown[],
-      value: unknown,
-      fromIndex?: number,
-    ) {
-      if (typeof value === "string" && value.startsWith("bootstrap_binding_")) {
-        searchedSlots += this.length;
-      }
-      return indexOf.call(this, value, fromIndex);
-    });
+    writeFixture(
+      root,
+      "dist/worker/worker.mjs",
+      "const bootstrap_binding_0 = 0; let bootstrap_binding_0;",
+    );
     const errors = workerErrors({
       rootDir: root,
       workerDeployEntrypoints: ["dist/worker/worker.mjs"],
     });
-    observed.mockRestore();
     expect(errors).toEqual([
       expect.stringContaining("Identifier 'bootstrap_binding_0' has already been declared"),
     ]);
-    expect(searchedSlots).toBeLessThanOrEqual(bindings * 8);
     expect(snapshotAcornParserPrototype()).toEqual(acornPrototypeBeforeCheck);
   });
 

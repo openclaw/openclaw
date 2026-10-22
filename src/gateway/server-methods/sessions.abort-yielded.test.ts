@@ -41,6 +41,7 @@ import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.
 import {
   abortContext,
   expectAbortFailure,
+  expectCancelledSession,
   expectStopResult,
   registerYieldedChild,
   seedYieldedSession,
@@ -221,11 +222,7 @@ it.each([
       expect(acknowledgment.entry).toEqual(replacement);
       return;
     }
-    expect(acknowledgment.entry, JSON.stringify(respond.mock.calls[0])).toMatchObject({
-      status: "killed",
-      abortedLastRun: true,
-      lastRunId: parentRunId,
-    });
+    expectCancelledSession(acknowledgment.entry, parentRunId);
     await fixture.settle();
     expect(
       publications.entries.some(
@@ -270,53 +267,55 @@ it.each([false, true])(
     );
     expect(completedChild.requesterSettleWake).toBeDefined();
     const childOutcome = structuredClone(completedChild.execution.outcome);
-    if (!pendingWake) {
-      // Isolate queue clearing from a still-pending child continuation.
-      await retireSubagentObligations(completedChild, () => {}, { requesterNotified: true });
-      expect(
-        (await getSubagentRunByChildSessionKey(childKey))?.requesterSettleWake,
-      ).toBeUndefined();
-    }
-    const before = loadSessionEntry(target);
-    const followup = createQueueTestRun({ prompt: "Queued follow-up" });
-    followup.run = { ...followup.run, agentId: "main", sessionId: parentId, sessionKey: parentKey };
-    expect(
-      enqueueFollowupRun(parentKey, followup, { mode: "followup" }, "none", undefined, false),
-    ).toBe(true);
-    expect(getFollowupQueueDepth(parentKey)).toBe(1);
-    const respond = vi.fn();
     const publications = observeChildPublications();
+    const firstPublication = publications.entries.length;
+    let followup: ReturnType<typeof createQueueTestRun> | undefined;
     try {
+      if (!pendingWake) {
+        // Isolate queue clearing from a still-pending child continuation.
+        await retireSubagentObligations(completedChild, () => {}, { requesterNotified: true });
+        expect(
+          (await getSubagentRunByChildSessionKey(childKey))?.requesterSettleWake,
+        ).toBeUndefined();
+      }
+      const before = loadSessionEntry(target);
+      followup = createQueueTestRun({ prompt: "Queued follow-up" });
+      followup.run = {
+        ...followup.run,
+        agentId: "main",
+        sessionId: parentId,
+        sessionKey: parentKey,
+      };
+      expect(
+        enqueueFollowupRun(parentKey, followup, { mode: "followup" }, "none", undefined, false),
+      ).toBe(true);
+      expect(getFollowupQueueDepth(parentKey)).toBe(1);
+      const respond = vi.fn();
       await stopSession(parentKey, respond, abortContext(), { clearQueued: true });
       expectStopResult(respond);
       expect(getFollowupQueueDepth(parentKey)).toBe(0);
+      await fixture.settle();
       if (pendingWake) {
-        expect(loadSessionEntry(target)).toMatchObject({
-          status: "killed",
-          abortedLastRun: true,
-          lastRunId: parentRunId,
-        });
-        await fixture.settle();
+        expectCancelledSession(loadSessionEntry(target), parentRunId);
         expect(await markStartupRecovery()).toMatchObject({ marked: 0 });
       } else {
         expect(loadSessionEntry(target)).toEqual(before);
       }
+      const terminalPublications = publications.entries
+        .slice(firstPublication)
+        .filter((entry) => entry !== undefined);
+      expect(terminalPublications.length).toBeGreaterThan(0);
+      for (const entry of terminalPublications) {
+        expect(entry.execution.status).toBe("terminal");
+        expect(entry.execution.outcome).toEqual(childOutcome);
+      }
       const retiredChild = await getSubagentRunByChildSessionKey(childKey);
       expect(retiredChild?.requesterSettleWake).toBeUndefined();
-      for (const entry of publications.entries) {
-        if (entry) {
-          expect(entry.execution.outcome).toEqual(childOutcome);
-        }
-      }
-      if (pendingWake) {
-        expect(retiredChild).toBeNull();
-      } else {
-        expect(retiredChild?.execution.outcome).toEqual(childOutcome);
-      }
+      expect(retiredChild).toBeNull();
     } finally {
       publications.stop();
-      clearSessionQueues([parentKey, parentId], followup.controllerInput?.target);
-      if (followup.controllerInput) {
+      clearSessionQueues([parentKey, parentId], followup?.controllerInput?.target);
+      if (followup?.controllerInput) {
         await followup.controllerInput.settlement.promise;
       }
       expect(getFollowupQueueDepth(parentKey)).toBe(0);

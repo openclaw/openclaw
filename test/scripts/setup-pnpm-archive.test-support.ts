@@ -6,9 +6,9 @@ import type { CommandFixture } from "../helpers/command-fixture.js";
 
 const owner = ".github/actions/setup-pnpm-store-cache/seed-pnpm-from-image.mjs";
 const currentWrapperAnchor =
-  "5b0e3288239a7ea4155d2094f547066e122a1376b3cd785a680c9112e116913e64aaaecf20dd83cc34030fa67013f5c5511f9cf430dd8384188b4c60b8a2ad1e";
+  "b3951d6d6ff4a9f13dc7cf56cd28d2b8eb37dbcc9c68e52e1e1191873ea9f82a017287ab50baadc5ccc494f036c67c0e47eb13608c2fa36f47711b61ea128e61";
 const currentNativeAnchor =
-  "73b921d30b63834e629f6c249a7e9faecfed722b9a1b0f1735952e82047cf26bd4be627cd63b023f532933ce704c5129b5d781e0e9e5446d0449465bbb8f6af1";
+  "c9cf9095947ef7e9ebdbd2787d1ce13286a98314c10e776affea5eca8ab55d4b9f9d01677db5d4305b9d0c82b31e2e78e658a71aa98e9977e7d0da2e7cd81c3a";
 
 export function createPnpmArchiveFixture(
   command: CommandFixture,
@@ -17,11 +17,10 @@ export function createPnpmArchiveFixture(
     arch?: string;
     glibc?: boolean;
     registryUrl?: string;
-    version?: "12.3.4" | "12.11.1";
     image?: boolean;
   } = {},
 ) {
-  const version = options.version ?? "12.11.1";
+  const version = "12.15.0";
   const root = command.createTempDir("pnpm-verified-download-");
   const image = path.join(root, "image");
   const registry = path.join(root, "registry");
@@ -71,8 +70,8 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 case "$url" in
-  https://registry.npmjs.org/pnpm/-/pnpm-12.11.1.tgz) name=pnpm-12.11.1.tgz ;;
-  https://registry.npmjs.org/@pnpm/exe.linux-x64/-/exe.linux-x64-12.11.1.tgz) name=exe.linux-x64-12.11.1.tgz ;;
+  https://registry.npmjs.org/pnpm/-/pnpm-12.15.0.tgz) name=pnpm-12.15.0.tgz ;;
+  https://registry.npmjs.org/@pnpm/exe.linux-x64/-/exe.linux-x64-12.15.0.tgz) name=exe.linux-x64-12.15.0.tgz ;;
   *) exit 91 ;;
 esac
 cp "$FIXTURE_REGISTRY/$name" "$out"
@@ -95,18 +94,8 @@ cp "$FIXTURE_REGISTRY/$name" "$out"
       "process.report?.getReport().header.glibcVersionRuntime",
       options.glibc === false ? "undefined" : '"fixture-glibc"',
     )
-    .replaceAll(
-      version === "12.11.1"
-        ? currentWrapperAnchor
-        : "961aa41fb077da3a04a441d9f8e15ebc0c96da8ef710b2eb67bf9ee7cb0610eabd48f1fd85f51cffe73846785fa0f87c56a3a872a1d893f8446741b5cce45457",
-      wrapperHash,
-    )
-    .replaceAll(
-      version === "12.11.1"
-        ? currentNativeAnchor
-        : "d99a8e9523e47f05f5879711f853e259ff3e17eda1653ff74ef8542b9b22807ab06900888aaf11ec21b186774ab3adc9b5c2e2d9ad50a68fb05ff128c9f8f225",
-      nativeHash,
-    );
+    .replaceAll(currentWrapperAnchor, wrapperHash)
+    .replaceAll(currentNativeAnchor, nativeHash);
   const scriptPath = path.join(root, "seed.mjs");
   fs.writeFileSync(scriptPath, script);
   const spec = `pnpm@${version}+sha512.${wrapperHash}`;

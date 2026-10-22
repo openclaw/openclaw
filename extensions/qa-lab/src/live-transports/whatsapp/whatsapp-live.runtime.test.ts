@@ -24,12 +24,10 @@ import {
   groupJid,
 } from "./runtime.test-support.js";
 import { whatsappScenarioImplementations } from "./scenario-implementations.js";
-import { runWhatsAppApprovalScenario } from "./whatsapp-live.approvals.js";
 import { buildWhatsAppQaConfig, parseWhatsAppQaCredentialPayload } from "./whatsapp-live.config.js";
 import {
   resolveWhatsAppQaMessageTargets,
   type WhatsAppQaScenarioImplementation,
-  type WhatsAppQaScenarioMetadata,
   type WhatsAppQaScenarioRun,
 } from "./whatsapp-live.contracts.js";
 import { isTransientWhatsAppQaDriverError } from "./whatsapp-live.driver.js";
@@ -42,7 +40,7 @@ import { runWhatsAppStructuredInboundChecks } from "./whatsapp-live.media.js";
 import { waitForScenarioObservedMessage } from "./whatsapp-live.observations.js";
 import { unpackWhatsAppAuthArchive } from "./whatsapp-live.setup.js";
 
-type Scenario = WhatsAppQaScenarioMetadata & WhatsAppQaScenarioImplementation;
+type Scenario = WhatsAppQaScenarioImplementation & { id: string; timeoutMs: number };
 type MessageRun = Exclude<WhatsAppQaScenarioRun, { kind: "approval" }>;
 type Context = Parameters<NonNullable<MessageRun["afterSend"]>>[0];
 type WhatsAppQaConfigBase = Parameters<typeof buildWhatsAppQaConfig>[0];
@@ -60,11 +58,10 @@ function createGateway(overrides: Partial<Context["gateway"]> = {}): Context["ga
 
 function createContext(
   overrides: Partial<Context> & {
-    recordedMessages?: unknown[];
     scenario?: Scenario;
   } = {},
 ): Context {
-  const { recordedMessages, scenario, ...contextOverrides } = overrides;
+  const { scenario, ...contextOverrides } = overrides;
   const workspaceDir = contextOverrides.gatewayWorkspaceDir ?? "/tmp/openclaw-whatsapp-qa";
   return {
     driver: createDriver(),
@@ -78,12 +75,8 @@ function createContext(
     },
     gatewayTarget: "+15550000001",
     gatewayWorkspaceDir: workspaceDir,
-    recordObservedMessage: (message) => {
-      recordedMessages?.push(message);
-    },
     requestStartedAt: new Date("2026-06-21T12:00:00.000Z"),
     scenarioId: scenario?.id ?? "whatsapp-canary",
-    scenarioTitle: scenario?.title ?? "WhatsApp QA scenario",
     sent: { messageId: "driver-message-1" },
     sutAccountId: "sut",
     target: "+15550000002",
@@ -118,7 +111,6 @@ function getWhatsAppScenario(id: string): Scenario {
     ...implementation,
     id,
     timeoutMs: scenario.execution.timeoutMs ?? 60_000,
-    title: scenario.title,
   };
 }
 
@@ -166,14 +158,12 @@ function statusReactionFixture(...emojis: Array<"👀" | "✅">) {
       text: "",
     }),
   );
-  const recorded: unknown[] = [];
   const context = createContext({
     driver: createDriver({ getObservedMessages: () => reactions }),
-    recordedMessages: recorded,
     scenario,
     sent: { messageId: "trigger-1" },
   });
-  return { context, reactions, recorded, run };
+  return { context, run };
 }
 
 describe("WhatsApp QA live runtime", () => {
@@ -191,7 +181,6 @@ describe("WhatsApp QA live runtime", () => {
       const archiveBase64 = await createArchive(tempRoot, entries);
       const authDir = await unpackWhatsAppAuthArchive({
         archiveBase64,
-        clearSignalSessions: true,
         label: "driver",
         parentDir: tempRoot,
       });
@@ -260,11 +249,9 @@ describe("WhatsApp QA live runtime", () => {
         { ...reaction, reaction: { ...reaction.reaction, emoji: "👎" } },
         { ...reaction, reaction: { ...reaction.reaction, messageId: "other-message" } },
       ];
-      const recorded: unknown[] = [];
       const context = createContext({
         scenario,
         sent: { messageId: triggerId },
-        recordedMessages: recorded,
         ...(group
           ? { gatewayTarget: group, target: group, targetKind: "group" as const }
           : { gatewayWorkspaceDir: "/tmp/openclaw-whatsapp-qa-gateway" }),
@@ -281,7 +268,6 @@ describe("WhatsApp QA live runtime", () => {
       expect(await run.afterSend(context)).toMatch(
         group ? /group agent message reaction/i : /\breaction\b/i,
       );
-      expect(recorded).toEqual([reaction]);
     },
   );
 
@@ -357,7 +343,7 @@ describe("WhatsApp QA live runtime", () => {
       const { scenario, run } = messageScenario(`whatsapp-group-outbound-${kind}`, ["afterReply"]);
       await run.afterReply(
         observedMessage(`reply-${index + 1}`, { fromJid: groupJid, text: String(run.matchText) }),
-        { ...context, scenarioId: scenario.id, scenarioTitle: scenario.title },
+        { ...context, scenarioId: scenario.id },
       );
     }
 
@@ -457,33 +443,40 @@ describe("WhatsApp QA live runtime", () => {
     if (!token) {
       throw new Error("missing upload token in scenario input");
     }
-    const observed: unknown[] = [];
+    const media = Promise.withResolvers<WhatsAppQaDriverObservedMessage>();
+    const waitForMessage = vi.fn(() => media.promise);
     const context = createContext({
       driver: createDriver({
-        waitForMessage: async () =>
-          observedMessage("media-1", {
-            hasMedia: true,
-            kind: "media",
-            mediaType: "image/png",
-            observedAt: "2026-06-21T12:00:02.000Z",
-            text: token,
-          }),
+        waitForMessage,
       }),
-      recordedMessages: observed,
       scenario,
       sent: { messageId: "trigger-1" },
     });
 
-    const details = await run.afterSend(context);
-
-    expect(details).toContain("upload-file media");
-    expect(observed).toHaveLength(1);
+    let settled = false;
+    const pending = run.afterSend(context).then((details) => {
+      settled = true;
+      return details;
+    });
+    await Promise.resolve();
+    expect(waitForMessage).toHaveBeenCalledOnce();
+    expect(settled).toBe(false);
+    media.resolve(
+      observedMessage("media-1", {
+        hasMedia: true,
+        kind: "media",
+        mediaType: "image/png",
+        observedAt: "2026-06-21T12:00:02.000Z",
+        text: token,
+      }),
+    );
+    expect(await pending).toContain("upload-file media");
   });
 
   it.each([true, false])(
     "validates WhatsApp status reaction ordering: ordered=%s",
     async (ordered) => {
-      const { context, reactions, recorded, run } = ordered
+      const { context, run } = ordered
         ? statusReactionFixture("👀", "✅")
         : statusReactionFixture("✅", "👀");
       vi.useFakeTimers({ now: new Date("2026-06-21T12:00:00.000Z") });
@@ -504,7 +497,6 @@ describe("WhatsApp QA live runtime", () => {
       } finally {
         vi.useRealTimers();
       }
-      expect(recorded).toEqual(ordered ? reactions : []);
     },
   );
 
@@ -890,13 +882,10 @@ describe("WhatsApp QA live runtime", () => {
         throw new Error("timed out waiting for WhatsApp QA driver message");
       },
     });
-    const recorded: unknown[] = [];
     const context = createContext({
       driver,
       gatewayWorkspaceDir: "/tmp/openclaw-whatsapp-qa-gateway",
-      recordedMessages: recorded,
       requestStartedAt: new Date("2026-06-05T01:00:00.000Z"),
-      scenarioTitle: "WhatsApp DM canary",
     });
 
     await expect(
@@ -905,7 +894,6 @@ describe("WhatsApp QA live runtime", () => {
         match: () => true,
       }),
     ).rejects.toThrow("observed 0 WhatsApp driver message(s) after wait lower bound");
-    expect(recorded).toEqual([]);
   });
 
   it("defines WhatsApp final-message accounting as a settled two-chunk assertion", () => {
@@ -956,7 +944,6 @@ describe("WhatsApp QA live runtime", () => {
       gatewayWorkspaceDir: "/tmp/openclaw-whatsapp-qa-gateway",
       requestStartedAt: new Date("2026-06-05T01:00:00.000Z"),
       scenarioId: "whatsapp-reply-delivery-shape",
-      scenarioTitle: "WhatsApp gateway send chunks long replies",
     });
 
     await run.afterReply(
@@ -968,66 +955,6 @@ describe("WhatsApp QA live runtime", () => {
     );
 
     expect(waitCallCount).toBe(2);
-  });
-
-  it("targets group approval reactions at the approval prompt participant", async () => {
-    const scenario = getWhatsAppScenario("whatsapp-approval-exec-group-reaction-native");
-    const run = scenario.buildRun();
-    if (run.kind !== "approval") {
-      throw new Error("expected approval scenario run");
-    }
-    const sendReaction = vi.fn(async () => ({ messageId: "reaction-1" }));
-    let approvalId = "";
-    let waitCount = 0;
-    const driver = createDriver({
-      sendReaction,
-      waitForMessage: async ({ match }) => {
-        waitCount += 1;
-        const isPending = waitCount === 1;
-        const message = observedMessage(isPending ? "approval-message-1" : "approval-resolved-1", {
-          fromJid: "12345@g.us",
-          observedAt: isPending ? "2026-06-28T02:00:00.000Z" : "2026-06-28T02:00:01.000Z",
-          participantJid: "999@lid",
-          text: isPending
-            ? `Exec approval required\nID: ${approvalId}\n` +
-              `Pending command:\nprintf '%s\\n' '${run.token}'\n\n` +
-              "React with:\n\n👍 Allow Once\n👎 Deny"
-            : `✅ Exec approval allow-once. ID: ${approvalId}`,
-        });
-        if (!match(message)) {
-          throw new Error(`approval test message ${waitCount} did not match`);
-        }
-        return message;
-      },
-    });
-    const gateway = {
-      call: async (method: string, payload: { id?: string }) => {
-        if (method === "exec.approval.request") {
-          approvalId = payload.id ?? "";
-          return { id: approvalId, status: "accepted" };
-        }
-        if (method === "exec.approval.waitDecision") {
-          return { decision: "allow-once" };
-        }
-        throw new Error(`unexpected gateway call ${method}`);
-      },
-    } as Parameters<typeof runWhatsAppApprovalScenario>[0]["gateway"];
-
-    await runWhatsAppApprovalScenario({
-      driver,
-      gateway,
-      observedMessages: [],
-      run,
-      scenario,
-      sutAccountId: "work",
-      sutPhoneE164: phones.sutPhoneE164,
-      turnSourceTo: "12345@g.us",
-    });
-
-    expect(sendReaction).toHaveBeenCalledWith("12345@g.us", "approval-message-1", "👍", {
-      fromMe: false,
-      participant: "999@lid",
-    });
   });
 
   it("enables WhatsApp native exec and plugin approval delivery for approval scenarios", () => {
@@ -1143,7 +1070,6 @@ describe("WhatsApp QA live runtime", () => {
           driver,
           gatewayTarget: groupJid,
           scenarioId: scenario.id,
-          scenarioTitle: scenario.title,
           target: groupJid,
           targetKind: "group",
         }),

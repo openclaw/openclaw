@@ -208,7 +208,7 @@ it("keeps subscriptions blocked until all exhausted windows reset", () => {
   });
 
   expect(resolveCodexUsageLimitResetAtMs(payload, nowMs)).toBe(weeklyReset * 1000);
-  expect(summarizeCodexAccountUsage(payload, nowMs)?.blockedUntilMs).toBe(weeklyReset * 1000);
+  expect(summarizeCodexAccountUsage(payload, nowMs)?.blockedResetRelative).toBe("in 1 day");
 });
 describe("summarizeCodexRateLimits", () => {
   it.each([true, false, null])(

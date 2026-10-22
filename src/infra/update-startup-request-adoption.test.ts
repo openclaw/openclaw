@@ -110,8 +110,6 @@ it("aborts and joins early update requests before the post-ready scheduler loads
   const factory = vi.spyOn(updateStartup, "createGatewayUpdateCheck");
   const owner = createDeferredGatewayUpdateCheck({
     scheduler,
-    createUpdateCheck: async (...args) =>
-      (await import("./update-startup.js")).createGatewayUpdateCheck(...args),
     getConfig: () => ({}),
     getPluginRegistry: () => undefined,
     log: { info: vi.fn(), warn: vi.fn() },

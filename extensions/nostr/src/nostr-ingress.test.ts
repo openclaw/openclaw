@@ -74,13 +74,16 @@ afterEach(async () => {
 describe("Nostr durable ingress", () => {
   it("advances the cursor only after exact raw admission into the sender lane", async () => {
     let appendCommitted = false;
+    const trackAppend = async <T>(work: Promise<T>): Promise<T> => {
+      const result = await work;
+      appendCommitted = true;
+      return result;
+    };
     const trackingQueue = {
       ...queue,
-      enqueue: vi.fn(async (...args: Parameters<NostrIngressQueue["enqueue"]>) => {
-        const result = await queue.enqueue(...args);
-        appendCommitted = true;
-        return result;
-      }),
+      enqueue: (...args) => trackAppend(queue.enqueue(...args)),
+      enqueueAndClaim:
+        queue.enqueueAndClaim && ((...args) => trackAppend(queue.enqueueAndClaim!(...args))),
     } satisfies NostrIngressQueue;
     const afterDurableAppend = vi.fn(() => {
       expect(appendCommitted).toBe(true);
@@ -116,9 +119,7 @@ describe("Nostr durable ingress", () => {
 
   it("migrates the persisted LRU seed into completion tombstones", async () => {
     const legacyId = "5".repeat(64);
-    await expect(
-      migrateNostrLegacyRecentEventIds({ queue, eventIds: [legacyId, legacyId] }),
-    ).resolves.toBe(1);
+    await migrateNostrLegacyRecentEventIds({ queue, eventIds: [legacyId, legacyId] });
     expect((await queue.enqueue(legacyId, {} as NostrIngressPayload)).kind).toBe("completed");
   });
 
@@ -138,7 +139,11 @@ describe("Nostr durable ingress", () => {
   it("latches the first append failure across queued admissions", async () => {
     const appendError = new Error("sqlite unavailable");
     const enqueue = vi.fn().mockRejectedValue(appendError);
-    const failingQueue = { ...queue, enqueue } satisfies NostrIngressQueue;
+    const failingQueue = {
+      ...queue,
+      enqueueAndClaim: undefined,
+      enqueue,
+    } satisfies NostrIngressQueue;
     const afterDurableAppend = vi.fn();
     const ingress = startIngress({ queue: failingQueue, deliver: vi.fn(), afterDurableAppend });
     const first = ingress.receive(createEvent({ id: "7".repeat(64) }));
@@ -219,6 +224,7 @@ describe("Nostr durable ingress", () => {
     const enqueueStarted = Promise.withResolvers<void>();
     const blockingQueue = {
       ...queue,
+      enqueueAndClaim: undefined,
       enqueue: vi.fn(async (...args: Parameters<NostrIngressQueue["enqueue"]>) => {
         enqueueStarted.resolve();
         await enqueueGate.promise;

@@ -17,7 +17,6 @@ function createAccount(
 ): ResolvedFeishuAccount {
   return {
     accountId: "default",
-    selectionSource: "fallback",
     enabled: true,
     configured: true,
     domain: "feishu",

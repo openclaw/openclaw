@@ -641,40 +641,6 @@ CREATE TABLE IF NOT EXISTS device_pairing_join_codes (
   expires_at_ms INTEGER
 ) STRICT;
 
-CREATE TABLE IF NOT EXISTS device_identities (
-  identity_key TEXT NOT NULL PRIMARY KEY,
-  device_id TEXT NOT NULL,
-  public_key_pem TEXT NOT NULL,
-  private_key_pem TEXT NOT NULL,
-  created_at_ms INTEGER NOT NULL,
-  updated_at_ms INTEGER NOT NULL
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_device_identities_device
-  ON device_identities(device_id, updated_at_ms DESC);
-
-CREATE TABLE IF NOT EXISTS device_auth_tokens (
-  device_id TEXT NOT NULL,
-  role TEXT NOT NULL,
-  token TEXT NOT NULL,
-  scopes_json TEXT NOT NULL,
-  updated_at_ms INTEGER NOT NULL,
-  PRIMARY KEY (device_id, role)
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_device_auth_tokens_updated
-  ON device_auth_tokens(updated_at_ms DESC, device_id, role);
-
-CREATE TABLE IF NOT EXISTS gateway_origin_device_tokens (
-  gateway_scope TEXT NOT NULL,
-  device_id TEXT NOT NULL,
-  role TEXT NOT NULL,
-  token TEXT NOT NULL,
-  scopes_json TEXT NOT NULL,
-  updated_at_ms INTEGER NOT NULL,
-  PRIMARY KEY (gateway_scope, device_id, role)
-) STRICT;
-
 CREATE TABLE IF NOT EXISTS macos_port_guardian_records (
   pid INTEGER NOT NULL PRIMARY KEY,
   port INTEGER NOT NULL,
@@ -1435,6 +1401,35 @@ CREATE INDEX IF NOT EXISTS idx_sandbox_registry_session
 CREATE INDEX IF NOT EXISTS idx_sandbox_registry_last_used
   ON sandbox_registry_entries(registry_kind, last_used_at_ms DESC, container_name)
   WHERE last_used_at_ms IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS sandbox_persistent_execs (
+  owner_key TEXT NOT NULL PRIMARY KEY,
+  source_identity TEXT NOT NULL,
+  attempt_id TEXT NOT NULL UNIQUE,
+  owner_json TEXT NOT NULL,
+  backend_id TEXT NOT NULL CHECK (backend_id = 'docker'),
+  backend_target_json TEXT NOT NULL,
+  workspace_binding_json TEXT NOT NULL,
+  container_id TEXT NOT NULL,
+  container_name TEXT NOT NULL,
+  container_started_at TEXT NOT NULL,
+  revision INTEGER NOT NULL CHECK (revision > 0),
+  phase TEXT NOT NULL CHECK (phase IN ('reserved', 'prepared', 'running', 'stopping', 'uncertain', 'stopped')),
+  receipt_json TEXT,
+  error TEXT,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  CHECK (phase NOT IN ('prepared', 'running') OR receipt_json IS NOT NULL)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_sandbox_persistent_execs_container
+  ON sandbox_persistent_execs(container_id, owner_key);
+
+CREATE INDEX IF NOT EXISTS idx_sandbox_persistent_execs_container_name
+  ON sandbox_persistent_execs(container_name, owner_key);
+
+CREATE INDEX IF NOT EXISTS idx_sandbox_persistent_execs_source
+  ON sandbox_persistent_execs(source_identity, owner_key);
 
 CREATE TABLE IF NOT EXISTS cron_jobs (
   store_key TEXT NOT NULL,

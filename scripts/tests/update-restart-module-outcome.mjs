@@ -323,6 +323,7 @@ async function fixture({
     "../../shared/regexp",
     "../../infra/acquire-with-wait",
     "../../infra/update-doctor-result",
+    "../../infra/update-doctor-scan-receipts",
     "../../infra/update-doctor-config-schema",
     "../../infra/update-doctor-lint-schema",
     "../../infra/update-run-schema",

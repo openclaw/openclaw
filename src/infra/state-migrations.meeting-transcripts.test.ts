@@ -2,7 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Compilable } from "kysely";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -275,37 +275,107 @@ describe("meeting transcript Doctor migration", () => {
   );
 
   it.each([
-    ["invalid transcript", "Failed migrating meeting transcripts", "meeting_transcript_sessions"],
-    ["new session", "session tree changed before archive", "meeting_transcript_sessions"],
-    ["archive collision", "Failed archiving verified legacy", "migration_sources"],
-  ] as const)("rolls back without moving sources after %s", async (failure, warning, table) => {
-    const source = await h.seed("verified");
-    const collision = failure === "archive collision";
-    const other =
-      failure === "invalid transcript"
-        ? await h.seed("invalid", { invalidTranscript: true })
-        : collision
-          ? path.join(h.stateDir, "transcripts.migrated-2026-07-02T00-00-00-000Z")
-          : path.join(h.root, "2026-07-03", "late-session");
-    const result = await h.migrate({
-      now: () => Date.parse("2026-07-02T00:00:00.000Z"),
-      testHooks:
+    ["invalid transcript", "Failed migrating meeting transcripts"],
+    ["new session", "session tree changed before archive"],
+  ] as const)(
+    "preserves sources when %s prevents completing migration",
+    async (failure, warning) => {
+      const source = await h.seed("verified");
+      const other =
         failure === "invalid transcript"
-          ? {}
-          : {
-              afterImport: () => {
-                fsSync.mkdirSync(other, { recursive: true });
-                fsSync.writeFileSync(
-                  path.join(other, collision ? "unrelated" : "metadata.json"),
-                  collision ? "keep" : JSON.stringify(nativeSession("late-session", "2026-07-03")),
-                );
+          ? await h.seed("invalid", { invalidTranscript: true })
+          : path.join(h.root, "2026-07-03", "late-session");
+      const result = await h.migrate({
+        now: () => Date.parse("2026-07-02T00:00:00.000Z"),
+        testHooks:
+          failure === "invalid transcript"
+            ? {}
+            : {
+                afterImport: () => {
+                  fsSync.mkdirSync(other, { recursive: true });
+                  fsSync.writeFileSync(
+                    path.join(other, "metadata.json"),
+                    JSON.stringify(nativeSession("late-session", "2026-07-03")),
+                  );
+                },
               },
-            },
+      });
+      expect(result.warnings.join("\n")).toContain(warning);
+      await expectExists(source, other);
+      if (failure === "invalid transcript") {
+        expect(result.changes).toEqual([]);
+        h.expectEmpty("meeting_transcript_sessions");
+        h.expectEmpty("migration_sources");
+      } else {
+        expect(result.changes).toEqual([
+          "Imported 1 meeting transcript session into shared SQLite state",
+        ]);
+        const imported = h.snapshot();
+        expect(imported.sessions).toMatchObject([{ session_id: "verified" }]);
+        expect(imported.utterances).toHaveLength(2);
+        expect(imported.summaries).toHaveLength(1);
+        expect(imported.runs).toMatchObject([{ status: "imported", finished_at: null }]);
+        expect(imported.sources).toMatchObject([{ status: "imported", removed_source: 0 }]);
+      }
+    },
+  );
+
+  it("resumes durable imported receipts after a native archive rename failure", async () => {
+    const source = await h.seed("archive-retry");
+    const archiveRoot = path.join(h.stateDir, "transcripts.migrated-2026-07-02T00-00-00-000Z");
+    const blocker = path.join(archiveRoot, "unrelated");
+    const rename = fs.rename;
+    const archive = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      if (from === h.root && to === archiveRoot) {
+        await fs.mkdir(archiveRoot);
+        await fs.writeFile(blocker, "keep");
+      }
+      return rename(from, to);
     });
-    expect(result.changes).toEqual([]);
-    expect(result.warnings.join("\n")).toContain(warning);
-    await expectExists(source, other);
-    h.expectEmpty(table);
+    let failed: Awaited<ReturnType<typeof h.migrate>>;
+    try {
+      failed = await h.migrate({ now: () => Date.parse("2026-07-02T00:00:00.000Z") });
+    } finally {
+      archive.mockRestore();
+    }
+    expect(failed.changes).toEqual([
+      "Imported 1 meeting transcript session into shared SQLite state",
+    ]);
+    expect(failed.warnings.join("\n")).toContain(
+      "retained imported SQLite rows and source receipts for Doctor retry",
+    );
+    await expectExists(source);
+    await expectFile(blocker, "keep");
+    await closeDatabase();
+    const pending = h.snapshot();
+    expect(pending.sessions).toMatchObject([{ session_id: "archive-retry" }]);
+    expect(pending.utterances).toHaveLength(2);
+    expect(pending.summaries).toHaveLength(1);
+    expect(pending.runs).toMatchObject([{ status: "imported", finished_at: null }]);
+    const runId = pending.runs[0]!.id;
+    expect(JSON.parse(pending.runs[0]!.report_json)).toMatchObject({ archiveRoot });
+    expect(pending.sources).toMatchObject([
+      { last_run_id: runId, source_path: source, status: "imported", removed_source: 0 },
+    ]);
+
+    await fs.rm(archiveRoot, { recursive: true });
+    const resumed = await h.migrate({ detected: h.detect() });
+    expect(resumed.warnings).toEqual([]);
+    expect(resumed.changes).toEqual([
+      `Resumed and archived meeting transcript migration → ${archiveRoot}`,
+    ]);
+    await closeDatabase();
+    const completed = h.snapshot();
+    expect(completed.sessions).toEqual(pending.sessions);
+    expect(completed.utterances).toEqual(pending.utterances);
+    expect(completed.summaries).toEqual(pending.summaries);
+    expect(completed.runs).toMatchObject([{ id: runId, status: "completed" }]);
+    expect(completed.runs[0]!.finished_at).not.toBeNull();
+    expect(completed.sources).toMatchObject([
+      { last_run_id: runId, status: "archived", removed_source: 1 },
+    ]);
+    await expectMissing(source);
+    await expectExists(path.join(archiveRoot, "2026-07-01", "archive-retry", "metadata.json"));
   });
 
   it("detects and recovers a partial-only legacy transcript tree", async () => {
@@ -412,7 +482,6 @@ describe("meeting transcript Doctor migration", () => {
         expect(interrupted.changes.join("\n")).toContain("modified meeting transcript export");
       }
       const pending = h.detect();
-      expect(pending.pendingImportCount).toBe(1);
       if (stage === "archive") {
         expect(pending.hasLegacy).toBe(true);
       }
@@ -576,7 +645,7 @@ describe("meeting transcript Doctor oversized projections", () => {
     const before = h.snapshot();
     await expectMissing(h.root);
     expect(detectLegacyMeetingTranscripts({ stateDir: h.stateDir }).hasLegacy).toBe(false);
-    expect(h.detect()).toMatchObject({ hasLegacy: true, pendingImportCount: 0 });
+    expect(h.detect()).toMatchObject({ hasLegacy: true });
     expect(h.snapshot()).toEqual(before);
 
     const result = await h.migrate();
@@ -661,7 +730,7 @@ describe("meeting transcript Doctor oversized projections", () => {
     expect(after.sessions.find((row) => row.session_id === sessionId)?.session_slug).toBe(
       safeTranscriptPathSegment(sessionId),
     );
-    expect(h.detect()).toMatchObject({ hasLegacy: true, pendingImportCount: 1 });
+    expect(h.detect()).toMatchObject({ hasLegacy: true });
     expect((await h.migrate()).changes).toEqual([]);
     expect(h.snapshot()).toEqual(after);
   });

@@ -6,7 +6,7 @@ import {
   invalidateLocalSqliteSchemaAdmissions,
   publishSqliteDatabaseAdmission,
   publishSqliteDatabaseSchemaChange,
-  type SqliteDatabaseAdmissionKey,
+  type SqliteDatabaseFactKey,
 } from "../sqlite-database-admission.js";
 import { stageSqliteTransactionState } from "../sqlite-post-commit.js";
 import { runSqliteImmediateTransactionSync } from "../sqlite-transaction.js";
@@ -26,33 +26,8 @@ import type { DatabaseEngineInput } from "./types.js";
 type EngineAdmission =
   | { engine: "sqlite" }
   | { engine: "postgres"; storeId: string; namespace: string; version: number };
-const admissionKey: SqliteDatabaseAdmissionKey<EngineAdmission> = {
+const admissionKey: SqliteDatabaseFactKey<EngineAdmission> = {
   name: "database.engine",
-  read: (value) => {
-    if (!value || typeof value !== "object" || !("engine" in value)) {
-      return undefined;
-    }
-    if (value.engine === "sqlite") {
-      return { engine: "sqlite" };
-    }
-    if (
-      value.engine === "postgres" &&
-      "storeId" in value &&
-      typeof value.storeId === "string" &&
-      "namespace" in value &&
-      typeof value.namespace === "string" &&
-      "version" in value &&
-      typeof value.version === "number"
-    ) {
-      return {
-        engine: "postgres",
-        storeId: value.storeId,
-        namespace: value.namespace,
-        version: value.version,
-      };
-    }
-    return undefined;
-  },
 };
 
 export function readEngineAnchor(
@@ -102,7 +77,10 @@ export function openEngineStore(ref: {
   reusePostgresConnection?: boolean;
   /** Inspection admits the declared source schema without running its migration. */
   existingVersion?: boolean;
+  /** Bind owner-local state inside the new anchor transaction before connecting. */
+  onFreshAnchor?: (anchor: DatabaseSync) => void;
   admitPostgres?: (db: PostgresSqlConnection, fresh: boolean) => void;
+  beforeMigrate?: (db: EngineConnection, fromVersion: number) => void;
   /** Family custody for schema writes; shared state defaults to its physical owner. */
   assertMigrationCurrent?: () => void;
   closeOnFailure?: (db: PostgresSqlConnection, error: unknown) => never;
@@ -173,6 +151,7 @@ export function openEngineStore(ref: {
         "INSERT INTO openclaw_engine_anchor (store_id, engine, schema) VALUES (?, 'postgres', ?)",
       )
       .run(storeId, namespace);
+    ref.onFreshAnchor?.(anchor);
     return { storeId, namespace };
   };
   const identity =
@@ -186,7 +165,6 @@ export function openEngineStore(ref: {
   const db = adapter.openConnection(store);
   const admit = (fresh: boolean) => {
     admitPostgresPhysicalFacts({
-      anchor,
       db,
       namespace: identity.namespace,
       storeId: identity.storeId,
@@ -194,6 +172,7 @@ export function openEngineStore(ref: {
       version: schema.version,
       schema,
       recordSchema: fresh,
+      preserveSchemaSeal: ref.existingVersion,
     });
     ref.admitPostgres?.(db, fresh);
   };
@@ -260,7 +239,12 @@ export function openEngineStore(ref: {
                   commit: () => publishSqliteDatabaseSchemaChange(db),
                   invalidate: () => publishSqliteDatabaseSchemaChange(db),
                 });
-                adapter.schema.migrate(store, Number(meta.version), db);
+                const migrate = () => adapter.schema.migrate(store, Number(meta.version), db);
+                if (migration) {
+                  migration.run(migrate);
+                } else {
+                  migrate();
+                }
               }
             }
           }

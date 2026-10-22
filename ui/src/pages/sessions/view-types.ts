@@ -1,58 +1,21 @@
-import type {
-  AgentIdentityResult,
-  GatewaySessionRow,
-  SessionsListResult,
-} from "../../api/types.ts";
-import type { SessionArchivedFilter } from "../../lib/sessions/index.ts";
-import type { SessionPatch } from "../../lib/sessions/patch.ts";
-import type { SessionsAdvancedFiltersProps } from "./sessions-filters.tsx";
-import type { TranscriptSearchProps } from "./transcript-search-view.tsx";
+import type { SessionsPageOwner } from "./sessions-page-state.ts";
 
-export type SessionsProps = {
-  loading: boolean;
-  refreshing: boolean;
-  refreshDisabled: boolean;
-  result: SessionsListResult | null;
-  error: string | null;
-  basePath: string;
-  agentId: string;
-  allAgentsScope: boolean;
-  mainKey: string;
-  searchQuery: string;
-  agentIdentityById: Record<string, AgentIdentityResult>;
-  sortColumn: "key" | "updated";
-  sortDir: "asc" | "desc";
-  knownCategories: string[];
-  page: number;
-  pageSize: number;
-  selectedKeys: Set<string>;
-  sessionMenu: { key: string } | null;
-  expandedSessionKey: string | null;
-  labelDisabledReason?: (row: GatewaySessionRow) => string | undefined;
-  patchAdminDisabledReason?: string;
-  deleteArchivedDisabledReason?: string;
-  deleteSelectedDisabledReason?: string;
-  onClearFilters: () => void;
-  onSearchChange: (query: string) => void;
-  onSortChange: (column: "key" | "updated", dir: "asc" | "desc") => void;
-  onAssignCategory: (key: string, category: string | null) => void;
-  onLoadMore: () => void;
-  onPageChange: (page: number) => void;
-  onPageSizeChange: (size: number) => void;
-  onRefresh: () => void;
-  onStatusFilterChange: (statusFilter: SessionArchivedFilter) => void;
-  onDeleteAllArchived: () => void;
-  onPatch: (key: string, patch: SessionPatch, options?: { sessionScope?: boolean }) => void;
-  onToggleSelect: (key: string) => void;
-  onSelectPage: (keys: string[]) => void;
-  onDeselectPage: (keys: string[]) => void;
-  onDeselectAll: () => void;
-  onDeleteSelected: () => void;
-  onOpenSessionMenu: (
-    row: GatewaySessionRow,
-    position: { x: number; y: number },
-    trigger: HTMLElement | null,
-  ) => void;
-  onToggleDetails: (sessionKey: string) => void;
-} & TranscriptSearchProps &
-  Omit<SessionsAdvancedFiltersProps, "archivedCount">;
+type View = ReturnType<SessionsPageOwner["view"]>;
+type OptionalFields =
+  | "labelDisabledReason"
+  | "patchAdminDisabledReason"
+  | "groupWriteDisabledReason"
+  | "deleteArchivedDisabledReason"
+  | "deleteSelectedDisabledReason";
+
+type Command = "onDeleteSelected" | "onDeleteAllArchived" | "onPatch" | "onAssignCategory";
+type CommandProps = {
+  [Key in Command]: (...args: Parameters<View[Key]>) => Promise<unknown> | void;
+};
+
+export type SessionsProps = Omit<View, OptionalFields | "sessionMenu" | "commandEpoch" | Command> &
+  CommandProps &
+  Partial<Pick<View, OptionalFields>> & {
+    sessionMenu: { key: string } | null;
+    commandPending?: boolean;
+  };

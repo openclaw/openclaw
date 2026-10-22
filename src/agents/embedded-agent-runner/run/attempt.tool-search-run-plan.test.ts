@@ -5,6 +5,7 @@ import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../../harness/tool-surface-bridge.js";
+import { createSandboxTestContext } from "../../sandbox/test-fixtures.js";
 import { AuthStorage } from "../../sessions/auth-storage.js";
 import { ModelRegistry } from "../../sessions/model-registry.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
@@ -38,19 +39,30 @@ async function plan(
     codeMode?: boolean;
     directory?: boolean;
     allow?: string[];
+    configAllow?: string[];
+    agentAllow?: string[];
+    toolsEnabled?: boolean;
+    disableTools?: boolean;
+    effectiveToolsAllow?: string[];
+    sandboxed?: boolean;
   } = {},
 ) {
   const visibleTools = options.visibleTools ?? [tool("dispatch_action")];
   const uncompactedTools = options.uncompactedTools ?? [];
   const config: OpenClawConfig = {
     tools: {
+      allow: options.configAllow,
       codeMode: options.codeMode ?? false,
       toolSearch: { enabled: !options.codeMode, mode: options.directory ? "directory" : "tools" },
     },
+    agents: { entries: { main: { tools: { allow: options.agentAllow } } } },
   };
   const admission = prepareSystemAgentRunAdmission(config, "catalog-plan", "main", "catalog-test");
   const abort = new AbortController();
-  const surface = createAgentHarnessToolSurfaceRuntimeCore({ config, modelToolsEnabled: true });
+  const surface = createAgentHarnessToolSurfaceRuntimeCore({
+    config,
+    modelToolsEnabled: options.toolsEnabled ?? true,
+  });
   try {
     const authStorage = AuthStorage.inMemory();
     const attempt = {
@@ -74,6 +86,7 @@ async function plan(
       }),
       thinkLevel: "off",
       toolsAllow: options.allow ?? ["missing_tool"],
+      disableTools: options.disableTools,
       authProfileStore: { version: 1, profiles: {} },
       authStorage,
       modelRegistry: ModelRegistry.inMemory(authStorage),
@@ -107,11 +120,11 @@ async function plan(
       skillInstructionDeliveryCache: new Map<string, Promise<boolean>>(),
       cronCreatorToolAllowlist: [],
       cronCreatorToolAllowlistCaptureRef: {},
-      effectiveToolsAllow: undefined,
+      effectiveToolsAllow: options.effectiveToolsAllow,
       forceDirectMessageTool: false,
       requireExplicitMessageTarget: false,
       inheritedToolAllowlist: [],
-      inheritedPublicationToolRef: {},
+      additionalInheritedToolNamesRef: [],
       localModelLeanEnabled: false,
       localModelLeanPreserveToolNames: [],
       replaySafetyOptions: { declaredReplaySafe: () => undefined },
@@ -138,12 +151,13 @@ async function plan(
       toolSearchControlsEnabledForRun: surface.toolSearchControlsEnabled,
       toolSearchRuntimeConfig: surface.plan.toolSearchRuntimeConfig,
       nestedToolActivityState: createAttemptNestedToolActivityState(),
-      toolsEnabled: true,
+      toolsEnabled: options.toolsEnabled ?? true,
       toolsRaw: uncompactedTools,
     } satisfies Parameters<typeof prepareEmbeddedAttemptToolCatalog>[0]["preparedToolBase"];
     const result = await prepareEmbeddedAttemptToolCatalog({
       attempt,
       setup: createAttemptSetupFixture({
+        sandbox: options.sandboxed ? createSandboxTestContext() : null,
         getProviderRuntimeHandle: () => ({
           provider: attempt.provider,
           modelId: attempt.modelId,
@@ -155,7 +169,10 @@ async function plan(
       abortSignal: abort.signal,
       executeCodeModeTool: async () => ({ content: [], details: undefined }),
     });
-    return result.toolSearchRunPlan;
+    return {
+      ...result.toolSearchRunPlan,
+      emptyExplicitToolAllowlistError: result.emptyExplicitToolAllowlistError,
+    };
   } finally {
     abort.abort();
     surface.cleanup();
@@ -220,5 +237,111 @@ describe("embedded attempt tool catalog", () => {
     ]);
     expect([...result.replayAllowedToolNames]).toContain("sessions_spawn");
     expect([...result.capabilityToolNames]).toEqual(["fake_plugin_tool", "sessions_spawn"]);
+  });
+});
+
+async function diagnostic(options: Parameters<typeof plan>[0] = {}) {
+  const result = await plan({ visibleTools: [], allow: [], ...options });
+  return result.emptyExplicitToolAllowlistError;
+}
+
+describe("explicit tool allowlist diagnostics", () => {
+  it.each([
+    {
+      entries: ["skill_workshop"],
+      toolsEnabled: true,
+      disableTools: false,
+      expected: "sandboxed run without library-authoring authority",
+    },
+    {
+      entries: ["skill_*"],
+      toolsEnabled: true,
+      disableTools: false,
+      expected: "sandboxed run without library-authoring authority",
+    },
+    {
+      entries: ["query_db"],
+      toolsEnabled: true,
+      disableTools: false,
+      expected: "no registered tools matched",
+    },
+    {
+      entries: ["skill_workshop"],
+      toolsEnabled: false,
+      disableTools: false,
+      expected: "selected model does not support tools",
+    },
+    {
+      entries: ["skill_workshop"],
+      toolsEnabled: true,
+      disableTools: true,
+      expected: "tools are disabled for this run",
+    },
+  ])(
+    "reports the relevant gate for $entries (enabled=$toolsEnabled, disabled=$disableTools)",
+    async ({ entries, toolsEnabled, disableTools, expected }) => {
+      expect(
+        (await diagnostic({ allow: entries, toolsEnabled, disableTools, sandboxed: true }))
+          ?.message,
+      ).toContain(expected);
+    },
+  );
+
+  it("fails closed when explicit allowlists resolve to no callable tools", async () => {
+    const error = await diagnostic({ configAllow: [" query_db "] });
+    expect(error?.message).toContain("No callable tools remain");
+    expect(error?.message).toContain("tools.allow: query_db");
+    expect(error?.message).toContain("no registered tools matched");
+  });
+
+  it("fails closed for runtime toolsAllow when tools are disabled", async () => {
+    const error = await diagnostic({ allow: ["query_db"], disableTools: true });
+    expect(error?.message).toContain("runtime toolsAllow: query_db");
+    expect(error?.message).toContain("tools are disabled for this run");
+  });
+
+  it("allows inherited config allowlists when a run intentionally disables tools", async () => {
+    expect(
+      await diagnostic({ configAllow: ["lobster", "llm-task"], disableTools: true }),
+    ).toBeNull();
+  });
+
+  it("allows inherited config allowlists when runtime toolsAllow is explicitly empty", async () => {
+    expect(
+      await diagnostic({ configAllow: ["*", "read", "cron"], effectiveToolsAllow: [] }),
+    ).toBeNull();
+  });
+
+  it("still enforces command-time allowlists for explicitly tool-less runs", async () => {
+    const error = await diagnostic({
+      configAllow: ["read"],
+      allow: ["query_db"],
+      effectiveToolsAllow: [],
+    });
+    expect(error?.message).toContain("runtime toolsAllow: query_db");
+    expect(error?.message).not.toContain("tools.allow: read");
+  });
+
+  it("fails closed when the selected model cannot use requested tools", async () => {
+    const error = await diagnostic({ agentAllow: ["query_db"], toolsEnabled: false });
+    expect(error?.message).toContain("agents.main.tools.allow: query_db");
+    expect(error?.message).toContain("the selected model does not support tools");
+  });
+
+  it("allows text-only runs without explicit allowlists", async () => {
+    expect(await diagnostic()).toBeNull();
+  });
+
+  it("allows explicit allowlists when at least one callable tool remains", async () => {
+    expect(
+      (await plan({ visibleTools: [tool("read")], allow: ["read", "missing_tool"] }))
+        .emptyExplicitToolAllowlistError,
+    ).toBeNull();
+  });
+
+  it("keeps normalized source labels for config and runtime allowlists", async () => {
+    expect((await diagnostic({ configAllow: [" read ", ""], allow: ["query_db"] }))?.message).toBe(
+      "No callable tools remain after resolving explicit tool allowlist (tools.allow: read; runtime toolsAllow: query_db); no registered tools matched. Fix the allowlist or enable the plugin that registers the requested tool.",
+    );
   });
 });

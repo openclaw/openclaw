@@ -2,6 +2,7 @@
 
 import { flush } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   renderComposerFixture as renderComposer,
   resetComposerFixture,
@@ -35,7 +36,10 @@ describe("progress card refresh admission", () => {
         disposeComposer(view.container);
         view.container.remove();
       });
-      await Promise.resolve();
+      await vi.dynamicImportSettled();
+      await waitForSolid(() =>
+        expect(view.container.querySelector(".session-progress-card--composer")).not.toBeNull(),
+      );
       const options = view.container.querySelector<HTMLButtonElement>(
         ".session-progress-card__options",
       );

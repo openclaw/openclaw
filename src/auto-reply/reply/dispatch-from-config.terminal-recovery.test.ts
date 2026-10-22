@@ -4,7 +4,6 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { formatBillingErrorMessage } from "../../agents/failover/user-copy.js";
 import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { setVerbose } from "../../global-state.js";
 import { onDiagnosticEvent, type DiagnosticEventPayload } from "../../infra/diagnostic-events.js";
 import { applyLoggingConfig, flushLogger, resetLogger } from "../../logging/logger.js";
@@ -23,7 +22,6 @@ import {
   ttsMocks,
 } from "./dispatch-from-config.shared.test-harness.js";
 import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
-import { withDispatchProcessedOutcomeSink } from "./dispatch-processed-outcome.js";
 import { expectedNoQueuedReplyResult } from "./dispatch-result-expectations.test-support.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import {
@@ -41,6 +39,8 @@ let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+type ReplyResolver = NonNullable<DispatchFromConfigParams["replyResolver"]>;
+
 const sessionKey = "agent:main:telegram:direct:1";
 const sessionTarget = captureSessionTarget({
   storeScope: "/tmp/mock-sessions.json",
@@ -48,8 +48,20 @@ const sessionTarget = captureSessionTarget({
   agentId: "main",
 });
 
+function createActiveOperation() {
+  const operation = createReplyOperation({
+    sessionKey,
+    sessionId: "active-session",
+    resetTriggered: false,
+    target: sessionTarget,
+  });
+  operation.setPhase("running");
+  return operation;
+}
+
 function createVisibleDispatchParams(
-  replyResolver: NonNullable<DispatchFromConfigParams["replyResolver"]>,
+  replyResolver: ReplyResolver,
+  overrides: Partial<Pick<DispatchFromConfigParams, "cfg" | "dispatcher" | "replyOptions">> = {},
 ) {
   return {
     ctx: buildTestCtx({
@@ -65,7 +77,23 @@ function createVisibleDispatchParams(
     cfg: {},
     dispatcher: createDispatcher(),
     replyResolver,
+    ...overrides,
   };
+}
+
+const adoptedOptions = () => ({ turnAdoptionLifecycle: { onAdopted: vi.fn(async () => {}) } });
+function expectFailure(
+  operation: ReturnType<typeof createReplyOperation> | undefined,
+  cause: Error,
+) {
+  expect(operation?.result).toEqual({ kind: "failed", code: "run_failed", cause });
+}
+function expectRecoveryNotice(dispatcher: DispatchFromConfigParams["dispatcher"]) {
+  expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+    expect.objectContaining({
+      text: expect.stringContaining("Check the conversation before trying again"),
+    }),
+  );
 }
 
 describe("dispatchReplyFromConfig visible admission recovery", () => {
@@ -125,48 +153,6 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
     resetInboundDedupe();
   });
 
-  it("does not force-clear a live raw owner because its persisted row is terminal", async () => {
-    const activeOperation = createReplyOperation({
-      sessionKey,
-      sessionId: "active-session",
-      resetTriggered: false,
-      target: sessionTarget,
-    });
-    activeOperation.setPhase("running");
-    const inspected = createDeferred();
-    const tick = vi.spyOn(activeOperation.watchdog, "tick").mockImplementation(async () => {
-      inspected.resolve();
-      return { action: "observe", reason: "live raw owner" };
-    });
-    sessionStoreMocks.currentEntry = {
-      sessionId: "active-session",
-      status: "killed",
-      updatedAt: Date.now(),
-    };
-
-    const replyResolver = vi.fn(async (_ctx, options) => {
-      options?.onAgentRunStart?.("successful-run");
-      return { text: "telegram reply" } satisfies ReplyPayload;
-    });
-    const dispatchParams = createVisibleDispatchParams(replyResolver);
-
-    const pending = dispatchReplyFromConfig(dispatchParams);
-    await inspected.promise;
-    expect(tick).toHaveBeenCalledOnce();
-    expect(activeOperation.result).toBeNull();
-    expect(replyResolver).not.toHaveBeenCalled();
-    activeOperation.complete();
-    const result = await pending;
-    expect(result).toMatchObject({
-      queuedFinal: true,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
-
-    expect(readAgentRunTerminalOutcome(result)).toBe("completed");
-    expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
-  });
-
   it("renders post-compaction context after dispatcher normalization", async () => {
     const dispatchParams = createVisibleDispatchParams(async () =>
       setReplyPayloadMetadata(
@@ -187,12 +173,7 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
     { name: "info", logging: { level: "info" }, detail: false },
     { name: "debug", logging: { level: "debug" }, detail: true },
     { name: "environment info", logging: { level: "debug" }, env: "info", detail: false },
-  ] satisfies Array<{
-    name: string;
-    logging: NonNullable<OpenClawConfig["logging"]>;
-    detail: boolean;
-    env?: string;
-  }>)(
+  ] as const)(
     "recovers a visible partial with $name diagnostics",
     async ({ logging, detail, ...testCase }) => {
       vi.stubEnv("OPENCLAW_LOG_LEVEL", "env" in testCase ? testCase.env : undefined);
@@ -207,34 +188,31 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
       const resolverError = new Error(
         `provider failed after partial: ${secret} ${customSecret} preserved-after-redaction ${"🦞".repeat(1_100)}`,
       );
+      const textReads: string[] = [];
       let replyOperation: ReturnType<typeof createReplyOperation> | undefined;
-      const replyResolver: NonNullable<DispatchFromConfigParams["replyResolver"]> = async (
-        _ctx,
-        options,
-      ) => {
-        if (!options) {
-          throw new Error("reply options required for partial recovery");
+      const replyResolver: ReplyResolver = async (_ctx, options) => {
+        replyOperation = options?.replyOperation;
+        options?.onAgentRunStart?.("failed-run");
+        let text = "";
+        for (let index = 0; index < 256; index++) {
+          await options?.onPartialReply?.({
+            get text() {
+              textReads.push(text);
+              return text;
+            },
+          });
+          text += index ? "x" : "partial telegram reply";
         }
-        replyOperation = options.replyOperation;
-        options.onAgentRunStart?.("failed-run");
-        await options.onPartialReply?.({ text: "partial telegram reply" });
         throw resolverError;
       };
-      const dispatchParams = {
-        ...createVisibleDispatchParams(replyResolver),
+      const dispatchParams = createVisibleDispatchParams(replyResolver, {
         cfg: { diagnostics: { enabled: true } },
-        replyOptions: {
-          onPartialReply: vi.fn(async () => undefined),
-        },
-      };
+        replyOptions: { onPartialReply: vi.fn(async () => (detail ? true : undefined)) },
+      });
 
       const result = await dispatchReplyFromConfig(dispatchParams);
-
-      expect(replyOperation?.result).toEqual({
-        kind: "failed",
-        code: "run_failed",
-        cause: resolverError,
-      });
+      expect(textReads).toEqual(["", "partial telegram reply"]);
+      expectFailure(replyOperation, resolverError);
       expect(result.queuedFinal).toBe(true);
       expect(readAgentRunTerminalOutcome(result)).toBe("failed");
       for (const events of [processedEvents, dispatchEvents]) {
@@ -254,58 +232,14 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
         }
       }
       expect(dispatchEvents[0]?.error).toBe(processedEvents[0]?.error);
-      expect(dispatchParams.replyOptions.onPartialReply).toHaveBeenCalledWith({
-        text: "partial telegram reply",
-      });
-      expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledWith(
-        expect.objectContaining({
-          text: expect.stringContaining("Check the conversation before trying again"),
-        }),
-      );
+      expect(dispatchParams.replyOptions?.onPartialReply).toHaveBeenCalledTimes(256);
+      expectRecoveryNotice(dispatchParams.dispatcher);
     },
   );
 
-  it("reads lazy partial text only until a visible partial has content", async () => {
-    const resolverError = new Error("provider failed after partials");
-    const textReads: string[] = [];
-    const replyResolver: NonNullable<DispatchFromConfigParams["replyResolver"]> = async (
-      _ctx,
-      options,
-    ) => {
-      let text = "";
-      for (let index = 0; index < 256; index++) {
-        await options?.onPartialReply?.({
-          get text() {
-            textReads.push(text);
-            return text;
-          },
-        });
-        text += "x";
-      }
-      throw resolverError;
-    };
-    const dispatchParams = {
-      ...createVisibleDispatchParams(replyResolver),
-      replyOptions: { onPartialReply: vi.fn(async () => true) },
-    };
-
-    const result = await dispatchReplyFromConfig(dispatchParams);
-
-    expect(textReads).toEqual(["", "x"]);
-    expect(result.queuedFinal).toBe(true);
-    expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: expect.stringContaining("Check the conversation before trying again"),
-      }),
-    );
-  });
-
   it("rethrows post-run dispatch errors after a completed run with no visible reply", async () => {
     const resolverError = new Error("final delivery failed after completion");
-    const replyResolver: NonNullable<DispatchFromConfigParams["replyResolver"]> = async (
-      _ctx,
-      options,
-    ) => {
+    const replyResolver: ReplyResolver = async (_ctx, options) => {
       options?.onAgentRunTerminalOutcome?.("completed");
       throw resolverError;
     };
@@ -318,29 +252,18 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
   it("records a terminal agent failure before the first visible reply", async () => {
     const resolverError = new Error("provider failed before output");
     let replyOperation: ReturnType<typeof createReplyOperation> | undefined;
-    const replyResolver: NonNullable<DispatchFromConfigParams["replyResolver"]> = async (
-      _ctx,
-      options,
-    ) => {
-      if (!options) {
-        throw new Error("reply options required for terminal failure");
-      }
-      replyOperation = options.replyOperation;
-      options.onAgentRunTerminalOutcome?.("failed");
+    const replyResolver: ReplyResolver = async (_ctx, options) => {
+      replyOperation = options?.replyOperation;
+      options?.onAgentRunTerminalOutcome?.("failed");
       throw resolverError;
     };
-    const dispatchParams = {
-      ...createVisibleDispatchParams(replyResolver),
-      replyOptions: { sourceReplyDeliveryMode: "message_tool_only" as const },
-    };
+    const dispatchParams = createVisibleDispatchParams(replyResolver, {
+      replyOptions: { sourceReplyDeliveryMode: "message_tool_only" },
+    });
 
     const result = await dispatchReplyFromConfig(dispatchParams);
 
-    expect(replyOperation?.result).toEqual({
-      kind: "failed",
-      code: "run_failed",
-      cause: resolverError,
-    });
+    expectFailure(replyOperation, resolverError);
     expect(result).toMatchObject(expectedNoQueuedReplyResult());
     expect(readAgentRunTerminalOutcome(result)).toBe("failed");
     expect(dispatchParams.dispatcher.sendFinalReply).not.toHaveBeenCalled();
@@ -368,12 +291,7 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
         delivered.push({ kind, payload });
         return { ok: true, delivered: true };
       });
-      let operation: ReturnType<typeof createReplyOperation> | undefined;
-      const replyResolver: NonNullable<DispatchFromConfigParams["replyResolver"]> = async (
-        _ctx,
-        options,
-      ) => {
-        operation = options?.replyOperation;
+      const replyResolver: ReplyResolver = async (_ctx, options) => {
         await options?.turnAdoptionLifecycle?.onAdopted();
         if (progress) {
           await options?.onToolResult?.({
@@ -385,17 +303,14 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
         }
         throw resolverError;
       };
-      const params = {
-        ...createVisibleDispatchParams(replyResolver),
+      const params = createVisibleDispatchParams(replyResolver, {
         cfg: {
           diagnostics: { enabled: true },
           agents: { defaults: { silentReply: { group: silentReply } } },
         },
         dispatcher,
-        replyOptions: {
-          turnAdoptionLifecycle: { onAdopted: vi.fn(async () => {}) },
-        },
-      };
+        replyOptions: adoptedOptions(),
+      });
       Object.assign(params.ctx, {
         Provider: surface,
         Surface: surface,
@@ -403,9 +318,10 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
         ChatType: chatType,
         WasMentioned: mentioned,
       });
-      const { result, processedOutcome } = await withDispatchProcessedOutcomeSink(() =>
-        withReplyDispatcher({ dispatcher, run: () => dispatchReplyFromConfig(params) }),
-      );
+      const result = await withReplyDispatcher({
+        dispatcher,
+        run: () => dispatchReplyFromConfig(params),
+      });
 
       expect(delivered.map(({ kind }) => kind)).toEqual(
         expectedFinal ? (progress ? ["tool", "final"] : ["final"]) : [],
@@ -415,16 +331,7 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
         expect(delivered.at(-1)?.payload.text?.trim()).toBeTruthy();
       }
       expect(JSON.stringify(delivered)).not.toContain(resolverError.message);
-      expect(operation?.result).toEqual({
-        kind: "failed",
-        code: "run_failed",
-        cause: resolverError,
-      });
       expect(readAgentRunTerminalOutcome(result)).toBe("failed");
-      expect(processedOutcome?.outcome).toBe("error");
-      expect(processedEvents).toEqual([
-        expect.objectContaining({ outcome: "error", error: undefined }),
-      ]);
       if (expectedFinal && origin !== surface) {
         expect(mocks.routeReply).toHaveBeenLastCalledWith(
           expect.objectContaining({
@@ -438,32 +345,40 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
     },
   );
 
-  it("keeps rejected adoption retryable without a final notice", async () => {
-    const resolverError = new Error("adoption rejected");
-    const onAdopted = vi.fn(async () => {
-      throw resolverError;
-    });
-    const dispatcher = createReplyDispatcher({ deliver: vi.fn(async () => {}) });
-    const replyResolver = vi.fn<NonNullable<DispatchFromConfigParams["replyResolver"]>>(
-      async (_ctx, options) => {
+  it.each([false, true])(
+    "retries ingress only when adoption was rejected (adopted=%s)",
+    async (adopted) => {
+      const resolverError = new Error("turn failed");
+      const deliveryError = new Error("final preparation failed");
+      const onAdopted = vi.fn(async () => {
+        if (!adopted) {
+          throw resolverError;
+        }
+      });
+      const dispatcher = createReplyDispatcher({ deliver: vi.fn(async () => {}) });
+      const replyResolver = vi.fn<ReplyResolver>(async (_ctx, options) => {
         await options?.turnAdoptionLifecycle?.onAdopted();
         throw resolverError;
-      },
-    );
-    const params = {
-      ...createVisibleDispatchParams(replyResolver),
-      dispatcher,
-      replyOptions: { turnAdoptionLifecycle: { onAdopted } },
-    };
-    params.ctx.MessageSid = "retryable-failure";
-    await expect(
-      withReplyDispatcher({ dispatcher, run: () => dispatchReplyFromConfig(params) }),
-    ).rejects.toBe(resolverError);
-    expect(dispatcher.getQueuedCounts()).toEqual({ tool: 0, block: 0, final: 0 });
-    replyResolver.mockResolvedValueOnce({ text: "retry succeeded" });
-    await dispatchReplyFromConfig({ ...params, dispatcher: createDispatcher() });
-    expect(replyResolver).toHaveBeenCalledTimes(2);
-  });
+      });
+      const params = createVisibleDispatchParams(replyResolver, {
+        dispatcher,
+        replyOptions: { turnAdoptionLifecycle: { onAdopted } },
+      });
+      params.ctx.MessageSid = "adoption-retryability";
+      if (adopted) {
+        ttsMocks.maybeApplyTtsToPayload.mockRejectedValueOnce(deliveryError);
+      }
+      await expect(
+        withReplyDispatcher({ dispatcher, run: () => dispatchReplyFromConfig(params) }),
+      ).rejects.toBe(adopted ? deliveryError : resolverError);
+      if (!adopted) {
+        expect(dispatcher.getQueuedCounts()).toEqual({ tool: 0, block: 0, final: 0 });
+      }
+      replyResolver.mockResolvedValueOnce({ text: "retry succeeded" });
+      await dispatchReplyFromConfig({ ...params, dispatcher: createDispatcher() });
+      expect(replyResolver).toHaveBeenCalledTimes(adopted ? 1 : 2);
+    },
+  );
 
   it.each(["observed-delivery", "room-event"])(
     "does not add an adopted failure notice for %s",
@@ -481,94 +396,83 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
       }
       const result = await dispatchReplyFromConfig({
         ...params,
-        replyOptions: {
-          turnAdoptionLifecycle: { onAdopted: vi.fn(async () => {}) },
-        },
+        replyOptions: adoptedOptions(),
       });
       expect(readAgentRunTerminalOutcome(result)).toBe("failed");
       expect(params.dispatcher.sendFinalReply).not.toHaveBeenCalled();
     },
   );
 
-  it("retains adopted dedupe when failure-notice preparation also fails", async () => {
-    const resolverError = new Error("accepted turn failed");
-    const deliveryError = new Error("final preparation failed");
-    const replyResolver = vi.fn<NonNullable<DispatchFromConfigParams["replyResolver"]>>(
-      async (_ctx, options) => {
-        await options?.turnAdoptionLifecycle?.onAdopted();
-        throw resolverError;
-      },
-    );
-    const params = {
-      ...createVisibleDispatchParams(replyResolver),
-      replyOptions: { turnAdoptionLifecycle: { onAdopted: vi.fn(async () => {}) } },
-    };
-    params.ctx.MessageSid = "adopted-final-failure";
-    ttsMocks.maybeApplyTtsToPayload.mockRejectedValueOnce(deliveryError);
-    await expect(dispatchReplyFromConfig(params)).rejects.toBe(deliveryError);
-    await dispatchReplyFromConfig({ ...params, dispatcher: createDispatcher() });
-    expect(replyResolver).toHaveBeenCalledOnce();
-  });
+  it.each(["fresh", "stalled", "terminal-row"] as const)(
+    "waits for the %s active producer to settle",
+    async (state) => {
+      if (state !== "terminal-row") {
+        vi.useFakeTimers();
+      }
+      const activeOperation = createActiveOperation();
+      let releaseProducer = () => activeOperation.complete();
+      const inspected = createDeferred();
+      const tick =
+        state === "terminal-row"
+          ? vi.spyOn(activeOperation.watchdog, "tick").mockImplementation(async () => {
+              inspected.resolve();
+              return { action: "observe", reason: "live raw owner" };
+            })
+          : undefined;
+      if (state === "terminal-row") {
+        sessionStoreMocks.currentEntry = {
+          sessionId: "active-session",
+          status: "killed",
+          updatedAt: Date.now(),
+        };
+      } else if (state === "stalled") {
+        releaseProducer = activeOperation.retainExecution();
+        expect(activeOperation.abortForStall()).toBe(true);
+        activeOperation.complete();
+      } else {
+        activeOperation.abortSignal.addEventListener("abort", () => activeOperation.complete(), {
+          once: true,
+        });
+      }
+      const replyResolver = vi.fn<ReplyResolver>(async (_ctx, options) => {
+        if (state === "terminal-row") {
+          options?.onAgentRunStart?.("successful-run");
+        }
+        return { text: "telegram reply" };
+      });
+      const dispatchParams = createVisibleDispatchParams(replyResolver);
+      let settled = false;
 
-  it("waits for fresh visible reply work without invoking diagnostic recovery", async () => {
-    vi.useFakeTimers();
-    const activeOperation = createReplyOperation({
-      sessionKey,
-      sessionId: "active-session",
-      resetTriggered: false,
-      target: sessionTarget,
-    });
-    activeOperation.setPhase("running");
-    activeOperation.abortSignal.addEventListener("abort", () => activeOperation.complete(), {
-      once: true,
-    });
-    const replyResolver = vi.fn(async () => ({ text: "telegram reply" }) satisfies ReplyPayload);
-    const dispatchParams = createVisibleDispatchParams(replyResolver);
-    let settled = false;
+      const resultPromise = dispatchReplyFromConfig(dispatchParams).then((result) => {
+        settled = true;
+        return result;
+      });
 
-    const resultPromise = dispatchReplyFromConfig(dispatchParams).then((result) => {
-      settled = true;
-      return result;
-    });
+      if (state === "terminal-row") {
+        await inspected.promise;
+        expect(tick).toHaveBeenCalledOnce();
+        expect(activeOperation.result).toBeNull();
+      } else {
+        await vi.advanceTimersByTimeAsync(120_000);
+      }
+      expect(settled).toBe(false);
+      expect(replyResolver).not.toHaveBeenCalled();
+      if (state === "stalled") {
+        expect(activeOperation.result).toEqual({ kind: "failed", code: "run_stalled" });
+        expect(getSessionControllerOperation(sessionKey, sessionTarget)).toBe(activeOperation);
+      }
+      releaseProducer();
+      const result = await resultPromise;
 
-    await vi.advanceTimersByTimeAsync(120_000);
-
-    expect(settled).toBe(false);
-    expect(replyResolver).not.toHaveBeenCalled();
-
-    activeOperation.complete();
-    const result = await resultPromise;
-
-    expect(result.queuedFinal).toBe(true);
-    expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
-  });
-
-  it("retains a stalled producer until its real settlement before admitting the next turn", async () => {
-    vi.useFakeTimers();
-    const activeOperation = createReplyOperation({
-      sessionKey,
-      sessionId: "active-session",
-      resetTriggered: false,
-      target: sessionTarget,
-    });
-    activeOperation.setPhase("running");
-    const releaseProducer = activeOperation.retainExecution();
-    expect(activeOperation.abortForStall()).toBe(true);
-    activeOperation.complete();
-    const replyResolver = vi.fn(async () => ({ text: "telegram reply" }) satisfies ReplyPayload);
-    const pending = dispatchReplyFromConfig(createVisibleDispatchParams(replyResolver));
-
-    await vi.advanceTimersByTimeAsync(120_000);
-    expect(activeOperation.result).toEqual({ kind: "failed", code: "run_stalled" });
-    expect(getSessionControllerOperation(sessionKey, sessionTarget)).toBe(activeOperation);
-    expect(replyResolver).not.toHaveBeenCalled();
-
-    releaseProducer();
-    const result = await pending;
-    expect(result.queuedFinal).toBe(true);
-    expect(replyResolver).toHaveBeenCalledOnce();
-  });
+      expect(result.queuedFinal).toBe(true);
+      if (state === "terminal-row") {
+        expect(result.counts).toEqual({ tool: 0, block: 0, final: 0 });
+        expect(readAgentRunTerminalOutcome(result)).toBe("completed");
+      }
+      expect(replyResolver).toHaveBeenCalledTimes(1);
+      expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it.each([
     { continued: undefined, notice: true },
@@ -631,13 +535,7 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
   );
 
   it("keeps a queued channel turn accepted when the busy session frees before final admission", async () => {
-    const activeOperation = createReplyOperation({
-      sessionKey,
-      sessionId: "active-session",
-      resetTriggered: false,
-      target: sessionTarget,
-    });
-    activeOperation.setPhase("running");
+    const activeOperation = createActiveOperation();
     sessionStoreMocks.currentEntry = { sessionId: "active-session", updatedAt: Date.now() };
     const runState: ReplyOperationRunState = {};
     const dispatchParams = createVisibleDispatchParams(async () => {

@@ -1,8 +1,14 @@
 import { createEffect, createMemo, createSignal, createUniqueId, onSettled, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
-import { Menu, type MenuEntry, type MenuHandle } from "../../../components/solid/menu.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import {
+  createMenuControls,
+  Menu,
+  type MenuEntry,
+  type MenuHandle,
+} from "../../../components/solid/menu.tsx";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { countSessionToolOverrides } from "../../../lib/sessions/tool-overrides.ts";
 import { uploadsEnabled } from "../../../lib/uploads.ts";
@@ -11,6 +17,8 @@ import type {
   ChatComposerPlusMenuProps,
 } from "./chat-composer-plus-menu.types.ts";
 
+registerEnglishCatalog(registerChatComposerEnglish);
+
 type MenuContent = typeof import("./chat-composer-plus-menu-content.tsx");
 type ContentState =
   | { kind: "loading" }
@@ -18,6 +26,7 @@ type ContentState =
   | { kind: "error"; error: unknown };
 
 function PlusMenuSurface(props: { menu: ChatComposerPlusMenuContentProps }) {
+  const controls = createMenuControls();
   let handle!: MenuHandle;
   let host!: HTMLDivElement;
   const id = createUniqueId();
@@ -133,7 +142,14 @@ function PlusMenuSurface(props: { menu: ChatComposerPlusMenuContentProps }) {
           {
             kind: "content",
             id: "plus-menu-error",
-            content: <LazyViewError error={current.error} onRetry={loadContent} inline />,
+            content: (
+              <LazyViewError
+                error={current.error}
+                onRetry={loadContent}
+                retryRef={controls.ref()}
+                inline
+              />
+            ),
           },
         ] satisfies MenuEntry[];
       }
@@ -142,7 +158,7 @@ function PlusMenuSurface(props: { menu: ChatComposerPlusMenuContentProps }) {
       }
       // Only a changed presentation snapshot recreates owned nodes; actions read live props.
       const { view: selected, menu } = inputs();
-      return current.module.menuItems(menu, selected);
+      return current.module.menuItems(menu, selected, () => inputs().menu);
     },
     { lazy: true },
   );
@@ -173,6 +189,7 @@ function PlusMenuSurface(props: { menu: ChatComposerPlusMenuContentProps }) {
         triggerAttributes={{ title: t("chat.composer.addAttachment") }}
         trigger={<Icon name="plus" />}
         items={items()}
+        controls={controls}
         ref={(next) => {
           handle = next;
           releaseAnchor();
@@ -230,8 +247,7 @@ export function ChatComposerPlusMenu(props: { menu: ChatComposerPlusMenuProps })
       showCapabilities: capabilityMenu !== undefined,
       basePath: capabilityMenu?.basePath ?? "",
       skills: capabilityMenu?.skills ?? null,
-      skillsLoading: capabilityMenu?.skillsLoading ?? false,
-      skillsError: capabilityMenu?.skillsError ?? false,
+      skillsRead: capabilityMenu?.skillsRead ?? null,
       mcpServers: capabilityMenu?.mcpServers ?? [],
       toolsEffectiveResult: capabilityMenu?.toolsEffectiveResult ?? null,
       toolsEffectiveLoading: capabilityMenu?.toolsEffectiveLoading ?? false,

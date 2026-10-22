@@ -57,6 +57,9 @@ including envelopes retained by copied attempt parameters. Each accepted
 transcript write keeps its original attempt's persistence callbacks until it
 finishes, even after a reused manager binds a newer attempt or the bounded
 teardown wait expires.
+Completed attempt results stay outside the scope captured by retained harness
+callbacks, so those callbacks cannot keep completed message snapshots alive.
+Finalization and retry owners retain access to the results while processing them.
 
 ## Queueing and concurrency
 

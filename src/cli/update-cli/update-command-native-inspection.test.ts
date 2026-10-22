@@ -1,8 +1,7 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { assert, beforeEach, expect, it, vi } from "vitest";
+import { assert, expect, it, vi } from "vitest";
 import { execFileUtf8 } from "../../daemon/exec-file.js";
 import { assertGatewayServiceUpdateCurrent } from "../../daemon/service-update-authority.js";
 import { readGatewayServiceState } from "../../daemon/service.js";
@@ -14,16 +13,9 @@ import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { useExecutorFixture } from "./update-command-executor.test-support.js";
 import { withRetainedUpdateServiceAuthority } from "./update-command-retained-service.js";
 
-const fixture = useExecutorFixture("native-inspection-");
+const fixture = useExecutorFixture("native-inspection-", { splitRoots: true });
 const command = { programArguments: ["node", "gateway"] };
 const runtime = { status: "stopped" as const, managerUid: 1001 };
-let root: string;
-let serviceRoot: string;
-beforeEach(() => {
-  ({ root } = fixture());
-  serviceRoot = path.join(root, "A");
-  fs.mkdirSync(serviceRoot, { mode: 0o700 });
-});
 
 it
   .skipIf(process.platform === "win32")
@@ -38,6 +30,7 @@ it
   ] as const)(
   "joins native inspection before parent reads and preserves authority: %s",
   async (change) => {
+    const { root, serviceRoot, control } = fixture();
     const healthy = change === "command-present" || change === "command-absent";
     const runCommand = processRunner.runCommandWithTimeout;
     const bound = createDeferredCore();
@@ -78,7 +71,7 @@ it
           run.executorFence = { assertCurrent() {} };
         }
         if (change === "A-revoked" || change === "B-revoked") {
-          const db = new DatabaseSync(path.join(root, "control", "managed-update-handoffs.sqlite"));
+          const db = new DatabaseSync(path.join(control, "managed-update-handoffs.sqlite"));
           try {
             const changed = db
               .prepare("UPDATE managed_update_handoffs SET owner = ? WHERE install_root = ?")

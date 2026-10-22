@@ -1,5 +1,8 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -34,7 +37,10 @@ import {
 } from "./prepared-model-runtime.inbound-registry.js";
 import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import { retainPreparedPluginRegistry } from "./prepared-model-runtime.plugin-lifetime.js";
-import { PreparedModelRuntimeBuildResources } from "./prepared-model-runtime.resources.js";
+import {
+  PreparedModelRuntimeBuildResources,
+  retainPreparedModelRuntimeSnapshotResources,
+} from "./prepared-model-runtime.resources.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -92,6 +98,53 @@ function startupFixture(
   };
   return { plugin, input, captures, start, [Symbol.dispose]: () => process.off(event, capture) };
 }
+
+async function loadRegistryInCallerContext(
+  context: AsyncLocalStorage<object>,
+  resources: PreparedModelRuntimeBuildResources,
+  input: Parameters<PreparedModelRuntimeBuildResources["load"]>[0],
+) {
+  const caller = { transcript: ["settled caller transcript"] };
+  const reference = new WeakRef(caller);
+  const registry = await context.run(caller, () => resources.load(input, () => {}));
+  return { registry, reference };
+}
+
+it("releases the acquiring caller context while a prepared registry remains retained", async () => {
+  using fixture = startupFixture(
+    "retained-catalog",
+    "selected/model",
+    (event) => `process.emit(${JSON.stringify(event)}, __dirname);
+      api.registerProvider({ id: "selected", label: "Selected", auth: [] });`,
+  );
+  await using cache = createPluginCache();
+  await withPluginCache(cache, async () => {
+    const { root, metadata } = await fixture.start([]);
+    const context = new AsyncLocalStorage<object>();
+    await using resources = new PreparedModelRuntimeBuildResources(retainPreparedPluginRegistry);
+    const { registry, reference } = await loadRegistryInCallerContext(context, resources, {
+      ...fixture.input,
+      metadataSnapshot: metadata,
+      preferBuiltPluginArtifacts: true,
+      basePluginIds: [],
+      purpose: "model-catalog",
+    });
+    const claim = retainPreparedModelRuntimeSnapshotResources({ pluginRegistry: registry });
+    expect(claim).toBeDefined();
+    try {
+      await resources[Symbol.asyncDispose]();
+      await setImmediate();
+      queryObjects(WeakRef);
+      expect(() => claim!.assertOpen()).not.toThrow();
+      expect(context.getStore()).toBeUndefined();
+      expect(reference.deref()).toBeUndefined();
+    } finally {
+      context.disable();
+      await claim?.release();
+      await disposePluginRegistryInstances(root);
+    }
+  });
+});
 
 it.each<[boolean, boolean, RuntimePluginLoadPurpose]>([
   [false, true, "agent"],

@@ -36,6 +36,7 @@ const config = {
     validation: "packages/ai/src/validation.ts",
     "internal/anthropic": "packages/ai/src/internal/anthropic.ts",
     "internal/google-model-family": "packages/ai/src/internal/google-model-family.ts",
+    "internal/model-request-body": "packages/ai/src/transports/model-request-body.ts",
     "internal/openai": "packages/ai/src/internal/openai.ts",
     "internal/openai-completions-compat": "packages/ai/src/internal/openai-completions-compat.ts",
     "internal/openai-responses-payload-policy":

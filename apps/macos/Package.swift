@@ -36,7 +36,7 @@ let package = Package(
             ]),
         .target(
             name: "OpenClawIPC",
-            dependencies: [],
+            dependencies: [.product(name: "OpenClawNativeState", package: "OpenClawKit")],
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),
             ]),
@@ -89,6 +89,7 @@ let package = Package(
             dependencies: [
                 "OpenClawIPC",
                 "OpenClawDiscovery",
+                .product(name: "OpenClawNativeState", package: "OpenClawKit"),
                 .product(name: "OpenClawKit", package: "OpenClawKit"),
                 .product(name: "OpenClawProtocol", package: "OpenClawKit"),
             ],
@@ -107,6 +108,7 @@ let package = Package(
             name: "OpenClawIPCTests",
             dependencies: [
                 "OpenClawIPC",
+                .product(name: "OpenClawNativeState", package: "OpenClawKit"),
                 "OpenClaw",
                 "OpenClawMacCLI",
                 "OpenClawDiscovery",

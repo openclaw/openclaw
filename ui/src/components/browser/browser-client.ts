@@ -308,21 +308,15 @@ export async function downloadBrowserDocument(
 export async function navigateBrowser(
   client: BrowserRequestClient,
   params: { url: string; targetId?: string },
-): Promise<{ targetId: string; url: string }> {
-  const result = asRecord(
-    await browserRequest(client, { method: "POST", path: "/navigate", body: params }),
-  );
-  return {
-    targetId: stringOrEmpty(result?.targetId) || params.targetId || "",
-    url: stringOrEmpty(result?.url) || params.url,
-  };
+): Promise<void> {
+  await browserRequest(client, { method: "POST", path: "/navigate", body: params });
 }
 
 export async function requestBrowserScreencast(
   client: BrowserRequestClient,
   params: { targetId: string; maxWidth: number; maxHeight: number },
   options?: GatewayClientRequestOptions,
-): Promise<{ token: string; wsPath: string; targetId: string; url: string }> {
+): Promise<string> {
   const result = asRecord(
     await browserRequest(client, { method: "POST", path: "/screencast", body: params }, options),
   );
@@ -331,12 +325,7 @@ export async function requestBrowserScreencast(
   if (!token || !wsPath) {
     throw new Error("browser screencast response is malformed");
   }
-  return {
-    token,
-    wsPath,
-    targetId: stringOrEmpty(result?.targetId),
-    url: stringOrEmpty(result?.url),
-  };
+  return wsPath;
 }
 
 export function isBrowserScreencastUnsupportedError(error: unknown): boolean {
@@ -363,7 +352,6 @@ export async function captureBrowserScreenshot(client: BrowserRequestClient, tar
   }
   return {
     path,
-    targetId: stringOrEmpty(result?.targetId) || targetId,
     url: stringOrEmpty(result?.url),
   };
 }
@@ -599,8 +587,5 @@ export async function fetchBrowserScreenshotDataUrl(params: {
   } finally {
     clearTimeout(timeout);
   }
-  return readBlobAsDataUrl(blob, {
-    readError: () => t("browser.errors.screenshotReadFailed"),
-    invalidResultError: () => t("browser.errors.screenshotReadFailed"),
-  });
+  return readBlobAsDataUrl(blob, () => t("browser.errors.screenshotReadFailed"));
 }

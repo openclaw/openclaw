@@ -608,8 +608,10 @@ export async function directSessionReq<TPayload = unknown>(
     throw new Error(`missing sessions handler for ${method}`);
   }
   const contextKey = opts?.context ?? defaultDirectContext;
-  const existingContext = directContexts.get(contextKey);
+  const context = directContexts.get(contextKey) ?? createDirectChatContext();
   const contextFields: GatewayRequestContext = createDirectChatContext({
+    // Later requests must not orphan active reply buffers and their release callbacks.
+    chatRunState: context.chatRunState,
     broadcastToConnIds: vi.fn(),
     dedupe: new Map(),
     getSessionEventSubscriberConnIds: () => new Set<string>(),
@@ -620,7 +622,6 @@ export async function directSessionReq<TPayload = unknown>(
     getRuntimeConfig,
     ...opts?.context,
   });
-  const context = existingContext ?? createDirectChatContext();
   Object.assign(context, contextFields);
   directContexts.set(contextKey, context);
   if (

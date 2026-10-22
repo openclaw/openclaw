@@ -1,14 +1,9 @@
-import { XAI_DEFAULT_MODEL_ID } from "../model-definitions.js";
 import {
   requestXaiResponsesTool,
   resolveXaiToolDefaultReasoningEffort,
   requireXaiResponseTextAndCitations,
   XAI_RESPONSES_ENDPOINT,
 } from "./responses-tool-shared.js";
-import {
-  resolveNormalizedXaiToolModel,
-  resolvePositiveIntegerToolConfig,
-} from "./tool-config-shared.js";
 
 type XaiCodeExecutionResult = {
   content: string;
@@ -16,19 +11,6 @@ type XaiCodeExecutionResult = {
   usedCodeExecution: boolean;
   outputTypes: string[];
 };
-
-export function resolveXaiCodeExecutionModel(config?: Record<string, unknown>): string {
-  return resolveNormalizedXaiToolModel({
-    config,
-    defaultModel: XAI_DEFAULT_MODEL_ID,
-  });
-}
-
-export function resolveXaiCodeExecutionMaxTurns(
-  config?: Record<string, unknown>,
-): number | undefined {
-  return resolvePositiveIntegerToolConfig(config, "maxTurns");
-}
 
 export async function requestXaiCodeExecution(params: {
   apiKey: string;

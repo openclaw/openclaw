@@ -1,4 +1,3 @@
-// Telegram tests cover threading tool context plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
 import { telegramPlugin } from "./channel.js";
@@ -14,104 +13,60 @@ vi.mock("openclaw/plugin-sdk/secret-file-runtime", async (importOriginal) => ({
   tryReadSecretFileSync: tryReadSecretFileSyncMock,
 }));
 
-function requireTelegramToolContextTargetMatcher() {
-  const matchesToolContextTarget = telegramPlugin.threading?.matchesToolContextTarget;
-  if (!matchesToolContextTarget) {
-    throw new Error("Telegram tool context target matcher is unavailable");
-  }
-  return matchesToolContextTarget;
-}
-
 describe("telegramPlugin reply threading", () => {
   it.each([
-    {
-      name: "uses an account override",
-      telegram: {
-        accounts: {
-          sut: {
-            tokenFile: "/tmp/openclaw-telegram-reply-mode-must-not-read",
-            replyToMode: "first" as const,
-          },
-        },
+    [
+      "first",
+      {
+        accounts: { sut: { tokenFile: "/tmp/must-not-read", replyToMode: "first" } },
       },
-      expected: "first",
-    },
-    {
-      name: "inherits the top-level mode",
-      telegram: {
-        replyToMode: "all" as const,
+    ],
+    [
+      "all",
+      {
+        replyToMode: "all",
         accounts: {
           sut: {
             botToken: { source: "file", provider: "telegram_token", id: "value" },
           },
         },
       },
-      expected: "all",
-    },
-    {
-      name: "allows an account to disable replies",
-      telegram: {
-        replyToMode: "all" as const,
-        accounts: { sut: { replyToMode: "off" as const } },
+    ],
+    [
+      "off",
+      {
+        replyToMode: "all",
+        accounts: { sut: { replyToMode: "off" } },
       },
-      expected: "off",
+    ],
+  ] satisfies [string, NonNullable<OpenClawConfig["channels"]>["telegram"]][])(
+    "resolves reply mode %s without reading credentials",
+    (expected, telegram) => {
+      tryReadSecretFileSyncMock.mockClear();
+      const cfg: OpenClawConfig = { channels: { telegram } };
+      expect(telegramPlugin.threading?.resolveReplyToMode?.({ cfg, accountId: "sut" })).toBe(
+        expected,
+      );
+      expect(tryReadSecretFileSyncMock).not.toHaveBeenCalled();
     },
-  ])("$name", ({ telegram, expected }) => {
-    tryReadSecretFileSyncMock.mockClear();
-    const resolveReplyToMode = telegramPlugin.threading?.resolveReplyToMode;
-    if (!resolveReplyToMode) {
-      throw new Error("Telegram reply mode resolver is unavailable");
-    }
-
-    const cfg = { channels: { telegram } } as unknown as OpenClawConfig;
-    expect(resolveReplyToMode({ cfg, accountId: "sut" })).toBe(expected);
-    expect(tryReadSecretFileSyncMock).not.toHaveBeenCalled();
-  });
+  );
 
   it.each([
-    { target: "-100123", currentChannelId: "telegram:-100123", expected: true },
-    { target: "telegram:-100123", currentChannelId: "-100123", expected: true },
-    {
-      target: "-100123:topic:77",
-      currentChannelId: "telegram:-100123:77",
-      expected: true,
-    },
-    {
-      target: "1234:topic:77",
-      currentChannelId: "telegram:1234:topic:77",
-      expected: true,
-    },
-    {
-      target: "1234:topic:77",
-      currentChannelId: "telegram:1234:topic:78",
-      expected: false,
-    },
-    {
-      target: "-100123:direct-topic:77",
-      currentChannelId: "telegram:-100123:direct-topic:77",
-      expected: true,
-    },
-    {
-      target: "-100123:direct-topic:77",
-      currentChannelId: "telegram:-100123:direct-topic:78",
-      expected: false,
-    },
-    {
-      target: "-100123:topic:77",
-      currentChannelId: "telegram:-100123:direct-topic:77",
-      expected: false,
-    },
-    {
-      target: "-100123:topic:77",
-      currentChannelId: "telegram:-100123:topic:78",
-      expected: false,
-    },
-    { target: "-100456", currentChannelId: "telegram:-100123", expected: false },
-  ])(
-    "matches canonical target $target against current channel $currentChannelId",
-    ({ target, currentChannelId, expected }) => {
+    ["-100123", "telegram:-100123", true],
+    ["telegram:-100123", "-100123", true],
+    ["-100123:topic:77", "telegram:-100123:77", true],
+    ["1234:topic:77", "telegram:1234:topic:77", true],
+    ["1234:topic:77", "telegram:1234:topic:78", false],
+    ["-100123:direct-topic:77", "telegram:-100123:direct-topic:77", true],
+    ["-100123:direct-topic:77", "telegram:-100123:direct-topic:78", false],
+    ["-100123:topic:77", "telegram:-100123:direct-topic:77", false],
+    ["-100123:topic:77", "telegram:-100123:topic:78", false],
+    ["-100456", "telegram:-100123", false],
+  ] as const)(
+    "matches canonical target %s against current channel %s: %s",
+    (target, currentChannelId, expected) => {
       expect(
-        requireTelegramToolContextTargetMatcher()({
+        telegramPlugin.threading?.matchesToolContextTarget?.({
           target,
           toolContext: { currentChannelId },
         }),
@@ -135,21 +90,11 @@ describe("telegramPlugin reply threading", () => {
   });
 
   it.each([
-    {
-      to: "telegram:1234",
-      currentChannelId: "telegram:1234",
-      currentThreadTs: "533274",
-      expected: "533274",
-    },
-    {
-      to: "telegram:-1001:topic:99",
-      currentChannelId: "telegram:-1001:topic:77",
-      currentThreadTs: "77",
-      expected: undefined,
-    },
-  ])(
-    "respects the registered thread selection for $to",
-    ({ to, currentChannelId, currentThreadTs, expected }) => {
+    ["telegram:1234", "telegram:1234", "533274", "533274"],
+    ["telegram:-1001:topic:99", "telegram:-1001:topic:77", "77", undefined],
+  ] as const)(
+    "respects the registered thread selection for %s",
+    (to, currentChannelId, currentThreadTs, expected) => {
       expect(
         telegramPlugin.threading?.resolveAutoThreadId?.({
           cfg: {},

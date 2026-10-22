@@ -10,6 +10,7 @@ type SettingsSelectRowProps<T extends string> = {
   onChange: (value: string) => void;
   description?: JSX.Element;
   disabled?: boolean;
+  nested?: boolean;
 };
 
 export function SettingsSelectRow<T extends string>(props: SettingsSelectRowProps<T>) {
@@ -17,6 +18,7 @@ export function SettingsSelectRow<T extends string>(props: SettingsSelectRowProp
     <SettingsRow
       title={props.title}
       description={props.description}
+      nested={props.nested}
       control={
         <select
           class="settings-select"

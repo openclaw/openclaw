@@ -70,14 +70,13 @@ function isNonInteractiveShell(shellPath: string): boolean {
   return NON_INTERACTIVE_SHELLS.has(path.basename(shellPath));
 }
 
-function getPosixShellArgs(shellPath: string, mode: "exec" | "session"): string[] {
+function getPosixShellArgs(shellPath: string): string[] {
   switch (path.basename(shellPath)) {
     case "bash":
       return ["--noprofile", "--norc", "-c"];
     case "zsh":
       // Agent commands commonly contain literal separators or unmatched globs.
-      // Keep native expansion semantics when a session explicitly selects zsh.
-      return mode === "exec" ? ["-f", "+o", "equals", "+o", "nomatch", "-c"] : ["-f", "-c"];
+      return ["-f", "+o", "equals", "+o", "nomatch", "-c"];
     case "fish":
       return ["--no-config", "-c"];
     default:
@@ -161,7 +160,7 @@ function resolveBashCommandConfig(shell: string): ShellConfig {
   }
   return createArgvShellConfig(
     shell,
-    process.platform === "win32" ? ["-c"] : getPosixShellArgs(shell, "session"),
+    process.platform === "win32" ? ["-c"] : getPosixShellArgs(shell),
   );
 }
 
@@ -176,14 +175,7 @@ export function buildShellCommandInvocation(
   return { argv: [config.shell, ...config.args, command], stdin: "ignore" };
 }
 
-export function getShellConfig(customShellPath?: string): ShellConfig {
-  if (customShellPath) {
-    if (!fs.existsSync(customShellPath)) {
-      throw new Error(`Custom shell path not found: ${customShellPath}`);
-    }
-    return createArgvShellConfig(customShellPath, getPosixShellArgs(customShellPath, "exec"));
-  }
-
+export function getShellConfig(): ShellConfig {
   if (process.platform === "win32") {
     // Use PowerShell instead of cmd.exe on Windows.
     // Problem: Many Windows system utilities (ipconfig, systeminfo, etc.) write
@@ -206,17 +198,10 @@ export function getShellConfig(customShellPath?: string): ShellConfig {
   // Placeholder SHELL (or unset): prefer a resolved sh/bash on PATH so we do not
   // re-invoke the placeholder and get a spurious exitCode=1.
   shell ??= resolveShellFromPath("sh") ?? resolveShellFromPath("bash") ?? "sh";
-  return createArgvShellConfig(shell, getPosixShellArgs(shell, "exec"));
+  return createArgvShellConfig(shell, getPosixShellArgs(shell));
 }
 
-export function getBashShellConfig(customShellPath?: string): ShellConfig {
-  if (customShellPath) {
-    if (!fs.existsSync(customShellPath)) {
-      throw new Error(`Custom shell path not found: ${customShellPath}`);
-    }
-    return resolveBashCommandConfig(customShellPath);
-  }
-
+export function getBashShellConfig(): ShellConfig {
   if (process.platform === "win32") {
     const bash = resolveWindowsBashPath();
     if (bash) {

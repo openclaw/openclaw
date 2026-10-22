@@ -11,6 +11,7 @@ import {
   clearAuthProfileMigrationDiagnostics,
 } from "../auth-profiles/legacy-source-diagnostic.js";
 import { createOAuthManager } from "../auth-profiles/oauth-manager.js";
+import { mockOAuthProviderOperations } from "../auth-profiles/oauth-native-provider.test-support.js";
 import { refreshSerializedOAuthCredential } from "../auth-profiles/oauth-refresh-fence.js";
 import {
   createOAuthRefreshFence,
@@ -235,10 +236,9 @@ describe("AuthStorage OAuth refresh ownership", () => {
             async (_provider, credential: OAuthCredential) => credential.access,
           );
           const refreshCredential = vi.fn(async () => (phase === "observer" ? null : providerB));
-          const manager = createOAuthManager({
+          mockOAuthProviderOperations({
             buildApiKey,
             refreshCredential,
-            readBootstrapCredential: () => null,
             canRefreshCredential: async () => {
               if (phase === "compare-and-swap") {
                 saveCredential(agentDir, profileId, providerB);
@@ -246,6 +246,7 @@ describe("AuthStorage OAuth refresh ownership", () => {
               return true;
             },
           });
+          const manager = createOAuthManager();
 
           if (phase === "pending") {
             const load = authProfileStoreRuntime.loadAuthProfileStoreWithoutExternalProfiles;

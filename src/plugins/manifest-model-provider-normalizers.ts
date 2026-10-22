@@ -1,5 +1,6 @@
 import { normalizeModelPricingProvider } from "@openclaw/model-catalog-core/model-catalog-pricing";
 import { normalizeModelCatalogProviderId } from "@openclaw/model-catalog-core/model-catalog-refs";
+import { asSafeIntegerInRange } from "../../packages/normalization-core/src/number-coercion.js";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import {
   normalizeOptionalTrimmedStringList,
@@ -175,9 +176,7 @@ export function normalizeManifestProviderRequest(
 }
 
 function normalizeManifestPositiveInteger(value: unknown, max: number): number | undefined {
-  return typeof value === "number" && Number.isInteger(value) && value > 0 && value <= max
-    ? value
-    : undefined;
+  return asSafeIntegerInRange(value, { min: 1, max });
 }
 
 export function normalizeManifestSecretProviderIntegrations(

@@ -3,13 +3,16 @@ import {
   createPluginRuntimeMock,
   createTestRegistry,
   setActivePluginRegistry,
+  createStartAccountContext,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/status-helpers";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
+import { resolveNextcloudTalkAccount } from "./accounts.js";
+import { nextcloudTalkPlugin } from "./channel.js";
 import { NextcloudTalkConfigSchema } from "./config-schema.js";
-import { monitorNextcloudTalkProvider } from "./monitor-runtime.js";
 import { createSignedCreateMessageRequest } from "./monitor.test-fixtures.js";
 import { setNextcloudTalkRuntime } from "./runtime.js";
 import type { CoreConfig, NextcloudTalkWebhookTarget } from "./types.js";
@@ -53,19 +56,45 @@ function createMonitorFixture() {
     config: monitorConfig({}),
     runtime: createRuntimeSpies(),
     abortSignal: abortController.signal,
-    statusSink: vi.fn(),
+    statusSink: vi.fn<(patch: ChannelAccountSnapshot) => void>(),
   };
   return {
     registry,
     abortController,
     spool,
     options,
-    start: (settings: ChannelConfig = {}, accountId?: string, gateway?: { port: number }) =>
-      monitorNextcloudTalkProvider({
-        ...options,
-        config: monitorConfig(settings, gateway),
-        accountId,
-      }),
+    start: (settings: ChannelConfig = {}, accountId?: string, gateway?: { port: number }) => {
+      const cfg = monitorConfig(settings, gateway);
+      const startAccount = nextcloudTalkPlugin.gateway?.startAccount;
+      if (!startAccount) {
+        throw new Error("Expected Nextcloud Talk gateway startAccount");
+      }
+      const ready = createDeferred<void>();
+      const task = startAccount(
+        createStartAccountContext({
+          cfg,
+          account: resolveNextcloudTalkAccount({ cfg, accountId }),
+          runtime: options.runtime,
+          abortSignal: options.abortSignal,
+          statusPatchSink: (patch) => {
+            options.statusSink(patch);
+            if (patch.lifecycle === "ready") {
+              ready.resolve();
+            }
+          },
+        }),
+      );
+      return {
+        task,
+        get ready() {
+          return Promise.race([ready.promise, task]);
+        },
+        stop: async () => {
+          abortController.abort();
+          await task;
+        },
+      };
+    },
   };
 }
 
@@ -88,7 +117,7 @@ describe("Nextcloud Talk monitor abort", () => {
       const { statusSink } = options;
       const createSpool = vi.mocked(createNextcloudTalkWebhookSpool);
       for (const webhookPath of [path, `${path}?tenant=a`]) {
-        const starting = start({ webhookPath }, undefined, { port: 19001 });
+        const starting = start({ webhookPath }, undefined, { port: 19001 }).task;
         await expect(starting).rejects.toThrow(reason);
         await expect(starting).rejects.toThrow(
           /Set webhookPath to "\/nextcloud-talk-webhook".*Gateway port 19001\/nextcloud-talk-webhook/,
@@ -97,11 +126,12 @@ describe("Nextcloud Talk monitor abort", () => {
         expect(registry.httpRoutes).toHaveLength(0);
         expect(statusSink).not.toHaveBeenCalled();
       }
-      const monitor = await start(
+      const monitor = start(
         { webhookPath: `${path}?tenant=a`, legacyWebhook: { port: 8788 } },
         undefined,
         { port: 19001 },
       );
+      await monitor.ready;
       try {
         expect(registry.httpRoutes).toHaveLength(1);
         expect(statusSink).toHaveBeenCalledOnce();
@@ -146,7 +176,8 @@ describe("Nextcloud Talk monitor abort", () => {
       spool.ready.mockImplementation(expectUnregistered);
       const channelConfig = { ...defaults, ...settings };
       expect(NextcloudTalkConfigSchema.safeParse(channelConfig).success).toBe(true);
-      const monitor = await start(settings, accountId);
+      const monitor = start(settings, accountId);
+      await monitor.ready;
 
       try {
         expect(registry.httpRoutes).toHaveLength(1);
@@ -168,7 +199,7 @@ describe("Nextcloud Talk monitor abort", () => {
   it("does not register ingress or publish ready when aborted during spool startup", async () => {
     const { registry, abortController, spool, options, start } = createMonitorFixture();
     spool.ready.mockImplementation(async () => abortController.abort());
-    await start();
+    await start().task;
 
     expect(registry.httpRoutes).toHaveLength(0);
     expect(options.statusSink).not.toHaveBeenCalled();
@@ -189,7 +220,8 @@ describe("Nextcloud Talk monitor abort", () => {
         await release.promise;
         return "accepted" as const;
       });
-      const monitor = await start({ botSecret: "nextcloud-secret" });
+      const monitor = start({ botSecret: "nextcloud-secret" });
+      await monitor.ready;
       const route = registry.httpRoutes[0]!;
       const { body, headers } = createSignedCreateMessageRequest({
         backend: "https://cloud.example.com",

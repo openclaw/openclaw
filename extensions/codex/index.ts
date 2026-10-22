@@ -232,7 +232,7 @@ export default definePluginEntry({
     if (registrationConfig.supervision?.enabled === true) {
       const {
         resolveCodexAppServerAuthProfileIdForAgent,
-        resolveCodexAppServerAuthProfileIdAtEffect,
+        withCodexAppServerAuthProfileIdAtEffect,
       } = createCodexAuthProfileSelection(api.runtime.modelAuth);
       api.registerTool(
         {
@@ -250,7 +250,7 @@ export default definePluginEntry({
               getPluginConfig: () => resolvePluginConfig(resolveToolRuntimeConfig),
               getRuntimeConfig: resolveToolRuntimeConfig,
               resolveAuthProfileId: resolveCodexAppServerAuthProfileIdForAgent,
-              resolveAuthProfileIdAtEffect: resolveCodexAppServerAuthProfileIdAtEffect,
+              withAuthProfileIdAtEffect: withCodexAppServerAuthProfileIdAtEffect,
               resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
               senderIsOwner: context.senderIsOwner,
               assertInvocationCurrent: context.assertInvocationCurrent,

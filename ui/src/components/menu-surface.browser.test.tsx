@@ -1,9 +1,12 @@
 import { createComponent, createSignal } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
-import { createChatAttachmentInputHandle } from "../pages/chat/components/chat-attachment-inputs.ts";
+import { BrowserTabCardHost } from "../pages/chat/components/browser-tab-card.tsx";
 import { composerLibraryMenuItems } from "../pages/chat/components/chat-composer-library-menu.tsx";
-import "../pages/chat/components/browser-tab-card.tsx";
+import {
+  makeCapabilities,
+  makeMenu,
+} from "../pages/chat/components/chat-composer-menu.test-support.ts";
 import { renderComposerMenuOption as ComposerMenuOption } from "../pages/chat/components/chat-composer-menu.tsx";
 import { ChatComposerPlusMenu } from "../pages/chat/components/chat-composer-plus-menu.tsx";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
@@ -14,41 +17,28 @@ import "./menu-surface.ts";
 import { Menu } from "./solid/menu.tsx";
 import "./resizable-divider.ts";
 
-// Real-browser regression for the sidebar menu z-order bug: the nav column is
-// a stacking context (.shell-nav z-index 10) painted below the sidebar
-// resizer (.sidebar-resizer z-index 20), so a fixed-position menu rendered
-// inside the nav is overdrawn by the divider unless it is promoted to the
-// popover top layer. Plain overlays use openclaw-menu-surface; owned Menus
-// have their own popover and must not nest inside that surface.
-//
-// The repo-level test shard also collects browser tests under jsdom,
-// which has neither the Popover API nor real layout; the paint-order
-// assertions only mean anything in the Chromium lane, so skip elsewhere.
+// Nav's stacking context is below the resizer. Plain overlays need a top-layer
+// surface; owned Menus use their own popover. jsdom cannot prove paint order.
 const hasPopoverApi = typeof HTMLElement.prototype.showPopover === "function";
-const originalTheme = document.documentElement.getAttribute("data-theme");
-const originalThemeMode = document.documentElement.getAttribute("data-theme-mode");
+const originalTheme = ["data-theme", "data-theme-mode"].map(
+  (name) => [name, document.documentElement.getAttribute(name)] as const,
+);
 
 afterEach(async () => {
   cleanupSolid();
   document.body.replaceChildren();
   await Promise.resolve();
   vi.unstubAllGlobals();
-  if (originalTheme === null) {
-    document.documentElement.removeAttribute("data-theme");
-  } else {
-    document.documentElement.setAttribute("data-theme", originalTheme);
-  }
-  if (originalThemeMode === null) {
-    document.documentElement.removeAttribute("data-theme-mode");
-  } else {
-    document.documentElement.setAttribute("data-theme-mode", originalThemeMode);
+  for (const [name, value] of originalTheme) {
+    if (value === null) {
+      document.documentElement.removeAttribute(name);
+    } else {
+      document.documentElement.setAttribute(name, value);
+    }
   }
 });
 
-// The default browser-lane viewport (414px) triggers the mobile drawer
-// layout, which hides the resizer entirely; the bug only exists on the
-// desktop grid. Dynamic import keeps jsdom collection from touching the
-// browser-only context module.
+// The mobile drawer hides the resizer; import lazily for jsdom collection.
 async function useDesktopViewport() {
   const { page } = await import("vitest/browser");
   await page.viewport(1280, 800);
@@ -57,28 +47,21 @@ async function useDesktopViewport() {
 function mountShell() {
   const shell = document.createElement("div");
   shell.className = "shell";
-  // The shell entry animation animates the whole grid; skip it so fixed
-  // positioning and hit-testing are stable at assertion time.
+  // Keep fixed positioning and hit-testing independent of the entry animation.
   shell.style.animation = "none";
-  const nav = document.createElement("div");
-  nav.className = "shell-nav";
-  const divider = document.createElement("resizable-divider");
-  divider.className = "sidebar-resizer";
-  const content = document.createElement("main");
-  content.className = "content";
-  shell.append(nav, divider, content);
+  shell.innerHTML = `<div class="shell-nav"></div>
+    <resizable-divider class="sidebar-resizer"></resizable-divider><main class="content"></main>`;
   document.body.append(shell);
-  return { nav, divider };
+  return {
+    nav: shell.querySelector<HTMLElement>(".shell-nav")!,
+    divider: shell.querySelector<HTMLElement>(".sidebar-resizer")!,
+  };
 }
 
 function createSortMenu() {
   const menu = document.createElement("div");
   menu.className = "sidebar-session-sort-menu";
-  const item = document.createElement("button");
-  item.type = "button";
-  item.className = "sidebar-session-sort-menu__item";
-  item.textContent = "Created";
-  menu.append(item);
+  menu.innerHTML = '<button type="button" class="sidebar-session-sort-menu__item">Created</button>';
   return menu;
 }
 
@@ -94,8 +77,8 @@ function hitTestOnDivider(menu: HTMLElement, divider: HTMLElement): Element | nu
   return document.elementFromPoint(x, y);
 }
 
-async function browserCardMenu(card: HTMLElementTagNameMap["openclaw-browser-tab-card"]) {
-  await card.updateComplete;
+async function browserCardMenu(card: HTMLElement) {
+  flush();
   const menu = card.querySelector<HTMLElement>(".oc-menu");
   if (!menu) {
     throw new Error("expected browser card menu");
@@ -333,13 +316,17 @@ describe.skipIf(!hasPopoverApi)("action menu typography", () => {
 });
 
 describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
-  function useTheme(theme: "dark" | "light") {
+  async function themeFixture(theme: "dark" | "light", padding = "") {
+    await useDesktopViewport();
     document.documentElement.dataset.theme = theme;
     document.documentElement.dataset.themeMode = theme;
     const swatch = document.createElement("div");
     swatch.style.backgroundColor = "var(--bg-hover)";
     document.body.append(swatch);
-    return getComputedStyle(swatch).backgroundColor;
+    const host = document.body.appendChild(document.createElement("div"));
+    host.style.padding = padding;
+    const { page } = await import("vitest/browser");
+    return { host, page, highlight: getComputedStyle(swatch).backgroundColor };
   }
 
   async function hoverBackground(element: HTMLElement, expected: string) {
@@ -352,48 +339,15 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
   it.each(["dark", "light"] as const)(
     "matches attachment and capability actions in %s mode",
     async (theme) => {
-      await useDesktopViewport();
-      const highlight = useTheme(theme);
-      const host = document.createElement("div");
-      host.style.padding = "400px 40px 0";
-      document.body.append(host);
-      const inputHandle = createChatAttachmentInputHandle();
+      const { host, page, highlight } = await themeFixture(theme, "400px 40px 0");
       mountSolid(
         () => (
           <ChatComposerPlusMenu
-            menu={{
-              attachments: {},
-              inputHandle,
-              disabled: false,
-              open: false,
-              view: "root",
-              toolOverrides: null,
-              onOpenChange: () => {},
-              onViewChange: () => {},
-              capabilityMenu: {
-                basePath: "",
-                skills: [],
-                skillsLoading: false,
-                skillsError: false,
-                mcpServers: [],
-                toolsEffectiveResult: null,
-                toolsEffectiveLoading: false,
-                toolsEffectiveError: false,
-                toolAccessMutationBlockedReason: null,
-                webSearchBaseEnabled: true,
-                mutationBlockedReason: null,
-                canAdmin: true,
-                adminBlockedReason: null,
-                onLoadSkills: () => {},
-                onPatchToolOverrides: () => {},
-                onNavigate: () => {},
-              },
-            }}
+            menu={makeMenu({ capabilityMenu: makeCapabilities({ basePath: "" }) })}
           />
         ),
         { container: host },
       );
-      const { page } = await import("vitest/browser");
       await page.elementLocator(host.querySelector<HTMLElement>('[aria-haspopup="menu"]')!).click();
       await expect.poll(() => host.querySelector('[data-value="photo"]')).not.toBeNull();
       const photo = host.querySelector<HTMLElement>('[data-value="photo"]')!;
@@ -407,11 +361,7 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
   it.each(["dark", "light"] as const)(
     "uses platform hover for library actions in %s mode",
     async (theme) => {
-      await useDesktopViewport();
-      const highlight = useTheme(theme);
-      const host = document.createElement("div");
-      document.body.append(host);
-      const { page } = await import("vitest/browser");
+      const { host, page, highlight } = await themeFixture(theme);
       mountSolid(
         () => (
           <Menu
@@ -443,24 +393,24 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
   it.each(["dark", "light"] as const)(
     "matches session menu geometry and theme inside browser cards in %s mode",
     async (theme) => {
-      await useDesktopViewport();
-      const highlight = useTheme(theme);
-      const card = document.createElement("openclaw-browser-tab-card");
-      card.preview = {
-        kind: "browser-tab",
-        target: "host",
-        profile: "managed",
-        targetId: "tab-1",
-        url: "https://example.test/page",
-        title: "Example page",
-      };
-      document.body.append(card);
+      const { host: reference, page, highlight } = await themeFixture(theme);
+      const view = mountSolid(() => (
+        <BrowserTabCardHost
+          preview={{
+            kind: "browser-tab",
+            target: "host",
+            profile: "managed",
+            targetId: "tab-1",
+            url: "https://example.test/page",
+            title: "Example page",
+          }}
+        />
+      ));
+      flush();
+      const card = view.container.querySelector<HTMLElement>("openclaw-browser-tab-card")!;
       const menu = await browserCardMenu(card);
-      const { page } = await import("vitest/browser");
       await page.elementLocator(card.querySelector<HTMLElement>(".more")!).click();
       const item = card.querySelector<HTMLElement>('[value="copy-url"]')!;
-      const reference = document.createElement("div");
-      document.body.append(reference);
       mountSolid(
         () => (
           <Menu
@@ -491,10 +441,7 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
   it.each(["dark", "light"] as const)(
     "uses platform hover for slash suggestions in %s mode",
     async (theme) => {
-      await useDesktopViewport();
-      const highlight = useTheme(theme);
-      const host = document.createElement("div");
-      document.body.append(host);
+      const { host, highlight } = await themeFixture(theme);
       mountSolid(
         () => {
           const [active, setActive] = createSignal(false);
@@ -522,8 +469,7 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
   it.each(["dark", "light"] as const)(
     "preserves disabled and danger states while neutral focus matches hover in %s mode",
     async (theme) => {
-      await useDesktopViewport();
-      const highlight = useTheme(theme);
+      const { highlight } = await themeFixture(theme);
       const { container: host } = mountSolid(() =>
         Menu({
           id: "menu-states",

@@ -9,6 +9,7 @@ import {
   createSessionManagementE2eSuite,
   installMockGateway,
   sessionsListResponse,
+  waitForSessionRosterHydration,
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
@@ -113,7 +114,7 @@ suite.define(() => {
       const refresh = page.getByRole("button", { name: "Refresh", exact: true });
       await refresh.waitFor();
       await gateway.waitForRequest("sessions.subscribe");
-      await page.waitForTimeout(1_200);
+      await waitForSessionRosterHydration(page);
 
       const pageQuery = { includeUnknown: false };
       await gateway.deferNext("sessions.list", pageQuery);
@@ -161,7 +162,7 @@ suite.define(() => {
       const selectedRow = sidebar.locator(`[data-session-key="${key}"]`);
       await expect.poll(() => selectedRow.textContent()).toContain("Weekly report");
       await gateway.waitForRequest("sessions.subscribe");
-      // Let startup settle before counting event-driven network traffic.
+      // Let startup reconciliation settle before counting event-driven network traffic.
       await page.waitForTimeout(1_200);
       const before = (await gateway.getRequests("sessions.list")).length;
       await captureUiProof(suite, page, "roster-before-other-agent-events.png");

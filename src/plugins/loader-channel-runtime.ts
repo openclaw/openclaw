@@ -186,18 +186,6 @@ export function loadSetupRuntimeChannelCandidate(params: {
       );
     }
   }
-  if (
-    !channelPluginIdBelongsToManifest({
-      channelId: mergedSetupPlugin.id,
-      pluginId: record.id,
-      manifestChannels: manifestRecord.channels,
-    })
-  ) {
-    params.pushPluginLoadError(
-      `plugin id mismatch (config uses "${record.id}", setup export uses "${mergedSetupPlugin.id}")`,
-    );
-    return true;
-  }
   if (registrationPlan.mode === "setup-runtime" && setupRegistration.registerSetupRuntime) {
     try {
       runPluginRegisterSyncInRegistry(

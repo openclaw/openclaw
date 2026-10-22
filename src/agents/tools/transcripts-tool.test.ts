@@ -73,14 +73,16 @@ function harness(
     origin?: Origin,
     agentId = accountBound ? "main" : undefined,
     signal?: AbortSignal,
-  ) =>
-    createTranscriptsTool({
-      ...ctx,
+  ) => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    return createTranscriptsTool({
+      config: ctx.config,
       agentId,
       caller: origin
         ? { kind: "channel", ...origin, senderId: "test-sender", roleIds: [] }
         : localCaller,
     }).execute("test", params, signal);
+  };
   const action = (name: string, sessionId?: string) => execute({ action: name, sessionId });
   const begin = (signal?: AbortSignal) =>
     execute(

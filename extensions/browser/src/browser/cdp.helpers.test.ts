@@ -10,7 +10,7 @@ import {
   resolveCdpReachabilityPolicy,
 } from "./cdp-reachability-policy.js";
 import { resolveCdpReachabilityTimeouts } from "./cdp-timeouts.js";
-import { resolveBrowserConfig, resolveProfile, type ResolvedBrowserProfile } from "./config.js";
+import type { ResolvedBrowserProfile } from "./config.js";
 import { assertBrowserNavigationAllowed } from "./navigation-guard.js";
 
 const mocks = vi.hoisted(() => ({
@@ -239,46 +239,12 @@ it("narrows configured extension loopback outside navigation allowlist", () => {
   ).toEqual({ allowedHostnames: ["127.0.0.1"] });
 });
 
-it.each([
-  ["cdpUrl", { cdpUrl: "http://127.0.0.1:9222" }],
-  ["--browserUrl", { mcpArgs: ["--browserUrl", "http://127.0.0.1:9222"] }],
-  ["--wsEndpoint", { mcpArgs: ["--wsEndpoint=ws://127.0.0.1:9222"] }],
-])("rejects Chrome MCP explicit %s endpoints under the default policy", (_source, endpoint) => {
-  const profile = resolveProfile(
-    resolveBrowserConfig({
-      profiles: { chrome: { driver: "existing-session", ...endpoint } },
-    }),
-    "chrome",
-  );
-  if (!profile) {
-    throw new Error("Expected configured Chrome MCP profile");
-  }
-  expect(() => assertChromeMcpCdpTransportAllowed(profile, {})).toThrow(
-    /cannot carry that pinned transport/i,
-  );
-});
-
 it("rejects Chrome MCP explicit CDP URL profiles after default CDP scoping", () => {
   const policy = resolveCdpReachabilityPolicy(chromeProfile, {});
   expect(policy).toEqual({ allowedHostnames: ["127.0.0.1"] });
   expect(() => assertChromeMcpCdpTransportAllowed(chromeProfile, policy)).toThrow(
     /cannot carry that pinned transport/i,
   );
-});
-
-it("preserves Chrome MCP explicit CDP URL profiles when private CDP endpoints are trusted", () => {
-  expect(() =>
-    assertChromeMcpCdpTransportAllowed(chromeProfile, { dangerouslyAllowPrivateNetwork: true }),
-  ).not.toThrow();
-});
-
-it("does not let trusted private CDP policy override endpoint allowlists for Chrome MCP", () => {
-  expect(() =>
-    assertChromeMcpCdpTransportAllowed(chromeProfile, {
-      dangerouslyAllowPrivateNetwork: true,
-      allowedHostnames: ["127.0.0.1"],
-    }),
-  ).toThrow(/cannot carry that pinned transport/i);
 });
 
 const ownershipParams = { cdpUrl: "https://browser.example" };
@@ -316,7 +282,6 @@ const {
   close: closeServers,
 } = createCdpFixture({});
 const fixtureAuthorization = `Basic ${Buffer.from("openclaw:cdp-abort-test").toString("base64")}`;
-const retryOptions = { handshakeRetries: 2, handshakeRetryDelayMs: 1, handshakeMaxRetryDelayMs: 1 };
 type CdpMessage = { id: number; method: string };
 
 function onCommand(
@@ -480,7 +445,7 @@ it("ignores malformed and uncorrelated messages before the matching response", a
 });
 
 it.each([
-  ["closes", "Test.willClose", retryOptions, /CDP socket closed/],
+  ["closes", "Test.willClose", {}, /CDP socket closed/],
   [
     "times out",
     "Page.captureScreenshot",
@@ -524,7 +489,7 @@ it("retries websocket failures before any CDP command is sent", async () => {
     socket.send(JSON.stringify({ id: message.id, result: { echoed: message.method } })),
   );
   const callback = vi.fn(async (send: CdpSendFn) => send("Test.afterOpen"));
-  await expect(withCdpSocket(wsUrl(server), callback, retryOptions)).resolves.toEqual({
+  await expect(withCdpSocket(wsUrl(server), callback)).resolves.toEqual({
     echoed: "Test.afterOpen",
   });
   expect(rejectedHandshakes).toBe(1);
@@ -550,9 +515,6 @@ it("aborts an authenticated 503 retry before opening another socket", async () =
     wsUrl(server, "openclaw:cdp-abort-test@127.0.0.1"),
     async () => "unexpected",
     {
-      handshakeRetries: 3,
-      handshakeRetryDelayMs: 2000,
-      handshakeMaxRetryDelayMs: 2000,
       signal: controller.signal,
     },
   );

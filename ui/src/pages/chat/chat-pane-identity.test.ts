@@ -26,10 +26,11 @@ import {
   connectPaneTestView,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
+import { chatRunPresentation } from "./chat-run-presentation.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { cancelChatStreamRenderFrame } from "./chat-state-render.ts";
 import { disposeChatView, renderChatPropsInto } from "./chat-view.test-helpers.ts";
 import { ChatView } from "./chat-view.tsx";
+import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { questionPanelIn } from "./components/chat-question-card.test-support.ts";
 import {
   installTranscriptDomMocks,
@@ -294,7 +295,7 @@ describe("chat pane approval requester identity", () => {
     } satisfies GatewaySessionRow;
     const decideApproval = vi.fn();
     const context: ApplicationContext = {
-      ...createInitializationContext(),
+      ...createInitializationContext(createGatewayBrowserClientFixture()),
       overlays: {
         snapshot: {
           approvalQueue: [],
@@ -305,12 +306,8 @@ describe("chat pane approval requester identity", () => {
         decideApproval,
       } as unknown as ApplicationContext["overlays"],
       sessions: createSessionCapabilityFixture({
-        presentation: {
-          result: sessionsResult([{ ...host, label: "Unrelated pane title" }], 1),
-          agentId: "main",
-        },
         state: {
-          result: null,
+          result: sessionsResult([{ ...host, label: "Unrelated pane title" }], 1),
           agentId: "main",
           modelOverrides: {},
           deletedSessions: [],
@@ -373,6 +370,7 @@ describe("chat pane approval requester identity", () => {
           return pane.chatProps!;
         });
         return createComponent(ChatView, {
+          questions: createComposerQuestions(pane.presentationId, props),
           get props() {
             return props();
           },
@@ -398,8 +396,7 @@ describe("chat pane approval requester identity", () => {
 
     try {
       for (const [row, title] of publications) {
-        pane.applySessionsState({
-          ...context.sessions.state,
+        Object.assign(context.sessions.state, {
           result: {
             ts: now,
             path: "",
@@ -408,6 +405,7 @@ describe("chat pane approval requester identity", () => {
             sessions: row ? [host, row] : [host],
           },
         });
+        pane.applySessionsState(context.sessions.state);
         await waitForSolid(() => {
           const card = container.querySelector(".chat-inline-approval .exec-approval-card");
           expect(card?.getAttribute("data-approval-id")).toBe(approval.id);
@@ -421,7 +419,7 @@ describe("chat pane approval requester identity", () => {
       allow.click();
       expect(decideApproval).toHaveBeenCalledExactlyOnceWith("allow-once", approval.id, approval);
     } finally {
-      cancelChatStreamRenderFrame(state);
+      chatRunPresentation(state).cancelFrame();
       view.unmount();
       pane.disconnectedCallback();
       container.remove();
@@ -494,7 +492,7 @@ function createGlobalFeaturePane(
   onTestFinished(() => {
     Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
     pane.disconnectedCallback();
-    cancelChatStreamRenderFrame(state);
+    chatRunPresentation(state).cancelFrame();
   });
   const emit = (payload: ProgressCardChangedEvent) => {
     const gateway = context.gateway as ApplicationContext["gateway"] & {

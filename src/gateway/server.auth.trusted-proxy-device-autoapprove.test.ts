@@ -29,7 +29,13 @@ import { loggingState } from "../logging/state.js";
 import { resolveGatewayClientPlatformIdentity } from "../shared/gateway-client-platform.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { useAuthIdentityFixture } from "./server.auth.identity-fixture.test-support.js";
-import { CONTROL_UI_CLIENT, NODE_CLIENT } from "./server.auth.test-helpers.js";
+import {
+  BROWSER_ORIGIN,
+  TRUSTED_BROWSER_HEADERS,
+  CONTROL_UI_CLIENT,
+  NODE_CLIENT,
+  openWs,
+} from "./server.auth.test-helpers.js";
 import {
   connectReq,
   createGatewaySuiteHarness,
@@ -37,7 +43,6 @@ import {
   onceMessage,
   readConnectChallengeNonce,
   testState,
-  trackConnectChallengeNonce,
   withGatewayServer,
 } from "./test-helpers.js";
 
@@ -96,7 +101,6 @@ async function connectSharedUi(
   return withSharedProxyGateway(({ port }) => connectOperatorUi({ port, identityPath, ...params }));
 }
 
-const BROWSER_ORIGIN = "https://control.example.com";
 const READ = ["operator.read"];
 const READ_WRITE = [...READ, "operator.write"];
 const WITH_APPROVALS = [...READ_WRITE, "operator.approvals"];
@@ -107,9 +111,7 @@ const NATIVE_UI_CLIENT = {
   version: "1.0.0",
 } satisfies ConnectParams["client"];
 const TRUSTED_PROXY_HEADERS = {
-  origin: BROWSER_ORIGIN,
-  "x-forwarded-for": "203.0.113.50",
-  "x-forwarded-proto": "https",
+  ...TRUSTED_BROWSER_HEADERS,
   "x-forwarded-user": "operator@example.com",
 };
 
@@ -125,12 +127,8 @@ function deviceIdentityPath(label: string): string {
 }
 
 async function openBrowserWs(port: number, headers: Record<string, string>): Promise<WebSocket> {
-  const ws = new WebSocket(`ws://127.0.0.1:${port}`, { headers });
+  const ws = await openWs(port, headers);
   clientSockets.add(ws);
-  trackConnectChallengeNonce(ws);
-  await new Promise<void>((resolve) => {
-    ws.once("open", () => resolve());
-  });
   return ws;
 }
 
@@ -252,7 +250,7 @@ async function connectOperatorUi(params: {
   trustedProxy?: boolean;
   declaredProxyScopes?: string;
 }) {
-  const client = params.client ?? CONTROL_UI_CLIENT;
+  const { client = CONTROL_UI_CLIENT, identityPath, scopes, token } = params;
   const headers: Record<string, string> =
     params.trustedProxy === false
       ? { origin: BROWSER_ORIGIN, "x-forwarded-for": "203.0.113.50" }
@@ -260,14 +258,14 @@ async function connectOperatorUi(params: {
   if (client.mode === GATEWAY_CLIENT_MODES.UI) {
     delete headers.origin;
   }
-  return withBrowserWs(params.port, headers, async (ws) => {
-    return await connectReq(ws, {
-      ...(params.token ? { token: params.token } : { skipDefaultAuth: true }),
-      ...(params.scopes === undefined ? {} : { scopes: [...params.scopes] }),
+  return withBrowserWs(params.port, headers, (ws) =>
+    connectReq(ws, {
+      ...(token ? { token } : { skipDefaultAuth: true }),
+      ...(scopes === undefined ? {} : { scopes: [...scopes] }),
       client,
-      deviceIdentityPath: params.identityPath,
-    });
-  });
+      deviceIdentityPath: identityPath,
+    }),
+  );
 }
 
 async function connectBrowserWithoutScopes(params: {
@@ -416,20 +414,27 @@ describe("trusted-proxy operator device auto-approval", () => {
     ).toMatchObject({ roles: ["node", "operator"] });
   });
 
-  test("caps omitted scopes to the declared proxy scopes", async () => {
-    const { identityPath, identity } = await prepareAutoApproval(WITH_APPROVALS);
+  test.each<[string[], string, string[]]>([
+    [WITH_APPROVALS, "operator.read", READ],
+    [["operator.write"], "operator.read", READ],
+    [WITH_APPROVALS, "", []],
+  ])(
+    "caps omitted scopes %j to declared proxy scopes '%s'",
+    async (configuredScopes, declaredProxyScopes, expectedScopes) => {
+      const { identityPath, identity } = await prepareAutoApproval(configuredScopes);
 
-    await withSharedProxyGateway(async ({ port }) => {
-      const res = await connectBrowserWithoutScopes({
-        port,
-        identityPath,
-        declaredProxyScopes: "operator.read",
+      await withSharedProxyGateway(async ({ port }) => {
+        const res = await connectBrowserWithoutScopes({
+          port,
+          identityPath,
+          declaredProxyScopes,
+        });
+        expect(res.ok).toBe(true);
       });
-      expect(res.ok).toBe(true);
-    });
 
-    expect((await getPairedDevice(identity.deviceId))?.approvedScopes).toEqual(["operator.read"]);
-  });
+      expect((await getPairedDevice(identity.deviceId))?.approvedScopes).toEqual(expectedScopes);
+    },
+  );
 
   test("caps requested scopes to the configured and declared proxy scopes", async () => {
     const { identityPath, identity } = await prepareAutoApproval(WITH_APPROVALS);

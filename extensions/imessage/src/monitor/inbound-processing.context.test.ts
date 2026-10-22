@@ -1,11 +1,12 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { loadFreshIMessageReplyCacheForTest } from "../test-support/runtime.js";
+import {
+  createInboundDecisionParams,
+  type InboundDecisionParams,
+} from "./inbound-decision.test-support.js";
 
 type InboundProcessingModule = typeof import("./inbound-processing.js");
-type InboundDecisionParams = Parameters<
-  InboundProcessingModule["resolveIMessageInboundDecision"]
->[0];
 
 type ReplyCacheModule = typeof import("../monitor-reply-cache.js");
 let rememberIMessageReplyCache: ReplyCacheModule["rememberIMessageReplyCache"];
@@ -19,31 +20,8 @@ beforeAll(async () => {
     await import("./inbound-processing.js"));
 });
 
-function resolveDecision(
-  overrides: Omit<Partial<InboundDecisionParams>, "message"> & {
-    message?: Partial<InboundDecisionParams["message"]>;
-  } = {},
-) {
-  const { message: messageOverrides, ...restOverrides } = overrides;
-  const message = makeMessage(messageOverrides);
-  const messageText = restOverrides.messageText ?? message.text ?? "";
-  const bodyText = restOverrides.bodyText ?? messageText;
-  return resolveIMessageInboundDecision({
-    cfg,
-    accountId: "default",
-    allowFrom: ["*"],
-    groupAllowFrom: [],
-    groupPolicy: "open",
-    dmPolicy: "open",
-    storeAllowFrom: [],
-    historyLimit: 0,
-    groupHistories: new Map(),
-    isKnownFromMeMessageId: () => false,
-    ...restOverrides,
-    message,
-    messageText,
-    bodyText,
-  });
+function resolveDecision(overrides: Parameters<typeof createInboundDecisionParams>[0] = {}) {
+  return resolveIMessageInboundDecision(createInboundDecisionParams({ cfg, ...overrides }));
 }
 
 async function buildContext(

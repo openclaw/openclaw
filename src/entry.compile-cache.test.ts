@@ -44,6 +44,7 @@ vi.mock("node:child_process", async (importOriginal) => {
   return mockNodeBuiltinModule<{ spawn: Spawn }>(
     () => importOriginal<typeof import("node:child_process")>(),
     { spawn },
+    { mirrorToDefault: true },
   );
 });
 vi.mock("./process/child-process-bridge.js", () => ({ attachChildProcessBridge }));

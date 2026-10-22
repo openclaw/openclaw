@@ -609,6 +609,23 @@ describe("native hook relay registry", () => {
     },
   );
 
+  it.each([-300_000, 300_000] as const)(
+    "rearms relay expiry on monotonic time despite a wall-clock %s ms jump",
+    async (wallClockDeltaMs) => {
+      vi.useFakeTimers();
+      const ttlMs = 10_000;
+      const relay = registerOwnedRelay({
+        relayId: uniqueNativeHookRelayIdForTests(`expiry-jump-${wallClockDeltaMs}`),
+        ttlMs,
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+      vi.setSystemTime(Date.now() + wallClockDeltaMs);
+      expect(testing.getNativeHookRelayRegistrationForTests(relay.relayId)).toBeDefined();
+      await vi.advanceTimersByTimeAsync(5_001);
+      expect(testing.getNativeHookRelayRegistrationForTests(relay.relayId)).toBeUndefined();
+    },
+  );
+
   it("leaves retained host authority available after an ordinary same-host relay", async () => {
     const { admittedRunContext, hostCapabilities } = await createAdmittedHostCapabilityTestFixture({
       runId: "run-ordinary-then-retaining",

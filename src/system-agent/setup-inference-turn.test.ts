@@ -27,6 +27,7 @@ import { captureAsyncWorkTracker } from "../shared/async-work-scope.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { SystemAgentConfiguredRoute } from "./inference-route.js";
+import { SETUP_INFERENCE_TEST_MAX_TOKENS } from "./setup-inference-probe-work.js";
 import {
   loadSetupInferencePluginGeneration,
   revalidateStableSetupInferenceOwner,
@@ -105,6 +106,36 @@ function revalidateOwner(
 }
 
 describe("setup inference plugin ownership", () => {
+  it("runs a bounded read-only probe with a detached transcript", async () => {
+    const route = embeddedRoute("openclaw");
+    vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(async (params) => {
+      expect(params).toMatchObject({
+        sessionPersistence: "detached",
+        authProfileStateMode: "read-only",
+        preparedModelRuntimeMode: "isolated-read-only",
+        allowAuthProfileFallback: false,
+        disableTools: true,
+        thinkLevel: "off",
+        streamParams: { maxTokens: SETUP_INFERENCE_TEST_MAX_TOKENS },
+      });
+      return {
+        payloads: [{ text: "OK" }],
+        meta: {
+          durationMs: 1,
+          executionTrace: { winnerProvider: route.provider, winnerModel: route.model },
+        },
+      };
+    });
+    const result = await runSetupInferenceTurn({
+      route,
+      requireExecutionOwner: false,
+    });
+    expect(result, result.ok ? undefined : result.error).toMatchObject({
+      ok: true,
+      text: "OK",
+    });
+  });
+
   it.each([
     ["ECONNREFUSED", "Nothing is listening at http://127.0.0.1:43210", "Start the server"],
     ["ENOTFOUND", "The server name in http://127.0.0.1:43210 could not be found", "DNS"],

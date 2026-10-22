@@ -172,6 +172,64 @@ describe("subagent registry restart recovery", () => {
     expect(finalizeInterruptedSubagentRun).toHaveBeenCalledOnce();
   });
 
+  it.each([false, true])(
+    "bounds sibling recovery across startup groups (retired=%s)",
+    async (retired) => {
+      const preparation = createDeferred<number | undefined>();
+      const entered = createDeferred();
+      let preparations = 0;
+      const entries = Array.from({ length: 9 }, (_, index) =>
+        run({
+          runId: `interrupted-${index}`,
+          childSessionKey: `agent:main:subagent:interrupted-${index}`,
+        }),
+      );
+      const { sweeper, runs, finalizeInterruptedSubagentRun } = createSubagentSweeperHarness(
+        {
+          current: {
+            ...gatewayRuntime,
+            prepareRestartRecovery: () => {
+              preparations += 1;
+              entered.resolve();
+              return preparation.promise;
+            },
+          },
+        },
+        entries[0],
+      );
+      for (const entry of entries) {
+        runs.set(entry.runId, entry);
+        mocks.entries[entry.childSessionKey] = { ...mocks.entries[childSessionKey]! };
+      }
+      const startup = Promise.all([
+        sweeper.recoverInterruptedRuns(entries.slice(0, 5)),
+        sweeper.recoverInterruptedRuns(entries.slice(5)),
+      ]);
+      try {
+        await entered.promise;
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(preparations).toBe(8);
+        // Repeated activation cannot queue a second attempt behind the current one.
+        await sweeper.recoverInterruptedRuns(entries);
+        expect(preparations).toBe(8);
+        expect(finalizeInterruptedSubagentRun).not.toHaveBeenCalled();
+        if (retired) {
+          rotateAgentEventLifecycleGeneration();
+        }
+      } finally {
+        preparation.resolve(undefined);
+        await startup;
+        await sweeper.reset();
+      }
+      expect(
+        finalizeInterruptedSubagentRun.mock.calls.map(([params]) => params.runId).toSorted(),
+      ).toEqual(retired ? [] : entries.map((entry) => entry.runId).toSorted());
+      expect(preparations).toBe(retired ? 8 : 9);
+    },
+  );
+
   it("abandons startup settlement if the Gateway changes while the breaker is checked", async () => {
     const preparation = createDeferred<number | undefined>();
     const entered = createDeferred();
@@ -618,6 +676,22 @@ describe("interrupted requester-settle continuation ownership", () => {
       },
     };
   }
+
+  it("does not mark a hard-killed incoming continuation as an orphan", async () => {
+    const { worker } = cohort();
+    worker.execution.status = "running";
+    worker.execution.lifecycleGeneration = getAgentEventLifecycleGeneration();
+    Object.assign(mocks.entries[childSessionKey]!, {
+      status: undefined,
+      abortedLastRun: false,
+    });
+    rotateAgentEventLifecycleGeneration();
+
+    expect(await recover(worker)).toEqual({ status: "handled" });
+    expect(mocks.entries[childSessionKey]?.abortedLastRun).toBe(false);
+    expect(mocks.applySessionEntryExactReplacements).not.toHaveBeenCalled();
+    expect(restartRecoveryTestHarness.warn).not.toHaveBeenCalled();
+  });
 
   it.each([
     { privateCompletion: false, physicalLocator: false, quiet: false, legacy: false },

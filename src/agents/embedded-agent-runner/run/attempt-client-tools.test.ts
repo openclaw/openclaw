@@ -237,9 +237,8 @@ describe("prepareEmbeddedAttemptClientTools", () => {
     async (executionPath) => {
       const previousMode = isEmbeddedMode();
       const previousBroker = getEmbeddedPluginApprovalBroker();
-      const broker = new EmbeddedPluginApprovalBroker();
       const requested = createDeferredCore();
-      broker.subscribe((event) => {
+      const broker = new EmbeddedPluginApprovalBroker((event) => {
         if (event.event === "plugin.approval.requested") {
           requested.resolve();
         }
@@ -437,7 +436,7 @@ describe("prepareEmbeddedAttemptClientTools", () => {
       clientTools: [clientTool("llm_task"), clientTool("hidden_owner")],
     });
     const projection = createCodeModeCatalogProjection(
-      (catalogRef.current?.entries ?? []).map(compactToolSearchCatalogEntry),
+      (catalogRef.current?.entries ?? []).map((entry) => compactToolSearchCatalogEntry(entry)),
     );
     const trustedBinding = projection.bindings.find((binding) => binding.name === "llm-task");
     expect(trustedBinding?.callableName).toMatch(/^llm_task_[a-f0-9]{8}$/);

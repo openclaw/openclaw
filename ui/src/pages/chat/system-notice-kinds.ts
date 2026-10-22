@@ -1,15 +1,14 @@
-import type { toolIcons } from "../../components/icons-tools.ts";
+import type { toolIconData } from "../../components/icon-data-tools.ts";
 
 export type PendingInputStatus =
   | "queued"
   | "waitingForWorkerSetup"
   | "waitingForWorkspaceSync"
-  | "resuming"
   | "cancelled"
   | "interrupted";
 
 type SystemNoticeKind = {
-  icon: keyof typeof toolIcons;
+  icon: keyof typeof toolIconData;
   labelKey: string;
   // Fixed operator summary shown instead of the raw model prompt. Omit when the
   // producer emits variable, informative text (reasons, doctor hints) that must

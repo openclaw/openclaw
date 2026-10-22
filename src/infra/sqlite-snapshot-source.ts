@@ -391,10 +391,14 @@ function prepareWorkerSnapshot(
 
 export function prepareSqliteReadOnlyLocationSync(
   pathname: string,
+  expectedSourceIdentity?: DatabaseFileIdentity,
 ): PreparedSqliteReadOnlyLocation {
   const stagingRoot = createSqliteSnapshotStagingDirectorySync();
   try {
-    return adoptPreparedLocation(runSqliteReadOnlyWorkerSync(pathname, stagingRoot), stagingRoot);
+    return adoptPreparedLocation(
+      runSqliteReadOnlyWorkerSync(pathname, stagingRoot, "sync", expectedSourceIdentity),
+      stagingRoot,
+    );
   } catch (error) {
     if (!removeTempDirectory(stagingRoot)) {
       throw new SqliteSnapshotCleanupError(

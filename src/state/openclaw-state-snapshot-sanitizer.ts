@@ -66,6 +66,8 @@ export function sanitizeOpenClawGlobalStateSnapshot(database: DatabaseSync): voi
           .set({
             raw_json: `${JSON.stringify(sanitized, null, 2)}\n`,
             ...projectionValues(sanitized),
+            // Historical snapshots retain the path for credential migration to verify and move.
+            socket_path: sanitized.socket?.path ?? null,
           })
           .where("config_key", "=", row.config_key),
       );

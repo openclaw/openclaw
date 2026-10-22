@@ -1,19 +1,13 @@
 import { createHash } from "node:crypto";
-import { afterEach, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { expect, it } from "vitest";
 import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import { createWorkerEnvironmentStore } from "./store.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(async () => {
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawStateDatabaseForTest();
-});
+const tempDirs = useStateDatabaseTempDirs();
 
 it.skipIf(!["1", "baseline"].includes(process.env.OPENCLAW_WORKER_INVENTORY_BENCH ?? ""))(
   "measures 5,000 environment inventory rows across 50 viewers",
@@ -26,11 +20,11 @@ it.skipIf(!["1", "baseline"].includes(process.env.OPENCLAW_WORKER_INVENTORY_BENC
       options: Parameters<typeof createWorkerEnvironmentStore>[0],
     ) => BenchmarkStore | Promise<BenchmarkStore>;
     // The comparison command stages the exact original source beside its original writer.
-    const baseline: { createWorkerEnvironmentStore: Factory } | undefined =
+    const createStore: Factory =
       process.env.OPENCLAW_WORKER_INVENTORY_BENCH === "baseline"
-        ? await import(new URL("./store.baseline.test-support.ts", import.meta.url).href)
-        : undefined;
-    const createStore = baseline?.createWorkerEnvironmentStore ?? createWorkerEnvironmentStore;
+        ? ((await import(new URL("./store.baseline.test-support.ts", import.meta.url).href))
+            .createWorkerEnvironmentStore ?? createWorkerEnvironmentStore)
+        : createWorkerEnvironmentStore;
     const database = openOpenClawStateDatabase({
       env: { OPENCLAW_STATE_DIR: tempDirs.make("worker-inventory-bench-") },
     });
@@ -75,21 +69,18 @@ it.skipIf(!["1", "baseline"].includes(process.env.OPENCLAW_WORKER_INVENTORY_BENC
           ? "dc8fe897b3f1531952e5dcf7ac59820fd7d442a6cd1d73fa7b62103cc5020adb"
           : "04f39389262b61ce99433d6ea9f913ac46ab80d11f90687c265135bd13eae6c9",
       );
-      const samples = [];
-      for (let round = 0; round < 6; round += 1) {
+      const samples = Array.from({ length: 6 }, () => {
         const cpu = process.threadCpuUsage();
         const started = performance.now();
         for (let viewer = 0; viewer < 50; viewer += 1) {
           inventory[name]();
         }
         const used = process.threadCpuUsage(cpu);
-        if (round > 0) {
-          samples.push({
-            cpu: (used.user + used.system) / 1_000 / 50,
-            wall: (performance.now() - started) / 50,
-          });
-        }
-      }
+        return {
+          cpu: (used.user + used.system) / 1_000 / 50,
+          wall: (performance.now() - started) / 50,
+        };
+      }).slice(1);
       console.log(
         JSON.stringify({
           operation: name,

@@ -1,4 +1,3 @@
-// Feishu tests cover bot sender name plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveFeishuSenderName } from "./bot-sender-name.js";
 import { FeishuConfigSchema } from "./config-schema.js";
@@ -12,18 +11,12 @@ vi.mock("./client.js", () => ({
 
 const account = {
   accountId: "main",
-  selectionSource: "explicit",
   enabled: true,
   configured: true,
   appId: "app-id",
   appSecret: "secret",
   domain: "feishu",
   config: FeishuConfigSchema.parse({}),
-} satisfies ResolvedFeishuAccount;
-
-const secondaryAccount = {
-  ...account,
-  accountId: "secondary",
 } satisfies ResolvedFeishuAccount;
 
 function feishuApiError(code: number, message: string): Error {
@@ -43,6 +36,17 @@ function mockUserNames(...names: string[]): ReturnType<typeof vi.fn> {
   return get;
 }
 
+const resolve = (senderId: string, log = vi.fn(), selectedAccount = account) =>
+  resolveFeishuSenderName({ account: selectedAccount, senderId, log });
+function mockUnauthorizedLookup() {
+  const get = vi
+    .fn()
+    .mockRejectedValueOnce(feishuApiError(41050, "no user authority error"))
+    .mockResolvedValueOnce({ data: { user: { name: "Ada" } } });
+  createFeishuClientMock.mockReturnValue({ contact: { user: { get } } });
+  return get;
+}
+
 describe("resolveFeishuSenderName", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -52,36 +56,20 @@ describe("resolveFeishuSenderName", () => {
   it("reuses a cached sender name within the TTL", async () => {
     const get = mockUserNames("Ada");
 
-    await expect(
-      resolveFeishuSenderName({ account, senderId: "ou_sender_cache", log: vi.fn() }),
-    ).resolves.toEqual({ name: "Ada" });
-    await expect(
-      resolveFeishuSenderName({ account, senderId: "ou_sender_cache", log: vi.fn() }),
-    ).resolves.toEqual({ name: "Ada" });
+    await expect(resolve("ou_sender_cache")).resolves.toEqual({ name: "Ada" });
+    await expect(resolve("ou_sender_cache")).resolves.toEqual({ name: "Ada" });
 
     expect(get).toHaveBeenCalledTimes(1);
   });
 
   it("caches 41050 misses per account without logging another failure", async () => {
-    const get = vi
-      .fn()
-      .mockRejectedValueOnce(feishuApiError(41050, "no user authority error"))
-      .mockResolvedValueOnce({ data: { user: { name: "Ada" } } });
-    createFeishuClientMock.mockReturnValue({ contact: { user: { get } } });
+    const get = mockUnauthorizedLookup();
     const log = vi.fn();
 
+    await expect(resolve("ou_sender_hidden", log)).resolves.toEqual({});
+    await expect(resolve("ou_sender_hidden", log)).resolves.toEqual({});
     await expect(
-      resolveFeishuSenderName({ account, senderId: "ou_sender_hidden", log }),
-    ).resolves.toEqual({});
-    await expect(
-      resolveFeishuSenderName({ account, senderId: "ou_sender_hidden", log }),
-    ).resolves.toEqual({});
-    await expect(
-      resolveFeishuSenderName({
-        account: secondaryAccount,
-        senderId: "ou_sender_hidden",
-        log,
-      }),
+      resolve("ou_sender_hidden", log, { ...account, accountId: "secondary" }),
     ).resolves.toEqual({ name: "Ada" });
 
     expect(get).toHaveBeenCalledTimes(2);
@@ -91,19 +79,11 @@ describe("resolveFeishuSenderName", () => {
   it("retries a 41050 sender lookup after the negative cache expires", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-20T00:00:00Z"));
-    const get = vi
-      .fn()
-      .mockRejectedValueOnce(feishuApiError(41050, "no user authority error"))
-      .mockResolvedValueOnce({ data: { user: { name: "Ada" } } });
-    createFeishuClientMock.mockReturnValue({ contact: { user: { get } } });
+    const get = mockUnauthorizedLookup();
 
-    await expect(
-      resolveFeishuSenderName({ account, senderId: "ou_sender_retry", log: vi.fn() }),
-    ).resolves.toEqual({});
+    await expect(resolve("ou_sender_retry")).resolves.toEqual({});
     vi.advanceTimersByTime(30 * 60 * 1000 + 1);
-    await expect(
-      resolveFeishuSenderName({ account, senderId: "ou_sender_retry", log: vi.fn() }),
-    ).resolves.toEqual({ name: "Ada" });
+    await expect(resolve("ou_sender_retry")).resolves.toEqual({ name: "Ada" });
 
     expect(get).toHaveBeenCalledTimes(2);
   });
@@ -114,8 +94,8 @@ describe("resolveFeishuSenderName", () => {
     createFeishuClientMock.mockReturnValue({ contact: { user: { get } } });
     const log = vi.fn();
 
-    await resolveFeishuSenderName({ account, senderId: "ou_sender_other_error", log });
-    await resolveFeishuSenderName({ account, senderId: "ou_sender_other_error", log });
+    await resolve("ou_sender_other_error", log);
+    await resolve("ou_sender_other_error", log);
 
     expect(get).toHaveBeenCalledTimes(2);
     expect(log).toHaveBeenCalledTimes(2);
@@ -128,22 +108,10 @@ describe("resolveFeishuSenderName", () => {
     createFeishuClientMock.mockReturnValue({ contact: { user: { get } } });
 
     for (let index = 0; index < 501; index += 1) {
-      await resolveFeishuSenderName({
-        account,
-        senderId: `ou_sender_cap_${index}`,
-        log: vi.fn(),
-      });
+      await resolve(`ou_sender_cap_${index}`);
     }
-    await resolveFeishuSenderName({
-      account,
-      senderId: "ou_sender_cap_0",
-      log: vi.fn(),
-    });
-    await resolveFeishuSenderName({
-      account,
-      senderId: "ou_sender_cap_500",
-      log: vi.fn(),
-    });
+    await resolve("ou_sender_cap_0");
+    await resolve("ou_sender_cap_500");
 
     expect(get).toHaveBeenCalledTimes(502);
     expect(

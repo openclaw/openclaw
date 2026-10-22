@@ -1,6 +1,5 @@
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
-import type { DraftBranches } from "./discovery.ts";
 
 registerNewSessionSetupEnglish();
 
@@ -33,28 +32,3 @@ export function resolveCheckoutChip(params: {
     label: params.baseRef ? t(labels[1], { branch: params.baseRef }) : t(labels[0]),
   };
 }
-
-export type CheckoutChipOptions = {
-  state: CheckoutChipState;
-  remotePlacement: boolean;
-  currentCheckoutUnavailableReason?: string;
-  repository?: boolean;
-  folderLabel: string;
-  worktree: boolean;
-  worktreeAvailable: boolean;
-  repositoryUnavailable?: boolean;
-  branches: DraftBranches | null;
-  branchesLoading: boolean;
-  baseRef: string;
-  worktreeName: string;
-  submitting: boolean;
-  pendingPlacement: boolean;
-  popoverOpen: boolean;
-  onPopoverShow: () => void;
-  onPopoverHide: () => void;
-  onPopoverAfterHide: () => void;
-  onSelectWorktree: (value: boolean) => void;
-  onBaseRefInput: (baseRef: string) => void;
-  onWorktreeNameInput: (name: string) => void;
-  onConfirm: () => void;
-};

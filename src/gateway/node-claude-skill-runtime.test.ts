@@ -6,6 +6,7 @@ import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
+import * as execApprovalRequests from "../agents/bash-tools.exec-approval-request.js";
 import { buildPreparedCliRunContext } from "../agents/cli-runner.test-helpers.js";
 import { executeNodeClaudeRun } from "../agents/cli-runner/execute-node-claude.js";
 import { createLibrarySkillWorkshopTool } from "../agents/tools/skill-workshop-tool-library.js";
@@ -32,7 +33,6 @@ import { listSkillLibrary, readSkillLibrary, saveSkillLibrary } from "../skills/
 import { buildSkillSnapshot } from "../skills/loading/workspace-skill-prompt.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
-import { invokeNodeClaudeCliRun } from "./node-agent-cli-runtime.js";
 import { NodeRegistry, type NodeRegistryOptions } from "./node-registry.js";
 import {
   libraryAuthority,
@@ -278,6 +278,12 @@ async function fixture(
     } as GatewayWsClient,
     { pairingIdentity: "node-1", pairingGeneration: "generation-1" },
   );
+  vi.spyOn(execApprovalRequests, "registerExecApprovalRequestForHostOrThrow").mockRejectedValue(
+    new Error("unexpected approval"),
+  );
+  vi.spyOn(execApprovalRequests, "resolveRegisteredExecApprovalDecision").mockRejectedValue(
+    new Error("unexpected approval"),
+  );
   let output = "";
   const execute = (stdin = "hello") =>
     withPluginRuntimeGatewayRequestScope(
@@ -293,15 +299,6 @@ async function fixture(
             output += text;
           },
           consumeStderr: () => {},
-          deps: {
-            invokeNodeClaudeCliRun,
-            registerExecApprovalRequestForHostOrThrow: async () => {
-              throw new Error("unexpected approval");
-            },
-            resolveRegisteredExecApprovalDecision: async () => {
-              throw new Error("unexpected approval");
-            },
-          },
         }),
     );
   return {

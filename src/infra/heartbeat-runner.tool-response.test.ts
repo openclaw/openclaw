@@ -1,5 +1,6 @@
 import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { deleteCronJobScratch } from "../../test/helpers/cron/scratch-store.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
@@ -10,10 +11,11 @@ import { normalizeReplyPayloadDirectives } from "../auto-reply/reply/reply-deliv
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { readCronScratchSnapshot } from "../cron/scratch-read.js";
-import { deleteCronJobScratch, readCronJobScratchState } from "../cron/scratch-store.js";
+import { readCronJobScratchState } from "../cron/scratch-store.js";
 import { resolveCronJobsStorePath, saveCronJobsStore } from "../cron/store.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
 import { claimHeartbeatOutcomeForRun } from "./heartbeat-outcome-store.js";
+import { bindHeartbeatReply, bindHeartbeatSend } from "./heartbeat-runner.boundary-test-support.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
@@ -81,21 +83,17 @@ async function createFixture(
   });
   const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
   replySpy.mockResolvedValue(quietReply());
+  bindHeartbeatReply(replySpy);
+  bindHeartbeatSend("telegram", sendTelegram);
   return {
     ...sandbox,
     cfg,
     sessionKey,
     sendTelegram,
-    run: (overrides: Omit<Parameters<typeof runHeartbeatOnce>[0], "cfg" | "deps"> = {}) =>
+    run: (overrides: Omit<Parameters<typeof runHeartbeatOnce>[0], "cfg"> = {}) =>
       runHeartbeatOnce({
         cfg,
         ...overrides,
-        deps: {
-          telegram: sendTelegram,
-          getReplyFromConfig: replySpy,
-          // Storage retention uses wall time, so isolated sessions must share that clock.
-          nowMs: Date.now,
-        },
       }),
     expectSend: (text: string, silent?: boolean) => {
       expect(sendTelegram).toHaveBeenCalledExactlyOnceWith(TELEGRAM_GROUP, text, {

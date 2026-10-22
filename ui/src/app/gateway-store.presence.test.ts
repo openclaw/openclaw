@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import nativePresenceStream from "../../../apps/shared/OpenClawKit/Tests/OpenClawKitTests/Fixtures/presence-deltas.json" with { type: "json" };
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   createGatewayEvent,
@@ -23,7 +24,7 @@ beforeEach(() => {
   stubGatewayStoreTestGlobals();
   store = createGatewayStoreTestStore();
   store.gateway.start();
-  store.current().opts.onHello?.(hello());
+  store.current().testOptions.onHello?.(hello());
 });
 afterEach(() => {
   store.gateway.stop();
@@ -31,12 +32,30 @@ afterEach(() => {
 });
 
 describe("Gateway presence delivery", () => {
+  it("matches the shared native presence stream", () => {
+    store.current().request.mockImplementation(() => new Promise(() => {}));
+    const events = vi.fn();
+    store.gateway.subscribeEvents(events);
+    for (const step of nativePresenceStream) {
+      if (step.reconnect) {
+        store.current().testOptions.onHello?.(hello());
+      }
+      events.mockClear();
+      store.current().testOptions.onEvent?.(createGatewayEvent("presence", step.payload));
+      if (step.expected === null) {
+        expect(events, step.name).not.toHaveBeenCalled();
+      } else {
+        expect(events.mock.lastCall?.[0].payload, step.name).toEqual({ presence: step.expected });
+      }
+    }
+  });
+
   it("publishes reconstructed snapshots to every consumer in server order", () => {
     const events = vi.fn();
     store.gateway.subscribeEvents(events);
     store.gateway.subscribeEventLog(() => {});
     const send = (payload: unknown) =>
-      store.current().opts.onEvent?.(createGatewayEvent("presence", payload));
+      store.current().testOptions.onEvent?.(createGatewayEvent("presence", payload));
     send(reset(2));
     const changed = { ...first, host: "Changed" };
     send({
@@ -63,7 +82,7 @@ describe("Gateway presence delivery", () => {
     store.gateway.subscribeEvents(events);
     const original = { ...first, watchedSessions: ["agent:main:old"], roles: ["operator"] };
     const send = (payload: unknown) =>
-      store.current().opts.onEvent?.(createGatewayEvent("presence", payload));
+      store.current().testOptions.onEvent?.(createGatewayEvent("presence", payload));
     send(reset(2, [original]));
     send({
       base: 2,
@@ -105,15 +124,15 @@ describe("Gateway presence delivery", () => {
       remove: [],
       order: [],
     });
-    store.current().opts.onEvent?.(event);
-    store.current().opts.onEvent?.(event);
+    store.current().testOptions.onEvent?.(event);
+    store.current().testOptions.onEvent?.(event);
     expect(store.current().request).toHaveBeenCalledTimes(1);
     expect(store.current().request).toHaveBeenCalledWith("system-presence", { snapshot: true });
     expect(events).not.toHaveBeenCalled();
     recovery.resolve(reset(4, [second], ["second-key"]));
     await recovery.promise;
     expect(events.mock.lastCall?.[0].payload).toEqual({ presence: [second] });
-    store.current().opts.onEvent?.(
+    store.current().testOptions.onEvent?.(
       createGatewayEvent("presence", {
         base: 4,
         version: 5,
@@ -132,10 +151,10 @@ describe("Gateway presence delivery", () => {
     store.gateway.subscribeEvents(events);
     store
       .current()
-      .opts.onEvent?.(
+      .testOptions.onEvent?.(
         createGatewayEvent("presence", { base: 9, version: 10, upsert: [], remove: [], order: [] }),
       );
-    store.current().opts.onEvent?.(createGatewayEvent("presence", reset(10)));
+    store.current().testOptions.onEvent?.(createGatewayEvent("presence", reset(10)));
     recovery.resolve(reset(10, [second], ["second-key"]));
     await recovery.promise;
     expect(events).toHaveBeenCalledTimes(1);
@@ -148,17 +167,17 @@ describe("Gateway presence delivery", () => {
     current.request.mockReturnValue(recovery.promise);
     const events = vi.fn();
     store.gateway.subscribeEvents(events);
-    current.opts.onEvent?.(createGatewayEvent("presence", reset(2)));
-    current.opts.onEvent?.(
+    current.testOptions.onEvent?.(createGatewayEvent("presence", reset(2)));
+    current.testOptions.onEvent?.(
       createGatewayEvent("presence", { base: 9, version: 10, upsert: [], remove: [], order: [] }),
     );
-    current.opts.onClose?.({ code: 1006, reason: "reconnecting", willRetry: true });
-    current.opts.onHello?.(hello());
+    current.testOptions.onClose?.({ code: 1006, reason: "reconnecting", willRetry: true });
+    current.testOptions.onHello?.(hello());
     recovery.resolve(reset(10, [second], ["second-key"]));
     await recovery.promise;
     expect(events).toHaveBeenCalledTimes(1);
-    current.opts.onEvent?.(createGatewayEvent("presence", reset(1)));
-    current.opts.onEvent?.(
+    current.testOptions.onEvent?.(createGatewayEvent("presence", reset(1)));
+    current.testOptions.onEvent?.(
       createGatewayEvent("presence", {
         base: 1,
         version: 2,

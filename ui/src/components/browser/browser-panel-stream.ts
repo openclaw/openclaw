@@ -1,11 +1,12 @@
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
-import type { BrowserPanelTab, BrowserRequestClient } from "./browser-client.ts";
+import type { BrowserRequestClient } from "./browser-client.ts";
 import { isBrowserScreencastUnsupportedError, requestBrowserScreencast } from "./browser-client.ts";
 import type {
   BrowserPanelHost,
   BrowserPanelOperations,
 } from "./browser-panel-operation-ownership.ts";
-import { loadBrowserPanelImage, type BrowserPanelView } from "./browser-panel-surface.ts";
+import type { BrowserPanelStateWriter } from "./browser-panel-state.ts";
+import { loadBrowserPanelImage } from "./browser-panel-surface.ts";
 import {
   BrowserScreencastClient,
   type BrowserScreencastFrame,
@@ -16,14 +17,9 @@ import { browserRouteKey } from "./browser-target.ts";
 const RETRY_DELAY_MS = 10_000;
 const RESIZE_RESTART_DEBOUNCE_MS = 500;
 
-type StreamState = {
-  activeTargetId: string | null;
-  view: BrowserPanelView | null;
-  tabs: BrowserPanelTab[];
-  loading: boolean;
-};
-
-interface BrowserPanelStreamHost extends StreamState {
+interface BrowserPanelStreamHost extends BrowserPanelStateWriter<
+  "activeTargetId" | "view" | "tabs" | "loading"
+> {
   readonly host: BrowserPanelHost;
   readonly mode: "interact" | "annotate" | "inspect";
   readonly input: { elements: { stage?: HTMLElement; viewport?: HTMLElement } };
@@ -32,7 +28,6 @@ interface BrowserPanelStreamHost extends StreamState {
     "epoch" | "route" | "isLive" | "hasPendingCapture" | "capturedTabs" | "forgetNavigation"
   >;
   readonly observedViewportSize: { width: number; height: number } | null;
-  setState<Key extends keyof StreamState>(key: Key, value: StreamState[Key]): void;
   syncUrlDraft(url: string): void;
   clearUnavailableView(): boolean;
   refreshView(targetId: string): Promise<void>;
@@ -153,7 +148,7 @@ export class BrowserPanelStream {
     dimensions: { maxWidth: number; maxHeight: number },
   ): Promise<void> {
     try {
-      const response = await requestBrowserScreencast(
+      const wsPath = await requestBrowserScreencast(
         attempt.client,
         { targetId: attempt.targetId, ...dimensions },
         { signal: attempt.controller.signal },
@@ -163,7 +158,7 @@ export class BrowserPanelStream {
       }
       attempt.connection = new BrowserScreencastClient({
         gatewayUrl: this.host.host.client!.gatewayUrl,
-        wsPath: response.wsPath,
+        wsPath,
         onReady: ({ url, title }) => this.updateMetadata(attempt, { url, title }),
         onMeta: (meta) => this.updateMetadata(attempt, meta),
         onFrame: (frame) => {

@@ -71,6 +71,7 @@ type AgentToolGatewayRequest = Pick<
   | "onAccepted"
   | "onSignalAbort"
   | "params"
+  | "sharedStateMode"
   | "signal"
   | "scopes"
   | "timeoutMs"

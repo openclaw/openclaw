@@ -11,7 +11,7 @@ import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectChannels, projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { projectMutableSource, projectSource } from "../../lib/reactive/projection.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { createChannelPluginPresentation } from "./plugin-presentation-loader.ts";
@@ -32,16 +32,8 @@ function createChannelsPage(context: ApplicationContext) {
     prompt: ChannelPairingPrompt | null;
   } = { prompt: null };
   let publishOperations = () => {};
-  const operationState = projectSource(operations, {
-    read: (source) => source,
-    subscribe: (_source, notify) => {
-      publishOperations = notify;
-      return () => {
-        publishOperations = () => {};
-      };
-    },
-    equality: "revision",
-  });
+  const operationState = projectMutableSource(operations, (source) => source);
+  publishOperations = operationState.publish;
   function updateOperations(patch: Partial<typeof operations>) {
     Object.assign(operations, patch);
     publishOperations();

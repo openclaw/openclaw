@@ -37,6 +37,7 @@ import {
   registerMetadataRevocationCases,
 } from "./chat-metadata-ownership.test-support.js";
 import {
+  chatMetadataCommandFields,
   connectChatMetadataAccount,
   createChatMetadataHarness,
 } from "./chat-metadata-runtime.test-support.js";
@@ -302,7 +303,10 @@ describe("chat metadata ownership", () => {
           await request.pending;
           expect(request.respond).toHaveBeenCalledWith(
             true,
-            expect.objectContaining({ commands: [{ name: "command-1-1" }], swarmEnabled: true }),
+            expect.objectContaining({
+              commands: [{ ...chatMetadataCommandFields, name: "command-1-1" }],
+              swarmEnabled: true,
+            }),
           );
           const result = request.respond.mock.calls[0]?.[1];
           if (includeModels) {
@@ -345,7 +349,7 @@ describe("chat metadata ownership", () => {
       await harness.runtime.refresh();
       const compact = await request(false);
       expect(compact).toHaveBeenCalledWith(true, {
-        commands: [{ name: "command-1-1" }],
+        commands: [{ ...chatMetadataCommandFields, name: "command-1-1" }],
         swarmEnabled: true,
         revision: expect.any(String),
       });
@@ -361,7 +365,7 @@ describe("chat metadata ownership", () => {
       harness.setSkillsVersion(2);
       await harness.runtime.refresh();
       expect(await request(false, revision)).toHaveBeenCalledWith(true, {
-        commands: [{ name: "command-2-1" }],
+        commands: [{ ...chatMetadataCommandFields, name: "command-2-1" }],
         swarmEnabled: true,
         revision: expect.not.stringContaining(revision),
       });
@@ -371,7 +375,7 @@ describe("chat metadata ownership", () => {
         true,
         expect.objectContaining({
           models: [expect.objectContaining({ id: "first" })],
-          commands: [{ name: "command-2-1" }],
+          commands: [{ ...chatMetadataCommandFields, name: "command-2-1" }],
         }),
       );
     } finally {

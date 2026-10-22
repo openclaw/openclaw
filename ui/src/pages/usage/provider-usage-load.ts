@@ -23,9 +23,6 @@ export function createProviderUsageLoader(options: {
     active = null;
   };
   return {
-    get pending() {
-      return active !== null;
-    },
     /** The last complete snapshot; a refreshing or failed read keeps it. */
     get summary() {
       return summary;

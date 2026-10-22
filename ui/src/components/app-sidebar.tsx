@@ -190,8 +190,15 @@ function AppSidebarContent(
       return projection.revision();
     },
     () => props.navigationVisible,
-    // Shell inputs finish preparing a hidden first mount; owner traffic stays parked.
-    () => Object.values(props),
+    // Connection and selection prepare a hidden view; cosmetic shell writes keep it parked.
+    () => [
+      props.connected,
+      props.router,
+      props.activeRouteId,
+      props.sessionKey,
+      props.navigationView,
+      props.sidebarAgentsMode,
+    ],
   );
   const observed = new WeakMap<object, object>();
   const observe = <T extends object>(target: T): T => {
@@ -293,14 +300,14 @@ function AppSidebarContent(
       owner.sessionData.connect();
     }
     let frame = requestAnimationFrame(() => {
-      frame = requestAnimationFrame(() => owner.classList.add("sidebar-r"));
+      frame = requestAnimationFrame(() => host.classList.add("sidebar-r"));
     });
     return () => {
       cancelAnimationFrame(frame);
       owner.sessionData.disconnect(owner.isConnected);
+      disconnectSidebarOwner(host);
     };
   });
-  onCleanup(() => disconnectSidebarOwner(host));
   return content;
 }
 

@@ -1649,7 +1649,7 @@ fn connect_params(
     signed_at_ms: u64,
     inline_widgets_available: bool,
 ) -> Result<Value, String> {
-    let mut client_caps = vec![AGENT_KIND_CLIENT_CAPABILITY];
+    let mut client_caps = vec![AGENT_KIND_CLIENT_CAPABILITY, "health-summary"];
     if inline_widgets_available {
         client_caps.push(INLINE_WIDGETS_CLIENT_CAPABILITY);
     }
@@ -3854,6 +3854,7 @@ esac
             params["caps"],
             json!([
                 AGENT_KIND_CLIENT_CAPABILITY,
+                "health-summary",
                 INLINE_WIDGETS_CLIENT_CAPABILITY
             ])
         );
@@ -3881,8 +3882,11 @@ esac
             false,
         )
         .expect("pinned connect params");
-        // Pinning only withdraws inline widgets; agent-kind is unconditional.
-        assert_eq!(pinned_params["caps"], json!([AGENT_KIND_CLIENT_CAPABILITY]));
+        // Pinning only withdraws inline widgets; other capabilities are unconditional.
+        assert_eq!(
+            pinned_params["caps"],
+            json!([AGENT_KIND_CLIENT_CAPABILITY, "health-summary"])
+        );
         std::fs::remove_dir_all(directory).expect("remove connect fixture");
     }
 

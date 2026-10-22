@@ -13,7 +13,8 @@ import type {
 } from "openclaw/plugin-sdk/realtime-voice";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { MockProvider } from "./providers/mock.js";
 import type { VoiceCallStateRuntime } from "./runtime-state.js";
 import { createVoiceCallRuntime, type VoiceCallRuntime } from "./runtime.js";
 import { createVoiceCallBaseConfig } from "./test-fixtures.js";
@@ -186,7 +187,8 @@ describe("voice-call realtime route ownership", () => {
         ),
       ).toEqual(["sales", "support"]);
 
-      const hangupCall = vi.spyOn(runtime.provider, "hangupCall");
+      const hangupCall = vi.spyOn(MockProvider.prototype, "hangupCall");
+      onTestFinished(() => hangupCall.mockRestore());
       const closed = Promise.all(sockets.map((ws) => waitForClose(ws)));
       sales.requests[0]?.onClose?.("completed");
       sockets[1]?.close(1000);

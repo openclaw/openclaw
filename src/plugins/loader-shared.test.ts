@@ -112,6 +112,14 @@ it("createPluginCandidatesFromManifestRegistry preserves child identity and owne
     effectivePluginId: "example/child",
   });
   expect(resolvePluginCandidateInstallOwner(candidate!)).toBe("example");
+  expect(
+    Object.getOwnPropertyDescriptor(childRecord, Symbol.for("openclaw.pluginManifestInstallOwner")),
+  ).toMatchObject({ configurable: false, enumerable: true, writable: false });
+  expect(
+    Object.getOwnPropertyDescriptor(candidate, Symbol.for("openclaw.pluginCandidateInstallOwner")),
+  ).toMatchObject({ configurable: true, enumerable: true, writable: false });
+  expect(resolvePluginCandidateInstallOwner({ ...candidate })).toBe("example");
+  expect(() => recordPluginManifestInstallOwner(childRecord, "replacement")).toThrow(TypeError);
 });
 it("does not accept a null source through the empty-schema fast path", () => {
   expect(validatePluginConfig({ schema: emptyObjectSchema, sourceValue: null, value: {} }).ok).toBe(

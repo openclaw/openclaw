@@ -130,7 +130,7 @@ suite.define(() => {
           await detailsLabel.fill("List workspace");
           await detailsLabel.press("Tab");
           await ui.sessionPatch(gateway, own.key, { label: "List workspace" });
-          await ui.button(listRow("List workspace"), "Open session menu").click();
+          await ui.button(listRow("List workspace"), "Open session menu", false).click();
           await ui.menuItem(menu, "Mark as unread").click();
           await ui.sessionPatch(gateway, own.key, { unread: true });
         }
@@ -208,7 +208,7 @@ suite.define(() => {
           await showSessions("?status=archived");
           const archivedRow = listRow("Organized workspace");
           await archivedRow.waitFor();
-          await ui.button(archivedRow, "Open session menu").click();
+          await ui.button(archivedRow, "Open session menu", false).click();
           await support.openSessionMenuSubmenu(page, "Advanced");
           const remove = menu.locator('[data-value="delete"]');
           await remove.waitFor();

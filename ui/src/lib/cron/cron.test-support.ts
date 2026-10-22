@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import type { CronJob, CronJobsListResult } from "../../api/types.ts";
+import type { CronJob, CronJobsListResult, CronRunsResult } from "../../api/types.ts";
 import { createInitialCronState } from "./state.ts";
 import type { CronState } from "./types.ts";
 
@@ -28,6 +28,21 @@ export function cronJobsListResponse(
     jobs,
     snapshotRevision: "cron-jobs-fixture",
     total: jobs.length,
+    offset: 0,
+    limit: 50,
+    hasMore: false,
+    nextOffset: null,
+    ...overrides,
+  };
+}
+
+export function createCronRunsResult(
+  entries: CronRunsResult["entries"],
+  overrides: Partial<Omit<CronRunsResult, "entries">> = {},
+): CronRunsResult {
+  return {
+    entries,
+    total: entries.length,
     offset: 0,
     limit: 50,
     hasMore: false,

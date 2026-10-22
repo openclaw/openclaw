@@ -37,7 +37,6 @@ export type QueuedMessageEdit = {
 
 type QueuedMessageEditHost = ChatQueueScopedSessionHost & {
   client?: Pick<GatewayBrowserClient, "recoveryScope" | "recoveryScopeReady"> | null;
-  connected?: boolean;
   chatQueuedEdit?: QueuedMessageEdit | null;
 };
 

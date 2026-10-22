@@ -1,5 +1,7 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
+import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
   createWebSearchProviderContractFields,
   enablePluginInConfig,
@@ -20,11 +22,8 @@ const GenericFirecrawlSearchSchema = {
   additionalProperties: false,
 } satisfies Record<string, unknown>;
 
-function getConfiguredFirecrawlFetchCredentialFallback(config?: {
-  plugins?: { entries?: { firecrawl?: { config?: unknown } } };
-}) {
-  const pluginConfig = asOptionalRecord(config?.plugins?.entries?.firecrawl?.config);
-  const value = asOptionalRecord(pluginConfig?.webFetch)?.apiKey;
+function getConfiguredFirecrawlFetchCredentialFallback(config?: OpenClawConfig) {
+  const value = asOptionalRecord(resolvePluginConfigObject(config, "firecrawl")?.webFetch)?.apiKey;
   return value === undefined
     ? undefined
     : {

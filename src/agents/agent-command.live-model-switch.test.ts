@@ -24,6 +24,7 @@ import { withInstallationTarget } from "../infra/installation-target-context.js"
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { startSessionControllerInterruption } from "../sessions/session-controller.lifecycle.js";
 import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
+import type { SkillSnapshot } from "../skills/types.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -55,6 +56,7 @@ import {
   withStoredAgentCommandRecoverySession,
 } from "./agent-command.restart-recovery.test-harness.js";
 import { createApiKeyCredential } from "./auth-profiles/credential-fixtures.test-support.js";
+import type { AgentAttemptParams } from "./command/attempt-execution.types.js";
 import { FailoverError } from "./failover/error.js";
 import type { FailoverReason } from "./failover/signal.js";
 import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "./internal-events.js";
@@ -160,7 +162,7 @@ const state = vi.hoisted(() => ({
     entries: [],
     routeVariants: [],
   })),
-  buildWorkspaceSkillSnapshotMock: vi.fn((..._args: unknown[]): unknown => ({
+  buildWorkspaceSkillSnapshotMock: vi.fn((..._args: unknown[]): SkillSnapshot => ({
     prompt: "",
     skills: [],
     resolvedSkills: [],
@@ -657,7 +659,8 @@ vi.mock("../skills/runtime/remote.js", () => ({
   getRemoteSkillEligibility: () => ({ eligible: false }),
 }));
 
-vi.mock("../skills/runtime/session-snapshot.js", () => ({
+vi.mock("../skills/runtime/session-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../skills/runtime/session-snapshot.js")>()),
   resolveReusableWorkspaceSkillSnapshot: (params: {
     workspaceDir: string;
     existingSnapshot?: { resolvedSkills?: unknown };
@@ -673,25 +676,20 @@ vi.mock("../skills/runtime/session-snapshot.js", () => ({
           version: 0,
         },
         shouldRefresh: !params.existingSnapshot,
-        snapshotVersion: 0,
       };
     }
     if (params.existingSnapshot?.resolvedSkills !== undefined) {
       return {
         snapshot: params.existingSnapshot,
         shouldRefresh: false,
-        snapshotVersion: 0,
       };
     }
-    const rebuilt = state.buildWorkspaceSkillSnapshotMock(params.workspaceDir, params) as {
-      resolvedSkills?: unknown;
-    };
+    const rebuilt = state.buildWorkspaceSkillSnapshotMock(params.workspaceDir, params);
     return {
       snapshot: params.existingSnapshot
-        ? { ...params.existingSnapshot, resolvedSkills: rebuilt?.resolvedSkills }
+        ? { ...params.existingSnapshot, resolvedSkills: rebuilt.resolvedSkills }
         : rebuilt,
       shouldRefresh: !params.existingSnapshot,
-      snapshotVersion: 0,
     };
   },
 }));
@@ -1632,15 +1630,12 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
   it.each(["live-switch", "flushed", "blocked", "internal"] as const)(
     "preserves %s user-turn persistence across retries",
     async (mode) => {
-      type AttemptCall = {
-        onUserMessagePersisted?: () => void;
-        suppressPromptPersistenceOnRetry?: boolean;
-        userTurnTranscriptRecorder?: {
-          markBlocked: () => void;
-          markRuntimePersisted: (message: { role: "user"; content: string }) => void;
-        };
-      };
+      type AttemptCall = Pick<
+        AgentAttemptParams,
+        "suppressPromptPersistenceOnRetry" | "userTurnTranscriptRecorder"
+      >;
       const attempts: AttemptCall[] = [];
+      const persistedUserMessage = { role: "user", content: "hello", timestamp: 0 } as const;
       if (mode === "live-switch") {
         setupModelSwitchRetry({ provider: "openai", model: "gpt-5.4" }, true);
       } else {
@@ -1649,15 +1644,15 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       state.runAgentAttemptMock.mockImplementation(async (attempt: AttemptCall) => {
         attempts.push(attempt);
         if (mode === "flushed") {
-          expectDefined(attempt.onUserMessagePersisted, "retry persistence callback")();
+          expectDefined(
+            attempt.userTurnTranscriptRecorder,
+            "retry transcript recorder",
+          ).markRuntimePersisted(persistedUserMessage);
         } else if (attempts.length === 1) {
           if (mode === "blocked") {
             attempt.userTurnTranscriptRecorder?.markBlocked();
           } else if (mode === "live-switch") {
-            attempt.userTurnTranscriptRecorder?.markRuntimePersisted({
-              role: "user",
-              content: "hello",
-            });
+            attempt.userTurnTranscriptRecorder?.markRuntimePersisted(persistedUserMessage);
           }
         }
         return mode === "internal"
@@ -1672,7 +1667,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       expect(attempts).toHaveLength(2);
       expect(attempts[0]?.suppressPromptPersistenceOnRetry).toBe(mode === "internal");
       expect(attempts[1]?.suppressPromptPersistenceOnRetry).toBe(true);
-      if (mode === "live-switch" || mode === "blocked") {
+      if (mode !== "internal") {
         expect(attempts[1]?.userTurnTranscriptRecorder).toBe(
           attempts[0]?.userTurnTranscriptRecorder,
         );

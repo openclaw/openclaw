@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { subscribeGitHubIdentityChanges } from "../agents/github-read-identity.js";
+import { githubIdentityChanges } from "../agents/github-read-identity.js";
 import { onManagedGitHubProfileChanged } from "../agents/github-tool-identity.js";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.types.js";
 import {
@@ -140,7 +140,7 @@ export function startGitHubPublicationDiscovery(params: {
     }
   };
   const stopProfile = onManagedGitHubProfileChanged(() => refreshAll(true));
-  const stopIdentity = subscribeGitHubIdentityChanges(() => refreshAll(true));
+  githubIdentityChanges.onChange = () => refreshAll(true);
   const stopConfig = sessionChanges.subscribe((change) => {
     if ("all" in change && change.scope === "config") {
       refreshAll(true);
@@ -180,7 +180,7 @@ export function startGitHubPublicationDiscovery(params: {
   return {
     stop: async () => {
       scheduler.beginClose();
-      stopIdentity();
+      githubIdentityChanges.onChange = undefined;
       stopProfile();
       stopConfig();
       if (readPublished === read) {

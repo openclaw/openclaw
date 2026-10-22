@@ -1,8 +1,8 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { tempWorkspace, type TempWorkspace } from "@openclaw/fs-safe/temp";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { preparePostgresBackupDiscovery } from "../infra/backup-database-discovery.js";
 import { discoverBackupDatabasePaths } from "../infra/backup-sqlite-snapshot.js";
@@ -332,9 +332,7 @@ export async function createGitBackup(params: {
         const resourceId = resource?.pluginId.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64);
         const id = primary
           ? family
-          : `${family}${resourceId ? `__${resourceId}` : ""}__${createHash("sha256")
-              .update(resourcePath)
-              .digest("hex")}`;
+          : `${family}${resourceId ? `__${resourceId}` : ""}__${sha256Hex(resourcePath)}`;
         databases.push({ path: file, identity: { role: "generic", id } });
       }
     }

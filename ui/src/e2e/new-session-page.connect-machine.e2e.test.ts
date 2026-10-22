@@ -1,6 +1,7 @@
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import type { ControlUiMockGatewayScenario } from "../test-helpers/control-ui-e2e.ts";
 import { createPageOpener } from "./new-session-page.scenario.test-support.ts";
 import {
   createNewSessionPageE2eSuite,
@@ -10,24 +11,33 @@ import {
 
 const suite = createNewSessionPageE2eSuite();
 const openPage = createPageOpener(suite);
-const setupCode = (
-  joinUrl: string,
-  commands: {
-    command: string;
-    serviceCommand: string;
-    installedCommand: string;
-    versionNote?: string;
-  },
-) => ({
-  setupCode: "SYNTHETIC",
-  joinUrl,
-  ...commands,
-  gatewayUrl: "wss://gateway.example.com",
-  auth: "token",
-  urlSource: "test",
-  access: "node",
-  expiresAtMs: Date.now() + 10 * 60_000,
-});
+function setupCode(joinUrl: string, version = "", quoted = false, versionNote?: string) {
+  const target = quoted ? `'${joinUrl}'` : joinUrl;
+  const connect = `npx -y openclaw${version ? `@${version}` : ""} connect ${target} --service`;
+  return {
+    setupCode: "SYNTHETIC",
+    joinUrl,
+    command: `${connect} --session-host`,
+    serviceCommand: connect,
+    installedCommand: `openclaw connect ${target} --service --session-host`,
+    ...(versionNote ? { versionNote } : {}),
+    gatewayUrl: "wss://gateway.example.com",
+    auth: "token",
+    urlSource: "test",
+    access: "node",
+    expiresAtMs: Date.now() + 10 * 60_000,
+  };
+}
+
+async function openNewSession(
+  scenario: ControlUiMockGatewayScenario = {},
+  options?: Parameters<typeof openPage>[0],
+) {
+  const page = await openPage(options);
+  const gateway = await installMockGateway(page, scenario);
+  await page.goto(`${suite.server.baseUrl}new`);
+  return { page, gateway };
+}
 
 async function openConnection(page: Page, gateway: Awaited<ReturnType<typeof installMockGateway>>) {
   await page.locator("#new-session-where-trigger").click();
@@ -38,41 +48,24 @@ async function openConnection(page: Page, gateway: Awaited<ReturnType<typeof ins
 
 suite.define(() => {
   it("lets admins mint and refresh a one-paste machine connection", async () => {
-    const page = await openPage({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
     const firstJoinUrl = "https://gateway.example.com/j/first-code?label=alpha&next=$(whoami)";
     const secondJoinUrl = "https://gateway.example.com/j/second-code";
-    const firstCommand = `npx -y openclaw@2026.9.30 connect '${firstJoinUrl}' --service --session-host`;
-    const firstServiceCommand = `npx -y openclaw@2026.9.30 connect '${firstJoinUrl}' --service`;
-    const firstInstalledCommand = `openclaw connect '${firstJoinUrl}' --service --session-host`;
-    const secondCommand = `npx -y openclaw connect ${secondJoinUrl} --service --session-host`;
-    const secondInstalledCommand = `openclaw connect ${secondJoinUrl} --service --session-host`;
     const versionNote =
       "The machine needs a matching Gateway build; the exact npm release could not be confirmed.";
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "device.pair.setupCode": {
-          sequence: [
-            setupCode(firstJoinUrl, {
-              command: firstCommand,
-              serviceCommand: firstServiceCommand,
-              installedCommand: firstInstalledCommand,
-            }),
-            setupCode(secondJoinUrl, {
-              command: secondCommand,
-              serviceCommand: `npx -y openclaw connect ${secondJoinUrl} --service`,
-              installedCommand: secondInstalledCommand,
-              versionNote,
-            }),
-          ],
+    const first = setupCode(firstJoinUrl, "2026.9.30", true);
+    const second = setupCode(secondJoinUrl, "", false, versionNote);
+    const { page, gateway } = await openNewSession(
+      {
+        methodResponses: {
+          "device.pair.setupCode": { sequence: [first, second] },
         },
       },
-    });
-
-    await page.goto(`${suite.server.baseUrl}new`);
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
+      },
+    );
     const place = page.locator(".oc-popover.new-session-page__where-popover");
     await page.locator("#new-session-where-trigger").click();
     const connect = place.getByRole("button", { name: "Connect a device" });
@@ -84,11 +77,11 @@ suite.define(() => {
     const firstRequest = await gateway.waitForRequest("device.pair.setupCode");
     expect(firstRequest.params).toEqual({ includeQr: false, joinUrl: true });
     const dialog = page.locator('openclaw-modal-dialog[label="Connect a machine"]');
-    await dialog.getByText(firstCommand, { exact: true }).waitFor();
+    await dialog.getByText(first.command, { exact: true }).waitFor();
     const installed = dialog
       .locator(".connect-machine-dialog__hint")
       .filter({ hasText: "Already have OpenClaw installed? Run:" });
-    expect(await installed.locator("code").textContent()).toBe(firstInstalledCommand);
+    expect(await installed.locator("code").textContent()).toBe(first.installedCommand);
     expect(await dialog.getByText(versionNote, { exact: true }).count()).toBe(0);
     expect(
       await dialog
@@ -112,7 +105,7 @@ suite.define(() => {
     expect(await dialog.getByRole("button", { name: "Manage devices" }).count()).toBe(1);
 
     await dialog.getByText("Command access only (no agent sessions)", { exact: true }).click();
-    await dialog.getByText(firstServiceCommand, { exact: true }).waitFor();
+    await dialog.getByText(first.serviceCommand, { exact: true }).waitFor();
 
     await dialog.getByText("Command access only (no agent sessions)", { exact: true }).click();
 
@@ -127,24 +120,22 @@ suite.define(() => {
     await dialog
       .locator(".login-gate__command code")
       .first()
-      .filter({ hasText: secondCommand })
+      .filter({ hasText: second.command })
       .waitFor();
     expect(await dialog.locator(".login-gate__command code").first().textContent()).toBe(
-      secondCommand,
+      second.command,
     );
-    expect(await installed.locator("code").textContent()).toBe(secondInstalledCommand);
+    expect(await installed.locator("code").textContent()).toBe(second.installedCommand);
     const note = dialog.getByText(versionNote, { exact: true });
     await note.waitFor();
-    expect(await dialog.getByText(firstCommand, { exact: true }).count()).toBe(0);
+    expect(await dialog.getByText(first.command, { exact: true }).count()).toBe(0);
   });
 
   it("hides machine connection from non-admin operators", async () => {
-    const page = await openPage();
-    const gateway = await installMockGateway(page, {
+    const { page, gateway } = await openNewSession({
       operatorScopes: ["operator.read", "operator.write"],
     });
 
-    await page.goto(`${suite.server.baseUrl}new`);
     const place = page.locator(".oc-popover.new-session-page__where-popover");
     await page.locator("#new-session-where-trigger").click();
     await place.locator('[data-value="gateway"]').waitFor();
@@ -153,19 +144,14 @@ suite.define(() => {
   });
 
   it("shows a retryable error when connection-link creation never responds", async () => {
-    const page = await openPage();
     const joinUrl = "https://gateway.example.com/j/retried-code";
-    const gateway = await installMockGateway(page, {
+    const response = setupCode(joinUrl, "2026.9.30");
+    const { page, gateway } = await openNewSession({
       methodResponses: {
-        "device.pair.setupCode": setupCode(joinUrl, {
-          command: `npx -y openclaw@2026.9.30 connect ${joinUrl} --service --session-host`,
-          serviceCommand: `npx -y openclaw@2026.9.30 connect ${joinUrl} --service`,
-          installedCommand: `openclaw connect ${joinUrl} --service --session-host`,
-        }),
+        "device.pair.setupCode": response,
       },
     });
 
-    await page.goto(`${suite.server.baseUrl}new`);
     await page.clock.install();
     await gateway.deferNext("device.pair.setupCode");
     const dialog = await openConnection(page, gateway);
@@ -184,22 +170,16 @@ suite.define(() => {
 
     const retry = dialog.getByRole("button", { name: "Mint fresh code" });
     await retry.click();
-    await dialog
-      .getByText(`npx -y openclaw@2026.9.30 connect ${joinUrl} --service --session-host`, {
-        exact: true,
-      })
-      .waitFor();
+    await dialog.getByText(response.command, { exact: true }).waitFor();
     expect(await gateway.getRequests("device.pair.setupCode")).toHaveLength(2);
   });
 
   it("redacts sensitive connection-link failures before rendering them", async () => {
-    const page = await openPage();
-    const gateway = await installMockGateway(page, {
+    const { page, gateway } = await openNewSession({
       deferredMethods: ["device.pair.setupCode"],
     });
     const secret = "e2e-pairing-bearer-secret";
 
-    await page.goto(`${suite.server.baseUrl}new`);
     const dialog = await openConnection(page, gateway);
     await gateway.rejectDeferred("device.pair.setupCode", {
       message: `pairing failed: Authorization: Bearer ${secret}`,
@@ -212,12 +192,10 @@ suite.define(() => {
   });
 
   it("closes an in-flight connection dialog when the Gateway reconnects", async () => {
-    const page = await openPage();
-    const gateway = await installMockGateway(page, {
+    const { page, gateway } = await openNewSession({
       deferredMethods: ["device.pair.setupCode"],
     });
 
-    await page.goto(`${suite.server.baseUrl}new`);
     const dialog = await openConnection(page, gateway);
     await dialog.getByText("Creating a secure connection link…", { exact: true }).waitFor();
 

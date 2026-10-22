@@ -1,10 +1,25 @@
 import { vi } from "vitest";
 import { githubIdentityViewFixture } from "../../features/github-connections/github-identity.test-support.ts";
+import { createAgentViewTestProps } from "./agents-view.test-helpers.ts";
 import type { AgentTools } from "./panels-tools-skills.tsx";
 
-export function createBaseParams(overrides: Partial<Parameters<typeof AgentTools>[0]> = {}) {
+type Params = Parameters<typeof AgentTools>[0] &
+  Pick<
+    ReturnType<Parameters<typeof AgentTools>[0]["readData"]>,
+    | "toolsCatalogLoading"
+    | "toolsCatalogError"
+    | "toolsCatalogResult"
+    | "toolsEffectiveLoading"
+    | "toolsEffectiveError"
+    | "toolsEffectiveResult"
+  >;
+
+export function createBaseParams(overrides: Partial<Params> = {}): Params {
   const githubIdentity = githubIdentityViewFixture();
   return {
+    readData() {
+      return { ...createAgentViewTestProps().readData(), ...this };
+    },
     agentId: "main",
     canUpdateConfig: true,
     configForm: {

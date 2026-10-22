@@ -6,7 +6,7 @@ import {
   resolveIMessageInboundDecision,
 } from "./inbound-processing.js";
 import { rememberPersistedIMessageEcho } from "./persisted-echo-cache.js";
-import { createSelfChatCache } from "./self-chat-cache.js";
+import { SelfChatCache } from "./self-chat-cache.js";
 
 const IMAGE_MEDIA_FACT = { contentType: "image/png", kind: "image" } as const;
 const SELF_CHAT_HANDLE = "+15551234567";
@@ -17,12 +17,12 @@ const DEFAULT_FAKE_TIME = "2026-03-24T12:00:00Z";
 type InboundDecisionParams = Parameters<typeof resolveIMessageInboundDecision>[0];
 
 let echoCache: ReturnType<typeof createSentMessageCache>;
-let selfChatCache: ReturnType<typeof createSelfChatCache>;
+let selfChatCache: SelfChatCache;
 
 beforeEach(() => {
   installIMessageStateRuntimeForTest();
   echoCache = createSentMessageCache();
-  selfChatCache = createSelfChatCache();
+  selfChatCache = new SelfChatCache();
 });
 
 afterEach(() => {

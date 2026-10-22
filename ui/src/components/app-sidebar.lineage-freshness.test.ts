@@ -668,7 +668,7 @@ it("resolves the routed child's former global ancestor over a foreign cached row
       return { subscribed: true };
     }
     if (method === "sessions.groups.list") {
-      return { names: [], sectionOrder: [] };
+      return { groups: [], sectionOrder: [] };
     }
     if (method === "models.list") {
       return { models: [] };

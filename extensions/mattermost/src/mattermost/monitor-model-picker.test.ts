@@ -51,12 +51,18 @@ vi.mock("./runtime-api.js", async (importOriginal) => ({
 import { createMattermostModelPickerInteractionHandler } from "./monitor-model-picker.js";
 import type { MattermostMonitorContext } from "./monitor-types.js";
 
-const scenarios = ["providers", "back", "list", "select"].flatMap((action) =>
-  ["ready", "failed", "empty"].map((catalogStatus) => ({ action, catalogStatus })),
-);
+const scenarios = [
+  ...["providers", "back", "list", "select"].flatMap((action) =>
+    ["ready", "failed", "empty"].map((catalogStatus) => ({ action, catalogStatus })),
+  ),
+  ...["removed-model", "unlisted-provider"].map((catalogStatus) => ({
+    action: "select",
+    catalogStatus,
+  })),
+];
 const replyToId = "interaction:picker-post-1:select:openai/gpt-5.4";
 it.each(scenarios)(
-  "updates the $action picker once with $catalogStatus catalog text and choices",
+  "handles the $action picker with $catalogStatus catalog availability",
   async ({ action, catalogStatus }) => {
     vi.clearAllMocks();
     mocks.authorize.mockResolvedValue({
@@ -108,8 +114,14 @@ it.each(scenarios)(
     mocks.buildPreparedModelsProviderData.mockImplementationOnce(async () => {
       order.push("load");
       return {
-        providers: hasModels ? ["openai"] : [],
-        byProvider: new Map(hasModels ? [["openai", new Set(["gpt-5.4"])]] : []),
+        providers: hasModels
+          ? [catalogStatus === "unlisted-provider" ? "anthropic" : "openai"]
+          : [],
+        byProvider: new Map(
+          hasModels
+            ? [["openai", new Set([catalogStatus === "removed-model" ? "gpt-4.1" : "gpt-5.4"])]]
+            : [],
+        ),
         modelNames: new Map(),
         modelCatalog: [],
         resolvedDefault: { provider: "openai", model: "gpt-5.4" },
@@ -164,9 +176,18 @@ it.each(scenarios)(
       post: { id: "picker-post-1", channel_id: "channel-1", message: "picker" },
     });
 
-    expect(response).toEqual({});
     expect(mocks.buildPreparedModelsProviderData).toHaveBeenCalledOnce();
     expect(mocks.dispatch).not.toHaveBeenCalled();
+    if (catalogStatus === "removed-model" || catalogStatus === "unlisted-provider") {
+      expect(response).toEqual({
+        ephemeral_text: "That model is no longer available: openai/gpt-5.4",
+      });
+      expect(mocks.runDetachedWebhookWork).not.toHaveBeenCalled();
+      expect(updateModelPickerPost).not.toHaveBeenCalled();
+      expect(mocks.recordDeliveredCommandExchange).not.toHaveBeenCalled();
+      return;
+    }
+    expect(response).toEqual({});
     const selectsModel = action === "select" && hasModels;
     const visibleText = !hasModels
       ? "No models available."

@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  attributeDelegatedSessionCreator,
+  inheritSessionCreationPolicy,
   inheritSessionGitContributorProfileIds,
+  preserveCreationStamp,
+  resolveSessionCreatorActor,
+  sessionCreatorProfileId,
+  sessionIsolationProfileId,
   isMainGitContributorScope,
   inheritSpawnSessionOwner,
   sessionPersonalProfileId,
@@ -11,39 +17,30 @@ import {
 type Source = Parameters<typeof sessionPersonalProfileId>[0];
 const creator: SessionCreatedActor = { type: "human", source: "profile", id: "profile-creator" };
 const human = (id?: string, label?: string): SessionActor => ({ type: "human", id, label });
-const spawningAgent: SessionActor = { type: "agent", id: "roboclaw" };
+const spawningAgent: SessionCreatedActor = { type: "agent", id: "roboclaw" };
+const owned = (actor: SessionActor, createdActor: SessionCreatedActor = creator): Source => ({
+  owner: { actor },
+  createdActor,
+});
+const created = (actor: SessionCreatedActor): Source => ({ createdActor: actor });
+const channelCreator: SessionCreatedActor = {
+  ...creator,
+  source: "channel",
+  label: "profile-owner",
+};
 
 it("resolves personal profiles from assigned humans or authenticated creators only", () => {
   const cases: Array<[Source, string | undefined]> = [
-    [
-      { owner: { actor: human("profile-owner", "profile-other") }, createdActor: creator },
-      "profile-owner",
-    ],
+    [owned(human("profile-owner", "profile-other")), "profile-owner"],
     [{ createdActor: creator }, "profile-creator"],
-    [
-      { owner: { actor: { type: "agent", id: "profile-not-a-human" } }, createdActor: creator },
-      "profile-creator",
-    ],
-    [
-      {
-        createdActor: {
-          type: "human",
-          source: "channel",
-          id: "profile-creator",
-          label: "profile-owner",
-        },
-      },
-      undefined,
-    ],
-    [{ owner: { actor: human(undefined, "profile-owner") }, createdActor: creator }, undefined],
-    [{ createdActor: { type: "human", source: "profile", label: "profile-creator" } }, undefined],
+    [owned({ type: "agent", id: "profile-not-a-human" }), "profile-creator"],
+    [created(channelCreator), undefined],
+    [owned(human(undefined, "profile-owner")), undefined],
+    [created({ type: "human", source: "profile", label: "profile-creator" }), undefined],
     [undefined, undefined],
     [{}, undefined],
     [
-      {
-        owner: { actor: { type: "agent", id: "profile-owner" } },
-        createdActor: { type: "system", id: "profile-creator" },
-      },
+      owned({ type: "agent", id: "profile-owner" }, { type: "system", id: "profile-creator" }),
       undefined,
     ],
   ];
@@ -53,41 +50,27 @@ it("resolves personal profiles from assigned humans or authenticated creators on
 });
 
 it("inherits only the requesting human's current owner, including canonical profile aliases", () => {
-  const cases: Array<{
-    source: Source;
-    requester: string | undefined;
-    actor: SessionActor;
-    now?: number;
-    resolve?: (profileId: string) => string | undefined;
-  }> = [
-    { source: { createdActor: creator }, requester: creator.id, actor: human(creator.id), now: 42 },
-    {
-      source: { owner: { actor: human("profile-owner") }, createdActor: creator },
-      requester: "profile-owner",
-      actor: human("profile-owner"),
-      now: 42,
-    },
-    { source: { createdActor: creator }, requester: "profile-other", actor: spawningAgent },
-    { source: { createdActor: creator }, requester: undefined, actor: spawningAgent },
-    {
-      source: { owner: { actor: human("profile-before-merge") }, createdActor: creator },
-      requester: "profile-after-merge",
-      actor: human("profile-after-merge"),
-      now: 42,
-      resolve: (id) => (id === "profile-before-merge" ? "profile-after-merge" : id),
-    },
-    {
-      source: { owner: { actor: { type: "agent", id: "another-agent" } }, createdActor: creator },
-      requester: creator.id,
-      actor: spawningAgent,
-    },
-    {
-      source: { createdActor: { type: "human", source: "channel", id: "discord-user" } },
-      requester: "discord-user",
-      actor: spawningAgent,
-    },
+  type Resolve = Parameters<typeof inheritSpawnSessionOwner>[4];
+  const cases: Array<[Source, string | undefined, SessionActor, number?, Resolve?]> = [
+    [created(creator), creator.id, human(creator.id), 42],
+    [owned(human("profile-owner")), "profile-owner", human("profile-owner"), 42],
+    [created(creator), "profile-other", spawningAgent],
+    [created(creator), undefined, spawningAgent],
+    [
+      owned(human("profile-before-merge")),
+      "profile-after-merge",
+      human("profile-after-merge"),
+      42,
+      (id) => (id === "profile-before-merge" ? "profile-after-merge" : id),
+    ],
+    [owned({ type: "agent", id: "another-agent" }), creator.id, spawningAgent],
+    [
+      created({ type: "human", source: "channel", id: "discord-user" }),
+      "discord-user",
+      spawningAgent,
+    ],
   ];
-  for (const { source, requester, actor, now, resolve } of cases) {
+  for (const [source, requester, actor, now, resolve] of cases) {
     expect(inheritSpawnSessionOwner(source, spawningAgent, requester, now, resolve)).toEqual({
       actor,
       assignedBy: spawningAgent,
@@ -106,55 +89,86 @@ const parent = {
   })),
 };
 
-describe("Git contributor source scope", () => {
-  it("uses the verified request, not a multiplexed main roster, for delegation", () => {
-    const source = {
+it("uses the verified request, not a multiplexed main roster, for delegation", () => {
+  const source = {
+    agentId: "work",
+    config: { session: { mainKey: "home" } },
+    sessionKey: "agent:work:home",
+  };
+  const inherit = (requesterProfileId?: string) =>
+    inheritSessionGitContributorProfileIds(parent, { ...source, requesterProfileId });
+  expect(inherit("requester-c")).toEqual(["requester-c"]);
+  expect(inheritSessionGitContributorProfileIds(parent, source)).toBeUndefined();
+  expect(inherit("requester-d")).toEqual(["requester-d"]);
+  expect(isMainGitContributorScope({ ...source, sessionKey: "agent:other:home" })).toBe(false);
+  expect(
+    isMainGitContributorScope({
       agentId: "work",
-      config: { session: { mainKey: "home" } },
-      sessionKey: "agent:work:home",
-    };
-    expect(
-      inheritSessionGitContributorProfileIds(parent, {
-        ...source,
-        requesterProfileId: "requester-c",
-      }),
-    ).toEqual(["requester-c"]);
-    expect(inheritSessionGitContributorProfileIds(parent, source)).toBeUndefined();
-    expect(
-      inheritSessionGitContributorProfileIds(parent, {
-        ...source,
-        requesterProfileId: "requester-d",
-      }),
-    ).toEqual(["requester-d"]);
-    expect(isMainGitContributorScope({ ...source, sessionKey: "agent:other:home" })).toBe(false);
-    expect(
-      isMainGitContributorScope({
-        agentId: "work",
-        config: { session: { scope: "global" } },
-        sessionKey: "global",
-      }),
-    ).toBe(true);
+      config: { session: { scope: "global" } },
+      sessionKey: "global",
+    }),
+  ).toBe(true);
+});
+
+it("preserves authorized collaborative task and nested-delegation credit", () => {
+  const source = { agentId: "work", config: {}, sessionKey: "agent:work:dashboard:task" };
+  const inherited = inheritSessionGitContributorProfileIds(parent, source);
+  expect(inherited).toEqual(["prior-inherited", "unrelated-a", "unrelated-b"]);
+  expect(
+    inheritSessionGitContributorProfileIds(
+      { inheritedGitContributorProfileIds: inherited },
+      { ...source, sessionKey: "agent:work:subagent:child" },
+    ),
+  ).toEqual(inherited);
+  expect(
+    inheritSessionGitContributorProfileIds({ ...parent, incognito: true }, source),
+  ).toBeUndefined();
+});
+
+describe("delegated human creators", () => {
+  const actor: SessionCreatedActor = { type: "human", source: "profile", id: "isolation-owner" };
+
+  it("keeps the legacy isolation actor while projecting the captured human creator", () => {
+    const attributed = attributeDelegatedSessionCreator(actor, "requester");
+    expect(attributed).toEqual({
+      ...actor,
+      delegatedBy: { type: "human", source: "profile", id: "requester" },
+    });
+    expect(resolveSessionCreatorActor(attributed)).toEqual({
+      type: "human",
+      source: "profile",
+      id: "requester",
+    });
+    expect(sessionCreatorProfileId(attributed)).toBe("requester");
+    expect(sessionIsolationProfileId(attributed)).toBe("isolation-owner");
+    expect(actor).not.toHaveProperty("delegatedBy");
   });
 
-  it("preserves authorized collaborative task and nested-delegation credit", () => {
-    const source = { agentId: "work", config: {}, sessionKey: "agent:work:dashboard:task" };
-    const inheritedGitContributorProfileIds = inheritSessionGitContributorProfileIds(
-      parent,
-      source,
-    );
-    expect(inheritedGitContributorProfileIds).toEqual([
-      "prior-inherited",
-      "unrelated-a",
-      "unrelated-b",
-    ]);
+  it("requires a captured human, not an assignee or execution agent", () => {
+    expect(attributeDelegatedSessionCreator(spawningAgent, "requester")).toEqual({
+      ...spawningAgent,
+      delegatedBy: { type: "human", source: "profile", id: "requester" },
+    });
+    expect(attributeDelegatedSessionCreator(spawningAgent)).toEqual(spawningAgent);
+    expect(attributeDelegatedSessionCreator(undefined, "requester")).toBeUndefined();
+  });
+
+  it("does not rewrite stored attribution when assignment or proposed creator changes", () => {
+    const attributed = attributeDelegatedSessionCreator(actor, "requester");
+    const stored = {
+      createdActor: attributed,
+      createdVia: "spawn" as const,
+      createdAt: 1,
+      sandbox: "required" as const,
+    };
+    expect(preserveCreationStamp({ ...stored, createdActor: creator }, stored)).toEqual(stored);
+    expect(inheritSessionCreationPolicy(stored, spawningAgent)).toEqual({
+      actor: attributed,
+      sandbox: "required",
+    });
+    expect(sessionPersonalProfileId({ createdActor: attributed })).toBe("requester");
     expect(
-      inheritSessionGitContributorProfileIds(
-        { inheritedGitContributorProfileIds },
-        { ...source, sessionKey: "agent:work:subagent:child" },
-      ),
-    ).toEqual(inheritedGitContributorProfileIds);
-    expect(
-      inheritSessionGitContributorProfileIds({ ...parent, incognito: true }, source),
-    ).toBeUndefined();
+      sessionPersonalProfileId({ createdActor: attributed, owner: { actor: human("assignee") } }),
+    ).toBe("assignee");
   });
 });

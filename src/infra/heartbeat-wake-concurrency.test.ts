@@ -84,19 +84,22 @@ describe("heartbeat wake target concurrency", () => {
         coalesceMs: 99,
       }).then(settled);
       await vi.advanceTimersByTimeAsync(99);
-      const initial = siblingAllowed ? ["event", "task"] : ["event"];
+      const failed = reason === "throw";
+      const initial = siblingAllowed || failed ? ["event", "task"] : ["event"];
       expect(handler.mock.calls.map(([request]) => request.intent)).toEqual(initial);
-      expect(settled).toHaveBeenCalledTimes(siblingAllowed ? 1 : 0);
+      expect(settled).toHaveBeenCalledTimes(failed ? 2 : siblingAllowed ? 1 : 0);
       await vi.advanceTimersByTimeAsync(delay - 1);
       expect(handler.mock.calls.map(([request]) => request.intent)).toEqual(initial);
       await vi.advanceTimersByTimeAsync(1);
       expect(handler.mock.calls.map(([request]) => request.intent)).toEqual(
-        siblingAllowed ? ["event", "task", "event"] : ["event", "event", "task"],
+        failed ? initial : siblingAllowed ? ["event", "task", "event"] : ["event", "event", "task"],
       );
       await Promise.all([event, task]);
       expect(settled).toHaveBeenCalledTimes(2);
       expect(settled.mock.calls.map(([result]) => result)).toEqual([
-        { status: "ran", durationMs: 1 },
+        failed
+          ? { status: "failed", reason: "temporary admission failure" }
+          : { status: "ran", durationMs: 1 },
         { status: "ran", durationMs: 1 },
       ]);
     },

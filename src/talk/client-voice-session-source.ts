@@ -145,14 +145,15 @@ export function matchesClientVoiceRunSource(
   );
 }
 
-/** Published foreign sources admit once; local predicates belong to the voice writer. */
+/** Foreign sources use their publication owner; local predicates belong to the voice writer. */
 export async function prepareClientVoiceSessionSourceChecks(
   writer: Pick<ClientVoiceSessionSource, "options" | "identity">,
   authorities: readonly PreparedSessionSourceAuthority[],
 ): Promise<PreparedSessionSourceAuthority> {
   const checks: PreparedSessionSourceAuthority["checks"] = [];
+  const publishedChecks: PreparedSessionSourceAuthority["checks"] = [];
   const foreign = new Map<string | symbol, PreparedSessionSourceAuthority["checks"]>();
-  const canAdmitPublished = authorities.every(
+  const canAdmitOnce = authorities.every(
     (authority) =>
       !authority.nativeSource && !authority.opaqueCommitGuard && !authority.hasOpaqueCheck,
   );
@@ -165,8 +166,11 @@ export async function prepareClientVoiceSessionSourceChecks(
     ) {
       checks.push(check);
     } else {
-      // An admitted durable write may finish after source revocation; later effects reauthorize.
-      if (canAdmitPublished && admitPublishedSessionSource(check.predicate)) {
+      if (admitPublishedSessionSource(check.predicate)) {
+        // Opaque guards keep live checks through native commit; ordinary writes admit once.
+        if (!canAdmitOnce) {
+          publishedChecks.push(check);
+        }
         continue;
       }
       const group = foreign.get(source.databaseIdentity) ?? [];
@@ -174,10 +178,20 @@ export async function prepareClientVoiceSessionSourceChecks(
       foreign.set(source.databaseIdentity, group);
     }
   }
-  const assertAuthoritiesCurrent = () =>
+  const assertAuthoritiesCurrent = () => {
     authorities.forEach((authority) => authority.assertCurrent());
+    publishedChecks.forEach(({ predicate }) => {
+      if (!admitPublishedSessionSource(predicate)) {
+        throw new Error("Voice session source is unavailable");
+      }
+    });
+  };
   if (foreign.size === 0) {
-    return { checks, assertCurrent: assertAuthoritiesCurrent };
+    return {
+      nativeSource: publishedChecks.length > 0,
+      checks,
+      assertCurrent: assertAuthoritiesCurrent,
+    };
   }
   const [
     { retainOpenClawAgentDatabaseReadOnly },

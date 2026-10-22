@@ -12,11 +12,9 @@ import {
   readConfigFileSnapshot,
   resetConfigRuntimeState,
 } from "../config/config.js";
-import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { resetNodeHostPluginRegistry } from "../node-host/plugin-node-host.test-support.js";
 import { prepareNodeHostRuntime } from "../node-host/runtime.js";
 import { ensureNodeHostStateReady } from "../node-host/startup-state-readiness.js";
-import { createPluginStateSyncKeyedStore } from "../plugin-state/plugin-state-store.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   resetPluginLoaderTestStateForTest,
@@ -27,6 +25,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   initializeNativeOpenClawStateDatabase,
+  openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { captureEnv } from "../test-utils/env.js";
 import { ensureCliExecutionBootstrap } from "./command-execution-startup.js";
@@ -47,15 +46,19 @@ beforeEach(() => {
   resetConfigRuntimeState();
   configGuardTestApi.resetConfigGuardStateForTests();
 });
-afterEach(() => {
-  pathEnv.restore();
-  resetConfigRuntimeState();
-  resetNodeHostPluginRegistry();
-  resetPluginLoaderTestStateForTest();
-  clearPluginMetadataLifecycleCaches();
-  closeOpenClawStateDatabaseForTest();
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
+afterEach(async () => {
+  try {
+    await closeOpenClawStateDatabaseAsync();
+  } finally {
+    pathEnv.restore();
+    resetConfigRuntimeState();
+    resetNodeHostPluginRegistry();
+    resetPluginLoaderTestStateForTest();
+    clearPluginMetadataLifecycleCaches();
+    closeOpenClawStateDatabaseForTest();
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  }
 });
 
 function fixture() {
@@ -108,6 +111,7 @@ function fixture() {
   writeJson(configPath, config);
   return {
     root,
+    stateDir,
     databasePath: path.join(stateDir, "state", "openclaw.sqlite"),
     configPath,
     config,
@@ -159,14 +163,15 @@ describe("private node worker bootstrap", () => {
     ],
     ["future", "PRAGMA user_version = 999", true],
     ["corrupt", "", true],
-  ] as const)("does not adopt %s state as native bootstrap", async (shape, sql, throws) => {
+  ] as const)("does not adopt %s state as native bootstrap", (shape, sql, throws) => {
     const { databasePath } = fixture();
     seedMacNodeWorkerProofState(databasePath);
-    const db = new DatabaseSync(databasePath);
-    if (sql) {
-      db.exec(sql);
+    {
+      using db = new DatabaseSync(databasePath);
+      if (sql) {
+        db.exec(sql);
+      }
     }
-    db.close();
     if (shape === "corrupt") {
       fs.writeFileSync(databasePath, "not a SQLite database");
     }
@@ -179,23 +184,26 @@ describe("private node worker bootstrap", () => {
     expect(fs.readFileSync(databasePath)).toEqual(before);
   });
 
-  it("initializes native bootstrap before plugin state reads without losing native rows", async () => {
-    const { databasePath } = fixture();
+  it("migrates native credentials during node startup without changing identity, tokens or policy", async () => {
+    const { stateDir, databasePath, configPath } = fixture();
     const rows = seedMacNodeWorkerProofState(databasePath);
+    const configBefore = fs.readFileSync(configPath);
+
     await bootstrap();
-    ensureNodeHostStateReady();
-    const store = createPluginStateSyncKeyedStore("fixture-node", {
-      namespace: "bootstrap-proof",
-      maxEntries: 10,
-    });
-    expect(store.entries()).toEqual([]);
-    closeOpenClawStateDatabaseForTest();
-    const database = new DatabaseSync(databasePath, { readOnly: true });
-    try {
-      expect(readMacNodeWorkerProofRows(database)).toEqual(rows);
-    } finally {
-      database.close();
-    }
+    await ensureNodeHostStateReady();
+    await closeOpenClawStateDatabaseAsync();
+
+    using database = new DatabaseSync(databasePath, { readOnly: true });
+    const credentialsPath = path.join(stateDir, "client", "credentials.sqlite");
+    expect(readMacNodeWorkerProofRows(database, credentialsPath)).toEqual(rows);
+    expect(
+      database
+        .prepare(
+          "SELECT name FROM sqlite_schema WHERE name IN ('device_identities','device_auth_tokens')",
+        )
+        .all(),
+    ).toEqual([]);
+    expect(fs.readFileSync(configPath)).toEqual(configBefore);
   });
 
   it("pins core config and preserves existing Gateway state", async () => {
@@ -203,7 +211,7 @@ describe("private node worker bootstrap", () => {
     const includePath = path.join(root, "channels.json");
     writeJson(includePath, config.channels);
     writeJson(configPath, { ...config, channels: { $include: "channels.json" } });
-    loadOrCreateDeviceIdentity();
+    openOpenClawStateDatabase();
     closeOpenClawStateDatabaseForTest();
     const filesBefore = readFiles(configPath, includePath, databasePath);
 
@@ -237,7 +245,7 @@ describe("private node worker bootstrap", () => {
     } finally {
       allocateSnapshot.mockRestore();
     }
-    ensureNodeHostStateReady();
+    await ensureNodeHostStateReady();
     const prepared = await prepareNodeHostRuntime();
     expect(getRuntimeConfig()).toBe(pinned);
     expect(prepared.manifest.commands).toEqual(

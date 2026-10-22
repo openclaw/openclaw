@@ -25,6 +25,7 @@ import { recordUpdateDatabaseWrites } from "./update-command-database-receipts.j
 type DoctorCompletionOptions = {
   root: string;
   progress: UpdateStepProgress;
+  results: UpdateStepResult[];
   onConfigSnapshot?: (snapshot: UpdateConfigSnapshot) => void;
   context?: { changes: UpdateDoctorConfigChange[]; databaseBackup?: UpdateDatabaseBackup };
   configSnapshot?: UpdateConfigSnapshot;
@@ -45,6 +46,10 @@ export function createPackageUpdateDoctorCompletion(params: DoctorCompletionOpti
     const databaseReceipt = context?.databaseBackup
       ? recordUpdateDatabaseWrites(context.databaseBackup, doctorResult?.databaseWrites, doctorStep)
       : undefined;
+    if (databaseReceipt) {
+      // The verifier attributes thrown completion failures to the last Doctor step.
+      params.results.unshift(databaseReceipt);
+    }
     try {
       const refusal = doctorResult?.configWriteRefusal;
       const configWriteRefusal = refusal

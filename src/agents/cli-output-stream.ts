@@ -702,7 +702,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
         }
       }
       if (
-        !frameBoundedCliJsonlChunk(lineBuffer, chunk, outputLimits.maxPendingLineChars, (line) => {
+        !frameBoundedCliJsonlChunk(lineBuffer, chunk, (line) => {
           handleJsonlLine(line);
           return !parseErrorText;
         })

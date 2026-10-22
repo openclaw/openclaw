@@ -1,5 +1,4 @@
 import {
-  type NpmIntegrityDrift,
   type NpmSpecResolution,
   packNpmSpecToArchive,
   withInstallWorkspace,
@@ -19,7 +18,6 @@ type NpmSpecArchiveFinalInstallResult<TResult extends { ok: boolean }> =
   | Exclude<TResult, { ok: true }>
   | (Extract<TResult, { ok: true }> & {
       npmResolution: NpmSpecResolution;
-      integrityDrift?: NpmIntegrityDrift;
     });
 
 function isSuccessfulInstallResult<TResult extends { ok: boolean }>(
@@ -108,7 +106,6 @@ export async function installFromValidatedNpmSpecArchive<
     return {
       ...installResult,
       npmResolution,
-      ...(driftResult.integrityDrift ? { integrityDrift: driftResult.integrityDrift } : {}),
     };
   });
 }

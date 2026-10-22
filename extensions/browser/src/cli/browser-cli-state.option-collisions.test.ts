@@ -121,9 +121,13 @@ describe("browser state option collisions", () => {
     expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
   });
 
-  it("filters non-string header values from JSON payload", async () => {
-    const request = await run("set headers --json", '{"x-auth":"ok","retry":3,"enabled":true}');
-    expect(request?.body?.headers).toEqual({ "x-auth": "ok" });
+  it.each([
+    ['{"x-auth":"ok","retry":3,"enabled":true}', { "x-auth": "ok" }],
+    ['{"retry":3,"enabled":true}', {}],
+    ['{"__proto__":"ignored","x-auth":"ok"}', { "x-auth": "ok" }],
+  ])("filters non-string and prototype header values from %s", async (input, expected) => {
+    const request = await run("set headers --json", input);
+    expect(request?.body?.headers).toEqual(expected);
   });
 
   it("passes no-preference through to /set/media", async () => {

@@ -292,7 +292,12 @@ it.skipIf(process.platform === "win32").for([
           mode: "test",
           scopes: ["operator.admin", "operator.read", "operator.write"],
           deviceIdentity: loadOrCreateDeviceIdentity({
-            path: instance.state.path("proof-device.sqlite"),
+            path: instance.state.statePath(
+              "proof-identities",
+              "requester",
+              "client",
+              "credentials.sqlite",
+            ),
           }),
           onEvent: ({ event, payload }) => {
             if (
@@ -435,7 +440,6 @@ it.skipIf(process.platform === "win32").for([
                     params: { transport: "sse", openaiWsWarmup: false },
                   },
                 },
-                heartbeat: { every: "0m" },
                 skipBootstrap: true,
                 skills: [],
                 timeoutSeconds: 120,
@@ -501,11 +505,31 @@ it.skipIf(process.platform === "win32").for([
           );
           observations.childKey = child.key;
           observations.beforeShutdown = persistedChild({ runId: childRunId });
+          const parentSession = persisted(PARENT_KEY);
+          const parentSessionId = parentSession?.sessionId;
+          expect(observations.beforeShutdown).toMatchObject({
+            operatorRecoverySource: {
+              version: 1,
+              agentId: "main",
+              sessionKey: PARENT_KEY,
+              sessionId: parentSessionId,
+              lifecycleRevision: parentSession?.lifecycleRevision,
+              sourceRunId: originalRunId,
+              snapshot: {
+                profileId: expect.any(String),
+                scopes: expect.arrayContaining([
+                  "operator.admin",
+                  "operator.read",
+                  "operator.write",
+                ]),
+                localOperator: true,
+              },
+            },
+          });
           expect(
             JSON.stringify(await client.request("chat.history", { sessionKey: PARENT_KEY })),
           ).toContain(PARENT_FINAL);
           observeRecovery = true;
-          const parentSessionId = persisted(PARENT_KEY)?.sessionId;
           const recoveryStartedAt = Date.now();
           await restart(replaceChild);
           phase = "waiting-for-continuation";

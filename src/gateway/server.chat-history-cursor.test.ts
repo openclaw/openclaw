@@ -202,7 +202,7 @@ describe("chat.history cursor catch-up", () => {
     });
     const cleanup = vi
       .spyOn(managedOutgoingMedia, "cleanupManagedOutgoingMediaRecords")
-      .mockResolvedValue({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 0 });
+      .mockResolvedValue(undefined);
     onTestFinished(() => cleanup.mockRestore());
     const cached = await callChat<History>(context, "chat.history");
     expect(cached.ok).toBe(true);

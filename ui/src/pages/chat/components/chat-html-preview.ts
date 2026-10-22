@@ -1,4 +1,4 @@
-import { createSignal, onCleanup } from "solid-js";
+import { createMemo, createSignal, onCleanup } from "solid-js";
 import { createLazyCustomElementRequests } from "../../../app/lazy-custom-element.ts";
 import { isStaleChunkImportError } from "../../../app/stale-chunk-reload.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
@@ -6,18 +6,14 @@ import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { readFileDraft } from "./chat-file-drafts.ts";
-import type { PreviewProps, SourceFallbackProps } from "./chat-html-preview-view.tsx";
 import type {
   SidebarContent,
   AttachmentSidebarRuntime,
   FileSidebarNavigation,
 } from "./chat-sidebar-content-types.ts";
-export type FileHtmlPreviewControls = {
-  source: boolean;
-  presentation: PreviewProps | null;
-  sourceFallback?: SourceFallbackProps;
-  onToggle: () => void;
-};
+export type FileHtmlPreviewControls = NonNullable<
+  ReturnType<ReturnType<typeof createFileHtmlPreview>["controls"]>
+>;
 
 registerEnglishCatalog(registerFilePreviewEnglish);
 
@@ -35,7 +31,7 @@ export const htmlPreviewElement = {
   loadModule: () => import("./chat-html-preview-element.tsx"),
 };
 
-/** Owns preview toggles; each selected file/navigation restores its initial mode. */
+/** Owns preview toggles; each selected file/line request restores its initial mode. */
 export function createFileHtmlPreview(
   content: () => SidebarContent | null,
   navigation: () => FileSidebarNavigation | null,
@@ -47,9 +43,13 @@ export function createFileHtmlPreview(
       ? current
       : null;
   };
+  const lineNavigation = createMemo(() => {
+    const request = navigation();
+    return request?.line != null ? request : null;
+  });
   const initialSource = () => {
     const current = file();
-    return Boolean(navigation() || current?.line != null);
+    return Boolean(lineNavigation() || current?.line != null);
   };
   const [source, setSource] = createSignal(initialSource);
   const [preview, setPreview] = createSignal(() => {
@@ -73,6 +73,10 @@ export function createFileHtmlPreview(
       return file() !== null && !source();
     },
     showSource: () => setSource(true),
+    showPreview() {
+      setPreview(text());
+      setSource(false);
+    },
     toggle() {
       if (source()) {
         setPreview(text());
@@ -90,7 +94,7 @@ export function createFileHtmlPreview(
       onToggle: () => void;
       runtime: AttachmentSidebarRuntime;
       mode: EmbedSandboxMode;
-    }): FileHtmlPreviewControls | undefined {
+    }) {
       const current = file();
       if (!current) {
         return undefined;
@@ -115,7 +119,7 @@ export function createFileHtmlPreview(
                     options.runtime.sessionKey ?? "",
                     options.runtime.agentId ?? "",
                     current.root ?? "",
-                    current.path,
+                    current.artifactId ?? current.path,
                   ].join(String.fromCharCode(0)),
                 title: current.name,
                 embedSandboxMode: options.mode,

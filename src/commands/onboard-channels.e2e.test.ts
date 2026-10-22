@@ -22,12 +22,30 @@ const manifestRegistryMocks = vi.hoisted(() => ({
 }));
 
 function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
-  return createWizardPrompter(
-    {
-      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-      ...overrides,
-    },
-    { defaultSelect: "__done__" },
+  return createWizardPrompter(overrides, { defaultSelect: "__done__" });
+}
+
+function registerDiscord(
+  setupWizard: ChannelSetupWizardAdapter,
+  config?: Parameters<typeof createChannelTestPluginBase>[0]["config"],
+  chatTypes: ("direct" | "group")[] = ["direct"],
+) {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "discord",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({
+            id: "discord",
+            label: "Discord",
+            capabilities: { chatTypes },
+            config,
+          }),
+          setupWizard,
+        },
+      },
+    ]),
   );
 }
 
@@ -195,38 +213,14 @@ describe("setupChannels", () => {
     vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockClear();
   });
 
-  it.each([
-    {
-      name: "explicitly confirmed",
-      configureOwner: true,
-      confirmOwner: true,
-      owners: undefined,
-      expected: ["discord:123456789012345678"],
-    },
-    {
-      name: "skipped",
-      configureOwner: false,
-      confirmOwner: false,
-      owners: undefined,
-      expected: undefined,
-    },
-    {
-      name: "declined at confirmation",
-      configureOwner: true,
-      confirmOwner: false,
-      owners: undefined,
-      expected: undefined,
-    },
-    {
-      name: "already configured",
-      configureOwner: true,
-      confirmOwner: true,
-      owners: ["telegram:existing-owner"],
-      expected: ["telegram:existing-owner"],
-    },
+  it.each<[string, boolean, boolean, string[] | undefined, string[] | undefined]>([
+    ["explicitly confirmed", true, true, undefined, ["discord:123456789012345678"]],
+    ["skipped", false, false, undefined, undefined],
+    ["declined at confirmation", true, false, undefined, undefined],
+    ["already configured", true, true, ["telegram:existing-owner"], ["telegram:existing-owner"]],
   ])(
-    "keeps Discord guild-only owner setup $name",
-    async ({ configureOwner, confirmOwner, owners, expected }) => {
+    "keeps Discord guild-only owner setup %s",
+    async (_name, configureOwner, confirmOwner, owners, expected) => {
       const channels: OpenClawConfig["channels"] = {
         discord: {
           enabled: true,
@@ -235,32 +229,16 @@ describe("setupChannels", () => {
           guilds: { "234567890123456789": { users: ["987654321098765432"] } },
         },
       };
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "discord",
-            source: "test",
-            plugin: {
-              ...createChannelTestPluginBase({
-                id: "discord",
-                label: "Discord",
-                capabilities: { chatTypes: ["direct", "group"] },
-              }),
-              setupWizard: {
-                channel: "discord",
-                getStatus: async () => ({ channel: "discord", configured: true, statusLines: [] }),
-                configure: async ({ cfg }: { cfg: OpenClawConfig }) => ({
-                  cfg,
-                  accountId: "default",
-                }),
-                configureInteractive: async ({ cfg }: { cfg: OpenClawConfig }) => ({
-                  cfg,
-                  accountId: "default",
-                }),
-              },
-            },
-          },
-        ]),
+      const configure = async ({ cfg }: { cfg: OpenClawConfig }) => ({ cfg, accountId: "default" });
+      registerDiscord(
+        {
+          channel: "discord",
+          getStatus: async () => ({ channel: "discord", configured: true, statusLines: [] }),
+          configure,
+          configureInteractive: configure,
+        },
+        undefined,
+        ["direct", "group"],
       );
       const prompter = createPrompter({
         select: vi.fn(async ({ message, options }: Parameters<WizardPrompter["select"]>[0]) => {
@@ -355,39 +333,22 @@ describe("setupChannels", () => {
           };
         },
       };
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "discord",
-            source: "test",
-            plugin: {
-              ...createChannelTestPluginBase({
-                id: "discord",
-                label: "Discord",
-                config: {
-                  resolveAccount: (cfg, accountId) =>
-                    cfg.channels?.discord?.accounts?.[accountId ?? "default"] ??
-                    cfg.channels?.discord ??
-                    {},
-                  deleteAccount: ({ cfg }) => {
-                    const channels = { ...cfg.channels };
-                    delete channels.discord;
-                    return { ...cfg, channels };
-                  },
-                  setAccountEnabled: ({ cfg, enabled }) => ({
-                    ...cfg,
-                    channels: {
-                      ...cfg.channels,
-                      discord: { ...cfg.channels?.discord, enabled },
-                    },
-                  }),
-                },
-              }),
-              setupWizard,
-            },
+      registerDiscord(setupWizard, {
+        resolveAccount: (cfg, accountId) =>
+          cfg.channels?.discord?.accounts?.[accountId ?? "default"] ?? cfg.channels?.discord ?? {},
+        deleteAccount: ({ cfg }) => {
+          const channels = { ...cfg.channels };
+          delete channels.discord;
+          return { ...cfg, channels };
+        },
+        setAccountEnabled: ({ cfg, enabled }) => ({
+          ...cfg,
+          channels: {
+            ...cfg.channels,
+            discord: { ...cfg.channels?.discord, enabled },
           },
-        ]),
-      );
+        }),
+      });
       const choices = [
         "discord",
         ...(outcome === "removed" || outcome === "disabled" ? ["discord"] : []),

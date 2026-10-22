@@ -5,7 +5,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareHostExecSpawn } from "./bash-tools.exec-host-spawn.js";
-import { getBashShellConfig } from "./shell-utils.js";
 
 const zsh = "/bin/zsh";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -57,18 +56,4 @@ describe.runIf(process.platform !== "win32" && fs.existsSync(zsh))("zsh host exe
     expect(result.stderr).toBe("");
   });
 
-  it.each([
-    ["echo before; echo ===; echo after", "not found"],
-    ["echo before; echo no-such-file-*.txt; echo after", "no matches found"],
-  ])("preserves explicit zsh session expansion semantics: %s", (command, diagnostic) => {
-    const config = getBashShellConfig(zsh);
-    const result = spawnSync(config.shell, [...config.args, command], {
-      cwd,
-      env,
-      encoding: "utf8",
-    });
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("before\n");
-    expect(result.stderr).toContain(diagnostic);
-  });
 });

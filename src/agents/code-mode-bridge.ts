@@ -38,6 +38,9 @@ const loadSwarmHandlers = createLazyRuntimeNamedExport(
   "codeModeSwarmHandlers",
 );
 
+const CODE_MODE_INSTRUCTIONS_HINT =
+  "Call handle.describe() before invocation to load the complete server instructions.";
+
 export const CODE_MODE_NODES_TOOL_ID = "openclaw:core:nodes";
 
 function projectCodeModeNode(node: NodeListNode) {
@@ -323,6 +326,8 @@ export async function runBridgeRequest(params: {
                 name: entry.mcp?.toolName ?? entry.name,
                 source: "mcp",
                 description: truncateUtf16Safe(entry.description, 512),
+                instructions: entry.mcp?.instructions,
+                instructionsHint: entry.instructionsHint ? CODE_MODE_INSTRUCTIONS_HINT : undefined,
               };
             });
         break;

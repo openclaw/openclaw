@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  areDiagnosticsEnabledForProcess,
+  setDiagnosticsEnabledForProcess,
+} from "../../infra/diagnostic-events.js";
 import * as gitExec from "../../infra/git-exec.js";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { createDiagnosticLogRecordCapture } from "../../logging/test-helpers/diagnostic-log-capture.js";
@@ -185,6 +189,8 @@ it("refuses a late live owner of unresolved shared metadata before deleting its 
   });
   setLoggerOverride({ level: "warn", consoleLevel: "silent", file: path.join(root, "evict.log") });
   const logs = createDiagnosticLogRecordCapture();
+  const diagnosticsWereEnabled = areDiagnosticsEnabledForProcess();
+  setDiagnosticsEnabledForProcess(true);
   try {
     await expect(create("replacement")).rejects.toThrow(/cap 2.*live owners/);
     expect(unavailable).toBe(true);
@@ -210,6 +216,7 @@ it("refuses a late live owner of unresolved shared metadata before deleting its 
     } finally {
       await lease?.release();
       logs.cleanup();
+      setDiagnosticsEnabledForProcess(diagnosticsWereEnabled);
       setLoggerOverride(null);
       resetLogger();
     }

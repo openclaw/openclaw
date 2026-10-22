@@ -9,7 +9,6 @@ import type { OperationalRunInstanceRef } from "./admitted-run-context.js";
 import type { ToolOutcomeObserver } from "./agent-tools.before-tool-call.js";
 import type { MemoryFlushToolRunContext } from "./agent-tools.memory-flush.types.js";
 import type { SkillInstructionDeliveryCache } from "./agent-tools.read.js";
-import type { AnyAgentTool } from "./agent-tools.types.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import type { ProcessToolDefaults } from "./bash-tools.process.js";
 import type {
@@ -78,6 +77,8 @@ export type OpenClawCodingToolsOptions = {
   modelApi?: string;
   /** Resolved endpoint for provider-native tool eligibility. */
   modelBaseUrl?: string;
+  /** Secret-free capability facts from the selected runtime model route. */
+  modelParams?: Record<string, unknown>;
   /** Resolved runtime model compatibility hints. */
   modelCompat?: ModelCompatConfig;
   /** If false, keep OpenClaw web_search even when a provider-native search tool is active. */
@@ -151,8 +152,8 @@ export type InternalCodingToolsOptions = OpenClawCodingToolsOptions & {
   pluginExecutionAuthority?: import("./admitted-run-context.js").AdmittedRunOperatorAuthority;
   pluginExecutionSkillsSnapshot?: SkillSnapshot;
   awaitSessionDiffBaseline?: () => Promise<void>;
-  /** Policy-approved publication unavailable in this workspace, retained for new children. */
-  inheritedPublicationToolRef?: { current?: AnyAgentTool };
+  /** Policy-approved tool names unavailable here but usable in a child's own workspace. */
+  additionalInheritedToolNamesRef?: string[];
   /** The host owns continuation policy when this factory builds only part of its tool surface. */
   sessionEventSourcePolicy?: SessionEventSourcePolicy;
 };

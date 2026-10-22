@@ -1,13 +1,5 @@
 import type { RenderLifecycle } from "./render-lifecycle.ts";
 
-type ChatPerformanceHost = {
-  renderLifecycle?: Pick<RenderLifecycle, "afterCommit">;
-};
-
-export function controlUiNowMs(): number {
-  return performance.now();
-}
-
 function runAfterPaint(callback: () => void, complete: () => void): () => void {
   let active = true;
   let frame: number | null = null;
@@ -46,13 +38,8 @@ function runAfterPaint(callback: () => void, complete: () => void): () => void {
 }
 
 export function scheduleControlUiAfterPaint(
-  host: Pick<ChatPerformanceHost, "renderLifecycle">,
+  host: { renderLifecycle: Pick<RenderLifecycle, "afterCommit"> },
   callback: () => void,
 ): void {
-  if (host.renderLifecycle) {
-    host.renderLifecycle.afterCommit((complete) => runAfterPaint(callback, complete));
-    return;
-  }
-  // Renderer-free unit hosts have no DOM commit to await.
-  runAfterPaint(callback, () => undefined);
+  host.renderLifecycle.afterCommit((complete) => runAfterPaint(callback, complete));
 }

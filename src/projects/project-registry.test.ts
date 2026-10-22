@@ -388,27 +388,65 @@ describe("project registry persistence", () => {
     });
   });
 
-  it("rejects a record-aligned truncated ref inventory before deleting tracking refs", async () => {
-    const { source, target } = await cloneFixture();
-    const commit = await gitText(target, "rev-parse", "HEAD");
-    const refNames = Array.from(
-      { length: 2_049 },
-      (_, index) => `refs/remotes/origin/${String(index).padStart(65, "0")}`,
-    );
-    await fs.writeFile(
-      path.join(target, ".git", "packed-refs"),
-      "# pack-refs with: peeled fully-peeled sorted\n" +
-        refNames.map((ref) => `${commit} ${ref}`).join("\n") +
-        "\n",
-    );
+  it.each(["initial", "fetched"] as const)(
+    "refreshes a large complete %s ref inventory and prunes only deleted upstream refs",
+    async (inventory) => {
+      const { source, target } = await cloneFixture();
+      const commit = await gitText(source, "rev-parse", "HEAD");
+      const branches = Array.from({ length: 7_850 }, (_, index) => String(index).padStart(65, "0"));
+      const writeRefs = (repo: string, prefix: string) =>
+        fs.writeFile(
+          path.join(repo, ".git", "packed-refs"),
+          branches.map((branch) => `${commit} ${prefix}/${branch}\n`).join(""),
+        );
+      await writeRefs(source, "refs/heads");
+      if (inventory === "initial") {
+        await writeRefs(target, "refs/remotes/origin");
+      }
+      await git(target, "update-ref", "refs/remotes/origin/deleted", commit);
+      const next = await commitFile(source, "later.txt", "new upstream commit\n");
 
-    await expect(refreshProjectCheckout({ url: source, target })).rejects.toThrow(
-      "too many managed repository refs",
-    );
-    await expectRef(target, refNames[0]!).resolves.toMatchObject({
-      stdout: `${commit}\n`,
-    });
-  });
+      await refreshProjectCheckout({ url: source, target });
+
+      expect(await gitText(target, "rev-parse", "origin/main")).toBe(next);
+      expect(await gitText(target, "rev-parse", `origin/${branches.at(-1)}`)).toBe(commit);
+      await expectRef(target, "origin/deleted").rejects.toMatchObject({ code: 128 });
+      expect(await gitText(target, "rev-parse", "HEAD")).toBe(commit);
+    },
+  );
+
+  it.each(["initial", "fetched"] as const)(
+    "rejects a truncated %s ref inventory before deleting tracking refs",
+    async (inventory) => {
+      const { source, target } = await cloneFixture();
+      const commit = await gitText(target, "rev-parse", "HEAD");
+      // Each record is 128 bytes, so truncation can leave only complete records.
+      const refNames = Array.from(
+        { length: 65_537 },
+        (_, index) => `refs/remotes/origin/${String(index).padStart(65, "0")}`,
+      );
+      const packed = path.join(target, ".git", "packed-refs");
+      const initialRefs = inventory === "initial" ? refNames : refNames.slice(0, 1);
+      const original = initialRefs.map((ref) => `${commit} ${ref}\n`).join("");
+      await fs.writeFile(packed, original);
+      if (inventory === "fetched") {
+        await fs.writeFile(
+          path.join(source, ".git", "packed-refs"),
+          refNames
+            .map((ref) => `${commit} ${ref.replace("refs/remotes/origin/", "refs/heads/")}\n`)
+            .join(""),
+        );
+      }
+
+      await expect(refreshProjectCheckout({ url: source, target })).rejects.toThrow(
+        "ref inventory exceeded the 8 MiB refresh limit",
+      );
+      await expectRef(target, refNames[0]!).resolves.toMatchObject({
+        stdout: `${commit}\n`,
+      });
+      expect(await fs.readFile(packed, "utf8")).toBe(original);
+    },
+  );
 
   it.each(["existing clone", "registration"] as const)(
     "serializes %s with checkout deletion",

@@ -2,6 +2,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import {
   isSessionDefaultDirectiveValue,
   normalizeVerboseLevel,
@@ -57,8 +58,6 @@ type SlashCommandResult = {
   action?: "refresh";
   /** When set, the caller should track this as the active run (enables Abort, blocks concurrent sends). */
   trackRunId?: string;
-  /** When set, the caller should surface a visible pending item tied to the current run. */
-  pendingCurrentRun?: boolean;
   /** The command did not complete and a durable queued invocation may be retried. */
   failed?: boolean;
 };
@@ -69,6 +68,7 @@ type SlashCommandContext = {
   sessionAccessSnapshot: Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase">;
   readSessionAccessSnapshot?: () => Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase">;
   isCurrent?: () => boolean;
+  runRequest?: { runId: string; signal: AbortSignal };
   chatModelCatalog?: ModelCatalogEntry[];
   defaultAgentId?: string;
   agentId?: string;
@@ -587,16 +587,24 @@ async function executeRunCommand(
       };
     }
     assertCurrentSlashCommand(context);
-    const response = await client.request<{ runId?: unknown; status?: unknown }>("chat.send", {
-      sessionKey,
-      ...selectedGlobalScope(sessionKey, context),
-      message,
-      attachments: buildChatApiAttachments(context.attachments),
-      ...(command === "steer"
-        ? { deliver: false, queueMode: "steer" }
-        : { queueMode: "interrupt" }),
-      idempotencyKey: generateUUID(),
-    });
+    const response = await client.request<{ runId?: unknown; status?: unknown }>(
+      "chat.send",
+      {
+        sessionKey,
+        ...selectedGlobalScope(sessionKey, context),
+        message,
+        attachments: buildChatApiAttachments(context.attachments),
+        ...(command === "steer"
+          ? { deliver: false, queueMode: "steer" }
+          : { queueMode: "interrupt" }),
+        idempotencyKey: context.runRequest?.runId ?? generateUUID(),
+      },
+      {
+        timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
+        signal: context.runRequest?.signal,
+        retainSentResultOnAbort: true,
+      },
+    );
     const ackStatus = normalizeChatSendAckStatus(response?.status);
     if (ackStatus === "timeout" || ackStatus === "error") {
       return {
@@ -607,12 +615,8 @@ async function executeRunCommand(
       };
     }
     const result: SlashCommandResult = { content: t(`chat.commandResults.${command}.succeeded`) };
-    if (ackStatus === "started" || ackStatus === "in_flight") {
-      if (command === "steer") {
-        result.pendingCurrentRun = true;
-      } else {
-        result.trackRunId = typeof response?.runId === "string" ? response.runId : undefined;
-      }
+    if (command === "redirect" && (ackStatus === "started" || ackStatus === "in_flight")) {
+      result.trackRunId = typeof response?.runId === "string" ? response.runId : undefined;
     }
     return result;
   } catch (err) {

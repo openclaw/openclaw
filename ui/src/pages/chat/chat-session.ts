@@ -1,11 +1,14 @@
 import type { AgentRuntimeRestrictionErrorDetails } from "../../../../packages/gateway-protocol/src/agent-runtime-restriction-error-details.js";
 import { normalizeThinkLevel } from "../../../../src/auto-reply/thinking.shared.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
-import type { FastMode, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
 import { resolvePreferredServerChatModelValue } from "../../lib/chat/model-ref.ts";
-import { resolveChatModelOverrideValue } from "../../lib/chat/model-select-state.ts";
+import {
+  normalizeChatFastModeInput,
+  resolveChatModelOverrideValue,
+} from "../../lib/chat/model-select-state.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isSessionRuntimePinned } from "../../lib/model-runtime-choice.ts";
 import { isAgentRuntimeRestrictionErrorDetails } from "../../lib/protocol-validators.generated/session-input.js";
@@ -51,7 +54,6 @@ type ChatModelSettingsHost = ChatSessionRefreshHost & {
   chatError?: string | null;
   chatModelCatalog: Parameters<typeof resolveChatModelOverrideValue>[0]["chatModelCatalog"];
   chatModelSwitchPromises?: Record<string, Promise<boolean>>;
-  chatThinkingLevel: string | null;
   sessions: SessionCapability;
   sessionsResult?: SessionsListResult | null;
   sessionsResultAgentId?: string | null;
@@ -189,7 +191,6 @@ async function applyChatSetting(
   captured: ReturnType<typeof captureChatSettingsTarget>,
   patch: Pick<SessionPatch, "thinkingLevel" | "fastMode" | "contextWindow">,
   settingName: "thinking level" | "speed" | "context window",
-  synchronize?: (receipt?: SessionPatchResult | null) => void,
 ): Promise<boolean> {
   const canDispatch = (receipt?: SessionPatchResult | null) =>
     (captured.isCurrent() || Boolean(captured.row(receipt))) &&
@@ -200,12 +201,11 @@ async function applyChatSetting(
       session: captured.row(receipt),
     }).allowed;
   setChatError(host, null);
-  let receipt: SessionPatchResult | null = null;
   try {
     if (!canDispatch()) {
       return false;
     }
-    const pending = patchChatSessionSettings(host, sessionKey, patch, {
+    const receipt = await patchChatSessionSettings(host, sessionKey, patch, {
       ...captured.agentParams,
       expectedSessionId: captured.sessionId,
       canDispatch,
@@ -215,13 +215,9 @@ async function applyChatSetting(
         }
       },
     });
-    synchronize?.();
-    receipt = await pending;
     return receipt !== null;
   } catch {
     return false;
-  } finally {
-    synchronize?.(receipt);
   }
 }
 
@@ -237,12 +233,7 @@ export function switchChatSetting(
   }
   const captured = captureChatSettingsTarget(host, targetSessionKey);
   if (selection.kind === "fastMode") {
-    const next: FastMode | undefined =
-      selection.value === ""
-        ? undefined
-        : selection.value === "auto" || selection.value === "ultrafast"
-          ? selection.value
-          : selection.value === "on";
+    const next = normalizeChatFastModeInput(selection.value);
     if (captured.settings.fastMode === next) {
       return Promise.resolve(true);
     }
@@ -271,19 +262,12 @@ export function switchChatSetting(
   if ((normalizedPrev ?? "") === (normalizedNext ?? "")) {
     return Promise.resolve(true);
   }
-  const synchronizeThinking = (receipt?: SessionPatchResult | null) => {
-    const row = captured.row(receipt);
-    if (row) {
-      host.chatThinkingLevel = row.thinkingLevel ?? null;
-    }
-  };
   return applyChatSetting(
     host,
     targetSessionKey,
     captured,
     { thinkingLevel: normalizedNext ?? null },
     "thinking level",
-    synchronizeThinking,
   );
 }
 

@@ -198,8 +198,6 @@ function makeDispatchInput(
     bootstrapPromptWarningSignaturesSeen: [],
     resolveRuntimeFallbackReason: () => null,
     getPostCompactionAbortError: vi.fn(() => undefined),
-    setPostCompactionAbortController: vi.fn(),
-    clearPostCompactionAbortController: vi.fn(),
   } as unknown as Parameters<typeof dispatch>[0];
 }
 

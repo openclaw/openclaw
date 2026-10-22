@@ -22,6 +22,7 @@ import {
 } from "./subagent-lifecycle-events.js";
 import { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import { installLifecycleWorkerAckFixture } from "./subagent-registry-lifecycle-controller.test-support.js";
+import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   getSubagentRunRuntimeKey,
@@ -52,8 +53,8 @@ function createHarness() {
       throw resumeError;
     }),
     scheduleSweep: vi.fn(),
-    warn: vi.fn(),
   };
+  const warn = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
   const runtime = createSubagentRegistryCompletionRuntime(dependencies);
   const request: SubagentCompletionRequest = {
     runId: entry.runId,
@@ -74,6 +75,7 @@ function createHarness() {
   });
   return {
     ...dependencies,
+    warn,
     entry,
     resumeError,
     runtime,
@@ -118,6 +120,7 @@ describe("subagent completion rejection ownership", () => {
     vi.clearAllTimers();
     vi.useRealTimers();
     resetGatewayWorkAdmission();
+    h.warn.mockRestore();
   });
 
   it.each(["absent", "released"] as const)(

@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MessageReactionSummary } from "../../../../../packages/gateway-protocol/src/index.js";
 /* @vitest-environment jsdom */
-import type { SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { createMessageGroupHarness } from "./chat-message-native.test-support.tsx";
@@ -56,13 +55,11 @@ function show(
   );
   return {
     onReact,
-    pickers: [
-      ...host.querySelectorAll<SolidBridgeElement<object>>("openclaw-message-reaction-picker"),
-    ],
+    pickers: [...host.querySelectorAll<HTMLElement>("openclaw-message-reaction-picker")],
   };
 }
 
-function pickerButton(picker: SolidBridgeElement<object>, label: string) {
+function pickerButton(picker: HTMLElement, label: string) {
   // Compare emoji labels directly; JSDOM selectors do not reliably match non-BMP values.
   return [...picker.querySelectorAll<HTMLButtonElement>("button")].find(
     (button) => button.getAttribute("aria-label") === label,
@@ -72,7 +69,7 @@ function pickerButton(picker: SolidBridgeElement<object>, label: string) {
 async function customEntry() {
   const { pickers, onReact } = show();
   const root = pickers[0]!;
-  await root.updateComplete;
+  flush();
   root.querySelector<HTMLButtonElement>(".trigger")!.click();
   root.querySelector<HTMLButtonElement>(".more")!.click();
   flush();
@@ -101,7 +98,11 @@ describe("transcript message reactions", () => {
     [{ role: "system" }, "ineligible"],
   ] as const)("renders %j reactions as %s", async (options, access) => {
     const { onReact, pickers } = show(options);
-    expect(pickers).toHaveLength(access === "writable" ? 2 : 0);
+    // Reactions exist, so only the chip row carries a picker; the action row drops its own.
+    expect(pickers).toHaveLength(access === "writable" ? 1 : 0);
+    expect(pickers[0]?.closest(".chat-message-reactions") ?? null).toBe(
+      access === "writable" ? host.querySelector(".chat-message-reactions") : null,
+    );
     if (access === "ineligible") {
       expect(host.querySelector(".chat-message-reactions")).toBeNull();
       return;
@@ -127,7 +128,7 @@ describe("transcript message reactions", () => {
     crowd.click();
     expect(onReact).toHaveBeenCalledWith("message-1", "🎉", false);
     const picker = pickers[0]!;
-    await picker.updateComplete;
+    flush();
     expect(picker.querySelector(".palette")).toBeNull();
     picker.querySelector<HTMLButtonElement>(".trigger")!.click();
     const pressed = pickerButton(picker, "👍")!;
@@ -140,6 +141,35 @@ describe("transcript message reactions", () => {
     picker.querySelector<HTMLButtonElement>(".trigger")!.click();
     pickerButton(picker, "🚀")!.click();
     expect(onReact).toHaveBeenLastCalledWith("message-1", "🚀", false);
+  });
+
+  it("moves the add-reaction picker from the action row to the chip row once reacted", () => {
+    host = document.body.appendChild(document.createElement("div"));
+    const harness = createMessageGroupHarness(host);
+    const group = createMessageGroup(
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "A shared reply" }],
+        timestamp: 1,
+        __openclaw: { id: "message-1" },
+      },
+      "assistant",
+    );
+    const render = (messageReactions: Map<string, MessageReactionSummary[]>) => {
+      harness.render(group, {
+        showReasoning: false,
+        userId: "self",
+        messageReactions,
+        onReact() {},
+      });
+      const pickers = [...host.querySelectorAll("openclaw-message-reaction-picker")];
+      return pickers.map((picker) =>
+        picker.closest(".chat-message-reactions") ? "chips" : "actions",
+      );
+    };
+    expect(render(new Map())).toEqual(["actions"]);
+    expect(render(new Map([["message-1", reactions]]))).toEqual(["chips"]);
+    expect(render(new Map([["message-1", []]]))).toEqual(["actions"]);
   });
 
   it("searches emoji by name and selects the first match on Enter", async () => {

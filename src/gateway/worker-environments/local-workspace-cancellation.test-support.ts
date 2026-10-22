@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { createAgentRunDirectAbortError } from "../../agents/run-termination.js";
 import type { SandboxBackendHandle } from "../../agents/sandbox/backend-handle.types.js";
@@ -15,7 +16,10 @@ import {
 import { createSandboxTestContext } from "../../agents/sandbox/test-fixtures.js";
 import { insertRegistryWorktree } from "../../agents/worktrees/registry.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
+import { withLocalWorkspaceStore } from "./local-workspace-store.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
+import * as manifests from "./workspace-manifest-worker.js";
 
 const command = () => ({ command: "true", env: {}, usePty: false });
 const failedOutcome = { status: "failed" as const, exitCode: 0, timedOut: false };
@@ -48,6 +52,55 @@ async function registerWorkspace(owner: LocalWorkspaceOwner) {
   return { scope, entry };
 }
 
+async function proveQueuedLocalWorkspaceCheckpoint(
+  owner: LocalWorkspaceOwner,
+  projection: NonNullable<Awaited<ReturnType<typeof prepareLocalSandboxWorkspace>>>,
+) {
+  await writeSource(projection.workspaceDir, "first edit\n");
+  const acquired = createDeferred();
+  const release = createDeferred();
+  const custody = withLocalWorkspaceStore({ worktreeId: owner.worktree.id }, async () => {
+    acquired.resolve();
+    await release.promise;
+  });
+  await acquired.promise;
+  const readSnapshot = manifests.captureWorkspaceManifestDocument;
+  const capture = vi.spyOn(manifests, "captureWorkspaceManifestDocument");
+  const first = projection.checkpoint();
+  const second = projection.checkpoint();
+  release.resolve();
+  await Promise.all([custody, first, second]);
+  await expectSource(owner.worktree.path, "first edit\n");
+  expect(capture.mock.calls.map(([input]) => input.root)).toEqual([projection.workspaceDir]);
+
+  const captured = createDeferred();
+  const finishCapture = createDeferred();
+  capture.mockImplementationOnce(async (input) => {
+    const result = await readSnapshot(input);
+    captured.resolve();
+    await finishCapture.promise;
+    return result;
+  });
+  const third = projection.checkpoint();
+  await captured.promise;
+  const later = projection.checkpoint();
+  finishCapture.resolve();
+  await Promise.all([third, later]);
+  expect(capture).toHaveBeenCalledTimes(3);
+
+  await fs.unlink(path.join(projection.workspaceDir, "source.txt"));
+  await fs.writeFile(path.join(projection.workspaceDir, "added.txt"), "later edit\n");
+  await projection.checkpoint();
+  await expect(fs.stat(path.join(owner.worktree.path, "source.txt"))).rejects.toMatchObject({
+    code: "ENOENT",
+  });
+  expect(await fs.readFile(path.join(owner.worktree.path, "added.txt"), "utf8")).toBe(
+    "later edit\n",
+  );
+  expect(capture).toHaveBeenCalledTimes(4);
+  capture.mockRestore();
+}
+
 export async function proveStoppedLocalWorkspaceCheckpoint(
   owner: LocalWorkspaceOwner,
   disposeBeforeCheckpoint = false,
@@ -69,6 +122,9 @@ export async function proveStoppedLocalWorkspaceCheckpoint(
     },
   });
   assert(projection, "Expected managed projection");
+  if (!disposeBeforeCheckpoint) {
+    await proveQueuedLocalWorkspaceCheckpoint(owner, projection);
+  }
   const backend = createBackend("stopped-command");
   const sandbox = createSandboxTestContext({
     overrides: { workspaceDir: projection.workspaceDir, backend },
@@ -137,6 +193,7 @@ export async function proveStoppedSandboxAuthority(
         createdAt: new Date().toISOString(),
         configPath,
         role: "gateway",
+        processNamespace: readGatewayLockProcessNamespace(),
       },
     });
     try {

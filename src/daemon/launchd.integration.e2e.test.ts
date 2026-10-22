@@ -9,11 +9,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
+import { withTimeout } from "../infra/fs-safe.js";
 import { LOOPBACK_PORT_PROBE_HOSTS, probePortUsage } from "../infra/ports-probe.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { waitForPidToExit } from "../test-utils/process-tree.js";
-import { withTimeout } from "../utils/with-timeout.js";
 import {
   installLaunchAgent,
   readLaunchAgentRuntime,

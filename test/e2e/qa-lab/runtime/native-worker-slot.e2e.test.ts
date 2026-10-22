@@ -115,7 +115,7 @@ it.skipIf(process.platform === "win32")(
         const provider = (providerResource = await providerFixture());
         const published = (publishedResource = await createPublishedWireWorkspace(root));
         const identity = loadOrCreateDeviceIdentity({
-          path: path.join(root, "node-identity.sqlite"),
+          env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "node-state") },
         });
         const config: OpenClawConfig = {
           models: {
@@ -160,7 +160,6 @@ it.skipIf(process.platform === "win32")(
           operator,
           root,
           capacity: 1,
-          capacityWaitMs: 0,
           nodeConfig: config,
         });
         expect(node.identity.deviceId).toBe(identity.deviceId);

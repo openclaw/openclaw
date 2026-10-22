@@ -23,9 +23,11 @@ export function InputDialogView(props: {
   const entryValue = (raw: string) => (initialOptions.requireValue ? raw.trim() : raw);
   const submitBlocked = (raw: string) => {
     const value = entryValue(raw);
+    const connected = gateway?.read().snapshot.phase === "connected";
+    const canSubmit = initialOptions.canSubmit?.();
     return (
-      initialOptions.canSubmit?.() === false ||
-      (gateway !== undefined && gateway.read().snapshot.phase !== "connected") ||
+      canSubmit === false ||
+      (gateway !== undefined && !connected && canSubmit !== true) ||
       (initialOptions.requireValue === true && !value.length) ||
       (initialOptions.requireChange === true && value === (initialOptions.defaultValue ?? ""))
     );
@@ -66,6 +68,7 @@ export function InputDialogView(props: {
   }
   return (
     <openclaw-modal-dialog
+      prop:initialFocus={() => input}
       label={initialOptions.title}
       description={initialOptions.label ?? initialOptions.title}
       onModal-cancel={(event: Event) => {
@@ -109,19 +112,19 @@ export function InputDialogView(props: {
         ) : undefined}
         <openclaw-modal-actions class="exec-approval-actions">
           <button
-            type="submit"
-            class="btn primary"
-            disabled={state().submitting || submitBlocked(rawValue())}
-          >
-            {initialOptions.submitLabel ?? t("common.save")}
-          </button>
-          <button
             type="button"
             class="btn"
             disabled={state().submitting}
             onClick={() => props.finish(null)}
           >
             {initialOptions.cancelLabel ?? t("common.cancel")}
+          </button>
+          <button
+            type="submit"
+            class="btn primary"
+            disabled={state().submitting || submitBlocked(rawValue())}
+          >
+            {initialOptions.submitLabel ?? t("common.save")}
           </button>
         </openclaw-modal-actions>
       </form>

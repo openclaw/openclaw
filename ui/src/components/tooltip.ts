@@ -74,7 +74,7 @@ export class TooltipProvider extends HTMLElement {
 
 const defaults = {
   content: "",
-  placement: "top",
+  placement: undefined,
   closeDelay: 100,
   hoverDismissDelay: undefined,
   delay: undefined,

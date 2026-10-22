@@ -257,10 +257,6 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     this.autoCompactionAbortController?.abort();
   }
 
-  abortBranchSummary(): void {
-    this.branchSummaryAbortController?.abort();
-  }
-
   private async runCompactionWork(options: {
     itemId: string;
     settings: ReturnType<SettingsManager["getCompactionSettings"]>;

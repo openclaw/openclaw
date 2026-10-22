@@ -64,7 +64,7 @@ async function connectWriter(port: number, email: string, scopes = writerScopes)
       browserOrigin: origin,
       skipDefaultAuth: true,
       scopes,
-      deviceIdentityPath: path.join(temps.make("policy-writer-"), "device.sqlite"),
+      deviceIdentityPath: path.join(temps.make("policy-writer-"), "client", "credentials.sqlite"),
     });
     expect(connected.ok, JSON.stringify(connected.error)).toBe(true);
     return { ws, connected, [Symbol.dispose]: () => ws.close() };

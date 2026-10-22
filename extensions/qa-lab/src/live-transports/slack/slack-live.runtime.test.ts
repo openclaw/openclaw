@@ -74,7 +74,6 @@ const observationContext = {
   sentTs: "1",
   sutIdentity: { userId: "U999999999" },
   observationScenarioId: "slack-mention-gating",
-  observationScenarioTitle: "Slack message observation",
 };
 const fallbackContext = {
   cfg: buildSlackConfigFixture({}, { driverBotUserId: "U111111111" }),
@@ -749,8 +748,8 @@ describe("Slack live QA runtime helpers", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     await pending;
     expect(observedMessages).toMatchObject([
-      { matchedScenario: false, text: "unrelated reply", ts: "2", userId: "U999999999" },
-      { matchedScenario: true, text: run.matchText, ts: "3" },
+      { text: "unrelated reply", ts: "2" },
+      { text: run.matchText, ts: "3" },
     ]);
   });
 });

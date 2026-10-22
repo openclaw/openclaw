@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
-import type { OutputRuntimeEnv } from "../runtime.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { defaultRuntime } from "../runtime.js";
 import { runClawsAddCommand } from "./claws-cli.runtime.js";
 import { useLocalStateOwnerFixture } from "./local-state-owner.fixture.test-support.js";
 
@@ -19,15 +19,7 @@ async function snapshotTree(root: string): Promise<Record<string, string>> {
 describe("Claw Add CLI state ownership", () => {
   const fixture = useLocalStateOwnerFixture();
   const output: unknown[] = [];
-  const runtime: OutputRuntimeEnv = {
-    log: () => {},
-    error: () => {},
-    writeStdout: () => {},
-    writeJson: (value) => output.push(value),
-    exit: (code) => {
-      throw new Error(`Claw command exited: ${code}; ${JSON.stringify(output.at(-1))}`);
-    },
-  };
+  afterEach(() => vi.restoreAllMocks());
   let root: string;
   let source: string;
 
@@ -35,6 +27,7 @@ describe("Claw Add CLI state ownership", () => {
     root = path.dirname(process.env.OPENCLAW_STATE_DIR!);
     source = path.join(root, "claw.json");
     output.length = 0;
+    vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value) => output.push(value));
     await fs.writeFile(source, JSON.stringify({ schemaVersion: 1, agent: { id: "demo" } }));
   });
 
@@ -42,7 +35,7 @@ describe("Claw Add CLI state ownership", () => {
     await fixture.startOwner();
     const before = await snapshotTree(root);
     for (const dryRun of [false, true]) {
-      await expect(runClawsAddCommand(source, { dryRun, json: true }, runtime)).rejects.toThrow(
+      await expect(runClawsAddCommand(source, { dryRun, json: true })).rejects.toThrow(
         /exclusive offline state ownership.*stop the Gateway/s,
       );
       expect(await snapshotTree(root)).toEqual(before);

@@ -4,7 +4,7 @@ import { PanelErrorState } from "../../components/solid/lazy-view-error.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { ElementProperties } from "../../types/solid-elements.d.ts";
 import type { ChatPageProps } from "./chat-page-types.ts";
-import "./chat-page.ts";
+import "./chat-page.tsx";
 import type { ChatRouteData } from "./route-loader.ts";
 
 const CHAT_PAGE_OWNER_KEY = "chat-page";

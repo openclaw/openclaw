@@ -1,4 +1,4 @@
-import { createMemo, createUniqueId, Show } from "solid-js";
+import { createUniqueId, Show } from "solid-js";
 import { openDesktopFocus } from "../../components/desktop/desktop-focus-window.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Menu, type MenuItem } from "../../components/solid/menu.tsx";
@@ -33,7 +33,7 @@ export function DeviceEntryMenu(props: {
   };
 }) {
   const id = createUniqueId();
-  const actions = createMemo(() => [
+  const actions = () => [
     {
       value: "desktop",
       labelKey: "devices.inventory.openDesktop",
@@ -80,7 +80,7 @@ export function DeviceEntryMenu(props: {
       pairing: true,
       run: () => props.entry.onRemove?.(),
     },
-  ]);
+  ];
   return (
     <Show when={props.entry.deviceId || props.entry.desktopEnvironment}>
       <Menu

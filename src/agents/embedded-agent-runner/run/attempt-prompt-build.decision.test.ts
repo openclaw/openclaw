@@ -221,9 +221,8 @@ describe("prompt assembly with registered Decision runtime", () => {
       f.policy.refresh();
       return undefined;
     });
-    const assembly = await f.assemble({ sessionKey: "agent:main:tools-revoked" });
+    await f.assemble({ sessionKey: "agent:main:tools-revoked" });
     expect(f.attempt.disableTools).toBeUndefined();
-    expect(assembly.decisionPrefilter).toMatchObject({ status: "skipped", reason: "no-tools" });
     expect(call).not.toHaveBeenCalled();
     expect(f.session.getActiveToolNames()).toEqual([]);
 

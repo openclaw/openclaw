@@ -5,9 +5,7 @@ import {
   canonicalAndroidVersionCode,
   normalizePinnedAndroidVersion as normalizePinned,
   renderAndroidReleaseNotes,
-  renderAndroidVersionProperties,
   resolveAndroidVersion,
-  resolveGatewayVersionForAndroidRelease,
   syncAndroidVersioning,
 } from "../../scripts/lib/android-version.ts";
 import { extractChangelogSection } from "../../scripts/lib/mobile-changelog.ts";
@@ -50,38 +48,26 @@ describe("Android versioning", () => {
     ).toMatchObject({ appStoreRevision: "1" });
   });
 
-  it("rejects missing CLI option values before reading version files", () => {
-    expectMissingValue("android-version", "--field");
-    expectMissingValue("android-version", "--field", "-h");
-  });
+  it.each<[string, string, string | undefined]>([
+    ["android-version", "--field", undefined],
+    ["android-version", "--field", "-h"],
+    ["android-sync-versioning", "--root", "--check"],
+    ["android-sync-versioning", "--root", "-h"],
+  ])("rejects missing %s %s values before reading version files (%s)", expectMissingValue);
 
-  it("rejects missing Android sync CLI root values before reading version files", () => {
-    expectMissingValue("android-sync-versioning", "--root", "--check");
-    expectMissingValue("android-sync-versioning", "--root", "-h");
-  });
-
-  it("rejects semver-only versions", () => {
-    const rootDir = writeAndroidFixture({ version: "1.2.3" });
-
-    expect(() => resolveAndroidVersion(rootDir)).toThrow(
-      "Expected pinned release version like 2026.6.5",
-    );
+  it.each<[Partial<Parameters<typeof writeFixture>[0]>, string]>([
+    [{ version: "1.2.3" }, "Expected pinned release version like 2026.6.5"],
+    [{ versionCode: 2026060301 }, "Expected 2026060201 through 2026060249 for version 2026.6.2"],
+  ])("rejects invalid pinned metadata %j", (overrides, message) => {
+    expect(() => resolveAndroidVersion(writeAndroidFixture(overrides))).toThrow(message);
   });
 
   it.each(["2026.13.2", "2026.6.9007199254740993"])("rejects impossible pinned %s", (version) => {
     expect(() => normalizePinned(version)).toThrow("Expected pinned release version like 2026.6.5");
   });
 
-  it("rejects version codes that do not match the pinned version date", () => {
-    const rootDir = writeAndroidFixture({ versionCode: 2026060301 });
-
-    expect(() => resolveAndroidVersion(rootDir)).toThrow(
-      "Expected 2026060201 through 2026060249 for version 2026.6.2",
-    );
-  });
-  it("strips prerelease suffixes when pinning from gateway version", () => {
-    expect(pinGateway("2026.6.2-beta.3")).toBe("2026.6.2");
-    expect(pinGateway("2026.6.2-alpha.1")).toBe("2026.6.2");
+  it.each(["2026.6.2-beta.3", "2026.6.2-alpha.1"])("strips the suffix from %s", (version) => {
+    expect(pinGateway(version)).toBe("2026.6.2");
   });
 
   it("rejects pinned versions that cannot derive Play-compatible version codes", () => {
@@ -97,24 +83,6 @@ describe("Android versioning", () => {
     },
   );
 
-  it("reads and normalizes the root package version for Android releases", () => {
-    const rootDir = writeAndroidFixture({ packageVersion: "2026.6.5-beta.3" });
-
-    expect(resolveGatewayVersionForAndroidRelease(rootDir)).toEqual({
-      packageVersion: "2026.6.5-beta.3",
-      pinnedAndroidVersion: "2026.6.5",
-      versionCode: 2026060501,
-    });
-  });
-  it("renders checked-in defaults from the pinned Android version", () => {
-    const properties = renderAndroidVersionProperties({
-      canonicalVersion: "2026.6.2",
-      versionCode: 2026060201,
-    });
-
-    expect(properties).toContain("OPENCLAW_ANDROID_VERSION_NAME=2026.6.2");
-    expect(properties).toContain("OPENCLAW_ANDROID_VERSION_CODE=2026060201");
-  });
   it("rejects changelogs without exact-version or Unreleased notes", () => {
     expect(() =>
       renderAndroidReleaseNotes(
@@ -136,6 +104,12 @@ describe("Android versioning", () => {
       releaseNotes: "APK notes.\n",
     });
     syncAndroidVersioning({ rootDir });
+    const properties = fs.readFileSync(
+      resolveAndroidVersion(rootDir).versionPropertiesPath,
+      "utf8",
+    );
+    expect(properties).toContain("OPENCLAW_ANDROID_VERSION_NAME=2026.6.2");
+    expect(properties).toContain("OPENCLAW_ANDROID_VERSION_CODE=2026060201");
     expect(syncAndroidVersioning({ mode: "check", rootDir }).updatedPaths).toEqual([]);
     fs.writeFileSync(resolveAndroidVersion(rootDir).releaseNotesPath, "Store notes.\n");
     expect(() => syncAndroidVersioning({ mode: "check", rootDir })).toThrow(

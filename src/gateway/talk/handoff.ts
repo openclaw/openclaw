@@ -86,14 +86,9 @@ export function createTalkHandoff(params: TalkHandoffCreateParams) {
     payload: { handoffId: id, roomId },
   });
   handoffs.set(id, record);
-  const { room, ...publicRecord } = record;
+  const { room: _room, ...publicRecord } = record;
   return {
     ...publicRecord,
-    room: {
-      activeClientId: undefined,
-      activeTurnId: room.talk.activeTurnId,
-      recentTalkEvents: [...room.talk.recentEvents],
-    },
     token,
   };
 }

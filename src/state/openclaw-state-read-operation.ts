@@ -153,7 +153,10 @@ export function startOpenClawStateReadOperation(
   const resource: ReadResource = {
     async close() {
       controller.abort(new Error("Shared-state read admission closed"));
-      preparationClose ??= preparation?.startClose();
+      // Pending preparation must stop, but a published snapshot still belongs to its reader.
+      if (!prepared) {
+        preparationClose ??= preparation?.startClose();
+      }
       await closeTransport();
       // The public result reports query failures; shutdown still joins native cleanup.
       await producer.catch(() => undefined);

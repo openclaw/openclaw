@@ -167,22 +167,7 @@ export function peekModelCatalog(
   return entry?.result;
 }
 
-export function settleModelCatalogRequests(
-  client: ModelCatalogClient,
-  scope: ModelsListParams,
-): Promise<void> | undefined {
-  const key = modelCatalogKey(modelCatalogParams(scope));
-  const cache = modelCatalogCache.get(client);
-  const pending = [
-    ...(cache?.requests.get(key)?.values() ?? []),
-    ...Array.from(cache?.retiredRequests ?? []).filter(
-      (request) => modelCatalogKey(request.scope) === key,
-    ),
-  ].map((request) => request.transportSettled);
-  return pending.length ? Promise.allSettled(pending).then(() => {}) : undefined;
-}
-
-/** Cache exact Gateway projections; concurrent readers share one request per budget. */
+/** Cache exact Gateway projections; concurrent readers share deadline and refresh intent. */
 export async function loadModelCatalog(
   client: ModelCatalogClient,
   options: ModelsListParams & Pick<GatewayProtocolRequestOptions, "signal" | "timeoutMs">,
@@ -220,32 +205,30 @@ export async function loadModelCatalog(
   }
   const cache = getModelCatalogCache(client);
   const key = modelCatalogKey(params);
-  const existing = cache.requests.get(key)?.get(timeoutMs);
-  if (existing && !existing.controller.signal.aborted && (!params.refresh || existing.refresh)) {
+  const requestKey = JSON.stringify([
+    timeoutMs === undefined ? "default" : timeoutMs,
+    params.refresh === true,
+  ]);
+  const existing = cache.requests.get(key)?.get(requestKey);
+  if (existing && !existing.controller.signal.aborted) {
     return await subscribeToSharedRequest(existing, {}, signal);
   }
   if (params.refresh) {
     invalidateModelCatalogCache(client);
   }
-  // Invalidation may retire this key's budgets, so admit the new request afterwards.
-  const budgets =
-    cache.requests.get(key) ??
-    new Map<GatewayProtocolRequestOptions["timeoutMs"], ModelCatalogRequest>();
+  const budgets = cache.requests.get(key) ?? new Map<string, ModelCatalogRequest>();
   cache.requests.set(key, budgets);
   const controller = new AbortController();
   const completion = createDeferredCore<ModelCatalogResult>();
-  const settled = createDeferredCore();
   const pending: ModelCatalogRequest = {
-    scope: params,
     refresh: params.refresh === true,
     controller,
     promise: completion.promise,
-    transportSettled: settled.promise,
     resolve: completion.resolve,
     reject: completion.reject,
     subscribers: new Set(),
   };
-  budgets.set(timeoutMs, pending);
+  budgets.set(requestKey, pending);
   const subscription = subscribeToSharedRequest(pending, {}, signal);
   const read = beginModelCatalogRead(client, params, controller.signal);
   const request = async () => {
@@ -268,18 +251,14 @@ export async function loadModelCatalog(
   };
   void request()
     .then((result) => {
-      // Its original readers still settle, but the reply may predate the change.
-      if (!pending.retired) {
-        publishModelCatalogResult(read, params, result);
-      }
+      // Catalog changes during a read are best effort until the next refresh.
+      publishModelCatalogResult(read, params, result);
       pending.resolve(result);
     }, pending.reject)
     .catch(pending.reject)
     .finally(() => {
-      settled.resolve();
-      cache.retiredRequests.delete(pending);
-      if (budgets.get(timeoutMs) === pending) {
-        budgets.delete(timeoutMs);
+      if (budgets.get(requestKey) === pending) {
+        budgets.delete(requestKey);
         if (budgets.size === 0 && cache.requests.get(key) === budgets) {
           cache.requests.delete(key);
         }

@@ -40,7 +40,11 @@ function setupRequest(
   handlers: Record<string, (params?: { answer?: unknown }) => unknown> = {},
 ) {
   return vi.fn(async (method: string, params?: { answer?: unknown }) =>
-    method === "openclaw.setup.auto" ? auto() : (handlers[method]?.(params) ?? reply),
+    method === "openclaw.chat.history"
+      ? (handlers[method]?.(params) ?? { turns: [] })
+      : method === "openclaw.setup.auto"
+        ? auto()
+        : (handlers[method]?.(params) ?? reply),
   );
 }
 function unavailable(attempts: SetupAutoResult["attempts"] = []): SetupAutoResult {

@@ -10,10 +10,10 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 
 const require = createRequire(import.meta.url);
+const httpRequests = channel("http.server.request.start");
 
 export function observeMcpAppHttpResponses(gatewayPort: number) {
   const responses: ServerResponse[] = [];
-  const requests = channel("http.server.request.start");
   const onRequest = (message: unknown) => {
     // SAFETY: Node publishes these exact objects before the real HTTP request handler runs.
     const { request, response } = message as {
@@ -28,8 +28,8 @@ export function observeMcpAppHttpResponses(gatewayPort: number) {
       responses.push(response);
     }
   };
-  requests.subscribe(onRequest);
-  return { responses, stop: () => requests.unsubscribe(onRequest) };
+  httpRequests.subscribe(onRequest);
+  return { responses, stop: () => httpRequests.unsubscribe(onRequest) };
 }
 
 export function observeMcpAppRequests(page: Page) {
@@ -190,7 +190,6 @@ window.mcpConformanceConnect = async ({ gatewayUrl, authValue, sessionKey }) => 
     { ...loadSettings(), gatewayUrl, token: authValue, sessionKey },
     "",
     "",
-    undefined,
     { persistDefaultConnectionSettings: false, ownsWarmBoot: false },
   );
   gateway.start();

@@ -110,6 +110,7 @@ import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
 import { ensureSessionRuntimeCleanup } from "./session-reset-runtime-cleanup.js";
 import { resolveSessionResetTarget } from "./session-reset-target.js";
 import { readGatewayBeforeResetPluginHookMessages } from "./session-reset-transcript.js";
+import { buildResetWorkspaceFields } from "./session-reset-workspace.js";
 import { withGatewaySessionEntryReadOnly } from "./session-utils-read-lifetime.js";
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
 import type { SessionWorkerPlacementContext } from "./session-worker-placement-context.js";
@@ -916,29 +917,7 @@ async function performPreparedGatewaySessionReset({
               queueDrop: currentEntry?.queueDrop,
               ...preserveSessionLineage(currentEntry),
               completionOwnerSessionKey: currentEntry?.completionOwnerSessionKey,
-              spawnedWorkspaceDir: currentEntry?.spawnedWorkspaceDir,
-              spawnedCwd: params.clearSpawnedCwd
-                ? undefined
-                : (preparedLifecycle?.spawnedCwd ?? params.spawnedCwd ?? currentEntry?.spawnedCwd),
-              sessionRoot: params.clearSpawnedCwd
-                ? undefined
-                : (preparedLifecycle?.sessionRoot ??
-                  params.sessionRoot ??
-                  currentEntry?.sessionRoot),
-              permissionMode: params.clearSpawnedCwd
-                ? undefined
-                : (params.permissionMode ?? currentEntry?.permissionMode),
-              // Reset keeps this logical chat's authorized containment choice.
-              sandboxMode: currentEntry?.sandboxMode,
-              worktree: params.clearSpawnedCwd
-                ? undefined
-                : (preparedLifecycle?.worktree ?? currentEntry?.worktree),
-              repositoryWorkspaceId:
-                preparedLifecycle?.repositoryWorkspaceId ?? currentEntry?.repositoryWorkspaceId,
-              // Placement can be retired by reset; the logical chat must still stay on its device.
-              deviceFolder: currentEntry?.deviceFolder
-                ? { ...currentEntry.deviceFolder }
-                : undefined,
+              ...buildResetWorkspaceFields(currentEntry, params, preparedLifecycle),
               ...creationStamp,
               delivery: currentEntry?.delivery,
               pendingDeliveryNotice: currentEntry?.pendingDeliveryNotice,
@@ -1034,7 +1013,6 @@ async function performPreparedGatewaySessionReset({
                     : { available: false, reason: "unsupported-source" },
                 });
                 emitGatewaySessionStartPluginHook({
-                  cfg,
                   sessionKey: resetSessionKey,
                   sessionId: mutation.nextEntry.sessionId,
                   resumedFrom: mutation.previousSessionId,

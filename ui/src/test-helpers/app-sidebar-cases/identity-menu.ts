@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationOverlays } from "../../app/overlays-types.ts";
+import { CONTROL_UI_BUILD_INFO } from "../../build-info.ts";
 import {
   dismissSidebarAttention,
   resolveSidebarAttentionKey,
@@ -99,6 +100,11 @@ describe("AppSidebar footer identity menu", () => {
   });
 
   it("owns account utilities, restores focus, and routes Profile", async () => {
+    const originalBuildInfo = { ...CONTROL_UI_BUILD_INFO };
+    Object.assign(CONTROL_UI_BUILD_INFO, { release: false, commit: "0123456789abcdef" });
+    onTestFinished(() => {
+      Object.assign(CONTROL_UI_BUILD_INFO, originalBuildInfo);
+    });
     const fullName = "Ada Lovelace With A Deliberately Long Display Name";
     const email = "ada.with.a.deliberately.long.address@example.test";
     const avatarUrl = "/api/users/self/avatar?v=1";
@@ -142,7 +148,7 @@ describe("AppSidebar footer identity menu", () => {
     expect(shortcut?.textContent?.replace(/\s+/gu, "").trim()).toMatch(/^(⌘⇧,|Ctrl\+Shift\+,)$/u);
     expect(menu?.style.getPropertyValue("--sidebar-identity-menu-min-width")).toBe("212px");
     expect(view.query(".sidebar-pair-mobile")?.hasAttribute("disabled")).toBe(true);
-    expect(view.query("openclaw-sidebar-build-chip")).toMatchObject({ variant: "identity" });
+    expect(view.attr("openclaw-sidebar-build-chip .sidebar-footer-build", "role")).toBe("menuitem");
     expect(view.query("openclaw-theme-mode-toggle")).not.toBeNull();
     expect(menu?.textContent).not.toContain("Recent activity");
     expect(view.all(':scope > [role="separator"]')).toHaveLength(4);
@@ -153,10 +159,12 @@ describe("AppSidebar footer identity menu", () => {
     const links = domProbe(helpRow!.parentElement!).all('[role="menu"] a[href]');
     expect([...links].map((link) => link.getAttribute("href"))).toEqual([
       "https://docs.openclaw.ai",
-      "https://docs.openclaw.ai/help",
+      "https://community.openclaw.ai/",
       "https://discord.gg/clawd",
       "https://docs.openclaw.ai/releases",
     ]);
+
+    expect([...links].find((link) => link.textContent?.includes("Get support"))).toBeDefined();
 
     view.query<HTMLElement>('[data-value="command:profile"]')?.focus();
     await dom.key(menu, "Escape", { cancelable: false });

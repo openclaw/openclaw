@@ -1339,21 +1339,13 @@ describe("Anthropic provider", () => {
     expect(payload.stop_sequences).toEqual(["STOP"]);
   });
 
-  it("skips unreadable Anthropic provider tools while preserving healthy siblings", async () => {
-    const unreadableTool = {
-      name: "unreadable_plugin_tool",
-      description: "unreadable schema",
-      get parameters(): Tool["parameters"] {
-        throw new Error("fuzz parameters getter exploded");
-      },
-    } as Tool;
+  it("skips invalid Anthropic provider schemas while preserving healthy siblings", async () => {
     const { payload: capturedPayload, result } = await captureSimpleAnthropicPayload(
       {},
       { mode: "raw", stopBeforeNetwork: true },
       {
         messages: [user("hello")],
         tools: [
-          unreadableTool,
           {
             name: "invalid_required_tool",
             description: "invalid required",
@@ -1394,20 +1386,18 @@ describe("Anthropic provider", () => {
   });
 
   it("fails locally when a pinned Anthropic provider tool is skipped", async () => {
-    const unreadableTool = {
-      name: "unreadable_plugin_tool",
-      description: "unreadable schema",
-      get parameters(): Tool["parameters"] {
-        throw new Error("fuzz parameters getter exploded");
-      },
-    } as Tool;
+    const invalidTool = {
+      name: "invalid_plugin_tool",
+      description: "invalid schema",
+      parameters: { type: "object", properties: false },
+    };
     const onPayload = vi.fn();
     const stream = streamAnthropic(
       makeAnthropicModel(),
       {
         messages: [user("hello")],
         tools: [
-          unreadableTool,
+          invalidTool,
           {
             name: "healthy_tool",
             description: "healthy schema",
@@ -1417,7 +1407,7 @@ describe("Anthropic provider", () => {
       },
       {
         apiKey: "sk-ant-provider",
-        toolChoice: { type: "tool", name: "unreadable_plugin_tool" },
+        toolChoice: { type: "tool", name: "invalid_plugin_tool" },
         onPayload,
       },
     );
@@ -1426,9 +1416,10 @@ describe("Anthropic provider", () => {
 
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toContain(
-      'Anthropic tool_choice requested unavailable tool "unreadable_plugin_tool"',
+      'Anthropic tool_choice requested unavailable tool "invalid_plugin_tool"',
     );
     expect(onPayload).not.toHaveBeenCalled();
+    expect(anthropicMockState.requestOptions).toHaveLength(0);
   });
 
   it("keeps Anthropic wire tool bytes and their cache breakpoint stable across discovery orders", async () => {

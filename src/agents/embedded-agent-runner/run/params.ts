@@ -11,13 +11,9 @@ import type { ExecApprovalContinuationPromptRange } from "../../bash-tools.exec-
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.exec-types.js";
 import type { QueuedAgentRunParams } from "../../command/queued-run-params.types.js";
 import type {
-  AgentRunClientContext,
+  AgentRunExecutionContext,
   AgentRunMessageContext,
   AgentRunChannelContext,
-  AgentRunModelOptions,
-  AgentRunInputContext,
-  AgentRunTranscriptContext,
-  AgentRunLifecycle,
   AgentStreamParams,
   ClientToolDefinition,
 } from "../../command/shared-types.js";
@@ -35,6 +31,7 @@ import type { AgentInternalEvent } from "../../internal-events.js";
 import type { CurrentInboundPromptContext } from "../../internal-runtime-context.js";
 import type { PreparedModelThinkingCapability } from "../../model-catalog-lookup.js";
 import type { ReplyDeliveryObserver } from "../../reply-completion.js";
+import type { ResolvedToolPromptFinalizer } from "../../resolved-tool-prompt.types.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import type { EmbeddedRunTrigger } from "../../run-trigger.js";
 import type { PromptMode } from "../../system-prompt.types.js";
@@ -43,11 +40,6 @@ import type { BlockReplyFlushContext } from "../types.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
 export type { ClientToolDefinition } from "../../command/shared-types.js";
 export type { CurrentInboundPromptContext } from "../../internal-runtime-context.js";
-
-export type ResolvedToolPromptFinalizer = (params: {
-  prompt: string;
-  messageToolAvailable: boolean;
-}) => string;
 
 export type RunEmbeddedAgentParams = Pick<
   QueuedAgentRunParams,
@@ -284,13 +276,7 @@ export type RunEmbeddedAgentParams = Pick<
   /** Keep an internal continuation prompt from being replaced by the original prepared turn. */
   skipPreparedUserTurnMessage?: boolean;
   onUserMessagePersistenceInvalidated?: () => void;
-} & AgentRunClientContext &
-  AgentRunMessageContext &
-  AgentRunChannelContext &
-  AgentRunModelOptions &
-  AgentRunInputContext &
-  AgentRunTranscriptContext &
-  AgentRunLifecycle;
+} & AgentRunExecutionContext;
 
 export type EmbeddedForegroundPromptContext = Pick<
   RunEmbeddedAgentParams,

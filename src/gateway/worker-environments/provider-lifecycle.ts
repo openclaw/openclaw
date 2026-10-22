@@ -122,8 +122,7 @@ export function createWorkerProviderLifecycle(
     if (record.state !== "bootstrapping" || !record.leaseId || !record.sshEndpoint) {
       throw serviceError("invalid_state", "Worker bootstrap requires a provisioned SSH lease");
     }
-    const leaseId = record.leaseId;
-    const sshEndpoint = record.sshEndpoint;
+    const { leaseId, sshEndpoint } = record;
     let receipt: WorkerAdmissionHandshake;
     try {
       receipt = await callBootstrap(installation, (signal) =>
@@ -422,6 +421,7 @@ export function createWorkerProviderLifecycle(
         installation = await options.prepareInstallation(installFor(bootstrapping), workSignal);
         cancellation?.assertActive();
       } catch (error) {
+        await cancellation?.settleStopIntent();
         options.ownerSignal.throwIfAborted();
         return await failBootstrap(bootstrapping, lease.leaseId, provider, error);
       }

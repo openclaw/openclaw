@@ -79,11 +79,7 @@ export async function prepareFoundryRuntimeAuth(
     const metadataModelId = normalizeOptionalString(metadata?.modelId);
     const modelId = requestedModelId ?? metadataModelId ?? ctx.modelId;
     const activeModelUsesMetadata = !requestedModelId || requestedModelId === metadataModelId;
-    const activeModelNameHint = activeModelUsesMetadata ? metadata?.modelName : undefined;
-    const modelNameHint = resolveConfiguredModelNameHint(
-      modelId,
-      ctx.model.name ?? activeModelNameHint,
-    );
+    const modelNameHint = resolveConfiguredModelNameHint(modelId, ctx.model.name);
     const configuredApi = isFoundryProviderApi(ctx.model.api)
       ? ctx.model.api
       : activeModelUsesMetadata &&

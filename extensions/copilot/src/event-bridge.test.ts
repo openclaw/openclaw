@@ -158,7 +158,7 @@ describe("attachEventBridge", () => {
     );
     emit(session, "assistant.usage", { inputTokens: 99, outputTokens: 99 }, { agentId: "child-1" });
 
-    expect(bridge.snapshot().assistantTexts).toEqual(["root"]);
+    expect(bridge.finalizeAssistantTexts()).toEqual(["root"]);
     expect(bridge.snapshot().startedCount).toBe(0);
     expect(bridge.snapshot().toolMetas).toEqual([
       { meta: "child write", toolName: "write", isError: false },
@@ -179,7 +179,7 @@ describe("attachEventBridge", () => {
     emitDelta(session, "x", "msg-2");
     emitDelta(session, "b", "msg-1");
 
-    expect(bridge.snapshot().assistantTexts).toEqual(["ab", "x"]);
+    expect(bridge.finalizeAssistantTexts()).toEqual(["ab", "x"]);
   });
 
   it("ignored child and ephemeral users do not split a root assistant API call", () => {

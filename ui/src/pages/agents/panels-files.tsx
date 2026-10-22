@@ -13,9 +13,10 @@ import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { pathDisplayName } from "../../lib/path-display.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { AgentFilePreview } from "./agent-file-preview.tsx";
-import { AgentFileError } from "./file-conflict-callout.tsx";
-import { hasAgentFileContent, type AgentFilesViewState } from "./files.ts";
+import type { AgentsPageView } from "./agents-page-state.ts";
+import { hasAgentFileContent, isAgentFileDirty } from "./files.ts";
 import { AgentPanelAction } from "./panel-ui.tsx";
+import { AgentReadNotice, createAgentReadPending } from "./read-status.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
 
@@ -59,24 +60,20 @@ function renderPreviewFact(value: string | number, label: string, secondary = fa
 }
 
 export function AgentFiles(
-  params: AgentFilesViewState & {
-    agentId: string;
-    canWrite: boolean;
-    onLoadFiles: (agentId: string) => void;
-    onSelectFile: (name: string) => void;
-    onFileDraftChange: (name: string, content: string) => void;
-    onFileReset: (name: string) => void;
-    onFileSave: (name: string) => void;
-    onFileReload: (name: string) => void;
-    onFileOverwrite: (name: string) => void;
-  },
+  params: AgentsPageView["agentFiles"] &
+    Pick<AgentsPageView, "readData"> & {
+      agentId: string;
+      canWrite: boolean;
+    },
 ) {
-  const list = createMemo(
-    () => (params.agentFilesList?.agentId === params.agentId ? params.agentFilesList : null),
-    { equals: false },
-  );
-  const files = createMemo(() => list()?.files ?? [], { equals: false });
-  const active = createMemo(() => params.agentFileActive ?? null);
+  const inventoryPending = createAgentReadPending(() => params.listRead);
+  const loading = () => params.readData().agentFilesLoading || inventoryPending();
+  const list = () =>
+    params.readData().agentFilesList?.agentId === params.agentId
+      ? params.readData().agentFilesList
+      : null;
+  const files = () => list()?.files ?? [];
+  const active = createMemo(() => params.readData().agentFileActive ?? null);
   // Files whose absence is a normal workspace state stay out of the tab strip until
   // the operator picks them; only a genuinely faulty absence is badged as missing.
   const isCreatable = (file: AgentFileEntry) =>
@@ -88,38 +85,62 @@ export function AgentFiles(
     { equals: false },
   );
   const conflictName = createMemo(() =>
-    active() && params.agentFileConflict === active() ? active() : null,
+    active() && params.readData().agentFileConflict === active() ? active() : null,
   );
-  const showMissing = createMemo(() => activeEntry()?.missing && !conflictName());
+  const showMissing = () => activeEntry()?.missing && !conflictName();
   const hasContent = createMemo(() => {
     const name = active();
-    return name ? hasAgentFileContent(params, name) : false;
+    return name ? hasAgentFileContent(params.readData(), name) : false;
   });
-  const editor = createMemo(
-    () => {
-      const name = active();
-      return name ? params.agentFileEditors[name] : undefined;
-    },
-    { equals: false },
-  );
-  const hasBase = createMemo(() => {
+  const editor = () => {
+    const name = active();
+    return name ? params.readData().agentFileEditors[name] : undefined;
+  };
+  const hasBase = () => {
     const value = editor();
     return Boolean(value && Object.hasOwn(value, "content"));
-  });
-  const baseContent = createMemo(() => editor()?.content ?? "");
+  };
+  const baseContent = () => editor()?.content ?? "";
   const draft = createMemo(() => editor()?.draft ?? baseContent());
-  const isDirty = createMemo(() => hasContent() && (!hasBase() || draft() !== baseContent()));
+  const isDirty = createMemo(() => isAgentFileDirty(editor()));
 
   return (
     <>
-      <AgentFileError
-        error={params.agentFilesError}
-        conflictName={conflictName()}
-        busy={params.agentFilesLoading || params.agentFileSaving}
-        canWrite={params.canWrite}
-        onReload={params.onFileReload}
-        onOverwrite={params.onFileOverwrite}
-      />
+      <Show
+        when={conflictName()}
+        fallback={
+          <Show
+            when={params.agentFilesError}
+            fallback={<AgentReadNotice request={params.listRead} />}
+          >
+            <div class="callout danger">{params.agentFilesError}</div>
+          </Show>
+        }
+      >
+        {(name) => (
+          <div class="callout danger">
+            <span>{params.agentFilesError ?? t("agents.files.conflictHint")}</span>
+            <div class="agent-file-actions">
+              <button
+                class="btn btn--sm"
+                type="button"
+                disabled={loading() || params.readData().agentFileSaving}
+                onClick={() => params.onFileReload(name())}
+              >
+                {t("common.reload")}
+              </button>
+              <button
+                class="btn btn--sm"
+                type="button"
+                disabled={loading() || params.readData().agentFileSaving || !params.canWrite}
+                onClick={() => params.onFileOverwrite(name())}
+              >
+                {t("agents.files.overwrite")}
+              </button>
+            </div>
+          </div>
+        )}
+      </Show>
       <SettingsSection
         title={t("agents.files.coreFilesTitle")}
         description={
@@ -134,8 +155,8 @@ export function AgentFiles(
         }
         actions={
           <AgentPanelAction
-            label={params.agentFilesLoading ? t("common.loading") : t("common.refresh")}
-            disabled={params.agentFilesLoading}
+            label={loading() ? t("common.loading") : t("common.refresh")}
+            disabled={loading()}
             onClick={() => params.onLoadFiles(params.agentId)}
           />
         }
@@ -160,7 +181,7 @@ export function AgentFiles(
                         : undefined,
                     // File reads are serialized; changing the active tab mid-read would
                     // expose an editor whose content request was never accepted.
-                    disabled: params.agentFilesLoading,
+                    disabled: loading(),
                   })),
                   ariaLabel: t("agents.files.coreFilesTitle"),
                   panelId: "agent-file-panel",
@@ -173,7 +194,7 @@ export function AgentFiles(
                   class="agent-tab-add"
                   aria-label={t("agents.files.addFile")}
                   value={""}
-                  disabled={params.agentFilesLoading}
+                  disabled={loading()}
                   onChange={(e) => {
                     const select = e.currentTarget;
                     const name = select.value;
@@ -239,12 +260,14 @@ export function AgentFiles(
                             disabled={
                               !params.canWrite ||
                               !hasContent() ||
-                              params.agentFileSaving ||
+                              params.readData().agentFileSaving ||
                               !isDirty()
                             }
                             onClick={() => params.onFileSave(entry().name)}
                           >
-                            {params.agentFileSaving ? t("common.saving") : t("common.save")}
+                            {params.readData().agentFileSaving
+                              ? t("common.saving")
+                              : t("common.save")}
                           </button>
                         </div>
                       </div>
@@ -264,7 +287,7 @@ export function AgentFiles(
                           placeholder={
                             hasContent()
                               ? undefined
-                              : params.agentFilesLoading
+                              : loading()
                                 ? t("common.loading")
                                 : t("agents.files.loadHint")
                           }

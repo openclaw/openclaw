@@ -1,3 +1,4 @@
+import { createChangeListeners } from "../../../src/shared/listeners.js";
 import { DEFAULT_SIDEBAR_ENTRIES, type NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationRouter } from "../app-routes.ts";
 import { selectApplicationSession } from "../app/agent-selection.ts";
@@ -13,7 +14,6 @@ import {
   type SessionMethodAccessRequest,
 } from "../lib/session-method-access.ts";
 import { prepareSessionNavigationHandoff } from "../lib/sessions/navigation-handoff.ts";
-import { SESSION_NAVIGATION_KEY_PARAM } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey, resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import type { GatewayStatusProps } from "./gateway-status.ts";
@@ -147,13 +147,9 @@ export abstract class AppSidebarBase {
   declare onPairMobile: AppSidebarProps["onPairMobile"];
   declare onNavigate: AppSidebarProps["onNavigate"];
   declare onPreloadRoute: AppSidebarProps["onPreloadRoute"];
-  declare readonly ownerDocument: HTMLElement["ownerDocument"];
-  declare readonly classList: HTMLElement["classList"];
-  declare readonly querySelector: HTMLElement["querySelector"];
-  declare readonly querySelectorAll: HTMLElement["querySelectorAll"];
-  declare readonly addEventListener: HTMLElement["addEventListener"];
-  declare readonly removeEventListener: HTMLElement["removeEventListener"];
-  declare readonly contains: HTMLElement["contains"];
+  get ownerDocument(): Document {
+    return this.hostElement.ownerDocument;
+  }
 
   readonly navigationViewElements = new Map<AppSidebarProps["navigationView"], HTMLElement>();
 
@@ -165,7 +161,7 @@ export abstract class AppSidebarBase {
     return element?.isConnected ? element : undefined;
   }
 
-  private readonly listeners = new Set<() => void>();
+  private readonly listeners = createChangeListeners();
   private attached = false;
   private complete: Promise<boolean> = Promise.resolve(true);
   private finishUpdate: ((value: boolean) => void) | undefined;
@@ -191,20 +187,6 @@ export abstract class AppSidebarBase {
         set: (value: unknown) => {
           Reflect.set(hostElement, key, value);
         },
-      });
-    }
-    for (const key of [
-      "ownerDocument",
-      "classList",
-      "querySelector",
-      "querySelectorAll",
-      "addEventListener",
-      "removeEventListener",
-      "contains",
-    ] as const) {
-      const value = hostElement[key];
-      Object.defineProperty(this, key, {
-        value: typeof value === "function" ? value.bind(hostElement) : value,
       });
     }
   }
@@ -235,19 +217,14 @@ export abstract class AppSidebarBase {
     // The bridge delays disposal across moves; detached hosts cannot admit new work.
     return this.attached && this.hostElement.isConnected;
   }
-  subscribe(listener: () => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
+  readonly subscribe = this.listeners.subscribe;
   invalidate(): void {
     if (!this.finishUpdate) {
       this.complete = new Promise((resolve) => {
         this.finishUpdate = resolve;
       });
     }
-    for (const listener of this.listeners) {
-      listener();
-    }
+    this.listeners.publish();
   }
   get updateComplete(): Promise<boolean> {
     return this.complete;
@@ -288,14 +265,20 @@ export abstract class AppSidebarBase {
 
   setSessionOwnerFilter = (ownerId: string | null, involvingMe = false) => {
     this.sessionOwnerFilter.set(ownerId, involvingMe);
+    if (this.sidebarSnapshot) {
+      // Keep the cached rows, but let explicit intent select the replacement query.
+      const selected = this.sessionOwnerFilter.read();
+      this.sidebarSnapshot.ownerId = selected.ownerId;
+      this.sidebarSnapshot.involvingMe = selected.involvingMe;
+    }
   };
 
   pluginNavigation() {
-    return this.context?.plugins?.registrations("navigation") ?? [];
+    return this.context.plugins.registrations("navigation");
   }
 
   pendingSessionCreate() {
-    const pending = this.context?.chatSubmissions?.readCreate();
+    const pending = this.context.chatSubmissions.readCreate();
     return this.activeRouteId === "chat" && !pending?.creation.admitted ? pending : undefined;
   }
 
@@ -304,16 +287,12 @@ export abstract class AppSidebarBase {
     return (
       this.pendingSessionCreate()?.creation.sessionKey ||
       this.sessionKey.trim() ||
-      this.context?.gateway.snapshot.sessionKey.trim() ||
-      ""
+      this.context.gateway.snapshot.sessionKey.trim()
     );
   }
 
   protected setApplicationSession(sessionKey: string, fallbackAgentId?: string): void {
     const context = this.context;
-    if (!context) {
-      return;
-    }
     selectApplicationSession({
       selection: context.agentSelection,
       gateway: context.gateway,
@@ -323,42 +302,27 @@ export abstract class AppSidebarBase {
   }
 
   prepareSessionNavigation(sessionKey: string, pathname: string): void {
-    if (this.context) {
-      prepareSessionNavigationHandoff(this.context.gateway, pathname, sessionKey);
-    }
-  }
-
-  protected bindLiteralSession(
-    sessionKey: string,
-    fallbackAgentId: string,
-    options: ApplicationNavigationOptions,
-  ): void {
-    if (!new URLSearchParams(options.search ?? "").has(SESSION_NAVIGATION_KEY_PARAM)) {
-      this.setApplicationSession(sessionKey, fallbackAgentId);
-    }
+    prepareSessionNavigationHandoff(this.context.gateway, pathname, sessionKey);
   }
 
   protected sessionMainKey(): string {
     return resolveUiConfiguredMainKey({
-      agentsList: this.context?.agents.state.agentsList,
-      hello: this.context?.gateway.snapshot.hello,
+      agentsList: this.context.agents.state.agentsList,
+      hello: this.context.gateway.snapshot.hello,
     });
   }
 
   readNewSessionAccess(): SessionMethodAccess {
-    return readSessionMethodAccess(
-      this.connected && !this.sidebarSnapshot ? this.context?.gateway.snapshot : null,
-      {
-        method: "sessions.create",
-        params: {},
-        sessionScope: true,
-      },
-    );
+    return this.readSessionMutationAccess({
+      method: "sessions.create",
+      params: {},
+      sessionScope: true,
+    });
   }
 
   readSessionMutationAccess(request: SessionMethodAccessRequest): SessionMethodAccess {
     return readSessionMethodAccess(
-      this.connected && !this.sidebarSnapshot ? this.context?.gateway.snapshot : null,
+      this.connected && !this.sidebarSnapshot ? this.context.gateway.snapshot : null,
       request,
     );
   }

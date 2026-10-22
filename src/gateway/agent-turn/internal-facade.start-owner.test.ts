@@ -1,18 +1,19 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import assert from "node:assert/strict";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { expect, it, vi } from "vitest";
 import { resetAgentEventsForTest } from "../../infra/agent-events.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
-import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { registerChatAbortController } from "../chat-abort.js";
-import { createChatRunState } from "../server-chat-state.js";
-import type { GatewayRequestContext } from "../server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
+import { createGatewayRequestContext } from "../server-request-context.js";
+import { makeContextParams } from "../server-request-context.test-support.js";
 import { claimRpcSourceForTest } from "../test-helpers.rpc-source.js";
 import { createInternalAgentTurnFacade } from "./internal-facade.js";
 import type { AgentTurnStartOwner } from "./internal-facade.types.js";
 
 const startTurn = vi.hoisted(() => vi.fn());
 
-// mock-isolation: The start-owner fixture supplies its request envelope without initializing the full Gateway method registry.
+// mock-isolation: Supply the envelope without initializing the full method registry.
 vi.mock("../server-methods.js", () => ({
   createRequestGatewayMethodRegistry: () => ({
     isControlPlaneWrite: () => false,
@@ -24,36 +25,24 @@ vi.mock("../server-methods.js", () => ({
     run: () => Promise<unknown>,
   ) => await run(),
 }));
-// mock-isolation: This synthetic start-owner context has no database-backed session policy; authorization is supplied by the fixture.
+// mock-isolation: The fixture supplies authorization, not database-backed session policy.
 vi.mock("../server-methods/request-authorization.js", () => ({
   authorizeGatewayRequestPreDispatch: async () => ({ error: null }),
 }));
-// mock-isolation: The fixture supplies the admitted request without loading runtime config or the model catalog.
+// mock-isolation: Supply admission without loading config or the model catalog.
 vi.mock("./agent-request-preflight.js", () => ({
   prepareAgentRequestPreflight: ({ request }: { request: unknown }) => ({ request }),
 }));
-// mock-isolation: The fixture publishes its existing source through startTurn without launching another agent execution.
+// mock-isolation: Publish the existing source without launching agent execution.
 vi.mock("./agent-turn-service.js", () => ({
   createAgentTurnService: () => ({ startTurn }),
 }));
 
-beforeEach(() => {
+it("observes a started owner without reentering its watchdog authority", async () => {
   resetAgentEventsForTest();
   startTurn.mockReset();
-});
-
-it("observes a started owner without reentering its watchdog authority", async () => {
-  const context = Object.assign({} as GatewayRequestContext, {
-    trackExecution: trackAsyncWork,
-    agentRunSeq: new Map(),
-    broadcast: vi.fn(),
-    chatRunState: createChatRunState(),
-    dedupe: new Map(),
-    getRuntimeConfig: () => ({}),
-    logGateway: { error: vi.fn(), warn: vi.fn() },
-    nodeSendToSession: vi.fn(),
-    removeChatRun: vi.fn(() => undefined),
-  });
+  const context = createGatewayRequestContext(makeContextParams());
+  context.getRuntimeConfig = () => ({});
   const request = {
     agentId: "main",
     message: "resume",
@@ -74,9 +63,9 @@ it("observes a started owner without reentering its watchdog authority", async (
     kind: "agent",
     timeoutMs: 60_000,
   });
-  if (!registration.registered) {
-    throw new Error("Expected recovery source registration");
-  }
+  assert(registration.registered, "Expected recovery source registration");
+  using cleanup = new DisposableStack();
+  cleanup.defer(registration.cleanup);
   let owner: AgentTurnStartOwner | undefined;
   startTurn.mockImplementation(async ({ io }) => {
     io.emitStartOwner?.(request.idempotencyKey, registration.entry);
@@ -88,46 +77,32 @@ it("observes a started owner without reentering its watchdog authority", async (
     client: createSyntheticPluginRuntimeClient(),
     getContext: () => context,
   });
-  try {
-    await facade.dispatch(request, { onStartOwner: (value) => (owner = value) });
-    expect(owner?.observe()).toMatchObject({ executionStarted: false });
-    await claimRpcSourceForTest(registration.entry);
-    const operation = registration.entry.input.claim?.operation;
-    if (!owner || !operation) {
-      throw new Error("Expected published owner and claimed controller operation");
-    }
-    const observedOwner = owner;
-    let policyCurrent = true;
-    let validatingPolicy = false;
-    const assertCurrent = vi.fn(() => {
-      if (validatingPolicy) {
-        throw new Error("Start observation reentered effect authority");
-      }
-      validatingPolicy = true;
-      try {
-        if (!policyCurrent) {
-          throw new Error("Recovery operator policy revoked");
-        }
-        expect(observedOwner.observe()).toMatchObject({ executionStarted: true });
-      } finally {
-        validatingPolicy = false;
-      }
-    });
-    const attempt = operation.watchdog.attachAttempt({ assertCurrent });
+  await facade.dispatch(request, { onStartOwner: (value) => (owner = value) });
+  expect(owner?.observe()).toMatchObject({ executionStarted: false });
+  await claimRpcSourceForTest(registration.entry);
+  const operation = expectDefined(registration.entry.input.claim?.operation, "claimed operation");
+  const observedOwner = expectDefined(owner, "published owner");
+  let policyCurrent = true;
+  let validatingPolicy = false;
+  const assertCurrent = vi.fn(() => {
+    assert(!validatingPolicy, "Start observation reentered effect authority");
+    validatingPolicy = true;
     try {
-      assertCurrent.mockClear();
+      assert(policyCurrent, "Recovery operator policy revoked");
       expect(observedOwner.observe()).toMatchObject({ executionStarted: true });
-      expect(assertCurrent).not.toHaveBeenCalled();
-      expect(observedOwner.abort()).toBe(false);
-      expect(attempt.isCurrent()).toBe(true);
-      expect(assertCurrent).toHaveBeenCalledOnce();
-      policyCurrent = false;
-      expect(attempt.isCurrent()).toBe(false);
-      expect(assertCurrent).toHaveBeenCalledTimes(2);
     } finally {
-      attempt.close();
+      validatingPolicy = false;
     }
-  } finally {
-    registration.cleanup();
-  }
+  });
+  const attempt = operation.watchdog.attachAttempt({ assertCurrent });
+  cleanup.defer(() => attempt.close());
+  assertCurrent.mockClear();
+  expect(observedOwner.observe()).toMatchObject({ executionStarted: true });
+  expect(assertCurrent).not.toHaveBeenCalled();
+  expect(observedOwner.abort()).toBe(false);
+  expect(attempt.isCurrent()).toBe(true);
+  expect(assertCurrent).toHaveBeenCalledOnce();
+  policyCurrent = false;
+  expect(attempt.isCurrent()).toBe(false);
+  expect(assertCurrent).toHaveBeenCalledTimes(2);
 });

@@ -43,7 +43,7 @@ export type StartupConfigPreflightResult = ReturnType<typeof result> & {
   pluginCache?: PluginCache;
 };
 
-/** Prepare current runtime state; legacy imports and repair receipts belong to Doctor. */
+/** Prepare runtime state, including backed-up client credential migration through Doctor custody. */
 export async function runStartupConfigPreflight(
   options: StartupConfigPreflightOptions,
 ): Promise<StartupConfigPreflightResult> {
@@ -126,6 +126,10 @@ async function prepareStartupConfig(
       readSnapshot,
       validateConfig: options.validateStartupConfig,
       beforeStatePreparation,
+      prepareClientCredentials: async (snapshot) => {
+        const { prepareStartupClientCredentials } = await import("./startup-client-credentials.js");
+        await prepareStartupClientCredentials({ env, config: snapshot.config });
+      },
     });
   let read = await readAdmitted();
   env = cloneEnvWithPlatformSemantics(process.env);
@@ -197,13 +201,19 @@ async function prepareStartupConfig(
         await import("../infra/state-migrations.daemon-runtime-pins.js");
       initializeFreshDaemonRuntimePinMigration(env);
     }
-    const { HISTORICAL_WEBHOOK_CHANNELS, prepareUnwrittenWebhookCompletion } =
-      await import("./doctor/shared/legacy-webhook-pins.js");
-    const webhookCompletion = read.snapshot.sourceConfig.meta?.migrations?.webhookListeners;
-    if (
-      webhookCompletion !== true &&
-      !HISTORICAL_WEBHOOK_CHANNELS.every((id) => Object.hasOwn(webhookCompletion ?? {}, id))
-    ) {
+    const {
+      HISTORICAL_WEBHOOK_CHANNELS,
+      prepareUnwrittenWebhookCompletion,
+      readUnwrittenWebhookCompletion,
+    } = await import("./doctor/shared/legacy-webhook-pins.js");
+    const webhookCompletion =
+      read.snapshot.sourceConfig.meta?.migrations?.webhookListeners ??
+      (await readUnwrittenWebhookCompletion(env));
+    const pendingWebhookChannels =
+      webhookCompletion === true
+        ? []
+        : HISTORICAL_WEBHOOK_CHANNELS.filter((id) => !Object.hasOwn(webhookCompletion ?? {}, id));
+    if (pendingWebhookChannels.length) {
       const migration = await measureDoctorConfigPreflightStep("webhook-readiness", async () => {
         const { applyPluginDoctorCompatibilityMigrations } =
           await import("../plugins/doctor-contract-registry.js");
@@ -213,8 +223,9 @@ async function prepareStartupConfig(
             config: read.snapshot.sourceConfig,
             env,
             manifestRegistry: read.pluginMetadataSnapshot?.manifestRegistry,
-            pluginIds: HISTORICAL_WEBHOOK_CHANNELS,
+            pluginIds: pendingWebhookChannels,
             historicalWebhookListeners: true,
+            historicalWebhookCompletion: { marker: webhookCompletion },
             startup: true,
           }),
         );
@@ -222,21 +233,27 @@ async function prepareStartupConfig(
       if (migration.warnings?.length) {
         throw new Error(migration.warnings.join("\n"));
       }
-      if (migration.changes.length) {
+      const completion = prepareUnwrittenWebhookCompletion(read.snapshot, migration, env);
+      if (!completion && migration.changes.length) {
+        const { StartupMaintenanceRequiredError } =
+          await import("../infra/startup-maintenance-required.js");
+        throw new StartupMaintenanceRequiredError(
+          "state-migrations",
+          `Webhook listeners require config migration. Run \`openclaw doctor --fix\`, then restart. Startup left the config unchanged.\n${migration.changes.join("\n")}`,
+        );
+      }
+      if (completion) {
         await beforeStatePreparation(read.snapshot);
         assertLeaseCurrent();
-        const completion = prepareUnwrittenWebhookCompletion(read.snapshot, migration, env);
-        if (!completion) {
-          const { StartupMaintenanceRequiredError } =
-            await import("../infra/startup-maintenance-required.js");
-          throw new StartupMaintenanceRequiredError(
-            "state-migrations",
-            `Webhook listeners require config migration. Run \`openclaw doctor --fix\`, then restart. Startup left the config unchanged.\n${migration.changes.join("\n")}`,
-          );
-        }
         const { writeConfigMachineStateAsync } =
           await import("../state/config-machine-state-async.js");
-        await writeConfigMachineStateAsync(completion.key, completion.value, { env });
+        try {
+          await writeConfigMachineStateAsync(completion.key, completion.value, { env });
+        } catch (error) {
+          recordStartupMigrationWarnings([
+            `Could not record webhook listener completion; startup will retry on the next boot: ${String(error)}`,
+          ]);
+        }
       }
     }
     const verification = await withPluginCache(

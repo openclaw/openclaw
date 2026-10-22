@@ -97,12 +97,11 @@ export function LobsterdexPage() {
     const seenCount = createMemo(
       () => LOBSTER_PET_PALETTES.filter((palette) => props.entries.has(palette.id)).length,
     );
-    const countLabel = createMemo(() =>
+    const countLabel = () =>
       t("quickSettings.appearance.lobsterdexSeen", {
         seen: String(seenCount()),
         total: String(LOBSTER_PET_PALETTES.length),
-      }),
-    );
+      });
     return (
       <section class="lobsterdex-page">
         <header

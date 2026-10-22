@@ -149,12 +149,6 @@ export type PreparedOutgoingMedia = {
   height?: number;
 };
 
-type CleanupManagedOutgoingMediaRecordsResult = {
-  deletedRecordCount: number;
-  deletedFileCount: number;
-  retainedCount: number;
-};
-
 type SessionManagedOutgoingAttachmentIndex = Set<string>;
 type ManagedOutgoingTranscriptMatch = "match" | "missing" | "unavailable";
 type ManagedOutgoingAttachmentRef = { attachmentId: string; sessionKey: string };
@@ -332,7 +326,7 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
   agentId?: string;
   forceDeleteSessionRecords?: boolean;
   hasActiveSessionRun?: (sessionKey: string, agentId: string | undefined) => boolean;
-}): Promise<CleanupManagedOutgoingMediaRecordsResult> {
+}): Promise<void> {
   const stateDir = params?.stateDir ?? resolveStateDir();
   const nowMs = params?.nowMs ?? Date.now();
   const transientMaxAgeMs = params?.transientMaxAgeMs ?? DEFAULT_TRANSIENT_OUTGOING_IMAGE_TTL_MS;
@@ -346,9 +340,6 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
   const entries = await listManagedImageRecordEntries({ stateDir });
   let pendingPreparedAttachmentIds: Set<string> | null | undefined;
 
-  let deletedRecordCount = 0;
-  let deletedFileCount = 0;
-  let retainedCount = 0;
   const transcriptAttachmentIndexCache = new Map<
     string,
     SessionManagedOutgoingAttachmentIndex | null
@@ -356,7 +347,6 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
   for (const entry of entries) {
     const { record } = entry;
     if (sessionKeyFilter && record.sessionKey !== sessionKeyFilter) {
-      retainedCount += 1;
       continue;
     }
     if (
@@ -369,7 +359,6 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
           globalCompatibilityOwnerAgentId,
         ) !== agentIdFilter)
     ) {
-      retainedCount += 1;
       continue;
     }
 
@@ -401,24 +390,16 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
       }
     }
 
-    const deleted = shouldDelete
-      ? await deleteManagedImageRecordArtifacts(record, stateDir, entry.cleanupPending)
-      : undefined;
-    if (deleted?.deletedRecord) {
-      deletedRecordCount += 1;
-      deletedFileCount += deleted.deletedFileCount;
-    } else {
-      retainedCount += 1;
+    if (shouldDelete) {
+      await deleteManagedImageRecordArtifacts(record, stateDir, entry.cleanupPending);
     }
   }
 
-  deletedFileCount += await deleteAgedOrphanManagedImageFiles({
+  await deleteAgedOrphanManagedImageFiles({
     stateDir,
     nowMs,
     minAgeMs: Math.max(transientMaxAgeMs, DEFAULT_TRANSIENT_OUTGOING_IMAGE_TTL_MS),
   });
-
-  return { deletedRecordCount, deletedFileCount, retainedCount };
 }
 
 export async function removeManagedOutgoingMediaBlocks(

@@ -82,7 +82,11 @@ async function heldStdioPeer({
       // This independent fixture channel releases only these exact peers, including
       // an untracked descendant when testing a deliberately failed process census.
       for (const socket of sockets) {
-        socket.end("release\n");
+        // Tests may already have released a peer whose socket has not closed yet; readline
+        // would rethrow a second end() as an uncaught write-after-end.
+        if (!socket.writableEnded && !socket.destroyed) {
+          socket.end("release\n");
+        }
       }
       const session = resources.session;
       await (session && owner.close(session).catch(() => {}));

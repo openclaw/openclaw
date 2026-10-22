@@ -61,7 +61,7 @@ async function openSkills(page: Page) {
     await menu.getByRole("menuitem", { name: "Back", exact: true }).click();
   }
   const root = menu.getByRole("menuitem", { name: "Skills", exact: true });
-  if (await root.isVisible()) {
+  if ((await menu.getAttribute("data-view")) === "root") {
     await root.click();
   }
   await menu.getByText("Selected for this session", { exact: true }).waitFor();

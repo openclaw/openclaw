@@ -3,15 +3,24 @@ import { afterEach, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { registerMenuShortcuts } from "../../../components/menu-shortcuts.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
+import { focusChatComposerFromPrintableKeydown } from "../chat-pane-shared.ts";
 import "../../../styles/base.css";
 import "../../../styles/chat/composer.css";
-import { focusChatComposerFromPrintableKeydown } from "../chat-pane-shared.ts";
 import { focusComposerFromChrome } from "./chat-composer-dom.ts";
+import {
+  modelControlSelector,
+  modelOption,
+  modelPickerProps,
+  waitForModelMenu,
+} from "./chat-model-picker.test-support.tsx";
 import { ChatModelPicker } from "./chat-model-picker.tsx";
 import { installChatComposerPickerDismissal } from "./chat-picker-overlay.ts";
 
 const container = document.createElement("div");
+const getSearch = () => container.querySelector<HTMLInputElement>(modelControlSelector("search"))!;
+const option = (value: string) =>
+  container.querySelector<HTMLButtonElement>(modelControlSelector("option", value))!;
 let dispose: (() => void) | undefined;
 afterEach(() => {
   dispose?.();
@@ -22,24 +31,15 @@ afterEach(() => {
 function mountPicker(optionsReady = true) {
   document.body.append(container);
   dispose = installChatComposerPickerDismissal(document);
-  const modelOptions = ["Alpha", "Beta", "Gamma"].map((label) => ({
-    label,
-    value: (label === "Gamma" ? "other/" : "example/") + label.toLowerCase(),
-    commitValue: (label === "Gamma" ? "other/" : "example/") + label.toLowerCase(),
-    provider: label === "Gamma" ? "other" : "example",
-    isDefault: false,
-  }));
-  const params = {
-    disabled: false,
-    modelSelectionLocked: false,
+  const modelOptions = ["Alpha", "Beta", "Gamma"].map((label) =>
+    modelOption(label === "Gamma" ? "other" : "example", label.toLowerCase(), { label }),
+  );
+  const params = modelPickerProps({
     selectedModelValue: "example/alpha",
-    sessionModelPinned: true,
-    sessionKey: "main",
     triggerModelLabel: "Alpha",
     modelOptions: optionsReady ? modelOptions : [],
-    onModelSelect: vi.fn(async () => {}),
     onOpenChange: vi.fn(),
-  };
+  });
   let update!: () => void;
   let composer!: HTMLTextAreaElement;
   mountSolid(
@@ -77,16 +77,17 @@ function mountPicker(optionsReady = true) {
     flush();
     await new Promise(requestAnimationFrame);
     if (picker.open) {
-      await waitForSolid(() =>
-        expect(picker.querySelector(".chat-controls__model-menu")).not.toBeNull(),
-      );
+      await waitForModelMenu(picker);
     }
   };
-  return { params, update, picker, trigger, composer, toggle, modelOptions };
+  const open = () => toggle(() => page.getByText("Alpha", { exact: true }).first().click());
+  return { params, update, picker, trigger, composer, toggle, modelOptions, open };
 }
 
 it("opens during activation and preserves filter focus and query across catalog rerenders", async () => {
-  const { picker, composer, toggle, params, update, trigger } = mountPicker();
+  const { composer, open, params, update, trigger } = mountPicker();
+  expect(container.querySelector<HTMLElement>(modelControlSelector("option"))).toBeNull();
+  expect(container.querySelector(".chat-controls__model-menu")).toBeNull();
   let visibleAtActivation = false;
   container.addEventListener(
     "click",
@@ -101,29 +102,23 @@ it("opens during activation and preserves filter focus and query across catalog 
   );
   composer.value = "Keep this draft";
   composer.focus();
-  await toggle(() => page.getByText("Alpha", { exact: true }).first().click());
-  const search = picker.querySelector<HTMLInputElement>("[data-chat-model-search]")!;
+  await open();
+  const search = getSearch();
   expect(visibleAtActivation).toBe(true);
   expect(params.onOpenChange).toHaveBeenCalledExactlyOnceWith(true);
   expect(document.activeElement).toBe(search);
   await userEvent.keyboard("beta");
   expect(search.value).toBe("beta");
   expect(composer.value).toBe("Keep this draft");
-  expect(
-    container.querySelector<HTMLButtonElement>('[data-chat-model-option="example/alpha"]')!.hidden,
-  ).toBe(true);
-  expect(
-    container.querySelector<HTMLButtonElement>('[data-chat-model-option="example/beta"]')!.hidden,
-  ).toBe(false);
-  const option = container.querySelector<HTMLButtonElement>(
-    '[data-chat-model-option="example/beta"]',
-  )!;
-  expect(option.checkVisibility()).toBe(true);
-  option.focus();
-  expect(document.activeElement).toBe(option);
+  expect(option("example/alpha")).toMatchObject({ hidden: true });
+  const beta = option("example/beta");
+  expect(beta).toMatchObject({ hidden: false });
+  expect(beta.checkVisibility()).toBe(true);
+  beta.focus();
+  expect(document.activeElement).toBe(beta);
   update();
   await Promise.resolve();
-  expect(document.activeElement).toBe(option);
+  expect(document.activeElement).toBe(beta);
   expect(search.value).toBe("beta");
   trigger.focus();
   await userEvent.keyboard("1");
@@ -131,19 +126,19 @@ it("opens during activation and preserves filter focus and query across catalog 
 });
 
 it("clears the active descendant when a catalog refresh removes the filtered choice", async () => {
-  const { picker, toggle, params, update } = mountPicker();
-  await toggle(() => page.getByText("Alpha", { exact: true }).first().click());
-  const search = picker.querySelector<HTMLInputElement>("[data-chat-model-search]")!;
+  const { open, params, update } = mountPicker();
+  await open();
+  const search = getSearch();
   await userEvent.keyboard("beta");
-  const highlighted = container.querySelector<HTMLElement>("[data-chat-model-highlighted]")!;
+  const highlighted = container.querySelector<HTMLElement>(modelControlSelector("highlighted"))!;
   expect(highlighted.textContent).toContain("Beta");
   expect(search.getAttribute("aria-activedescendant")).toBe(highlighted.id);
-  params.modelOptions = params.modelOptions.filter((option) => option.value !== "example/beta");
+  params.modelOptions = params.modelOptions.filter((row) => row.value !== "example/beta");
   update();
   await Promise.resolve();
   expect(search.value).toBe("beta");
   expect(search.hasAttribute("aria-activedescendant")).toBe(false);
-  expect(container.querySelector("[data-chat-model-highlighted]")).toBeNull();
+  expect(container.querySelector<HTMLElement>(modelControlSelector("highlighted"))).toBeNull();
 });
 
 it("keeps a disabled picker closed on keyboard activation", async () => {
@@ -157,16 +152,13 @@ it("keeps a disabled picker closed on keyboard activation", async () => {
 });
 
 it("leaves digit shortcuts to a nested native menu", async () => {
-  const { picker, toggle, params, trigger } = mountPicker();
-  await toggle(() => page.getByText("Alpha", { exact: true }).first().click());
+  const { picker, open, params, trigger } = mountPicker();
+  await open();
   const menu = document.createElement("div");
-  menu.setAttribute("role", "menu");
-  menu.setAttribute("popover", "manual");
-  const item = document.createElement("button");
-  item.setAttribute("role", "menuitem");
-  item.dataset.shortcut = "1";
-  item.textContent = "Nested choice";
-  menu.append(item);
+  menu.role = "menu";
+  menu.popover = "manual";
+  menu.innerHTML = '<button role="menuitem" data-shortcut="1">Nested choice</button>';
+  const item = menu.querySelector("button")!;
   const releaseShortcut = registerMenuShortcuts(menu, () => [{ element: item, key: "1" }]);
   picker.querySelector(".chat-controls__model-menu")!.append(menu);
   menu.showPopover();
@@ -187,7 +179,7 @@ it("focuses the filter on keyboard open and reopen, and returns Escape to the tr
   trigger.focus();
   for (const key of ["{Enter}", " "]) {
     await toggle(() => userEvent.keyboard(key));
-    const search = picker.querySelector<HTMLInputElement>("[data-chat-model-search]")!;
+    const search = picker.querySelector<HTMLInputElement>(modelControlSelector("search"))!;
     expect(document.activeElement).toBe(search);
     await userEvent.keyboard("beta");
     await userEvent.keyboard("{Escape}");
@@ -201,74 +193,70 @@ it("focuses the filter on keyboard open and reopen, and returns Escape to the tr
   expect(params.onModelSelect).not.toHaveBeenCalled();
 });
 
-it.each(["closed", "removed", "focus moved"])(
-  "does not autofocus after opening is %s",
-  async (state) => {
-    const { picker, composer, toggle } = mountPicker();
-    picker.addEventListener(
-      "toggle",
-      () => {
-        if (state === "closed") {
-          picker.open = false;
-        } else if (state === "removed") {
-          picker.remove();
-        }
-        composer.focus();
-      },
-      { once: true },
-    );
-    await toggle(() => page.getByText("Alpha", { exact: true }).first().click());
-    expect(document.activeElement).toBe(composer);
-  },
-);
-
-it.each(["open", "closed", "removed", "focus moved"])(
-  "honors opening focus when a late catalog arrives and the picker is %s",
-  async (state) => {
-    const { picker, trigger, composer, toggle, params, modelOptions, update } = mountPicker(false);
-    trigger.focus();
-    await toggle(() => userEvent.keyboard("{Enter}"));
-    expect(picker.querySelector("[data-chat-model-search]")).toBeNull();
+it.each([
+  [true, "closed"],
+  [true, "removed"],
+  [true, "focus moved"],
+  [false, "open"],
+  [false, "closed"],
+  [false, "removed"],
+  [false, "focus moved"],
+] as const)("guards autofocus: ready=%s, picker=%s", async (ready, state) => {
+  const { picker, trigger, composer, toggle, open, params, modelOptions, update } =
+    mountPicker(ready);
+  const interrupt = () => {
     if (state === "closed") {
-      await toggle(() => userEvent.keyboard("{Escape}"));
+      picker.open = false;
     } else if (state === "removed") {
       picker.remove();
-      composer.focus();
-    } else if (state === "focus moved") {
-      composer.focus();
     }
-    const previousFocus = document.activeElement;
-    params.modelOptions = modelOptions;
-    update();
-    await new Promise(requestAnimationFrame);
-    const search = picker.querySelector<HTMLInputElement>("[data-chat-model-search]")!;
-    expect(search).not.toBeNull();
-    expect(document.activeElement).toBe(state === "open" ? search : previousFocus);
-  },
-);
+    composer.focus();
+  };
+  if (ready) {
+    picker.addEventListener("toggle", interrupt, { once: true });
+    await open();
+    expect(document.activeElement).toBe(composer);
+    return;
+  }
+  trigger.focus();
+  await toggle(() => userEvent.keyboard("{Enter}"));
+  expect(picker.querySelector<HTMLElement>(modelControlSelector("search"))).toBeNull();
+  if (state === "closed") {
+    await toggle(() => userEvent.keyboard("{Escape}"));
+  } else if (state !== "open") {
+    interrupt();
+  }
+  const previousFocus = document.activeElement;
+  params.modelOptions = modelOptions;
+  update();
+  await new Promise(requestAnimationFrame);
+  const search = picker.querySelector<HTMLInputElement>(modelControlSelector("search"))!;
+  expect(search).not.toBeNull();
+  expect(document.activeElement).toBe(state === "open" ? search : previousFocus);
+});
 
 it.each(["trigger", "Escape", "selection"])(
   "retains provider toggles after closing through %s",
   async (close) => {
-    const { picker, trigger, toggle, update, params } = mountPicker();
-    await toggle(() => page.getByText("Alpha", { exact: true }).first().click());
-    const search = picker.querySelector<HTMLInputElement>("[data-chat-model-search]")!;
-    const selectedToggle = picker.querySelector<HTMLButtonElement>(
-      '[data-chat-model-provider-group="example"] [data-chat-model-provider-toggle]',
-    )!;
-    const otherToggle = picker.querySelector<HTMLButtonElement>(
-      '[data-chat-model-provider-group="other"] [data-chat-model-provider-toggle]',
-    )!;
+    const { picker, trigger, toggle, open, update, params } = mountPicker();
+    await open();
+    const search = getSearch();
+    const beta = option("example/beta");
+    const providerToggle = (provider: string) =>
+      picker.querySelector<HTMLButtonElement>(
+        `[data-chat-model-provider-group="${provider}"] [data-chat-model-provider-toggle]`,
+      )!;
+    const selectedToggle = providerToggle("example"),
+      otherToggle = providerToggle("other");
+    const expectExpanded = () =>
+      expect([selectedToggle.ariaExpanded, otherToggle.ariaExpanded]).toEqual(["false", "true"]);
     await userEvent.click(selectedToggle);
     await userEvent.click(otherToggle);
-    expect(selectedToggle.getAttribute("aria-expanded")).toBe("false");
-    expect(otherToggle.getAttribute("aria-expanded")).toBe("true");
+    expectExpanded();
     // Search reveals matching rows temporarily without changing group intent.
     await userEvent.click(search);
     await userEvent.keyboard("beta");
-    expect(
-      picker.querySelector<HTMLButtonElement>('[data-chat-model-option="example/beta"]')!.hidden,
-    ).toBe(false);
+    expect(option("example/beta").hidden).toBe(false);
     update();
     await Promise.resolve();
     if (close === "trigger") {
@@ -284,17 +272,13 @@ it.each(["trigger", "Escape", "selection"])(
     expect(search.value).toBe("");
     update();
     await toggle(() => userEvent.click(trigger));
-    expect(selectedToggle.getAttribute("aria-expanded")).toBe("false");
-    expect(otherToggle.getAttribute("aria-expanded")).toBe("true");
-    const hidden = picker.querySelector<HTMLButtonElement>(
-      '[data-chat-model-option="example/beta"]',
-    )!;
-    const visible = picker.querySelector<HTMLButtonElement>(
-      '[data-chat-model-option="other/gamma"]',
-    )!;
-    expect(hidden.hidden).toBe(true);
+    expect(option("example/beta")).toBe(beta);
+    expectExpanded();
+    const hidden = option("example/beta"),
+      visible = option("other/gamma");
+    expect(hidden).toMatchObject({ hidden: true });
     expect(hidden.checkVisibility()).toBe(false);
-    expect(visible.hidden).toBe(false);
+    expect(visible).toMatchObject({ hidden: false });
     expect(visible.checkVisibility()).toBe(true);
     trigger.focus();
     await toggle(() => userEvent.keyboard("1"));

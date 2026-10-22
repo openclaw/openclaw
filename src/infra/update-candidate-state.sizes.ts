@@ -4,6 +4,7 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 import { z } from "zod";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { runUtf8CommandWithTimeout } from "../process/exec.js";
+import { ignoreMissingPath } from "./errno.js";
 import { hasNodeErrorCode } from "./path-guards.js";
 import { resolveAggregateSqliteInspectionTimeoutMs } from "./sqlite-readonly-worker.js";
 import {
@@ -59,10 +60,7 @@ export async function updateStateDatabaseExists(file: string): Promise<boolean> 
     await fs.access(file);
     return true;
   } catch (error) {
-    if (hasNodeErrorCode(error, "ENOENT")) {
-      return false;
-    }
-    throw error;
+    return ignoreMissingPath(error) ?? false;
   }
 }
 

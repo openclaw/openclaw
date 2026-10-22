@@ -2133,7 +2133,6 @@ describe("agent event handler", () => {
         h.chat().filter(([, event]) => ["final", "error", "aborted"].includes(event.state));
       h.register(runId, "session-provider-detail", runId);
       const state: AgentAttemptLifecycleState = {
-        currentTurnUserMessagePersisted: true,
         lifecycleFinishing: false,
         lifecycleEnded: false,
       };

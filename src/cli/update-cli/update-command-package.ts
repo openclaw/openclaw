@@ -123,7 +123,6 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
   // transaction protects this migration and the later restart verification.
   const doctorPolicy = resolveUpdateDoctorExecutionPolicy({
     targetVersion: candidateHostVersion,
-    allowGatewayServiceRepair: false,
   });
   let doctorArgv: string[];
   if (context) {
@@ -183,9 +182,11 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
   }
   await params.progress?.onStepStart?.(doctorProgressInfo);
   assertCurrent();
+  const completedSteps: UpdateStepResult[] = [];
   const completeDoctorStep = createPackageUpdateDoctorCompletion({
     root: params.root,
     progress: params.progress,
+    results: completedSteps,
     onConfigSnapshot: params.onConfigSnapshot,
     context,
     configSnapshot,
@@ -193,7 +194,6 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
     assertCurrent,
     doctorProgressInfo,
   });
-  const completedSteps: UpdateStepResult[] = [];
   let processSettlement: UpdateStepResult | undefined;
   const runDoctor = (runCommand?: Parameters<typeof runUpdateStep>[0]["runCommand"]) =>
     runUpdateStep({
@@ -512,7 +512,7 @@ export async function runPackageInstallUpdate(
     });
 
   const before = pkgRoot ? await readPackageUpdateIdentity(pkgRoot) : { version: null };
-  const doctorSettlements: UpdateStepResult[] = [];
+  const doctorReceipts: UpdateStepResult[] = [];
 
   const packageUpdate = await runGlobalPackageUpdateSteps({
     localOverrides: {
@@ -552,8 +552,12 @@ export async function runPackageInstallUpdate(
       try {
         return await runPackageUpdateDoctor({ ...resolveDoctorOptions(), root, results });
       } finally {
-        doctorSettlements.push(
-          ...(results?.filter((result) => result.name === "doctor process settlement") ?? []),
+        doctorReceipts.push(
+          ...(results?.filter(
+            (result) =>
+              result.name === "doctor process settlement" ||
+              result.name === "database migration writes",
+          ) ?? []),
         );
       }
     },
@@ -582,7 +586,7 @@ export async function runPackageInstallUpdate(
       version: packageUpdate.afterVersion,
       ...(afterBuildId ? { buildId: afterBuildId } : {}),
     },
-    steps: [...packageUpdate.steps, ...doctorSettlements],
+    steps: [...packageUpdate.steps, ...doctorReceipts],
     failedStep: packageUpdate.failedStep ?? undefined,
     recovery: packageUpdate.recovery,
     localOverrides: packageUpdate.localOverrides,

@@ -12,7 +12,7 @@ import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-cata
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { makeAgentAssistantMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { registerMinimaxProviders } from "./provider-registration.js";
+import minimaxPlugin from "./index.js";
 
 const m31Model: Model<"anthropic-messages"> = {
   id: "MiniMax-M3.1-Flash-Preview",
@@ -70,7 +70,7 @@ async function registeredProviders(baseUrl?: string) {
                 ...api.runtime.config,
                 current: () => modelConfig(baseUrl),
               };
-        registerMinimaxProviders({ ...api, runtime: { ...api.runtime, config } });
+        minimaxPlugin.register({ ...api, runtime: { ...api.runtime, config } });
       },
     },
     id: "minimax",
@@ -317,7 +317,7 @@ describe("minimax provider hooks", () => {
   });
 
   it.each([
-    [undefined, "max", undefined, 500],
+    [undefined, "max", m31Model.maxTokens, 500],
     ["low", "low", m31Model.maxTokens, 500],
     ["high", "high", 128, 500],
     ["adaptive", "max", 128, undefined],
@@ -328,15 +328,11 @@ describe("minimax provider hooks", () => {
         for (const hook of ["wrapStreamFn", "wrapSimpleCompletionStreamFn"] as const) {
           const model = {
             ...m31Model,
+            maxTokens: modelMaxTokens,
             provider: provider.id,
             api:
               hook === "wrapStreamFn" ? "anthropic-messages" : "openclaw-provider-simple:synthetic",
           };
-          if (modelMaxTokens === undefined) {
-            Reflect.deleteProperty(model, "maxTokens");
-          } else {
-            model.maxTokens = modelMaxTokens;
-          }
           let payload: unknown;
           const wrapped = provider[hook]?.({
             provider: provider.id,
@@ -393,10 +389,7 @@ describe("minimax provider hooks", () => {
           expect(await stream.result()).toMatchObject({ errorMessage: "stop before network" });
           expect(payload).toMatchObject({
             thinking: { type: "adaptive" },
-            max_tokens: Math.min(
-              requestedMaxTokens ?? m31Model.maxTokens,
-              modelMaxTokens ?? m31Model.maxTokens,
-            ),
+            max_tokens: Math.min(requestedMaxTokens ?? m31Model.maxTokens, modelMaxTokens),
             output_config: { effort },
           });
           expect(payload).not.toHaveProperty("thinking.budget_tokens");

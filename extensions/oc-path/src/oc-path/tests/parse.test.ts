@@ -13,27 +13,9 @@ describe("parseMd — frontmatter", () => {
     ["123", "123"],
   ])("reads quoted scalar %s without changing plain string semantics", (encoded, value) => {
     const raw = `---\nnote: ${encoded}\n---\n`;
-    const { ast } = parseMd(raw);
+    const ast = parseMd(raw);
     expect(ast.frontmatter[0]?.value).toBe(value);
     expect(ast.raw).toBe(raw);
-  });
-
-  it("emits diagnostic for unclosed frontmatter", () => {
-    const raw = `---
-name: github
-description: never closes
-
-Body.
-`;
-    const { diagnostics } = parseMd(raw);
-    expect(diagnostics).toStrictEqual([
-      {
-        line: 1,
-        message: "frontmatter opens with --- but never closes",
-        severity: "warning",
-        code: "OC_FRONTMATTER_UNCLOSED",
-      },
-    ]);
   });
 
   it("strips quotes from values", () => {
@@ -42,7 +24,7 @@ title: "Hello world"
 hint: 'quoted'
 ---
 `;
-    const { ast } = parseMd(raw);
+    const ast = parseMd(raw);
     expect(ast.frontmatter[0]?.value).toBe("Hello world");
     expect(ast.frontmatter[1]?.value).toBe("quoted");
   });
@@ -51,7 +33,7 @@ hint: 'quoted'
 describe("parseMd — byte-fidelity", () => {
   it("preserves BOM in raw but ignores it for parsing", () => {
     const raw = "﻿## Heading\n";
-    const { ast } = parseMd(raw);
+    const ast = parseMd(raw);
     expect(ast.raw).toBe(raw);
     expect(ast.blocks[0]?.heading).toBe("Heading");
   });

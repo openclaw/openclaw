@@ -35,59 +35,29 @@ export function contentTaskId(prefix: string) {
   return expect.stringMatching(new RegExp(`^${prefix}_[a-f0-9]{8}_1$`, "u"));
 }
 
-export function checkpoint(run: () => Promise<void>): {
-  kind: "checkpoint";
-  run: () => Promise<void>;
-} {
+type Checkpoint = { kind: "checkpoint"; run: () => Promise<void> };
+export function checkpoint(run: Checkpoint["run"]): Checkpoint {
   return { kind: "checkpoint", run };
 }
 
+type EventPayload<K extends keyof GetReplyOptions> =
+  NonNullable<GetReplyOptions[K]> extends (payload: infer P) => unknown ? P : never;
+type IdentityFields = "itemId" | "toolCallId" | "title" | "name" | "phase";
+type Item = Pick<
+  EventPayload<"onItemEvent">,
+  IdentityFields | "status" | "summary" | "progressText" | "meta"
+>;
+type Tool = EventPayload<"onToolStart"> & { name: string };
+type Patch = EventPayload<"onPatchSummary">;
+type Command = Pick<EventPayload<"onCommandOutput">, IdentityFields | "status" | "exitCode"> & {
+  explanation?: string;
+};
+
 export type SlackReplyOptionEvent =
-  | {
-      kind: "item";
-      itemId?: string;
-      toolCallId?: string;
-      itemKind?: string;
-      progressText?: string;
-      summary?: string;
-      title?: string;
-      name?: string;
-      phase?: string;
-      status?: string;
-      meta?: string;
-    }
-  | {
-      kind: "tool_start";
-      itemId?: string;
-      toolCallId?: string;
-      name: string;
-      phase?: string;
-      args?: Record<string, unknown>;
-      detailMode?: "explain" | "raw";
-    }
-  | {
-      kind: "patch";
-      itemId?: string;
-      toolCallId?: string;
-      phase?: string;
-      title?: string;
-      name?: string;
-      added?: string[];
-      modified?: string[];
-      deleted?: string[];
-      summary?: string;
-    }
-  | {
-      kind: "command_output";
-      itemId?: string;
-      toolCallId?: string;
-      phase?: string;
-      title?: string;
-      name?: string;
-      explanation?: string;
-      status?: string;
-      exitCode?: number | null;
-    }
+  | (Item & { kind: "item"; itemKind?: string })
+  | (Tool & { kind: "tool_start" })
+  | (Patch & { kind: "patch" })
+  | (Command & { kind: "command_output" })
   | {
       kind: "plan";
       phase?: string;
@@ -100,38 +70,30 @@ export type SlackReplyOptionEvent =
   | { kind: "assistant_start" }
   | { kind: "reasoning"; text?: string; isReasoningSnapshot?: boolean }
   | { kind: "reasoning_end" }
-  | { kind: "checkpoint"; run: () => Promise<void> }
+  | Checkpoint
   | ({ kind: "approval" } & Parameters<NonNullable<GetReplyOptions["onApprovalEvent"]>>[0]);
 
 /** A model preamble stays visible while successful and failed work continues. */
 export async function emitCompactProgressScenario(reply: GetReplyOptions) {
-  await reply.onPlanUpdate?.({
-    phase: "update",
-    steps: [
-      { step: "Inspect", status: "in_progress" },
-      { step: "Patch", status: "pending" },
-      { step: "Verify", status: "pending" },
-    ],
-  });
-  await reply.onItemEvent?.({
-    kind: "preamble",
-    itemId: "preamble-1",
-    phase: "end",
-    progressText: "Checking the current Slack behavior.",
-  });
+  const plan = (steps: EventPayload<"onPlanUpdate">["steps"], explanation?: string) =>
+    reply.onPlanUpdate?.({ phase: "update", steps, ...(explanation ? { explanation } : {}) });
+  const preamble = (itemId: string, progressText: string) =>
+    reply.onItemEvent?.({ kind: "preamble", itemId, phase: "end", progressText });
+  const command = (itemId: string, exitCode: number) =>
+    reply.onCommandOutput?.({ itemId, name: "bash", phase: "end", title: "pnpm test", exitCode });
+  await plan([
+    { step: "Inspect", status: "in_progress" },
+    { step: "Patch", status: "pending" },
+    { step: "Verify", status: "pending" },
+  ]);
+  await preamble("preamble-1", "Checking the current Slack behavior.");
   await reply.onToolStart?.({
     itemId: "tool-1",
     name: "bash",
     phase: "start",
     args: { command: "pnpm test" },
   });
-  await reply.onCommandOutput?.({
-    itemId: "tool-1",
-    name: "bash",
-    phase: "end",
-    title: "pnpm test",
-    exitCode: 0,
-  });
+  await command("tool-1", 0);
   await reply.onReasoningStream?.({ text: "Considering the transport choice." });
   await reply.onToolStart?.({
     toolCallId: "write-1",
@@ -139,11 +101,7 @@ export async function emitCompactProgressScenario(reply: GetReplyOptions) {
     phase: "start",
     args: { path: "result.txt", content: "fixed\n" },
   });
-  await reply.onItemEvent?.({
-    toolCallId: "write-1",
-    phase: "end",
-    status: "completed",
-  });
+  await reply.onItemEvent?.({ toolCallId: "write-1", phase: "end", status: "completed" });
   await reply.onPatchSummary?.({
     phase: "end",
     title: "Apply patch",
@@ -151,27 +109,8 @@ export async function emitCompactProgressScenario(reply: GetReplyOptions) {
     modified: [],
     deleted: [],
   });
-  await reply.onPlanUpdate?.({
-    phase: "update",
-    explanation: "Running the checklist.",
-    steps: [{ step: "Patch", status: "in_progress" }],
-  });
-  await reply.onItemEvent?.({
-    kind: "preamble",
-    itemId: "preamble-2",
-    phase: "end",
-    progressText: "The fix is ready; I’m checking the result.",
-  });
-  await reply.onCommandOutput?.({
-    itemId: "tool-2",
-    name: "bash",
-    phase: "end",
-    title: "pnpm test",
-    exitCode: 1,
-  });
-  await reply.onPlanUpdate?.({
-    phase: "update",
-    explanation: "Finishing the checklist.",
-    steps: [{ step: "Verify", status: "completed" }],
-  });
+  await plan([{ step: "Patch", status: "in_progress" }], "Running the checklist.");
+  await preamble("preamble-2", "The fix is ready; I’m checking the result.");
+  await command("tool-2", 1);
+  await plan([{ step: "Verify", status: "completed" }], "Finishing the checklist.");
 }

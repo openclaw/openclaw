@@ -169,6 +169,15 @@ the current conversation. `replyTo` may name the current message or thread, but
 cannot select another reply target. Inline reply and `audio_as_voice` directives
 remain unavailable on this restricted grant.
 
+In Control UI/Webchat, publish a local HTML report to the current conversation
+with `message(action=send, media=<path>)`, omitting the target. OpenClaw checks the
+current file-read and delivery permissions, validates the HTML, and saves an
+attachment snapshot. A parent agent can publish its final revision of a child
+agent's report using its own read permission. Use self-contained HTML; relative
+assets are not bundled. This explicit send does not grant generated-file
+provenance: automatic `MEDIA:` replies retain their existing HTML restrictions,
+and the preview keeps its existing sandbox and script controls.
+
 OpenClaw exposes one semantic image inspection capability named `view_image`.
 When the active harness supplies its own loader, OpenClaw suppresses its
 duplicate. Otherwise, the OpenClaw-provided implementation accepts `path` for

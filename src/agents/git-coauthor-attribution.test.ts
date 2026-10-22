@@ -123,77 +123,39 @@ it("resolves credit from the configured templated session store", async () => {
   });
 });
 
-it("returns undefined when the only participant has opted out", async () => {
-  await withSession("no-coauthors-opted-out", async (scope) => {
-    await upsertSessionEntryCore(scope, { sessionId: "no-coauthors-opted-out", updatedAt: 1 });
-    const email = "solo-opted-out@example.test";
-    const profile = linkedProfile(email, 201, "solo-opted-out");
-    setCredit(profile.id, false);
-    participant(scope, profile, 1);
-
-    expect(await resolveGitCoauthorAttribution({ ...scope, config: {} })).toBeUndefined();
-  });
-});
-
 it("derives exact bounded trailers only from canonical profile-backed humans", async () => {
   await withSession("coauthors", async (scope, state) => {
-    // "default" writes no preference row: credit is on unless the person opts out.
-    const profile = (
-      email: string,
-      accountId?: number,
-      login?: string,
-      credit: "on" | "off" | "default" | "malformed" = "on",
-    ) => {
-      const value =
-        accountId && login
-          ? linkedProfile(email, accountId, login)
-          : ensureProfileForEmail(email, { env: state.env });
-      if (accountId && login && credit !== "default") {
-        // Persisted non-booleans must not become consent to publish a trailer.
-        expect(setCredit(value.id, credit === "malformed" ? "yes" : credit === "on")).toMatchObject(
-          { ok: true },
-        );
+    await upsertSessionEntryCore(scope, { sessionId: "coauthors", updatedAt: 1 });
+    // Undefined leaves consent at its default; malformed persisted consent must not publish credit.
+    for (const [login, accountId, credit, firstPrompt, repeats] of [
+      ["ada", 20, true, 200, 2],
+      ["grace", 10, true, 100, 1],
+      ["same-time", 5, true, 100, 1],
+      ["later", 1, true, 203, 1],
+      ["primary", 30, true, 204, 0],
+      ["opted-out", 25, false, 205, 0],
+      ["defaulted", 35, undefined, 206, 0],
+      ["malformed", 45, "yes", 207, 0],
+    ] as const) {
+      const profile = linkedProfile(`${login}@example.test`, accountId, login);
+      if (credit !== undefined) {
+        expect(setCredit(profile.id, credit)).toMatchObject({ ok: true });
       }
-      return value;
-    };
-    const ada = profile("ada@example.test", 20, "ada");
-    const grace = profile("grace@example.test", 10, "grace");
-    const sameTime = profile("same-time@example.test", 5, "same-time");
-    const later = profile("later@example.test", 1, "later");
-    const primary = profile("primary@example.test", 30, "primary");
-    const current = profile("current@example.test", 15, "current");
-    const optedOut = profile("opted-out@example.test", 25, "opted-out", "off");
-    const defaulted = profile("defaulted@example.test", 35, "defaulted", "default");
-    const malformed = profile("malformed@example.test", 45, "malformed", "malformed");
-    const unlinked = profile("unlinked@example.test");
+      participant(scope, profile, firstPrompt);
+      for (let index = 0; index < repeats; index++) {
+        participant(scope, profile, 400);
+      }
+    }
+    const current = linkedProfile("current@example.test", 15, "current");
+    expect(setCredit(current.id, true)).toMatchObject({ ok: true });
+    participant(scope, ensureProfileForEmail("unlinked@example.test", stateOptions()), 208);
     const legacy = ensureProfileForEmail("legacy@example.test", { env: state.env });
     openOpenClawStateDatabase({ env: state.env })
       .db.prepare(
         "INSERT INTO user_profile_identities (provider, subject, profile_id, canonical_login, created_at) VALUES (?, ?, ?, ?, ?)",
       )
       .run("github-attribution", "40", legacy.id, "legacy", Date.now());
-    await upsertSessionEntryCore(scope, { sessionId: "coauthors", updatedAt: 1 });
-    for (const [index, contributor] of [
-      ada,
-      grace,
-      sameTime,
-      later,
-      primary,
-      optedOut,
-      defaulted,
-      malformed,
-      unlinked,
-      legacy,
-    ].entries()) {
-      participant(
-        scope,
-        contributor,
-        contributor === grace || contributor === sameTime ? 100 : 200 + index,
-      );
-    }
-    for (const contributor of [ada, ada, grace, sameTime, later]) {
-      participant(scope, contributor, 400);
-    }
+    participant(scope, legacy, 209);
     recordSessionParticipant(scope, {
       identity: {
         type: "observation",

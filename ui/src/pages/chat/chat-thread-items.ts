@@ -94,13 +94,7 @@ export function messageMatchesSearchQuery(
   return normalizeLowercaseStringOrEmpty(extractTextCached(message)).includes(normalizedQuery);
 }
 
-type ChatMessagePreview = {
-  runId?: string;
-  parentToolCallId?: string;
-  preview: CanvasToolPreview;
-  text: string | null;
-  timestamp: number | null;
-};
+type ChatMessagePreview = NonNullable<ReturnType<typeof readChatMessagePreview>>;
 
 const chatMessagePreviews = new WeakMap<object, ChatMessagePreview | null>();
 
@@ -119,7 +113,7 @@ export function extractChatMessagePreview(toolMessage: unknown): ChatMessagePrev
   return preview;
 }
 
-function readChatMessagePreview(toolMessage: Record<string, unknown>): ChatMessagePreview | null {
+function readChatMessagePreview(toolMessage: Record<string, unknown>) {
   if (!safeNormalizeMessage(toolMessage)) {
     return null;
   }

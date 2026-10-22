@@ -158,6 +158,21 @@ export function registerOpenClawStateDatabaseLifecycleListener(
   return () => databaseLifecycleListeners.delete(listener);
 }
 
+/** Invalidate path-scoped projections on non-open database lifecycle events. */
+export function registerOpenClawStatePathCacheInvalidation<Key, Value extends { path: string }>(
+  cache: Map<Key, Value>,
+): () => void {
+  return registerOpenClawStateDatabaseLifecycleListener((event) => {
+    if (event.kind !== "opened") {
+      for (const [key, value] of cache) {
+        if (value.path === (event.identity?.canonicalPath ?? event.path)) {
+          cache.delete(key);
+        }
+      }
+    }
+  });
+}
+
 function retainStateDatabaseClose(database: StateDatabaseHandle): void {
   retainedDatabaseHandles.set(database.db, database);
   stateDatabaseLifecycle.unregisterRetainedExitClose ??= registerSqliteCacheExitClose(

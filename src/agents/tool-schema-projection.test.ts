@@ -8,6 +8,10 @@ import {
 import type { AnyAgentTool } from "./tools/common.js";
 
 const objectSchema = (properties: Record<string, unknown>) => ({ type: "object", properties });
+const rejected = (toolName: string, violation: string) => ({
+  tools: [],
+  diagnostics: [{ toolName, toolIndex: 0, violations: [violation] }],
+});
 function expectInvalid(schema: unknown, path: string) {
   expect(projectRuntimeToolInputSchema(schema)).toEqual({
     schema: {},
@@ -124,14 +128,8 @@ describe("runtime tool input schema projection", () => {
     const healthy = { name: "healthy", parameters: objectSchema({}) };
 
     expect(filterRuntimeCompatibleTools([unreadable, healthy])).toEqual({
+      ...rejected("fuzzplugin_unreadable", "fuzzplugin_unreadable.parameters is unreadable"),
       tools: [healthy],
-      diagnostics: [
-        {
-          toolName: "fuzzplugin_unreadable",
-          toolIndex: 0,
-          violations: ["fuzzplugin_unreadable.parameters is unreadable"],
-        },
-      ],
     });
   });
 
@@ -148,20 +146,13 @@ describe("runtime tool input schema projection", () => {
   });
 
   it("quarantines non-object schemas before provider normalization", () => {
+    const name = "fuzzplugin_array_root";
     const arraySchema = {
-      name: "fuzzplugin_array_root",
+      name,
       parameters: { type: "array", items: { type: "number" } },
     };
-
-    expect(filterProviderNormalizableTools([arraySchema])).toEqual({
-      tools: [],
-      diagnostics: [
-        {
-          toolName: "fuzzplugin_array_root",
-          toolIndex: 0,
-          violations: ['fuzzplugin_array_root.parameters.type must be "object"'],
-        },
-      ],
-    });
+    expect(filterProviderNormalizableTools([arraySchema])).toEqual(
+      rejected(name, `${name}.parameters.type must be "object"`),
+    );
   });
 });

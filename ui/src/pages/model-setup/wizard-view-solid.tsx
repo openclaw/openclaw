@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Match, Show, Switch } from "solid-js";
+import { For, Match, Show, Switch } from "solid-js";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { WizardStepControls } from "../../components/wizard-step-controls.tsx";
@@ -16,6 +16,7 @@ export type WizardViewProps = {
   onDialogRef?: (element: import("../../components/modal-dialog.ts").OpenClawModalDialog) => void;
   mode: "auth" | "prepare" | "activate";
   state: ModelSetupWizardState;
+  busy?: boolean;
   refreshWarning: string | null;
   doneMessage?: string;
   doneDescription?: string;
@@ -33,6 +34,12 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
   const autofocusRef = (element: HTMLElement) => {
     focusTargets.add(element);
   };
+  const initialFocus = () =>
+    [...focusTargets]
+      .filter((element) => element.isConnected && element.autofocus)
+      .toSorted((left, right) =>
+        left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+      )[0] ?? null;
   // Focus the committed wizard step after its identity or completion actions change.
   createPendingFocus(
     () =>
@@ -43,24 +50,19 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
       requested: () => true,
       focus: () => {
         focusTargets = new Set([...focusTargets].filter((element) => element.isConnected));
-        const target = [...focusTargets]
-          .filter((element) => element.autofocus)
-          .toSorted((left, right) =>
-            left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
-          )[0];
-        target?.focus({ preventScroll: true });
+        initialFocus()?.focus({ preventScroll: true });
       },
     },
   );
-  const copy = createMemo(() => WIZARD_COPY[props.mode]);
+  const copy = () => WIZARD_COPY[props.mode];
   const canCancel = () => props.state.phase === "starting" || props.state.phase === "step";
-  const stepState = createMemo(() => (props.state.phase === "step" ? props.state : undefined));
-  const errorState = createMemo(() =>
-    props.state.phase === "error" || props.state.phase === "cancelled" ? props.state : undefined,
-  );
+  const stepState = () => (props.state.phase === "step" ? props.state : undefined);
+  const errorState = () =>
+    props.state.phase === "error" || props.state.phase === "cancelled" ? props.state : undefined;
   return (
     <Show when={props.state.phase !== "idle"}>
       <openclaw-modal-dialog
+        prop:initialFocus={initialFocus}
         ref={(element) => props.onDialogRef?.(element)}
         label={t(copy().dialog)}
         onModal-cancel={() => (canCancel() ? props.onCancel() : props.onClose())}
@@ -160,7 +162,7 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
                       step={state().step}
                       externalAuthInput={state().externalAuthInput}
                       value={props.value}
-                      busy={state().busy}
+                      busy={props.busy || state().busy}
                       inputId="model-setup-wizard-text-input"
                       validationErrorId={
                         state().validationError ? "model-setup-wizard-validation-error" : undefined
@@ -181,7 +183,7 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
                     />
                     <Show
                       when={
-                        state().busy &&
+                        (props.busy || state().busy) &&
                         state().step.type !== "progress" &&
                         !state().step.externalUrl &&
                         !state().step.deviceCode
@@ -199,6 +201,15 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
           </div>
           <Show when={props.state.phase !== "step"}>
             <openclaw-modal-actions class="model-setup-wizard__footer">
+              <button
+                ref={autofocusRef}
+                type="button"
+                class="btn"
+                autofocus={props.state.phase !== "done" || !props.doneAction}
+                onClick={() => (canCancel() ? props.onCancel() : props.onClose())}
+              >
+                {t(canCancel() ? "common.cancel" : "common.close")}
+              </button>
               <Show when={props.state.phase === "done" && props.doneAction}>
                 {(action) => (
                   <button
@@ -218,15 +229,6 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
                   </button>
                 )}
               </Show>
-              <button
-                ref={autofocusRef}
-                type="button"
-                class="btn"
-                autofocus={props.state.phase !== "done" || !props.doneAction}
-                onClick={() => (canCancel() ? props.onCancel() : props.onClose())}
-              >
-                {t(canCancel() ? "common.cancel" : "common.close")}
-              </button>
             </openclaw-modal-actions>
           </Show>
         </div>

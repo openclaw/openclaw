@@ -334,7 +334,7 @@ function readTalkCatalog(
             { inheritRequestScope: false },
           ),
         );
-        if ((!expired || !retained.snapshot) && !lifetime?.aborted) {
+        if (!lifetime?.aborted) {
           retained.snapshot = snapshot;
         }
         if (!expired) {

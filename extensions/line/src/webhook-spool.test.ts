@@ -82,7 +82,6 @@ describe("LINE webhook spool", () => {
       const handler = createLineNodeWebhookHandler({
         getTargets: () => [{ channelSecret, bot: { handleWebhook: spool.accept } }],
         runtime: runtime(),
-        readBody: async () => body,
       });
       try {
         const response = createMockServerResponse();

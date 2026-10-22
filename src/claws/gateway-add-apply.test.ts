@@ -5,7 +5,7 @@ import type {
 } from "../../packages/gateway-protocol/src/schema/claws.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ClawAddMutationError } from "./add.js";
-import type { ClawHubClawTrust } from "./clawhub-source.js";
+import type { ClawHubClawTrust, withResolvedClawHubSource } from "./clawhub-source.js";
 import {
   applyClawAddForGateway,
   ClawGatewayPlanBlockedError,
@@ -53,7 +53,15 @@ vi.mock("./gateway-disclosure.js", () => ({ projectClawConfiguredAccess: mocks.c
 // mock-isolation: Consent decisions are varied without invoking installer prompts.
 vi.mock("./gateway-plugin-consent.js", () => ({ bindClawPluginInstallConsent: mocks.consent }));
 // mock-isolation: The real Add mutates shared state; these tests observe handoff decisions.
-vi.mock("./add-stateless.js", () => ({ applyClawAddPlanStateless: mocks.apply }));
+vi.mock("./add-stateless.js", () => ({
+  stageClawAddHostRequirementsStateless: async (plan: unknown, options: unknown) => ({
+    kind: "ready",
+    stageAgent: async () => ({
+      kind: "ready",
+      finish: async () => await mocks.apply(plan, options),
+    }),
+  }),
+}));
 
 const coordinate = { packageName: "@openclaw/workflow-operator", version: "1.0.0" };
 const source = {
@@ -119,42 +127,62 @@ const skillReview = {
 const config: OpenClawConfig = { gateway: { controlUi: { experimental: { claws: true } } } };
 const labsOff: OpenClawConfig = { gateway: { controlUi: { experimental: { claws: false } } } };
 
-function applyInput() {
+type ApplyInput = Parameters<typeof applyClawAddForGateway>[0];
+function applyInput(overrides: Partial<ApplyInput> = {}) {
   return {
     source: coordinate,
     planIntegrity: projected.planIntegrity,
     getPlanningContext: vi.fn(async () => ({ config, sourceMcpServers: {} })),
     policyConfig: { configPath: "/tmp/openclaw.json", env: {} },
     assertCurrent: vi.fn(),
+    ...overrides,
   };
+}
+
+const applyReviewed = () => applyClawAddForGateway(applyInput());
+
+function usePolicy(getCurrentConfig: () => OpenClawConfig) {
+  mocks.policyReader.mockImplementation(
+    async (_options: unknown, run: (get: typeof getCurrentConfig) => Promise<unknown>) =>
+      run(getCurrentConfig),
+  );
+}
+function enterPluginLease(before: () => void = () => {}) {
+  mocks.pluginLease.mockImplementation(
+    async (
+      _options: unknown,
+      run: (lease: { databasePath: string; assertOwned: () => void }) => Promise<unknown>,
+    ) => {
+      before();
+      return run({ databasePath: "/tmp/state.sqlite", assertOwned: mocks.owned });
+    },
+  );
+}
+function expectNoMutation() {
+  expect(mocks.persist).not.toHaveBeenCalled();
+  expect(mocks.apply).not.toHaveBeenCalled();
+}
+function expectNoAgentLease() {
+  expect(
+    mocks.lease.mock.calls.filter(([options]) => options.scope === "core:agent-deletion"),
+  ).toHaveLength(0);
 }
 
 beforeEach(() => {
   vi.resetAllMocks();
   mocks.resolve.mockImplementation(
-    async (input: {
-      run: (
-        artifact: typeof source,
-        trust: ClawHubClawTrust,
-        persist: () => Promise<typeof persistedSource>,
-      ) => Promise<unknown>;
-    }) => ({ value: await input.run(source, trust, mocks.persist), ...trust }),
+    async (input: Parameters<typeof withResolvedClawHubSource>[0]) => ({
+      value: await input.run(source, trust, mocks.persist),
+      ...trust,
+    }),
   );
   mocks.persist.mockResolvedValue(persistedSource);
   mocks.lease.mockImplementation(
     async (_options: unknown, run: (lease: { assertOwned: () => void }) => Promise<unknown>) =>
       await run({ assertOwned: mocks.owned }),
   );
-  mocks.pluginLease.mockImplementation(
-    async (
-      _options: unknown,
-      run: (lease: { databasePath: string; assertOwned: () => void }) => Promise<unknown>,
-    ) => await run({ databasePath: "/tmp/state.sqlite", assertOwned: mocks.owned }),
-  );
-  mocks.policyReader.mockImplementation(
-    async (_options: unknown, run: (getCurrentConfig: () => OpenClawConfig) => Promise<unknown>) =>
-      await run(() => config),
-  );
+  enterPluginLease();
+  usePolicy(() => config);
   mocks.build.mockResolvedValue(plan);
   mocks.project.mockReturnValue(projected);
   mocks.plansMatch.mockReturnValue(true);
@@ -164,7 +192,8 @@ beforeEach(() => {
 
 describe("Gateway Claw Add application", () => {
   it("allocates distinct numbered agents for concurrent direct Adds", async () => {
-    let currentConfig: OpenClawConfig = config;
+    const entries: NonNullable<OpenClawConfig["agents"]>["entries"] = {};
+    const currentConfig: OpenClawConfig = { ...config, agents: { entries } };
     const pendingLeases = new Map<string, Promise<void>>();
     mocks.lease.mockImplementation(
       async (
@@ -173,38 +202,28 @@ describe("Gateway Claw Add application", () => {
       ) => {
         const key = `${options.scope}:${options.key}`;
         const previous = pendingLeases.get(key) ?? Promise.resolve();
-        let release!: () => void;
-        const held = new Promise<void>((resolve) => {
-          release = resolve;
-        });
+        const { promise, resolve } = Promise.withResolvers<void>();
         pendingLeases.set(
           key,
-          previous.then(() => held),
+          previous.then(() => promise),
         );
         await previous;
         try {
           return await run({ assertOwned: mocks.owned });
         } finally {
-          release();
+          resolve();
         }
       },
     );
-    mocks.policyReader.mockImplementation(
-      async (
-        _options: unknown,
-        run: (getCurrentConfig: () => OpenClawConfig) => Promise<unknown>,
-      ) => await run(() => currentConfig),
-    );
+    usePolicy(() => currentConfig);
     mocks.build.mockImplementation(async (_source: unknown, context: { agentId?: string }) => {
       const finalId =
         context.agentId ??
-        (currentConfig.agents?.entries?.["workflow-operator"]
-          ? "workflow-operator-2"
-          : "workflow-operator");
+        (entries["workflow-operator"] ? "workflow-operator-2" : "workflow-operator");
       return {
         ...plan,
         agent: { finalId, config: { id: finalId } },
-        blockers: currentConfig.agents?.entries?.[finalId] ? [{ code: "agent_id_collision" }] : [],
+        blockers: entries[finalId] ? [{ code: "agent_id_collision" }] : [],
       };
     });
     mocks.project.mockImplementation((currentPlan: ClawAddPlan) => ({
@@ -215,38 +234,23 @@ describe("Gateway Claw Add application", () => {
     }));
     mocks.apply.mockImplementation(async (currentPlan: ClawAddPlan) => {
       const agentId = currentPlan.agent.finalId;
-      currentConfig = {
-        ...currentConfig,
-        agents: {
-          ...currentConfig.agents,
-          entries: {
-            ...currentConfig.agents?.entries,
-            [agentId]: {},
-          },
-        },
-      };
+      entries[agentId] = {};
       return { agent: { finalId: agentId }, status: "complete" };
     });
-    const input = () => ({
-      source: coordinate,
-      getPlanningContext: async () => ({ config: currentConfig, sourceMcpServers: {} }),
-      policyConfig: { configPath: "/tmp/openclaw.json", env: {} },
-      assertCurrent: vi.fn(),
-    });
+    const input = () =>
+      applyInput({
+        planIntegrity: undefined,
+        getPlanningContext: async () => ({ config: currentConfig, sourceMcpServers: {} }),
+      });
 
     const results = await Promise.all([
       applyClawAddForGateway(input()),
       applyClawAddForGateway(input()),
     ]);
 
-    expect(results.map((result) => result.agentId)).toEqual([
-      "workflow-operator",
-      "workflow-operator-2",
-    ]);
-    expect(Object.keys(currentConfig.agents?.entries ?? {})).toEqual([
-      "workflow-operator",
-      "workflow-operator-2",
-    ]);
+    const allocated = ["workflow-operator", "workflow-operator-2"];
+    expect(results.map((result) => result.agentId)).toEqual(allocated);
+    expect(Object.keys(entries)).toEqual(allocated);
     expect(mocks.lease.mock.calls.map(([options]) => [options.scope, options.key])).toEqual([
       ["core:claw-add-allocation", "workflow-operator"],
       ["core:claw-add-allocation", "workflow-operator"],
@@ -298,21 +302,10 @@ describe("Gateway Claw Add application", () => {
     const changedConfig: OpenClawConfig = { ...config, tools: { deny: ["web_fetch"] } };
     const input = applyInput();
     let onDisk = config;
-    mocks.pluginLease.mockImplementation(
-      async (
-        _options: unknown,
-        run: (lease: { databasePath: string; assertOwned: () => void }) => Promise<unknown>,
-      ) => {
-        onDisk = changedConfig;
-        return await run({ databasePath: "/tmp/state.sqlite", assertOwned: mocks.owned });
-      },
-    );
-    mocks.policyReader.mockImplementation(
-      async (
-        _options: unknown,
-        run: (getCurrentConfig: () => OpenClawConfig) => Promise<unknown>,
-      ) => await run(() => onDisk),
-    );
+    enterPluginLease(() => {
+      onDisk = changedConfig;
+    });
+    usePolicy(() => onDisk);
     mocks.project.mockImplementation(
       (
         _plan: ClawAddPlan,
@@ -324,51 +317,50 @@ describe("Gateway Claw Add application", () => {
 
     await expect(applyClawAddForGateway(input)).rejects.toBeInstanceOf(ClawGatewayPlanChangedError);
     expect(mocks.project).toHaveBeenNthCalledWith(2, plan, source, trust, changedConfig);
-    expect(mocks.persist).not.toHaveBeenCalled();
+    expectNoMutation();
+  });
+
+  it.each([
+    ["current", "blocker"],
+    ["persisted", "blocker"],
+    ["persisted", "integrity"],
+  ] as const)("rejects %s replan %s drift", async (phase, drift) => {
+    const changed: ClawLifecyclePlanResult =
+      drift === "integrity"
+        ? { ...projected, planIntegrity: "sha256:changed" }
+        : {
+            ...projected,
+            blockers: [
+              {
+                code: "effect_disclosure_unavailable",
+                path: "$.actions[0]",
+                message: "The Claw effect cannot be reviewed safely.",
+              },
+            ],
+          };
+    mocks.project
+      .mockReturnValueOnce(projected)
+      .mockReturnValueOnce(phase === "current" ? changed : projected)
+      .mockReturnValueOnce(phase === "persisted" ? changed : projected);
+
+    await expect(applyReviewed()).rejects.toBeInstanceOf(ClawGatewayPlanChangedError);
+    expect(plan.blockers).toEqual([]);
+    expect(mocks.persist).toHaveBeenCalledTimes(phase === "current" ? 0 : 1);
     expect(mocks.apply).not.toHaveBeenCalled();
   });
 
-  it.each(["current", "persisted"] as const)(
-    "rejects a projection-only blocker at the %s replan",
-    async (phase) => {
-      const blockedProjection: ClawLifecyclePlanResult = {
-        ...projected,
-        blockers: [
-          {
-            code: "effect_disclosure_unavailable",
-            path: "$.actions[0]",
-            message: "The Claw effect cannot be reviewed safely.",
-          },
-        ],
-      };
-      mocks.project
-        .mockReturnValueOnce(projected)
-        .mockReturnValueOnce(phase === "current" ? blockedProjection : projected)
-        .mockReturnValueOnce(phase === "persisted" ? blockedProjection : projected);
-
-      await expect(applyClawAddForGateway(applyInput())).rejects.toBeInstanceOf(
-        ClawGatewayPlanChangedError,
-      );
-      expect(plan.blockers).toEqual([]);
-      expect(mocks.persist).toHaveBeenCalledTimes(phase === "current" ? 0 : 1);
-      expect(mocks.apply).not.toHaveBeenCalled();
-    },
-  );
-
   it("checks full access before config commit and actual agent access afterward", async () => {
-    await applyClawAddForGateway(applyInput());
-    const options = mocks.apply.mock.calls[0]?.[1] as {
+    await applyReviewed();
+    const { assertReviewedConfig } = mocks.apply.mock.calls[0]![1] as {
       assertReviewedConfig: (config: OpenClawConfig, phase?: "after-agent-commit") => void;
     };
-    expect(options.assertReviewedConfig).toBeTypeOf("function");
-    expect(() =>
-      options.assertReviewedConfig({ gateway: { controlUi: { experimental: { claws: true } } } }),
-    ).not.toThrow();
+    expect(assertReviewedConfig).toBeTypeOf("function");
+    expect(() => assertReviewedConfig(config)).not.toThrow();
     mocks.configuredAccess.mockReturnValueOnce({
       ...reviewedAccess,
       unresolved: ["runtime-tools", "memory-runtime"],
     });
-    expect(() => options.assertReviewedConfig({ tools: { deny: ["web_fetch"] } })).toThrow(
+    expect(() => assertReviewedConfig({ tools: { deny: ["web_fetch"] } })).toThrow(
       ClawAddMutationError,
     );
     expect(mocks.configuredAccess).toHaveBeenCalledWith({
@@ -385,7 +377,7 @@ describe("Gateway Claw Add application", () => {
       ...reviewedAccess,
       current: reviewedDesired,
     });
-    expect(() => options.assertReviewedConfig(committedConfig, "after-agent-commit")).not.toThrow();
+    expect(() => assertReviewedConfig(committedConfig, "after-agent-commit")).not.toThrow();
     expect(mocks.configuredAccess).toHaveBeenLastCalledWith({
       config: committedConfig,
       agentId: "workflow-operator",
@@ -396,7 +388,7 @@ describe("Gateway Claw Add application", () => {
       ...reviewedAccess,
       current: { ...reviewedDesired, filesystem: { workspaceOnly: false } },
     });
-    expect(() => options.assertReviewedConfig(committedConfig, "after-agent-commit")).toThrow(
+    expect(() => assertReviewedConfig(committedConfig, "after-agent-commit")).toThrow(
       ClawAddMutationError,
     );
   });
@@ -428,37 +420,18 @@ describe("Gateway Claw Add application", () => {
 
   it("refuses Add when Labs turns off while waiting for the mutation lease", async () => {
     let onDisk = config;
-    mocks.pluginLease.mockImplementation(
-      async (
-        _options: unknown,
-        run: (lease: { databasePath: string; assertOwned: () => void }) => Promise<unknown>,
-      ) => {
-        onDisk = labsOff;
-        return await run({ databasePath: "/tmp/state.sqlite", assertOwned: mocks.owned });
-      },
-    );
-    mocks.policyReader.mockImplementation(
-      async (
-        _options: unknown,
-        run: (getCurrentConfig: () => OpenClawConfig) => Promise<unknown>,
-      ) => await run(() => onDisk),
-    );
+    enterPluginLease(() => {
+      onDisk = labsOff;
+    });
+    usePolicy(() => onDisk);
 
-    await expect(applyClawAddForGateway(applyInput())).rejects.toBeInstanceOf(
-      ClawsLabsDisabledError,
-    );
-    expect(mocks.persist).not.toHaveBeenCalled();
-    expect(mocks.apply).not.toHaveBeenCalled();
+    await expect(applyReviewed()).rejects.toBeInstanceOf(ClawsLabsDisabledError);
+    expectNoMutation();
   });
 
   it("rechecks Labs at a later mutation effect boundary", async () => {
     let onDisk = config;
-    mocks.policyReader.mockImplementation(
-      async (
-        _options: unknown,
-        run: (getCurrentConfig: () => OpenClawConfig) => Promise<unknown>,
-      ) => await run(() => onDisk),
-    );
+    usePolicy(() => onDisk);
     mocks.apply.mockImplementation(
       async (_plan: ClawAddPlan, options: { getCurrentConfig: () => OpenClawConfig }) => {
         onDisk = labsOff;
@@ -466,54 +439,37 @@ describe("Gateway Claw Add application", () => {
       },
     );
 
-    await expect(applyClawAddForGateway(applyInput())).rejects.toBeInstanceOf(
-      ClawsLabsDisabledError,
-    );
+    await expect(applyReviewed()).rejects.toBeInstanceOf(ClawsLabsDisabledError);
     expect(mocks.apply).toHaveBeenCalledTimes(1);
   });
 
   it("does not acquire a mutation lease when the reviewed plan changed", async () => {
     mocks.project.mockReturnValue({ ...projected, planIntegrity: "sha256:changed" });
 
-    await expect(applyClawAddForGateway(applyInput())).rejects.toBeInstanceOf(
-      ClawGatewayPlanChangedError,
-    );
-    expect(
-      mocks.lease.mock.calls.filter(([options]) => options.scope === "core:agent-deletion"),
-    ).toHaveLength(0);
-    expect(mocks.persist).not.toHaveBeenCalled();
-    expect(mocks.apply).not.toHaveBeenCalled();
+    await expect(applyReviewed()).rejects.toBeInstanceOf(ClawGatewayPlanChangedError);
+    expectNoAgentLease();
+    expectNoMutation();
   });
 
   it("explains an unavailable required skill before mutating anything", async () => {
+    const missingSkill = { code: "skill_preflight_failed", path: "$.packages[0]" };
     mocks.build.mockResolvedValue({
       ...plan,
-      blockers: [
-        {
-          code: "skill_preflight_failed",
-          path: "$.packages[0]",
-          message: "Skill not found",
-        },
-      ],
+      blockers: [{ ...missingSkill, message: "Skill not found" }],
     });
     mocks.project.mockReturnValue({
       ...projected,
       blockers: [
         {
-          code: "skill_preflight_failed",
-          path: "$.packages[0]",
+          ...missingSkill,
           message: "Resolve this OpenClaw state conflict before continuing.",
         },
       ],
     });
 
-    await expect(applyClawAddForGateway(applyInput())).rejects.toThrow(ClawGatewayPlanBlockedError);
-    await expect(applyClawAddForGateway(applyInput())).rejects.toThrow(
-      "A required skill is unavailable from ClawHub",
-    );
-    expect(
-      mocks.lease.mock.calls.filter(([options]) => options.scope === "core:agent-deletion"),
-    ).toHaveLength(0);
+    await expect(applyReviewed()).rejects.toThrow(ClawGatewayPlanBlockedError);
+    await expect(applyReviewed()).rejects.toThrow("A required skill is unavailable from ClawHub");
+    expectNoAgentLease();
     expect(mocks.persist).not.toHaveBeenCalled();
   });
 
@@ -537,48 +493,31 @@ describe("Gateway Claw Add application", () => {
           : "sha256:workspace-changed",
     }));
 
-    await expect(applyClawAddForGateway(applyInput())).rejects.toBeInstanceOf(
-      ClawGatewayPlanChangedError,
-    );
-    expect(
-      mocks.lease.mock.calls.filter(([options]) => options.scope === "core:agent-deletion"),
-    ).toHaveLength(0);
-    expect(mocks.persist).not.toHaveBeenCalled();
-    expect(mocks.apply).not.toHaveBeenCalled();
+    await expect(applyReviewed()).rejects.toBeInstanceOf(ClawGatewayPlanChangedError);
+    expectNoAgentLease();
+    expectNoMutation();
   });
 
-  it("stops when the final persisted artifact produces different reviewed facts", async () => {
-    mocks.project
-      .mockReturnValueOnce(projected)
-      .mockReturnValueOnce(projected)
-      .mockReturnValueOnce({ ...projected, planIntegrity: "sha256:changed" });
-
-    await expect(applyClawAddForGateway(applyInput())).rejects.toBeInstanceOf(
-      ClawGatewayPlanChangedError,
-    );
-    expect(mocks.persist).toHaveBeenCalledTimes(1);
-    expect(mocks.apply).not.toHaveBeenCalled();
-  });
-
-  it("requires live plugin activation before persisting a plugin-bearing Claw", async () => {
-    mocks.project.mockReturnValue({
-      ...projected,
-      pluginReviews: [{ ownerAction: "install", pluginId: "workflow-operator" }],
-    });
-
-    await expect(applyClawAddForGateway(applyInput())).rejects.toThrow(
-      "Gateway plugin activation is unavailable",
-    );
-    expect(mocks.persist).not.toHaveBeenCalled();
-    expect(mocks.apply).not.toHaveBeenCalled();
-  });
-
-  it("requires review of a warned skill before persisting the Claw", async () => {
-    mocks.project.mockReturnValue({ ...projected, skillReviews: [skillReview] });
-
-    await expect(applyClawAddForGateway(applyInput())).rejects.toThrow(/review.*skill/i);
-    expect(mocks.persist).not.toHaveBeenCalled();
-    expect(mocks.apply).not.toHaveBeenCalled();
+  it.each([
+    ["plugin activation", "Gateway plugin activation is unavailable"],
+    ["skill review", /review.*skill/i],
+    ["cron authority", "Gateway schedule installation is unavailable"],
+  ] as const)("requires %s before persisting the Claw", async (requirement, error) => {
+    if (requirement === "cron authority") {
+      mocks.build.mockResolvedValue({
+        ...plan,
+        actions: [{ kind: "cronJob", id: "nightly", blocked: false }],
+      });
+    } else {
+      mocks.project.mockReturnValue({
+        ...projected,
+        ...(requirement === "skill review"
+          ? { skillReviews: [skillReview] }
+          : { pluginReviews: [{ ownerAction: "install", pluginId: "workflow-operator" }] }),
+      });
+    }
+    await expect(applyReviewed()).rejects.toThrow(error);
+    expectNoMutation();
   });
 
   it("rejects a stale skill warning receipt and passes an exact one to the installer", async () => {
@@ -597,32 +536,18 @@ describe("Gateway Claw Add application", () => {
         acknowledgeSkillWarnings: [{ ...acknowledgement, reviewToken: "sha256:stale" }],
       }),
     ).rejects.toThrow(/skill trust state changed/i);
-    expect(mocks.persist).not.toHaveBeenCalled();
-    expect(mocks.apply).not.toHaveBeenCalled();
+    expectNoMutation();
 
     await expect(
       applyClawAddForGateway({ ...input, acknowledgeSkillWarnings: [acknowledgement] }),
     ).resolves.toMatchObject({ status: "complete" });
-    const installOptions = mocks.apply.mock.calls[0]?.[1] as {
+    const { skillConsent } = mocks.apply.mock.calls[0]![1] as {
       skillConsent: { assertApproved: (review: typeof skillReview) => void };
     };
-    expect(installOptions.skillConsent).toBeDefined();
-    expect(() => installOptions.skillConsent.assertApproved(skillReview)).not.toThrow();
-    expect(() =>
-      installOptions.skillConsent.assertApproved({ ...skillReview, riskWarning: "changed" }),
-    ).toThrow(/skill trust state changed/i);
-  });
-
-  it("requires Gateway cron authority before persisting a scheduled Claw", async () => {
-    mocks.build.mockResolvedValue({
-      ...plan,
-      actions: [{ kind: "cronJob", id: "nightly", blocked: false }],
-    });
-
-    await expect(applyClawAddForGateway(applyInput())).rejects.toThrow(
-      "Gateway schedule installation is unavailable",
+    expect(skillConsent).toBeDefined();
+    expect(() => skillConsent.assertApproved(skillReview)).not.toThrow();
+    expect(() => skillConsent.assertApproved({ ...skillReview, riskWarning: "changed" })).toThrow(
+      /skill trust state changed/i,
     );
-    expect(mocks.persist).not.toHaveBeenCalled();
-    expect(mocks.apply).not.toHaveBeenCalled();
   });
 });

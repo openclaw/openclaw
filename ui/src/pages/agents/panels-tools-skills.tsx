@@ -8,11 +8,7 @@ import {
   normalizeToolPolicyName,
   resolveToolProfilePolicy,
 } from "../../../../src/agents/tool-policy-shared.js";
-import type {
-  ToolsCatalogResult,
-  ToolsEffectiveEntry,
-  ToolsEffectiveResult,
-} from "../../api/types.ts";
+import type { ToolsEffectiveEntry } from "../../api/types.ts";
 import {
   SettingsSection,
   SettingsRow,
@@ -21,7 +17,6 @@ import {
   SettingsLoadingSkeleton,
 } from "../../components/solid/settings-ui.tsx";
 import { GitHubIdentity } from "../../features/github-connections/github-identity-view.tsx";
-import type { GitHubIdentity as GitHubIdentityModel } from "../../features/github-connections/github-identity.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { resolveAgentConfig } from "../../lib/agents/display.ts";
 import {
@@ -31,8 +26,9 @@ import {
   resolveToolSections,
 } from "../../lib/agents/tool-catalog.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
+import type { AgentsPageView } from "./agents-page-state.ts";
 import { AgentConfigButtons, type AgentConfigActions } from "./config-actions.tsx";
 import { AgentPanelAction, renderAgentPanelFacts } from "./panel-ui.tsx";
 import { resolveToolAvailability, renderToolPolicyDetails } from "./tool-access-diagnostics.tsx";
@@ -118,22 +114,12 @@ function renderEffectiveToolBadge(tool: {
 }
 
 export function AgentTools(
-  params: AgentConfigActions & {
-    agentId: string;
-    configForm: Record<string, unknown> | null;
-    toolsCatalogLoading: boolean;
-    toolsCatalogError: string | null;
-    toolsCatalogResult: ToolsCatalogResult | null;
-    toolsEffectiveLoading: boolean;
-    toolsEffectiveError: string | null;
-    toolsEffectiveResult: ToolsEffectiveResult | null;
-    runtimeSessionKey: string;
-    runtimeSessionMatchesSelectedAgent: boolean;
-    githubIdentity: GitHubIdentityModel;
-    onOpenGitHubConnections: () => void;
-    onProfileChange: (agentId: string, profile: string | null, clearAllow: boolean) => void;
-    onOverridesChange: (agentId: string, alsoAllow: string[], deny: string[]) => void;
-  },
+  params: AgentConfigActions &
+    AgentsPageView["tools"] &
+    Pick<AgentsPageView, "readData"> & {
+      agentId: string;
+      configForm: Record<string, unknown> | null;
+    },
 ) {
   const toolTargets = new Map<
     string,
@@ -161,8 +147,14 @@ export function AgentTools(
   const agentTools = () => config().entry?.tools ?? {};
   const globalTools = () => config().globalTools ?? {};
   const profile = () => agentTools().profile ?? globalTools().profile ?? "full";
-  const profileOptions = createMemo(() => resolveToolProfileOptions(params.toolsCatalogResult));
-  const toolSections = createMemo(() => resolveToolSections(params.toolsCatalogResult));
+  const profileOptions = createMemo(() => {
+    i18nRevision();
+    return resolveToolProfileOptions(params.readData().toolsCatalogResult);
+  });
+  const toolSections = createMemo(() => {
+    i18nRevision();
+    return resolveToolSections(params.readData().toolsCatalogResult);
+  });
   const profileSource = () =>
     agentTools().profile
       ? t("agentTools.profileSourceAgent")
@@ -178,7 +170,9 @@ export function AgentTools(
     return Array.isArray(tools.allow) && tools.allow.length > 0;
   };
   const catalogLoading = () =>
-    params.toolsCatalogLoading && !params.toolsCatalogResult && !params.toolsCatalogError;
+    params.readData().toolsCatalogLoading &&
+    !params.readData().toolsCatalogResult &&
+    !params.readData().toolsCatalogError;
   const editable = () =>
     params.canUpdateConfig &&
     Boolean(params.configForm) &&
@@ -225,11 +219,11 @@ export function AgentTools(
   const preview = createMemo(() =>
     !params.runtimeSessionMatchesSelectedAgent
       ? { status: "otherAgent", empty: "switchAgent" }
-      : params.toolsEffectiveLoading
+      : params.readData().toolsEffectiveLoading
         ? { status: "previewLoading", empty: "loadingPreview" }
-        : params.toolsEffectiveError
+        : params.readData().toolsEffectiveError
           ? { status: "previewUnavailable", empty: "previewError" }
-          : !params.toolsEffectiveResult
+          : !params.readData().toolsEffectiveResult
             ? { status: "previewNotLoaded", empty: "previewNotLoaded" }
             : null,
   );
@@ -237,7 +231,9 @@ export function AgentTools(
     const current = preview();
     return current ? t(`agentTools.${current.status}`) : null;
   });
-  const previewResult = createMemo(() => (previewStatus() ? null : params.toolsEffectiveResult));
+  const previewResult = createMemo(() =>
+    previewStatus() ? null : params.readData().toolsEffectiveResult,
+  );
   const unverifiedReason = () =>
     previewStatus() ?? (params.configDirty ? t("agentTools.unsavedAvailability") : null);
   const toolAccess = () => (unverifiedReason() ? null : (previewResult()?.toolAccess ?? null));
@@ -343,7 +339,7 @@ export function AgentTools(
             [!params.configForm, "agentTools.loadConfig"],
             [hasAgentAllow(), "agentTools.explicitAllowlist"],
             [hasGlobalAllow(), "agentTools.globalAllowlist"],
-            [params.toolsCatalogError, "agentTools.catalogFallback"],
+            [params.readData().toolsCatalogError, "agentTools.catalogFallback"],
           ] as const
         }
       >
@@ -589,7 +585,7 @@ export function AgentTools(
                             previewStatus(),
                           ),
                         );
-                        const previewLabel = createMemo(() => {
+                        const previewLabel = () => {
                           const reason = unverifiedReason();
                           if (reason) {
                             return reason;
@@ -602,7 +598,7 @@ export function AgentTools(
                                   source: renderEffectiveToolBadge(entry),
                                 })
                               : availability().reason || availability().summary;
-                        });
+                        };
                         return (
                           <details
                             ref={(element) => (details = element)}

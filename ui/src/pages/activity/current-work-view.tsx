@@ -31,7 +31,7 @@ type CurrentWorkProps = {
 };
 
 function CurrentSession(props: { owner: CurrentWorkProps; row: GatewaySessionRow }) {
-  const face = createMemo(() => resolveSessionPreferredFace(props.row));
+  const face = () => resolveSessionPreferredFace(props.row);
   const target = createMemo(() =>
     isSessionKeyAddressable(props.row.key, props.owner.globalScope)
       ? sessionNavigationTarget({
@@ -85,8 +85,8 @@ function CurrentSession(props: { owner: CurrentWorkProps; row: GatewaySessionRow
 }
 
 export function renderCurrentWork(props: CurrentWorkProps) {
-  const rows = createMemo(() => props.result?.sessions ?? []);
-  const message = createMemo(() =>
+  const rows = () => props.result?.sessions ?? [];
+  const message = () =>
     props.error
       ? t("activity.currentWork.loadFailed")
       : rows().length > 0
@@ -95,8 +95,7 @@ export function renderCurrentWork(props: CurrentWorkProps) {
           ? t("activity.currentWork.disconnected")
           : !props.result || props.incomplete
             ? t("activity.currentWork.loading")
-            : t("activity.currentWork.empty"),
-  );
+            : t("activity.currentWork.empty");
   return (
     <section
       class="activity-current-work"

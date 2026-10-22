@@ -23,6 +23,7 @@ import {
   type ExternalPluginCatalogEntry,
 } from "../../plugins/plugin-catalog-source.js";
 import type { PluginOrigin } from "../../plugins/plugin-origin.types.js";
+import { PLUGIN_ORIGIN_PRIORITIES } from "../../plugins/record-groups.js";
 import { resolveUserPath } from "../../utils.js";
 import { buildManifestChannelMeta } from "./channel-meta.js";
 import type { ChannelMeta } from "./types.public.js";
@@ -63,13 +64,6 @@ type CatalogOptions = {
   discovery?: PluginDiscoveryResult;
 };
 
-const ORIGIN_PRIORITY: Record<PluginOrigin, number> = {
-  config: 0,
-  workspace: 1,
-  global: 2,
-  bundled: 3,
-};
-
 function shouldExcludeCatalogEntry(
   options: CatalogOptions,
   pluginId?: string,
@@ -90,7 +84,7 @@ function shouldExcludeCatalogEntry(
   );
 }
 
-const EXTERNAL_CATALOG_PRIORITY = ORIGIN_PRIORITY.bundled + 1;
+const EXTERNAL_CATALOG_PRIORITY = PLUGIN_ORIGIN_PRIORITIES.bundled.explicit + 1;
 const FALLBACK_CATALOG_PRIORITY = EXTERNAL_CATALOG_PRIORITY + 1;
 
 const OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH = path.join("dist", "channel-catalog.json");
@@ -383,7 +377,7 @@ export function listRawChannelPluginCatalogEntries(
     }
     rememberCatalogEntry(
       entry,
-      ORIGIN_PRIORITY[candidate.origin] ?? 99,
+      PLUGIN_ORIGIN_PRIORITIES[candidate.origin]?.explicit ?? 99,
       candidate.trustedOfficialInstall ? candidate.packageName : undefined,
     );
   }

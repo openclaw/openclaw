@@ -24,13 +24,11 @@ import {
 import {
   assertInteractionCurrent,
   awaitActionWithAbort,
-  awaitNavigationGuardedInteraction,
-  createAbortPromiseWithListener,
   type GuardedInteractionOptions,
   type InteractionTargetOptions,
-  interactionNavigationPolicy,
   reconcileRemoteDialogAfterActionSettled,
   runCancellablePageInteraction,
+  runGuardedPageInteraction,
   throwIfInteractionAborted,
 } from "./pw-tools-core.interactions.navigation.js";
 import { normalizeTimeoutMs } from "./pw-tools-core.shared.js";
@@ -162,10 +160,9 @@ export async function waitForViaPlaywright(
   const fn = opts.fn;
   const predicateSource = fn ? normalizeBrowserEvaluateFunctionSource(fn) : "";
   const predicate = fn ? createBrowserWaitPredicate(predicateSource) : undefined;
-  const { abortPromise, cleanup } = createAbortPromiseWithListener(opts.signal);
   const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, opts.signal);
   const waitForStep = async <T>(stepPromise: Promise<T>) => {
-    await awaitActionWithAbort(stepPromise, abortPromise, reconcileRemoteDialog);
+    await awaitActionWithAbort(stepPromise, opts.signal, reconcileRemoteDialog);
   };
   const waitForSettledStep = async <T>(stepPromise: Promise<T>) => {
     await stepPromise;
@@ -226,32 +223,16 @@ export async function waitForViaPlaywright(
     }
   };
 
-  try {
-    // Playwright exposes no per-wait cancellation; retiring the shared
-    // connection would disrupt sibling tabs. Only executable waits need the
-    // request guard, which must own the full sequence before their predicate.
-    // `fn` shares the explicit evaluateEnabled trust contract with evaluate;
-    // this guard owns navigation during the action, not jobs trusted JS schedules later.
-    if (!fn) {
-      await runWaitSequence(waitForStep);
-      return;
-    }
-    await awaitNavigationGuardedInteraction(
-      {
-        action: async () => await runWaitSequence(waitForSettledStep),
-        cdpUrl: opts.cdpUrl,
-        page,
-        ...interactionNavigationPolicy(opts),
-        targetId: opts.targetId,
-        assertCurrent: opts.assertCurrent,
-      },
-      abortPromise,
-      opts.signal,
-      reconcileRemoteDialog,
-    );
-  } finally {
-    cleanup();
+  // Playwright exposes no per-wait cancellation; retiring the shared
+  // connection would disrupt sibling tabs. Only executable waits need the
+  // request guard, which must own the full sequence before their predicate.
+  // `fn` shares the explicit evaluateEnabled trust contract with evaluate;
+  // this guard owns navigation during the action, not jobs trusted JS schedules later.
+  if (!fn) {
+    await runWaitSequence(waitForStep);
+    return;
   }
+  await runGuardedPageInteraction(page, opts, () => runWaitSequence(waitForSettledStep));
 }
 
 type ScreenshotOptions = {

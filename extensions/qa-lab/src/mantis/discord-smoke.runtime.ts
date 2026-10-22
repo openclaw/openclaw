@@ -383,17 +383,17 @@ export async function runMantisDiscordSmoke(
         },
       );
       addSensitiveValues(sensitiveValues, message.id);
+      summary.message = { id: message.id, posted: true, reactionAdded: false };
       await call<void>(
         "add-reaction",
         `/channels/${channelId}/messages/${message.id}/reactions/%F0%9F%91%80/@me`,
         { method: "PUT" },
       );
-      summary.message = { id: message.id, posted: true, reactionAdded: true };
+      summary.message.reactionAdded = true;
     }
 
     summary.status = "pass";
   } catch (error) {
-    summary.status = "fail";
     summary.message = summary.message ?? {
       id: "",
       posted: false,
@@ -410,7 +410,6 @@ export async function runMantisDiscordSmoke(
     );
   } finally {
     summary.finishedAt = new Date().toISOString();
-    await fs.mkdir(outputDir, { recursive: true });
     const published = buildPublishedMantisDiscordSmokeSummary(summary, sensitiveValues);
     await fs.writeFile(reportPath, renderMantisDiscordSmokeReport(published), "utf8");
     await fs.writeFile(summaryPath, `${JSON.stringify(published, null, 2)}\n`, "utf8");

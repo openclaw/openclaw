@@ -23,7 +23,7 @@ import {
 } from "./standing-intents-model.js";
 
 type DatabaseOptions = ReturnType<typeof captureMemoryAgentDatabaseOptions>;
-const lifecycleListeners = new Set<(path: string, nextDueAt: number | null) => void>();
+let scheduleMaintenance: ((path: string, nextDueAt: number | null) => void) | undefined;
 const lifecycleFacts = new Map<string, { empty: boolean }>();
 const operationQueues = new Map<string, StoreWriterQueue>();
 
@@ -80,9 +80,7 @@ async function executeStandingIntent(
         if (facts) {
           facts.empty = result.nextDueAt === Infinity;
         }
-        for (const listener of lifecycleListeners) {
-          listener(options.path, result.nextDueAt);
-        }
+        scheduleMaintenance?.(options.path, result.nextDueAt);
         return result.value;
       } finally {
         await worker.close();
@@ -136,14 +134,14 @@ export function startStandingIntentMaintenance(params: {
       }),
     );
   };
-  lifecycleListeners.add(schedule);
+  scheduleMaintenance = schedule;
   // Restart must process overdue expiry/cooldown before trusting a retained deadline.
   for (const path of targets.keys()) {
     lifecycleFacts.set(path, { empty: false });
     schedule(path, null);
   }
   return () => {
-    lifecycleListeners.delete(schedule);
+    scheduleMaintenance = undefined;
     for (const job of jobs.values()) {
       job.cancel();
     }

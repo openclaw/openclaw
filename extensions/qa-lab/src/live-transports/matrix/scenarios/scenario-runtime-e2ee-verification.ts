@@ -60,10 +60,6 @@ async function runMatrixQaE2eeDeviceVerificationScenario(
     method === "sas" ? "matrix-e2ee-device-sas-verification" : "matrix-e2ee-qr-verification",
     async ({ driver, observer }) => {
       await verifyMatrixQaParticipants(driver, observer);
-      let completedVerificationIds: string[];
-      let methodArtifacts:
-        | { currentDeviceId: string; sasEmoji: string[] }
-        | { identityVerificationCompleted: boolean; qrBytes: number };
       let leadingDetails: string[];
       let finalDetail: string;
       if (method === "sas") {
@@ -74,8 +70,6 @@ async function runMatrixQaE2eeDeviceVerificationScenario(
           request: { deviceId: observerDeviceId, userId: context.observerUserId },
           timeoutMs: context.timeoutMs,
         });
-        completedVerificationIds = [result.completedInitiator.id, result.completedRecipient.id];
-        methodArtifacts = { currentDeviceId: driverDeviceId, sasEmoji: result.sasEmoji };
         leadingDetails = [
           "driver-to-observer device verification completed with real SAS",
           `initiator transaction: ${result.completedInitiator.transactionId ?? "<none>"}`,
@@ -123,15 +117,13 @@ async function runMatrixQaE2eeDeviceVerificationScenario(
             sameMatrixQaVerificationTransaction(summary, initiated) && summary.completed,
           timeoutMs: context.timeoutMs,
         });
-        const completedObserver = await waitForMatrixQaVerificationSummary({
+        await waitForMatrixQaVerificationSummary({
           client: observer,
           label: "QR observer complete",
           predicate: (summary) =>
             sameMatrixQaVerificationTransaction(summary, completedDriver) && summary.completed,
           timeoutMs: context.timeoutMs,
         });
-        completedVerificationIds = [completedDriver.id, completedObserver.id];
-        methodArtifacts = { identityVerificationCompleted: true, qrBytes: qrByteCount };
         leadingDetails = [
           "driver-to-observer QR verification completed through real QR scan",
           `transaction: ${completedDriver.transactionId ?? "<none>"}`,
@@ -153,13 +145,6 @@ async function runMatrixQaE2eeDeviceVerificationScenario(
         userId: context.driverUserId,
       });
       return {
-        artifacts: {
-          completedVerificationIds,
-          ...methodArtifacts,
-          driverTrustsObserverDevice: driverTrust.verified,
-          observerTrustsDriverDevice: observerTrust.verified,
-          secondaryDeviceId: observerDeviceId,
-        },
         details: [
           ...leadingDetails,
           `driver trusts observer device: ${driverTrust.verified ? "yes" : "no"}`,
@@ -212,12 +197,6 @@ export async function runMatrixQaE2eeStaleDeviceHygieneScenario(
         throw new Error("Matrix stale-device deletion removed the current device");
       }
       return {
-        artifacts: {
-          currentDeviceId: deleted.currentDeviceId,
-          deletedDeviceIds: deleted.deletedDeviceIds,
-          remainingDeviceIds,
-          secondaryDeviceId: secondary.deviceId,
-        },
         details: [
           "driver secondary device was created, observed, and removed through real device APIs",
           `current device: ${deleted.currentDeviceId ?? "<none>"}`,
@@ -257,12 +236,6 @@ export async function runMatrixQaE2eeDmSasVerificationScenario(
         throw new Error("Matrix E2EE DM verification completed outside the expected DM room");
       }
       return {
-        artifacts: {
-          completedVerificationIds: [result.completedInitiator.id, result.completedRecipient.id],
-          roomKey: MATRIX_QA_E2EE_VERIFICATION_DM_ROOM_KEY,
-          sasEmoji: result.sasEmoji,
-          verificationRoomId: roomId,
-        },
         details: [
           "driver/observer encrypted DM verification completed with SAS in the expected room",
           `verification DM room: ${roomId}`,

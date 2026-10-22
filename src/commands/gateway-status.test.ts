@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayProbeResult } from "../gateway/probe.js";
@@ -90,7 +90,9 @@ const mocks = vi.hoisted(() => {
       message: "Windows LAN firewall diagnostics do not apply.",
       details: [],
     })),
-    probeGateway: vi.fn(async (opts: { url: string }) => successfulProbe(opts.url)),
+    probeGateway: vi.fn<typeof import("../gateway/probe.js").probeGateway>(async ({ url }) =>
+      successfulProbe(url),
+    ),
   };
 });
 
@@ -161,7 +163,7 @@ function createRuntimeCapture() {
 type ProbeGatewayCall = Parameters<typeof import("../gateway/probe.js").probeGateway>[0];
 
 function readProbeCalls(): ProbeGatewayCall[] {
-  return probeGateway.mock.calls.map(([call]) => call as ProbeGatewayCall);
+  return probeGateway.mock.calls.map(([call]) => call);
 }
 
 function requireProbeCall(url: string): ProbeGatewayCall {
@@ -235,11 +237,73 @@ const localGatewayConfig = (token = "ltok", tls = false): OpenClawConfig => ({
   },
 });
 
+const gatewaySelf = {
+  text: "Gateway fixture",
+  host: "gateway-host",
+  ip: "192.0.2.10",
+  version: "2026.5.22",
+  platform: "linux",
+};
+const gatewayProcessSelf = { ...gatewaySelf, instanceId: "gateway-instance-1" };
+
 describe("gateway-status command", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     readBestEffortConfig.mockReset().mockImplementation(defaultConfigReader);
     probeGateway.mockReset().mockImplementation(async ({ url }) => mocks.successfulProbe(url));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("checks known targets during discovery and cancels unfinished checks at the overall deadline", async () => {
+    vi.useFakeTimers();
+    const { runtime, runtimeLogs } = createRuntimeCapture();
+    readBestEffortConfig.mockResolvedValueOnce(localGatewayConfig());
+    discoverGatewayBeacons.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          setTimeout(() => resolve([]), 1000);
+        }),
+    );
+    probeGateway.mockImplementation(async (opts) => {
+      if (opts.url.includes("127.0.0.1")) {
+        return mocks.successfulProbe(opts.url);
+      }
+      return await new Promise<GatewayProbeResult>((resolve) => {
+        const timer = setTimeout(
+          () => resolve(createUnreachableGatewayProbe(opts.url, "late timeout")),
+          2000,
+        );
+        opts.signal?.addEventListener("abort", () => {
+          clearTimeout(timer);
+          resolve(createUnreachableGatewayProbe(opts.url, "aborted"));
+        });
+      });
+    });
+
+    const command = runGatewayStatus(runtime, {
+      timeout: "1000",
+      json: true,
+      url: "wss://slow.example:18789",
+      token: "explicit-token",
+    });
+    await vi.advanceTimersByTimeAsync(500);
+    const startedDuringDiscovery = readProbeCalls().map((call) => call.url);
+    await vi.advanceTimersByTimeAsync(2500);
+    await command;
+
+    expect(startedDuringDiscovery).toEqual(["wss://slow.example:18789", "ws://127.0.0.1:18789"]);
+    expect(JSON.parse(runtimeLogs.join("\n"))).toMatchObject({
+      ok: true,
+      durationMs: 1000,
+      primaryTargetId: "localLoopback",
+      targets: [
+        { id: "explicit", connect: { ok: false, error: "timeout" } },
+        { id: "localLoopback", connect: { ok: true } },
+      ],
+    });
   });
 
   it("prints human output by default", async () => {
@@ -251,6 +315,112 @@ describe("gateway-status command", () => {
     expect(runtimeLogs.join("\n")).toContain("Gateway Status");
     expect(runtimeLogs.join("\n")).toContain("Discovery (this machine)");
     expect(runtimeLogs.join("\n")).toContain("Targets");
+  });
+
+  it("warns with diagnostic next steps when no probes or Bonjour discovery find a gateway", async () => {
+    const { runtime, runtimeLogs } = createRuntimeCapture();
+    readBestEffortConfig.mockResolvedValueOnce(localGatewayConfig());
+    probeGateway.mockImplementation(async ({ url }) =>
+      createUnreachableGatewayProbe(url, "connection refused"),
+    );
+
+    await expect(runGatewayStatus(runtime, { timeout: "1000", json: true })).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(JSON.parse(runtimeLogs.join("\n"))).toMatchObject({
+      ok: false,
+      primaryTargetId: null,
+      warnings: [
+        {
+          code: "no_gateway_reachable",
+          message:
+            "No gateway answered any check and Bonjour discovery returned no local gateways. Run `openclaw gateway status --deep --require-rpc` to inspect service state, config paths, listener owners, and logs; include `ss -ltnp` or `lsof -nP -iTCP:<port> -sTCP:LISTEN` for the configured port when filing a report.",
+          targetIds: ["localLoopback"],
+        },
+      ],
+    });
+  });
+
+  it.each([
+    {
+      name: "suppresses warning for SSH tunnel and configured remote with the same self identity",
+      ssh: "user@gateway-host",
+      localSelf: gatewayProcessSelf,
+      remoteSelf: { ...gatewayProcessSelf, host: "GATEWAY-HOST" },
+      expectedTargetIds: null,
+      primaryTargetId: "sshTunnel",
+    },
+    {
+      name: "suppresses warning for the same self identity on different transport ports",
+      ssh: null,
+      localSelf: gatewayProcessSelf,
+      remoteSelf: gatewayProcessSelf,
+      expectedTargetIds: null,
+      primaryTargetId: "explicit",
+    },
+    {
+      name: "warns when same-host probes do not report process identity",
+      ssh: null,
+      localSelf: gatewaySelf,
+      remoteSelf: gatewaySelf,
+      expectedTargetIds: ["explicit", "localLoopback"],
+      primaryTargetId: "explicit",
+    },
+    {
+      name: "warns when probes report distinct identities",
+      ssh: "user@gateway-a",
+      localSelf: { ...gatewayProcessSelf, host: "gateway-a", instanceId: "gateway-instance-a" },
+      remoteSelf: {
+        ...gatewayProcessSelf,
+        host: "gateway-b",
+        ip: "192.0.2.11",
+        instanceId: "gateway-instance-b",
+      },
+      expectedTargetIds: ["sshTunnel", "configRemote"],
+      primaryTargetId: "sshTunnel",
+    },
+    {
+      name: "warns when probe identity is unknown",
+      ssh: "user@gateway-host",
+      localSelf: null,
+      remoteSelf: null,
+      expectedTargetIds: ["sshTunnel", "configRemote"],
+      primaryTargetId: "sshTunnel",
+    },
+  ])("$name", async ({ ssh, localSelf, remoteSelf, expectedTargetIds, primaryTargetId }) => {
+    const { runtime, runtimeLogs } = createRuntimeCapture();
+    readBestEffortConfig.mockResolvedValueOnce(
+      ssh ? makeRemoteGatewayConfig("ws://gateway-host:18789") : localGatewayConfig(),
+    );
+    probeGateway.mockImplementation(async ({ url }) => {
+      const self = url.includes("127.0.0.1") ? localSelf : remoteSelf;
+      return {
+        ...mocks.successfulProbe(url),
+        presence: self ? [{ ...self, ts: 0, mode: "gateway", reason: "self" }] : null,
+      };
+    });
+
+    await runGatewayStatus(runtime, {
+      timeout: "1000",
+      json: true,
+      ...(ssh ? { ssh } : { url: "ws://gateway-host:28789", token: "explicit-token" }),
+    });
+
+    expect(JSON.parse(runtimeLogs.join("\n"))).toMatchObject({
+      ok: true,
+      primaryTargetId,
+      warnings: expectedTargetIds
+        ? [
+            {
+              code: "multiple_gateways",
+              message:
+                "Unconventional setup: multiple reachable gateway identities detected. Usually one gateway per network is recommended unless you intentionally run isolated profiles, like a rescue bot (see docs: /gateway#multiple-gateways-same-host).",
+              targetIds: expectedTargetIds,
+            },
+          ]
+        : [],
+    });
   });
 
   it("rejects configured and ambient credentials before probing an explicit URL", async () => {
@@ -499,7 +669,7 @@ describe("gateway-status command", () => {
 
     expect(startSshPortForward).toHaveBeenCalledTimes(1);
     expect(probeGateway).toHaveBeenCalled();
-    const tunnelCall = readProbeCalls().find((call) => call.url.startsWith("ws://127.0.0.1:"));
+    const tunnelCall = readProbeCalls().find((call) => call.sshTunnel);
     expect(tunnelCall?.auth?.token).toBe("rtok");
     expect(tunnelCall?.sshTunnel).toMatchObject({ target: "me@studio", remotePort: 18789 });
     const tunnelSignal = requireSshForwardCall().signal;
@@ -521,6 +691,39 @@ describe("gateway-status command", () => {
     });
   });
 
+  it("finishes same-port loopback checks before binding the SSH tunnel", async () => {
+    const { runtime } = createRuntimeCapture();
+    readBestEffortConfig.mockResolvedValueOnce(localGatewayConfig());
+    const directStarted = Promise.withResolvers<void>();
+    const finishDirect = Promise.withResolvers<void>();
+    const completed: string[] = [];
+    probeGateway.mockImplementation(async ({ url, sshTunnel }) => {
+      if (!sshTunnel) {
+        directStarted.resolve();
+        await finishDirect.promise;
+        completed.push(url);
+      }
+      return mocks.successfulProbe(url);
+    });
+    const command = runGatewayStatus(runtime, {
+      timeout: "1000",
+      json: true,
+      ssh: "me@studio",
+      url: "ws://localhost:18789",
+      token: "explicit-token",
+    });
+    await directStarted.promise;
+    await vi.dynamicImportSettled();
+    const startedBeforeChecksFinished = startSshPortForward.mock.calls.length;
+    finishDirect.resolve();
+    await command;
+
+    expect(startedBeforeChecksFinished).toBe(0);
+    expect(completed).toEqual(["ws://localhost:18789", "ws://127.0.0.1:18789"]);
+    expect(startSshPortForward).toHaveBeenCalledOnce();
+    expect(sshStop).toHaveBeenCalledOnce();
+  });
+
   it("uses local TLS target strategy and fingerprint for local loopback probes", async () => {
     const { runtime } = createRuntimeCapture();
     readBestEffortConfig.mockResolvedValueOnce(localGatewayConfig("ltok", true) as never);
@@ -531,7 +734,8 @@ describe("gateway-status command", () => {
     const localProbeCall = requireProbeCall("wss://127.0.0.1:18789");
     expect(localProbeCall.originScopedDeviceAuth).toBeUndefined();
     expect(localProbeCall.tlsFingerprint).toBe("sha256:local-fingerprint");
-    expect(localProbeCall.timeoutMs).toBe(15_000);
+    expect(localProbeCall.timeoutMs).toBeGreaterThan(0);
+    expect(localProbeCall.timeoutMs).toBeLessThanOrEqual(15_000);
   });
 
   it("warns when local TLS is enabled but the certificate fingerprint cannot be loaded", async () => {
@@ -581,7 +785,8 @@ describe("gateway-status command", () => {
 
     expect(runtimeErrors).toHaveLength(0);
     expect(readProbeCalls().map((call) => call.url)).toEqual(["ws://127.0.0.1:19080"]);
-    expect(requireProbeCall("ws://127.0.0.1:19080").timeoutMs).toBe(15_000);
+    expect(requireProbeCall("ws://127.0.0.1:19080").timeoutMs).toBeGreaterThan(0);
+    expect(requireProbeCall("ws://127.0.0.1:19080").timeoutMs).toBeLessThanOrEqual(15_000);
     expect(JSON.parse(runtimeLogs.join("\n"))).toMatchObject({
       network: { localLoopbackUrl: "ws://127.0.0.1:19080" },
       primaryTargetId: "localLoopback",
@@ -618,7 +823,10 @@ describe("gateway-status command", () => {
     },
   );
 
-  it("infers SSH target from gateway.remote.url and ssh config", async () => {
+  it.each([
+    { ssh: undefined, port: 2222, explicitPort: false },
+    { ssh: "alias:22", port: 22, explicitPort: true },
+  ])("resolves SSH port $port with explicit=$explicitPort", async ({ ssh, port, explicitPort }) => {
     const { runtime } = createRuntimeCapture();
     await withEnvAsync({ USER: "steipete" }, async () => {
       readBestEffortConfig.mockResolvedValueOnce(
@@ -627,15 +835,21 @@ describe("gateway-status command", () => {
       resolveSshConfig.mockResolvedValueOnce({
         user: "steipete",
         host: "peters-mac-studio-1.sheep-coho.ts.net",
-        port: 2222,
+        port,
         identityFiles: ["/tmp/id_ed25519"],
       });
 
-      await runGatewayStatus(runtime, { timeout: "1000", json: true });
+      await runGatewayStatus(runtime, { timeout: "1000", json: true, ssh });
 
       expect(startSshPortForward).toHaveBeenCalledTimes(1);
+      expect(resolveSshConfig).toHaveBeenCalledWith(expect.anything(), {
+        explicitPort,
+        identity: undefined,
+        timeoutMs: 800,
+        signal: expect.any(AbortSignal),
+      });
       const call = requireSshForwardCall();
-      expect(call.target).toBe("steipete@peters-mac-studio-1.sheep-coho.ts.net:2222");
+      expect(call.target).toBe(`steipete@peters-mac-studio-1.sheep-coho.ts.net:${port}`);
       expect(call.identity).toBe("/tmp/id_ed25519");
     });
   });

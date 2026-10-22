@@ -108,6 +108,8 @@ type SwarmCollectorCompletion = NonNullable<SubagentRunReadRecord["collectorComp
   structured?: unknown;
   schemaError?: string;
   usage?: { inputTokens: number; outputTokens: number };
+  /** Set only when the registry sweeper settled a collector that yielded without a result. */
+  reason?: "yielded_without_result";
 };
 
 export type SwarmStructuredOutputState = {
@@ -291,4 +293,9 @@ export type RegisterSubagentRunOptions = {
   assertCurrent?: () => void;
   assertPublicationCurrent?: () => void;
   retainOwnership?: (scope: SubagentRegistrationScope) => void;
+  /** Retain rejection cleanup at the non-queued registration's durable commit. */
+  retainAdmission?: (reject: SubagentAdmissionRejection) => void;
+  admissionSessionEffects?: SubagentSessionEffects;
 };
+
+export type SubagentAdmissionRejection = (error: string) => Promise<void>;

@@ -2,6 +2,7 @@ import {
   preserveCompactionReplayWindow,
   resolveCompactionReplayEligibility,
 } from "@openclaw/ai/transports";
+import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import type { ContextEngineSessionTarget } from "../../context-engine/types.js";
@@ -69,11 +70,7 @@ import { readCompactionAccountingRecorder } from "./run/compaction-accounting-br
 import { estimateLlmBoundaryTokenPressure } from "./run/preemptive-compaction.js";
 import { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
 import { collectRegisteredToolNames, toSessionToolAllowlist } from "./tool-name-allowlist.js";
-import {
-  mapThinkingLevel,
-  mapThinkingLevelForProvider,
-  normalizeContextTokenBudget,
-} from "./utils.js";
+import { mapThinkingLevel, mapThinkingLevelForProvider } from "./utils.js";
 import { flushPendingToolResultsAfterIdle } from "./wait-for-idle-before-flush.js";
 
 export async function executePreparedCompactionSession(runtime: PreparedCompactionRuntime) {
@@ -101,7 +98,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
     effectiveModel,
     runtimePlan,
     runtimePlanModelContext,
-    runAbortController,
     effectiveTools,
     allowedToolNames,
     buildSystemPromptText,
@@ -283,7 +279,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           llmRuntime: getModelRegistryRuntime(modelRegistry).llmRuntime,
           providerStreamFn,
           sessionId: params.sessionId,
-          signal: runAbortController.signal,
           resolvedApiKey: hasRuntimeAuthExchange ? undefined : apiKeyInfo?.apiKey,
           config: params.config,
           thinkLevel,
@@ -390,7 +385,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         const hookRunner = accountingRecorder?.hostOwnsCompactionLifecycle
           ? null
           : getGlobalHookRunner();
-        const observedTokenCount = normalizeContextTokenBudget(params.currentTokenCount);
+        const observedTokenCount = floorPositiveFiniteNumber(params.currentTokenCount);
         const beforeHookMetrics = buildBeforeCompactionHookMetrics({
           originalMessages,
           currentMessages: session.messages,
@@ -480,7 +475,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               extraParams: effectiveExtraParams,
               requestBudget: accountingRecorder?.requestBudget,
               customInstructions: params.customInstructions,
-              config: params.config,
               onUsage: recordUsage,
               onCompactionCommitted: recordServerCompaction,
               assertActive,
