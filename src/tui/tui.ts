@@ -364,11 +364,6 @@ export function stopTuiSafely(stop: () => void): void {
   }
 }
 
-type TerminalLossEmitter = {
-  on(event: "close" | "end", listener: () => void): unknown;
-  off(event: "close" | "end", listener: () => void): unknown;
-};
-
 export function isTuiTerminalLossError(error: unknown): boolean {
   const err = asOptionalObjectRecord(error);
   if (err?.code === "EIO" || err?.code === "EPIPE") {
@@ -381,13 +376,8 @@ export function isTuiTerminalLossError(error: unknown): boolean {
   );
 }
 
-export function installTuiTerminalLossExitHandler(
-  requestExit: () => void,
-  targets: { stdin?: TerminalLossEmitter; stdout?: TerminalLossEmitter } = {
-    stdin: process.stdin,
-    stdout: process.stdout,
-  },
-): () => void {
+export function installTuiTerminalLossExitHandler(requestExit: () => void): () => void {
+  const { stdin, stdout } = process;
   let requested = false;
   const requestOnce = (): void => {
     if (requested) {
@@ -403,14 +393,14 @@ export function installTuiTerminalLossExitHandler(
     requestOnce();
     return true;
   });
-  targets.stdin?.on("end", requestOnce);
-  targets.stdin?.on("close", requestOnce);
-  targets.stdout?.on("close", requestOnce);
+  stdin.on("end", requestOnce);
+  stdin.on("close", requestOnce);
+  stdout.on("close", requestOnce);
   return () => {
     removeUncaughtExceptionHandler();
-    targets.stdin?.off("end", requestOnce);
-    targets.stdin?.off("close", requestOnce);
-    targets.stdout?.off("close", requestOnce);
+    stdin.off("end", requestOnce);
+    stdin.off("close", requestOnce);
+    stdout.off("close", requestOnce);
   };
 }
 

@@ -1,4 +1,5 @@
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonEmptyStringPreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   getTerminalTableWidth,
@@ -16,6 +17,7 @@ import {
   type MessageActionResult,
 } from "../infra/outbound/message-action-contracts.js";
 import { formatTargetDisplay } from "../infra/outbound/target-resolver.js";
+import { readParsedField } from "../utils/string-readers.js";
 import { shortenText } from "./text-format.js";
 
 const resolveChannelLabel = (channel: ChannelId) =>
@@ -25,13 +27,7 @@ function firstNonemptyString(
   record: Record<string, unknown> | undefined,
   ...keys: string[]
 ): string {
-  for (const key of keys) {
-    const value = record?.[key];
-    if (typeof value === "string" && value) {
-      return value;
-    }
-  }
-  return "";
+  return (record && readParsedField(record, keys, readNonEmptyStringPreservingWhitespace)) ?? "";
 }
 
 type FormatOpts = {

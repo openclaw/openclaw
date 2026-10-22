@@ -128,7 +128,7 @@ it("settles delayed close writes without consuming a replacement monitor's resum
   expect
     .soft({
       earlyUnregister,
-      assignments: await f.store.readNativeSubagentAssignments?.(f.identity, f.historyOwner()),
+      assignments: await f.assignments(),
     })
     .toMatchObject({
       earlyUnregister: false,
@@ -147,10 +147,8 @@ it("settles delayed close writes without consuming a replacement monitor's resum
       result: "Resumed result",
     }),
   );
-  expect(await f.store.readNativeSubagentAssignments?.(f.identity, f.historyOwner())).toEqual([]);
+  expect(await f.assignments()).toEqual([]);
   nextClient.close();
-  const duplicate = await f.register(createClient());
-  await duplicate.ready;
-  await duplicate.unregister();
+  await f.settle(createClient());
   expect(f.deliver).toHaveBeenCalledOnce();
 });

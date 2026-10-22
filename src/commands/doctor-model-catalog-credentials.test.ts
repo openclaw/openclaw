@@ -171,7 +171,13 @@ describe("doctor model catalog credential migration", () => {
 
     const first = await maybeMigrateModelCatalogCredentials(migrationParams(state, cfg));
 
-    expect(first).toEqual({ detected: 0, migrated: 0, removed: 0, warnings: [] });
+    expect(first).toEqual({
+      detected: 0,
+      migrated: 0,
+      removed: 0,
+      warnings: [],
+      findings: [],
+    });
     expect(loadPersistedSharedAuthProfileStore(state.env)).toBeNull();
 
     saveAuthProfileStore(
@@ -197,7 +203,7 @@ describe("doctor model catalog credential migration", () => {
 
     const repaired = await maybeMigrateModelCatalogCredentials(migrationParams(state, cfg));
 
-    expect(repaired).toEqual({ detected: 0, migrated: 0, removed: 2, warnings: [] });
+    expect(repaired).toEqual({ detected: 0, migrated: 0, removed: 2, warnings: [], findings: [] });
     expect(loadPersistedSharedAuthProfileStore(state.env)).toEqual({ version: 1, profiles: {} });
   });
 
@@ -242,7 +248,7 @@ describe("doctor model catalog credential migration", () => {
 
       const result = await maybeMigrateModelCatalogCredentials(params);
 
-      expect(result).toEqual({ detected: 0, migrated: 0, removed: 1, warnings: [] });
+      expect(result).toEqual({ detected: 0, migrated: 0, removed: 1, warnings: [], findings: [] });
       expect(loadPersistedAuthProfileStore(agentDir)).toEqual({
         version: 1,
         profiles: { "custom:default": store.profiles["custom:default"] },
@@ -264,7 +270,7 @@ describe("doctor model catalog credential migration", () => {
     );
 
     await expect(maybeMigrateModelCatalogCredentials(migrationParams(state, cfg))).resolves.toEqual(
-      { detected: 0, migrated: 0, removed: 0, warnings: [] },
+      { detected: 0, migrated: 0, removed: 0, warnings: [], findings: [] },
     );
     expect(loadPersistedSharedAuthProfileStore(state.env)).toBeNull();
   });
@@ -317,6 +323,7 @@ describe("doctor model catalog credential migration", () => {
         migrated: 0,
         removed: 0,
         warnings: [],
+        findings: [],
       });
       if (local) {
         expect(loadPersistedAuthProfileStore(agentDir)?.profiles).toEqual(store.profiles);
@@ -351,7 +358,7 @@ describe("doctor model catalog credential migration", () => {
       await maybeMigrateModelCatalogCredentials(
         migrationParams(state, { models: { providers: { custom: provider("fresh-config-key") } } }),
       ),
-    ).toEqual({ detected: 1, migrated: 1, removed: 0, warnings: [] });
+    ).toEqual({ detected: 1, migrated: 1, removed: 0, warnings: [], findings: [] });
     expect(loadPersistedSharedAuthProfileStore(state.env)?.profiles).toEqual({
       "custom:old": canonical,
       "custom:default": { type: "api_key", provider: "custom", key: "fresh-config-key" },

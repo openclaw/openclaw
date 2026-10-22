@@ -228,7 +228,7 @@ describe("update-cli", () => {
       });
       primeNpmChannelTag("latest", VERSION);
       vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
-        packageTargetStatus({ version: VERSION, nodeEngine: ">=24.16.0 <25 || >=26.1.0" }),
+        packageTargetStatus({ version: VERSION, nodeEngine: ">=24.22.1 <25 || >=26.12.1" }),
       );
       nodeVersionSatisfiesEngine.mockImplementation(
         (version) => fallback && version === process.versions.node,
@@ -322,10 +322,10 @@ describe("update-cli", () => {
           .join("");
         expect(getErrorOutput()).toContain(captureWarnings);
         expect(getErrorOutput()).toContain(
-          `Required: openclaw@${VERSION} Node >=24.16.0 <25 || >=26.1.0; detected: Node 22.23.1 at ${serviceNode}`,
+          `Required: openclaw@${VERSION} Node >=24.22.1 <25 || >=26.12.1; detected: Node 22.23.1 at ${serviceNode}`,
         );
         expect(getErrorOutput()).toContain(
-          `broken TEXT decoder\n${runtimeRecovery.expectedPlainRecovery(VERSION, "24.16.0", writable ? "refresh" : "owner", "unset OPENCLAW_HOME OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_PROFILE OPENCLAW_GATEWAY_PORT OPENCLAW_LAUNCHD_LABEL OPENCLAW_SYSTEMD_UNIT OPENCLAW_WINDOWS_TASK_NAME OPENCLAW_WORKSPACE_DIR", root, writable ? undefined : serviceNode)}`,
+          `broken TEXT decoder\n${runtimeRecovery.expectedPlainRecovery(VERSION, "24.22.1", writable ? "refresh" : "owner", "unset OPENCLAW_HOME OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_PROFILE OPENCLAW_GATEWAY_PORT OPENCLAW_LAUNCHD_LABEL OPENCLAW_SYSTEMD_UNIT OPENCLAW_WINDOWS_TASK_NAME OPENCLAW_WORKSPACE_DIR", root, writable ? undefined : serviceNode)}`,
         );
         expectNoSideEffects(
           updateNpmInstalledPlugins,
@@ -432,7 +432,7 @@ describe("update-cli", () => {
     expect(listUpdateRuns({ limit: 1 })[0]?.reason).toBe("node-runtime-preflight");
     expect(defaultRuntime.error).toHaveBeenCalledWith(
       expect.stringContaining(
-        `Node 22.18.0: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954)\n${runtimeRecovery.expectedPlainRecovery("2026.5.20", "24.16.0", "refresh", undefined, root).replace("3. Install and select Node 24.16.0 using your system package manager or https://nodejs.org/en/download.", `3. Run \`${runtimeRecovery.expectedRuntimeSelectionCommand("nvm", "24.16.0")}\`.`)}`,
+        `Node 22.18.0: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954)\n${runtimeRecovery.expectedPlainRecovery("2026.5.20", "24.22.1", "refresh", undefined, root).replace("3. Install and select Node 24.22.1 using your system package manager or https://nodejs.org/en/download.", `3. Run \`${runtimeRecovery.expectedRuntimeSelectionCommand("nvm", "24.22.1")}\`.`)}`,
       ),
     );
   });

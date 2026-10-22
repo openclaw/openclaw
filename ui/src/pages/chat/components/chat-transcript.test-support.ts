@@ -68,6 +68,7 @@ export function threadProps(
   paneId: string,
   sessionKey = "agent:main:main",
   messages: unknown[] = defaultMessages,
+  overrides: Partial<ChatThreadProps> = {},
 ): ChatThreadProps {
   return {
     paneId,
@@ -87,8 +88,16 @@ export function threadProps(
     assistantAvatar: null,
     onDraftChange: () => {},
     onSend: () => {},
+    ...overrides,
   };
 }
+
+export const transcriptMessage = <Content>(
+  role: string,
+  content: Content,
+  timestamp = 1_000,
+  extra = {},
+) => ({ role, content, timestamp, ...extra });
 
 export function requireElement(container: ParentNode, selector: string): HTMLElement {
   return expectDefined(container.querySelector<HTMLElement>(selector), selector);

@@ -23,18 +23,6 @@ function shouldRegisterGatewayRunOnly(name: string, argv: string[]): boolean {
   return invocation.commandPath.length === 1 || invocation.commandPath[1] === "run";
 }
 
-async function registerGatewayRunOnly(program: Command): Promise<void> {
-  // Hot path for `gateway run`: avoid loading the full gateway command tree.
-  const { addGatewayRunCommand } = await import("../gateway-cli/run-command.js");
-  removeCommandByName(program, "gateway");
-  const gateway = addGatewayRunCommand(
-    program.command("gateway").description("Run, inspect, and query the WebSocket Gateway"),
-  );
-  addGatewayRunCommand(
-    gateway.command("run").description("Run the WebSocket Gateway (foreground)"),
-  );
-}
-
 function resolveSubCliCommandGroups(
   argv: string[],
   context: SubCliRegistrationContext = {},
@@ -64,7 +52,15 @@ export async function registerSubCliByName(
   context: SubCliRegistrationContext = {},
 ): Promise<boolean> {
   if (shouldRegisterGatewayRunOnly(name, argv)) {
-    await registerGatewayRunOnly(program);
+    // Hot path for `gateway run`: avoid loading the full gateway command tree.
+    const { addGatewayRunCommand } = await import("../gateway-cli/run-command.js");
+    removeCommandByName(program, "gateway");
+    const gateway = addGatewayRunCommand(
+      program.command("gateway").description("Run, inspect, and query the WebSocket Gateway"),
+    );
+    addGatewayRunCommand(
+      gateway.command("run").description("Run the WebSocket Gateway (foreground)"),
+    );
     return true;
   }
   return registerCommandGroupByName(program, resolveSubCliCommandGroups(argv, context), name);

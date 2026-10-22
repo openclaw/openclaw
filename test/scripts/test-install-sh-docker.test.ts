@@ -944,9 +944,9 @@ printf 'status=%s\\n' "$status"
 
   it.each([
     {
-      version: "24.16.0",
+      version: "24.22.1",
       options: { sqlite: false },
-      error: "unsupported node 24.16.0: missing node:sqlite",
+      error: "unsupported node 24.22.1: missing node:sqlite",
     },
     {
       version: "24.17.0",
@@ -961,10 +961,10 @@ printf 'status=%s\\n' "$status"
 
   it("accepts non-root smoke Node runtimes that match the installer runtime floor", () => {
     expect(runNonrootNodePreflight("22.23.2").status).toBe(1);
-    expect(runNonrootNodePreflight("24.16.0").status).toBe(0);
+    expect(runNonrootNodePreflight("24.22.1").status).toBe(0);
     expect(runNonrootNodePreflight("25.9.0").status).toBe(1);
     expect(runNonrootNodePreflight("26.0.0").status).toBe(1);
-    expect(runNonrootNodePreflight("26.1.0").status).toBe(0);
+    expect(runNonrootNodePreflight("26.12.1").status).toBe(0);
   });
 
   it.each([

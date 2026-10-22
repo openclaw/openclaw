@@ -6,15 +6,8 @@ import { togglePinnedAgent } from "../../app/bootstrap-navigation-preferences.ts
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { selectableAgentsList } from "../../lib/agents/display.ts";
-import {
-  loadToolsCatalog,
-  loadToolsEffective,
-  buildToolsEffectiveRequestKey,
-  refreshVisibleToolsEffectiveForCurrentSession,
-  resetToolsEffectiveState,
-  setDefaultAgent,
-  type AgentsState,
-} from "../../lib/agents/index.ts";
+import { buildToolsEffectiveRequestKey, type AgentsState } from "../../lib/agents/index.ts";
+import { setDefaultAgent } from "../../lib/agents/mutations.ts";
 import { DEFAULT_AGENT_PANEL, type AgentsPanel } from "../../lib/agents/panels.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { createInitialCronState } from "../../lib/cron/index.ts";
@@ -64,6 +57,7 @@ import {
   createAgentSkillsReader,
   type AgentSkillsState,
 } from "./skills.ts";
+import { createAgentToolsCatalog, createAgentEffectiveTools } from "./tools.ts";
 
 type AgentsPageData = Omit<AgentsState, "agentsLoading" | "agentsError"> &
   AgentFilesState &
@@ -87,10 +81,8 @@ type AgentsViewData = Omit<
   | "sessionsResult"
   | "sessionKey"
   | "agentFileWriteRevisions"
-  | "toolsCatalogLoadingAgentId"
-  | "toolsEffectiveLoadingKey"
-  | "toolsEffectiveResultKey"
 >;
+
 export type AgentsPageView = ReturnType<ReturnType<typeof createAgentsPageState>["read"]>;
 
 export function createAgentsPageState(
@@ -107,15 +99,6 @@ export function createAgentsPageState(
   const observation = observeState<AgentsPageData>({
     agentsList: null,
     agentsSelectedId: null,
-    toolsCatalogLoading: false,
-    toolsCatalogLoadingAgentId: null,
-    toolsCatalogError: null,
-    toolsCatalogResult: null,
-    toolsEffectiveLoading: false,
-    toolsEffectiveLoadingKey: null,
-    toolsEffectiveResultKey: null,
-    toolsEffectiveError: null,
-    toolsEffectiveResult: null,
     chatModelCatalogRead: null,
     agentFilesLoading: false,
     agentFilesError: null,
@@ -161,7 +144,7 @@ export function createAgentsPageState(
   const readData: () => AgentsViewData = observation.read;
   const readChannels: () => Pick<
     ReturnType<typeof channels.read>,
-    "channelsSnapshot" | "channelsLoading" | "channelsError" | "channelsLastSuccess"
+    "channelsSnapshot" | "channelsRead" | "channelsError" | "channelsLastSuccess"
   > = channels.read;
   const publish = observation.invalidate;
   const cron = createAgentCronPresenter({
@@ -208,7 +191,7 @@ export function createAgentsPageState(
     canUpdate: (agentId: string) =>
       agentId === state.agentsSelectedId && canCall("config.set", "operator.admin"),
     getReport: () => state.agentSkillsReport,
-    onPrimaryChanged: () => void refreshVisibleToolsEffectiveForCurrentSession(state),
+    onPrimaryChanged: () => refreshEffectiveToolsForCurrentSession(),
   });
   const githubIdentity = createGitHubIdentityView({
     runExternalMutation: (task, options) =>
@@ -244,6 +227,19 @@ export function createAgentsPageState(
     },
     ensureInitialData: () => ensureInitialData(),
   });
+  const isCurrentToolsRead = (client: GatewayBrowserClient, generation: number, agentId: string) =>
+    isCurrentRequest(client, generation, agentId, {});
+  const toolsCatalog = createAgentToolsCatalog({
+    scope: () => state,
+    isCurrent: isCurrentToolsRead,
+  });
+  const effectiveTools = createAgentEffectiveTools({
+    scope: () => state,
+    isCurrent: isCurrentToolsRead,
+    key: (agentId, sessionKey) => buildToolsEffectiveRequestKey(state, { agentId, sessionKey }),
+    changed: publish,
+  });
+
   function applyRoute() {
     applyRouteData();
     syncCanonicalLocation();
@@ -300,7 +296,7 @@ export function createAgentsPageState(
     if (!state.agentFileActive || !files.some((file) => file.name === state.agentFileActive)) {
       state.agentFileActive = files.find((file) => file.name === "AGENTS.md")?.name ?? null;
     }
-    if (state.agentFileActive) {
+    if (state.agentFileActive && !context.agents.files(agentId).loading) {
       await loadAgentFileContent(state, agentId, state.agentFileActive, {
         force,
       });
@@ -323,9 +319,8 @@ export function createAgentsPageState(
     state.agentFileSaving = false;
     state.identitySaving = false;
     skills.reset();
-    state.toolsCatalogLoading = false;
-    state.toolsCatalogLoadingAgentId = null;
-    resetToolsEffectiveState(state);
+    toolsCatalog.invalidate();
+    effectiveTools.reset();
     cron.retire();
     state.cron = {
       ...state.cron,
@@ -451,9 +446,7 @@ export function createAgentsPageState(
     }
     if (state.agentsPanel === "tools") {
       syncGitHubIdentity(agentId);
-      if (state.toolsCatalogResult?.agentId !== agentId && !state.toolsCatalogLoading) {
-        void loadToolsCatalog(state, agentId);
-      }
+      toolsCatalog.ensure(agentId);
       loadEffectiveToolsForAgent(agentId);
       githubIdentity.ensureVerified();
       return;
@@ -547,29 +540,26 @@ export function createAgentsPageState(
   async function loadAgentFiles(agentId: string, force = false) {
     const client = state.client;
     const agents = context.agents;
-    if (!client || !state.connected || state.agentFilesLoading) {
+    const cached = agents.files(agentId);
+    if (!client || !state.connected || state.agentFilesLoading || cached.loading) {
       return;
     }
-    const cached = agents.files(agentId);
     if (cached.list && !force) {
       syncCurrentAgentFiles(agents);
       return;
     }
-    const generation = state.requestGeneration;
-    state.agentFilesLoading = true;
-    state.agentFilesError = null;
-    try {
-      const list = force ? await agents.refreshFiles(agentId) : await agents.ensureFiles(agentId);
-      if (!isCurrentRequest(client, generation, agentId, { agents })) {
-        return;
-      }
-      state.agentFilesList = list ?? agents.files(agentId).list;
-    } finally {
-      if (isCurrentRequest(client, generation, agentId, { agents })) {
-        state.agentFilesLoading = false;
-      }
+    // Keep an initial failure visible until explicit retry or owner retirement.
+    if (cached.read && !force) {
+      return;
     }
-    if (isCurrentRequest(client, generation, agentId, { agents })) {
+    const generation = state.requestGeneration;
+    state.agentFilesError = null;
+    const list = force ? await agents.refreshFiles(agentId) : await agents.ensureFiles(agentId);
+    if (!isCurrentRequest(client, generation, agentId, { agents })) {
+      return;
+    }
+    state.agentFilesList = list ?? agents.files(agentId).list;
+    if (list) {
       await selectDefaultAgentFile(agentId, force);
     }
   }
@@ -661,11 +651,8 @@ export function createAgentsPageState(
     skills.reset();
     state.agentSkillsAgentId = null;
     resetIdentityDraft(state);
-    state.toolsCatalogResult = null;
-    state.toolsCatalogError = null;
-    state.toolsCatalogLoading = false;
-    state.toolsCatalogLoadingAgentId = null;
-    resetToolsEffectiveState(state);
+    toolsCatalog.reset();
+    effectiveTools.reset();
     cron.retire();
     state.cron = createInitialCronState({
       client: state.client,
@@ -673,19 +660,19 @@ export function createAgentsPageState(
     });
   }
 
-  function loadEffectiveToolsForAgent(agentId: string) {
+  function loadEffectiveToolsForAgent(agentId: string, refresh = false) {
     if (agentId !== chatAgentId()) {
-      resetToolsEffectiveState(state);
+      effectiveTools.reset();
       return;
     }
-    const requestKey = buildToolsEffectiveRequestKey(state, {
-      agentId,
-      sessionKey: state.sessionKey,
-    });
-    if (state.toolsEffectiveResultKey === requestKey && !state.toolsEffectiveError) {
-      return;
+    effectiveTools.ensure(agentId, state.sessionKey, refresh);
+  }
+
+  function refreshEffectiveToolsForCurrentSession() {
+    const agentId = state.agentsSelectedId;
+    if (state.agentsPanel === "tools" && agentId) {
+      loadEffectiveToolsForAgent(agentId, true);
     }
-    void loadToolsEffective(state, { agentId, sessionKey: state.sessionKey });
   }
 
   async function refreshAgents(mode: "ensure" | "refresh" | "save" = "refresh") {
@@ -703,7 +690,7 @@ export function createAgentsPageState(
       return;
     }
     if (mode === "save") {
-      resetToolsEffectiveState(state);
+      effectiveTools.reset();
     }
     syncAgentState(agents);
     if (mode !== "refresh") {
@@ -745,7 +732,6 @@ export function createAgentsPageState(
 
   function viewProps() {
     const configState = context.runtimeConfig.state;
-    const agentsState = context.agents.state;
     const selectedAgentId = state.agentsSelectedId;
     const canEditIdentity = () =>
       selectedAgentId === state.agentsSelectedId && canCall("agents.update", "operator.admin");
@@ -757,7 +743,6 @@ export function createAgentsPageState(
       canWriteFiles: canCall("agents.files.set", "operator.admin"),
       canRunCron: canCall("cron.run", "operator.admin"),
     };
-    const agentFilesListError = context.agents.files(selectedAgentId).error;
     const modelCatalog = readAgentModelCatalog(
       state.connected ? state.client : null,
       state.agentsSelectedId,
@@ -767,8 +752,7 @@ export function createAgentsPageState(
       readData,
       readChannels,
       basePath: context.basePath,
-      loading: agentsState.agentsLoading,
-      error: agentsState.agentsError,
+      listRead: context.agents.listRead,
       selectedAgentId,
       memoryTarget,
       config: configState,
@@ -782,7 +766,8 @@ export function createAgentsPageState(
         onRunNow: cron.onRunNow,
       },
       agentFiles: {
-        agentFilesError: state.agentFilesError ?? agentFilesListError,
+        agentFilesError: state.agentFilesError,
+        listRead: context.agents.files(selectedAgentId).read,
         onLoadFiles: (agentId: string) => void loadAgentFiles(agentId, true),
         onSelectFile: (name: string) => {
           state.agentFileActive = name;
@@ -889,6 +874,16 @@ export function createAgentsPageState(
         onClear: (agentId: string) => skillReset.clear(agentId),
       },
       tools: {
+        readCatalog: toolsCatalog.read,
+        catalogRequest: toolsCatalog.request(),
+        readEffective: effectiveTools.read,
+        effectivePreview: effectiveTools.cached,
+        effectiveRequest: effectiveTools.request(),
+        onRetryCatalog: () => {
+          if (state.agentsSelectedId) {
+            toolsCatalog.ensure(state.agentsSelectedId);
+          }
+        },
         githubIdentity,
         onOpenGitHubConnections: () =>
           context.navigate("profile", { hash: "#settings-profile-github-connections" }),
@@ -962,7 +957,7 @@ export function createAgentsPageState(
       }),
       // Session model receipts replace the tools.effective request key before older results settle.
       context.sessions.subscribe(() => {
-        void refreshVisibleToolsEffectiveForCurrentSession(state);
+        refreshEffectiveToolsForCurrentSession();
         publish();
       }),
     ];

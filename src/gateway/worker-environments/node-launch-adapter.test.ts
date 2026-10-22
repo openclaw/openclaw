@@ -695,7 +695,6 @@ describe("node worker launch adapter", () => {
       });
       adapter = adapterFor(invoke, {
         nodes: async () => [nodeProof("conn-1", launched && cause === "hosting withdrawn" ? 0 : 2)],
-        pollIntervalMs: 1,
         sleep: async () => {
           if (cause === "dispatch authority closed") {
             dispatchAuthorized = false;

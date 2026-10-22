@@ -80,6 +80,7 @@ type FixtureOptions = {
   duplicateBootReads?: boolean;
   closedMenuMembers?: boolean;
   largeSnapshot?: boolean;
+  offRosterSession?: boolean;
   transcriptMessages?: number;
   dashboardMcpApp?: { font: Buffer };
   /** Opt into a scripted HTML dashboard with an independently fetched web font. */
@@ -122,16 +123,15 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     now,
     people,
     counts,
+    offRosterSession: options.offRosterSession,
   });
   const duplicateReads = options.duplicateBootReads
     ? createTeamScaleDuplicateReadFixture(selectedSessionKey, now)
     : undefined;
-  if (duplicateReads) {
-    assets.set(duplicateReads.mediaPath, duplicateReads.asset);
-  }
   pinnedRows[0]!.sharingRole = "admin";
   pinnedRows[0]!.visibility = "shared";
   if (duplicateReads) {
+    assets.set(duplicateReads.mediaPath, duplicateReads.asset);
     pinnedRows[0]!.worktree = duplicateReads.worktree;
   }
   if (options.liveRun) {
@@ -705,7 +705,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
           },
         }
       : undefined,
-    counts: { ...counts, sessions: sessions.length },
+    counts: { ...counts, sessions: sessions.length, pinned: pinnedKeys.length },
     assets,
   };
 }

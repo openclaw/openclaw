@@ -20,12 +20,17 @@ function conversationRef(conversationId: string, parentConversationId?: string) 
   return { ...account, conversationId, ...(parentConversationId ? { parentConversationId } : {}) };
 }
 
-function bind(conversation: ReturnType<typeof conversationRef>, targetSessionKey: string) {
+function bind(
+  conversation: ReturnType<typeof conversationRef>,
+  targetSessionKey: string,
+  metadata?: Record<string, unknown>,
+) {
   return service.bind({
     conversation,
     targetSessionKey,
     targetKind: "session",
     placement: "current",
+    metadata,
   });
 }
 
@@ -59,37 +64,17 @@ describe("Feishu thread bindings", () => {
     vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
     createManager({ ...baseCfg, agents: { entries: { main: {}, codex: {} } } });
 
-    const binding = await getSessionBindingService().bind({
-      targetSessionKey: "agent:codex:acp:binding:feishu:default:abc123",
-      targetKind: "session",
-      conversation: {
-        channel: "feishu",
-        accountId: "default",
-        conversationId: "oc_group_chat:topic:om_topic_root",
-        parentConversationId: "oc_group_chat",
-      },
-      placement: "current",
-      metadata: {
-        label: "codex-main",
-      },
+    const conversation = conversationRef("oc_group_chat:topic:om_topic_root", "oc_group_chat");
+    const binding = await bind(conversation, "agent:codex:acp:binding:feishu:default:abc123", {
+      label: "codex-main",
     });
-
-    expect(binding.conversation.conversationId).toBe("oc_group_chat:topic:om_topic_root");
-    const resolved = getSessionBindingService().resolveByConversation({
-      channel: "feishu",
-      accountId: "default",
-      conversationId: "oc_group_chat:topic:om_topic_root",
-    });
+    expect(binding.conversation.conversationId).toBe(conversation.conversationId);
+    const resolved = service.resolveByConversation(conversationRef(conversation.conversationId));
     expect(resolved).toEqual({
       bindingId: "default:oc_group_chat:topic:om_topic_root",
       targetSessionKey: "agent:codex:acp:binding:feishu:default:abc123",
       targetKind: "session",
-      conversation: {
-        channel: "feishu",
-        accountId: "default",
-        conversationId: "oc_group_chat:topic:om_topic_root",
-        parentConversationId: "oc_group_chat",
-      },
+      conversation,
       status: "active",
       boundAt: 1_700_000_000_000,
       expiresAt: 1_700_086_400_000,
@@ -110,27 +95,9 @@ describe("Feishu thread bindings", () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(startedAt);
     const manager = createManager();
     const targetSessionKey = "agent:codex:acp:binding:feishu:default:expired";
-    const conversation = {
-      channel: "feishu",
-      accountId: "default",
-      conversationId: "oc_group_chat:topic:om_expired_root",
-    };
-
-    const binding = await service.bind({
-      targetSessionKey,
-      targetKind: "session",
-      conversation,
-      placement: "current",
-    });
-    await service.bind({
-      targetSessionKey,
-      targetKind: "session",
-      conversation: {
-        ...conversation,
-        conversationId: "oc_group_chat:topic:om_expired_list_root",
-      },
-      placement: "current",
-    });
+    const conversation = conversationRef("oc_group_chat:topic:om_expired_root");
+    const binding = await bind(conversation, targetSessionKey);
+    await bind(conversationRef("oc_group_chat:topic:om_expired_list_root"), targetSessionKey);
     const expiresAt = startedAt + 86_400_000;
     expect(binding.expiresAt).toBe(expiresAt);
 
@@ -185,17 +152,8 @@ describe("Feishu thread bindings", () => {
   it("keeps active bindings touchable and unbindable", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(startedAt);
     createManager();
-    const conversation = {
-      channel: "feishu",
-      accountId: "default",
-      conversationId: "oc_group_chat:topic:om_active_root",
-    };
-    const binding = await service.bind({
-      targetSessionKey: "agent:codex:acp:binding:feishu:default:active",
-      targetKind: "session",
-      conversation,
-      placement: "current",
-    });
+    const conversation = conversationRef("oc_group_chat:topic:om_active_root");
+    const binding = await bind(conversation, "agent:codex:acp:binding:feishu:default:active");
 
     now.mockReturnValue(startedAt + 1_000);
     service.touch(binding.bindingId);
@@ -229,13 +187,7 @@ describe("Feishu thread bindings", () => {
     const manager = createManager();
     const original = conversationRef("oc_group_chat:topic:om_topic_root", "oc_group_chat");
 
-    await service.bind({
-      targetSessionKey: "agent:codex:acp:binding:feishu:default:abc123",
-      targetKind: "session",
-      conversation: original,
-      placement: "current",
-      metadata: { agentId: "codex" },
-    });
+    await bind(original, "agent:codex:acp:binding:feishu:default:abc123", { agentId: "codex" });
 
     manager.stop();
 

@@ -1,4 +1,5 @@
-import { Show, createMemo, createSignal } from "solid-js";
+import type { JSX } from "@solidjs/web";
+import { Errored, Loading, Show, createMemo, createSignal, isPending, latest } from "solid-js";
 import type { ChatInputRegion } from "../../../app/chat-input-owner.ts";
 import { ElapsedTime } from "../../../components/elapsed-time.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -6,6 +7,7 @@ import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-sk
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { formatDurationCompact } from "../../../lib/format-duration.ts";
+import { formatUiError } from "../../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../../lib/reactive/pending-focus.ts";
 import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
@@ -25,6 +27,7 @@ import { ChatSubagentsMobileList, type ChatSubagentMobileItem } from "./chat-sub
 import "./chat-session-panels.css";
 import "./chat-subagents-panel.css";
 import { ChatSubagentsPanelDesktop } from "./chat-subagents-panel-desktop.tsx";
+import { createSubagentsPresentation } from "./chat-subagents-presentation.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -58,6 +61,83 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
       () => ({ sessionKey: host.sessionKey, agentId: host.agentId, presented: host.presented }),
       SubagentsPanelData,
       syncSelection,
+    );
+    const readiness = createSubagentsPresentation(data);
+    const createMobileStop = (key: () => string) =>
+      readiness.createStop(() => data().rows.find((row) => row.session.key === key()));
+    const consumeRead = () => {
+      latest(readiness.read);
+      return null;
+    };
+    const FallbackShell = (fallbackProps: { loading?: boolean; children: JSX.Element }) => (
+      <div
+        class={
+          props.mobile === true
+            ? "chat-subagents-mobile"
+            : props.mobile === false
+              ? "subagents-desktop"
+              : "chat-subagents__list"
+        }
+        hidden={Boolean(selected()) || !props.presented}
+        aria-busy={fallbackProps.loading ? "true" : "false"}
+      >
+        <Show when={props.mobile === false} fallback={fallbackProps.children}>
+          <div class="subagents-desktop__content" tabindex="-1">
+            {fallbackProps.children}
+          </div>
+        </Show>
+      </div>
+    );
+    const ReadBoundary = (readProps: { children: JSX.Element }) => (
+      <Errored
+        fallback={(error, reset) => (
+          <FallbackShell>
+            <div class="chat-subagents__error" role="alert">
+              <span>{formatUiError(error())}</span>
+              <button
+                ref={(button) => {
+                  mobileRetry = button;
+                }}
+                class="btn btn--sm"
+                type="button"
+                onClick={() => {
+                  void data().refresh();
+                  reset();
+                }}
+              >
+                {t("common.retry")}
+              </button>
+            </div>
+          </FallbackShell>
+        )}
+      >
+        <Loading
+          on={readiness.scope().retired}
+          fallback={
+            <FallbackShell loading>
+              <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
+            </FallbackShell>
+          }
+        >
+          {consumeRead()}
+          {readProps.children}
+        </Loading>
+      </Errored>
+    );
+    const Empty = () => (
+      <Show
+        when={isPending(readiness.read)}
+        fallback={
+          data().hasResult &&
+          !data().stopError && (
+            <div class="chat-subagents__empty" role="status">
+              {t("chat.subagentsPanel.empty")}
+            </div>
+          )
+        }
+      >
+        <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
+      </Show>
     );
     // An applied request must not reopen detail after the user returns to the list.
     let appliedRequest: Props["showRequest"];
@@ -230,221 +310,203 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
       <>
         <Show when={props.mobile === true}>
           <div style={{ display: !selected() && props.presented ? "contents" : "none" }}>
-            <ChatSubagentsMobileList
-              running={mobileRunning()}
-              finished={mobileFinished()}
-              runningLabel={t("common.running")}
-              finishedLabel={t("chat.subagentsPanel.mobileFinished")}
-              noRunningLabel={t("chat.subagentsPanel.noRunning")}
-              finishedId={finishedId}
-              finishedOpen={finishedOpen()}
-              onToggleFinished={() => setFinishedOpen((value) => !value)}
-              loading={data().loading}
-              onScrollPortRef={props.onScrollPortRef}
-              listRef={(element, firstButton) => {
-                mobileList = element;
-                mobileFirstButton = firstButton;
-              }}
-              onOpen={(key) => {
-                const focus = mobileList?.ownerDocument.activeElement;
-                mobileReturn = {
-                  scrollTop: mobileList?.scrollTop ?? 0,
-                  focus: focus instanceof HTMLElement ? focus : null,
-                };
-                setSelected({ key, agentId: subagentAgentId(key) });
-              }}
-              notice={
-                data().error && (
-                  <div class="chat-subagents__error" role="alert">
-                    <span>{data().error}</span>
-                    <button
-                      ref={(button) => {
-                        mobileRetry = button;
-                      }}
-                      class="btn btn--sm"
-                      type="button"
-                      onClick={() => void data().refresh()}
-                    >
-                      {t("common.retry")}
-                    </button>
-                  </div>
-                )
-              }
-              empty={
-                (data().loading || (data().hasResult && !data().error)) && (
-                  <Show
-                    when={data().loading}
-                    fallback={
-                      <div class="chat-subagents__empty" role="status">
-                        {t("chat.subagentsPanel.empty")}
-                      </div>
-                    }
-                  >
-                    <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
-                  </Show>
-                )
-              }
-            />
+            <ReadBoundary>
+              <ChatSubagentsMobileList
+                createStop={createMobileStop}
+                running={mobileRunning()}
+                finished={mobileFinished()}
+                runningLabel={t("common.running")}
+                finishedLabel={t("chat.subagentsPanel.mobileFinished")}
+                noRunningLabel={t("chat.subagentsPanel.noRunning")}
+                finishedId={finishedId}
+                finishedOpen={finishedOpen()}
+                onToggleFinished={() => setFinishedOpen((value) => !value)}
+                loading={isPending(readiness.read)}
+                onScrollPortRef={props.onScrollPortRef}
+                listRef={(element, firstButton) => {
+                  mobileList = element;
+                  mobileFirstButton = firstButton;
+                }}
+                onOpen={(key) => {
+                  const focus = mobileList?.ownerDocument.activeElement;
+                  mobileReturn = {
+                    scrollTop: mobileList?.scrollTop ?? 0,
+                    focus: focus instanceof HTMLElement ? focus : null,
+                  };
+                  setSelected({ key, agentId: subagentAgentId(key) });
+                }}
+                notice={
+                  data().stopError && (
+                    <div class="chat-subagents__error" role="alert">
+                      <span>{data().stopError}</span>
+                      <button
+                        ref={(button) => {
+                          mobileRetry = button;
+                        }}
+                        class="btn btn--sm"
+                        type="button"
+                        onClick={() => void data().refresh()}
+                      >
+                        {t("common.retry")}
+                      </button>
+                    </div>
+                  )
+                }
+                empty={<Empty />}
+              />
+            </ReadBoundary>
           </div>
         </Show>
         <Show when={props.mobile === false}>
-          <ChatSubagentsPanelDesktop
-            sessionKey={props.sessionKey}
-            agentId={props.agentId}
-            rows={data().rows}
-            loading={data().loading}
-            error={data().error}
-            hasResult={data().hasResult}
-            active={!selected() && props.presented}
-            doneExpanded={props.doneExpanded}
-            onDoneExpandedChange={props.onDoneExpandedChange}
-            onRefresh={() => void data().refresh()}
-            onStop={(row) => void data().stop(row)}
-            onOpen={(row) =>
-              setSelected({ key: row.session.key, agentId: subagentAgentId(row.session.key) })
-            }
-            renderElapsed={renderElapsed}
-          />
+          <ReadBoundary>
+            <ChatSubagentsPanelDesktop
+              sessionKey={props.sessionKey}
+              agentId={props.agentId}
+              rows={data().rows}
+              loading={isPending(readiness.read)}
+              error={data().stopError}
+              hasResult={data().hasResult}
+              active={!selected() && props.presented}
+              doneExpanded={props.doneExpanded}
+              onDoneExpandedChange={props.onDoneExpandedChange}
+              onRefresh={() => void data().refresh()}
+              createStop={readiness.createStop}
+              onOpen={(row) =>
+                setSelected({ key: row.session.key, agentId: subagentAgentId(row.session.key) })
+              }
+              renderElapsed={renderElapsed}
+            />
+          </ReadBoundary>
         </Show>
         <Show
           when={detailId()}
           keyed
           fallback={
             <Show when={props.mobile === undefined}>
-              <div class="chat-subagents__list" aria-busy={data().loading ? "true" : "false"}>
-                {data().error && (
-                  <div class="chat-subagents__error" role="alert">
-                    <span>{data().error}</span>
-                    <button class="btn btn--sm" type="button" onClick={() => void data().refresh()}>
-                      {t("common.retry")}
-                    </button>
-                  </div>
-                )}
-                <Show
-                  when={data().rows.length}
-                  fallback={
-                    (data().loading || (data().hasResult && !data().error)) && (
-                      <Show
-                        when={data().loading}
-                        fallback={
-                          <div class="chat-subagents__empty" role="status">
-                            {t("chat.subagentsPanel.empty")}
-                          </div>
-                        }
-                      >
-                        <PanelLoadingSkeleton
-                          variant="file-list"
-                          label={t("common.loading")}
-                          compact
-                        />
-                      </Show>
-                    )
-                  }
+              <ReadBoundary>
+                <div
+                  class="chat-subagents__list"
+                  aria-busy={isPending(readiness.read) ? "true" : "false"}
                 >
-                  <SessionPanelGroups
-                    kind="subagents"
-                    running={running()}
-                    finished={finished()}
-                    keyFor={(row) => row.session.key}
-                    finishedId={finishedId}
-                    finishedOpen={finishedOpen()}
-                    onToggleFinished={() => setFinishedOpen((value) => !value)}
-                  >
-                    {(row) => {
-                      const title = () =>
-                        resolveSessionDisplayName(row().session.key, row().session);
-                      const active = () => isSessionRunStateActive(row().session);
-                      const activity = () =>
-                        row().session.status === "queued"
-                          ? t("common.queued")
-                          : active()
-                            ? row().activity || row().toolDisplayName
-                            : undefined;
-                      const stopLabel = () =>
-                        row().stopping
-                          ? t("chat.subagentsPanel.stopping")
-                          : t("chat.subagentsPanel.stop", { name: title() });
-                      const stopTitle = () => {
-                        const access = row().stopAccess;
-                        return access.allowed ? stopLabel() : access.reason;
-                      };
-                      return (
-                        <div
-                          class="chat-subagents__item"
-                          role="listitem"
-                          data-session-key={row().session.key}
-                        >
-                          <div class="chat-subagents__item-heading">
-                            <button
-                              class="chat-subagents__open"
-                              type="button"
-                              title={title()}
-                              onClick={() =>
-                                setSelected({
-                                  key: row().session.key,
-                                  agentId: subagentAgentId(row().session.key),
-                                })
-                              }
-                            >
-                              {title()}
-                            </button>
-                            {active() && row().session.activeRunIds?.length === 1 && (
+                  {data().stopError && (
+                    <div class="chat-subagents__error" role="alert">
+                      <span>{data().stopError}</span>
+                      <button
+                        class="btn btn--sm"
+                        type="button"
+                        onClick={() => void data().refresh()}
+                      >
+                        {t("common.retry")}
+                      </button>
+                    </div>
+                  )}
+                  <Show when={data().rows.length} fallback={<Empty />}>
+                    <SessionPanelGroups
+                      kind="subagents"
+                      running={running()}
+                      finished={finished()}
+                      keyFor={(row) => row.session.key}
+                      finishedId={finishedId}
+                      finishedOpen={finishedOpen()}
+                      onToggleFinished={() => setFinishedOpen((value) => !value)}
+                    >
+                      {(row) => {
+                        const stop = readiness.createStop(row);
+                        const title = () =>
+                          resolveSessionDisplayName(row().session.key, row().session);
+                        const active = () => isSessionRunStateActive(row().session);
+                        const activity = () =>
+                          row().session.status === "queued"
+                            ? t("common.queued")
+                            : active()
+                              ? row().activity || row().toolDisplayName
+                              : undefined;
+                        const stopLabel = () =>
+                          stop.stopping()
+                            ? t("chat.subagentsPanel.stopping")
+                            : t("chat.subagentsPanel.stop", { name: title() });
+                        const stopTitle = () => {
+                          const access = row().stopAccess;
+                          return access.allowed ? stopLabel() : access.reason;
+                        };
+                        return (
+                          <div
+                            class="chat-subagents__item"
+                            role="listitem"
+                            data-session-key={row().session.key}
+                          >
+                            <div class="chat-subagents__item-heading">
                               <button
-                                class="chat-subagents__stop"
+                                class="chat-subagents__open"
                                 type="button"
-                                aria-label={stopLabel()}
-                                title={stopTitle()}
-                                disabled={row().stopping || !row().canStop}
-                                onClick={() => void data().stop(row())}
+                                title={title()}
+                                onClick={() =>
+                                  setSelected({
+                                    key: row().session.key,
+                                    agentId: subagentAgentId(row().session.key),
+                                  })
+                                }
                               >
-                                <Icon name="square" />
+                                {title()}
                               </button>
-                            )}
-                          </div>
-                          <div class="chat-subagents__metadata">
-                            <span class="chat-subagents__work">
-                              {row().callCount !== undefined && (
-                                <span class="chat-subagents__calls">
-                                  {t(
-                                    !row().callCount?.exact
-                                      ? "chat.subagentsPanel.callsAtLeast"
-                                      : row().callCount?.count === 1
-                                        ? "chat.subagentsPanel.callsOne"
-                                        : "chat.subagentsPanel.callsMany",
-                                    { count: String(row().callCount?.count) },
-                                  )}
-                                </span>
-                              )}
-                              {row().callCount !== undefined && activity() && (
-                                <span aria-hidden="true">·</span>
-                              )}
-                              {activity() && (
-                                <span
-                                  ref={createTextOverflow(activity)}
-                                  class="chat-subagents__activity"
-                                  title={activity()}
+                              {active() && row().session.activeRunIds?.length === 1 && (
+                                <button
+                                  class="chat-subagents__stop"
+                                  type="button"
+                                  aria-label={stopLabel()}
+                                  title={stopTitle()}
+                                  disabled={stop.stopping() || !row().canStop}
+                                  onClick={() => void stop.stop()}
                                 >
-                                  {activity()}
-                                </span>
+                                  <Icon name="square" />
+                                </button>
                               )}
-                            </span>
-                            <span
-                              class="chat-subagents__elapsed"
-                              title={t(
-                                active()
-                                  ? "chat.subagentsPanel.elapsed"
-                                  : "chat.subagentsPanel.duration",
-                              )}
-                            >
-                              {renderElapsed(row())}
-                            </span>
+                            </div>
+                            <div class="chat-subagents__metadata">
+                              <span class="chat-subagents__work">
+                                {row().callCount !== undefined && (
+                                  <span class="chat-subagents__calls">
+                                    {t(
+                                      !row().callCount?.exact
+                                        ? "chat.subagentsPanel.callsAtLeast"
+                                        : row().callCount?.count === 1
+                                          ? "chat.subagentsPanel.callsOne"
+                                          : "chat.subagentsPanel.callsMany",
+                                      { count: String(row().callCount?.count) },
+                                    )}
+                                  </span>
+                                )}
+                                {row().callCount !== undefined && activity() && (
+                                  <span aria-hidden="true">·</span>
+                                )}
+                                {activity() && (
+                                  <span
+                                    ref={createTextOverflow(activity)}
+                                    class="chat-subagents__activity"
+                                    title={activity()}
+                                  >
+                                    {activity()}
+                                  </span>
+                                )}
+                              </span>
+                              <span
+                                class="chat-subagents__elapsed"
+                                title={t(
+                                  active()
+                                    ? "chat.subagentsPanel.elapsed"
+                                    : "chat.subagentsPanel.duration",
+                                )}
+                              >
+                                {renderElapsed(row())}
+                              </span>
+                            </div>
                           </div>
-                        </div>
-                      );
-                    }}
-                  </SessionPanelGroups>
-                </Show>
-              </div>
+                        );
+                      }}
+                    </SessionPanelGroups>
+                  </Show>
+                </div>
+              </ReadBoundary>
             </Show>
           }
         >

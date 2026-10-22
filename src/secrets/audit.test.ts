@@ -17,82 +17,28 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import {
+  createApplyFixture,
+  createOpenAiProviderConfig,
+  OPENAI_API_KEY_ENV_REF as ENV_REF,
+  writeJsonFile,
+} from "./apply.test-support.js";
 import { runSecretsAudit } from "./audit.js";
+import { describeSecretResolutionError } from "./resolve-errors.js";
+import { resolveSecretRefString } from "./resolve.js";
+import { isRetryableSecretDegradationReason } from "./runtime-degraded-state.js";
 import { writeSecretStoreEntry } from "./store/secret-store.js";
 
 type AuditFixture = Awaited<ReturnType<typeof createAuditFixture>>;
 
-const OPENAI_API_KEY_MARKER = "OPENAI_API_KEY"; // pragma: allowlist secret
-const ENV_REF = { source: "env", provider: "default", id: OPENAI_API_KEY_MARKER };
+const OPENAI_API_KEY_MARKER = ENV_REF.id;
 
 function modelProvider(apiKey: unknown = ENV_REF, extra: Record<string, unknown> = {}) {
-  return {
-    baseUrl: "https://api.openai.com/v1",
-    api: "openai-completions",
-    apiKey,
-    models: [{ id: "gpt-5", name: "gpt-5" }],
-    ...extra,
-  };
-}
-
-function countNonEmptyLines(value: string): number {
-  return value.split("\n").filter((line) => line.trim().length > 0).length;
-}
-
-async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
-  await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  return { ...createOpenAiProviderConfig(apiKey), ...extra };
 }
 
 function writeAuthStore(fixture: AuditFixture, value: unknown): void {
   writePersistedAuthProfileStoreRaw(value, fixture.agentDir);
-}
-
-async function writeExecResolverShellScript(params: {
-  scriptPath: string;
-  logPath: string;
-  values: Record<string, string>;
-}) {
-  await fs.writeFile(
-    params.scriptPath,
-    [
-      "#!/bin/sh",
-      `printf 'x\\n' >> ${JSON.stringify(params.logPath)}`,
-      "cat >/dev/null",
-      `printf '${JSON.stringify({ protocolVersion: 1, values: params.values }).replaceAll("'", "'\\''")}'`, // pragma: allowlist secret
-    ].join("\n"),
-    { encoding: "utf8", mode: 0o700 },
-  );
-}
-
-async function writeExecSecretsAuditConfig(
-  fixture: AuditFixture,
-  execScriptPath: string,
-  headerRefId?: string,
-  executionOptions: { timeoutMs?: number; noOutputTimeoutMs?: number; passEnv?: string[] } = {
-    timeoutMs: 20_000,
-    noOutputTimeoutMs: 10_000,
-  },
-) {
-  await writeJsonFile(fixture.configPath, {
-    secrets: {
-      providers: {
-        execmain: {
-          source: "exec",
-          command: execScriptPath,
-          jsonOnly: true,
-          ...executionOptions,
-        },
-      },
-    },
-    models: {
-      providers: {
-        openai: modelProvider(
-          execRef("providers/openai/apiKey"),
-          headerRefId ? { headers: { Authorization: execRef(headerRefId) } } : {},
-        ),
-      },
-    },
-  });
 }
 
 const execRef = (id: string) => ({ source: "exec", provider: "execmain", id });
@@ -102,11 +48,9 @@ const authProfile = (key: string, keyRef?: unknown) => ({
   key,
   ...(keyRef ? { keyRef } : {}),
 });
-
-function resolveRuntimePathEnv(): string {
-  const value = process.env.PATH;
-  return value?.trim() ? value : "/usr/bin:/bin";
-}
+const modelsConfig = (openai: ReturnType<typeof modelProvider>) => ({
+  models: { providers: { openai } },
+});
 
 function expectFinding(
   report: Awaited<ReturnType<typeof runSecretsAudit>>,
@@ -123,36 +67,23 @@ const expectPathMissing = (filePath: string) =>
   expect(fs.stat(filePath)).rejects.toMatchObject({ code: "ENOENT" });
 
 async function createAuditFixture() {
-  const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-audit-"));
-  const stateDir = path.join(rootDir, ".openclaw");
-  const configPath = path.join(stateDir, "openclaw.json");
-  const agentDir = path.join(stateDir, "agents", "main", "agent");
-
-  await fs.mkdir(path.dirname(configPath), { recursive: true });
-  await fs.mkdir(agentDir, { recursive: true });
-
+  const fixture = await createApplyFixture(
+    await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-audit-")),
+  );
+  const env: NodeJS.ProcessEnv = {
+    ...fixture.env,
+    OPENAI_API_KEY: "env-openai-key", // pragma: allowlist secret
+    PATH: process.env.PATH?.trim() ? process.env.PATH : "/usr/bin:/bin",
+  };
   return {
-    rootDir,
-    stateDir,
-    configPath,
-    agentDir,
-    authStorePath: resolveAuthProfileDatabasePath(agentDir),
-    authJsonPath: path.join(agentDir, "auth.json"),
-    modelsPath: path.join(agentDir, "models.json"),
-    envPath: path.join(stateDir, ".env"),
-    env: {
-      OPENCLAW_STATE_DIR: stateDir,
-      OPENCLAW_CONFIG_PATH: configPath,
-      OPENAI_API_KEY: "env-openai-key", // pragma: allowlist secret
-      PATH: resolveRuntimePathEnv(),
-    },
+    ...fixture,
+    modelsPath: path.join(fixture.agentDir, "models.json"),
+    env,
   };
 }
 
 async function seedAuditFixture(fixture: AuditFixture): Promise<void> {
-  await writeJsonFile(fixture.configPath, {
-    models: { providers: { openai: modelProvider() } },
-  });
+  await writeJsonFile(fixture.configPath, modelsConfig(modelProvider()));
   writeAuthStore(fixture, {
     version: 1,
     profiles: {
@@ -160,9 +91,7 @@ async function seedAuditFixture(fixture: AuditFixture): Promise<void> {
     },
   });
   await writeJsonFile(fixture.modelsPath, {
-    providers: {
-      openai: modelProvider(OPENAI_API_KEY_MARKER),
-    },
+    providers: { openai: modelProvider(OPENAI_API_KEY_MARKER) },
   });
   await fs.writeFile(
     fixture.envPath,
@@ -180,10 +109,57 @@ describe("secrets audit", () => {
     overrides: { apiKey?: unknown; headers?: Record<string, unknown> } = {},
   ) {
     await writeJsonFile(fixture.modelsPath, {
-      providers: {
-        openai: modelProvider(OPENAI_API_KEY_MARKER, overrides),
-      },
+      providers: { openai: modelProvider(OPENAI_API_KEY_MARKER, overrides) },
     });
+  }
+
+  async function execFixture({ header = false, fail = false } = {}) {
+    const logPath = path.join(fixture.rootDir, "exec-calls.log");
+    const scriptPath = path.join(fixture.rootDir, fail ? "resolver.mjs" : "resolver.sh");
+    const headerId = "providers/openai/headers/Authorization";
+    const values = {
+      "providers/openai/apiKey": "value:providers/openai/apiKey",
+      ...(header ? { [headerId]: `value:${headerId}` } : {}),
+    };
+    const lines = fail
+      ? [
+          "#!/usr/bin/env node",
+          "import fs from 'node:fs';",
+          `fs.appendFileSync(${JSON.stringify(logPath)}, 'x\\n');`,
+          "process.exit(1);",
+        ]
+      : [
+          "#!/bin/sh",
+          `printf 'x\\n' >> ${JSON.stringify(logPath)}`,
+          "cat >/dev/null",
+          `printf '${JSON.stringify({ protocolVersion: 1, values }).replaceAll("'", "'\\''")}'`,
+        ];
+    await fs.writeFile(scriptPath, lines.join("\n"), { encoding: "utf8", mode: 0o700 });
+    await writeConfig({
+      secrets: {
+        providers: {
+          execmain: {
+            source: "exec",
+            command: scriptPath,
+            jsonOnly: true,
+            ...(fail ? { passEnv: ["PATH"] } : { timeoutMs: 20_000, noOutputTimeoutMs: 10_000 }),
+          },
+        },
+      },
+      ...modelsConfig(
+        modelProvider(
+          execRef("providers/openai/apiKey"),
+          header ? { headers: { Authorization: execRef(headerId) } } : {},
+        ),
+      ),
+    });
+    return logPath;
+  }
+
+  async function expectOneExecution(logPath: string) {
+    expect(
+      (await fs.readFile(logPath, "utf8")).split("\n").filter((line) => line.trim()).length,
+    ).toBe(1);
   }
 
   function expectModelsFinding(
@@ -209,6 +185,64 @@ describe("secrets audit", () => {
     closeOpenClawAgentDatabasesForTest();
     await closeOpenClawStateDatabaseAsync();
     await fs.rm(fixture.rootDir, { recursive: true, force: true });
+  });
+
+  describe("store SecretRef resolution", () => {
+    const ref = { source: "store", provider: "default", id: "STORED_API_KEY" } as const;
+    const config = (alias: string, source: "env" | "store") => ({
+      secrets: { providers: { [alias]: { source } } },
+    });
+    const resolve = (provider = "default", configuredSource: "env" | "store" = "store") =>
+      resolveSecretRefString(
+        { ...ref, provider },
+        { config: config(provider, configuredSource), env: fixture.env },
+      );
+
+    it.each([
+      ["default", "env"],
+      ["teamstore", "store"],
+    ] as const)("resolves store alias %s configured as %s", async (provider, source) => {
+      await writeSecretStoreEntry({
+        scope: { kind: "team" },
+        name: ref.id,
+        value: "resolved-store-secret",
+        kind: "secret",
+        updatedBy: "test",
+        database: { env: fixture.env },
+      });
+      await expect(resolve(provider, source)).resolves.toBe("resolved-store-secret");
+    });
+    it("rejects a non-default store alias configured for another source", async () => {
+      await expect(resolve("envmain", "env")).rejects.toMatchObject({
+        code: "SECRET_PROVIDER_INVALID",
+        source: "store",
+        provider: "envmain",
+      });
+    });
+    it("resolves the env default when a store provider uses the same alias", async () => {
+      await expect(
+        resolveSecretRefString(ENV_REF, { config: config("default", "store"), env: fixture.env }),
+      ).resolves.toBe("env-openai-key");
+    });
+    it("maps a missing name to a retryable not-found degradation", async () => {
+      const error = await resolveSecretRefString(
+        { ...ref, id: "MISSING_API_KEY" },
+        { config: {}, env: fixture.env },
+      ).catch((caught: unknown) => caught);
+      expect(error).toMatchObject({ code: "SECRET_REF_NOT_FOUND", source: "store" });
+      const reason = describeSecretResolutionError(error);
+      expect(reason).toBe("secret reference was not found");
+      expect(isRetryableSecretDegradationReason(reason ?? "")).toBe(true);
+    });
+    it("maps database access failures to provider unavailable", async () => {
+      fixture.env.OPENCLAW_STATE_DIR = path.join(fixture.rootDir, "not-a-directory");
+      await fs.writeFile(fixture.env.OPENCLAW_STATE_DIR, "not a directory", "utf8");
+      const error = await resolveSecretRefString(ref, { config: {}, env: fixture.env }).catch(
+        (caught: unknown) => caught,
+      );
+      expect(error).toMatchObject({ code: "SECRET_PROVIDER_UNAVAILABLE", source: "store" });
+      expect(describeSecretResolutionError(error)).toBe("secret provider failed");
+    });
   });
 
   it("reports plaintext + shadowing findings", async () => {
@@ -257,21 +291,9 @@ describe("secrets audit", () => {
     await writeConfig({
       models: {
         providers: {
-          plaintext: modelProvider("shared-store-value", {
-            baseUrl: "https://plaintext.example.test/v1",
-            models: [{ id: "fixture", name: "fixture" }],
-          }),
-          referenced: modelProvider(
-            { source: "store", provider: "default", id: "STORED_API_KEY" },
-            {
-              baseUrl: "https://referenced.example.test/v1",
-              models: [{ id: "fixture", name: "fixture" }],
-            },
-          ),
-          envReferenced: modelProvider("${AUDIT_STORE_VALUE}", {
-            baseUrl: "https://env-referenced.example.test/v1",
-            models: [{ id: "fixture", name: "fixture" }],
-          }),
+          plaintext: modelProvider("shared-store-value"),
+          referenced: modelProvider({ source: "store", provider: "default", id: "STORED_API_KEY" }),
+          envReferenced: modelProvider("${AUDIT_STORE_VALUE}"),
         },
       },
     });
@@ -293,48 +315,25 @@ describe("secrets audit", () => {
     );
   });
 
-  it("does not inspect or mutate legacy auth.json during audit", async () => {
-    await fs.writeFile(fixture.authJsonPath, "{invalid-json", "utf8");
-
-    const report = await audit();
-    expectFinding(report, { code: "LEGACY_RESIDUE" });
-    expectFinding(report, { file: fixture.authJsonPath });
-    expect(report.filesScanned).not.toContain(fixture.authJsonPath);
-    await expect(fs.readFile(fixture.authJsonPath, "utf8")).resolves.toBe("{invalid-json");
-    await expectPathMissing(fixture.authStorePath);
-  });
-
-  it("reports Doctor-created auth archives without reading their contents", async () => {
-    const archivePaths = [
-      `${fixture.authJsonPath}.migrated-2026-07-25T12-00-00.000Z-fake`,
-      `${fixture.authJsonPath}.sqlite-import.1753430400000.bak`,
-    ];
-    for (const archivePath of archivePaths) {
-      await fs.writeFile(archivePath, "opaque fake credential bytes", "utf8");
-    }
-
-    const report = await audit();
-    expectFinding(report, { code: "LEGACY_RESIDUE" });
-    for (const archivePath of archivePaths) {
-      expectFinding(report, { file: archivePath });
-      expect(report.filesScanned).not.toContain(archivePath);
-    }
-  });
+  it.each(["", ".migrated-2026-07-25T12-00-00.000Z-fake", ".sqlite-import.1753430400000.bak"])(
+    "reports auth.json%s without inspecting or mutating it",
+    async (suffix) => {
+      const filePath = `${fixture.authJsonPath}${suffix}`;
+      await fs.writeFile(filePath, "{invalid-json", "utf8");
+      const report = await audit();
+      expectFinding(report, { code: "LEGACY_RESIDUE" });
+      expectFinding(report, { file: filePath });
+      expect(report.filesScanned).not.toContain(filePath);
+      await expect(fs.readFile(filePath, "utf8")).resolves.toBe("{invalid-json");
+      await expectPathMissing(fixture.authStorePath);
+    },
+  );
 
   it("skips exec ref resolution during audit unless explicitly allowed", async () => {
     if (process.platform === "win32") {
       return;
     }
-    const execLogPath = path.join(fixture.rootDir, "exec-calls-skipped.log");
-    const execScriptPath = path.join(fixture.rootDir, "resolver-skipped.sh");
-    await writeExecResolverShellScript({
-      scriptPath: execScriptPath,
-      logPath: execLogPath,
-      values: {
-        "providers/openai/apiKey": "value:providers/openai/apiKey",
-      },
-    });
-    await writeExecSecretsAuditConfig(fixture, execScriptPath);
+    const execLogPath = await execFixture();
 
     const report = await audit();
     expect(report.resolution.resolvabilityComplete).toBe(false);
@@ -347,57 +346,25 @@ describe("secrets audit", () => {
     if (process.platform === "win32") {
       return;
     }
-    const execLogPath = path.join(fixture.rootDir, "exec-calls.log");
-    const execScriptPath = path.join(fixture.rootDir, "resolver.sh");
-    await writeExecResolverShellScript({
-      scriptPath: execScriptPath,
-      logPath: execLogPath,
-      values: {
-        "providers/openai/apiKey": "value:providers/openai/apiKey",
-        "providers/openai/headers/Authorization": "value:providers/openai/headers/Authorization",
-      },
-    });
-    await writeExecSecretsAuditConfig(
-      fixture,
-      execScriptPath,
-      "providers/openai/headers/Authorization",
-    );
+    const execLogPath = await execFixture({ header: true });
 
     const report = await audit(true);
     expect(report.summary.unresolvedRefCount).toBe(0);
     expect(report.resolution.refsChecked).toBe(2);
 
-    expect(countNonEmptyLines(await fs.readFile(execLogPath, "utf8"))).toBe(1);
+    await expectOneExecution(execLogPath);
   });
 
   it("short-circuits per-ref fallback for provider-wide batch failures when --allow-exec is enabled", async () => {
     if (process.platform === "win32") {
       return;
     }
-    const execLogPath = path.join(fixture.rootDir, "exec-fail-calls.log");
-    const execScriptPath = path.join(fixture.rootDir, "resolver-fail.mjs");
-    await fs.writeFile(
-      execScriptPath,
-      [
-        "#!/usr/bin/env node",
-        "import fs from 'node:fs';",
-        `fs.appendFileSync(${JSON.stringify(execLogPath)}, 'x\\n');`,
-        "process.exit(1);",
-      ].join("\n"),
-      { encoding: "utf8", mode: 0o700 },
-    );
-
-    await writeExecSecretsAuditConfig(
-      fixture,
-      execScriptPath,
-      "providers/openai/headers/Authorization",
-      { passEnv: ["PATH"] },
-    );
+    const execLogPath = await execFixture({ header: true, fail: true });
 
     const report = await audit(true);
     expect(report.summary.unresolvedRefCount).toBeGreaterThanOrEqual(2);
 
-    expect(countNonEmptyLines(await fs.readFile(execLogPath, "utf8"))).toBe(1);
+    await expectOneExecution(execLogPath);
   });
 
   it("scans hardlinked agent models.json files for plaintext provider apiKey values", async () => {
@@ -410,26 +377,12 @@ describe("secrets audit", () => {
     expect(report.filesScanned).toContain(fixture.modelsPath);
   });
 
-  it("scans agent models.json files for plaintext provider header values", async () => {
-    await writeModelsProvider({
-      headers: {
-        Authorization: "Bearer sk-header-plaintext", // pragma: allowlist secret
-      },
-    });
-
-    const report = await audit();
-    expectModelsFinding(report, "PLAINTEXT_FOUND", "providers.openai.headers.Authorization");
-  });
-
-  it("reports unresolved models.json SecretRef objects in provider headers", async () => {
-    await writeModelsProvider({
-      headers: {
-        Authorization: { ...ENV_REF, id: "OPENAI_HEADER_TOKEN" }, // pragma: allowlist secret
-      },
-    });
-
-    const report = await audit();
-    expectModelsFinding(report, "REF_UNRESOLVED", "providers.openai.headers.Authorization");
+  it.each([
+    ["PLAINTEXT_FOUND", "Bearer sk-header-plaintext"], // pragma: allowlist secret
+    ["REF_UNRESOLVED", { ...ENV_REF, id: "OPENAI_HEADER_TOKEN" }], // pragma: allowlist secret
+  ] as const)("reports %s for models.json provider headers", async (code, Authorization) => {
+    await writeModelsProvider({ headers: { Authorization } });
+    expectModelsFinding(await audit(), code, "providers.openai.headers.Authorization");
   });
 
   it("reports malformed models.json as unresolved findings", async () => {
@@ -468,10 +421,8 @@ describe("secrets audit", () => {
     const externalModelsPath = path.join(externalAgentDir, "models.json");
     await fs.mkdir(externalAgentDir, { recursive: true });
     await writeJsonFile(externalModelsPath, {
-      providers: {
-        openai: modelProvider("sk-external-plaintext"), // pragma: allowlist secret
-      },
-    });
+      providers: { openai: modelProvider("sk-external-plaintext") },
+    }); // pragma: allowlist secret
 
     const report = await runSecretsAudit({
       env: {
@@ -517,25 +468,18 @@ describe("secrets audit", () => {
       }),
       ambientAgentDir,
     );
-    const stateDatabase = openOpenClawStateDatabase({ env: fixture.env }).db;
-    stateDatabase
-      .prepare(
-        `INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
-         VALUES ('auth.sharedStore', ?, 1)`,
-      )
-      .run(JSON.stringify({ location: "state-db" }));
-    stateDatabase
-      .prepare(
-        "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, 1)",
-      )
-      .run(
-        "authProfiles.store",
-        JSON.stringify(
-          createAuthProfileStoreFixture({
-            "openai:target": authProfile("sk-target-plaintext"),
-          }),
-        ),
-      );
+    const insert = openOpenClawStateDatabase({ env: fixture.env }).db.prepare(
+      "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, 1)",
+    );
+    insert.run("auth.sharedStore", JSON.stringify({ location: "state-db" }));
+    insert.run(
+      "authProfiles.store",
+      JSON.stringify(
+        createAuthProfileStoreFixture({
+          "openai:target": authProfile("sk-target-plaintext"),
+        }),
+      ),
+    );
     noteCommittedSharedAuthStoreOwnership({ location: "state-db" }, fixture.env);
 
     const report = await audit();
@@ -553,16 +497,14 @@ describe("secrets audit", () => {
   });
 
   it("exempts direct routing headers but audits request headers in openclaw config", async () => {
-    await writeConfig({
-      models: {
-        providers: {
-          openai: modelProvider(ENV_REF, {
-            headers: { "X-Proxy-Region": "us-west" },
-            request: { headers: { "X-Proxy-Region": "us-west" } },
-          }),
-        },
-      },
-    });
+    await writeConfig(
+      modelsConfig(
+        modelProvider(ENV_REF, {
+          headers: { "X-Proxy-Region": "us-west" },
+          request: { headers: { "X-Proxy-Region": "us-west" } },
+        }),
+      ),
+    );
 
     const report = await audit();
     expectFinding(

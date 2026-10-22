@@ -217,33 +217,15 @@ describe("process reaper", () => {
     expect(killProcess).not.toHaveBeenCalled();
   });
 
-  it("does not kill a reused pid when the live command is not OpenClaw-owned", async () => {
-    const { killed } = cleanupDeps([{ pid: 250, ppid: 1, command: "node unrelated.js" }]);
-
-    const result = await cleanupOpenClawOwnedAcpxProcessTree({
-      rootPid: 250,
-      rootCommand: CODEX_WRAPPER_COMMAND,
-      wrapperRoot: WRAPPER_ROOT,
-    });
-
-    expect(result).toEqual({
-      terminatedPids: [],
-      skippedReason: "not-openclaw-owned",
-    });
-    expect(killed).toStrictEqual([]);
-  });
-
-  it("does not kill a reused adapter pid when the stored root was a generated wrapper", async () => {
-    const { killed } = cleanupDeps([{ pid: 260, ppid: 1, command: PLUGIN_DEPS_CODEX_COMMAND }]);
-    const result = await cleanupTree(260);
-    expect(result).toEqual(skippedResult("not-openclaw-owned"));
-    expect(killed).toStrictEqual([]);
-  });
-
-  it("skips non-owned recorded process trees", async () => {
-    const { killed } = cleanupDeps([{ pid: 300, ppid: 1, command: "node server.js" }]);
-    const result = await cleanupTree(300, { rootCommand: "node server.js" });
-    expect(result.skippedReason).toBe("not-openclaw-owned");
+  it.each([
+    ["unrelated reused pid", "node unrelated.js", CODEX_WRAPPER_COMMAND],
+    ["adapter replacing a wrapper", PLUGIN_DEPS_CODEX_COMMAND, CODEX_WRAPPER_COMMAND],
+    ["non-owned recorded tree", "node server.js", "node server.js"],
+  ])("does not kill %s", async (_name, command, rootCommand) => {
+    const { killed } = cleanupDeps([{ pid: 250, ppid: 1, command }]);
+    await expect(cleanupTree(250, { rootCommand })).resolves.toEqual(
+      skippedResult("not-openclaw-owned"),
+    );
     expect(killed).toStrictEqual([]);
   });
 

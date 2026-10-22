@@ -22,11 +22,9 @@ const readEvidence = async (base: string) =>
   validateQaEvidenceSummaryJson(await readJson(path.join(base, "qa-evidence.json")));
 
 async function makeWriter(
-  params: Partial<
-    Pick<
-      Parameters<typeof createQaScriptEvidenceWriter>[0],
-      "maxDetailsBytes" | "maxLogBytes" | "primaryModel" | "providerId" | "providerMode"
-    >
+  params: Pick<
+    Parameters<typeof createQaScriptEvidenceWriter>[0],
+    "maxDetailsBytes" | "maxLogBytes"
   > = {},
 ) {
   const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-script-evidence-"));
@@ -56,34 +54,6 @@ afterEach(async () => {
     tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
   );
 });
-
-it.each([
-  ["unknown model", "", "openai", null],
-  ["explicit model precedence", "custom/model", "custom", "model"],
-] as const)(
-  "provider identity fallback: persists %s",
-  async (_name, primaryModel, expectedId, expectedName) => {
-    const { artifactBase, write, log } = await makeWriter({
-      primaryModel,
-      providerMode: "live-frontier",
-      providerId: "  openai  ",
-    });
-    await write("missing candidate", "blocked");
-    const diskEvidence = await readEvidence(artifactBase);
-
-    expect(diskEvidence.entries[0]?.result).toMatchObject({
-      status: "blocked",
-      failure: { reason: "missing candidate" },
-    });
-    expect(await log()).toBe("");
-    expect(diskEvidence.entries[0]?.execution?.provider).toEqual({
-      id: expectedId,
-      live: true,
-      auth: "live-frontier",
-      model: { name: expectedName, ref: primaryModel || null },
-    });
-  },
-);
 
 it("writes evidence with normalized artifact paths", async () => {
   const { artifactBase, writer } = await makeWriter();

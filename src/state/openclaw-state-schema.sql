@@ -2361,8 +2361,20 @@ CREATE TABLE IF NOT EXISTS local_workspace_projections (
   journal_pack BLOB CHECK (journal_pack IS NULL OR length(journal_pack) <= 268435456),
   revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
   created_at_ms INTEGER NOT NULL,
-  CHECK ((baseline_json IS NULL) = (baseline_ref IS NULL)),
+  checkpoint_json TEXT,
+  CHECK (baseline_json IS NULL OR baseline_ref IS NOT NULL),
   CHECK ((journal_json IS NULL) = (journal_pack IS NULL))
+) STRICT;
+
+-- The projection owner advances changed nodes and its root in one acceptance.
+-- Legacy baseline_json remains only until that owner's resumable conversion.
+CREATE TABLE IF NOT EXISTS local_workspace_manifest_nodes (
+  worktree_id TEXT NOT NULL,
+  path TEXT NOT NULL,
+  node_json TEXT NOT NULL,
+  PRIMARY KEY (worktree_id, path),
+  FOREIGN KEY (worktree_id)
+    REFERENCES local_workspace_projections(worktree_id) ON DELETE CASCADE
 ) STRICT;
 
 -- A reconciliation journal is written before managed-worktree mutation. The

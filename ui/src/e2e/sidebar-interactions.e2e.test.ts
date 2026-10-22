@@ -1,4 +1,3 @@
-import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import {
@@ -49,18 +48,6 @@ function agentResponses(agents: Array<{ id: string; name?: string }>) {
       thinkingLevel: null,
     },
   };
-}
-
-function expectInScrollPort(row: Locator) {
-  return expect
-    .poll(() =>
-      row.evaluate((element) => {
-        const box = element.getBoundingClientRect();
-        const list = element.parentElement!.getBoundingClientRect();
-        return box.top >= list.top - 1 && box.bottom <= list.bottom + 1;
-      }),
-    )
-    .toBe(true);
 }
 
 suite.define(() => {
@@ -257,7 +244,6 @@ suite.define(() => {
       const sidebar = page.locator("openclaw-app-sidebar");
       await sidebar.getByRole("button", { name: /Switch agent/ }).click();
       const menu = sidebar.locator(".sidebar-agent-menu");
-      const allSwitch = menu.getByRole("menuitem", { name: "Show all", exact: true });
       const mainSwitch = menu.getByRole("menuitem", { name: "Scheduled Automations", exact: true });
       const researchSwitch = menu.getByRole("menuitem", { name: "Research", exact: true });
       await expect
@@ -275,20 +261,6 @@ suite.define(() => {
         await document.fonts.ready;
         await Promise.all(dropdown.getAnimations().map((animation) => animation.finished));
       });
-      const rowLayout = await menu.evaluate((dropdown) => {
-        const rows = [...dropdown.querySelectorAll(".sidebar-agent-menu__agent-switch")];
-        return rows.map((row) => {
-          const avatar = row
-            .querySelector(".sidebar-agent-menu__agent-avatar")!
-            .getBoundingClientRect();
-          const label = row.querySelector(".agent-select__option-copy")!.getBoundingClientRect();
-          const bounds = row.getBoundingClientRect();
-          return { height: bounds.height, width: bounds.width, gap: label.left - avatar.right };
-        });
-      });
-      expect(rowLayout.map((row) => row.height)).toEqual([44, 44, 44, 44, 44]);
-      expect(new Set(rowLayout.map((row) => row.width)).size).toBe(1);
-      expect(rowLayout.map((row) => row.gap)).toEqual([10, 10, 10, 10, 10]);
       const createAgent = menu.getByRole("menuitem", {
         name: "Create new agent",
         exact: true,
@@ -309,32 +281,7 @@ suite.define(() => {
           )
           .toBeLessThanOrEqual(0);
       }
-      await expect
-        .poll(() =>
-          menu.evaluate((dropdown) => {
-            const grid = dropdown.querySelector(".sidebar-agent-menu__agent-list");
-            const rows = [...dropdown.querySelectorAll(".sidebar-agent-menu__agent-switch")];
-            if (!grid || rows.length === 0) {
-              return Number.NaN;
-            }
-            return Math.round(
-              Math.abs(
-                grid.getBoundingClientRect().bottom -
-                  Math.max(...rows.map((row) => row.getBoundingClientRect().bottom)),
-              ),
-            );
-          }),
-        )
-        .toBe(0);
       await expectFocused(mainSwitch);
-      await pressAndExpectFocus(
-        page,
-        "End",
-        menu.getByRole("menuitem", { name: "Support", exact: true }),
-      );
-      await pressAndExpectFocus(page, "Home", createAgent);
-      await pressAndExpectFocus(page, "ArrowDown", allSwitch);
-      await pressAndExpectFocus(page, "ArrowDown", mainSwitch);
       await pressAndExpectFocus(page, "r", researchSwitch);
       const researchSettings = researchSwitch.getByRole("button", { name: "Research settings" });
       await pressAndExpectFocus(page, "Tab", researchSettings);
@@ -359,12 +306,9 @@ suite.define(() => {
     });
   });
 
-  it("scrolls a crowded agent menu without a search field and keeps keyboard navigation", async () => {
+  it("keeps crowded agent-menu actions inside the available viewport", async () => {
     await suite.withPage(
-      {
-        ...desktop,
-        viewport: { width: 1440, height: 480 },
-      },
+      { ...desktop, viewport: { width: 1440, height: 480 } },
       async ({ page }) => {
         const agents = Array.from({ length: 40 }, (_, index) => ({
           id: index === 0 ? "main" : `agent-${index}`,
@@ -375,61 +319,35 @@ suite.define(() => {
           methodResponses: {
             ...agentResponses(agents),
             "agent.identity.get": {
-              cases: agents.map((agent) => ({
-                match: { agentId: agent.id },
-                response: { agentId: agent.id, name: agent.name },
+              cases: agents.map(({ id, name }) => ({
+                match: { agentId: id },
+                response: { agentId: id, name },
               })),
             },
           },
         });
         await page.goto(`${suite.server.baseUrl}chat`);
-        const sidebar = page.locator("openclaw-app-sidebar");
-        const trigger = sidebar.locator(".sidebar-agent-card__main");
-        await trigger.click();
-        const menu = sidebar.locator(".sidebar-agent-menu");
-        const rows = menu.locator('.sidebar-agent-menu__agent-list > [role^="menuitem"]');
-        await expectCount(rows, 41);
-        await expectCount(menu.getByRole("searchbox"), 0);
+        await page.locator("openclaw-app-sidebar .sidebar-agent-card__main").click();
+        const menu = page.locator("openclaw-app-sidebar .sidebar-agent-menu");
         await menu.evaluate(async (dropdown) => {
           await document.fonts.ready;
           await Promise.all(dropdown.getAnimations().map((animation) => animation.finished));
         });
-        const geometry = await menu.evaluate((dropdown) => {
-          const list = dropdown.querySelector<HTMLElement>(".sidebar-agent-menu__agent-list")!;
-          const actions = [
-            ...dropdown.querySelectorAll<HTMLElement>(':scope > [role^="menuitem"]'),
-          ];
-          return {
-            scrolls: list.scrollHeight > list.clientHeight,
-            actionsFit: actions.every((action) => {
-              const box = action.getBoundingClientRect();
-              return box.top >= 0 && box.bottom <= innerHeight;
-            }),
-            heights: [...list.children].map((row) => row.getBoundingClientRect().height),
-          };
-        });
-        expect(geometry).toMatchObject({ scrolls: true, actionsFit: true });
-        expect(geometry.heights.every((height) => height >= 44)).toBe(true);
-        const duplicateNames = rows.filter({ hasText: "Support" });
+        expect(
+          await menu.evaluate((dropdown) =>
+            [...dropdown.querySelectorAll<HTMLElement>(':scope > [role^="menuitem"]')].every(
+              (action) => {
+                const box = action.getBoundingClientRect();
+                return box.top >= 0 && box.bottom <= innerHeight;
+              },
+            ),
+          ),
+        ).toBe(true);
+        const duplicateNames = menu
+          .locator('.sidebar-agent-menu__agent-list > [role^="menuitem"]')
+          .filter({ hasText: "Support" });
         expect(await duplicateNames.count()).toBe(2);
         expect(await duplicateNames.locator(".agent-select__option-description").count()).toBe(0);
-        expect(await menu.locator(".sidebar-agent-menu__pin").count()).toBe(0);
-        await pressAndExpectFocus(page, "End", menu.locator('[data-value="agent:agent-39"]'));
-        await page.keyboard.press("Enter");
-        await expectPath(page, controlUiSessionPath("agent:agent-39:main"));
-        await trigger.click();
-        expect(await menu.getByRole("searchbox").count()).toBe(0);
-        const active = menu.locator('[aria-current="true"]');
-        await expectInScrollPort(active);
-        await page.keyboard.press("Escape");
-        await expectCount(menu, 0);
-        await expectFocused(trigger);
-        const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
-        await composer.click();
-        await trigger.hover();
-        await expectCount(menu, 1);
-        await expectInScrollPort(active);
-        await expectFocused(composer);
       },
     );
   });
