@@ -67,6 +67,81 @@ describe("isSafeBuiltinSegment", () => {
     ).toBe(false);
   });
 
+  it("rejects case-variant builtin tokens (builtin lookup is case-sensitive)", () => {
+    expect(
+      isSafeBuiltinSegment({
+        segment: builtinSegment(["TEST", "-d", "/tmp"]),
+        platform: "linux",
+      }),
+    ).toBe(false);
+    expect(
+      isSafeBuiltinSegment({
+        segment: builtinSegment(["Cd", "/tmp"]),
+        platform: "linux",
+      }),
+    ).toBe(false);
+  });
+
+  it("still auto-allows ordinary test predicates", () => {
+    expect(
+      isSafeBuiltinSegment({
+        segment: builtinSegment(["test", "-d", "/tmp"]),
+        platform: "linux",
+      }),
+    ).toBe(true);
+    expect(
+      isSafeBuiltinSegment({
+        segment: builtinSegment(["test", "-f", "/etc/hostname"]),
+        platform: "linux",
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects test/-v predicates: bash evaluates the -v operand subscript (command-injection vector)", () => {
+    // `test -v 'a[$(cmd)]'` runs cmd under bash >= 4.2 because the -v operand's array
+    // subscript is evaluated even inside single quotes.
+    expect(
+      isSafeBuiltinSegment({
+        segment: builtinSegment(["test", "-v", "a[$(touch /tmp/m)]"]),
+        platform: "linux",
+      }),
+    ).toBe(false);
+    expect(
+      isSafeBuiltinSegment({
+        segment: builtinSegment(["test", "-v", "a[`touch /tmp/m`]"]),
+        platform: "linux",
+      }),
+    ).toBe(false);
+    expect(
+      isSafeBuiltinSegment({
+        segment: builtinSegment(["[", "-v", "a[$(touch /tmp/m)]", "]"]),
+        platform: "linux",
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects test -v operands regardless of position and negation", () => {
+    expect(
+      isSafeBuiltinSegment({
+        segment: builtinSegment(["test", "!", "-v", "a"]),
+        platform: "linux",
+      }),
+    ).toBe(false);
+    expect(
+      isSafeBuiltinSegment({
+        segment: builtinSegment(["test", "x", "-a", "-v"]),
+        platform: "linux",
+      }),
+    ).toBe(false);
+    // Plain variable existence checks now route through approval too (conservative fail-safe).
+    expect(
+      isSafeBuiltinSegment({
+        segment: builtinSegment(["test", "-v", "a"]),
+        platform: "linux",
+      }),
+    ).toBe(false);
+  });
+
   it("returns false on Windows hosts (PowerShell semantics differ)", () => {
     expect(
       isSafeBuiltinSegment({
