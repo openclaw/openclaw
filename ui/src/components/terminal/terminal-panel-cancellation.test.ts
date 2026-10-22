@@ -1,14 +1,18 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
-import { i18n } from "../../i18n/index.ts";
-import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import {
+  eventGateway,
+  mountPanel,
+  panelButton,
+  panelTestStorage,
+  waitForPanelReady,
+} from "./terminal-panel-lifecycle.test-support.ts";
+import {
   createTerminalController,
-  createTestTerminalPanel,
   defineTestTerminalPanelElement,
   terminalOpenResult,
   type CreateGhosttyTerminalMock,
@@ -24,38 +28,34 @@ const TERMINAL_PANEL_ELEMENT_NAME = defineTestTerminalPanelElement(createGhostty
 const panels: OpenClawTerminalPanel[] = [];
 const releaseResponses: Array<() => void> = [];
 
-function mountTerminalPanel(client: TerminalGatewayClient): OpenClawTerminalPanel {
-  const panel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
-  panel.client = client;
-  panel.available = true;
+function mountTerminalPanel(
+  client: TerminalGatewayClient,
+  props: Partial<OpenClawTerminalPanel> = {},
+): OpenClawTerminalPanel {
+  const panel = mountPanel(
+    TERMINAL_PANEL_ELEMENT_NAME,
+    { client, available: true, ...props },
+    false,
+  );
   panels.push(panel);
-  document.body.append(panel);
   return panel;
 }
 
 describe("terminal panel pending cancellation", () => {
-  beforeEach(async () => {
-    vi.stubGlobal("localStorage", createStorageMock());
-    vi.stubGlobal("sessionStorage", createStorageMock());
-    await i18n.setLocale("en");
-  });
-
-  afterEach(async () => {
-    for (const panel of panels) {
-      panel.closeTerminalPanel();
-    }
-    document.body.replaceChildren();
-    await Promise.resolve();
-    for (const release of releaseResponses) {
-      release();
-    }
-    await Promise.all(panels.map((panel) => panel.updateComplete));
-    panels.length = 0;
-    releaseResponses.length = 0;
-    createGhosttyTerminalMock.mockReset();
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
+  panelTestStorage(
+    createGhosttyTerminalMock,
+    false,
+    async () => {
+      for (const release of releaseResponses) {
+        release();
+      }
+      await Promise.all(panels.map((panel) => panel.updateComplete));
+      panels.length = 0;
+      releaseResponses.length = 0;
+      vi.restoreAllMocks();
+    },
+    () => panels.forEach((panel) => panel.closeTerminalPanel()),
+  );
 
   it.each(
     (["open", "attach"] as const).flatMap((kind) => [
@@ -75,30 +75,21 @@ describe("terminal panel pending cancellation", () => {
       });
       const pending = createDeferred<ReturnType<typeof response>>();
       releaseResponses.push(() => pending.resolve(response("cleanup-session")));
-      const requests: Array<{ method: string; params: unknown }> = [];
       const targetMethod = `terminal.${kind}`;
-      const client: TerminalGatewayClient = {
-        forceReconnect: () => {},
-        request: <T>(method: string, params?: unknown) => {
-          requests.push({ method, params });
-          if (method === targetMethod) {
-            return (
-              requests.filter((request) => request.method === targetMethod).length === 1
-                ? pending.promise
-                : Promise.resolve(response("unexpected-replay"))
-            ) as Promise<T>;
-          }
-          return Promise.resolve({ ok: true }) as Promise<T>;
-        },
-        addEventListener: () => () => {},
-      };
-      const panel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
-      panel.client = client;
-      panel.available = true;
-      panel.page = panel.fullscreen = panel.embedded = page;
-      panel.routeTarget = kind === "attach" ? { sessionId: "pending-session" } : null;
-      panels.push(panel);
-      document.body.append(panel);
+      let attempts = 0;
+      const { client, calls } = eventGateway((method) =>
+        method === targetMethod
+          ? ++attempts === 1
+            ? pending.promise
+            : response("unexpected-replay")
+          : { ok: true },
+      );
+      const panel = mountTerminalPanel(client, {
+        page,
+        fullscreen: page,
+        embedded: page,
+        routeTarget: kind === "attach" ? { sessionId: "pending-session" } : null,
+      });
       await panel.updateComplete;
       await vi.dynamicImportSettled();
       if (!page) {
@@ -111,11 +102,9 @@ describe("terminal panel pending cancellation", () => {
           }),
         );
       }
-      await waitForFast(() =>
-        expect(requests.filter((request) => request.method === targetMethod)).toHaveLength(1),
-      );
+      await waitForFast(() => expect(calls(targetMethod)).toHaveLength(1));
       if (cancelled) {
-        panel.querySelector<HTMLButtonElement>(".tabstrip-tab__close")!.click();
+        panelButton(panel, ".tabstrip-tab__close")!.click();
         await panel.updateComplete;
         expect(panel.querySelector(".tabstrip-tab")).toBeNull();
         expect(panel.querySelector(".tp-error")).toBeNull();
@@ -130,7 +119,7 @@ describe("terminal panel pending cancellation", () => {
         await panel.updateComplete;
       }
       if (page) {
-        expect(panel.querySelector<HTMLButtonElement>(".tabstrip-new")?.disabled).toBe(true);
+        expect(panelButton(panel)?.disabled).toBe(true);
       }
       if (outcome === "resolve") {
         pending.resolve(response("pending-session"));
@@ -138,18 +127,13 @@ describe("terminal panel pending cancellation", () => {
         pending.reject(new Error("terminal request failed"));
       }
       if (page) {
-        await waitForFast(() =>
-          expect(panel.querySelector<HTMLButtonElement>(".tabstrip-new")?.disabled).toBe(false),
-        );
+        await waitForPanelReady(panel);
       } else {
         await waitForFast(() =>
-          expect(requests).toContainEqual({
-            method: "terminal.close",
-            params: { sessionId: "pending-session" },
-          }),
+          expect(calls("terminal.close")).toContainEqual({ sessionId: "pending-session" }),
         );
       }
-      expect(requests.filter((request) => request.method === targetMethod)).toHaveLength(1);
+      expect(calls(targetMethod)).toHaveLength(1);
       expect(panel.querySelector(".tabstrip-tab")).toBeNull();
       expect(panel.terminalPanelOpen).toBe(page);
       if (cancelled) {
@@ -157,10 +141,8 @@ describe("terminal panel pending cancellation", () => {
       } else {
         expect(panel.querySelector(".tp-error")?.textContent).toContain("terminal request failed");
       }
-      expect(requests.filter((request) => request.method === "terminal.close")).toEqual(
-        outcome === "resolve"
-          ? [{ method: "terminal.close", params: { sessionId: "pending-session" } }]
-          : [],
+      expect(calls("terminal.close")).toEqual(
+        outcome === "resolve" ? [{ sessionId: "pending-session" }] : [],
       );
     },
   );
@@ -177,45 +159,35 @@ describe("terminal panel pending cancellation", () => {
       createGhosttyTerminalMock.mockResolvedValueOnce(healthyController);
       const pending = createDeferred<ReturnType<typeof terminalOpenResult>>();
       releaseResponses.push(() => pending.resolve(terminalOpenResult("cleanup-session")));
-      const requests: Array<{ method: string; params: unknown }> = [];
       const pendingOpenIndex = healthy ? 2 : 1;
       let openCount = 0;
-      const client: TerminalGatewayClient = {
-        forceReconnect: () => {},
-        request: <T>(method: string, params?: unknown) => {
-          requests.push({ method, params });
-          if (method === "terminal.open") {
-            openCount += 1;
-            return (
-              openCount === pendingOpenIndex
-                ? pending.promise
-                : Promise.resolve(terminalOpenResult(openCount === 1 ? "healthy" : "replayed"))
-            ) as Promise<T>;
-          }
-          if (method === "terminal.list") {
-            return Promise.resolve({
-              sessions: [{ ...terminalOpenResult("healthy"), attached: false, createdAtMs: 1 }],
-            }) as Promise<T>;
-          }
-          if (method === "terminal.attach") {
-            const { sessionId } = params as { sessionId: string };
-            return Promise.resolve({
-              ...terminalOpenResult(sessionId),
-              buffer: "ready",
-              seq: 5,
-            }) as Promise<T>;
-          }
-          return Promise.resolve({ ok: true }) as Promise<T>;
-        },
-        addEventListener: () => () => {},
-      };
+      const { client, calls } = eventGateway((method, params) => {
+        if (method === "terminal.open") {
+          openCount += 1;
+          return openCount === pendingOpenIndex
+            ? pending.promise
+            : terminalOpenResult(openCount === 1 ? "healthy" : "replayed");
+        }
+        if (method === "terminal.list") {
+          return {
+            sessions: [{ ...terminalOpenResult("healthy"), attached: false, createdAtMs: 1 }],
+          };
+        }
+        if (method === "terminal.attach") {
+          const { sessionId } = params as { sessionId: string };
+          return {
+            ...terminalOpenResult(sessionId),
+            buffer: "ready",
+            seq: 5,
+          };
+        }
+        return { ok: true };
+      });
       const panel = mountTerminalPanel(client);
       panel.toggle();
       if (healthy) {
-        await waitForFast(() =>
-          expect(panel.querySelector<HTMLButtonElement>(".tabstrip-new")?.disabled).toBe(false),
-        );
-        panel.querySelector<HTMLButtonElement>(".tabstrip-new")!.click();
+        await waitForPanelReady(panel);
+        panelButton(panel)!.click();
       }
       await waitForFast(() => expect(openCount).toBe(pendingOpenIndex));
       if (transition === "queued attach") {
@@ -224,9 +196,9 @@ describe("terminal panel pending cancellation", () => {
             detail: { open: true, terminalSessionId: "queued-session" },
           }),
         );
-        expect(requests.filter((request) => request.method === "terminal.attach")).toHaveLength(0);
+        expect(calls("terminal.attach")).toHaveLength(0);
       }
-      panel.querySelector<HTMLButtonElement>(".is-connecting + .tabstrip-tab__close")!.click();
+      panelButton(panel, ".is-connecting + .tabstrip-tab__close")!.click();
       await panel.updateComplete;
       expect(panel.terminalPanelOpen).toBe(true);
       if (transition === "reconnect") {
@@ -240,18 +212,12 @@ describe("terminal panel pending cancellation", () => {
       }
       pending.resolve(terminalOpenResult("cancelled-session"));
       await waitForFast(() => {
-        expect(panel.querySelector<HTMLButtonElement>(".tabstrip-new")?.disabled).toBe(false);
-        expect(
-          openCount > pendingOpenIndex ||
-            requests.filter((request) => request.method === "terminal.attach").length === 1,
-        ).toBe(true);
+        expect(panelButton(panel)?.disabled).toBe(false);
+        expect(openCount > pendingOpenIndex || calls("terminal.attach").length === 1).toBe(true);
       });
       expect(openCount).toBe(pendingOpenIndex);
-      expect(requests.filter((request) => request.method === "terminal.attach")).toEqual([
-        {
-          method: "terminal.attach",
-          params: { sessionId: transition === "reconnect" ? "healthy" : "queued-session" },
-        },
+      expect(calls("terminal.attach")).toEqual([
+        { sessionId: transition === "reconnect" ? "healthy" : "queued-session" },
       ]);
       expect(panel.querySelector(".tp-error")).toBeNull();
       expect(JSON.parse(sessionStorage.getItem("openclaw.terminal.sessions.v1") ?? "[]")).toEqual(
@@ -261,9 +227,7 @@ describe("terminal panel pending cancellation", () => {
             ? ["healthy", "queued-session"]
             : ["queued-session"],
       );
-      expect(requests.filter((request) => request.method === "terminal.close")).toEqual([
-        { method: "terminal.close", params: { sessionId: "cancelled-session" } },
-      ]);
+      expect(calls("terminal.close")).toEqual([{ sessionId: "cancelled-session" }]);
     },
   );
 });

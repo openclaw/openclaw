@@ -74,7 +74,23 @@ type FakeClient = ReturnType<typeof makeFakeClient>;
 
 function makeHarness() {
   const client = makeFakeClient();
-  return { client, conn: new TerminalConnection(client) };
+  const data: string[] = [];
+  const replays: string[] = [];
+  const exits: unknown[] = [];
+  const sink: TerminalSink = {
+    onData: (chunk) => data.push(chunk),
+    onReplay: ({ data: snapshot }) => {
+      replays.push(snapshot);
+    },
+    onExit: (info) => exits.push(info),
+  };
+  return { client, conn: new TerminalConnection(client), data, replays, exits, sink };
+}
+
+async function openHarness() {
+  const harness = makeHarness();
+  await openSession(harness.conn, harness.sink);
+  return harness;
 }
 
 function testSink(overrides: Partial<TerminalSink> = {}): TerminalSink {
@@ -264,18 +280,8 @@ describe("TerminalConnection", () => {
   });
 
   it("discards a detached exit that predates a successful recovery rebind", async () => {
-    const { client, conn } = makeHarness();
-    const data: string[] = [];
-    const replays: string[] = [];
-    const exits: unknown[] = [];
+    const { client, conn, data, replays, exits } = await openHarness();
     const recovery = createDeferred<TestSessionResult>();
-    await openSession(conn, {
-      onData: (chunk) => data.push(chunk),
-      onReplay: ({ data: snapshot }) => {
-        replays.push(snapshot);
-      },
-      onExit: (info) => exits.push(info),
-    });
     deferRequest(client, "terminal.attach", recovery);
 
     emitData(client, 5, "hello");
@@ -291,15 +297,8 @@ describe("TerminalConnection", () => {
   });
 
   it("delivers the received tail and exit when recovery loses the finished session", async () => {
-    const { client, conn } = makeHarness();
-    const data: string[] = [];
-    const exits: unknown[] = [];
+    const { client, conn, data, exits } = await openHarness();
     const recovery = createDeferred<never>();
-    await openSession(conn, {
-      onData: (chunk) => data.push(chunk),
-      onReplay: () => {},
-      onExit: (info) => exits.push(info),
-    });
     deferRequest(client, "terminal.attach", recovery);
 
     emitData(client, 5, "hello");
@@ -315,23 +314,14 @@ describe("TerminalConnection", () => {
   });
 
   it("keeps a queued exit behind recovery started while flushing early events", async () => {
-    const { client, conn } = makeHarness();
+    const { client, conn, replays, exits, sink } = makeHarness();
     const openResult = createDeferred<TestSessionResult>();
     const recovery = createDeferred<TestSessionResult>();
     client.request = ((method: string, params: unknown) => {
       client.requests.push({ method, params });
       return method === "terminal.open" ? openResult.promise : recovery.promise;
     }) as typeof client.request;
-    const replays: string[] = [];
-    const exits: unknown[] = [];
-
-    const opening = openSession(conn, {
-      onData: () => {},
-      onReplay: ({ data: snapshot }) => {
-        replays.push(snapshot);
-      },
-      onExit: (info) => exits.push(info),
-    });
+    const opening = openSession(conn, sink);
     emitData(client, 7, "first");
     emitExit(client, { exitCode: 0, signal: null });
     openResult.resolve(sessionResult());
@@ -362,9 +352,7 @@ describe("TerminalConnection", () => {
   });
 
   it("does not deliver data to the wrong session", async () => {
-    const { client, conn } = makeHarness();
-    const data: string[] = [];
-    await openSession(conn, { onData: (dataChunk) => data.push(dataChunk) });
+    const { client, data } = await openHarness();
     emitData(client, 0, "nope", "other");
     expect(data).toEqual([]);
   });
@@ -372,9 +360,7 @@ describe("TerminalConnection", () => {
   it.each([["terminal.resize", (conn: TerminalConnection) => conn.resize("s1", 120, 40)]] as const)(
     "marks the session unavailable when %s rejects its live owner",
     async (_, act) => {
-      const { client, conn } = makeHarness();
-      const exits: unknown[] = [];
-      await openSession(conn, { onExit: (info) => exits.push(info) });
+      const { client, conn, exits } = await openHarness();
       client.nextResponse = { ok: false };
 
       await act(conn);
@@ -395,8 +381,7 @@ describe("TerminalConnection", () => {
   it.each(["terminal.input", "terminal.resize"] as const)(
     "reports rejected and unconfirmed %s delivery without retiring the session",
     async (method) => {
-      const { client, conn } = makeHarness();
-      await openSession(conn);
+      const { client, conn } = await openHarness();
       const act = () =>
         method === "terminal.input" ? conn.input("s1", "typed") : conn.resize("s1", 120, 40);
       client.nextResponse = null;
@@ -434,8 +419,7 @@ describe("TerminalConnection", () => {
   });
 
   it("keeps the listener while an open is in flight even if every session closes", async () => {
-    const { client, conn } = makeHarness();
-    await openSession(conn);
+    const { client, conn } = await openHarness();
 
     // Second open held in flight while the only registered session closes.
     const opening = createDeferred<TestSessionResult>();
@@ -455,8 +439,7 @@ describe("TerminalConnection", () => {
   });
 
   it("drops the final exit the server emits while a close RPC is in flight", async () => {
-    const { client, conn } = makeHarness();
-    await openSession(conn);
+    const { client, conn } = await openHarness();
     // A second session keeps the event subscription alive across the close.
     client.nextResponse = sessionResult({ sessionId: "s2" });
     await openSession(conn);
@@ -554,20 +537,11 @@ describe("TerminalConnection", () => {
   });
 
   it("discards a detached exit that predates successful session adoption", async () => {
-    const { client, conn } = makeHarness();
-    const replays: string[] = [];
-    const data: string[] = [];
-    const exits: unknown[] = [];
+    const { client, conn, replays, data, exits, sink } = makeHarness();
     const attached = createDeferred<TestSessionResult>();
     deferRequest(client, "terminal.attach", attached);
 
-    const attachPromise = conn.attach("s1", {
-      onData: (chunk) => data.push(chunk),
-      onReplay: ({ data: snapshot }) => {
-        replays.push(snapshot);
-      },
-      onExit: (info) => exits.push(info),
-    });
+    const attachPromise = conn.attach("s1", sink);
     emitExit(client, { exitCode: null, signal: null, reason: "detached" });
     attached.resolve(sessionResult({ buffer: "snapshot", seq: 8 }));
 
@@ -597,11 +571,7 @@ describe("TerminalConnection", () => {
   it("lists attachable sessions and tolerates a missing sessions field", async () => {
     const { client, conn } = makeHarness();
     const info = {
-      sessionId: "s1",
-      agentId: "main",
-      shell: "/bin/zsh",
-      cwd: "/work",
-      confined: false,
+      ...sessionResult(),
       attached: false,
       createdAtMs: 1,
     };

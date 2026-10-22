@@ -1,9 +1,7 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../../test/helpers/promise.ts";
-import { i18n } from "../../i18n/index.ts";
-import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import {
@@ -11,6 +9,8 @@ import {
   panelButton,
   queueCatalog,
   eventGateway,
+  waitForPanelReady,
+  panelTestStorage,
 } from "./terminal-panel-lifecycle.test-support.ts";
 import {
   createTerminalController,
@@ -125,39 +125,30 @@ function recordSessionWrites() {
   return writes;
 }
 
-async function settled(panel: OpenClawTerminalPanel) {
-  await waitForFast(() => expect(panelButton(panel)?.disabled).toBe(false));
-}
+panelTestStorage(
+  createTerminal,
+  false,
+  async () => {
+    for (const reply of pendingAttaches) {
+      reply.resolve(attachResult(reply.sessionId));
+    }
+    // Include controllers created by delayed attach replies in the disposal proof.
+    for (const result of createTerminal.mock.results) {
+      if (result.type === "return") {
+        const terminal = await result.value;
+        await waitForFast(() => expect(terminal.dispose).toHaveBeenCalled());
+      }
+    }
+    mounted.length = 0;
+    pendingAttaches.length = 0;
+    vi.restoreAllMocks();
+  },
+  () => mounted.forEach((panel) => panel.closeTerminalPanel()),
+);
 
-beforeEach(async () => {
-  vi.stubGlobal("localStorage", createStorageMock());
-  vi.stubGlobal("sessionStorage", createStorageMock());
+beforeEach(() => {
   sessionStorage.setItem(STORAGE_KEY, JSON.stringify(["session-a", "session-b"]));
   createTerminal.mockImplementation(async () => createTerminalController());
-  await i18n.setLocale("en");
-});
-
-afterEach(async () => {
-  for (const panel of mounted) {
-    panel.closeTerminalPanel();
-  }
-  document.body.replaceChildren();
-  await Promise.resolve();
-  for (const reply of pendingAttaches) {
-    reply.resolve(attachResult(reply.sessionId));
-  }
-  // The fixture waits for each renderer's public disposal, including delayed attach replies.
-  for (const result of createTerminal.mock.results) {
-    if (result.type === "return") {
-      const terminal = await result.value;
-      await waitForFast(() => expect(terminal.dispose).toHaveBeenCalled());
-    }
-  }
-  mounted.length = 0;
-  pendingAttaches.length = 0;
-  createTerminal.mockReset();
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
 });
 
 it.for(["pointerdown", "keydown"])(
@@ -187,7 +178,7 @@ it.for(["pointerdown", "keydown"])(
     expect(policies[1]?.()).toBe(false);
     expect(panel.activeHostedTabId).toBe(firstId);
     second.resolve(attachResult(second.sessionId));
-    await settled(panel);
+    await waitForPanelReady(panel);
     expect(document.activeElement).toBe(external);
     const next = panel.hostedTabs[1]!;
     const terminal = await createTerminal.mock.results[1]!.value;
@@ -225,7 +216,7 @@ it.for([false, true])(
       first.resolve(attachResult(first.sessionId));
       const second = await waitForAttach(gateway, 1, signal);
       second.resolve(attachResult(second.sessionId));
-      await settled(panel);
+      await waitForPanelReady(panel);
     }
     expect(removed).toHaveBeenCalledWith("pointerdown", handler, true);
     expect(removed).toHaveBeenCalledWith("keydown", handler, true);
@@ -248,7 +239,7 @@ it.for([
     }
 
     second.resolve(attachResult(second.sessionId));
-    await settled(panel);
+    await waitForPanelReady(panel);
     expect(gateway.calls("terminal.close")).toContainEqual({ sessionId: closed });
     expect(panel.hostedTabs).toMatchObject([{ className: "is-live" }]);
     expect(savedIds()).toEqual([remaining]);
@@ -274,7 +265,7 @@ it("opens a queued catalog after cancelling restore", async ({ signal }) => {
     event: "terminal.data",
     payload: { sessionId: "replacement", seq: 5, data: "ready" },
   });
-  await settled(panel);
+  await waitForPanelReady(panel);
   expect(gateway.calls("terminal.open")).toContainEqual({
     agentId: "agent-a",
     catalog,
@@ -306,7 +297,7 @@ it.for(["resolve", "reject"] as const)(
     } else {
       follower.reject(new Error("queued attach failed"));
     }
-    await settled(panel);
+    await waitForPanelReady(panel);
     expect(panel.terminalPanelOpen).toBe(true);
     expect(gateway.attaches.map((request) => request.sessionId)).toEqual([
       "session-a",
@@ -329,7 +320,7 @@ it("does not resurrect an exit received before adoption", async ({ signal }) => 
     payload: { sessionId: "session-b", exitCode: 0, reason: "exited" },
   });
   second.resolve(attachResult(second.sessionId));
-  await settled(panel);
+  await waitForPanelReady(panel);
 
   expect(writes).toContainEqual(["session-a"]);
   expect(panel.hostedTabs[1]).toMatchObject({ className: "is-exited" });
@@ -349,7 +340,7 @@ it("retires an adopted session during pending restore", async ({ signal }) => {
   });
   expect(savedIds()).toEqual(["session-b"]);
   second.resolve(attachResult(second.sessionId));
-  await settled(panel);
+  await waitForPanelReady(panel);
   expect(savedIds()).toEqual(["session-b"]);
 });
 
@@ -393,7 +384,7 @@ it.for([
     const restoredSecond = await waitForAttach(currentGateway, firstIndex + 1, signal);
     expect(savedIds()).toEqual(["session-a", "session-b"]);
     restoredSecond.resolve(attachResult(restoredSecond.sessionId));
-    await settled(current.panel);
+    await waitForPanelReady(current.panel);
     expect(current.panel.hostedTabs.map((tab) => tab.className)).toEqual(["is-live", "is-live"]);
     expect(savedIds()).toEqual(["session-a", "session-b"]);
     expect(currentGateway.calls("terminal.open")).toEqual([]);
@@ -421,6 +412,6 @@ it.for(["list", "attach"] as const)(
     expect(gateway.attaches).toHaveLength(stage === "list" ? 0 : 1);
     expect(panel.hostedTabs).toEqual([]);
     expect(gateway.calls("terminal.open")).toEqual([]);
-    await settled(panel);
+    await waitForPanelReady(panel);
   },
 );
