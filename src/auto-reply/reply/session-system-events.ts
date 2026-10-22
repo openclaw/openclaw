@@ -18,7 +18,7 @@ import {
 import {
   adoptSelectedSystemEventEntries,
   isSystemEventTurnOwned,
-  peekSystemEventEntries,
+  peekDeliverableSystemEventEntries,
   type SystemEvent,
 } from "../../infra/system-events.js";
 import { SESSION_CREATED_NOTICE_CONTEXT_PREFIX } from "../../sessions/session-state-event-kinds.js";
@@ -95,10 +95,10 @@ export async function drainFormattedSystemEvents(params: {
 }): Promise<string | undefined> {
   const systemLines: string[] = [];
   const queueKey = resolveSystemEventQueueKey(params.sessionKey, params.agentId);
-  // Claimed turns retain their own execution and delivery owner.
+  // Passive selection leaves held notices with their delivery owner.
   const queued = adoptSelectedSystemEventEntries(
     queueKey,
-    (params.events ?? peekSystemEventEntries(queueKey)).filter(
+    (params.events ?? peekDeliverableSystemEventEntries(queueKey)).filter(
       (event) => !isSystemEventTurnOwned(queueKey, event),
     ),
     { deferredEventIds: params.deferredEventIds },
