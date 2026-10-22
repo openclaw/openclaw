@@ -1,13 +1,38 @@
 import type { OperatorScope } from "../operator-scopes.js";
+import { isSessionProfileDependentMethod } from "../session-method-policy.js";
 import type { CoreGatewayMethodSpec } from "./core-descriptor-types.js";
 import { CORE_GATEWAY_METHOD_SPECS } from "./core-descriptors.js";
-import { isCoreGatewayMethodFamilyProfileDependent } from "./core-profile-access.js";
 import {
   DYNAMIC_GATEWAY_METHOD_SCOPE,
   NODE_GATEWAY_METHOD_SCOPE,
   type GatewayMethodDescriptorInput,
   type GatewayMethodHandler,
 } from "./descriptor.js";
+
+const PROFILE_DEPENDENT_CORE_PREFIXES = [
+  "artifacts.",
+  "chat.",
+  "conversations.",
+  "controlUi.session",
+  "mcp.app.",
+  "mentions.",
+  "openclaw.approval.",
+  "openclaw.chat",
+  "progressCard.",
+  "projects.",
+  "secrets.",
+  "session.",
+  "sessions.",
+  "taskSuggestions.",
+  "terminal.",
+  "transcripts.",
+  "users.authConnect.",
+  "users.prefs.",
+  "users.background.",
+  "themes.",
+  "users.github.",
+  "skills.library.",
+] as const;
 
 type CoreGatewayMethodMetadata = Pick<CoreGatewayMethodSpec, "name" | "scope" | "since">;
 
@@ -101,7 +126,9 @@ export function createCoreGatewayMethodDescriptors(
         : {}),
       profileAccess:
         spec.profileAccess ??
-        (spec.sessionAccess || isCoreGatewayMethodFamilyProfileDependent(spec.name)
+        (spec.sessionAccess ||
+        isSessionProfileDependentMethod(spec.name) ||
+        PROFILE_DEPENDENT_CORE_PREFIXES.some((prefix) => spec.name.startsWith(prefix))
           ? "required"
           : "independent"),
       ...(spec.since ? { since: spec.since } : {}),
