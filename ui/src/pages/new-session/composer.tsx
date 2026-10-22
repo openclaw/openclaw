@@ -13,7 +13,7 @@ import {
 import { createBackgroundLayoutRef } from "../../components/session-background-layout-context.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
-import { isMobileBrowserPlatform } from "../../lib/browser-platform.ts";
+import { isMobileBrowserPlatform, keepMobileReturnNative } from "../../lib/browser-platform.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import type { ComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
@@ -160,12 +160,8 @@ function prepareComposer(options: NewSessionComposerOptions, textarea: NewSessio
     commitDraft: options.onInput,
   };
   const handleComposerKeydown = (event: KeyboardEvent) => {
-    if (event.key === "Enter" && isMobileBrowserPlatform()) {
-      // Leave native editing and IME behavior intact; no ancestor may submit this key.
-      event.stopPropagation();
-      return;
-    }
     if (
+      keepMobileReturnNative(event) ||
       options.dictationActive ||
       options.submitting ||
       options.messageLocked ||

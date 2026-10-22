@@ -19,7 +19,7 @@ import {
   type RouteId,
 } from "../app-route-paths.ts";
 import { registerCommandPaletteEnglish } from "../i18n/locales/en-command-palette.ts";
-import { isMobileBrowserPlatform } from "../lib/browser-platform.ts";
+import { isMobileBrowserPlatform, keepMobileReturnNative } from "../lib/browser-platform.ts";
 import { MAX_HUMAN_MENTIONS } from "../lib/chat/human-mentions.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
@@ -131,8 +131,7 @@ function handleKeydown(
   ) {
     return;
   }
-  if (event.key === "Enter" && isMobileBrowserPlatform()) {
-    event.stopPropagation();
+  if (keepMobileReturnNative(event)) {
     return;
   }
   if (event.key === "Enter" && event.repeat) {

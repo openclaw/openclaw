@@ -1,5 +1,5 @@
 import type { ChatFollowUpMode, ChatSendShortcut } from "../../../app/settings.ts";
-import { isMobileBrowserPlatform } from "../../../lib/browser-platform.ts";
+import { keepMobileReturnNative } from "../../../lib/browser-platform.ts";
 import { isComposingKeyboardEvent } from "../../../lib/ime.ts";
 import { steerableQueuedMessage } from "../chat-queue.ts";
 import { restoreHistoryCaret } from "./chat-composer-dom.ts";
@@ -52,9 +52,7 @@ export function createComposerKeyDownHandler({
     if (!(target instanceof HTMLTextAreaElement)) {
       return;
     }
-    if (event.key === "Enter" && isMobileBrowserPlatform()) {
-      // Leave native editing and IME behavior intact; no ancestor may submit this key.
-      event.stopPropagation();
+    if (keepMobileReturnNative(event)) {
       return;
     }
     if (state.composerComposing || isComposingKeyboardEvent(event)) {
@@ -198,8 +196,7 @@ export function handleQueueEditKeydown(
   event: KeyboardEvent,
   edit: ChatComposerProps["queuedEdit"],
 ): void {
-  if (event.key === "Enter" && isMobileBrowserPlatform()) {
-    event.stopPropagation();
+  if (keepMobileReturnNative(event)) {
     return;
   }
   if (isComposingKeyboardEvent(event)) {

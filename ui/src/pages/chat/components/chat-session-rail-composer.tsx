@@ -3,7 +3,7 @@ import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { ChatSendShortcut } from "../../../app/settings.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
-import { isMobileBrowserPlatform } from "../../../lib/browser-platform.ts";
+import { isMobileBrowserPlatform, keepMobileReturnNative } from "../../../lib/browser-platform.ts";
 import {
   clearCompositionEnd,
   isComposingKeyboardEvent,
@@ -127,8 +127,7 @@ export function SessionRailComposer(props: {
     });
   };
   const keydown = (event: KeyboardEvent) => {
-    if (event.key === "Enter" && isMobileBrowserPlatform()) {
-      event.stopPropagation();
+    if (keepMobileReturnNative(event)) {
       return;
     }
     if (isComposingKeyboardEvent(event) || emojiMenu.handleKeydown(event, paneId())) {

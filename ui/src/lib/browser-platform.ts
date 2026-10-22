@@ -15,3 +15,12 @@ export function isIosBrowserPlatform(): boolean {
 export function isMobileBrowserPlatform(): boolean {
   return isIosBrowserPlatform() || /Android/u.test(globalThis.navigator.userAgent);
 }
+
+/** Keep native mobile editing, without allowing ancestor shortcuts to submit Return. */
+export function keepMobileReturnNative(event: KeyboardEvent): boolean {
+  if (event.key !== "Enter" || !isMobileBrowserPlatform()) {
+    return false;
+  }
+  event.stopPropagation();
+  return true;
+}
