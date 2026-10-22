@@ -294,14 +294,12 @@ it.each([false, true])(
       await stopSession(parentKey, respond, abortContext(), { clearQueued: true });
       expectStopResult(respond);
       expect(getFollowupQueueDepth(parentKey)).toBe(0);
-      if (pendingWake) {
-        expectCancelledSession(loadSessionEntry(target), parentRunId);
-      } else {
-        expect(loadSessionEntry(target)).toEqual(before);
-      }
       await fixture.settle();
       if (pendingWake) {
+        expectCancelledSession(loadSessionEntry(target), parentRunId);
         expect(await markStartupRecovery()).toMatchObject({ marked: 0 });
+      } else {
+        expect(loadSessionEntry(target)).toEqual(before);
       }
       const terminalPublications = publications.entries
         .slice(firstPublication)
