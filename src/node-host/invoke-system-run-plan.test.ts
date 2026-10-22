@@ -17,17 +17,6 @@ import {
   resolveNativeBinaryFixturePath,
 } from "./system-run-native-binary.test-helpers.js";
 
-type HardeningCase = {
-  name: string;
-  mode: "build-plan" | "harden";
-  argv: string[];
-  withPathToken?: boolean;
-  expectedArgv?: (pathToken: string | null) => string[];
-  expectedCmdText?: string;
-  checkRawCommandMatchesArgv?: boolean;
-  expectedCommandPreview?: string | null;
-};
-
 type ScriptOperandFixture = {
   command: string[];
   scriptPath: string;
@@ -60,13 +49,6 @@ const shellFixture: RuntimeFixture = {
   initialBody: "#!/bin/sh\necho SAFE\n",
   expectedArgvIndex: 1,
 };
-
-function requirePathToken(pathToken: string | null): string {
-  if (!pathToken) {
-    throw new Error("Expected PATH token fixture");
-  }
-  return pathToken;
-}
 
 function shellPlan(command: string, cwd: string) {
   return buildSystemRunApprovalPlan({
@@ -321,100 +303,51 @@ const unsafeRuntimeInvocationCases = [
 ];
 
 describe("hardenApprovedExecutionPaths", () => {
-  const cases: HardeningCase[] = [
-    {
-      name: "preserves shell-wrapper argv during approval hardening",
-      mode: "build-plan",
-      argv: ["env", "sh", "-c", "echo SAFE"],
-      expectedCmdText: 'env sh -c "echo SAFE"',
-      expectedCommandPreview: "echo SAFE",
-    },
-    {
-      name: "preserves dispatch-wrapper argv during approval hardening",
-      mode: "harden",
-      argv: ["env", "tr", "a", "b"],
-    },
-    {
-      name: "pins direct PATH-token executable during approval hardening",
-      mode: "harden",
-      argv: ["poccmd", "SAFE"],
-      withPathToken: true,
-      expectedArgv: (pathToken) => [requirePathToken(pathToken), "SAFE"],
-    },
-    {
-      name: "preserves env-wrapper PATH-token argv during approval hardening",
-      mode: "harden",
-      argv: ["env", "poccmd", "SAFE"],
-      withPathToken: true,
-    },
-    {
-      name: "rawCommand matches hardened argv after executable path pinning",
-      mode: "build-plan",
-      argv: ["poccmd", "hello"],
-      withPathToken: true,
-      expectedArgv: (pathToken) => [requirePathToken(pathToken), "hello"],
-      checkRawCommandMatchesArgv: true,
-      expectedCommandPreview: null,
-    },
-    {
-      name: "stores full approval text and preview for path-qualified env wrappers",
-      mode: "build-plan",
-      argv: ["./env", "sh", "-c", "echo SAFE"],
-      expectedCmdText: './env sh -c "echo SAFE"',
-      checkRawCommandMatchesArgv: true,
-      expectedCommandPreview: "echo SAFE",
-    },
-  ];
-
   it.runIf(process.platform !== "win32")("handles approval hardening cases", () => {
-    for (const testCase of cases) {
-      runNamedCase(testCase.name, () => {
-        const tmp = createFixtureDir("openclaw-approval-hardening-");
-        let pathToken: string | null = null;
-
-        const checkCase = () => {
-          const expectedArgv = testCase.expectedArgv?.(pathToken) ?? [...testCase.argv];
-          if (testCase.mode === "build-plan") {
-            const prepared = buildSystemRunApprovalPlan({ command: testCase.argv, cwd: tmp });
-            requireSuccess(prepared);
-            expect(prepared.plan.argv).toEqual(expectedArgv);
-            if (testCase.expectedCmdText) {
-              expect(prepared.plan.commandText).toBe(testCase.expectedCmdText);
-            }
-            if (testCase.checkRawCommandMatchesArgv) {
-              expect(prepared.plan.commandText).toBe(formatExecCommand(prepared.plan.argv));
-            }
-            if ("expectedCommandPreview" in testCase) {
-              expect(prepared.plan.commandPreview ?? null).toBe(testCase.expectedCommandPreview);
-            }
-            return;
-          }
-
-          const hardened = hardenApprovedExecutionPaths({
-            approvedByAsk: true,
-            argv: testCase.argv,
-            shellCommand: null,
-            cwd: tmp,
-          });
-          requireSuccess(hardened);
-          expect(hardened.argv).toEqual(expectedArgv);
-        };
-
-        if (testCase.withPathToken) {
-          const binDir = path.join(tmp, "bin");
-          fs.mkdirSync(binDir, { recursive: true });
-          const link = path.join(binDir, "poccmd");
-          fs.symlinkSync("/bin/echo", link);
-          pathToken = fs.realpathSync(link);
-          return withEnv(
-            { PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}` },
-            checkCase,
-          );
+    const tmp = createFixtureDir("openclaw-approval-hardening-");
+    const binDir = path.join(tmp, "bin");
+    fs.mkdirSync(binDir);
+    const link = path.join(binDir, "poccmd");
+    fs.symlinkSync("/bin/echo", link);
+    const pinned = fs.realpathSync(link);
+    withEnv({ PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}` }, () => {
+      for (const argv of [
+        ["env", "tr", "a", "b"],
+        ["poccmd", "SAFE"],
+        ["env", "poccmd", "SAFE"],
+      ]) {
+        const hardened = hardenApprovedExecutionPaths({
+          approvedByAsk: true,
+          argv,
+          shellCommand: null,
+          cwd: tmp,
+        });
+        requireSuccess(hardened);
+        expect(hardened.argv).toEqual(argv[0] === "poccmd" ? [pinned, "SAFE"] : argv);
+      }
+      for (const [argv, expectedArgv, commandText, commandPreview] of [
+        [
+          ["env", "sh", "-c", "echo SAFE"],
+          ["env", "sh", "-c", "echo SAFE"],
+          'env sh -c "echo SAFE"',
+          "echo SAFE",
+        ],
+        [["poccmd", "hello"], [pinned, "hello"], formatExecCommand([pinned, "hello"]), null],
+        [
+          ["./env", "sh", "-c", "echo SAFE"],
+          ["./env", "sh", "-c", "echo SAFE"],
+          './env sh -c "echo SAFE"',
+          "echo SAFE",
+        ],
+      ] satisfies [string[], string[], string, string | null][]) {
+        const prepared = buildSystemRunApprovalPlan({ command: argv, cwd: tmp });
+        requireSuccess(prepared);
+        expect(prepared.plan).toMatchObject({ argv: expectedArgv, commandText, commandPreview });
+        if (argv[0] !== "env") {
+          expect(prepared.plan.commandText).toBe(formatExecCommand(prepared.plan.argv));
         }
-
-        return checkCase();
-      });
-    }
+      }
+    });
   });
 
   const mutableOperandCases = [

@@ -15,6 +15,10 @@ export type UpdatesViewOverrides = Partial<Omit<UpdatesViewProps, "update">> & {
 export function createUpdatesViewProps(overrides: UpdatesViewOverrides = {}): UpdatesViewProps {
   return {
     statusRead: null,
+    captureCommandPresentation: () => ({
+      retired: new Promise<void>(() => {}),
+      isCurrent: () => true,
+    }),
     configObject: { update: { channel: "stable", auto: { enabled: false } } },
     gatewayVersion: "2026.8.1",
     controlUiCommit: "0123456789abcdef0123456789abcdef01234567",

@@ -248,6 +248,7 @@ suite.define(() => {
           ).toHaveLength(0);
           await button(page, "Update Mac app and restart").click();
           expect(await page.locator("html").getAttribute("data-native-update-posted")).toBe("yes");
+          expect(await gateway.getRequests("update.run")).toHaveLength(0);
           return;
         }
 

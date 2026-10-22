@@ -1,3 +1,4 @@
+import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import type {
   ProgressCard,
   ProgressCardGetParams,
@@ -11,6 +12,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { GatewayRequestError } from "../api/gateway.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
+import { createGatewayRetryOwner } from "./gateway-retry.ts";
 import { readSessionChangedEvent } from "./sessions/reconcile.ts";
 import {
   normalizeAgentId,
@@ -46,6 +48,7 @@ type ProgressCardEntry = {
   error?: SessionProgressCardLoadError;
   load?: Promise<ProgressCard | null>;
   refresh?: ProgressCardRefresh;
+  readRetry?: ReturnType<typeof createGatewayRetryOwner>;
 };
 
 type SessionProgressCardLoadError = "access-denied" | "unavailable";
@@ -151,7 +154,7 @@ export function sessionProgressCardsForGateway(
     if (scope !== presentationScope) {
       presentationScope = scope;
       lifetimes.clear();
-      entries.forEach(retireRefresh);
+      entries.forEach(retireEntry);
       entries.clear();
     }
   };
@@ -197,6 +200,18 @@ export function sessionProgressCardsForGateway(
     clearTimeout(entry.refresh?.timer);
     delete entry.refresh;
   };
+  const retireEntry = (entry: ProgressCardEntry) => {
+    retireRefresh(entry);
+    entry.readRetry?.reset();
+  };
+  const cancelInactiveReadRetries = () => {
+    const admitted = watchedTargets(true);
+    for (const [key, entry] of entries) {
+      if (!admitted.has(key)) {
+        entry.readRetry?.cancel();
+      }
+    }
+  };
   const reconcileRefresh = (entry: ProgressCardEntry) => {
     const refresh = entry.refresh;
     if (refresh?.accepted && entry.card && entry.card.revision > refresh.baseline) {
@@ -204,14 +219,15 @@ export function sessionProgressCardsForGateway(
       refresh.state = "updated";
     }
   };
-  const recordRequestError = (entry: ProgressCardEntry, error: unknown) => {
+  const recordRequestError = (entry: ProgressCardEntry, error: unknown, method: "get" | "put") => {
     const accessDenied =
-      error instanceof GatewayRequestError &&
-      isRecord(error.details) &&
-      error.details.code === "SESSION_PARTICIPATION_REQUIRED";
+      error instanceof GatewayProtocolRequestError &&
+      ((isRecord(error.details) && error.details.code === "SESSION_PARTICIPATION_REQUIRED") ||
+        (method === "get" && error.gatewayCode === "FORBIDDEN"));
     entry.error = accessDenied ? "access-denied" : "unavailable";
     entry.dirty = true;
     if (accessDenied) {
+      entry.readRetry?.reset();
       entry.card = null;
     }
     notify();
@@ -228,7 +244,7 @@ export function sessionProgressCardsForGateway(
       if (!oldest) {
         break;
       }
-      retireRefresh(oldest[1]);
+      retireEntry(oldest[1]);
       entries.delete(oldest[0]);
     }
   };
@@ -257,6 +273,7 @@ export function sessionProgressCardsForGateway(
       return null;
     }
     const current = () => entries.get(resolved.key) === entry && gateway.snapshot.client === client;
+    entry.readRetry?.cancel();
     const request = client
       .request<ProgressCardGetResult>("progressCard.get", progressCardRequestTarget(entry.target))
       .then((response) => {
@@ -264,6 +281,7 @@ export function sessionProgressCardsForGateway(
         if (!current() || entry.load !== request) {
           return null;
         }
+        entry.readRetry?.reset();
         entry.card = card;
         delete entry.hydratedScope;
         acceptLifetime(resolved.key, entry.target, card);
@@ -274,8 +292,8 @@ export function sessionProgressCardsForGateway(
         return card;
       })
       .catch((error: unknown) => {
-        if (current()) {
-          recordRequestError(entry, error);
+        if (current() && entry.load === request) {
+          recordRequestError(entry, error, "get");
         }
         throw error;
       })
@@ -288,6 +306,17 @@ export function sessionProgressCardsForGateway(
             delete entry.refreshPending;
             if (needsRefresh && watchedTargets(true).has(resolved.key)) {
               void load(entry.target).catch(() => undefined);
+            } else if (
+              entry.error === "unavailable" &&
+              available() &&
+              watchedTargets(true).has(resolved.key)
+            ) {
+              const retry = (entry.readRetry ??= createGatewayRetryOwner());
+              retry.schedule(() => {
+                if (current() && available() && watchedTargets(true).has(resolved.key)) {
+                  void load(entry.target).catch(() => undefined);
+                }
+              });
             }
           }
         }
@@ -305,7 +334,7 @@ export function sessionProgressCardsForGateway(
     const scope = gatewayPresentationScope(gateway);
     for (const [key, entry] of entries) {
       if (entry.hydratedScope !== scope) {
-        retireRefresh(entry);
+        retireEntry(entry);
         entries.delete(key);
         lifetimes.delete(key);
       }
@@ -319,6 +348,7 @@ export function sessionProgressCardsForGateway(
     if (!nextAvailable && knownAvailable) {
       // Automatic reconnect reuses the client. Retire its reads, but retain presentation.
       for (const entry of entries.values()) {
+        entry.readRetry?.cancel();
         entry.dirty = true;
         delete entry.load;
         delete entry.refreshPending;
@@ -362,7 +392,7 @@ export function sessionProgressCardsForGateway(
       let removed = false;
       for (const [key, entry] of entries) {
         if (matchesTarget(entry.target)) {
-          retireRefresh(entry);
+          retireEntry(entry);
           entries.delete(key);
           removed = true;
         }
@@ -432,7 +462,7 @@ export function sessionProgressCardsForGateway(
     stopGatewayEvents?.();
     stopGatewaySnapshots = null;
     stopGatewayEvents = null;
-    entries.forEach(retireRefresh);
+    entries.forEach(retireEntry);
     entries.clear();
   };
   const watch: SessionProgressCardStore["watch"] = (owner, targets, options) => {
@@ -442,10 +472,12 @@ export function sessionProgressCardsForGateway(
       .map(({ sessionKey, agentId }) => ({ sessionKey, agentId }));
     if (retained.length === 0) {
       watchedByOwner.delete(owner);
+      cancelInactiveReadRetries();
       detachIfIdle();
       return;
     }
     watchedByOwner.set(owner, { targets: retained, ...options });
+    cancelInactiveReadRetries();
     attach();
     for (const target of retained) {
       if (options?.admitAutomaticRead?.() !== false) {
@@ -458,7 +490,7 @@ export function sessionProgressCardsForGateway(
       const { key } = resolveTarget(target);
       const entry = entries.get(key);
       if (entry) {
-        retireRefresh(entry);
+        retireEntry(entry);
         entries.delete(key);
       }
       lifetimes.delete(key);
@@ -577,7 +609,7 @@ export function sessionProgressCardsForGateway(
         })
         .catch((error: unknown) => {
           if (current()) {
-            recordRequestError(entry, error);
+            recordRequestError(entry, error, "put");
           }
           throw error;
         });
@@ -587,6 +619,7 @@ export function sessionProgressCardsForGateway(
       }
       const dismissed = resultCard === null;
       if ((entry.card?.revision ?? 0) <= (resultCard?.revision ?? card.revision)) {
+        entry.readRetry?.reset();
         entry.card = resultCard;
         acceptLifetime(resolved.key, entry.target, resultCard);
         entry.dirty = false;

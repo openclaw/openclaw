@@ -3,35 +3,42 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildDmGroupAccountAllowlistAdapter,
   buildLegacyDmAccountAllowlistAdapter,
-  collectAllowlistOverridesFromRecord,
   createAccountScopedAllowlistNameResolver,
   createFlatAllowlistOverrideResolver,
   createNestedAllowlistOverrideResolver,
-  readConfiguredAllowlistEntries,
 } from "./allowlist-config-edit.js";
 
+function accountOptions(dmOwner: string, room: string) {
+  return {
+    channelId: "demo",
+    resolveAccount: ({ accountId }: { accountId?: string | null }) => ({
+      accountId: accountId ?? "default",
+      dmAllowFrom: [dmOwner],
+      groupAllowFrom: ["group-owner"],
+      dmPolicy: "allowlist",
+      groupPolicy: "allowlist",
+      groupOverrides: [{ label: room, entries: ["member-1"] }],
+    }),
+    normalize: ({ values }: { values: Array<string | number> }) =>
+      values.map((entry) => String(entry).trim().toLowerCase()),
+    resolveDmAllowFrom: (account: { dmAllowFrom: string[] }) => account.dmAllowFrom,
+    resolveGroupPolicy: (account: { groupPolicy: string }) => account.groupPolicy,
+    resolveGroupOverrides: (account: {
+      groupOverrides: Array<{ label: string; entries: string[] }>;
+    }) => account.groupOverrides,
+  };
+}
+
 describe("allowlist config helpers", () => {
-  it("coerces mixed entries to non-empty strings", () => {
-    expect(readConfiguredAllowlistEntries(["owner", 42, ""])).toEqual(["owner", "42"]);
-  });
-  it("collects only non-empty overrides from a flat record", () => {
-    expect(
-      collectAllowlistOverridesFromRecord({
-        record: { room1: { users: ["a", "b"] }, room2: { users: [] } },
-        label: (key) => key,
-        resolveEntries: (value) => value.users,
-      }),
-    ).toEqual([{ label: "room1", entries: ["a", "b"] }]);
-  });
-  it("builds an account-scoped flat override resolver", () => {
-    const account = { channels: { room1: { users: ["a"] } } };
+  it("builds flat overrides with nonempty, string-coerced entries", () => {
+    const account = { channels: { room1: { users: ["a", 42, ""] }, room2: { users: [] } } };
     const resolveOverrides = createFlatAllowlistOverrideResolver({
       resolveRecord: (value: typeof account) => value.channels,
       label: (key) => key,
       resolveEntries: (value) => value.users,
     });
 
-    expect(resolveOverrides(account)).toEqual([{ label: "room1", entries: ["a"] }]);
+    expect(resolveOverrides(account)).toEqual([{ label: "room1", entries: ["a", "42"] }]);
   });
   it("builds an account-scoped nested override resolver", () => {
     const account = {
@@ -73,21 +80,9 @@ describe("allowlist config helpers", () => {
 
 describe("buildDmGroupAccountAllowlistAdapter", () => {
   const adapter = buildDmGroupAccountAllowlistAdapter({
-    channelId: "demo",
-    resolveAccount: ({ accountId }) => ({
-      accountId: accountId ?? "default",
-      dmAllowFrom: ["dm-owner"],
-      groupAllowFrom: ["group-owner"],
-      dmPolicy: "allowlist",
-      groupPolicy: "allowlist",
-      groupOverrides: [{ label: "room-1", entries: ["member-1"] }],
-    }),
-    normalize: ({ values }) => values.map((entry) => String(entry).trim().toLowerCase()),
-    resolveDmAllowFrom: (account) => account.dmAllowFrom,
+    ...accountOptions("dm-owner", "room-1"),
     resolveGroupAllowFrom: (account) => account.groupAllowFrom,
     resolveDmPolicy: (account) => account.dmPolicy,
-    resolveGroupPolicy: (account) => account.groupPolicy,
-    resolveGroupOverrides: (account) => account.groupOverrides,
   });
   const edit = (
     parsedConfig: Record<string, unknown>,
@@ -153,19 +148,7 @@ describe("buildDmGroupAccountAllowlistAdapter", () => {
 });
 
 describe("buildLegacyDmAccountAllowlistAdapter", () => {
-  const adapter = buildLegacyDmAccountAllowlistAdapter({
-    channelId: "demo",
-    resolveAccount: ({ accountId }) => ({
-      accountId: accountId ?? "default",
-      dmAllowFrom: ["owner"],
-      groupPolicy: "allowlist",
-      groupOverrides: [{ label: "group-1", entries: ["member-1"] }],
-    }),
-    normalize: ({ values }) => values.map((entry) => String(entry).trim().toLowerCase()),
-    resolveDmAllowFrom: (account) => account.dmAllowFrom,
-    resolveGroupPolicy: (account) => account.groupPolicy,
-    resolveGroupOverrides: (account) => account.groupOverrides,
-  });
+  const adapter = buildLegacyDmAccountAllowlistAdapter(accountOptions("owner", "group-1"));
 
   it("does not support group scope", () => {
     expect(adapter.supportsScope?.({ scope: "group" })).toBe(false);

@@ -294,7 +294,10 @@ export function prepareSessionSharingRole(
   params: Pick<SessionSharingRoleParams, "cfg" | "client">,
   preparedCap?: { value: ReturnType<typeof operatorSessionCap> },
   isCreator?: ReturnType<typeof prepareSessionCreatorProfile>,
-): (target: SessionSharingTarget, isMember?: boolean) => SessionSharingRole {
+): (
+  target: Pick<SessionSharingTarget, "canonicalKey" | "entry">,
+  isMember?: boolean,
+) => SessionSharingRole {
   if (isGatewayAdmin(params.client)) {
     return () => "admin";
   }
@@ -337,6 +340,20 @@ export function prepareSessionSharingRole(
 
 export function canManageSessionSharing(role: SessionSharingRole): boolean {
   return role === "admin" || role === "owner";
+}
+
+/**
+ * Owner-only conversation work: between attributed people only the creator qualifies, even with
+ * admin scope. Unattributed callers and creators keep the owner-equivalent sharing role.
+ */
+export function isSessionOwnRequester(
+  params: Pick<SessionSharingRoleParams, "cfg" | "client">,
+  target: Pick<SessionSharingTarget, "canonicalKey" | "entry">,
+  profileId = sharingIdentity(params.client, resolveGatewayOperatorRoleActor(params.client))?.id,
+): boolean {
+  return profileId && sessionCreatorProfileId(target.entry.createdActor)
+    ? isSessionCreatorProfile(target.entry.createdActor, profileId)
+    : canManageSessionSharing(prepareSessionSharingRole(params, { value: "none" })(target));
 }
 
 export function hiddenSessionNotFound(sessionKey: string, incognito = false): ErrorShape {

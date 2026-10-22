@@ -70,9 +70,8 @@ export function createSessionMenuSettings(options: SessionMenuSettingsOptions) {
     get communicationAvailable() {
       return Boolean(communicationState().session.effectiveCommunication);
     },
-    get error() {
-      return details.error();
-    },
+    read: details.read,
+    readKey: details.readKey,
     open() {
       setActive(true);
       details.synchronize();
@@ -83,8 +82,7 @@ export function createSessionMenuSettings(options: SessionMenuSettingsOptions) {
     },
     handleSelect(value: string) {
       if (value === "reload-settings") {
-        details.reset();
-        details.synchronize();
+        details.retry();
         return true;
       }
       return selectSessionCommunication(value, options.runAction);

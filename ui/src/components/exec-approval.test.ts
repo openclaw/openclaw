@@ -109,7 +109,7 @@ describe("openclaw-exec-approval", () => {
       Array.from(container.querySelectorAll(".exec-approval-actions button > span")).map((label) =>
         label.textContent?.trim(),
       ),
-    ).toEqual(["Allow once", "Deny"]);
+    ).toEqual(["Deny", "Allow once"]);
     expect(container.querySelector(".exec-approval-warning")).toBeNull();
   });
 
@@ -167,7 +167,7 @@ describe("openclaw-exec-approval", () => {
 
     expect(activeId()).toBe("approval-newer");
     expect(queue.map((entry) => entry.id)).toEqual(["approval-oldest", "approval-newer"]);
-    container.querySelector<HTMLButtonElement>(".exec-approval-actions button")!.click();
+    container.querySelector<HTMLButtonElement>(".exec-approval-actions button:last-child")!.click();
     expect(onDecision).toHaveBeenCalledWith("approval-newer", "allow-once");
   });
 

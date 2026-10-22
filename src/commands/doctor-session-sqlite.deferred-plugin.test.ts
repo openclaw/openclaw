@@ -37,7 +37,13 @@ import {
   seedConcurrentDeferredPluginMigration as seedConcurrent,
   seedDeferredPluginSessionSource as seedSource,
 } from "./doctor-session-sqlite.deferred-plugin.test-support.js";
+import { jsonl, messageEvent } from "./doctor-session-sqlite.fixtures.test-support.js";
 import { runDoctorSessionSqlite, type DoctorSessionSqliteReport } from "./doctor-session-sqlite.js";
+import {
+  containsObjects,
+  expectFiles,
+  expectMissing,
+} from "./doctor-session-sqlite.publication-spies.test-support.js";
 import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";
 
 const fixturePlugin = "fixture-plugin";
@@ -47,20 +53,16 @@ function writeJson(file: string, value: unknown) {
   fs.writeFileSync(file, JSON.stringify(value));
 }
 function writeTranscript(file: string, id: string) {
-  const header = { type: "session", version: 3, id };
-  const message = {
-    type: "message",
-    id: "message",
-    parentId: null,
-    message: { role: "user", content: id },
-  };
-  fs.writeFileSync(file, `${JSON.stringify(header)}\n${JSON.stringify(message)}\n`);
+  fs.writeFileSync(
+    file,
+    jsonl({ type: "session", version: 3, id }, messageEvent("message", "user", id)),
+  );
 }
 function reportIssues(report: DoctorSessionSqliteReport) {
   return report.targets.flatMap((target) => target.issues);
 }
 function expectIssue(report: DoctorSessionSqliteReport, code: string) {
-  expect(reportIssues(report)).toContainEqual(expect.objectContaining({ code }));
+  containsObjects(reportIssues(report), { code });
 }
 function expectImport(
   report: DoctorSessionSqliteReport,
@@ -98,9 +100,7 @@ function expectArchived(
   expect(fs.readFileSync(move!.archivePath)).toEqual(bytes);
 }
 function expectTranscriptsArchived(originals: Map<string, Buffer>) {
-  for (const file of [...originals.keys()].filter((name) => name.endsWith(".jsonl"))) {
-    expect(fs.existsSync(file)).toBe(false);
-  }
+  expectMissing(...[...originals.keys()].filter((name) => name.endsWith(".jsonl")));
 }
 async function expectInterruptedPublication(run: () => Promise<DoctorSessionSqliteReport>) {
   using publication = vi.spyOn(migrationRun, "recordCompletedMigrationMoves");
@@ -118,7 +118,7 @@ function expectReady(cfg: OpenClawConfig, env: NodeJS.ProcessEnv) {
 }
 function expectOriginals(originals: Map<string, Buffer>, links?: number) {
   for (const [file, bytes] of originals) {
-    expect(fs.readFileSync(file)).toEqual(bytes);
+    expectFiles(bytes, file);
     if (links !== undefined) {
       expect(fs.statSync(file).nlink).toBe(links);
     }
@@ -237,11 +237,9 @@ it.each([
       expect(readPending({ env: state.env })).toEqual([
         expect.objectContaining({ pluginId: fixturePlugin, requiresStateMigration: true }),
       ]);
-      expect(reportIssues(interrupted)).toContainEqual(
-        expect.objectContaining({
-          message: expect.stringContaining("Plugin migration obligations changed"),
-        }),
-      );
+      containsObjects(reportIssues(interrupted), {
+        message: expect.stringContaining("Plugin migration obligations changed"),
+      });
 
       await editAndDeleteImportedSessions(scope, "edited after interrupted archival");
       expect((await run()).totals.importedEntries).toBe(0);
@@ -250,7 +248,7 @@ it.each([
 
       await resolvePlugin(state.env);
       expectImport(await run(), 0);
-      expect(fs.existsSync(storePath)).toBe(false);
+      expectMissing(storePath);
       expectTranscriptsArchived(originals);
     }),
 );
@@ -372,8 +370,8 @@ it.each([
       });
     }
     await noteSessionTranscriptHealth({ cfg, env: state.env, shouldRepair: true });
-    expect(fs.existsSync(marker)).toBe(false);
-    expect(fs.readFileSync(newHistory, "utf8")).toBe(newHistoryBytes);
+    expectMissing(marker);
+    expectFiles(newHistoryBytes, newHistory);
     expectCanonicalSessions(scope, "changed after import");
     if (pendingChange === "none") {
       expectReady(cfg, state.env);
@@ -401,13 +399,13 @@ it.each([
       expectOriginals(originals);
     } else {
       expectPending(state.env);
-      expect(fs.existsSync(storePath)).toBe(false);
+      expectMissing(storePath);
       const archived = manifestTargets(state.env).filter((target) =>
         target.completedMoves.some((move) => move.sourcePath === storePath),
       );
       expect(archived).toEqual([expect.objectContaining({ validationBeforeArchive: "passed" })]);
       for (const [file, bytes] of archiveInputs) {
-        expect(fs.existsSync(file)).toBe(false);
+        expectMissing(file);
         expectArchived(archived[0]!.completedMoves, file, bytes);
       }
       if (missingTranscript) {
@@ -482,7 +480,7 @@ it.each(["default", "configured-root", "relocated-interrupted"] as const)(
       }
       const resumed = await run();
       expectImport(resumed, 0);
-      expect(fs.existsSync(storePath)).toBe(false);
+      expectMissing(storePath);
       expect(resumed.totals.archivedTranscriptFiles).toBe(
         layout === "relocated-interrupted" ? 0 : 2,
       );
@@ -651,9 +649,7 @@ it.each(["unimported-owner", "malformed", "unreadable"] as const)(
           expectIssue(imported, "plugin_migration_source_retained");
         }
       }
-      expect(fs.existsSync(resolveTarget(storePath, { agentId: "ops", env: state.env }).path)).toBe(
-        false,
-      );
+      expectMissing(resolveTarget(storePath, { agentId: "ops", env: state.env }).path);
       expect(() => assertMigrated({ cfg, env: state.env })).toThrow(
         "Legacy session store requires migration",
       );
@@ -678,9 +674,7 @@ it.each(["declared", "metadata-only"] as const)(
       fs.writeFileSync(transcript, contents);
       const retry = await importSessions(cfg, state.env);
       const issues = reportIssues(retry);
-      expect(issues).toContainEqual(
-        expect.objectContaining({ code: "retained_plugin_source_conflict" }),
-      );
+      containsObjects(issues, { code: "retained_plugin_source_conflict" });
       expect(issues.every(isWarning)).toBe(true);
       expect(retry.totals).toMatchObject({ importedEntries: 0, archivedTranscriptFiles: 1 });
       expect(fs.existsSync(transcript)).toBe(false);

@@ -398,9 +398,12 @@ describe("mcp-app-view localization", () => {
     const provider = createSolidApplicationContextProvider(
       context as unknown as ApplicationContext,
     );
-    const mounted = mountSolid(() => createComponent(McpAppPanel, { launch }), {
-      wrapper: provider.wrapper,
-    });
+    const mounted = mountSolid(
+      () => createComponent(McpAppPanel, { launch, observeRetirement: () => () => {} }),
+      {
+        wrapper: provider.wrapper,
+      },
+    );
     const panel = mounted.container.querySelector("openclaw-mcp-app-panel")!;
     const expired = deferred();
     panel.addEventListener(MCP_APP_VIEW_EXPIRED_EVENT, () => expired.resolve(), { once: true });
