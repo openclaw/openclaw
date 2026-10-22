@@ -553,6 +553,41 @@ describe("context-engine turn outbox", () => {
     });
   });
 
+  it.each([
+    ["missing", "{}", null],
+    ["unknown", '{"state":"unexpected"}', "unexpected"],
+  ] as const)(
+    "keeps a decoded %s payload pending during recovery",
+    async (_label, payloadJson, state) => {
+      const { database, warn, enqueue, store } = outboxFixture(createCommitTurn());
+      const turn = enqueue(`session-a:${_label}-state`);
+      const advancementKey = turn.boundary.admission.logicalTurnId;
+      database.db
+        .prepare(
+          "UPDATE context_engine_turn_outbox SET payload_json = ?, payload_state = ? WHERE advancement_key = ?",
+        )
+        .run(payloadJson, state, advancementKey);
+
+      expect(
+        recoverContextEngineTurnOutbox({
+          database,
+          engineId: "test",
+          sessionId: "session-a",
+          warn,
+        }),
+      ).toBe(true);
+      expect(readRow(database, advancementKey, "payload_state, payload_json, last_error")).toEqual({
+        payload_state: state,
+        payload_json: payloadJson,
+        last_error: null,
+      });
+      expect(warn).not.toHaveBeenCalled();
+      expect(
+        await store.readNextPending({ engineId: "test", sessionId: "session-a" }),
+      ).toBeDefined();
+    },
+  );
+
   it("does not let later same-session turns overtake a failed commit", async () => {
     let failFirstTurn = true;
     const commitTurn = vi.fn(async ({ advancementKey }: { advancementKey: string }) => {

@@ -42,20 +42,17 @@ type OutboxKernelParams<Type extends keyof ContextEngineTurnOutboxWorkerOperatio
 const RECOVERED_TURN_MAX_EVENTS = 20_000;
 const RECOVERED_TURN_MAX_BYTES = 8 * 1024 * 1024;
 
+type ParsedContextEngineTurnOutboxPayload =
+  | { kind: "decoded"; payload: unknown }
+  | { kind: "corrupt" };
+
 function parseContextEngineTurnOutboxPayload(
   payloadJson: string,
-): ContextEngineTurnOutboxPayload | undefined {
+): ParsedContextEngineTurnOutboxPayload {
   try {
-    const payload: unknown = JSON.parse(payloadJson);
-    if (payload === null || typeof payload !== "object" || !("state" in payload)) {
-      return undefined;
-    }
-    const state = (payload as { state: unknown }).state;
-    return state === "accepted" || state === "admitted" || state === "ready" || state === "blocked"
-      ? (payload as ContextEngineTurnOutboxPayload)
-      : undefined;
+    return { kind: "decoded", payload: JSON.parse(payloadJson) };
   } catch {
-    return undefined;
+    return { kind: "corrupt" };
   }
 }
 
@@ -297,12 +294,29 @@ export function recoverContextEngineTurnOutbox(params: {
   ).rows;
   let pending = false;
   for (const row of rows) {
-    const payload = parseContextEngineTurnOutboxPayload(row.payload_json);
-    if (!payload) {
+    const parsed = parseContextEngineTurnOutboxPayload(row.payload_json);
+    if (parsed.kind === "corrupt") {
       terminalizeCorruptContextEngineTurn(params.database, row.advancement_key);
       params.warn(
         `[context-engine] skipped corrupt turn advancement: ${row.advancement_key}: payload could not be decoded`,
       );
+      continue;
+    }
+    const decoded = parsed.payload;
+    if (decoded === null || typeof decoded !== "object" || !("state" in decoded)) {
+      // Valid JSON without a state is deliberately retained for compatibility.
+      pending = true;
+      continue;
+    }
+    const payload = decoded as ContextEngineTurnOutboxPayload;
+    if (
+      payload.state !== "accepted" &&
+      payload.state !== "admitted" &&
+      payload.state !== "ready" &&
+      payload.state !== "blocked"
+    ) {
+      // Unknown states also remain pending rather than becoming terminal data.
+      pending = true;
       continue;
     }
     if (payload.state === "ready") {
