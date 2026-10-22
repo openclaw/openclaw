@@ -758,7 +758,6 @@
 ["extensions/msteams/src/send-context.test.ts","./sdk.js","a3bfb7faf9a7461a4708d12a28f8fdac313eed76a5b2718feeeb1b95c88b6b86",1]
 ["extensions/msteams/src/send.handoff.test.ts","./send-context.js","2f23f3e864e9b742fe23abb0810e128623780b460edfea1d4f28274ccaedb6b0",1]
 ["extensions/msteams/src/send.test.ts","./pending-uploads-fs.js","fd907d7076809c347a6c14c152bd042bfd525554b5692bacc207c37289466283",1]
-["extensions/msteams/src/send.test.ts","./sdk-proactive.js","4be6b24d5c6b13dd75b529f8def9f1e1012be565c505b0048ab84f2730ad9ca8",1]
 ["extensions/msteams/src/send.test.ts","./send-context.js","471036ebbe110165720f583695503819bcd2ef060a01af9bb0cb2f7761c37954",1]
 ["extensions/msteams/src/send.test.ts","openclaw/plugin-sdk/outbound-media","91d58aa978a1d14b74bb7139099abdcd6079fa245139a7b089644614e80e88b2",1]
 ["extensions/msteams/src/send.threaded-attachments.test.ts","./send-context.js","471036ebbe110165720f583695503819bcd2ef060a01af9bb0cb2f7761c37954",1]

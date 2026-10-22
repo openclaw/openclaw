@@ -18,7 +18,7 @@ import { formatMSTeamsMarkdown } from "./format.js";
 import { buildTeamsFileInfoCard } from "./graph-chat.js";
 import {
   getDriveItemProperties,
-  requireMSTeamsSharePointSiteId,
+  resolveUploadSiteId,
   uploadAndShareSharePoint,
 } from "./graph-upload.js";
 import { normalizeMSTeamsConversationId } from "./inbound.js";
@@ -44,6 +44,7 @@ import {
   withMSTeamsConnectorHandoff,
   type MSTeamsSendHandoff,
 } from "./send-handoff.js";
+import { lookupReferenceScopedTeamDetails } from "./team-lookup.js";
 
 type MSTeamsReplyRenderOptions = {
   textChunkLimit: number;
@@ -165,6 +166,8 @@ export async function sendMSTeamsMessages(
     tokenProvider?: MSTeamsAccessTokenProvider;
     /** SharePoint site ID for file uploads in group chats/channels */
     sharePointSiteId?: string;
+    /** Folder name for bot-uploaded files on the SharePoint site */
+    sharePointFolder?: string;
     /** Max media size in bytes. Default: 100MB. */
     mediaMaxBytes?: number;
     /** Enable the Teams feedback loop (thumbs up/down) on sent messages. */
@@ -190,10 +193,18 @@ export async function sendMSTeamsMessages(
       pendingUploadId?: string;
     }> {
       const msg = message;
-      const { conversationRef, tokenProvider, sharePointSiteId, mediaMaxBytes } = params;
+      const { conversationRef, tokenProvider, sharePointSiteId, sharePointFolder, mediaMaxBytes } =
+        params;
       const options = {
         feedbackLoopEnabled: params.feedbackLoopEnabled,
         assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
+        getTeamDetails: (teamId: string) =>
+          lookupReferenceScopedTeamDetails({
+            app: params.app,
+            serviceUrl: conversationRef.serviceUrl,
+            teamId,
+            assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
+          }),
       };
       const activity: Record<string, unknown> = buildMSTeamsMessageActivity(msg.text);
       if (msg.adaptiveCard) {
@@ -242,13 +253,18 @@ export async function sendMSTeamsMessages(
           }
 
           if (!isPersonal && !isImage) {
-            // Non-images in group chats/channels require SharePoint because an
-            // application token has no signed-in `/me/drive` to fall back to.
-            const siteId = requireMSTeamsSharePointSiteId(sharePointSiteId);
             if (!tokenProvider) {
               throw new Error("MS Teams Graph token provider unavailable for SharePoint file send");
             }
             const chatId = conversationRef.conversation?.id;
+            const siteId = await resolveUploadSiteId({
+              configuredSiteId: sharePointSiteId,
+              teamId: conversationRef.teamId,
+              channelId: conversationType === "channel" ? chatId : undefined,
+              tokenProvider,
+              assertDirectAdapterHandoff: options.assertDirectAdapterHandoff,
+              getTeamDetails: options.getTeamDetails,
+            });
 
             const uploaded = await uploadAndShareSharePoint({
               assertDirectAdapterHandoff: options?.assertDirectAdapterHandoff,
@@ -259,6 +275,7 @@ export async function sendMSTeamsMessages(
               siteId,
               chatId,
               usePerUserSharing: conversationType === "groupchat",
+              folderName: sharePointFolder,
             });
 
             const driveItem = await getDriveItemProperties({

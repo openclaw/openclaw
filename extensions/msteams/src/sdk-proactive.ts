@@ -36,8 +36,6 @@ type MSTeamsSdkReferenceSource = {
   aadObjectId?: string;
 };
 
-type MSTeamsSdkConversationReference = ReturnType<typeof buildSdkConversationReference>;
-
 type MSTeamsProactiveOptions = {
   accountId?: string | null;
   quoteActivityId?: string;
@@ -112,13 +110,27 @@ function buildSdkConversationReference(
   };
 }
 
-function getApiClientForReference(
-  app: MSTeamsApp,
-  ref: MSTeamsSdkConversationReference,
-): MSTeamsApp["api"] {
+function getApiClientForReference(app: MSTeamsApp, ref: { serviceUrl: string }): MSTeamsApp["api"] {
   return app.api.serviceUrl === ref.serviceUrl
     ? app.api
     : app.api.fromServiceUrl({ serviceUrl: ref.serviceUrl });
+}
+
+/** Team lookup follows the stored conversation endpoint when it is not the app endpoint. */
+export function resolveReferenceScopedTeamsApi(
+  app: MSTeamsApp,
+  serviceUrl: string | undefined,
+): MSTeamsApp["api"] {
+  if (!serviceUrl) {
+    return app.api;
+  }
+  let normalized: string;
+  try {
+    normalized = normalizeBotFrameworkServiceUrl(serviceUrl);
+  } catch {
+    return app.api;
+  }
+  return getApiClientForReference(app, { serviceUrl: normalized });
 }
 
 export async function sendMSTeamsActivityWithReference(

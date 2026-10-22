@@ -4,6 +4,7 @@ type MockAppOptions = {
   createFn?: (activity: unknown) => Promise<unknown>;
   onClientCreated?: (serviceUrl: string, conversationId: string) => void;
   onReference?: (ref: unknown) => void;
+  getById?: (teamId: string) => Promise<{ aadGroupId?: string }>;
 };
 
 export function createMockApp(opts?: MockAppOptions): MSTeamsApp {
@@ -16,6 +17,9 @@ export function createMockApp(opts?: MockAppOptions): MSTeamsApp {
   const createApi = (apiServiceUrl: string): unknown => ({
     serviceUrl: apiServiceUrl,
     fromServiceUrl: ({ serviceUrl }: { serviceUrl: string }) => createApi(serviceUrl),
+    teams: {
+      getById: opts?.getById ?? (async () => ({ aadGroupId: "aad-group" })),
+    },
     conversations: {
       activities: (conversationId: string) => {
         opts?.onClientCreated?.(apiServiceUrl, conversationId);

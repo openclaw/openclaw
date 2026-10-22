@@ -5,7 +5,7 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/channel-test-helpers";
-import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import { withFetchPreconnect, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import type { StoredConversationReference } from "./conversation-store.js";
@@ -105,7 +105,9 @@ vi.mock("./graph-upload.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./sdk-proactive.js", () => ({
+// mock-isolation: capture proactive sends without opening a live Teams transport.
+vi.mock("./sdk-proactive.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./sdk-proactive.js")>()),
   sendMSTeamsActivityWithReference: mockState.sendMSTeamsActivityWithReference,
   updateMSTeamsActivityWithReference: mockState.updateMSTeamsActivityWithReference,
   deleteMSTeamsActivityWithReference: mockState.deleteMSTeamsActivityWithReference,
@@ -152,6 +154,28 @@ function sendFile(options: Partial<Parameters<typeof sendMessageMSTeams>[0]> = {
   });
 }
 
+function stubTeamSiteDiscovery(groupId: string, siteId: string) {
+  const fetchFn = vi.fn(async (url: string) => {
+    const href = url;
+    if (href.includes(`teams/${groupId}/`) && href.includes("membershipType")) {
+      return Response.json({ membershipType: "standard" });
+    }
+    if (href.includes(`groups/${groupId}/sites/root`)) {
+      return Response.json({ id: siteId });
+    }
+    if (href.includes(`sites/${siteId}/drive/items/`)) {
+      return Response.json({
+        eTag: '"{ITEM-1},1"',
+        webDavUrl: "https://contoso.example/report.pdf",
+        name: "report.pdf",
+      });
+    }
+    throw new Error(`Unexpected SharePoint request: ${href}`);
+  });
+  vi.stubGlobal("fetch", withFetchPreconnect(fetchFn));
+  return fetchFn;
+}
+
 async function useActualOutboundMediaLoader() {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/outbound-media")>(
     "openclaw/plugin-sdk/outbound-media",
@@ -173,6 +197,10 @@ beforeEach(() => {
   mockState.sendMSTeamsActivityWithReference.mockResolvedValue({ id: "message-1" });
   mockState.updateMSTeamsActivityWithReference.mockResolvedValue({ id: "updated" });
   mockState.deleteMSTeamsActivityWithReference.mockResolvedValue(undefined);
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe("sendMessageMSTeams", () => {
@@ -266,8 +294,99 @@ describe("sendMessageMSTeams", () => {
     });
     mockPdf();
 
-    await expect(sendFile()).rejects.toThrow("channels.msteams.sharePointSiteId is required");
+    await expect(sendFile()).rejects.toThrow("No SharePoint site ID available");
     expect(mockState.uploadAndShareSharePoint).not.toHaveBeenCalled();
+  });
+
+  it("discovers the team site for channel files on the app endpoint", async () => {
+    const getById = vi.fn(async () => ({ aadGroupId: "aad-group-c" }));
+    const fromServiceUrl = vi.fn();
+    mockContext({
+      conversationType: "channel",
+      sharePointSiteId: undefined,
+      ref: { teamId: "team-c", serviceUrl: "https://smba.trafficmanager.net/amer/" },
+      app: {
+        api: {
+          serviceUrl: "https://smba.trafficmanager.net/amer",
+          fromServiceUrl,
+          teams: { getById },
+          conversations: {
+            activities: () => ({
+              create: async () => ({ id: "message-1" }),
+            }),
+          },
+        },
+      },
+    });
+    mockPdf();
+    stubTeamSiteDiscovery("aad-group-c", "contoso-site-c");
+    mockState.uploadAndShareSharePoint.mockResolvedValue({ itemId: "item-c" });
+
+    await sendMessageMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: "conversation:19:conversation@thread.tacv2",
+      text: "report",
+      mediaUrl: "https://example.com/report.pdf",
+    });
+
+    expect(getById).toHaveBeenCalledWith("team-c");
+    expect(fromServiceUrl).not.toHaveBeenCalled();
+    expect(mockState.uploadAndShareSharePoint).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ siteId: "contoso-site-c" }),
+    );
+  });
+
+  it("looks up the team on the stored regional endpoint", async () => {
+    const appGetById = vi.fn(async () => ({ aadGroupId: "aad-group-unused" }));
+    const regionalGetById = vi.fn(async () => ({ aadGroupId: "aad-group-d" }));
+    const fromServiceUrl = vi.fn(({ serviceUrl }: { serviceUrl: string }) => ({
+      serviceUrl,
+      fromServiceUrl,
+      teams: { getById: regionalGetById },
+      conversations: {
+        activities: () => ({
+          create: async () => ({ id: "message-1" }),
+        }),
+      },
+    }));
+    mockContext({
+      conversationType: "channel",
+      sharePointSiteId: undefined,
+      ref: { teamId: "team-d", serviceUrl: "https://smba.trafficmanager.net/emea/" },
+      app: {
+        api: {
+          serviceUrl: "https://smba.trafficmanager.net/amer",
+          fromServiceUrl,
+          teams: { getById: appGetById },
+          conversations: {
+            activities: () => ({
+              create: async () => ({ id: "message-1" }),
+            }),
+          },
+        },
+      },
+    });
+    mockPdf();
+    stubTeamSiteDiscovery("aad-group-d", "contoso-site-d");
+    mockState.uploadAndShareSharePoint.mockResolvedValue({ itemId: "item-d" });
+
+    await sendMessageMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: "conversation:19:conversation@thread.tacv2",
+      text: "report",
+      mediaUrl: "https://example.com/report.pdf",
+    });
+
+    expect(fromServiceUrl).toHaveBeenCalledWith({
+      serviceUrl: "https://smba.trafficmanager.net/emea",
+    });
+    expect(regionalGetById).toHaveBeenCalledWith("team-d");
+    expect(appGetById).not.toHaveBeenCalled();
+    expect(mockState.uploadAndShareSharePoint).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ siteId: "contoso-site-d" }),
+    );
   });
 });
 

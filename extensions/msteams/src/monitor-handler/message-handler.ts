@@ -504,6 +504,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       },
       tokenProvider,
       sharePointSiteId: admittedMSTeamsCfg?.sharePointSiteId,
+      sharePointFolder: admittedMSTeamsCfg?.sharePointFolder,
     });
 
     const senderTimezone = conversationRef.timezone;

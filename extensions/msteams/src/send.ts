@@ -22,7 +22,7 @@ import { formatMSTeamsMarkdown } from "./format.js";
 import { buildTeamsFileInfoCard } from "./graph-chat.js";
 import {
   getDriveItemProperties,
-  requireMSTeamsSharePointSiteId,
+  resolveUploadSiteId,
   uploadAndShareSharePoint,
 } from "./graph-upload.js";
 import { extractFilename, extractMessageId, MSTEAMS_MAX_MEDIA_BYTES } from "./media-helpers.js";
@@ -41,6 +41,7 @@ import {
 } from "./sdk-proactive.js";
 import { resolveMSTeamsSendContext, type MSTeamsProactiveContext } from "./send-context.js";
 import { assertMSTeamsSendHandoff, type MSTeamsSendHandoff } from "./send-handoff.js";
+import { lookupReferenceScopedTeamDetails } from "./team-lookup.js";
 
 type MSTeamsSendOptions = MSTeamsSendHandoff & {
   onDeliveryResult?: (result: SendMSTeamsMessageResult) => Promise<void> | void;
@@ -190,7 +191,8 @@ export async function sendMessageMSTeams(
   const tableMode = resolveMSTeamsMarkdownTableMode(cfg, accountId);
   const messageText = formatMSTeamsMarkdown(text ?? "", tableMode);
   const ctx = await resolveMSTeamsSendContext({ cfg, accountId, to });
-  const { conversationId, conversationType, tokenProvider, sharePointSiteId } = ctx;
+  const { conversationId, conversationType, tokenProvider, sharePointSiteId, sharePointFolder } =
+    ctx;
 
   if (mediaUrl) {
     const mediaMaxBytes = ctx.mediaMaxBytes ?? MSTEAMS_MAX_MEDIA_BYTES;
@@ -256,7 +258,20 @@ export async function sendMessageMSTeams(
     }
 
     try {
-      const siteId = requireMSTeamsSharePointSiteId(sharePointSiteId);
+      const siteId = await resolveUploadSiteId({
+        configuredSiteId: sharePointSiteId,
+        teamId: ctx.ref.teamId,
+        channelId: conversationType === "channel" ? conversationId : undefined,
+        tokenProvider,
+        assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
+        getTeamDetails: (teamId) =>
+          lookupReferenceScopedTeamDetails({
+            app: ctx.app,
+            serviceUrl: ctx.ref.serviceUrl,
+            teamId,
+            assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
+          }),
+      });
       const uploaded = await uploadAndShareSharePoint({
         assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
         buffer: media.buffer,
@@ -266,6 +281,7 @@ export async function sendMessageMSTeams(
         siteId,
         chatId: conversationId,
         usePerUserSharing: conversationType === "groupChat",
+        folderName: sharePointFolder,
       });
 
       const driveItem = await getDriveItemProperties({
@@ -316,6 +332,7 @@ async function sendTextWithMedia(
     log,
     tokenProvider,
     sharePointSiteId,
+    sharePointFolder,
     mediaMaxBytes,
     replyStyle,
   } = ctx;
@@ -347,6 +364,7 @@ async function sendTextWithMedia(
       },
       tokenProvider,
       sharePointSiteId,
+      sharePointFolder,
       mediaMaxBytes,
       serviceUrlBoundary: ctx.sdkCloudOptions,
     });
