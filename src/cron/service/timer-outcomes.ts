@@ -259,7 +259,7 @@ export function applyJobResult(
     job.state.nextRunAtMs = nextRunAtMs === undefined ? undefined : scheduleNextRun(nextRunAtMs);
   };
   const finish = () => {
-    if (opts.replaySchedule && job.schedule.kind !== "at") {
+    if (opts.replaySchedule && job.schedule.kind !== "at" && !silentReportedFailure) {
       applyReplaySchedule();
     }
     if (shouldDelete) {
@@ -412,6 +412,12 @@ export function applyJobResult(
         executionStarted: result.executionStarted,
         consecutiveErrors: job.state.consecutiveErrors,
       });
+      // A permanent silent failure has no notification owner and must not re-schedule.
+      // The job stays enabled so the operator can inspect and reset it, but no next run is set.
+      if (silentReportedFailure && !retryDecision.retryable) {
+        job.state.nextRunAtMs = undefined;
+        return finish();
+      }
       // Within the quick-retry budget the next run is at most minutes away, whether it is the
       // retry itself or an earlier natural slot, so a provider outage holds notifications.
       const holdsForRetry =

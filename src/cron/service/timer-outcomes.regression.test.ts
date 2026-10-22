@@ -266,10 +266,53 @@ describe("cron timer outcome and failure policy regressions", () => {
       expect(deferredNotifications.filter((n) => n.kind === "auto-disabled")).toHaveLength(
         disables ? 1 : 0,
       );
-      // The streak still drives error backoff past the one-minute cadence: 5 and 15 minutes, then hourly.
-      expect(delaysMs.slice(2, 6)).toEqual([300_000, 900_000, 3_600_000, 3_600_000]);
+      if (disables) {
+        // The streak still drives error backoff past the one-minute cadence: 5 and 15 minutes, then hourly.
+        expect(delaysMs.slice(2, 6)).toEqual([300_000, 900_000, 3_600_000, 3_600_000]);
+      } else {
+        // Silent permanent failure: job stays enabled but never re-schedules (INC-20261022-108).
+        expect(delaysMs).toHaveLength(0);
+        expect(job.state.nextRunAtMs).toBeUndefined();
+      }
     },
   );
+
+  it("does not re-schedule a silent recurring job on startup replay of a permanent agent-reported failure (INC-20261022-108)", () => {
+    const startedAt = Date.parse("2026-10-22T06:22:00.000Z");
+    const everyMs = 60_000;
+    const nextScheduledMs = startedAt + everyMs;
+    const deferredNotifications: DeferredCronNotifications = [];
+    const { state, job } = outcomeFixture(
+      startedAt,
+      { delivery: { mode: "none" as const } },
+      { nowMs: () => startedAt },
+    );
+    job.state.nextRunAtMs = nextScheduledMs;
+
+    // Simulate startup replay of a previously finalized permanent-failure run.
+    applyJobResult(
+      state,
+      job,
+      {
+        status: "error",
+        error: "No shell tool is available in this run.",
+        errorClassification: { kind: "permanent", reportedByAgent: true },
+        startedAt,
+        endedAt: startedAt + 10,
+      },
+      {
+        replay: true,
+        replaySchedule: { nextRunAtMs: nextScheduledMs },
+        deferredNotifications,
+      },
+    );
+
+    expect(job.enabled).toBe(true);
+    expect(job.state.consecutiveErrors).toBe(1);
+    // The replay must not re-apply the stored schedule for a permanent silent failure.
+    expect(job.state.nextRunAtMs).toBeUndefined();
+    expect(deferredNotifications.filter((n) => n.kind === "auto-disabled")).toHaveLength(0);
+  });
 
   it.each([
     { name: "stale", options: { scheduleOwnership: "stale" } },
