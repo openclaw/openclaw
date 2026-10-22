@@ -292,9 +292,9 @@ suite.define(() => {
           await dialog.getByRole("button", { name: "Save", exact: true }).click();
           const request = await gateway.waitForRequest("config.set");
           expect(await dialog.isVisible()).toBe(true);
-          expect(
-            await dialog.getByRole("button", { name: "Cancel", exact: true }).isDisabled(),
-          ).toBe(true);
+          await expect
+            .poll(() => dialog.getByRole("button", { name: "Cancel", exact: true }).isDisabled())
+            .toBe(true);
           await page.keyboard.press("Escape");
           expect(await dialog.isVisible()).toBe(true);
           expect(

@@ -48,7 +48,7 @@ export function expectOutcome(
 }
 
 type AuthorityAttempt = Parameters<typeof withPreparedEmbeddedRunToolAuthority>[1];
-export function withAuthority<T>(
+function withAuthority<T>(
   admittedRunContext: AdmittedRunContext,
   run: Parameters<typeof withPreparedEmbeddedRunToolAuthority<T, AuthorityAttempt>>[3],
   params: AuthorityAttempt = attempt,

@@ -77,23 +77,12 @@ describe("secrets path utils", () => {
   });
 
   it.each([
-    {
-      name: "array index",
-      segment: 0,
-      expected: { accounts: [{ token: "secret" }] },
-      mismatched: { accounts: { "0": { token: "old" } } },
-    },
-    {
-      name: "numeric record key",
-      segment: "0",
-      expected: { accounts: { "0": { token: "secret" } } },
-      mismatched: { accounts: [{ token: "old" }] },
-    },
-  ])(
-    "setPathCreateStrict preserves the $name container contract",
-    ({ segment, expected, mismatched }) => {
+    [0, { accounts: [{ token: "secret" }] }, { accounts: { "0": { token: "old" } } }],
+    ["0", { accounts: { "0": { token: "secret" } } }, { accounts: [{ token: "old" }] }],
+  ] as const)(
+    "preserves the container contract for segment %j",
+    (segment, expected, mismatched) => {
       const config = {};
-
       expect(setPathCreateStrict(config, ["accounts", segment, "token"], "secret")).toBe(true);
       expect(config).toEqual(expected);
       expect(() =>

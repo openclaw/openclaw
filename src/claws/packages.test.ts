@@ -4,52 +4,39 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { installPluginFromClawHub } from "../plugins/clawhub.js";
 import { PLUGIN_ARTIFACT_ADAPTER_IDENTITY } from "../plugins/install-artifact-inspection.js";
-import { installClawPackages as installClawPackagesCore } from "./packages.boundary.test-support.js";
+import {
+  installClawPackages as installClawPackagesCore,
+  testPluginPackage as pluginPackage,
+  testPluginProbe as pluginProbe,
+  withStagedInspection,
+} from "./packages.boundary.test-support.js";
 import { preflightClawPackage } from "./packages.js";
 import {
   emptyPluginCapabilityEvidence,
   packageInstallPlan as plan,
 } from "./packages.test-support.js";
 
-const integrity = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-const pluginPackage = {
-  kind: "plugin",
+const { integrity } = pluginPackage;
+const skillIntegrity = `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`;
+const skillPackage = {
+  kind: "skill",
   source: "clawhub",
-  ref: "@owner/audit",
-  version: "2.0.1",
-  integrity,
+  ref: "@owner/triage",
+  version: "1.2.3",
+  integrity: skillIntegrity,
 } as const;
-
-type PluginProbe = Extract<Awaited<ReturnType<typeof installPluginFromClawHub>>, { ok: true }>;
-function pluginProbe(overrides: Partial<PluginProbe> = {}): PluginProbe {
-  return {
-    ok: true,
-    pluginId: "audit",
-    packageName: "@owner/audit",
-    targetDir: "/tmp/plugin",
-    extensions: [],
-    clawhub: {
-      source: "clawhub",
-      clawhubUrl: "https://clawhub.ai",
-      clawhubPackage: "@owner/audit",
-      clawhubFamily: "code-plugin",
-      integrity,
-    },
-    ...overrides,
-  };
-}
-function withStagedInspection(probe: typeof installPluginFromClawHub) {
-  return async (request: Parameters<typeof installPluginFromClawHub>[0]) => {
-    const result = await probe(request);
-    if (result.ok) {
-      await request.onPluginArtifactInspect?.({
-        pluginId: result.pluginId,
-        stagedArtifactDir: "/tmp/staged-audit",
-        mode: "install",
-      });
-    }
-    return result;
-  };
+const installedSkill = {
+  ok: true as const,
+  slug: "triage",
+  version: "1.2.3",
+  targetDir: "/tmp/incident-2/skills/triage",
+};
+function skillPlan(riskWarning?: string) {
+  const planned = plan([skillPackage]);
+  if (riskWarning) {
+    planned.actions[0]!.details!.riskWarning = riskWarning;
+  }
+  return planned;
 }
 const inspectPluginCapabilities = vi.fn((_rootDir: string, pluginId: string) => ({
   ...emptyPluginCapabilityEvidence,
@@ -121,17 +108,24 @@ describe("preflightClawPackage plugin setup requirements", () => {
     clawhub: { integrity },
   });
 
+  const preflight = (env: NodeJS.ProcessEnv = {}) =>
+    preflightClawPackage(pluginPackage, "/tmp/workspace", {
+      env,
+      deps: {
+        preflightPlugin,
+        probePlugin: withStagedInspection(probePluginSetup),
+        inspectPluginCapabilities,
+      },
+    });
+  const setupProbe = (providerSetup: unknown) => ({
+    ok: true,
+    pluginId: "evidence",
+    setup: providerSetup,
+    artifactInspection,
+    clawhub: { integrity },
+  });
   it("reports plugin setup when no declared environment credential is present", async () => {
-    await expect(
-      preflightClawPackage(pluginPackage, "/tmp/workspace", {
-        env: {},
-        deps: {
-          preflightPlugin,
-          probePlugin: withStagedInspection(probePluginSetup),
-          inspectPluginCapabilities,
-        },
-      }),
-    ).resolves.toEqual(
+    await expect(preflight()).resolves.toEqual(
       expect.objectContaining({
         requirements: [
           {
@@ -147,62 +141,36 @@ describe("preflightClawPackage plugin setup requirements", () => {
   });
 
   it("accepts any declared credential from any provider", async () => {
-    probePluginSetup.mockResolvedValueOnce({
-      ok: true,
-      pluginId: "evidence",
-      setup: {
+    probePluginSetup.mockResolvedValueOnce(
+      setupProbe({
         providers: [
           { id: "first", envVars: ["FIRST_API_KEY"] },
           { id: "second", envVars: ["SECOND_API_KEY", "SECOND_TOKEN"] },
         ],
-      },
-      artifactInspection,
-      clawhub: { integrity },
-    });
-
-    await expect(
-      preflightClawPackage(pluginPackage, "/tmp/workspace", {
-        env: { SECOND_TOKEN: "configured" },
-        deps: {
-          preflightPlugin,
-          probePlugin: withStagedInspection(probePluginSetup),
-          inspectPluginCapabilities,
-        },
       }),
-    ).resolves.not.toHaveProperty("requirements");
+    );
+
+    await expect(preflight({ SECOND_TOKEN: "configured" })).resolves.not.toHaveProperty(
+      "requirements",
+    );
   });
 
   it("does not gate readiness on an auth-method-only provider", async () => {
-    probePluginSetup.mockResolvedValueOnce({
-      ok: true,
-      pluginId: "evidence",
-      setup: {
+    probePluginSetup.mockResolvedValueOnce(
+      setupProbe({
         providers: [{ id: "oauth-only", authMethods: ["oauth"] }],
-      },
-      artifactInspection,
-      clawhub: { integrity },
-    });
-
-    await expect(
-      preflightClawPackage(pluginPackage, "/tmp/workspace", {
-        env: {},
-        deps: {
-          preflightPlugin,
-          probePlugin: withStagedInspection(probePluginSetup),
-          inspectPluginCapabilities,
-        },
       }),
-    ).resolves.not.toHaveProperty("requirements");
+    );
+
+    await expect(preflight()).resolves.not.toHaveProperty("requirements");
   });
 
   it("accepts declared local auth evidence", async () => {
     const credentialsDir = await mkdtemp(join(tmpdir(), "claw-auth-evidence-"));
     const credentialsPath = join(credentialsDir, "credentials.json");
     await writeFile(credentialsPath, "{}", "utf8");
-    probePluginSetup.mockResolvedValueOnce({
-      ok: true,
-      pluginId: "evidence",
-      setup: {
+    probePluginSetup.mockResolvedValueOnce(
+      setupProbe({
         providers: [
           {
             ...setup.providers[0],
@@ -216,23 +184,14 @@ describe("preflightClawPackage plugin setup requirements", () => {
             ],
           },
         ],
-      },
-      artifactInspection,
-      clawhub: { integrity },
-    });
+      }),
+    );
 
     try {
       await expect(
-        preflightClawPackage(pluginPackage, "/tmp/workspace", {
-          env: {
-            EVIDENCE_CREDENTIALS: credentialsPath,
-            EVIDENCE_PROJECT: "project",
-          },
-          deps: {
-            preflightPlugin,
-            probePlugin: withStagedInspection(probePluginSetup),
-            inspectPluginCapabilities,
-          },
+        preflight({
+          EVIDENCE_CREDENTIALS: credentialsPath,
+          EVIDENCE_PROJECT: "project",
         }),
       ).resolves.not.toHaveProperty("requirements");
     } finally {
@@ -252,36 +211,19 @@ describe("installClawPackages", () => {
   };
 
   it("installs skill packages into the planned workspace with the resolved digest", async () => {
-    const skillIntegrity = `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`;
     const installSkill = vi.fn(async (params: { beforePersistentApply?: () => void }) => {
       params.beforePersistentApply?.();
-      return {
-        ok: true as const,
-        slug: "triage",
-        version: "1.2.3",
-        targetDir: "/tmp/incident-2/skills/triage",
-      };
+      return installedSkill;
     });
-    const result = await installClawPackages(
-      plan([
-        {
-          kind: "skill",
-          source: "clawhub",
-          ref: "@owner/triage",
-          version: "1.2.3",
-          integrity: skillIntegrity,
-        },
-      ]),
-      {
-        deps: {
-          installSkill,
-          preflightSkill: vi
-            .fn()
-            .mockResolvedValue({ ok: true, action: "install", integrity: skillIntegrity }),
-          acquirePackageLease,
-        },
+    const result = await installClawPackages(skillPlan(), {
+      deps: {
+        installSkill,
+        preflightSkill: vi
+          .fn()
+          .mockResolvedValue({ ok: true, action: "install", integrity: skillIntegrity }),
+        acquirePackageLease,
       },
-    );
+    });
 
     expect(installSkill).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -305,17 +247,7 @@ describe("installClawPackages", () => {
   });
 
   it("rejects an unreviewed skill warning before recording a ref or installing bytes", async () => {
-    const skillIntegrity = `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`;
-    const planned = plan([
-      {
-        kind: "skill",
-        source: "clawhub",
-        ref: "@owner/triage",
-        version: "1.2.3",
-        integrity: skillIntegrity,
-      },
-    ]);
-    planned.actions[0]!.details!.riskWarning = "Review this skill.";
+    const planned = skillPlan("Review this skill.");
     const installSkill = vi.fn();
 
     await expect(
@@ -336,28 +268,13 @@ describe("installClawPackages", () => {
   });
 
   it("accepts only the reviewed skill warning at the installer trust check", async () => {
-    const skillIntegrity = `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`;
-    const planned = plan([
-      {
-        kind: "skill",
-        source: "clawhub",
-        ref: "@owner/triage",
-        version: "1.2.3",
-        integrity: skillIntegrity,
-      },
-    ]);
-    planned.actions[0]!.details!.riskWarning = "Review this skill.";
+    const planned = skillPlan("Review this skill.");
     const skillConsent = { assertApproved: vi.fn() };
     const installSkill = vi.fn(
       async (params: { confirmInstall?: (warning?: string) => boolean | Promise<boolean> }) => {
         expect(await params.confirmInstall?.("Review this skill.")).toBe(true);
         expect(await params.confirmInstall?.("Changed trust warning.")).toBe(false);
-        return {
-          ok: true as const,
-          slug: "triage",
-          version: "1.2.3",
-          targetDir: "/tmp/incident-2/skills/triage",
-        };
+        return installedSkill;
       },
     );
 
@@ -540,17 +457,7 @@ describe("installClawPackages", () => {
   });
 
   it("invalidates consent when a skill trust warning changes after planning", async () => {
-    const skillIntegrity = `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`;
-    const planned = plan([
-      {
-        kind: "skill",
-        source: "clawhub",
-        ref: "@owner/triage",
-        version: "1.2.3",
-        integrity: skillIntegrity,
-      },
-    ]);
-    Object.assign(planned.actions[0]!.details!, { riskWarning: "review warning one" });
+    const planned = skillPlan("review warning one");
 
     await expect(
       installClawPackages(planned, {

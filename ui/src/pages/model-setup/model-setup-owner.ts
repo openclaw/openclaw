@@ -2,7 +2,6 @@ import { createEffect, createSignal, onSettled } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   SystemAgentSetupActivateParams,
-  SystemAgentSetupActivateResult,
   SystemAgentSetupDetectResult,
 } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -20,24 +19,18 @@ import {
   FirstRunSetup,
   type ModelSetupRouteData,
 } from "./first-run-setup.ts";
+import { completeModelSetupWizard } from "./model-setup-completion.ts";
 import { createModelSetupIconLoader } from "./model-setup-icon-loader.tsx";
 import { formatModelSetupError } from "./model-setup-task-result.ts";
 import { createNativeModelSetup } from "./native-model-setup.tsx";
-import {
-  candidateActivation,
-  findPreparedModelCandidate,
-  type ModelSetupPrepareOption,
-  preparedModelActivation,
-} from "./prepare-options.ts";
+import { candidateActivation, type ModelSetupPrepareOption } from "./prepare-options.ts";
 import { manualProviderActivation } from "./provider-picker.tsx";
 import type { ModelSetupDetection } from "./rpc.ts";
 import { createModelSetupDetectRequest, createModelSetupVerifyRequest } from "./rpc.ts";
 import {
   activationTargetId,
   createModelSetupState,
-  preparedModelPageState,
   updateModelSetupWizardDraft,
-  mapActivationResult,
   type ModelSetupActivationState,
 } from "./state.ts";
 import { ModelSetupWizardRunner, type ModelSetupWizardCompletion } from "./wizard-runner.ts";
@@ -85,7 +78,7 @@ export function createModelSetup(
   let wizardReturnFocus: HTMLElement | null = null;
   let manualInput: HTMLInputElement | undefined;
   let feedback: HTMLElement | undefined;
-  let wizardDialog: import("../../components/modal-dialog.ts").OpenClawModalDialog | undefined;
+  let wizardDialog: import("../../components/modal-dialog.tsx").OpenClawModalDialog | undefined;
   const firstRun = new FirstRunSetup({
     context: () => context,
     routeData: () => props.routeData,
@@ -121,7 +114,11 @@ export function createModelSetup(
     (urls) => (state.iconUrls = urls),
   );
   const login = createModelProviderLogin({
-    getScope: () => ({ context, agentId: agentSelection().state.selectedId }),
+    getScope: () => ({
+      context,
+      agentId: agentSelection().state.selectedId,
+      connectionEpoch: context.gateway.connectionRevision,
+    }),
     getManualProviders: () =>
       state.pageState.phase === "ready" ? state.pageState.result.manualProviders : [],
     onManualProvider: (authChoice) => {
@@ -399,76 +396,6 @@ export function createModelSetup(
     state.manualError = null;
   }
 
-  async function handleWizardDone({
-    startMethod,
-    preparedModelRef,
-    activationTargetId: targetId,
-    modelActivation,
-    isCurrent,
-  }: ModelSetupWizardCompletion): Promise<void> {
-    const prepareOption =
-      startMethod === "openclaw.setup.prepare.start" ? pendingPrepareOption : null;
-    const catalogPreference = nativeSessionCatalogPreference();
-    pendingPrepareOption = null;
-    if (startMethod !== "openclaw.setup.prepare.start") {
-      if (isCurrent?.() === false) {
-        wizard.close();
-        return;
-      }
-      if (!modelActivation) {
-        wizard.fail(
-          t(
-            startMethod === "openclaw.setup.activate.start"
-              ? "modelSetup.errors.activationFailed"
-              : "modelSetup.wizard.notComplete",
-          ),
-        );
-        return;
-      }
-      wizard.close();
-      const result: SystemAgentSetupActivateResult = { ok: true, ...modelActivation };
-      const activationTarget = targetId ?? "provider-auth";
-      state.activationState = mapActivationResult({
-        result,
-        targetId: activationTarget,
-        fallbackError: t("modelSetup.errors.activationFailed"),
-        restartWarning: t("labsPage.restartRequired"),
-        refreshWarning: state.setupRefreshWarning,
-      });
-      if (state.activationState.phase === "success") {
-        state.manualApiKey = "";
-      }
-      firstRun.finishActivation(result, activationTarget, state.setupRefreshWarning);
-      return;
-    }
-    let activation: ReturnType<typeof candidateActivation> | undefined;
-    if (prepareOption && preparedModelRef) {
-      activation = preparedModelActivation(prepareOption, preparedModelRef);
-    } else {
-      const result = await detect();
-      if (!result) {
-        wizard.fail(t("modelSetup.errors.requestFailed"));
-        return;
-      }
-      if (prepareOption) {
-        state.pageState = preparedModelPageState(result, prepareOption.modelTarget);
-        const candidate = findPreparedModelCandidate(result, prepareOption.id);
-        if (!candidate) {
-          wizard.fail(t("modelSetup.prepare.providerNotReady", { provider: prepareOption.label }));
-          return;
-        }
-        activation = candidateActivation(candidate);
-      }
-    }
-    wizard.close();
-    if (activation) {
-      void activate(
-        { ...activation, ...catalogPreference },
-        activationTargetId(activation.kind, activation.modelRef),
-      );
-    }
-  }
-
   function retireWizardMutation(): void {
     wizardMutationGeneration += 1;
     wizardMutationActive = false;
@@ -536,7 +463,15 @@ export function createModelSetup(
         // The coordinated wizard action has settled; follow-up activation owns
         // its own mutation lane and must not be blocked by the prior busy flag.
         wizardMutationActive = false;
-        await handleWizardDone(completion);
+        const prepareOption = pendingPrepareOption;
+        const catalogPreference = nativeSessionCatalogPreference();
+        pendingPrepareOption = null;
+        await completeModelSetupWizard(
+          { state, firstRun, wizard, detect, activate },
+          completion,
+          prepareOption,
+          catalogPreference,
+        );
       } else if (state.wizardState.phase === "step" && state.wizardState.busy) {
         state.wizardState = { ...state.wizardState, busy: false };
       }
@@ -597,7 +532,7 @@ export function createModelSetup(
       onFeedback: (element: HTMLDivElement) => {
         feedback = element;
       },
-      onWizardDialog: (element: import("../../components/modal-dialog.ts").OpenClawModalDialog) => {
+      onWizardDialog: (element: NonNullable<typeof wizardDialog>) => {
         wizardDialog = element;
       },
       detecting: state.detectionRequest !== null,
@@ -706,6 +641,7 @@ export function createModelSetup(
   };
   const synchronizeCurrentGateway = () => {
     synchronizeGateway(props.routeData);
+    login.synchronizePresentation();
     notify();
   };
   createEffect(

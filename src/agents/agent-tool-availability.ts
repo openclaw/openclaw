@@ -40,6 +40,11 @@ export function getAgentToolAvailabilityBinding(
   return availabilityBindings.get(tool)?.binding;
 }
 
+/** Offered definitions can remain present even when this turn cannot execute them. */
+export function isAgentToolExecutionAvailable(tool: object): boolean {
+  return availabilityBindings.get(tool)?.executionDenied !== true;
+}
+
 export function copyAgentToolAvailability<T extends object>(source: object, target: T): T {
   const metadata = availabilityBindings.get(source);
   if (metadata) {

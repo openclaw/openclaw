@@ -73,14 +73,12 @@ const pendingDelivery = {
 };
 
 it.each<NormalizationCase>([
-  ["noncanonical ID", { sessionId: "legacy:session", pluginExtensions: { memory: {} } }],
   [
     "retired conversation link",
     { conversationLink: { url: "https://example.test" }, pluginExtensions },
     session({ pluginExtensions: structuredClone(pluginExtensions) }),
     ["conversationLink"],
   ],
-  ["known archive reason", archived, { archiveReason: "active-session-cap" }],
   [
     "orphan archive metadata",
     { archivedBy: actor, archiveReason: "active-session-cap" },

@@ -5,7 +5,6 @@ export type PlaceBrowserOptions = {
   id: string;
   label: string;
   registerProjectPath: string | null;
-  registeringProject: boolean;
   onBack: () => void;
   onRegisterProject: (path: string) => void;
   onClose: () => void;

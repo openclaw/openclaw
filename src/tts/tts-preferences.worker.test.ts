@@ -57,9 +57,10 @@ it("carries the worker-read path through delivery and plugin prompt rendering wi
     // Deprecated synchronous calls never open SQLite to discover an unprepared path.
     expect(resolveTtsPrefsPath(config)).toBe(path.join(root, "settings", "tts.json"));
     sql.expectIdle();
-    expect(await buildHint(cfg, "main", { messageToolOnly: true })).toContain(
-      "Use message(action=send) with voiceText",
-    );
+    const hint = await buildHint(cfg, "main", { messageToolOnly: true });
+    expect(hint).toContain("Use message(action=send) with voiceText");
+    expect(hint).toContain("voiceProvider/voiceId");
+    expect(hint).not.toContain("[[tts:");
     const preparedTtsPreferences = await prepareTtsPreferences();
     expect(await prepareTtsPreferences()).toEqual(preparedTtsPreferences);
     expect(reads).toHaveBeenCalledTimes(1);

@@ -45,23 +45,31 @@ function writeFile(root: string, name: string, content: string) {
   return target;
 }
 
+function writeJson(root: string, name: string, value: unknown) {
+  return writeFile(root, name, JSON.stringify(value));
+}
+
+function installResolver(f: ReturnType<typeof fixture>, pluginModulePath = f.entry) {
+  installOpenClawPluginSdkNativeResolver({
+    pluginModulePath,
+    devSourceRoot: f.root,
+    pluginSdkResolution: "dist",
+  });
+}
+
 function fixture() {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-lazy-alias-")));
   roots.push(root);
   fs.mkdirSync(path.join(root, "extensions"));
-  writeFile(
-    root,
-    "package.json",
-    JSON.stringify({
-      name: "openclaw",
-      type: "module",
-      bin: { openclaw: "./openclaw.mjs" },
-      exports: {
-        "./plugin-sdk/used": "./dist/plugin-sdk/used.js",
-        "./plugin-sdk/unused": "./dist/plugin-sdk/unused.js",
-      },
-    }),
-  );
+  writeJson(root, "package.json", {
+    name: "openclaw",
+    type: "module",
+    bin: { openclaw: "./openclaw.mjs" },
+    exports: {
+      "./plugin-sdk/used": "./dist/plugin-sdk/used.js",
+      "./plugin-sdk/unused": "./dist/plugin-sdk/unused.js",
+    },
+  });
   const used = writeFile(root, "dist/plugin-sdk/used.js", 'export const value = "dist";');
   const unused = writeFile(root, "dist/plugin-sdk/unused.js", 'export const value = "unused";');
   writeFile(root, "src/plugin-sdk/used.ts", 'export const value: string = "source";');
@@ -98,16 +106,11 @@ describe("native plugin alias preparation", () => {
       devSourceRoot: f.root,
       pluginSdkResolution: "dist",
     });
-    installOpenClawPluginSdkNativeResolver({
-      pluginModulePath: f.entry,
-      devSourceRoot: f.root,
-      pluginSdkResolution: "dist",
-    });
+    installResolver(f);
     const jitiTarget = process.platform === "win32" ? f.used.replaceAll("\\", "/") : f.used;
     expect(aliases.resolveAlias(specifier)).toBe(jitiTarget);
     expect(resolvePluginNativeAliasForParent(specifier, f.entry)).toBe(f.used);
     expect(aliases.getAliasMap()[specifier]).toBe(jitiTarget);
-    expect(resolvePluginNativeAliasForParent(specifier, f.entry)).toBe(f.used);
     const requirePlugin = createRequire(f.entry);
     expect(requirePlugin.resolve(specifier)).toBe(f.used);
     const resolve = vi.spyOn(path, "resolve");
@@ -126,11 +129,7 @@ describe("native plugin alias preparation", () => {
     const outside = fixture();
     const parent = path.join(path.dirname(f.entry), "linked-parent.cjs");
     fs.symlinkSync(f.entry, parent);
-    installOpenClawPluginSdkNativeResolver({
-      pluginModulePath: f.entry,
-      devSourceRoot: f.root,
-      pluginSdkResolution: "dist",
-    });
+    installResolver(f);
     const requirePlugin = createRequire(parent);
     const specifier = "@openclaw/plugin-sdk/used";
     expect(requirePlugin.resolve(specifier)).toBe(f.used);
@@ -183,7 +182,7 @@ describe("native plugin alias preparation", () => {
         `module.exports = { start: () => import("${sdkImport === "alias" ? "openclaw/plugin-sdk/used" : "../../plugin-sdk/used.js"}") };`,
       );
       const pluginDir = path.join(f.root, "external");
-      writeFile(pluginDir, "package.json", JSON.stringify({ name: "external-fixture" }));
+      writeJson(pluginDir, "package.json", { name: "external-fixture" });
       writeFile(pluginDir, "lazy.cjs", 'module.exports = require("openclaw/plugin-sdk/used");');
       const entry = writeFile(
         pluginDir,
@@ -222,11 +221,7 @@ describe("native plugin alias preparation", () => {
   it("loads a workspace alias without reading unrelated SDK artifacts", () => {
     const f = fixture();
     writeFile(f.root, "dist/retry/index.js", 'export const value = "family";');
-    writeFile(
-      f.root,
-      "extensions/fixture-owner/package.json",
-      JSON.stringify({ name: "@openclaw/fixture-owner" }),
-    );
+    writeJson(f.root, "extensions/fixture-owner/package.json", { name: "@openclaw/fixture-owner" });
     writeFile(
       f.root,
       "extensions/fixture-owner/diagnostic-api.ts",
@@ -240,7 +235,6 @@ describe("native plugin alias preparation", () => {
     const read = vi.spyOn(fs, "readFileSync");
     const load = createPluginModuleLoader({ devSourceRoot: f.root, pluginSdkResolution: "dist" });
     expect(load(f.entry)).toMatchObject({ marker: "metadata" });
-    expect(read.mock.calls.filter(([target]) => target === f.unused)).toEqual([]);
     expect(load(entry)).toMatchObject({ value: "family" });
     expect(read.mock.calls.filter(([target]) => target === f.unused)).toEqual([]);
   });
@@ -291,11 +285,7 @@ describe("native plugin alias preparation", () => {
 
   it("captures private QA denial before late use even if ambient authorization changes", async () => {
     const f = fixture();
-    writeFile(
-      f.root,
-      "scripts/lib/plugin-sdk-private-local-only-subpaths.json",
-      JSON.stringify(["qa-runtime"]),
-    );
+    writeJson(f.root, "scripts/lib/plugin-sdk-private-local-only-subpaths.json", ["qa-runtime"]);
     writeFile(f.root, "dist/plugin-sdk/qa-runtime.js", "export const privateValue = true;");
     vi.stubEnv("OPENCLAW_ENABLE_PRIVATE_QA_CLI", "0");
     const load = createPluginModuleLoader({ devSourceRoot: f.root, pluginSdkResolution: "dist" });
@@ -316,14 +306,12 @@ describe("native plugin alias preparation", () => {
   it("does not reuse a bundled private alias grant for an external plugin", () => {
     const f = fixture();
     vi.stubEnv("OPENCLAW_ENABLE_PRIVATE_QA_CLI", "0");
-    writeFile(
-      f.root,
-      "scripts/lib/plugin-sdk-private-local-only-subpaths.json",
-      JSON.stringify(["demoted-helper"]),
-    );
+    writeJson(f.root, "scripts/lib/plugin-sdk-private-local-only-subpaths.json", [
+      "demoted-helper",
+    ]);
     writeFile(f.root, "dist/plugin-sdk/demoted-helper.js", "export const privateValue = true;");
     const external = writeFile(f.root, "external/index.cjs", "module.exports = {};");
-    writeFile(f.root, "external/package.json", JSON.stringify({ name: "external-fixture" }));
+    writeJson(f.root, "external/package.json", { name: "external-fixture" });
     installOpenClawPluginSdkNativeResolver({ pluginModulePath: f.entry, devSourceRoot: f.root });
     expect(createRequire(f.entry)("@openclaw/plugin-sdk/demoted-helper")).toMatchObject({
       privateValue: true,
@@ -337,11 +325,7 @@ describe("native plugin alias preparation", () => {
     vi.stubEnv("OPENCLAW_ENABLE_PRIVATE_QA_CLI", "0");
     const packageName = "@openclaw/llama-cpp-provider";
     const packageRoot = path.join(f.root, "node_modules", packageName);
-    const manifest = writeFile(
-      packageRoot,
-      "package.json",
-      JSON.stringify({ name: "external-fixture" }),
-    );
+    const manifest = writeJson(packageRoot, "package.json", { name: "external-fixture" });
     const entry = writeFile(packageRoot, "index.cjs", "module.exports = {};");
     writeFile(
       f.root,
@@ -411,24 +395,19 @@ describe("native plugin alias preparation", () => {
       }), { commands: ["late"], descriptors: [{ name: "late", description: "Late import", hasSubcommands: false }], parentPath: ${JSON.stringify(registration === "nodes" ? ["nodes"] : [])} });
     } };`,
       );
-      writeFile(
-        pluginDir,
-        "package.json",
-        JSON.stringify({ name: "demo", openclaw: { extensions: ["./index.cjs"] } }),
-      );
-      writeFile(
-        pluginDir,
-        "openclaw.plugin.json",
-        JSON.stringify({
-          id: "demo",
-          configSchema: { type: "object", properties: {} },
-          ...(registration === "nodes"
-            ? {}
-            : {
-                cliCommands: [{ name: "late", description: "Late import", hasSubcommands: false }],
-              }),
-        }),
-      );
+      writeJson(pluginDir, "package.json", {
+        name: "demo",
+        openclaw: { extensions: ["./index.cjs"] },
+      });
+      writeJson(pluginDir, "openclaw.plugin.json", {
+        id: "demo",
+        configSchema: { type: "object", properties: {} },
+        ...(registration === "nodes"
+          ? {}
+          : {
+              cliCommands: [{ name: "late", description: "Late import", hasSubcommands: false }],
+            }),
+      });
       const cfg = {
         plugins: {
           allow: ["demo"],

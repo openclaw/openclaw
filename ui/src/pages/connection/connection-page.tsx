@@ -1,5 +1,5 @@
 import "../../styles/connection.css";
-import { createSignal, onCleanup } from "solid-js";
+import { createSignal, onSettled } from "solid-js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { LearnMoreLink, SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
@@ -28,7 +28,7 @@ export function ConnectionPage() {
     },
     onPageActivation: () => draft.syncDiagnosticsPolling(),
   });
-  onCleanup(() => draft.dispose());
+  onSettled(() => () => draft.dispose());
   const viewProps = () => {
     revision();
     return draft.viewProps();

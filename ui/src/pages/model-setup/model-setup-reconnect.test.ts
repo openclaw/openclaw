@@ -9,6 +9,7 @@ import { createAgentCapability } from "../../lib/agents/index.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import {
+  running,
   callsFor,
   authButton,
   waitForElement,
@@ -196,7 +197,7 @@ describe("ModelSetupPage detection ownership", () => {
     let nextCalls = 0;
     request.mockImplementation(async (method, _params, options) => {
       if (method === "openclaw.setup.auth.start") {
-        return { done: false, status: "running" };
+        return running;
       }
       if (method === "wizard.next") {
         nextCalls += 1;

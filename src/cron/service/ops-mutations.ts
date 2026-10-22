@@ -130,6 +130,7 @@ export async function add(
         ? (state.store?.jobs.filter(opts.matchesExisting).map((job) => job.id) ?? [])
         : undefined,
       options: {
+        pluginCommand: opts?.pluginCommand,
         streamSandbox: opts?.streamSandbox,
         enabledExplicit: opts?.enabledExplicit,
         systemOwned: opts?.systemOwned,
@@ -156,11 +157,13 @@ export async function add(
     const existing = plan.previous.jobs.find((entry) => entry.id === job.id);
     const captured = consumeRuntimeAuthorityMutationOptions(opts);
     Object.assign(mutation.options, captured);
-    reconcileRuntimeAuthority({
-      job,
-      ...captured,
-      explicitlyMutatesToolsAllow: normalizedInput.payload.toolsAllow !== undefined,
-    });
+    if (!existing?.pluginCommand) {
+      reconcileRuntimeAuthority({
+        job,
+        ...captured,
+        explicitlyMutatesToolsAllow: normalizedInput.payload.toolsAllow !== undefined,
+      });
+    }
     plan.updated =
       existing !== undefined &&
       !isDeepStrictEqual(
@@ -292,12 +295,14 @@ async function updateLoadedJob(params: {
   }
   const captured = consumeRuntimeAuthorityMutationOptions(opts);
   Object.assign(mutation.options, captured);
-  reconcileRuntimeAuthority({
-    job: nextJob,
-    ...captured,
-    explicitlyMutatesToolsAllow:
-      patch.payload !== undefined && Object.hasOwn(patch.payload, "toolsAllow"),
-  });
+  if (!previousJob.pluginCommand) {
+    reconcileRuntimeAuthority({
+      job: nextJob,
+      ...captured,
+      explicitlyMutatesToolsAllow:
+        patch.payload !== undefined && Object.hasOwn(patch.payload, "toolsAllow"),
+    });
+  }
   source.assertCurrent();
   return await persistUpdatedJob({
     state,
