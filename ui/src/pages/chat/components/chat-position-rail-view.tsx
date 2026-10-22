@@ -84,7 +84,7 @@ export type PositionRailViewParams = {
   bindScroller: (element?: Element) => void;
   bindPreview: (element?: Element, description?: () => string) => void;
   onScroll: () => void;
-  stopScrollInput: EventListenerObject & AddEventListenerOptions;
+  stopScrollInput: (event: Event) => void;
   onPointerLeave: () => void;
   onMarkerHover: (id: string) => void;
   onMarkerFocus: (id: string, event: FocusEvent) => void;
@@ -141,7 +141,6 @@ export function ChatPositionRailView(props: PositionRailViewParams) {
         : "";
     return text ? toSanitizedMarkdownHtml(text, { codeBlockChrome: "none" }) : "";
   });
-  const stopScrollInput = (event: Event) => props.stopScrollInput.handleEvent(event);
   const Preview = () => {
     let label: HTMLElement | undefined;
     let copy: HTMLElement | undefined;
@@ -195,7 +194,7 @@ export function ChatPositionRailView(props: PositionRailViewParams) {
               props.bindScroller(element);
               // Stop touch input here, before the transcript's native history listeners.
               const stopInput = ["wheel", "touchstart", "touchmove"].map((type) =>
-                listen(element, type, stopScrollInput, { passive: true }),
+                listen(element, type, props.stopScrollInput, { passive: true }),
               );
               return () => stopInput.forEach((stop) => stop());
             }),

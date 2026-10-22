@@ -81,12 +81,9 @@ export function createPositionRail(props: PositionRailParams) {
   let targetsChanged = true;
   let layoutVisible = false;
   let reader: PositionRailReaderState = { followingResize: false, followActive: false };
-  const stopScrollInput = {
-    handleEvent: (event: Event) => {
-      reader.followActive = false;
-      event.stopPropagation();
-    },
-    passive: true,
+  const stopScrollInput = (event: Event) => {
+    reader.followActive = false;
+    event.stopPropagation();
   };
 
   const scheduleLayout = () => {
@@ -113,25 +110,37 @@ export function createPositionRail(props: PositionRailParams) {
       layoutVisible = false;
       return;
     }
+    const offset = scroller.scrollTop;
+    const inset = Number.parseFloat(getComputedStyle(scroller).scrollPaddingTop) || 0;
+    const geometryChanged =
+      height !== viewportHeight || offset !== viewportOffset || inset !== viewportInset;
     viewportHeight = height;
-    viewportOffset = scroller.scrollTop;
-    viewportInset = Number.parseFloat(getComputedStyle(scroller).scrollPaddingTop) || 0;
+    viewportOffset = offset;
+    viewportInset = inset;
     viewportResizePending = session?.layout.viewportResizePending ?? false;
     const root = transcriptElement ?? scroller.closest<HTMLElement>(".chat-thread");
     if (root) {
       syncReaderViewport(readTranscriptViewport(root));
     }
-    const visibleMessageIds = new Set(
-      [...observedMessages.values()]
-        .filter((message) => message.visible)
-        .map((message) => message.messageId),
-    );
+    const visibleMessageIds = new Set<string>();
+    for (const message of observedMessages.values()) {
+      if (message.visible) {
+        visibleMessageIds.add(message.messageId);
+      }
+    }
     const visibleOrder = positionMessageIds.filter((id) => visibleMessageIds.has(id));
     const activeMessageId = session?.activeMessageId(
       visibleOrder.length ? visibleOrder : positionMessageIds,
     );
     observedActiveId = activeMessageId ? markerIdsByMessageId.get(activeMessageId) : undefined;
-    scheduleLayout();
+    if (
+      geometryChanged ||
+      !layoutVisible ||
+      reader.followActive ||
+      (observedActiveId ?? markerIds[0]) !== currentActiveId
+    ) {
+      scheduleLayout();
+    }
   };
 
   function requestObservation() {
@@ -278,8 +287,10 @@ export function createPositionRail(props: PositionRailParams) {
         (entries) => {
           for (const entry of entries) {
             const message = observedMessages.get(entry.target);
-            if (message) {
-              message.visible = entry.isIntersecting && entry.intersectionRatio > 0;
+            const visible = entry.isIntersecting && entry.intersectionRatio > 0;
+            if (message && message.visible !== visible) {
+              message.visible = visible;
+              scheduleLayout();
             }
           }
           // Publish current position, retained markers, and Tab entry in one layout commit.
@@ -374,7 +385,6 @@ export function createPositionRail(props: PositionRailParams) {
       markerElements.get(currentActiveId ?? "")?.setAttribute("aria-current", "false");
       currentActiveId = activeId;
       markerElements.get(activeId ?? "")?.setAttribute("aria-current", "true");
-      syncTabStop();
       if (!reader.followingResize) {
         reader.followActive = true;
       }
@@ -530,14 +540,7 @@ export function createPositionRail(props: PositionRailParams) {
     }
     const markers = positions.markers;
     if (positions.markerIdsByMessageId !== markerIdsByMessageId) {
-      if (
-        markerIdsByMessageId.size !== positions.markerIdsByMessageId.size ||
-        [...positions.markerIdsByMessageId].some(
-          ([messageId, markerId]) => markerIdsByMessageId.get(messageId) !== markerId,
-        )
-      ) {
-        targetsChanged = true;
-      }
+      targetsChanged = true;
       markerIdsByMessageId = positions.markerIdsByMessageId;
       positionMessageIds = [...positions.markerIdsByMessageId.keys()];
     }

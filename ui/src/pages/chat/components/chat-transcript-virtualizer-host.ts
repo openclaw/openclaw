@@ -196,7 +196,6 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       count: 0,
       getScrollElement: () => this.scrollElement,
       estimateSize: () => CHAT_TRANSCRIPT_ESTIMATED_ROW_PX,
-      getItemKey: () => "",
       initialRect: initialTranscriptRect(),
       initialOffset: initialOffset ?? Number.MAX_SAFE_INTEGER,
       anchorTo: "end",

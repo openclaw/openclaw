@@ -207,6 +207,15 @@ it("updates rail and end position without pane renders until the virtual range c
     await settleUpdates(true);
     expect(host.committedRenders).toBe(renderedAt);
     expectCurrent("row-3");
+    await settleUpdates(true);
+    const railStyles = vi.spyOn(marks.style, "setProperty");
+    readContentHeight.mockReturnValue(4812);
+    measureRail();
+    await settleUpdates(true);
+    expect(railStyles).not.toHaveBeenCalled();
+    expectCurrent("row-3");
+    railStyles.mockRestore();
+    readContentHeight.mockReturnValue(4800);
     container.dispatchEvent(new WheelEvent("wheel", { deltaY: 600 }));
     await settleUpdates();
     renderedAt = host.committedRenders;

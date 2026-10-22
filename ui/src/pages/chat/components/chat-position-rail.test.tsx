@@ -69,7 +69,7 @@ describe("conversation position rail", () => {
       bindScroller: vi.fn(),
       bindPreview: vi.fn(),
       onScroll: vi.fn(),
-      stopScrollInput: { handleEvent: vi.fn() },
+      stopScrollInput: vi.fn(),
       onPointerLeave: vi.fn(),
       onMarkerHover: vi.fn(),
       onMarkerFocus: vi.fn(),
