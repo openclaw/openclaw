@@ -1,7 +1,10 @@
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import type { ReplyExecutionSelection } from "../../sessions/session-controller.execution-selection.js";
 import type { FollowupRun } from "./queue/types.js";
 
 export type ReplyToolAuthorityInput = {
+  /** Original admitted selection; absent on released snapshots that cannot prepare a join. */
+  executionSelection?: ReplyExecutionSelection;
   operatorAuthority?: AdmittedRunOperatorAuthority;
   originatingChannel?: FollowupRun["originatingChannel"];
   toolsAllow?: string[];

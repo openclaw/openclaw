@@ -16,6 +16,7 @@ import { AgentFilePreview } from "./agent-file-preview.tsx";
 import type { AgentsPageView } from "./agents-page-state.ts";
 import { hasAgentFileContent, isAgentFileDirty } from "./files.ts";
 import { AgentPanelAction } from "./panel-ui.tsx";
+import { AgentReadNotice, createAgentReadPending } from "./read-status.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
 
@@ -65,6 +66,8 @@ export function AgentFiles(
       canWrite: boolean;
     },
 ) {
+  const inventoryPending = createAgentReadPending(() => params.listRead);
+  const loading = () => params.readData().agentFilesLoading || inventoryPending();
   const list = () =>
     params.readData().agentFilesList?.agentId === params.agentId
       ? params.readData().agentFilesList
@@ -106,7 +109,10 @@ export function AgentFiles(
       <Show
         when={conflictName()}
         fallback={
-          <Show when={params.agentFilesError}>
+          <Show
+            when={params.agentFilesError}
+            fallback={<AgentReadNotice request={params.listRead} />}
+          >
             <div class="callout danger">{params.agentFilesError}</div>
           </Show>
         }
@@ -118,7 +124,7 @@ export function AgentFiles(
               <button
                 class="btn btn--sm"
                 type="button"
-                disabled={params.readData().agentFilesLoading || params.readData().agentFileSaving}
+                disabled={loading() || params.readData().agentFileSaving}
                 onClick={() => params.onFileReload(name())}
               >
                 {t("common.reload")}
@@ -126,11 +132,7 @@ export function AgentFiles(
               <button
                 class="btn btn--sm"
                 type="button"
-                disabled={
-                  params.readData().agentFilesLoading ||
-                  params.readData().agentFileSaving ||
-                  !params.canWrite
-                }
+                disabled={loading() || params.readData().agentFileSaving || !params.canWrite}
                 onClick={() => params.onFileOverwrite(name())}
               >
                 {t("agents.files.overwrite")}
@@ -153,8 +155,8 @@ export function AgentFiles(
         }
         actions={
           <AgentPanelAction
-            label={params.readData().agentFilesLoading ? t("common.loading") : t("common.refresh")}
-            disabled={params.readData().agentFilesLoading}
+            label={loading() ? t("common.loading") : t("common.refresh")}
+            disabled={loading()}
             onClick={() => params.onLoadFiles(params.agentId)}
           />
         }
@@ -179,7 +181,7 @@ export function AgentFiles(
                         : undefined,
                     // File reads are serialized; changing the active tab mid-read would
                     // expose an editor whose content request was never accepted.
-                    disabled: params.readData().agentFilesLoading,
+                    disabled: loading(),
                   })),
                   ariaLabel: t("agents.files.coreFilesTitle"),
                   panelId: "agent-file-panel",
@@ -192,7 +194,7 @@ export function AgentFiles(
                   class="agent-tab-add"
                   aria-label={t("agents.files.addFile")}
                   value={""}
-                  disabled={params.readData().agentFilesLoading}
+                  disabled={loading()}
                   onChange={(e) => {
                     const select = e.currentTarget;
                     const name = select.value;
@@ -285,7 +287,7 @@ export function AgentFiles(
                           placeholder={
                             hasContent()
                               ? undefined
-                              : params.readData().agentFilesLoading
+                              : loading()
                                 ? t("common.loading")
                                 : t("agents.files.loadHint")
                           }

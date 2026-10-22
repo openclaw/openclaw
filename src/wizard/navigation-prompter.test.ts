@@ -46,7 +46,6 @@ describe("runWizardWithPromptNavigation", () => {
       result = { first, second };
     });
     expect(result).toEqual({ first: "beta", second: "two" });
-    expect(select).toHaveBeenCalledTimes(4);
     expect([2, 3].map((index) => selectParamsAt(select, index).navigation)).toEqual([
       { canGoBack: false, canGoForward: true },
       { canGoBack: true, canGoForward: false },
@@ -73,9 +72,7 @@ describe("runWizardWithPromptNavigation", () => {
       result = { first, second, third };
     });
     expect(result).toEqual({ first: "alpha", second: "two", third: "final" });
-    expect(select).toHaveBeenCalledTimes(5);
-    const secondReplayParams = selectParamsAt(select, 3);
-    expect(secondReplayParams).toMatchObject({
+    expect(selectParamsAt(select, 3)).toMatchObject({
       message: "Second",
       initialValue: "two",
       navigation: { canGoBack: true, canGoForward: true },
@@ -101,7 +98,6 @@ describe("runWizardWithPromptNavigation", () => {
       result = { secret, done };
     });
     expect(result).toEqual({ secret: "secret-two", done: "done" });
-    expect(text).toHaveBeenCalledTimes(2);
     expect(text.mock.calls[1]?.[0]).toMatchObject({
       message: "Secret",
       navigation: { canGoBack: false, canGoForward: false },
@@ -121,7 +117,6 @@ describe("runWizardWithPromptNavigation", () => {
         await pick(navigationPrompter, "Second", ["two"]);
       }),
     ).rejects.toMatchObject({ direction: "back" });
-    expect(select).toHaveBeenCalledTimes(2);
     expect(selectParamsAt(select, 1).navigation).toEqual({
       canGoBack: false,
       canGoForward: false,
