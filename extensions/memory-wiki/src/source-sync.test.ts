@@ -147,6 +147,11 @@ describe("syncMemoryWikiImportedSources", () => {
       const secondResult = { ...bridgeResult, pagePaths: ["sources/beta.md"] };
       const importer = modes ? syncUnsafeLocalMock : syncBridgeMock;
       importer.mockResolvedValueOnce(secondResult);
+      if (modes) {
+        refreshIndexesMock
+          .mockResolvedValueOnce(refreshResult)
+          .mockResolvedValueOnce({ refreshed: false, reason: "auto-compile-disabled" });
+      }
       const second = runSync(
         modes ? createConfig("unsafe-local", config.vault.path) : config,
         options("beta"),
@@ -157,7 +162,16 @@ describe("syncMemoryWikiImportedSources", () => {
       resume();
       await first;
       await vi.waitFor(() => expect(importer).toHaveBeenCalledTimes(modes ? 1 : 2));
-      await expect(second).resolves.toMatchObject({ pagePaths: ["sources/beta.md"] });
+      if (modes) {
+        await expect(second).resolves.toEqual({
+          ...secondResult,
+          indexesRefreshed: false,
+          indexRefreshReason: "auto-compile-disabled",
+          indexUpdatedFiles: [],
+        });
+      } else {
+        await expect(second).resolves.toMatchObject({ pagePaths: ["sources/beta.md"] });
+      }
       expect(refreshIndexesMock).toHaveBeenCalledTimes(2);
     },
   );
@@ -181,27 +195,5 @@ describe("syncMemoryWikiImportedSources", () => {
     await expect(runSync(config)).rejects.toThrow("bridge unavailable");
     await expect(runSync(config)).resolves.toMatchObject({ pagePaths: bridgeResult.pagePaths });
     expect(syncBridgeMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("routes unsafe-local mode through unsafe-local sync", async () => {
-    const unsafeLocalResult = {
-      ...bridgeResult,
-      importedCount: 2,
-      workspaces: 0,
-      pagePaths: ["sources/private.md"],
-    };
-    syncUnsafeLocalMock.mockResolvedValueOnce(unsafeLocalResult);
-    refreshIndexesMock.mockResolvedValueOnce({ refreshed: false, reason: "auto-compile-disabled" });
-    const config = createConfig("unsafe-local");
-    const result = await syncMemoryWikiImportedSources({ config });
-    expect(syncUnsafeLocalMock).toHaveBeenCalledWith(config);
-    expect(syncBridgeMock).not.toHaveBeenCalled();
-    expect(refreshIndexesMock).toHaveBeenCalledWith({ config, syncResult: unsafeLocalResult });
-    expect(result).toEqual({
-      ...unsafeLocalResult,
-      indexesRefreshed: false,
-      indexRefreshReason: "auto-compile-disabled",
-      indexUpdatedFiles: [],
-    });
   });
 });

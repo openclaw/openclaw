@@ -1,15 +1,10 @@
-// Memory Wiki tests cover the related-pages block index used by compile.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { compileMemoryWikiVault } from "./compile.js";
 import * as markdown from "./markdown.js";
-import {
-  renderWikiMarkdown,
-  WIKI_RELATED_END_MARKER,
-  WIKI_RELATED_START_MARKER,
-} from "./markdown.js";
+import { WIKI_RELATED_END_MARKER, WIKI_RELATED_START_MARKER } from "./markdown.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createVault } = createMemoryWikiTestHarness();
@@ -18,30 +13,14 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-type PageSpec = {
-  path: string;
-  id?: string;
-  title: string;
-  pageType: string;
-  sourceIds?: string[];
-  links?: string[];
-};
+type PageSpec = [file: string, id: string, title: string, sourceIds?: string[], links?: string[]];
 
-async function writePages(rootDir: string, pages: PageSpec[]) {
-  for (const page of pages) {
-    const target = path.join(rootDir, page.path);
-    await fs.mkdir(path.dirname(target), { recursive: true });
-    await fs.writeFile(
-      target,
-      renderWikiMarkdown({
-        frontmatter: {
-          pageType: page.pageType,
-          ...(page.id ? { id: page.id } : {}),
-          title: page.title,
-          ...(page.sourceIds ? { sourceIds: page.sourceIds } : {}),
-        },
-        body: `# ${page.title}\n\n${(page.links ?? []).map((link) => `See [[${link}]].`).join("\n")}\n`,
-      }),
+async function writePages(vault: Awaited<ReturnType<typeof createVault>>, pages: PageSpec[]) {
+  for (const [file, id, title, sourceIds, links = []] of pages) {
+    await vault.page(
+      file,
+      { pageType: id.slice(0, id.indexOf(".")), id, title, ...(sourceIds ? { sourceIds } : {}) },
+      `# ${title}\n\n${links.map((link) => `See [[${link}]].`).join("\n")}\n`,
     );
   }
 }
@@ -55,74 +34,40 @@ async function readRelatedBlock(rootDir: string, relativePath: string): Promise<
 
 describe("compile related blocks", () => {
   it("resolves sources, references and related pages from the vault-wide index", async () => {
-    const { rootDir, config } = await createVault({
+    const vault = await createVault({
       initialize: true,
       config: { vault: { renderMode: "obsidian" } },
     });
-    const hubPages: PageSpec[] = Array.from({ length: 26 }, (_, index) => ({
-      path: `concepts/hub-user-${String(index).padStart(2, "0")}.md`,
-      id: `concept.hub-user-${index}`,
-      title: `Hub User ${String(index).padStart(2, "0")}`,
-      pageType: "concept",
-      sourceIds: ["source.hub", ...(index === 0 ? ["source.beta"] : [])],
-    }));
+    const { rootDir, config } = vault;
+    const hubPages: PageSpec[] = Array.from({ length: 26 }, (_, index): PageSpec => [
+      `concepts/hub-user-${String(index).padStart(2, "0")}.md`,
+      `concept.hub-user-${index}`,
+      `Hub User ${String(index).padStart(2, "0")}`,
+      ["source.hub", ...(index === 0 ? ["source.beta"] : [])],
+    ]);
     // Exactly 24 other pages share this source: the last count that still relates them.
-    const edgePages: PageSpec[] = Array.from({ length: 25 }, (_, index) => ({
-      path: `concepts/edge-${String(index).padStart(2, "0")}.md`,
-      id: `concept.edge-${index}`,
-      title: `Edge ${String(index).padStart(2, "0")}`,
-      pageType: "concept",
-      sourceIds: ["source.edge"],
-    }));
-    await writePages(rootDir, [
-      { path: "sources/alpha.md", id: "source.alpha", title: "Alpha", pageType: "source" },
-      { path: "sources/beta.md", id: "source.beta", title: "Beta", pageType: "source" },
-      { path: "sources/hub.md", id: "source.hub", title: "Hub", pageType: "source" },
-      {
-        path: "concepts/one.md",
-        id: "concept.one",
-        title: "Concept One",
-        pageType: "concept",
-        sourceIds: ["source.alpha"],
-        links: ["concepts/two"],
-      },
-      {
-        path: "concepts/two.md",
-        id: "concept.two",
-        title: "Concept Two",
-        pageType: "concept",
-        sourceIds: ["source.alpha", "source.alpha", "source.beta"],
-      },
-      {
-        path: "entities/ent.md",
-        id: "entity.ent",
-        title: "Entity",
-        pageType: "entity",
-        sourceIds: ["source.beta"],
-        links: ["Concept One"],
-      },
-      {
-        path: "syntheses/synth.md",
-        id: "synthesis.synth",
-        title: "Synth",
-        pageType: "synthesis",
-        sourceIds: ["source.alpha", "concept.one"],
-      },
-      {
-        path: "concepts/dup-a.md",
-        id: "concept.dup",
-        title: "Dup A",
-        pageType: "concept",
-        links: ["concepts/lonely"],
-      },
-      {
-        path: "concepts/dup-b.md",
-        id: "concept.dup",
-        title: "Dup B",
-        pageType: "concept",
-        links: ["concepts/dup-a", "concepts/lonely"],
-      },
-      { path: "concepts/lonely.md", id: "concept.lonely", title: "Lonely", pageType: "concept" },
+    const edgePages: PageSpec[] = Array.from({ length: 25 }, (_, index): PageSpec => [
+      `concepts/edge-${String(index).padStart(2, "0")}.md`,
+      `concept.edge-${index}`,
+      `Edge ${String(index).padStart(2, "0")}`,
+      ["source.edge"],
+    ]);
+    await writePages(vault, [
+      ["sources/alpha.md", "source.alpha", "Alpha"],
+      ["sources/beta.md", "source.beta", "Beta"],
+      ["sources/hub.md", "source.hub", "Hub"],
+      ["concepts/one.md", "concept.one", "Concept One", ["source.alpha"], ["concepts/two"]],
+      [
+        "concepts/two.md",
+        "concept.two",
+        "Concept Two",
+        ["source.alpha", "source.alpha", "source.beta"],
+      ],
+      ["entities/ent.md", "entity.ent", "Entity", ["source.beta"], ["Concept One"]],
+      ["syntheses/synth.md", "synthesis.synth", "Synth", ["source.alpha", "concept.one"]],
+      ["concepts/dup-a.md", "concept.dup", "Dup A", [], ["concepts/lonely"]],
+      ["concepts/dup-b.md", "concept.dup", "Dup B", [], ["concepts/dup-a", "concepts/lonely"]],
+      ["concepts/lonely.md", "concept.lonely", "Lonely"],
       ...hubPages,
       ...edgePages,
     ]);
@@ -131,45 +76,31 @@ describe("compile related blocks", () => {
 
     const blocks = Object.fromEntries(
       await Promise.all(
-        [
-          "sources/alpha.md",
-          "concepts/one.md",
-          "concepts/two.md",
-          "entities/ent.md",
-          "syntheses/synth.md",
-          "concepts/dup-a.md",
-          "concepts/lonely.md",
-          "sources/hub.md",
-          "concepts/hub-user-00.md",
-          "concepts/hub-user-01.md",
-          "concepts/edge-00.md",
-        ].map(async (page) => [page, await readRelatedBlock(rootDir, page)] as const),
+        Object.keys(EXPECTED_BLOCKS).map(
+          async (page) => [page, await readRelatedBlock(rootDir, page)] as const,
+        ),
       ),
     );
     expect(blocks).toEqual(EXPECTED_BLOCKS);
   });
 
   it("builds related blocks from indexes instead of rescanning every page per page", async () => {
-    const { rootDir, config } = await createVault({
+    const vault = await createVault({
       initialize: true,
       config: { vault: { renderMode: "obsidian" } },
     });
+    const { rootDir, config } = vault;
     const pageCount = 120;
     const sourceCount = 36;
     const specs: PageSpec[] = [];
     for (let index = 0; index < sourceCount; index++) {
-      specs.push({
-        path: `sources/s${index}.md`,
-        id: `source.s${index}`,
-        title: `Source ${index}`,
-        pageType: "source",
-      });
+      specs.push([`sources/s${index}.md`, `source.s${index}`, `Source ${index}`]);
     }
-    // Path, filename-only, heading and block links all resolve to the same backlink.
+    // Path, filename-only, aliased heading and block links resolve to the same backlink.
     const linkForms = [
       ["concepts/", ""],
       ["", ""],
-      ["concepts/", "#Heading"],
+      ["concepts/", "#Heading|Display"],
       ["", "#^block"],
     ] as const;
     for (let index = 0; index < pageCount - sourceCount; index++) {
@@ -177,16 +108,15 @@ describe("compile related blocks", () => {
       const [prefix, suffix] = linkForms[index % linkForms.length] ?? ["", ""];
       const pick = (salt: number) =>
         Math.floor(((index * 31 + salt * 17) % 97) ** 2 / 97) % sourceCount;
-      specs.push({
-        path: `concepts/p${index}.md`,
-        id: `concept.p${index}`,
-        title: `Page ${index}`,
-        pageType: "concept",
-        sourceIds: [...new Set([`source.s${pick(1)}`, `source.s${pick(2)}`])],
-        links: [`${prefix}p${(index * 7 + 3) % (pageCount - sourceCount)}${suffix}`],
-      });
+      specs.push([
+        `concepts/p${index}.md`,
+        `concept.p${index}`,
+        `Page ${index}`,
+        [...new Set([`source.s${pick(1)}`, `source.s${pick(2)}`])],
+        [`${prefix}p${(index * 7 + 3) % (pageCount - sourceCount)}${suffix}`],
+      ]);
     }
-    await writePages(rootDir, specs);
+    await writePages(vault, specs);
 
     // Count how often compile touches each page's relation lists; a per-page rescan of
     // the whole vault shows up as quadratic growth here, independent of timing.
@@ -215,11 +145,11 @@ describe("compile related blocks", () => {
     expect(relationReads).toBeLessThan(pageCount * 20);
 
     const digest = createHash("sha256");
-    for (const spec of specs) {
+    for (const [file] of specs) {
       digest
-        .update(spec.path)
+        .update(file)
         .update("\0")
-        .update(await readRelatedBlock(rootDir, spec.path));
+        .update(await readRelatedBlock(rootDir, file));
     }
     expect(digest.digest("hex")).toBe(EXPECTED_RELATED_DIGEST);
   });
