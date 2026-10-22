@@ -292,11 +292,7 @@ async function runGatewayLoopWithSupervisedLockRecovery(params: {
   port: number;
   healthHost: string;
   log: GatewayRunLogger;
-  now?: () => number;
-  sleep?: (ms: number) => Promise<void>;
   probeHealth: (params: { host: string; port: number }) => Promise<boolean>;
-  retryMs?: number;
-  timeoutMs?: number;
 }) {
   const supervisor = params.supervisor;
   if (!supervisor) {
@@ -304,11 +300,9 @@ async function runGatewayLoopWithSupervisedLockRecovery(params: {
     return;
   }
 
-  const now = params.now ?? performance.now.bind(performance);
-  const sleep = params.sleep ?? defaultSleep;
-  const retryMs = params.retryMs ?? SUPERVISED_GATEWAY_LOCK_RETRY_MS;
-  const timeoutMs = params.timeoutMs ?? GATEWAY_LIFECYCLE_LOCK_TIMEOUT_MS;
-  const startedAt = now();
+  const retryMs = SUPERVISED_GATEWAY_LOCK_RETRY_MS;
+  const timeoutMs = GATEWAY_LIFECYCLE_LOCK_TIMEOUT_MS;
+  const startedAt = performance.now();
 
   for (;;) {
     try {
@@ -338,7 +332,7 @@ async function runGatewayLoopWithSupervisedLockRecovery(params: {
         return;
       }
 
-      const elapsedMs = now() - startedAt;
+      const elapsedMs = performance.now() - startedAt;
       if (elapsedMs >= timeoutMs) {
         if (lifecycleContention) {
           throw err;
@@ -354,7 +348,7 @@ async function runGatewayLoopWithSupervisedLockRecovery(params: {
       params.log.warn(
         `${lifecycleContention ? "gateway-lifecycle ownership held by another OpenClaw process" : "gateway already running"} under ${supervisor}; waiting ${waitMs}ms before retrying startup`,
       );
-      await sleep(waitMs);
+      await defaultSleep(waitMs);
     }
   }
 }

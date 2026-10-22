@@ -9,15 +9,16 @@ function withNodeServiceEnv(
   // node-specific labels, logs, task script, and service marker.
   return {
     ...env,
-    ...resolveNodeServiceIdentityEnvironment(),
+    ...resolveNodeServiceIdentityEnvironment(env),
   };
 }
 
 function withNodeInstallEnv(args: GatewayServiceInstallArgs): GatewayServiceInstallArgs {
+  const identity = resolveNodeServiceIdentityEnvironment(args.env);
   return {
     ...args,
-    env: withNodeServiceEnv(args.env),
-    environment: withNodeServiceEnv(args.environment ?? {}),
+    env: { ...args.env, ...identity },
+    environment: { ...args.environment, ...identity },
   };
 }
 

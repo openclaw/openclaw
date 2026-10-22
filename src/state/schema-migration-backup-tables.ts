@@ -43,5 +43,11 @@ export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
     ],
     // Only shared-state version and content metadata change.
     30: [],
+    31: [
+      "local_workspace_projections",
+      "local_workspace_manifest_nodes",
+      "sqlite_stat1",
+      "sqlite_stat4",
+    ],
   },
 };

@@ -178,8 +178,9 @@ describe("Sessions archive outcome lifetime", () => {
     if (timing === "before" || timing === "detached") {
       transition();
     }
+    const failure = new Error("Archive unavailable");
     if (event === "failure") {
-      pending.reject(new Error("Archive unavailable"));
+      pending.reject(failure);
     } else {
       pending.resolve(result);
     }
@@ -188,7 +189,7 @@ describe("Sessions archive outcome lifetime", () => {
       await fixture.toast.updateComplete;
       expect(undo()).toBeNull();
       if (event === "failure") {
-        expect(page.error).toBe(timing === "detached" ? null : "Archive unavailable");
+        expect(page.error).toBe(timing === "detached" ? null : failure);
       }
       expect(patches()).toHaveLength(1);
       return;

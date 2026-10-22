@@ -426,7 +426,7 @@ const nativeReadCallers = new Map<string, readonly string[]>([
       "src/cli/capability-cli/model.ts:runModelAuthLogout",
       "src/cli/capability-cli/shared.ts:providerHasGenericConfig",
       "src/commands/doctor-auth.ts:loadAuthProfileHealth",
-      "src/commands/doctor-auth.ts:noteCopilotAmbientToken",
+      "src/commands/doctor-auth.ts:collectCopilotAmbientTokenFindings",
     ],
   ],
   [

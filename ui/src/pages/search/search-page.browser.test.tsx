@@ -116,6 +116,8 @@ describe("Search settings", () => {
     expect(fixture.button("Refresh search status").disabled).toBe(true);
     expect(fixture.button("Test search").disabled).toBe(true);
     expect(fixture.input("Search query")).toBe(query);
+    expect(fixture.element.textContent).toContain(i18n.t("searchPage.loading"));
+    expect(fixture.element.querySelector(".settings-loading-skeleton")).toBeNull();
 
     refresh.reject(new Error("Search status unavailable"));
     await fixture.settle();
@@ -206,6 +208,9 @@ describe("Search settings", () => {
       const catalog = createDeferred<ModelCatalogResult>();
       const fixture = await mount({ modelsResponse: catalog.promise, waitReady: false });
       expect(fixture.calls("webSearch.status")).toHaveLength(0);
+      await waitForSolid(() =>
+        expect(fixture.element.querySelector(".settings-loading-skeleton")).not.toBeNull(),
+      );
       if (outcome === "success") {
         fixture.setResult({ ...ready, agentId: "scout" });
         fixture.setAgent("scout");
@@ -219,6 +224,7 @@ describe("Search settings", () => {
       expect(statuses).toHaveLength(1);
       expect(statuses[0]?.[1]).toEqual({ agentId: outcome === "success" ? "scout" : "main" });
       expect(fixture.element.querySelector('select[aria-label="Search provider"]')).not.toBeNull();
+      expect(fixture.element.querySelector(".settings-loading-skeleton")).toBeNull();
       expect(fixture.element.textContent).toContain("Configured");
     },
   );

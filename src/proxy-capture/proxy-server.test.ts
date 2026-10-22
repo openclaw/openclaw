@@ -9,7 +9,7 @@ import {
 import net, { Socket, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import type { DebugProxySettings } from "./env.js";
@@ -129,6 +129,7 @@ type ProxyResponseResult = {
   complete: boolean;
   errorMessage?: string;
   statusCode?: number;
+  statusLine?: string;
 };
 
 function captureMethodCall<Key extends PropertyKey, Args extends unknown[], Result>(
@@ -139,57 +140,105 @@ function captureMethodCall<Key extends PropertyKey, Args extends unknown[], Resu
   return (receiver: typeof owner, ...args: Args): Result => method.apply(receiver, args);
 }
 
+type ProxyClientOptions = {
+  abortAfterBytes?: number;
+  abortWithReset?: boolean;
+  signal?: AbortSignal;
+  streaming?: boolean;
+};
+
 async function getThroughProxy(
   proxyUrl: string,
   targetUrl: string,
   requestBody?: string,
-): Promise<ProxyResponseResult> {
+  options: ProxyClientOptions = {},
+) {
   const proxy = new URL(proxyUrl);
-  return await new Promise<ProxyResponseResult>((resolve) => {
-    let body = "";
-    let response: IncomingMessage | undefined;
-    const finish = (error?: Error) => {
-      resolve({
-        body,
-        complete: response?.complete ?? false,
-        ...(error ? { errorMessage: error.message } : {}),
-        ...(response?.statusCode === undefined ? {} : { statusCode: response.statusCode }),
-      });
-    };
-    const req = httpRequest(
-      {
-        host: proxy.hostname,
-        port: Number(proxy.port),
-        method: requestBody === undefined ? "GET" : "POST",
-        path: targetUrl,
-        headers: {
-          connection: "close",
-          ...(requestBody === undefined
-            ? {}
-            : {
-                "content-length": Buffer.byteLength(requestBody),
-                "content-type": "text/plain; charset=utf-8",
-              }),
+  return new Promise<ProxyResponseResult & { aborted: boolean; bodyBytes: number }>(
+    (resolve, reject) => {
+      const chunks: Buffer[] = [];
+      let response: IncomingMessage | undefined;
+      let aborted = false,
+        bodyBytes = 0;
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      const finish = (error?: Error) => {
+        clearTimeout(timeout);
+        options.signal?.removeEventListener("abort", abort);
+        if (error && options.streaming && !aborted) {
+          reject(error);
+        } else {
+          resolve({
+            body: Buffer.concat(chunks).toString(),
+            complete: response?.complete ?? false,
+            statusCode: response?.statusCode,
+            statusLine:
+              response &&
+              `HTTP/${response.httpVersion} ${response.statusCode} ${response.statusMessage}`,
+            errorMessage: error?.message,
+            aborted,
+            bodyBytes,
+          });
+        }
+      };
+      const abort = () => {
+        aborted = true;
+        if (options.abortWithReset && response?.socket) {
+          response.socket.resetAndDestroy();
+        } else {
+          req.destroy();
+        }
+        finish();
+      };
+      const req = httpRequest(
+        {
+          hostname: proxy.hostname,
+          port: proxy.port,
+          path: targetUrl,
+          method: requestBody === undefined ? "GET" : "POST",
+          headers: {
+            connection: "close",
+            ...(requestBody === undefined
+              ? {}
+              : {
+                  "content-length": Buffer.byteLength(requestBody),
+                  "content-type": "text/plain; charset=utf-8",
+                }),
+          },
         },
-      },
-      (res) => {
-        response = res;
-        res.setEncoding("utf8");
-        res.on("data", (chunk) => {
-          body += chunk;
-        });
-        res.on("end", () => finish());
-        res.on("error", finish);
-        res.on("close", () => {
-          if (!res.complete) {
-            finish(new Error("response closed before completion"));
-          }
-        });
-      },
-    );
-    req.on("error", finish);
-    req.end(requestBody);
-  });
+        (res) => {
+          response = res;
+          res.on("data", (chunk: Buffer) => {
+            bodyBytes += chunk.length;
+            if (!options.streaming) {
+              chunks.push(chunk);
+            }
+            if (options.abortAfterBytes !== undefined && bodyBytes >= options.abortAfterBytes) {
+              abort();
+            }
+          });
+          res.on("end", () => finish());
+          res.on("error", finish);
+          res.on("close", () => {
+            if (!res.complete) {
+              finish(new Error("response closed before completion"));
+            }
+          });
+        },
+      );
+      req.on("error", finish);
+      if (options.streaming) {
+        timeout = setTimeout(() => {
+          req.destroy();
+          finish(new Error("slow proxy client timed out"));
+        }, 15000);
+      }
+      options.signal?.addEventListener("abort", abort, { once: true });
+      if (options.signal?.aborted) {
+        abort();
+      }
+      req.end(requestBody);
+    },
+  );
 }
 
 async function startStreamingProxyOrigin(responseBodyBytes: number) {
@@ -246,103 +295,6 @@ async function startStreamingProxyOrigin(responseBodyBytes: number) {
     responseClosed: responseClosed.promise,
     state,
   };
-}
-
-async function rawSlowGetThroughProxy(params: {
-  abortAfterBytes?: number;
-  abortWithReset?: boolean;
-  signal?: AbortSignal;
-  pauseBeforeReadMs: number;
-  proxyUrl: string;
-  targetUrl: string;
-}): Promise<{
-  aborted: boolean;
-  bodyBytes: number;
-  resumed: boolean;
-  statusLine: string;
-}> {
-  const proxy = new URL(params.proxyUrl);
-  return await new Promise((resolve, reject) => {
-    let aborted = false;
-    let bodyBytes = 0;
-    let contentLength: number | undefined;
-    let headerBytes = Buffer.alloc(0);
-    let resumed = false;
-    let statusLine = "";
-    let resumeTimeout: ReturnType<typeof setTimeout> | undefined;
-    const socket = net.connect(Number(proxy.port), proxy.hostname);
-    const abort = () => {
-      aborted = true;
-      socket.destroy();
-    };
-    params.signal?.addEventListener("abort", abort, { once: true });
-    if (params.signal?.aborted) {
-      abort();
-    }
-    const timeout = setTimeout(() => {
-      socket.destroy();
-      reject(new Error("slow proxy client timed out"));
-    }, 15000);
-    const finish = () => {
-      clearTimeout(timeout);
-      clearTimeout(resumeTimeout);
-      params.signal?.removeEventListener("abort", abort);
-      resolve({ aborted, bodyBytes, resumed, statusLine });
-    };
-    const maybeFinishCompleteBody = () => {
-      if (contentLength !== undefined && bodyBytes >= contentLength) {
-        socket.destroy();
-        finish();
-      }
-    };
-    socket.on("connect", () => {
-      socket.write(
-        `GET ${params.targetUrl} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n`,
-      );
-      socket.pause();
-      resumeTimeout = setTimeout(() => {
-        resumed = true;
-        socket.resume();
-      }, params.pauseBeforeReadMs);
-    });
-    socket.on("data", (chunk) => {
-      if (contentLength === undefined) {
-        headerBytes = Buffer.concat([headerBytes, Buffer.from(chunk)]);
-        const headerEnd = headerBytes.indexOf("\r\n\r\n");
-        if (headerEnd === -1) {
-          return;
-        }
-        const headerText = headerBytes.subarray(0, headerEnd).toString("latin1");
-        statusLine = headerText.split("\r\n")[0] ?? "";
-        const contentLengthHeader = headerText
-          .split("\r\n")
-          .find((line) => line.toLowerCase().startsWith("content-length:"));
-        const parsedContentLength = Number(contentLengthHeader?.split(":")[1]?.trim());
-        contentLength = Number.isFinite(parsedContentLength) ? parsedContentLength : 0;
-        bodyBytes += headerBytes.byteLength - headerEnd - 4;
-        headerBytes = Buffer.alloc(0);
-      } else {
-        bodyBytes += chunk.length;
-      }
-      if (params.abortAfterBytes !== undefined && bodyBytes >= params.abortAfterBytes) {
-        aborted = true;
-        if (params.abortWithReset) {
-          socket.resetAndDestroy();
-        } else {
-          socket.destroy();
-        }
-        finish();
-        return;
-      }
-      maybeFinishCompleteBody();
-    });
-    socket.on("error", (error) => {
-      clearTimeout(timeout);
-      clearTimeout(resumeTimeout);
-      reject(error);
-    });
-    socket.on("close", finish);
-  });
 }
 
 async function startConnectProxy(connectTarget: string) {
@@ -489,11 +441,9 @@ describe("startDebugProxyServer", () => {
       firstDrain.resolve();
       return emitted;
     });
-    const forwarding = rawSlowGetThroughProxy({
-      pauseBeforeReadMs: 0,
-      proxyUrl: proxy.proxyUrl,
+    const forwarding = getThroughProxy(proxy.proxyUrl, targetUrl, undefined, {
+      streaming: true,
       signal: abortController.signal,
-      targetUrl,
     });
     cleanup.push(async () => {
       abortController.abort();
@@ -506,7 +456,6 @@ describe("startDebugProxyServer", () => {
     expect(forwarded).toMatchObject({
       aborted: false,
       bodyBytes: responseBodyBytes,
-      resumed: true,
       statusLine: "HTTP/1.1 200 OK",
     });
     expect(bytesReadWhileBackpressured).toBe(0);
@@ -532,17 +481,14 @@ describe("startDebugProxyServer", () => {
 
       // Start the async reader before the bounded abort assertions measure cleanup.
       await readCaptureEvents(settings.sessionId, 20);
-      const aborted = await rawSlowGetThroughProxy({
+      const aborted = await getThroughProxy(proxy.proxyUrl, `${origin.url}/capture`, undefined, {
+        streaming: true,
         abortAfterBytes: 64 * 1024,
         abortWithReset,
-        pauseBeforeReadMs: 0,
-        proxyUrl: proxy.proxyUrl,
-        targetUrl: `${origin.url}/capture`,
       });
 
       expect(aborted).toMatchObject({
         aborted: true,
-        resumed: true,
         statusLine: "HTTP/1.1 200 OK",
       });
       expect(aborted.bodyBytes).toBeGreaterThanOrEqual(64 * 1024);
@@ -648,5 +594,129 @@ describe("startDebugProxyServer", () => {
 
     expect(openingTimeout).toHaveBeenCalledWith(0);
     expect(upstream.listenerCount("timeout")).toBe(0);
+  });
+});
+
+async function connectThroughProxy(
+  proxyUrl: string,
+  connectTarget = "example.com:443",
+): Promise<string> {
+  return requestRawThroughProxy(
+    proxyUrl,
+    `CONNECT ${connectTarget} HTTP/1.1\r\nHost: ${connectTarget}\r\n\r\n`,
+  );
+}
+
+async function requestThroughProxy(proxyUrl: string, targetUrl: string): Promise<string> {
+  const target = new URL(targetUrl);
+  return requestRawThroughProxy(
+    proxyUrl,
+    `GET ${target.href} HTTP/1.1\r\nHost: ${target.host}\r\nConnection: close\r\n\r\n`,
+  );
+}
+
+async function requestRawThroughProxy(proxyUrl: string, request: string): Promise<string> {
+  const proxy = new URL(proxyUrl);
+  const socket = new Socket();
+  let data = "";
+  socket.setEncoding("utf8");
+  socket.on("data", (chunk) => {
+    data += chunk.toString();
+  });
+  await new Promise<void>((resolve, reject) => {
+    socket.once("error", reject);
+    socket.connect(Number(proxy.port), proxy.hostname, resolve);
+  });
+  socket.write(request);
+  await new Promise<void>((resolve) => {
+    socket.once("end", resolve);
+  });
+  socket.destroy();
+  return data;
+}
+
+async function startCanaryOrigin() {
+  let requests = 0;
+  const origin = await listenOrigin(
+    createHttpServer((_req, res) => {
+      requests++;
+      res.end("ok");
+    }),
+    "/metadata",
+  );
+  return { ...origin, requestCount: () => requests };
+}
+
+describe("debug proxy managed-proxy direct upstream policy", () => {
+  const startManagedProxy = async () => (await startProxy()).proxy;
+  let origin: Awaited<ReturnType<typeof startCanaryOrigin>>;
+
+  beforeEach(() => {
+    vi.stubEnv("OPENCLAW_PROXY_ACTIVE", undefined);
+    vi.stubEnv("OPENCLAW_DEBUG_PROXY_ALLOW_DIRECT_CONNECT_WITH_MANAGED_PROXY", undefined);
+  });
+
+  it("allows HTTP upstreams with the explicit diagnostic override", async () => {
+    process.env["OPENCLAW_PROXY_ACTIVE"] = "1";
+    process.env["OPENCLAW_DEBUG_PROXY_ALLOW_DIRECT_CONNECT_WITH_MANAGED_PROXY"] = "1";
+    origin = await startCanaryOrigin();
+    const server = await startManagedProxy();
+    const response = await requestThroughProxy(server.proxyUrl, origin.url);
+
+    expect(response).toContain("200 OK");
+    expect(response).toContain("ok");
+    expect(origin.requestCount()).toBe(1);
+  });
+
+  it("rejects CONNECT upstreams before opening direct sockets while managed proxy mode is active", async () => {
+    process.env["OPENCLAW_PROXY_ACTIVE"] = "true";
+    const server = await startManagedProxy();
+    const response = await connectThroughProxy(server.proxyUrl);
+    expect(response).toContain("403 Forbidden");
+    expect(response).toContain("Connection: close");
+    expect(response).toContain("Debug proxy direct upstream forwarding is disabled");
+  });
+
+  it("accepts bracketed IPv6 CONNECT targets before applying upstream policy", async () => {
+    process.env["OPENCLAW_PROXY_ACTIVE"] = "1";
+    const server = await startManagedProxy();
+    const response = await connectThroughProxy(server.proxyUrl, "[::1]:8443");
+
+    expect(response).toContain("403 Forbidden");
+    expect(response).not.toContain("400 Bad Request");
+  });
+
+  it.each(["[::1]:99999", "api.openai.com:1e3", "api.openai.com:0x50"])(
+    "rejects invalid CONNECT target %s",
+    async (connectTarget) => {
+      const server = await startManagedProxy();
+      const response = await connectThroughProxy(server.proxyUrl, connectTarget);
+
+      expect(response).toContain("400 Bad Request");
+    },
+  );
+
+  it("rejects absolute-form HTTP proxy requests before opening direct upstreams while managed proxy mode is active", async () => {
+    process.env["OPENCLAW_PROXY_ACTIVE"] = "1";
+    origin = await startCanaryOrigin();
+    const server = await startManagedProxy();
+    const response = await requestThroughProxy(server.proxyUrl, origin.url);
+
+    expect(response).toContain("403 Forbidden");
+    expect(response).toContain("Connection: close");
+    expect(response).toContain("Debug proxy direct upstream forwarding is disabled");
+    expect(origin.requestCount()).toBe(0);
+  });
+
+  it("rejects malformed relative-form HTTP proxy targets before upstream handling", async () => {
+    const server = await startManagedProxy();
+    const response = await requestRawThroughProxy(
+      server.proxyUrl,
+      "GET /capture HTTP/1.1\r\nHost: [\r\nConnection: close\r\n\r\n",
+    );
+
+    expect(response).toContain("400 Bad Request");
+    expect(response).toContain("Connection: close");
+    expect(response).toContain("Invalid proxy target URL");
   });
 });

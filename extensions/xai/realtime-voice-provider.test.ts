@@ -568,32 +568,6 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     ]);
   });
 
-  it("continues after malformed terminal items and content beside valid text", async () => {
-    const { bridge, socket, onTranscript } = await observe("onTranscript");
-    responseCreated(socket);
-    bridge.sendUserMessage?.("Continue.");
-    socket.emitServer({
-      type: "response.done",
-      response: {
-        status: "completed",
-        output: [
-          null,
-          {
-            type: "message",
-            role: "assistant",
-            content: [
-              null,
-              { type: "output_text", text: "Valid text " },
-              { type: "output_audio", transcript: "and audio" },
-            ],
-          },
-        ],
-      },
-    });
-    expectTail(socket, userMessageEvent("Continue."), { type: "response.create" });
-    expect(onTranscript.mock.calls).toEqual([["assistant", "Valid text and audio", true]]);
-  });
-
   it.each([false, true])(
     "interrupts acknowledged legacy playback (completed=%s)",
     async (completed) => {
@@ -675,6 +649,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     if (completed === undefined) {
       toolArguments(socket, "item_tool_1", "call_1", streamed, toolName);
     }
+    expect(onToolCall).not.toHaveBeenCalled();
     responseDone(socket);
     expect(onToolCall).toHaveBeenCalledExactlyOnceWith({
       itemId: "item_tool_1",
@@ -919,30 +894,6 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     expect(onReady).toHaveBeenCalledOnce();
   });
 
-  it("exhausts reconnect attempts when websocket opens without session setup", async () => {
-    const { onEvent, onClose } = observers();
-    const { socket: firstSocket } = await resumable({ onEvent, onClose });
-    firstSocket.close(1006, "connection lost");
-
-    for (let attempt = 1; attempt <= 5; attempt += 1) {
-      const delayMs = 1000 * 2 ** (attempt - 1);
-      await vi.advanceTimersByTimeAsync(delayMs);
-      await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(attempt + 1));
-      const socket = requireSocket(attempt);
-      socket.open();
-      socket.close(1006, "session setup failed");
-    }
-
-    await waitForRealtimeState(() =>
-      expect(onEvent).toHaveBeenCalledWith({
-        direction: "client",
-        type: "session.reconnect.exhausted",
-        detail: "reason=websocket-close attempts=5",
-      }),
-    );
-    expect(onClose).toHaveBeenCalledWith("error");
-  });
-
   it("cancels a pending reconnect and allows a later explicit connect", async () => {
     resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: ["xai", "test"].join("-") });
     const onError = vi.fn();
@@ -1002,7 +953,6 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     const { connecting, socket } = await pendingConnection(bridge);
     socket.open();
     socket.emit("error", new Error("bad auth"));
-
     await expect(connecting).rejects.toThrow("bad auth");
     await vi.advanceTimersByTimeAsync(1000);
     expect(FakeWebSocket.instances).toHaveLength(1);

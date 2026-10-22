@@ -37,6 +37,8 @@ export function configAuditScrubToHealthFinding(
   return {
     checkId: CONFIG_AUDIT_SCRUB_CHECK_ID,
     severity: "warning",
+    category: "fix-now",
+    docsUrl: "https://docs.openclaw.ai/gateway/audit",
     message: `${formatEntryCount(result.rewritten)} in config-audit.jsonl still contain pre-redactor argv values.`,
     path: result.auditPath,
     fixHint:

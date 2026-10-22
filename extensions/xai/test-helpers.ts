@@ -1,74 +1,64 @@
-// Xai helper module supports test helpers behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import type { Context, Model } from "openclaw/plugin-sdk/llm";
-import { expect } from "vitest";
+import type { Model } from "openclaw/plugin-sdk/llm";
+import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
+import { wrapXaiProviderStream } from "./stream.js";
 
-type XaiToolPayloadFunction = {
-  function?: Record<string, unknown>;
-};
-
-type XaiTestPayload = Record<string, unknown> & {
-  tools?: Array<{ type?: string; function?: Record<string, unknown> }>;
-  input?: unknown[];
-};
-
-function createXaiToolStreamPayload(): XaiTestPayload {
+export function xaiModel(
+  overrides: Partial<Model<"openai-responses">> = {},
+): Model<"openai-responses"> {
   return {
-    reasoning: { effort: "high" },
-    tools: [
-      {
-        type: "function",
-        function: {
-          name: "write",
-          parameters: { type: "object", properties: {} },
-          strict: true,
+    api: "openai-responses",
+    provider: "xai",
+    id: "grok-4-fast",
+    name: "Fixture",
+    baseUrl: "https://proxy.example/v1",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 500_000,
+    maxTokens: 64_000,
+    ...overrides,
+  };
+}
+
+export function captureXaiRequest(
+  model: Parameters<StreamFn>[0],
+  {
+    extraParams = {},
+    headers,
+    payload = {
+      reasoning: { effort: "high" },
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "write",
+            parameters: { type: "object", properties: {} },
+            strict: true,
+          },
         },
-      },
-    ],
-  };
-}
-
-export function createXaiPayloadCaptureStream() {
-  let capturedModelId = "";
-  let capturedPayload: XaiTestPayload | undefined;
-
-  const streamFn: StreamFn = (model, _context, options) => {
-    capturedModelId = model.id;
-    const payload = createXaiToolStreamPayload();
-    options?.onPayload?.(payload as never, model as never);
-    capturedPayload = payload;
-    return {
-      result: async () => ({}) as never,
-      async *[Symbol.asyncIterator]() {},
-    } as unknown as ReturnType<StreamFn>;
-  };
-
-  return {
-    streamFn,
-    getCapturedModelId: () => capturedModelId,
-    getCapturedPayload: () => capturedPayload,
-  };
-}
-
-export function runXaiGrok4ResponseStream(streamFn: StreamFn | null | undefined) {
-  void streamFn?.(
-    {
-      api: "openai-responses",
-      provider: "xai",
-      id: "grok-4",
-    } as Model<"openai-responses">,
-    { messages: [] } as Context,
-    {},
-  );
-}
-
-export function expectXaiFastToolStreamShaping(
-  capture: ReturnType<typeof createXaiPayloadCaptureStream>,
+      ],
+    },
+    wrap = (ctx) => wrapXaiProviderStream(ctx, { clientVersion: "2026.7.2" }),
+  }: {
+    extraParams?: Record<string, unknown>;
+    headers?: Record<string, string>;
+    payload?: Record<string, unknown>;
+    wrap?: (ctx: ProviderWrapStreamFnContext) => StreamFn | null | undefined;
+  } = {},
 ) {
-  const capturedPayload = capture.getCapturedPayload();
-  expect(capture.getCapturedModelId()).toBe("grok-4-fast");
-  expect(capturedPayload).toMatchObject({ tool_stream: true });
-  expect(capturedPayload).not.toHaveProperty("reasoning");
-  const payloadTools = capturedPayload?.tools as XaiToolPayloadFunction[] | undefined;
-  expect(payloadTools?.[0]?.function).toHaveProperty("strict", true);
+  let modelId: string | undefined;
+  let capturedHeaders: Record<string, string> | undefined;
+  const streamFn: StreamFn = (selected, _context, options) => {
+    modelId = selected.id;
+    capturedHeaders = options?.headers;
+    options?.onPayload?.(payload, selected);
+    return {} as ReturnType<StreamFn>;
+  };
+  const wrapped = wrap({ provider: "xai", modelId: model.id, extraParams, streamFn });
+  if (!wrapped) {
+    throw new Error("expected xAI stream wrapper");
+  }
+  void wrapped(model, { messages: [] }, { headers });
+  return { modelId, headers: capturedHeaders, payload };
 }

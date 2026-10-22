@@ -182,6 +182,78 @@ describe("ApprovalsPage", () => {
     expect(body).not.toContain("No resolved approvals");
   });
 
+  it("retains accepted history through pending pagination, failure and retry", async () => {
+    const firstRead = createDeferred<ApprovalHistoryResult>();
+    const moreRead = createDeferred<ApprovalHistoryResult>();
+    const retryRead = createDeferred<ApprovalHistoryResult>();
+    const request = replyOnce(firstRead.promise, moreRead.promise, retryRead.promise);
+    const { page } = createPage(request);
+    await waitForSolid(() =>
+      expect(page.querySelector(".settings-loading-skeleton")?.getAttribute("aria-label")).toBe(
+        "Loading approval history…",
+      ),
+    );
+
+    firstRead.resolve({ items: [terminal("retained", 2_000)], nextCursor: "next" });
+    await waitForHistory(page, "echo retained");
+    const table = page.querySelector(".approval-history-table")!;
+    const row = table.querySelector("tbody tr");
+    const more = page.querySelector<HTMLButtonElement>(".data-table-pagination button")!;
+    more.click();
+    more.click();
+    flush();
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(table.getAttribute("aria-busy")).toBe("true");
+    expect(more.disabled).toBe(true);
+    expect(more.textContent).toContain("Loading");
+    expect(table.querySelector("tbody tr")).toBe(row);
+
+    moreRead.reject(new Error("History unavailable"));
+    await waitForSolid(() => {
+      expect(page.querySelector('[role="alert"]')?.textContent).toContain("History unavailable");
+      expect(table.getAttribute("aria-busy")).toBe("false");
+      expect(more.disabled).toBe(false);
+    });
+    expect(table.querySelector("tbody tr")).toBe(row);
+    page.querySelector<HTMLButtonElement>('[role="alert"] button')!.click();
+    flush();
+    expect(request).toHaveBeenLastCalledWith("approval.history", { limit: 50 });
+    expect(table.getAttribute("aria-busy")).toBe("true");
+    expect(page.querySelector('[role="alert"]')).toBeNull();
+    expect(table.querySelector("tbody tr")).toBe(row);
+
+    retryRead.resolve({ items: [terminal("retained", 3_000)] });
+    await waitForSolid(() => expect(table.getAttribute("aria-busy")).toBe("false"));
+    expect(table.querySelector("tbody tr")).toBe(row);
+    expect(page.querySelector(".approval-history-table")).toBe(table);
+  });
+
+  it("keeps a failed initial grants read unknown until an accepted refresh", async () => {
+    const refreshedGrants = createDeferred<ExecApprovalGrantsListResult>();
+    const grants = vi.fn().mockRejectedValueOnce(new Error("Ledger unavailable"));
+    grants.mockReturnValue(refreshedGrants.promise);
+    const { page, emitGatewayEvent } = createPage(
+      () => Promise.resolve({ items: [] }),
+      undefined,
+      grants,
+    );
+    await waitForSolid(() =>
+      expect(page.querySelector('[role="alert"]')?.textContent).toContain("Ledger unavailable"),
+    );
+    const table = page.querySelector(".standing-grants-table");
+    expect(grantsText(page)).toContain("Unknown");
+    expect(grantsText(page)).not.toContain("No standing grants");
+    expect(page.querySelector('[role="alert"] button')).toBeNull();
+
+    emitGatewayEvent("exec.approval.resolved", { id: "refreshed", decision: "deny" });
+    await waitForSolid(() => expect(grants).toHaveBeenCalledTimes(2));
+    expect(grantsText(page)).toContain("Unknown");
+    refreshedGrants.resolve({ grants: [] });
+    await waitForGrants(page, "No standing grants");
+    expect(page.querySelector('[role="alert"]')).toBeNull();
+    expect(page.querySelector(".standing-grants-table")).toBe(table);
+  });
+
   it("refreshes the newest history after an approval resolves during pagination", async () => {
     const olderPage = createDeferred<ApprovalHistoryResult>();
     const request = replyOnce(
@@ -316,6 +388,44 @@ describe("ApprovalsPage", () => {
       expect(grantButton(page)).toBeNull();
     },
   );
+
+  it("retains the grant row and releases failed revoke feedback before retry", async () => {
+    const failedRevoke = createDeferred<unknown>();
+    const retryRevoke = createDeferred<unknown>();
+    const revoke = replyOnce(failedRevoke.promise, retryRevoke.promise);
+    const { page } = createPage(
+      (method) =>
+        method === "exec.approval.grants.revoke" ? revoke() : Promise.resolve({ items: [] }),
+      undefined,
+      () => Promise.resolve(grantReply("Nightly backup")),
+    );
+    await waitForGrants(page, "Nightly backup");
+    const button = grantButton(page)!;
+    const row = button.closest("tr");
+    button.click();
+    button.click();
+    flush();
+    expect(revoke).toHaveBeenCalledOnce();
+    expect(button.disabled).toBe(true);
+    expect(button.textContent).toContain("Revoking");
+    expect(grantsText(page)).toContain("Until revoked");
+
+    failedRevoke.reject(new Error("Revoke failed"));
+    await waitForSolid(() => {
+      expect(page.querySelector('[role="alert"]')?.textContent).toContain("Revoke failed");
+      expect(button.disabled).toBe(false);
+      expect(button.textContent?.trim()).toBe("Revoke");
+    });
+    expect(grantButton(page)?.closest("tr")).toBe(row);
+
+    button.click();
+    flush();
+    expect(button.disabled).toBe(true);
+    retryRevoke.resolve({ outcome: "revoked" });
+    await waitForGrants(page, "Revoked");
+    expect(revoke).toHaveBeenCalledTimes(2);
+    expect(grantButton(page)).toBeNull();
+  });
 
   it("renders the standing-grant ledger and revokes through the gateway", async () => {
     const pendingRefresh = createDeferred<ExecApprovalGrantsListResult>();

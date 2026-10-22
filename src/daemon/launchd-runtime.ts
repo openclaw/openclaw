@@ -252,7 +252,7 @@ export async function readLaunchAgentProgramArguments(
     ...resolveLaunchAgentEnvironmentReadOptions(env, label),
     ...options,
   });
-  if (!command && options?.requireEffective) {
+  if (!command && options?.requireEffective && !options.allowMissingDefinition) {
     // A removed plist can leave its job registered; only launchd can prove absence.
     const timeoutMs =
       options.timeoutMs && options.timeoutMs > 0 ? Math.min(options.timeoutMs, 5_000) : 5_000;

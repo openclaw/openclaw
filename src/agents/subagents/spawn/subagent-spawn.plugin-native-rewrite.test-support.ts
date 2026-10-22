@@ -21,7 +21,7 @@ import { normalizeAcceptedSessionSpawnResult } from "../../accepted-session-spaw
 import { resolveAgentWorkspaceDir } from "../../agent-scope.js";
 import { finalizeAgentTools } from "../../agent-tools.finalize.js";
 import type { AnyAgentTool } from "../../agent-tools.types.js";
-import type { NativeSubagentRequestSource } from "../../plugin-native-subagent.js";
+import type { NativeSubagentRequestSource } from "../../plugin-native-subagent.types.js";
 import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
