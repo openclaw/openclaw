@@ -367,14 +367,12 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(await stopped).toBe(transportFailure);
   });
 
-  it("passes fullConfig to the webhook server for streaming provider resolution", async () => {
-    const coreConfig = { tts: { provider: "openai" } } as OpenClawConfig;
-    const fullConfig: OpenClawConfig = { plugins: { entries: { openai: { enabled: true } } } };
+  it("passes the complete config to the webhook server for streaming provider resolution", async () => {
+    const coreConfig: OpenClawConfig = { plugins: { entries: { openai: { enabled: true } } } };
 
-    await createRuntime({ coreConfig, fullConfig });
+    await createRuntime({ coreConfig });
 
     expect(mocks.webhookCtorArgs[0]?.[4]).toBe(coreConfig);
-    expect(mocks.webhookCtorArgs[0]?.[5]).toBe(fullConfig);
   });
 
   it("builds realtime instructions for the agent frozen on each call", async () => {
@@ -390,7 +388,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       },
       { agentId: "operator" },
     );
-    const fullConfig: OpenClawConfig = {
+    const coreConfig: OpenClawConfig = {
       agents: {
         entries: {
           operator: { identity: { name: "Main Voice" } },
@@ -398,7 +396,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
         },
       },
     };
-    const runtime = await createRuntime({ config, fullConfig });
+    const runtime = await createRuntime({ config, coreConfig });
 
     const resolveCallRegistration = mocks.realtimeHandlerCtorArgs[0]?.[2];
     expect(mocks.realtimeHandlerCtorArgs[0]?.[4]).toBe(

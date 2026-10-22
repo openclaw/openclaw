@@ -181,8 +181,6 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/browser/browser-maintenance.transport.test.ts",
   "extensions/browser/src/browser-dashboard.concurrency.test.ts",
   "extensions/browser/src/browser/routes/agent.act.dashboard-ownership.test.ts",
-  "extensions/browser/src/browser/routes/agent.act.transfers-ownership.test.ts",
-  "extensions/browser/src/browser/routes/agent.state.dashboard-ownership.test.ts",
   "extensions/browser/src/browser/session-tab-registry.extension-cleanup.test.ts",
   "extensions/browser/src/browser/session-tab-registry.membership.test.ts",
   "extensions/browser/src/browser/session-tab-registry.sqlite.test.ts",

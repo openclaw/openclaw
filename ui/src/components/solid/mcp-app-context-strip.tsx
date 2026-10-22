@@ -4,7 +4,7 @@ import {
   createOptimisticStore,
   createSignal,
   For,
-  onCleanup,
+  onSettled,
   Show,
 } from "solid-js";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
@@ -37,10 +37,7 @@ export function McpAppContextStrip(props: McpAppContextStripProps) {
   const [pending, setPending] = createOptimisticStore<Record<string, (() => boolean) | undefined>>(
     {},
   );
-  let mounted = true;
-  onCleanup(() => {
-    mounted = false;
-  });
+  let mounted = false;
   const contexts = createMemo(() => {
     const client = gateway.read().snapshot.client;
     const sessionKey = props.sessionKey;
@@ -51,8 +48,9 @@ export function McpAppContextStrip(props: McpAppContextStripProps) {
       equality: "revision",
     });
   });
-  onCleanup(
-    context.gateway.subscribeEvents((event) => {
+  onSettled(() => {
+    mounted = true;
+    const stop = context.gateway.subscribeEvents((event) => {
       if (event.event !== "mcp.app.hostContextChanged") {
         return;
       }
@@ -89,8 +87,12 @@ export function McpAppContextStrip(props: McpAppContextStripProps) {
         })
         .then((result) => publish(result.state))
         .catch(() => publish(null));
-    }),
-  );
+    });
+    return () => {
+      mounted = false;
+      stop();
+    };
+  });
   const presentRemoval = action(function* (
     viewId: string,
     current: () => boolean,

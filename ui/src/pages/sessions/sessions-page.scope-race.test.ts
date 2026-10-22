@@ -215,8 +215,9 @@ describe("sessions page agent-scope retirement", () => {
         await vi.waitFor(() => expect(page.loading).toBe(false));
         page.error = "New foreground error.";
       }
+      const failure = new Error("Old placement failed.");
       if (fails) {
-        pending.reject(new Error("Old placement failed."));
+        pending.reject(failure);
       } else {
         pending.resolve({ ok: true });
       }
@@ -226,7 +227,7 @@ describe("sessions page agent-scope retirement", () => {
         expect(reconcileMutation).not.toHaveBeenCalled();
         expect(page.error).toBe("New foreground error.");
       } else {
-        await vi.waitFor(() => expect(page.error).toBe("Old placement failed."));
+        await vi.waitFor(() => expect(page.error).toBe(failure));
         expect(reconcileMutation).toHaveBeenCalledWith("writer");
       }
     },
@@ -281,7 +282,7 @@ describe("sessions page agent-scope retirement", () => {
     expect(query).toMatchObject({ search: key, agentId: "writer" });
     vi.mocked(showConfirmDialog).mockResolvedValue(true);
     const oldRequest = page.deleteSessionFromMenu(archivedRow(key));
-    let newRequest: Promise<void> | undefined;
+    let newRequest: ReturnType<typeof page.deleteSessionFromMenu> | undefined;
     try {
       await vi.waitFor(() => expect(deleteMany).toHaveBeenCalledTimes(1));
       changeScope("main");

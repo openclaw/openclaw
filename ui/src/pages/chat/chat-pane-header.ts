@@ -239,7 +239,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       agentsList: this.context.agents.state.agentsList,
       hello: this.context.gateway.snapshot.hello,
     });
-    const archiveAllowed = Boolean(row && this.canArchiveHeaderSession(row));
     const deleteAllowed = Boolean(
       row &&
       !isNativeCatalogAdoptionSessionKey(row.key) &&
@@ -658,7 +657,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               actionDisabledReasons,
               forkDisabled: this.state.sessionsLoading || row.modelSelectionLocked === true,
               forkFromLastCompleted: row.hasActiveRun === true,
-              archiveAllowed,
+              archiveAllowed: this.canArchiveHeaderSession(row),
               archiveShortcut: this.active && this.presented && !this.onboarding,
               deleteAllowed,
               onOpen: this.onHeaderMenuOpen,
