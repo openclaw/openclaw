@@ -15,7 +15,6 @@ import {
   focused,
   makeBoard,
   makeCard,
-  cardsListResponse,
 } from "./workboard.e2e.test-support.ts";
 
 let webkitBrowser: Browser | undefined;
@@ -46,8 +45,11 @@ const card = makeCard(
 );
 const board = makeBoard("ops", { name: "Operations", total: 1, active: 1, byStatus: { todo: 1 } });
 
-const cardsResponse = (cards: WorkboardCard[]) =>
-  cardsListResponse(cards, [board], ["todo", "done"]);
+const cardsResponse = (cards: WorkboardCard[]) => ({
+  boards: [board],
+  cards,
+  statuses: ["todo", "done"],
+});
 
 suite.define(() => {
   it.each(["chromium", "webkit"] as const)(

@@ -358,11 +358,15 @@ it("runs a listen-first health probe", async () => {
   const testListen = vi.fn(async () => ({
     createdSession: true,
     inCall: true,
+    manualAction: undefined,
     listenVerified: true,
     listenTimedOut: false,
     captioning: true,
     captionsEnabledAttempted: true,
     transcriptLines: 1,
+    lastCaptionAt: undefined,
+    lastCaptionSpeaker: undefined,
+    lastCaptionText: undefined,
     recentTranscript: [],
     session: meetSession({
       transport: "chrome-node",

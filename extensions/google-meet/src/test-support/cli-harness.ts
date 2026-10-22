@@ -40,7 +40,7 @@ export function useCli() {
     vi.resetModules();
   });
   return {
-    async run(args: string[], params: Parameters<typeof setupCli>[0] = {}) {
+    run: async (args: string[], params: Parameters<typeof setupCli>[0] = {}) => {
       stdout.restore();
       stdout = captureStdout();
       await setupCli(params).parseAsync(["googlemeet", ...args], { from: "user" });

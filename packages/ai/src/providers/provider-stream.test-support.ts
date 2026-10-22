@@ -6,7 +6,7 @@ export function serializeSse(events: object[]): string {
   return events
     .map(
       (event) =>
-        `${"type" in event ? `event: ${event.type}\n` : ""}data: ${JSON.stringify(event)}\n\n`,
+        `${"type" in event && typeof event.type === "string" ? `event: ${event.type}\n` : ""}data: ${JSON.stringify(event)}\n\n`,
     )
     .join("");
 }

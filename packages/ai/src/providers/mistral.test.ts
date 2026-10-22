@@ -372,7 +372,10 @@ describe("Mistral provider", () => {
     expect(JSON.stringify(mistralMockState.payloads[0])).toBe(
       JSON.stringify(mistralMockState.payloads[1]),
     );
-    expect(payload().tools?.map((tool) => tool.function.name)).toEqual(["alpha_tool", "zeta_tool"]);
+    expect(payload().tools).toMatchObject([
+      { function: { name: "alpha_tool" } },
+      { function: { name: "zeta_tool" } },
+    ]);
   });
 
   it("reports unreadable tool parameters beside a usable tool before sending", async () => {

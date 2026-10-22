@@ -126,6 +126,8 @@ it("ends an active conference for a Meet space", async () => {
   expect(endCall?.[1]).toEqual({
     method: "POST",
     body: "{}",
+    redirect: "manual",
+    signal: expect.any(AbortSignal),
     headers: {
       Accept: "application/json",
       Authorization: "Bearer token",

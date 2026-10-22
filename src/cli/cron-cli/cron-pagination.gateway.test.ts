@@ -42,12 +42,12 @@ const listRequests = () =>
   callGatewayFromCli.mock.calls.filter(([method]) => method === "cron.list");
 const listOffsets = () => listRequests().map((call) => (call[2] as { offset: number }).offset);
 const output = (stream: "log" | "error") => runtime[stream].mock.calls.flat().join("\n");
-const readJson = <T = unknown>() => runtime.writeJson.mock.calls.at(-1)?.[0] as T;
+const readJson = (): unknown => runtime.writeJson.mock.calls.at(-1)?.[0];
 type Inventory = {
   jobs: Array<CronJob & { effectiveAgentId?: string | null }>;
   deliveryPreviews: Record<string, { label: string; detail: string }>;
 };
-const inventory = () => readJson<Inventory>();
+const inventory = () => readJson() as Inventory;
 const stderrIsTTY = Object.getOwnPropertyDescriptor(process.stderr, "isTTY");
 function expectIncludes(text: string, ...parts: string[]) {
   for (const part of parts) {
@@ -656,7 +656,7 @@ describe("cron CLI with the real Gateway pagination contract", () => {
 
     await runCron(["show", job.id, "--json"]);
 
-    const result = readJson<CronJob>();
+    const result = readJson();
     expect(result).toMatchObject({ id: job.id, name, payload: { model }, state: { lastError } });
   });
 
