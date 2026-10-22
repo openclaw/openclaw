@@ -13,10 +13,7 @@ import {
 } from "openclaw/plugin-sdk/sandbox";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({
-  resolveBinary: vi.fn(() => "mxc-test-binary"),
-  probe: vi.fn(),
-}));
+const mocks = vi.hoisted(() => ({ resolveBinary: vi.fn(() => "mxc-test-binary"), probe: vi.fn() }));
 // mock-isolation: Registration probes a synthetic binary, never the host installation.
 vi.mock("../src/binary-resolver.js", () => ({ resolveMxcBinaryPath: mocks.resolveBinary }));
 vi.mock("node:child_process", async (importOriginal) => ({
@@ -295,9 +292,7 @@ describe("registerMxcPlugin", () => {
     } finally {
       await expect(
         registryApi.disposePluginRegistryInstances(registry.registry),
-      ).resolves.toMatchObject({
-        failures: [],
-      });
+      ).resolves.toMatchObject({ failures: [] });
       if (originalRegistry) {
         registryApi.setActivePluginRegistry(originalRegistry);
       } else {
