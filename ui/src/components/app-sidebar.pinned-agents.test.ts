@@ -34,6 +34,7 @@ const modalButton = (text: string) =>
   )!;
 
 it("pins an agent into a menu-less gallery above the roster and preserves the other agents", async () => {
+  const warnings = vi.spyOn(console, "warn");
   const { sidebar, context, provider } = await mountRoster(roster, reply());
   sidebar.sidebarAgentsMode = "roster";
   await vi.waitFor(() => expect(agentIds(sidebar)).toHaveLength(3));
@@ -46,6 +47,11 @@ it("pins an agent into a menu-less gallery above the roster and preserves the ot
   expect(context.navigation.snapshot.pinnedAgentIds).toEqual(["main"]);
   expect(loadSettings().pinnedAgentIds).toEqual(["main"]);
   expect(document.activeElement?.getAttribute("data-agent-id")).toBe("main");
+  expect(
+    warnings.mock.calls.filter(
+      ([message]) => typeof message === "string" && message.includes("[NO_OWNER_EFFECT]"),
+    ),
+  ).toEqual([]);
   provider.remove();
   const remounted = await mountRoster(roster, reply());
   remounted.sidebar.sidebarAgentsMode = "roster";
@@ -184,3 +190,58 @@ it("offers agent sessions and settings without a create action, and confirms age
     expect(context.agents.refreshList).toHaveBeenCalledOnce();
   });
 });
+
+it.each([false, true])(
+  "offers Create Claw with pinned=%s without unrelated pinned actions",
+  async (isPinned) => {
+    const { sidebar, context, gatewayHarness, request } = await mountRoster(roster, []);
+    context.runtimeConfig.state.configForm = {
+      gateway: { controlUi: { experimental: { claws: true } } },
+    };
+    if (isPinned) {
+      context.navigation.update({ pinnedAgentIds: ["main"] });
+    }
+    gatewayHarness.publish({
+      hello: gatewayHelloForMethods([
+        ...SESSION_MUTATION_TEST_METHODS,
+        "claws.drafts.create",
+        "chat.send",
+      ]),
+    });
+    sidebar.sidebarAgentsMode = "roster";
+    await vi.waitFor(() =>
+      isPinned ? expect(pinned(sidebar)).not.toBeNull() : expect(agentIds(sidebar)).toHaveLength(3),
+    );
+    await settleRoster(sidebar);
+
+    const previousRequest = request.getMockImplementation()!;
+    request.mockImplementation((...args) =>
+      args[0] === "claws.drafts.create"
+        ? Promise.reject(new Error("The agent workspace is unavailable."))
+        : previousRequest(...args),
+    );
+    const menuHost = isPinned ? pinned(sidebar)! : sidebar;
+    const trigger = menuHost.querySelector<HTMLButtonElement>(
+      'button[aria-label="Options for Harbor"]',
+    );
+    expect(trigger).not.toBeNull();
+    trigger!.click();
+    await vi.waitFor(() =>
+      expect(menuHost.querySelector('[data-value="create-claw"]')).not.toBeNull(),
+    );
+    if (isPinned) {
+      expect(
+        menuHost.querySelector(
+          '[data-value="pin"], [data-value="sessions"], [data-value="settings"], [data-value="delete"]',
+        ),
+      ).toBeNull();
+    }
+    menuHost.querySelector<HTMLElement>('[data-value="create-claw"]')!.click();
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("claws.drafts.create", { agentId: "main" }),
+    );
+    if (isPinned) {
+      expect(context.navigation.snapshot.pinnedAgentIds).toEqual(["main"]);
+    }
+  },
+);

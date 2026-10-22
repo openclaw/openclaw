@@ -53,6 +53,29 @@ describe("human Notes blocks", () => {
     expect(extractHumanNotesBlock(existing)).toBe(`${startMarker}\n${notes}\n${endMarker}`);
     expect(preserveHumanNotesBlock(rendered, existing)).toBe(existing);
   });
+
+  it.each([startMarker, endMarker])("rejects an unpaired producer-page marker %s", (marker) => {
+    const existing = `# Concept\n\n## Notes\n${marker}\nHandwritten note.\n`;
+
+    expect(() => preserveHumanNotesBlock(rendered, existing, { producerMarkdown: true })).toThrow(
+      "human Notes are missing",
+    );
+  });
+
+  it.each(["\n", "\r\n"])("preserves legacy Notes under an open producer fence (%j)", (newline) => {
+    const humanBlock = [startMarker, "Keep café and trailing spaces.  ", endMarker].join(newline);
+    const existing = `~~~sql${newline}SELECT 1${newline}## Notes${newline}${humanBlock}${newline}`;
+
+    expect(preserveHumanNotesBlock(rendered, existing, { producerMarkdown: true })).toBe(
+      rendered.replace(`${startMarker}\n${endMarker}`, () => humanBlock),
+    );
+  });
+
+  it("does not preserve a legacy producer's closed Notes example", () => {
+    const existing = `~~~markdown\n## Notes\n${startMarker}\nProducer example.\n${endMarker}\n~~~`;
+
+    expect(preserveHumanNotesBlock(rendered, existing, { producerMarkdown: true })).toBe(rendered);
+  });
 });
 
 describe("toWikiPageSummary", () => {

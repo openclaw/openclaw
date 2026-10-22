@@ -1,57 +1,13 @@
-import { verifyEvent, getPublicKey, SimplePool, type Event } from "nostr-tools";
+import { verifyEvent, getPublicKey, SimplePool } from "nostr-tools";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { NostrProfile } from "./config-schema.js";
 import { publishProfile } from "./nostr-profile.js";
 import { createNostrRelayFixture, PREFIX_ACK_REASON } from "./nostr-relay.test-harness.js";
 import { TEST_HEX_PRIVATE_KEY_BYTES } from "./test-fixtures.js";
 
 const TEST_PUBKEY = getPublicKey(TEST_HEX_PRIVATE_KEY_BYTES);
+const profile = { name: "wire-profile" };
 
-async function publishTestProfile(profile: NostrProfile, lastPublishedAt?: number): Promise<Event> {
-  let publishedEvent: Event | undefined;
-  const pool = {
-    publish: vi.fn((_relays: string[], event: Event) => {
-      publishedEvent = event;
-      return [Promise.resolve("saved")];
-    }),
-  } as unknown as SimplePool;
-
-  await publishProfile(
-    pool,
-    TEST_HEX_PRIVATE_KEY_BYTES,
-    ["wss://relay.example"],
-    profile,
-    lastPublishedAt,
-  );
-
-  if (!publishedEvent) {
-    throw new Error("expected profile event to be published");
-  }
-  return publishedEvent;
-}
-
-describe("createProfileEvent", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2024-01-15T12:00:00Z"));
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("uses current time when lastPublishedAt is in the past", async () => {
-    const pastTimestamp = 1705320000 - 3600; // 1 hour in the past
-    const profile: NostrProfile = { name: "pasttest" };
-
-    const event = await publishTestProfile(profile, pastTimestamp);
-
-    const expectedTimestamp = Math.floor(Date.now() / 1000);
-    expect(event.created_at).toBe(expectedTimestamp);
-  });
-});
-
-describe("publishProfile real relay outcomes", () => {
+describe("publishProfile", () => {
   let pool: SimplePool;
   let relays: Array<Awaited<ReturnType<typeof createNostrRelayFixture>>>;
 
@@ -61,6 +17,7 @@ describe("publishProfile real relay outcomes", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     const poolResults = await Promise.allSettled([Promise.resolve().then(() => pool.destroy())]);
     const relayResults = await Promise.allSettled(relays.map((entry) => entry.close()));
     const failures = [...poolResults, ...relayResults].flatMap((result) =>
@@ -80,6 +37,18 @@ describe("publishProfile real relay outcomes", () => {
     relays.push(result);
     return result;
   }
+  const publish = (urls: string[], lastPublishedAt?: number) =>
+    publishProfile(pool, TEST_HEX_PRIVATE_KEY_BYTES, urls, profile, lastPublishedAt);
+
+  it("uses current time when lastPublishedAt is in the past", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1705320000000);
+    const publishSpy = vi.spyOn(pool, "publish").mockReturnValue([Promise.resolve("saved")]);
+    await publish(["wss://relay.example"], 1705320000 - 3600);
+    expect(publishSpy).toHaveBeenCalledWith(
+      ["wss://relay.example"],
+      expect.objectContaining({ created_at: 1705320000 }),
+    );
+  });
 
   it("fans out before acknowledgements and classifies OK by its boolean, not its reason", async () => {
     const first = await relay({ reason: PREFIX_ACK_REASON, holdAcknowledgements: true });
@@ -88,16 +57,12 @@ describe("publishProfile real relay outcomes", () => {
       reason: PREFIX_ACK_REASON,
       holdAcknowledgements: true,
     });
-    const publishing = publishProfile(pool, TEST_HEX_PRIVATE_KEY_BYTES, [first.url, second.url], {
-      name: "wire-profile",
-    });
+    const publishing = publish([first.url, second.url]);
     try {
       await vi.waitFor(() => {
-        expect(first.events).toHaveLength(1);
-        expect(second.events).toHaveLength(1);
+        expect([first.events.length, second.events.length]).toEqual([1, 1]);
       });
-      expect(first.acknowledgements).toEqual([]);
-      expect(second.acknowledgements).toEqual([]);
+      expect([first.acknowledgements, second.acknowledgements]).toEqual([[], []]);
       first.acknowledgeAll();
       second.acknowledgeAll();
 
@@ -121,9 +86,7 @@ describe("publishProfile real relay outcomes", () => {
   it("reports actual relay connection failures instead of successful publishes", async () => {
     const failed = await relay({ rejectUpgrade: true });
 
-    const result = await publishProfile(pool, TEST_HEX_PRIVATE_KEY_BYTES, [failed.url], {
-      name: "wire-profile",
-    });
+    const result = await publish([failed.url]);
 
     expect(failed.upgradeAttempts()).toBeGreaterThan(0);
     expect(failed.events).toEqual([]);

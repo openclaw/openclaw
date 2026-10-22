@@ -66,11 +66,11 @@ describe("Android app i18n resources", () => {
 
   it("builds complete Wear and third-party resources for every native locale", async () => {
     const catalog = await buildAndroidAppI18nCatalog();
-    const wearResources = [...catalog.resources].filter(
-      ([filePath]) =>
-        filePath.includes("/apps/android/wear/src/main/res/values-") &&
-        filePath.endsWith("/strings.xml"),
-    );
+    const resourcesFor = (directory: string, filename: string) =>
+      [...catalog.resources].filter(
+        ([file]) => file.includes(directory) && file.endsWith(filename),
+      );
+    const wearResources = resourcesFor("/apps/android/wear/src/main/res/values-", "/strings.xml");
     const base = await readFile("apps/android/wear/src/main/res/values/strings.xml", "utf8");
     const baseKeys = sortedMatches(base, /<string name="([^"]+)"/gu, 1);
     const basePlaceholders = sortedMatches(base, /%\d+\$[a-z]/giu);
@@ -78,10 +78,7 @@ describe("Android app i18n resources", () => {
     expect(wearResources).toHaveLength(NATIVE_I18N_LOCALES.length);
     for (const [, content] of wearResources) {
       const stringTags = [...content.matchAll(/<string\b[^>]*>/gu)].map((match) => match[0]);
-      const keys = stringTags
-        .map((tag) => tag.match(/\bname="([^"]+)"/u)?.[1])
-        .filter((key): key is string => key !== undefined)
-        .toSorted();
+      const keys = sortedMatches(stringTags.join("\n"), /\bname="([^"]+)"/gu, 1);
       expect(keys).toEqual(baseKeys);
       expect(sortedMatches(content, /%\d+\$[a-z]/giu)).toEqual(basePlaceholders);
       expect(content).not.toMatch(/(?:&apos;|(?<!\\)')/u);
@@ -106,10 +103,9 @@ describe("Android app i18n resources", () => {
       "apps/android/app/src/thirdParty/res/values/accessibility_strings.xml",
       "utf8",
     );
-    const resources = [...catalog.resources].filter(
-      ([filePath]) =>
-        filePath.includes("/apps/android/app/src/thirdParty/res/values-") &&
-        filePath.endsWith("/accessibility_strings.xml"),
+    const resources = resourcesFor(
+      "/apps/android/app/src/thirdParty/res/values-",
+      "/accessibility_strings.xml",
     );
 
     expect(thirdPartyBase).toContain('tools:ignore="MissingTranslation"');

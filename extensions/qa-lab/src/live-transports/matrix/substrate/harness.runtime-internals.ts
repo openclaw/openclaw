@@ -121,37 +121,6 @@ function resolveMatrixQaHarnessImage(image?: string) {
   );
 }
 
-function renderMatrixQaCompose(params: {
-  homeserverPort: number;
-  image: string;
-  registrationToken: string;
-  serverName: string;
-}) {
-  // Omitting `published` lets Docker atomically choose and bind the host port;
-  // probing a free numeric port before Compose starts races parallel harnesses.
-  const portMapping =
-    params.homeserverPort === 0
-      ? `      - target: ${MATRIX_QA_INTERNAL_PORT}\n        host_ip: 127.0.0.1`
-      : `      - "127.0.0.1:${params.homeserverPort}:${MATRIX_QA_INTERNAL_PORT}"`;
-  return `services:
-  ${MATRIX_QA_SERVICE}:
-    image: ${params.image}
-    ports:
-${portMapping}
-    environment:
-      TUWUNEL_ADDRESS: "0.0.0.0"
-      TUWUNEL_ALLOW_ENCRYPTION: "true"
-      TUWUNEL_ALLOW_FEDERATION: "false"
-      TUWUNEL_ALLOW_REGISTRATION: "true"
-      TUWUNEL_DATABASE_PATH: "/var/lib/tuwunel"
-      TUWUNEL_PORT: "${MATRIX_QA_INTERNAL_PORT}"
-      TUWUNEL_REGISTRATION_TOKEN: "${params.registrationToken}"
-      TUWUNEL_SERVER_NAME: "${params.serverName}"
-    volumes:
-      - ./data:/var/lib/tuwunel
-`;
-}
-
 export async function writeMatrixQaHarnessFiles(params: {
   outputDir: string;
   image?: string;
@@ -166,14 +135,32 @@ export async function writeMatrixQaHarnessFiles(params: {
   const dataDir = path.join(params.outputDir, "data");
 
   await fs.mkdir(dataDir, { recursive: true });
+  const homeserverPort = params.homeserverPort;
+  // Omitting `published` lets Docker atomically choose and bind the host port;
+  // probing a free numeric port before Compose starts races parallel harnesses.
+  const portMapping =
+    homeserverPort === 0
+      ? `      - target: ${MATRIX_QA_INTERNAL_PORT}\n        host_ip: 127.0.0.1`
+      : `      - "127.0.0.1:${homeserverPort}:${MATRIX_QA_INTERNAL_PORT}"`;
   await fs.writeFile(
     composeFile,
-    `${renderMatrixQaCompose({
-      homeserverPort: params.homeserverPort,
-      image,
-      registrationToken,
-      serverName,
-    })}\n`,
+    `services:
+  ${MATRIX_QA_SERVICE}:
+    image: ${image}
+    ports:
+${portMapping}
+    environment:
+      TUWUNEL_ADDRESS: "0.0.0.0"
+      TUWUNEL_ALLOW_ENCRYPTION: "true"
+      TUWUNEL_ALLOW_FEDERATION: "false"
+      TUWUNEL_ALLOW_REGISTRATION: "true"
+      TUWUNEL_DATABASE_PATH: "/var/lib/tuwunel"
+      TUWUNEL_PORT: "${MATRIX_QA_INTERNAL_PORT}"
+      TUWUNEL_REGISTRATION_TOKEN: "${registrationToken}"
+      TUWUNEL_SERVER_NAME: "${serverName}"
+    volumes:
+      - ./data:/var/lib/tuwunel
+\n`,
     { encoding: "utf8", mode: 0o600 },
   );
   return {

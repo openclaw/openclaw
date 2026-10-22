@@ -22,7 +22,7 @@ Run links from automation messages and notifications open the exact recorded run
       --name "Calendar check" \
       --at "20m" \
       --session main \
-      --system-event "Next heartbeat: check calendar." \
+      --system-event "Check the calendar for upcoming events." \
       --wake now
     ```
   </Tab>
@@ -79,6 +79,8 @@ In the Control UI, an open automation refreshes its next-run time and condition 
 ### Conversational management
 
 An authenticated channel sender explicitly listed in `commands.ownerAllowFrom`, or a Control UI administrator with `operator.admin`, can ask the agent to list, inspect, update, run, or remove any existing automation on that Gateway, regardless of its creator or channel. For example, ask it to disable a reminder created in Telegram. This matches the administrator's authority on the **Automations** page. Create command payloads through the operator CLI or Gateway API.
+
+When `tools.gatewayPolicy.automations.scope` is `"caller"`, model turns keep ordinary caller scope even for administrators and configured channel owners. `allowCommandJobs: false` additionally blocks model changes to and runs of command jobs. Direct human administration remains available. See [Gateway tool policy](/gateway/config-tools/tool-policy#automation-scope-and-command-jobs).
 
 Fresh authenticated Control UI administrator turns can also create ordinary automations through chat, including recurring agent turns in the current conversation with `timeoutSeconds: 0`. Creation keeps the caller's account/session ownership and captured tool restrictions. Remote administration does not grant local-host or provider-read authority, or permission to capture fresh configured-MCP execution authority. An incomplete tool capture still prevents inheriting an uncaptured tool surface.
 
@@ -239,7 +241,9 @@ Disable automations: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
   <Accordion title="Maintenance">
     `cron.sessionRetention` (default `24h`, `false` or `"0h"` disables) prunes isolated run-session entries. Terminal run history is retained for 7 days (`lost` rows for 24 hours), with the newest 2000 rows per job and history class enforced as an additional ceiling.
 
-    Gateway retention skips agent databases still undergoing startup preparation while maintaining healthy agents. Completed preparation wakes retention for the newly available database. These sweeps keep the Gateway's maintenance context rather than borrowing the publisher's temporary startup admission. Retention continues even when scheduled execution is disabled.
+    Per-agent run-session retention skips agent databases still undergoing startup preparation while maintaining healthy agents. Completed preparation wakes retention for the newly available database. These sweeps keep the Gateway's maintenance context rather than borrowing the publisher's temporary startup admission. Retention continues even when scheduled execution is disabled.
+
+    The seven-day session registry sweep checks descendants only for expired, unprotected run rows. It retains an exact-run parent while it has a non-archived descendant, including through archived intermediate sessions or in another agent's store. If a non-deleted agent's store is unavailable or held for recovery, the registry sweep defers pruning across healthy stores too and retries every minute: the unavailable store may still contain a live descendant. Once those stores are available and no live descendants remain, the expired parent can be pruned. This preserves the parent communication policy for `sessions_send`; it does not restore parent rows deleted before this fix.
 
     After each registry sweep, the Gateway waits until the next candidate expiry or a committed cron-session or store-topology change. Empty, unchanged registries do not need periodic reads. Protected expired sessions and failed sweeps retry every minute; run-history recovery keeps its existing minute cadence.
 

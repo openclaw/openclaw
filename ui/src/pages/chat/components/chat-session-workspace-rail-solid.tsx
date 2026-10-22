@@ -5,9 +5,11 @@ import { shortestFileLabels } from "../../../components/file-kind.ts";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
+import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import "../../../components/tooltip.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { formatByteSize } from "../../../lib/format.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { liveValue } from "../../../lib/reactive/live-value.ts";
 import { isSessionWorkspaceFileSelected } from "../../../lib/sessions/workspace.ts";
 import { nativeListener } from "../../../lib/solid-native-listener.ts";
@@ -16,6 +18,8 @@ import { DesktopWorkspaceContents } from "./chat-session-workspace-desktop.tsx";
 import { MobileWorkspaceContents } from "./chat-session-workspace-mobile-adapter.tsx";
 import type { SessionWorkspaceFilter } from "./chat-sidebar-content-types.ts";
 import type { SessionWorkspaceProps } from "./chat-sidebar-view-types.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 const SESSION_KIND_LABELS = {
   modified: "chat.workspaceFiles.changed",
@@ -71,7 +75,13 @@ function RailRow(props: {
         </span>
         <span class="chat-workspace-rail__file-main">
           <openclaw-tooltip prop:content={props.tooltip ?? props.name}>
-            <span class="chat-workspace-rail__file-name">{props.name}</span>
+            <span
+              ref={createTextOverflow(() => props.name)}
+              class="chat-workspace-rail__file-name"
+              title={props.name}
+            >
+              {props.name}
+            </span>
           </openclaw-tooltip>
           <Show when={props.meta}>
             <span class="chat-workspace-rail__file-meta">{props.meta}</span>
@@ -268,7 +278,14 @@ function WorkspaceContents(props: { workspace: SessionWorkspaceProps }) {
     <aside class="chat-workspace-rail" aria-label={t("chat.workspaceFiles.label")}>
       <Show when={props.workspace.list?.root}>
         <openclaw-tooltip prop:content={props.workspace.list?.root}>
-          <div class="chat-workspace-rail__path">{props.workspace.list?.root}</div>
+          <div class="chat-workspace-rail__path">
+            <span
+              ref={createTextOverflow(() => props.workspace.list?.root)}
+              title={props.workspace.list?.root ?? undefined}
+            >
+              {props.workspace.list?.root}
+            </span>
+          </div>
         </openclaw-tooltip>
       </Show>
       <div class="chat-workspace-rail__toolbar">

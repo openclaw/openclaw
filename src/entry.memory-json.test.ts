@@ -44,12 +44,12 @@ type MemoryRootFixture = {
 
 function memoryConfig(workspace: string, baseUrl?: string): OpenClawConfig {
   return {
+    cron: baseUrl ? { enabled: false } : undefined,
     agents: {
       ownership: "explicit",
       defaults: {
         workspace,
         skipBootstrap: baseUrl ? true : undefined,
-        heartbeat: baseUrl ? { every: "0m" } : undefined,
         model: baseUrl ? { primary: "fixture/unused" } : undefined,
       },
       entries: { main: {} },

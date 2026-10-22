@@ -1,5 +1,6 @@
 import { expect, it, onTestFinished, vi } from "vitest";
 import { shortestFileLabels } from "./file-kind.ts";
+import { markdownFileLinkFromEvent } from "./markdown-file-links.ts";
 import type { MarkdownRenderOptions } from "./markdown-render-options.ts";
 import { htmlFragment } from "./markdown.test-support.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
@@ -230,4 +231,24 @@ it.each([
     expect(link.dataset.filePath).not.toMatch(/[\s()?]/);
   }
   expect(fragment.textContent).toContain(input);
+});
+
+it("carries a persisted message identity without borrowing it for a forwarded session", () => {
+  const bubble = document.createElement("div");
+  bubble.dataset.entryId = "original-entry";
+  bubble.append(render("[Notes](notes.md)"));
+  let selected: ReturnType<typeof markdownFileLinkFromEvent> = null;
+  bubble.addEventListener("click", (event) => {
+    selected = markdownFileLinkFromEvent(event);
+  });
+  const link = bubble.querySelector<HTMLAnchorElement>("a")!;
+  link.click();
+  expect(selected).toMatchObject({ path: "notes.md", messageEntryId: "original-entry" });
+  bubble.dataset.fileSessionKey = "agent:other:forwarded";
+  link.click();
+  expect(selected).toMatchObject({ sessionKey: "agent:other:forwarded" });
+  expect(selected).not.toHaveProperty("messageEntryId");
+  bubble.dataset.fileEntryId = "forwarded-source-entry";
+  link.click();
+  expect(selected).toMatchObject({ messageEntryId: "forwarded-source-entry" });
 });

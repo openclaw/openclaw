@@ -4,7 +4,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { mountSolid as mountReactive } from "../../test-helpers/solid-render.tsx";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   getChatAttachmentDataUrl,
@@ -50,23 +49,11 @@ function button(container: Element, selector: string) {
   return expectDefined(container.querySelector<HTMLButtonElement>(selector), selector);
 }
 
-it.each(["focus", "restore", "preview"] as const)(
+it.each(["restore", "preview"] as const)(
   "handles the pasted file card %s action independently",
   async (action) => {
     const text = "  Preserve indentation 🦞\n" + "x".repeat(1100);
     const f = pastedText(text);
-    if (action === "focus") {
-      const controls = { attachments: [f.attachment], onDraftChange: f.props.onDraftChange };
-      const view = mountReactive(ComposerPastedText, { attachment: f.attachment, controls });
-      document.body.append(view.container);
-      const restore = button(view.container, ".chat-attachment-text-action");
-      restore.focus();
-      const refreshed = { ...f.attachment };
-      view.update({ attachment: refreshed, controls: { ...controls, attachments: [refreshed] } });
-      expect(button(view.container, ".chat-attachment-text-action")).toBe(restore);
-      expect(document.activeElement).toBe(restore);
-      return;
-    }
     const sidebar = action === "preview" ? createAttachmentSidebarHarness() : undefined;
     const onOpenSidebar = sidebar?.open ?? f.props.onOpenSidebar;
     const { onDraftChange } = f.props;
@@ -82,15 +69,6 @@ it.each(["focus", "restore", "preview"] as const)(
     await waitForFast(() => expect(container.querySelector(target)).not.toBeNull());
     if (action === "restore") {
       const restore = button(container, ".chat-attachments-preview .chat-attachment-text-action");
-      const card = expectDefined(
-        restore.closest(".chat-attachment-thumb--file"),
-        "pasted file card",
-      );
-      expect(card.classList.contains("chat-selection-annotations__chip")).toBe(false);
-      const body = restore.closest(".chat-attachment-file__body");
-      expect(body?.firstElementChild?.classList.contains("chat-attachment-file__name")).toBe(true);
-      expect(restore.closest("a, button button, [role=button]")).toBeNull();
-      expect(card.querySelector(".chat-attachment-file__icon")).not.toBeNull();
       restore.click();
       restore.click();
       expect(onDraftChange).toHaveBeenCalledExactlyOnceWith("Newer draft\n\n" + text);

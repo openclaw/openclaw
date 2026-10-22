@@ -2,21 +2,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { UPDATE_RUN_PHASES } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createPackageUpdateDoctorCompletion } from "../cli/update-cli/update-command-doctor-completion.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import * as state from "../state/openclaw-state-db.js";
 import type { UpdateDatabaseBackup } from "./update-database-backup.js";
 import { createUpdateDoctorSectionTiming } from "./update-doctor-section-timing.js";
-import {
-  createUpdateRun,
-  finishUpdateRun,
-  getUpdateRun,
-  listUpdateRuns,
-  recordUpdateRunDiagnostic,
-  recordUpdateRunStep,
-} from "./update-run-ledger.js";
+import * as ledger from "./update-run-ledger.js";
 import { toPublicUpdateRun } from "./update-run-record.js";
 import { renderUpdateRunReport } from "./update-run-report.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
@@ -25,8 +14,8 @@ import type { UpdateStepResult } from "./update-step-result.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawStateDatabaseForTest();
+  await state.closeOpenClawStateDatabaseAsync();
+  state.closeOpenClawStateDatabaseForTest();
 });
 
 function isolatedOptions() {
@@ -47,9 +36,9 @@ describe("update run ledger compaction", () => {
     "retains evidence across the $name bound and reopen",
     async ({ count, detail, missingWrites }) => {
       const options = isolatedOptions();
-      const run = createUpdateRun({ trigger: "chat" }, options);
-      const write = (step: Parameters<typeof recordUpdateRunStep>[1]) =>
-        recordUpdateRunStep(run.runId, step, options);
+      const run = ledger.createUpdateRun({ trigger: "chat" }, options);
+      const write = (step: Parameters<typeof ledger.recordUpdateRunStep>[1]) =>
+        ledger.recordUpdateRunStep(run.runId, step, options);
       const backup: UpdateDatabaseBackup = {
         directory: `${options.env.OPENCLAW_STATE_DIR}/backup`,
         databases: [],
@@ -144,9 +133,9 @@ describe("update run ledger compaction", () => {
       for (let index = 0; index < count; index++) {
         write({ step: `warning:diagnostic-${index}`, status: "completed", detail });
       }
-      finishUpdateRun(run.runId, { status: "succeeded" }, options);
-      closeOpenClawStateDatabaseForTest();
-      const persisted = getUpdateRun(run.runId, options)!;
+      ledger.finishUpdateRun(run.runId, { status: "succeeded" }, options);
+      state.closeOpenClawStateDatabaseForTest();
+      const persisted = ledger.getUpdateRun(run.runId, options)!;
       const published = toPublicUpdateRun(persisted);
       const report = renderUpdateRunReport(published);
       expect(published.status).toBe("succeeded");
@@ -221,7 +210,7 @@ describe("update run ledger compaction", () => {
       finishedAtMs: 3_000,
       downtimeMs: 500,
     };
-    const database = openOpenClawStateDatabase(options);
+    const database = state.openOpenClawStateDatabase(options);
     database.db.exec(updateRunLedgerSchema);
     // Record insertion order matches the explicit column order below.
     database.db
@@ -237,17 +226,17 @@ describe("update run ledger compaction", () => {
           value !== null && typeof value === "object" ? JSON.stringify(value) : value,
         ),
       );
-    closeOpenClawStateDatabaseForTest();
-    expect(getUpdateRun(runId, options)).toEqual(oldRecord);
-    expect(listUpdateRuns({}, options)).toEqual([oldRecord]);
+    state.closeOpenClawStateDatabaseForTest();
+    expect(ledger.getUpdateRun(runId, options)).toEqual(oldRecord);
+    expect(ledger.listUpdateRuns({}, options)).toEqual([oldRecord]);
     expect(Buffer.byteLength(JSON.stringify(steps))).toBeLessThanOrEqual(16 * 1024);
 
     for (const step of ["finalize:exit", "finalize:cleanup", "finalize:complete"]) {
-      recordUpdateRunDiagnostic(runId, "d".repeat(1024), options, step);
+      ledger.recordUpdateRunDiagnostic(runId, "d".repeat(1024), options, step);
     }
-    closeOpenClawStateDatabaseForTest();
+    state.closeOpenClawStateDatabaseForTest();
 
-    const persisted = getUpdateRun(runId, options)!;
+    const persisted = ledger.getUpdateRun(runId, options)!;
     const { steps: oldSteps, updatedAtMs, ...coreFacts } = oldRecord;
     expect(persisted).toMatchObject(coreFacts);
     expect(persisted.updatedAtMs).toBeGreaterThan(updatedAtMs);
@@ -257,6 +246,6 @@ describe("update run ledger compaction", () => {
     expect(persisted.steps).toEqual(expect.arrayContaining(oldTimings));
     expect(persisted.steps.some((step) => step.detail === steps[0]!.detail)).toBe(false);
     expect(Buffer.byteLength(JSON.stringify(persisted.steps))).toBeLessThanOrEqual(16 * 1024);
-    expect(listUpdateRuns({}, options)).toEqual([persisted]);
+    expect(ledger.listUpdateRuns({}, options)).toEqual([persisted]);
   });
 });

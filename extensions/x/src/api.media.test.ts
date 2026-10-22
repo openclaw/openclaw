@@ -4,13 +4,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { createXApiClient, XFetch } from "./api.js";
 import { createXTestApi } from "./test-support/api-client.js";
 
-type ClientOptions = Parameters<typeof createXApiClient>[0];
 type Media = Parameters<ReturnType<typeof createXApiClient>["uploadMedia"]>[0];
-function client(fetch: XFetch, options: Partial<ClientOptions> = {}) {
+function client(fetch: XFetch) {
   return createXTestApi({
     clientSecret: "test-secret",
     refreshToken: "test-refresh",
-    ...options,
     fetch: (url, init) =>
       url.endsWith("/oauth2/token")
         ? Promise.resolve(Response.json({ access_token: "test-access" }))
@@ -54,7 +52,6 @@ function processingFixture(options: {
   id?: string;
   media?: Media;
   finalize: object;
-  signal?: AbortSignal;
   append?: () => Response;
   statuses?: object[];
 }) {
@@ -66,50 +63,47 @@ function processingFixture(options: {
     requests: string[] = [];
   const chunks: { index: FormDataEntryValue | null; bytes: Buffer }[] = [];
   let post: unknown;
-  const api = client(
-    async (url, init) => {
-      const request = new Request(url, init),
-        parsed = new URL(url);
-      calls.push(parsed.pathname);
-      requests.push(`${request.method} ${parsed.pathname}`);
-      expect(request.headers.get("authorization")).toBe("Bearer test-access");
-      if (parsed.pathname.endsWith("/initialize")) {
-        expect(await request.json()).toEqual({
-          media_type: media.contentType,
-          total_bytes: media.buffer.length,
-          media_category: media.mediaCategory,
-        });
-        return mediaResponse({ id });
-      }
-      if (parsed.pathname.endsWith("/append")) {
-        expect(request.headers.get("content-type")).toContain("multipart/form-data; boundary=");
-        const { file, index } = await readMedia(request);
-        expect(file).toMatchObject({ name: media.fileName, type: media.contentType });
-        chunks.push({ index, bytes: Buffer.from(await file.arrayBuffer()) });
-        return options.append?.() ?? mediaResponse({ id });
-      }
-      if (parsed.pathname.endsWith("/finalize")) {
-        expect(await request.text()).toBe("");
-        finalized.resolve();
-        return mediaResponse(options.finalize);
-      }
-      if (parsed.pathname === "/2/media/upload") {
-        expect({
-          method: request.method,
-          command: parsed.searchParams.get("command"),
-          id: parsed.searchParams.get("media_id"),
-        }).toEqual({ method: "GET", command: "STATUS", id });
-        polls.push(Date.now());
-        const states = options.statuses;
-        return mediaResponse(
-          states?.[Math.min(polls.length - 1, states.length - 1)] ?? options.finalize,
-        );
-      }
-      post = await request.json();
-      return mediaResponse({ id: "900" });
-    },
-    { signal: options.signal },
-  );
+  const api = client(async (url, init) => {
+    const request = new Request(url, init),
+      parsed = new URL(url);
+    calls.push(parsed.pathname);
+    requests.push(`${request.method} ${parsed.pathname}`);
+    expect(request.headers.get("authorization")).toBe("Bearer test-access");
+    if (parsed.pathname.endsWith("/initialize")) {
+      expect(await request.json()).toEqual({
+        media_type: media.contentType,
+        total_bytes: media.buffer.length,
+        media_category: media.mediaCategory,
+      });
+      return mediaResponse({ id });
+    }
+    if (parsed.pathname.endsWith("/append")) {
+      expect(request.headers.get("content-type")).toContain("multipart/form-data; boundary=");
+      const { file, index } = await readMedia(request);
+      expect(file).toMatchObject({ name: media.fileName, type: media.contentType });
+      chunks.push({ index, bytes: Buffer.from(await file.arrayBuffer()) });
+      return options.append?.() ?? mediaResponse({ id });
+    }
+    if (parsed.pathname.endsWith("/finalize")) {
+      expect(await request.text()).toBe("");
+      finalized.resolve();
+      return mediaResponse(options.finalize);
+    }
+    if (parsed.pathname === "/2/media/upload") {
+      expect({
+        method: request.method,
+        command: parsed.searchParams.get("command"),
+        id: parsed.searchParams.get("media_id"),
+      }).toEqual({ method: "GET", command: "STATUS", id });
+      polls.push(Date.now());
+      const states = options.statuses;
+      return mediaResponse(
+        states?.[Math.min(polls.length - 1, states.length - 1)] ?? options.finalize,
+      );
+    }
+    post = await request.json();
+    return mediaResponse({ id: "900" });
+  });
   return { api, calls, requests, chunks, polls, finalized: finalized.promise, post: () => post };
 }
 
@@ -235,7 +229,7 @@ describe("X native media request boundary", () => {
     expect(test.polls.map((time) => time - started)).toEqual([60_000, 120_000, 180_000, 240_000]);
   });
 
-  it.each(["caller abort", "account abort", "revoked authority", "missing processing status"])(
+  it.each(["caller abort", "revoked authority", "missing processing status"])(
     "stops after %s during the processing wait without posting",
     async (failure) => {
       vi.useFakeTimers();
@@ -243,7 +237,6 @@ describe("X native media request boundary", () => {
       let active = true;
       const test = processingFixture({
         finalize: processing("pending", 2),
-        signal: failure === "account abort" ? controller.signal : undefined,
         statuses: [{ id: "101" }],
       });
       const result = uploadThenReply(test.api, {

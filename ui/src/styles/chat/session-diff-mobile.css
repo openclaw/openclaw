@@ -128,7 +128,7 @@ openclaw-session-diff:has(> .session-diff--mobile) {
 
 .session-diff-mobile__branch > span > * {
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
 }
 

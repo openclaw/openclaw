@@ -15,68 +15,106 @@ import {
   renderPaneHeaderInto,
 } from "./components/chat-pane-header.test-support.ts";
 import type { SidebarPanelDefinition } from "./components/chat-sidebar-region-types.ts";
-import { ensureSidebarConversation, openSlot, promoteSidebarPanel } from "./sidebar-layout.ts";
+import {
+  ensureSidebarConversation,
+  openSlot,
+  promoteSidebarPanel,
+  setSidebarExpanded,
+  setSidebarOpen,
+  isSidebarSlotVisible,
+} from "./sidebar-layout.ts";
 
-it("retains the plugin main selection when Panels closes and reopens offline", () => {
-  const { pane, state } = createTestChatPane({
-    client: createGatewayBrowserClientFixture(),
-    sessions: createSessionCapabilityFixture(),
-  });
-  const slot = "plugin:fixture/notes";
-  const definitions: SidebarPanelDefinition[] = [
-    ...sidebarPanelDefinitions(),
-    {
+it.each([
+  { slot: "plugin:fixture/notes", mode: "split" },
+  { slot: "dashboard", mode: "split" },
+  { slot: "dashboard", mode: "expanded" },
+  { slot: "dashboard", mode: "closed" },
+] as const)(
+  "retains $slot main when Panels toggles from $mode and reopens offline",
+  ({ slot, mode }) => {
+    const { pane, state } = createTestChatPane({
+      client: createGatewayBrowserClientFixture(),
+      sessions: createSessionCapabilityFixture(),
+    });
+    const definitions: SidebarPanelDefinition[] = [
+      ...sidebarPanelDefinitions(),
+      {
+        slot: "plugin:fixture/notes",
+        label: "Fixture notes",
+        icon: sidebarPanelDefinitions()[0]!.icon,
+        available: true,
+        content: "Notes",
+        loading: { variant: "files", label: "Loading notes" },
+        empty: { description: "No notes" },
+      },
+    ];
+    state.sidebarLayout = promoteSidebarPanel(
+      openSlot(ensureSidebarConversation({ columns: [] }), slot),
       slot,
-      label: "Fixture notes",
-      icon: sidebarPanelDefinitions()[0]!.icon,
-      available: true,
-      content: "Notes",
-      loading: { variant: "files", label: "Loading notes" },
-      empty: { description: "No notes" },
-    },
-  ];
-  state.sidebarLayout = promoteSidebarPanel(
-    openSlot(ensureSidebarConversation({ columns: [] }), slot),
-    slot,
-  );
-  const columns = structuredClone(state.sidebarLayout.columns);
-  const container = document.body.appendChild(document.createElement("div"));
-  onTestFinished(() => container.remove());
-  const paint = () => {
-    renderPaneHeaderInto(
-      pane.renderPaneHeader(
-        createPaneHeaderWorkspaceFixture(state),
-        { key: state.sessionKey, kind: "direct", updatedAt: 0 },
-        false,
-        undefined,
-        false,
-        null,
-        state.sidebarLayout,
-        definitions,
-      ),
-      container,
     );
+    if (mode === "expanded") {
+      state.sidebarLayout = setSidebarExpanded(state.sidebarLayout, true);
+    } else if (mode === "closed") {
+      state.sidebarLayout = setSidebarOpen(state.sidebarLayout, false);
+    }
+    const columns = structuredClone(state.sidebarLayout.columns);
+    const container = document.body.appendChild(document.createElement("div"));
+    onTestFinished(() => container.remove());
+    const paint = () => {
+      renderPaneHeaderInto(
+        pane.renderPaneHeader(
+          createPaneHeaderWorkspaceFixture(state),
+          { key: state.sessionKey, kind: "direct", updatedAt: 0 },
+          false,
+          undefined,
+          false,
+          null,
+          state.sidebarLayout,
+          definitions,
+          undefined,
+          {
+            presentation: true,
+            mobile: false,
+            setRef: () => {},
+            externalTrigger: true,
+            conversationVisible: isSidebarSlotVisible(state.sidebarLayout, "conversation"),
+          },
+        ),
+        container,
+      );
+      flush();
+    };
+    paint();
+    const trigger = container.querySelector<HTMLButtonElement>(
+      '.chat-pane__header button[aria-label="Panels"]',
+    )!;
+    expect(container.querySelectorAll(".chat-pane__header")).toHaveLength(1);
+    expect(trigger).not.toBeNull();
+    expect(container.querySelectorAll(".chat-pane__chat-toggle")).toHaveLength(
+      slot === "dashboard" ? 0 : 1,
+    );
+    expect(trigger.getAttribute("aria-expanded")).toBe(mode === "split" ? "true" : "false");
+    if (mode !== "split") {
+      trigger.click();
+      paint();
+      expect(isSidebarSlotVisible(state.sidebarLayout, "conversation")).toBe(true);
+      expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    }
+    trigger.click();
     flush();
-  };
-  paint();
-  const trigger = container.querySelector<HTMLButtonElement>(
-    '.chat-pane__header button[aria-label="Panels"]',
-  )!;
-  expect(container.querySelectorAll(".chat-pane__header")).toHaveLength(1);
-  expect(trigger).not.toBeNull();
-  trigger.click();
-  flush();
-  expect(state.sidebarLayout.open).toBe(false);
-  state.connected = false;
-  paint();
-  expect(container.querySelector('.chat-pane__header button[aria-label="Panels"]')).toBe(trigger);
-  expect(trigger.disabled).toBe(false);
-  trigger.click();
-  flush();
-  expect(state.sidebarLayout.open).toBe(true);
-  expect(state.sidebarLayout.mainPanelId).toBe(slot);
-  expect(state.sidebarLayout.columns).toEqual(columns);
-});
+    expect(state.sidebarLayout.open).toBe(false);
+    state.connected = false;
+    paint();
+    expect(container.querySelector('.chat-pane__header button[aria-label="Panels"]')).toBe(trigger);
+    expect(trigger.disabled).toBe(false);
+    trigger.click();
+    flush();
+    expect(state.sidebarLayout.open).toBe(true);
+    expect(state.sidebarLayout.mainPanelId).toBe(slot);
+    expect(state.sidebarLayout.columns).toEqual(columns);
+    expect(isSidebarSlotVisible(state.sidebarLayout, "conversation")).toBe(true);
+  },
+);
 
 it("retains focused session menu controls through header refresh and restores focus before splitting", async () => {
   const focusAtSplit: (Element | null)[] = [];

@@ -3,7 +3,7 @@ import type {
   EnvironmentsListResult,
   SystemInfoResult,
 } from "@openclaw/gateway-protocol";
-import { createEffect, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
+import { createEffect, createMemo, createSignal, onSettled } from "solid-js";
 import { GATEWAY_EVENT_DEVICE_PAIR_CHANGED } from "../../../../src/gateway/events.js";
 import type { PresenceEntry } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
@@ -186,16 +186,17 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
   onSettled(() => {
     syncConfigCustody();
     // Config receipts record which connection owns the accepted policy draft.
-    return configProjection.subscribe(syncConfigCustody);
-  });
-  onCleanup(() => {
-    stopGatewayEvents?.();
-    dialogs.cancel();
-    presenceTask.cancel();
-    systemInfoTask.cancel();
-    environmentsTask.cancel();
-    canManagePairing = false;
-    canAdmin = false;
+    const stopConfig = configProjection.subscribe(syncConfigCustody);
+    return () => {
+      stopConfig();
+      stopGatewayEvents?.();
+      dialogs.cancel();
+      presenceTask.cancel();
+      systemInfoTask.cancel();
+      environmentsTask.cancel();
+      canManagePairing = false;
+      canAdmin = false;
+    };
   });
 
   function setRouteData(data: DevicesRouteData | undefined) {
@@ -667,7 +668,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
       <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
         <section class="content-header">
           <div>
-            <div class="page-title">{titleForRoute("devices", t)}</div>
+            <h1 class="page-title">{titleForRoute("devices", t)}</h1>
             <div class="page-subtitle">
               {subtitleForRoute("devices", t)} <LearnMoreLink url={DEVICES_DOCS_URL} />
             </div>

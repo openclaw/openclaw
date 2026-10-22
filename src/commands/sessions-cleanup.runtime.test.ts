@@ -1,8 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { SessionCleanupSummary } from "../config/sessions.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { expect, it, vi } from "vitest";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { cleanupSummary } from "./sessions-cleanup-summary.test-support.js";
 import { runLocalSessionsCleanup } from "./sessions-cleanup.runtime.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const runSessionsCleanup = vi.hoisted(() => vi.fn());
 
@@ -37,73 +37,45 @@ vi.mock("../agents/agent-scope-config.js", () => ({
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/openclaw-test-workspace"),
 }));
 
-const runtime: RuntimeEnv = {
-  log: () => {},
-  error: () => {},
-  exit: () => {},
-};
+it("keeps prior store summaries when a later target returns a failure", async () => {
+  vi.clearAllMocks();
+  await withOpenClawTestState({ label: "cleanup-partial" }, async (state) => {
+    const target = (agentId: string) => ({
+      agentId,
+      storePath: state.statePath(`agents/${agentId}/sessions/sessions.json`),
+    });
+    const mainSummary = cleanupSummary({
+      mode: "enforce",
+      dryRun: false,
+      beforeCount: 1,
+      missing: 1,
+      wouldMutate: true,
+      applied: true,
+      appliedCount: 0,
+    });
+    runSessionsCleanup
+      .mockResolvedValueOnce({
+        mode: "enforce",
+        previewResults: [],
+        appliedSummaries: [mainSummary],
+      })
+      .mockRejectedValueOnce(new Error("injected later-store failure"));
 
-function summary(agentId: string): SessionCleanupSummary {
-  return {
-    agentId,
-    storePath: `/tmp/${agentId}/sessions.json`,
-    mode: "enforce",
-    dryRun: false,
-    beforeCount: 1,
-    afterCount: 0,
-    missing: 1,
-    dmScopeRetired: 0,
-    modelRunPruned: 0,
-    pruned: 0,
-    capped: 0,
-    unreferencedArtifacts: { scannedFiles: 0, removedFiles: 0, freedBytes: 0, olderThanMs: 0 },
-    diskBudget: null,
-    wouldMutate: true,
-    applied: true,
-    appliedCount: 0,
-  };
-}
+    const result = await runLocalSessionsCleanup(
+      {
+        cfg: {},
+        opts: { enforce: true },
+        targets: [target("main"), target("work")],
+      },
+      createTestRuntime(),
+    );
 
-describe("runLocalSessionsCleanup", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it("keeps prior store summaries when a later target returns a failure", async () => {
-    await withOpenClawTestState({ label: "cleanup-partial" }, async (state) => {
-      const mainSummary = summary("main");
-      runSessionsCleanup
-        .mockResolvedValueOnce({
-          mode: "enforce",
-          previewResults: [],
-          appliedSummaries: [mainSummary],
-        })
-        .mockRejectedValueOnce(new Error("injected later-store failure"));
-
-      const result = await runLocalSessionsCleanup(
-        {
-          cfg: {},
-          opts: { enforce: true },
-          targets: [
-            { agentId: "main", storePath: state.statePath("agents/main/sessions/sessions.json") },
-            { agentId: "work", storePath: state.statePath("agents/work/sessions/sessions.json") },
-          ],
-        },
-        runtime,
-      );
-
-      expect(result.appliedSummaries).toEqual([mainSummary]);
-      expect(runSessionsCleanup.mock.calls.map(([params]) => params.reclamationMode)).toEqual([
-        "in-process",
-        "in-process",
-      ]);
-      expect(result.failure).toMatchObject({
-        target: {
-          agentId: "work",
-          storePath: state.statePath("agents/work/sessions/sessions.json"),
-        },
-        lifecycleCommitted: false,
-      });
+    expect(result.appliedSummaries).toEqual([mainSummary]);
+    const modes = runSessionsCleanup.mock.calls.map(([params]) => params.reclamationMode);
+    expect(modes).toEqual(["in-process", "in-process"]);
+    expect(result.failure).toMatchObject({
+      target: target("work"),
+      lifecycleCommitted: false,
     });
   });
 });

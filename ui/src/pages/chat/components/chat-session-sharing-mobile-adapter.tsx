@@ -1,6 +1,7 @@
 import { createMemo } from "solid-js";
 import type { SessionVisibility } from "../../../api/types.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type {
   ChatSessionAccessMobileProps,
   ChatSessionSharingMobileLabels,
@@ -16,6 +17,8 @@ import {
   projectChatSessionSharingRoster,
   selectChatSessionSharingItem,
 } from "./chat-session-sharing.solid.tsx";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 export type ChatSessionSharingMobileNavigation = {
   onOpenSharing: () => void;
@@ -89,8 +92,8 @@ export function createChatSessionSharingMobileAdapter(
     get anyoneWithLink() {
       return t("chat.sessionSharing.anyoneWithLink");
     },
-    get messagePermissions() {
-      return t("chat.sessionSharing.messagePermissions");
+    get sessionMembers() {
+      return t("chat.sessionSharing.sessionMembers");
     },
     get showSearch() {
       return t("chat.sessionSharing.searchPeople");

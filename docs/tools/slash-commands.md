@@ -10,6 +10,9 @@ read_when:
 
 The Gateway handles commands sent as standalone messages starting with `/`.
 Host-only bash commands use `! <cmd>` (with `/bash <cmd>` as an alias).
+The bang must start the command text, after any required group mention. Bang
+commands still require command authorization and elevated access; text such as
+`hello ! poll` and Markdown images such as `![diagram](image.png)` remain ordinary chat.
 
 When a conversation is bound to an ACP session, normal text routes to the ACP
 harness. Gateway management commands remain local: `/acp ...` always reaches
@@ -636,6 +639,7 @@ See [BTW side questions](/tools/btw) for the full behavior.
     - **Native Discord commands:** `agent:<agentId>:discord:slash:<userId>`
     - **Native Slack commands:** `agent:<agentId>:slack:slash:<userId>` (prefix configurable via `channels.slack.slashCommand.sessionPrefix`)
     - **Native Telegram commands:** run in the chat session like text commands.
+    - Native commands entering shared reply dispatch restore an archived command-source session in place before execution. The session ID and history are retained. Restart-recovery tombstones, active worker placement, and non-human or unauthorized requests remain blocked with recovery guidance; archive and retention policies are unchanged. Discord's direct status and picker shortcuts do not use this dispatch path.
     - **`/login`** requires a private chat or Control UI session. It shows provider buttons without starting sign-in. API keys and local setup use the Control UI handoff. `/login codex` still selects OpenAI device pairing. Retry messages name the exact connection command.
     - **`/login openrouter`** sends a browser sign-in action through the Gateway's managed HTTPS address. Approve access in your browser, then return to chat for the saved result. See [OpenRouter](/providers/openrouter#getting-started) for address requirements. Use `/login cancel` to cancel a pending sign-in.
     - After login, model restrictions can prompt **Show all provider models** or **Keep current restrictions**. Credentials stay saved either way, and the question does not block another sign-in. An expired question or changed restrictions opens a fresh choice without signing in again. `/login cancel` can cancel the pending question without removing saved credentials.

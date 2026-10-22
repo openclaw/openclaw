@@ -1,89 +1,60 @@
 import { describe, expect, it } from "vitest";
 import { parseZalouserTextStyles } from "./text-styles.js";
-import { TextStyle } from "./zca-constants.js";
+import { TextStyle, type Style } from "./zca-constants.js";
+
+function range(start: number, len: number, st: Style["st"], indentSize?: number) {
+  return { start, len, st, ...(indentSize === undefined ? {} : { indentSize }) };
+}
+
+function expectParsed(input: string, text: string, styles: ReturnType<typeof range>[] = []) {
+  expect(parseZalouserTextStyles(input)).toEqual({ text, styles });
+}
 
 describe("parseZalouserTextStyles containers", () => {
   it("keeps parent list ownership after a nested child", () => {
-    expect(parseZalouserTextStyles("- parent\n  - child\n\n  continuation")).toEqual({
-      text: "parent\nchild\ncontinuation",
-      styles: [
-        { start: 0, len: 6, st: TextStyle.UnorderedList },
-        { start: 7, len: 5, st: TextStyle.Indent, indentSize: 1 },
-        { start: 7, len: 5, st: TextStyle.UnorderedList },
-        { start: 13, len: 12, st: TextStyle.UnorderedList },
-      ],
-    });
+    expectParsed("- parent\n  - child\n\n  continuation", "parent\nchild\ncontinuation", [
+      range(0, 6, TextStyle.UnorderedList),
+      range(7, 5, TextStyle.Indent, 1),
+      range(7, 5, TextStyle.UnorderedList),
+      range(13, 12, TextStyle.UnorderedList),
+    ]);
   });
 
   it("keeps task fallback when the checkbox starts on a continuation line", () => {
-    expect(parseZalouserTextStyles("-\n  [ ] child")).toEqual({
-      text: "[ ] child",
-      styles: [],
-    });
+    expectParsed("-\n  [ ] child", "[ ] child");
   });
 
   it("keeps unsupported top-level blocks outside the preceding list", () => {
-    expect(parseZalouserTextStyles("- item\n##### heading")).toEqual({
-      text: "item\n##### heading",
-      styles: [{ start: 0, len: 4, st: TextStyle.UnorderedList }],
-    });
+    expectParsed("- item\n##### heading", "item\n##### heading", [
+      range(0, 4, TextStyle.UnorderedList),
+    ]);
     expect(parseZalouserTextStyles("- - -\nnext").text).toBe("- - -\nnext");
-    expect(parseZalouserTextStyles("- item\n***")).toEqual({
-      text: "item\n***",
-      styles: [{ start: 0, len: 4, st: TextStyle.UnorderedList }],
-    });
+    expectParsed("- item\n***", "item\n***", [range(0, 4, TextStyle.UnorderedList)]);
   });
 
   it("keeps reconstructed heading markers inside their containers", () => {
-    expect(parseZalouserTextStyles("> ##### literal")).toEqual({
-      text: "##### literal",
-      styles: [{ start: 0, len: 13, st: TextStyle.Indent, indentSize: 1 }],
-    });
-    expect(parseZalouserTextStyles("- title\n  ---")).toEqual({
-      text: "title\n---",
-      styles: [{ start: 0, len: 9, st: TextStyle.UnorderedList }],
-    });
+    expectParsed("> ##### literal", "##### literal", [range(0, 13, TextStyle.Indent, 1)]);
+    expectParsed("- title\n  ---", "title\n---", [range(0, 9, TextStyle.UnorderedList)]);
   });
 
   it("preserves padding on marker-only literal headings", () => {
-    expect(parseZalouserTextStyles("  #")).toEqual({ text: "  #", styles: [] });
-    expect(parseZalouserTextStyles("  #####")).toEqual({ text: "  #####", styles: [] });
-    expect(parseZalouserTextStyles("# ###")).toEqual({
-      text: "###",
-      styles: [
-        { start: 0, len: 3, st: TextStyle.Bold },
-        { start: 0, len: 3, st: TextStyle.Big },
-      ],
-    });
-    expect(parseZalouserTextStyles("##### #####")).toEqual({
-      text: "##### #####",
-      styles: [],
-    });
-    expect(parseZalouserTextStyles("##### ![](/img)")).toEqual({
-      text: "##### ![](/img)",
-      styles: [],
-    });
-    expect(parseZalouserTextStyles("  ***\u00A0")).toEqual({ text: "  ***", styles: [] });
+    expectParsed("  #", "  #");
+    expectParsed("  #####", "  #####");
+    expectParsed("# ###", "###", [range(0, 3, TextStyle.Bold), range(0, 3, TextStyle.Big)]);
+    expectParsed("##### #####", "##### #####");
+    expectParsed("##### ![](/img)", "##### ![](/img)");
+    expectParsed("  ***\u00A0", "  ***");
   });
 
   it("keeps parser-owned indentation on marker-only nested items", () => {
-    expect(parseZalouserTextStyles("- -")).toEqual({
-      text: "-",
-      styles: [{ start: 0, len: 1, st: TextStyle.Indent, indentSize: 1 }],
-    });
-    expect(parseZalouserTextStyles("> - -")).toEqual({
-      text: "-",
-      styles: [{ start: 0, len: 1, st: TextStyle.Indent, indentSize: 1 }],
-    });
-    expect(parseZalouserTextStyles("- > -")).toEqual({
-      text: "-",
-      styles: [{ start: 0, len: 1, st: TextStyle.Indent, indentSize: 2 }],
-    });
+    expectParsed("- -", "-", [range(0, 1, TextStyle.Indent, 1)]);
+    expectParsed("> - -", "-", [range(0, 1, TextStyle.Indent, 1)]);
+    expectParsed("- > -", "-", [range(0, 1, TextStyle.Indent, 2)]);
     expect(
       parseZalouserTextStyles("-\n  -\n    -\n      -\n        -\n          -\n            -"),
     ).toEqual({
       text: "-",
-      styles: [{ start: 0, len: 1, st: TextStyle.Indent, indentSize: 5 }],
+      styles: [range(0, 1, TextStyle.Indent, 5)],
     });
   });
 
@@ -106,37 +77,22 @@ describe("parseZalouserTextStyles containers", () => {
   });
 
   it("keeps Unicode separators inside native list content", () => {
-    expect(parseZalouserTextStyles("- \u00A0item")).toEqual({
-      text: "\u00A0item",
-      styles: [{ start: 0, len: 5, st: TextStyle.UnorderedList }],
-    });
-    expect(parseZalouserTextStyles("- \u00A0")).toEqual({
-      text: "\u00A0",
-      styles: [{ start: 0, len: 1, st: TextStyle.UnorderedList }],
-    });
-    expect(parseZalouserTextStyles("-\n  \u00A0")).toEqual({
-      text: "\u00A0",
-      styles: [{ start: 0, len: 1, st: TextStyle.UnorderedList }],
-    });
-    expect(parseZalouserTextStyles("- parent\n  - \u00A0")).toEqual({
-      text: "parent\n\u00A0",
-      styles: [
-        { start: 0, len: 6, st: TextStyle.UnorderedList },
-        { start: 7, len: 1, st: TextStyle.Indent, indentSize: 1 },
-        { start: 7, len: 1, st: TextStyle.UnorderedList },
-      ],
-    });
-    expect(parseZalouserTextStyles("> \u00A0")).toEqual({
-      text: "\u00A0",
-      styles: [{ start: 0, len: 1, st: TextStyle.Indent, indentSize: 1 }],
-    });
+    expectParsed("- \u00A0item", "\u00A0item", [range(0, 5, TextStyle.UnorderedList)]);
+    expectParsed("- \u00A0", "\u00A0", [range(0, 1, TextStyle.UnorderedList)]);
+    expectParsed("-\n  \u00A0", "\u00A0", [range(0, 1, TextStyle.UnorderedList)]);
+    expectParsed("- parent\n  - \u00A0", "parent\n\u00A0", [
+      range(0, 6, TextStyle.UnorderedList),
+      range(7, 1, TextStyle.Indent, 1),
+      range(7, 1, TextStyle.UnorderedList),
+    ]);
+    expectParsed("> \u00A0", "\u00A0", [range(0, 1, TextStyle.Indent, 1)]);
   });
 
   it("keeps whitespace-only lines inside indented code blocks", () => {
-    expect(parseZalouserTextStyles("    a\n      \n    b")).toEqual({
-      text: `${"\u00A0".repeat(4)}a\n${"\u00A0".repeat(6)}\n${"\u00A0".repeat(4)}b`,
-      styles: [],
-    });
+    expectParsed(
+      "    a\n      \n    b",
+      `${"\u00A0".repeat(4)}a\n${"\u00A0".repeat(6)}\n${"\u00A0".repeat(4)}b`,
+    );
     const nestedCode = parseZalouserTextStyles("- parent\n  - child\n\n        code");
     expect(
       nestedCode.styles
@@ -159,21 +115,18 @@ describe("parseZalouserTextStyles containers", () => {
     ).toEqual({
       text: 'x y z "q"',
       styles: [
-        { start: 0, len: 1, st: TextStyle.Bold },
-        { start: 0, len: 1, st: TextStyle.Red },
-        { start: 2, len: 1, st: TextStyle.Red },
-        { start: 2, len: 1, st: TextStyle.Bold },
-        { start: 4, len: 1, st: TextStyle.Underline },
-        { start: 6, len: 3, st: TextStyle.Red },
-        { start: 6, len: 3, st: TextStyle.Italic },
+        range(0, 1, TextStyle.Bold),
+        range(0, 1, TextStyle.Red),
+        range(2, 1, TextStyle.Red),
+        range(2, 1, TextStyle.Bold),
+        range(4, 1, TextStyle.Underline),
+        range(6, 3, TextStyle.Red),
+        range(6, 3, TextStyle.Italic),
       ],
     });
   });
 
   it("treats small text tags as normal text", () => {
-    expect(parseZalouserTextStyles("{small}tiny{/small}")).toEqual({
-      text: "tiny",
-      styles: [],
-    });
+    expectParsed("{small}tiny{/small}", "tiny");
   });
 });

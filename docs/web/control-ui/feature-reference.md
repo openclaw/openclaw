@@ -90,6 +90,7 @@ Workboard sidebar entries offer pin/unpin and, with write access, confirmed boar
     - Form saves discard stale redacted placeholders that cannot be restored from the saved config, while preserving redacted values that still map to saved secrets.
     - Sensitive string fields that are empty or contain only whitespace remain editable after reloading. Concrete secrets stay masked by default; entries containing stored secrets cannot be renamed in the form. In plugin-declared credential fields, administrators can explicitly reveal a saved literal for the selected field and current config revision (`plugins.credentials.inspect`). This does not resolve secret references or environment values.
     - Schema and form rendering come from `config.schema` / `config.schema.lookup`, including field `title`/`description`, matched UI hints, immediate child summaries, docs metadata on nested object/wildcard/array/composition nodes, plus plugin and channel schemas when available. Raw JSON editor is available only when the snapshot has a safe raw round-trip; otherwise Control UI forces Form mode.
+    - Custom map entries stay separate from declared fields. Keys such as `constructor`, `prototype`, and `__proto__` remain editable and keep their values through form serialization.
     - Raw JSON editor "Reset to saved" preserves the raw-authored shape (formatting, comments, `$include` layout) instead of re-rendering a flattened snapshot, so external edits survive a reset when the snapshot can safely round-trip.
     - Structured SecretRef object values render read-only in form text inputs, to prevent accidental object-to-string corruption.
 
@@ -129,7 +130,7 @@ Workboard sidebar entries offer pin/unpin and, with write access, confirmed boar
     - The event log includes Control UI refresh/RPC timings, slow chat/config render timings, and browser responsiveness entries for long animation frames or long tasks when the browser exposes those PerformanceObserver entry types.
     - Raw Gateway event history is captured while Debug or the expanded System busyness overlay subscribes to it, up to 250 events. Closing the last diagnostic view releases those payloads; Live Activity retains its own reduced history independently.
     - Diagnostic event history belongs to the selected Gateway and authentication context. Applying a different Gateway URL or credential clears the previous history immediately, even if the new connection fails. A reconnect authenticated as a different account also clears it. Reconnects with unchanged authentication preserve history for troubleshooting.
-    - Logs: live tail of gateway file logs with filter/export (`logs.tail`).
+    - Logs: live tail of gateway file logs with filter/export (`logs.tail`). A truncation notice stays visible when the Gateway skips records or the displayed buffer drops older entries. It clears when a complete tail replaces that buffer.
     - Update: run a package/git update plus restart (`update.run`) with a restart report, then poll `update.status` after reconnect to verify the running gateway version.
 
   </Accordion>

@@ -15,6 +15,7 @@ import {
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
+import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { pairControlUiPage } from "../test-helpers/control-ui-browser-pairing.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
@@ -253,8 +254,17 @@ suite.define(() => {
         const frame = panel.locator(".chat-html-preview__frame");
         const document = frame.contentFrame().frameLocator("iframe");
         await document.getByRole("heading", { name: "Parent revision", exact: true }).waitFor();
+        // The preview retires its loader after the inner document's load acknowledgment.
+        await panel
+          .locator("openclaw-chat-html-preview [role=status]")
+          .waitFor({ state: "hidden" });
+        // Inner-frame readiness does not settle the enclosing panel's layout transition.
+        await page
+          .locator('[data-region="side"]')
+          .filter({ has: panel })
+          .evaluate(finishElementAnimations);
         await document.getByRole("button", { name: "Count", exact: true }).click();
-        expect(await document.locator("output").textContent()).toBe("1");
+        await expect.poll(() => document.locator("output").textContent()).toBe("1");
         expect(
           await document.locator("body").evaluate(() => {
             let topDenied = false;

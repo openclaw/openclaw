@@ -1,13 +1,5 @@
-/**
- * Gateway lifecycle proof for session-scoped completed process cleanup.
- */
 import { afterEach, expect, test } from "vitest";
-import {
-  addSession,
-  appendOutput,
-  getFinishedSession,
-  markExited,
-} from "../agents/bash-process-registry.js";
+import * as registry from "../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
@@ -27,11 +19,18 @@ afterEach(async () => {
   await closeStateDatabaseForTest();
 });
 
-function seedFinishedProcess(id: string, scopeKey: string) {
-  const session = createProcessSessionFixture({ id, backgrounded: true });
-  session.scopeKey = scopeKey;
-  addSession(session);
-  markExited(session, 0, null, "completed");
+function seedProcess(
+  scopeKey: string,
+  options: Parameters<typeof createProcessSessionFixture>[0] & { agentId?: string },
+  finished = false,
+) {
+  const session = createProcessSessionFixture(options);
+  Object.assign(session, { scopeKey, agentId: options.agentId });
+  registry.addSession(session);
+  if (finished) {
+    registry.markExited(session, 0, null, "completed");
+  }
+  return session;
 }
 
 test("sessions.delete purges only completed processes owned by the deleted session", async () => {
@@ -42,58 +41,50 @@ test("sessions.delete purges only completed processes owned by the deleted sessi
   await writeSessionStore({
     entries: { [requestedKey]: sessionStoreEntry(sessionId) },
   });
-  seedFinishedProcess("finished-delete-alias", requestedKey);
-  seedFinishedProcess("finished-delete-canonical", canonicalKey);
-  seedFinishedProcess("finished-delete-id", sessionId);
-  seedFinishedProcess("finished-delete-other", "agent:main:other");
+  const scopes = [requestedKey, canonicalKey, sessionId, "agent:main:other"];
+  scopes.forEach((scope, i) =>
+    seedProcess(scope, { id: `finished-${i}`, backgrounded: true }, true),
+  );
 
   const deleted = await directSessionReq("sessions.delete", { key: requestedKey });
 
   expect(deleted.ok).toBe(true);
-  expect(getFinishedSession("finished-delete-alias")).toBeUndefined();
-  expect(getFinishedSession("finished-delete-canonical")).toBeUndefined();
-  expect(getFinishedSession("finished-delete-id")).toBeUndefined();
-  expect(getFinishedSession("finished-delete-other")).toBeDefined();
+  const retained = scopes.map((_, i) => registry.getFinishedSession(`finished-${i}`) !== undefined);
+  expect(retained).toEqual([false, false, false, true]);
 });
 
 test("sessions.processes.list exposes only owned background processes without consuming output", async () => {
   await seedActiveMainSession();
-  // Prepare the real row projection through its existing read boundary.
   await directSessionReq("sessions.describe", { key: "main" });
-  const running = createProcessSessionFixture({
+  const scopeKey = "agent:main:main";
+  const running = seedProcess(scopeKey, {
     id: "visible-process",
-    command: "node build.mjs",
+    agentId: "main",
     backgrounded: true,
     startedAt: 1,
   });
-  running.scopeKey = "agent:main:main";
-  running.agentId = "main";
-  addSession(running);
-  appendOutput(running, "stdout", "Building the package\n");
-  const foreground = createProcessSessionFixture({ id: "foreground-process" });
-  foreground.scopeKey = running.scopeKey;
-  addSession(foreground);
-  const unrelated = createProcessSessionFixture({ id: "other-process", backgrounded: true });
-  unrelated.scopeKey = "agent:main:other";
-  addSession(unrelated);
-  seedFinishedProcess("finished-visible", running.scopeKey);
+  registry.appendOutput(running, "stdout", "Building the package\n");
+  seedProcess(scopeKey, { id: "foreground-process" });
+  seedProcess("agent:main:other", { id: "other-process", backgrounded: true });
+  seedProcess(scopeKey, { id: "finished-visible", backgrounded: true }, true);
 
-  const listed = await directSessionReq<{
-    sessionId: string;
-    processes: Array<{ processId: string; instanceId: string; tail: string; status: string }>;
-    truncated: boolean;
-  }>("sessions.processes.list", { key: "main" });
+  const listed = await directSessionReq("sessions.processes.list", { key: "main" });
 
-  expect(listed.ok).toBe(true);
-  expect(listed.payload).toMatchObject({ sessionId: "sess-main", truncated: false });
-  expect(listed.payload?.processes.map((row) => row.processId)).toEqual([
-    "visible-process",
-    "finished-visible",
-  ]);
-  expect(listed.payload?.processes[0]).toMatchObject({
-    instanceId: expect.any(String),
-    tail: "Building the package\n",
-    status: "running",
+  expect(listed).toMatchObject({
+    ok: true,
+    payload: {
+      sessionId: "sess-main",
+      truncated: false,
+      processes: [
+        {
+          processId: "visible-process",
+          instanceId: expect.any(String),
+          tail: "Building the package\n",
+          status: "running",
+        },
+        { processId: "finished-visible" },
+      ],
+    },
   });
   expect(running.pendingOutput).toEqual([{ stream: "stdout", text: "Building the package\n" }]);
   expect(running.terminalPollObserved).toBeUndefined();

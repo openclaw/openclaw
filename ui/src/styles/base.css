@@ -42,6 +42,12 @@
   --muted-foreground: #8b8b94;
   --file-icon-glyph: var(--muted);
 
+  /* Navigation controls use their own resting ink and subdued primary action. */
+  --sidebar-rail-control-color: color-mix(in srgb, var(--text-strong) 46%, transparent);
+  --sidebar-rail-action-bg: oklch(from var(--accent) calc(l * 0.94) calc(c * 0.72) h);
+  --sidebar-rail-action-hover-bg: oklch(from var(--accent-hover) calc(l * 0.94) calc(c * 0.72) h);
+  --sidebar-rail-action-active-bg: oklch(from var(--accent) calc(l * 0.9) calc(c * 0.72) h);
+
   /* GitHub references share an opaque neutral surface; only their ink carries status. */
   --github-item-bg: color-mix(in srgb, var(--text) 6%, var(--bg));
   --github-item-hover-bg: color-mix(in srgb, var(--text) 10%, var(--bg));

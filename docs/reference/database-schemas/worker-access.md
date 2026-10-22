@@ -1368,6 +1368,9 @@ Ordinary discovery keeps one captured roster and listing through completion.
 Later registry, path, or row changes are observed on the next owner preparation;
 there is no post-read registry retry or repeated listing-identity capture.
 Registry receipts and physical replacement invalidate reusable target facts.
+The discovery memo adopts each decoded result once and shares a deeply readonly,
+frozen snapshot on warm reads. Inventory preparation captures its selection facts
+once; repeated reads still check registry, physical-file, and applicable row revisions.
 Session-row writes invalidate fixed-store inventories, whose agent visibility
 can depend on those rows. Per-agent inventories retain their path and registry
 facts across ordinary turns, avoiding another discovery and
@@ -2724,6 +2727,13 @@ SQLite fingerprints without constructing a scratch database or transferring
 contracts between processes. Version facts stay within their unchanged
 snapshot. Each request rereads stored facts. Schemas, stored bytes, and update
 behavior are unchanged.
+
+PostgreSQL startup starts its isolated agent-schema reader while shared-state
+inspection runs, then transfers that reader to the first agent-inspection slot.
+Only process loading overlaps: database inspection still follows shared-state
+discovery and retains its fresh read, admission boundary, and full request timeout.
+Cancellation and early returns close an unused reader; SQLite keeps its existing
+clean-close fast path without starting a child.
 
 `pnpm db:postgres:gen` also generates the SQLite catalogs for declared shared-state
 and agent schema fragments, including supported historical migration definitions.
@@ -5832,6 +5842,13 @@ cursor and follow-up reads retain one SQLite snapshot across transport
 acknowledgments.
 SQLite streams the ordered cursor through a native iterator; PostgreSQL uses
 16-row keyset batches because its bridge buffers results.
+Bounded SQLite context hydration also decodes one payload row at a time, so the
+encoded window does not remain resident alongside its decoded result. Its byte
+selection, event order, and snapshot authority are unchanged. Before a transcript
+worker task starts on V8, usage at or above 80% of the actual heap limit sheds its
+decoded history and memory-export caches through the isolate-local memory-pressure
+channel. Subsequent reads repopulate those caches through their existing owners;
+database handles and stored transcript bytes remain under their original lifecycle.
 Manual compaction reads entry and transcript statistics after the previous writer
 settles, then reuses them while its lifecycle owner holds admission closed.
 The initial canonical lookup supplies session identity without an unchanged-entry

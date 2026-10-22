@@ -61,7 +61,6 @@ function createState(): { state: SkillsState; request: ReturnType<typeof vi.fn<T
     clawhubIconUrls: {},
     clawhubDetail: null,
     clawhubDetailRef: null,
-    clawhubDetailLoading: false,
     clawhubDetailError: null,
     clawhubInstallMessage: null,
     clawhubVerdicts: {},
@@ -439,7 +438,6 @@ describe("loadClawHubDetail", () => {
       skill: { slug: "gitlab", displayName: "GitLab", createdAt: 3, updatedAt: 4 },
     });
     await secondPending;
-    expect(state.clawhubDetailLoading).toBe(false);
     expect(state.clawhubDetail?.skill?.slug).toBe("gitlab");
   });
 
@@ -449,14 +447,12 @@ describe("loadClawHubDetail", () => {
     const pending = loadClawHubDetail(state, "github");
     state.connected = false;
     state.skillsAgentRevision++;
-    state.clawhubDetailLoading = false;
     state.connected = true;
     queue.resolveNext({
       skill: { slug: "stale", displayName: "Stale", createdAt: 1, updatedAt: 2 },
     });
     await pending;
     expect(state.clawhubDetail).toBeNull();
-    expect(state.clawhubDetailLoading).toBe(false);
   });
 });
 

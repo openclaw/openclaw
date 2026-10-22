@@ -119,17 +119,19 @@ describe("managed provider response capture", () => {
               },
             );
             try {
+              const request = {
+                model: model.id,
+                stream: true,
+                input: [{ role: "user", content: "fixture" }],
+              } satisfies Parameters<typeof createResponsesStreamWithRecovery>[0]["request"];
               const { stream: sdk } = await createResponsesStreamWithRecovery({
                 client: new OpenAI({
                   apiKey: "fixture-key",
                   baseURL: localModel.baseUrl,
                   fetch: async () => response,
                 }),
-                request: {
-                  model: model.id,
-                  stream: true,
-                  input: [{ role: "user", content: "fixture" }],
-                },
+                request,
+                buildFullHistoryRequest: () => request,
                 requestOptions: { signal: controller.signal },
                 model: localModel,
               });

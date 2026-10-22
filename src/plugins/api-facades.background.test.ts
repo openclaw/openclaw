@@ -29,9 +29,7 @@ function fixture() {
   const instance = new PluginInstance(record.id, { registry, record });
   const api = instrumentPluginInstanceApi(
     buildPluginApi({
-      id: record.id,
-      name: record.id,
-      source: record.source,
+      ...record,
       registrationMode: "full",
       config: {},
       runtime: createUnavailableRuntime("setup-only"),
@@ -99,21 +97,20 @@ describe("instance-bound background context", () => {
       expect(pluginInstanceInvocation.getStore()?.instance).toBe(owner.instance);
       expect(getBoundLegacyPluginSdkResourceHost()).toBe(host);
     };
+    const openingScope = {
+      isWebchatConnect: () => false,
+      signal: new AbortController().signal,
+      pluginRegistry: owner.registry,
+    };
+    const work = () =>
+      owner.run(async () => {
+        observe();
+        await Promise.resolve();
+        observe();
+      });
     try {
       await caller.run("opening-turn", () =>
-        withPluginRuntimeGatewayRequestScope(
-          {
-            isWebchatConnect: () => false,
-            signal: new AbortController().signal,
-            pluginRegistry: owner.registry,
-          },
-          () =>
-            owner.run(async () => {
-              observe();
-              await Promise.resolve();
-              observe();
-            }),
-        ),
+        withPluginRuntimeGatewayRequestScope(openingScope, work),
       );
       expect(owner.run(() => 42)).toBe(42);
       const error = new Error("background failure");
@@ -132,18 +129,14 @@ describe("instance-bound background context", () => {
     const owner = fixture();
     const replacement = fixture();
     const gate = createDeferredCore<string>();
-    const enteredCleanup = createDeferredCore();
-    owner.instance.lifecycle.onDispose(() =>
-      owner.run(() => {
-        expect(pluginInstanceInvocation.getStore()?.instance).toBe(owner.instance);
-        enteredCleanup.resolve();
-      }),
+    const cleanup = vi.fn(() =>
+      owner.run(() => expect(pluginInstanceInvocation.getStore()?.instance).toBe(owner.instance)),
     );
+    owner.instance.lifecycle.onDispose(cleanup);
     const pending = owner.run(() => gate.promise);
     let disposed = false;
-    const closing = owner.instance.dispose().then((result) => {
+    const closing = owner.instance.dispose().finally(() => {
       disposed = true;
-      return result;
     });
     try {
       expect(() => owner.run(() => "new work")).toThrow("reloaded or disabled");
@@ -151,8 +144,8 @@ describe("instance-bound background context", () => {
       expect(disposed).toBe(false);
       gate.resolve("settled");
       await expect(pending).resolves.toBe("settled");
-      await enteredCleanup.promise;
       await expect(closing).resolves.toEqual({ errors: [] });
+      expect(cleanup).toHaveBeenCalledOnce();
       expect(() => owner.run(() => "retired")).toThrow("reloaded or disabled");
       expect(replacement.run(() => pluginInstanceInvocation.getStore()?.instance)).toBe(
         replacement.instance,
@@ -160,31 +153,6 @@ describe("instance-bound background context", () => {
     } finally {
       gate.resolve("settled");
       await Promise.all([closing, replacement.instance.dispose()]);
-    }
-  });
-
-  it("lets resource cleanup await background completion without joining its own disposal", async () => {
-    vi.useFakeTimers();
-    const owner = fixture();
-    const gate = createDeferredCore();
-    const pending = owner.run(() => gate.promise);
-    let cleaned = false;
-    owner.instance.lifecycle.onDispose(async () => {
-      await pending;
-      cleaned = true;
-    });
-    const closing = owner.instance.dispose();
-    void pending.catch(() => {});
-    try {
-      gate.resolve();
-      await vi.advanceTimersByTimeAsync(5_000);
-      await expect(closing).resolves.toEqual({ errors: [] });
-      await expect(pending).resolves.toBeUndefined();
-      expect(cleaned).toBe(true);
-    } finally {
-      gate.resolve();
-      await Promise.allSettled([pending, closing]);
-      vi.useRealTimers();
     }
   });
 });

@@ -24,6 +24,7 @@ import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { touchTranscriptMutationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import type { SessionActorAppend, SessionActorAppendCommitted } from "./session-actor-contract.js";
 import type { SessionActorStoredState } from "./session-actor-hydration.types.js";
 import { hydrateSessionActorState } from "./session-actor-hydration.worker.js";
@@ -133,6 +134,24 @@ export function applySessionActorAppend(
     return { ...bound, ...initialEntry?.fence };
   };
   let modelPromptProjection: SessionActorAppendCommitted["modelPromptProjection"];
+  const finalizeProjection = (snapshot: SessionActorAppendCommitted["value"]["snapshot"]) => {
+    if (!modelPromptProjection) {
+      return;
+    }
+    if (!snapshot.ok) {
+      throw new SessionTranscriptWriterClaimReboundError(snapshot.error);
+    }
+    // A fresh carrier publishes the rewrite's watermark in the same transaction.
+    // A duplicate carrier leaves the changed prompt as the only mutation.
+    if (
+      !modelPromptProjection.result.unchanged &&
+      snapshot.value.after.updatedAt === modelPromptProjection.before.updatedAt
+    ) {
+      touchTranscriptMutationInTransaction(database, append.input.scope.sessionId);
+      snapshot.value.after = { ...state.hot.transcript.version };
+    }
+    snapshot.value.before = modelPromptProjection.before;
+  };
   const metadata = (
     input: SessionMetadataOperations["session.metadata.append"]["input"],
     scope = scopeForAppend(input.scope),
@@ -162,12 +181,7 @@ export function applySessionActorAppend(
         }),
     );
     const value = result.value;
-    if (modelPromptProjection) {
-      if (!value.snapshot.ok) {
-        throw new SessionTranscriptWriterClaimReboundError(value.snapshot.error);
-      }
-      value.snapshot.value.before = modelPromptProjection.before;
-    }
+    finalizeProjection(value.snapshot);
     if (input.view && sessionMetadataAppendNeedsReload(input, value)) {
       try {
         value.reload = {
@@ -244,6 +258,7 @@ export function applySessionActorAppend(
           rows: [row],
         };
       },
+      { touchMutation: false },
     );
   }
   if (append.kind === "metadata") {
@@ -273,11 +288,6 @@ export function applySessionActorAppend(
         return value;
       }),
   );
-  if (modelPromptProjection) {
-    if (!result.value.snapshot.ok) {
-      throw new SessionTranscriptWriterClaimReboundError(result.value.snapshot.error);
-    }
-    result.value.snapshot.value.before = modelPromptProjection.before;
-  }
+  finalizeProjection(result.value.snapshot);
   return { kind: "message", value: result.value, initialEntry, header, modelPromptProjection };
 }

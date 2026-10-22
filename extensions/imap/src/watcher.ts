@@ -15,7 +15,6 @@ import {
   isImapUid,
   MAX_IMAP_UID,
   recordImapAttempt,
-  rememberImapMessage,
   type ImapWatcherState,
 } from "./state.js";
 
@@ -308,7 +307,6 @@ export class ImapAccountWatcher {
     }
     uids.sort((left, right) => left - right);
 
-    let processed = 0;
     for (let offset = 0; offset < uids.length; offset += FETCH_BATCH_SIZE) {
       if (this.scheduler.signal.aborted || this.client !== client) {
         break;
@@ -341,12 +339,8 @@ export class ImapAccountWatcher {
           cursor.uidValidity,
           message.uid,
         );
-        processed++;
       }
     }
-    this.options.context.logger.debug?.(
-      `imap: account=${this.options.accountId} lastSweep=${new Date().toISOString()} messages=${processed}/${uids.length}`,
-    );
   }
 
   private async processMessage(message: FetchMessageObject, uidValidity: string): Promise<boolean> {
@@ -421,7 +415,9 @@ export class ImapAccountWatcher {
     }
     if (result.ok) {
       if (mail.messageId) {
-        await rememberImapMessage(state, accountId, mail.messageId);
+        await state.messageIds.register(accountId, {
+          messageIds: [...(messageRing?.messageIds ?? []), mail.messageId].slice(-100),
+        });
       }
       const gate = verdict.reason === "token" ? "gate=token" : `strength=${verdict.strength}`;
       this.options.context.logger.info(

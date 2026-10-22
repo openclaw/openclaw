@@ -1,4 +1,4 @@
-import { defineSolidPage } from "../../app-route-types.ts";
+import { defineSolidPage } from "../../app-route-types.tsx";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorPairingAccess } from "../../app/operator-access.ts";
 import type { DevicesRouteData } from "./devices-page.tsx";

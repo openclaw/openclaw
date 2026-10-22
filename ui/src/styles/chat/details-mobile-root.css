@@ -254,13 +254,7 @@
   .chat-details-mobile-root__label {
   overflow: hidden;
   white-space: nowrap;
-  mask-image: linear-gradient(to right, black calc(100% - 16px), transparent);
-}
-
-.chat-details-mobile-root__entry[data-details-destination="task-progress"]
-  .chat-details-mobile-root__label--note {
-  text-overflow: ellipsis;
-  mask-image: none;
+  text-overflow: clip;
 }
 
 .chat-details-mobile-root__entry[data-details-destination="task-progress"]

@@ -1,5 +1,4 @@
 import { createUniqueId } from "solid-js";
-import { isSystemMonitorDeclaration } from "../../../../src/cron/system-owned-declaration.js";
 import type { CronJob } from "../../api/types.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
@@ -35,7 +34,6 @@ export function AdminRequired(props: CronProps) {
 // the menu only carries the low-traffic actions.
 export function JobMenu(props: CronProps & { job: CronJob }) {
   const id = createUniqueId();
-  const systemOwned = () => isSystemMonitorDeclaration(props.job.declarationKey);
   const displayName = () => props.job.displayName ?? props.job.name;
   return (
     <Menu
@@ -57,23 +55,19 @@ export function JobMenu(props: CronProps & { job: CronJob }) {
                 disabled: props.busy || !props.connected || !props.canManage,
               },
             ]),
-        ...(systemOwned()
-          ? []
-          : [
-              {
-                id: "clone",
-                label: t("cron.actions.clone"),
-                class: "cron-job-menu__item",
-                disabled: props.busy || !props.canManage,
-              },
-              {
-                id: "remove",
-                label: t("cron.actions.remove"),
-                class: "cron-job-menu__item danger",
-                variant: "danger" as const,
-                disabled: props.busy || !props.connected || !props.canManage,
-              },
-            ]),
+        {
+          id: "clone",
+          label: t("cron.actions.clone"),
+          class: "cron-job-menu__item",
+          disabled: props.busy || !props.canManage,
+        },
+        {
+          id: "remove",
+          label: t("cron.actions.remove"),
+          class: "cron-job-menu__item danger",
+          variant: "danger",
+          disabled: props.busy || !props.connected || !props.canManage,
+        },
       ]}
       onSelect={(item) => {
         if (!props.canManage || (!props.connected && item.id !== "clone")) {
@@ -84,14 +78,10 @@ export function JobMenu(props: CronProps & { job: CronJob }) {
             props.onRun(props.job, "due");
             break;
           case "clone":
-            if (!systemOwned()) {
-              props.onClone(props.job);
-            }
+            props.onClone(props.job);
             break;
           case "remove":
-            if (!systemOwned()) {
-              void props.onRemove(props.job);
-            }
+            void props.onRemove(props.job);
             break;
         }
       }}

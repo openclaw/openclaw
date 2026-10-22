@@ -8,16 +8,21 @@ import {
   type PersonActivityRouting,
 } from "../../../components/person-activity-link.ts";
 import { ParticipantAvatar } from "../../../components/solid/viewer-facepile.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { sessionParticipantIdentityKey } from "../../../lib/chat/sender-label.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
-import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import "./chat-details-people.css";
+import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 type ChatDetailsPeopleFacts = {
   /** Session people in the parent's order, including its projected owner/creator. */
   people: readonly SessionParticipant[];
   /** Distinct total for this union, if known; not the raw participantCount. */
   totalCount?: number;
+  /** The loaded identities are not a confirmed complete participant list. */
+  partial?: boolean;
 };
 
 export type ChatDetailsPeopleProps = ChatDetailsPeopleFacts & {
@@ -64,9 +69,11 @@ export function ChatDetailsPeopleSummary(props: ChatDetailsPeopleSummaryProps) {
   const remaining = () => total() - preview().length;
   return (
     <span class="chat-details-people__summary">
-      <span class="sr-only">
-        {t("chat.sessionDetails.participants", { count: String(total()) })}
-      </span>
+      <Show when={!props.partial}>
+        <span class="sr-only">
+          {t("chat.sessionDetails.peopleCount", { count: String(total()) })}
+        </span>
+      </Show>
       <Show
         when={props.expanded}
         fallback={
@@ -90,13 +97,15 @@ export function ChatDetailsPeopleSummary(props: ChatDetailsPeopleSummaryProps) {
           </span>
         }
       >
-        <span
-          class="chat-details-people__count chat-details-desktop-section__count"
-          aria-hidden="true"
-        >
-          <span class="chat-details-desktop-section__count-separator">·</span>
-          {total()}
-        </span>
+        <Show when={!props.partial}>
+          <span
+            class="chat-details-people__count chat-details-desktop-section__count"
+            aria-hidden="true"
+          >
+            <span class="chat-details-desktop-section__count-separator">·</span>
+            {total()}
+          </span>
+        </Show>
       </Show>
     </span>
   );

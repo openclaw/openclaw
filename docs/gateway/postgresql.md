@@ -451,6 +451,7 @@ memory-index sidecars. Upgrade older shared state with a compatible binary and
 Doctor before retrying. Agent schema upgrades can run in the port's private copy.
 A scoped port checks only migrations declared for that family. Fresh Matrix
 roots without legacy inbound-dedupe rows do not require a completion receipt.
+Port also refuses reserved-incognito session keys: run `openclaw doctor --fix` on the SQLite installation before retrying; PostgreSQL Doctor leaves such stores unchanged and requires re-adoption from a repaired SQLite source.
 
 Provision PostgreSQL and add `database.postgres.connection`, but leave the source
 engine selections unchanged. Stop the Gateway through its service owner and stop
@@ -865,9 +866,11 @@ follow a prefix):
 Connection loss closes the failed connection. The engine distinguishes a known
 rolled-back transaction from an uncertain outcome, invalidating cached facts
 when a commit may have occurred. It does not switch to SQLite or promise
-transparent replay of every operation. Recover server connectivity, inspect the
-operation's recorded result, and restart the Gateway through its service owner
-if needed to reopen stores.
+transparent replay of every operation. The shared-state worker retires its failed
+connection so a subsequent operation can reopen the store once PostgreSQL is
+available. The interrupted operation is not replayed. Recover server connectivity
+and inspect the operation's recorded result before repeating an external effect.
+If another store remains unavailable, restart the Gateway through its service owner.
 
 ## Roll back to SQLite
 

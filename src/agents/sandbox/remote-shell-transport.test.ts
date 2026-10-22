@@ -6,10 +6,25 @@ import { spawnCommand } from "../../process/exec.js";
 import { createRemoteShellSandboxSession } from "./remote-shell-transport.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionFor = (root: string, argv: (command: string) => string[], env = process.env) =>
+  createRemoteShellSandboxSession({
+    buildCommand: ({ remoteCommand }) => ({ argv: argv(remoteCommand), env, cwd: root }),
+  });
+
+async function uploadFixture(prefix: string, payload: string | Buffer) {
+  const root = await fs.realpath(tempDirs.make(prefix));
+  const localDir = path.join(root, "local");
+  const remoteDir = path.join(root, "remote");
+  await fs.mkdir(localDir);
+  await fs.writeFile(path.join(localDir, "payload"), payload);
+  return { root, localDir, remoteDir, remoteRootDir: root };
+}
 
 describe.runIf(process.platform !== "win32")("provider-owned remote shell transport", () => {
   it("keeps uploads, private exec staging, execution, and cleanup behind the command owner", async () => {
-    const root = await fs.realpath(tempDirs.make("remote-shell-owner-"));
+    const payload = Buffer.from([0, 1, 2, 255]);
+    const upload = await uploadFixture("remote-shell-owner-", payload);
+    const { root, localDir, remoteDir } = upload;
     const claimFile = path.join(root, "claim");
     const providerFile = path.join(root, "provider.cjs");
     await fs.writeFile(claimFile, "original");
@@ -29,19 +44,11 @@ describe.runIf(process.platform !== "win32")("provider-owned remote shell transp
       process.exit(child.status ?? 1);
     `,
     );
-    const session = createRemoteShellSandboxSession({
-      buildCommand: ({ remoteCommand }) => ({
-        argv: [process.execPath, providerFile, remoteCommand],
-        env: { ...process.env, PROVIDER_LOCAL_ONLY: "synthetic-provider-auth" },
-        cwd: root,
-      }),
+    const session = sessionFor(root, (command) => [process.execPath, providerFile, command], {
+      ...process.env,
+      PROVIDER_LOCAL_ONLY: "synthetic-provider-auth",
     });
-    const localDir = path.join(root, "local");
-    const remoteDir = path.join(root, "remote");
-    await fs.mkdir(localDir);
-    const payload = Buffer.from([0, 1, 2, 255]);
-    await fs.writeFile(path.join(localDir, "payload"), payload);
-    await session.uploadDirectory({ localDir, remoteDir, remoteRootDir: root });
+    await session.uploadDirectory(upload);
     expect(await fs.readFile(path.join(remoteDir, "payload"))).toEqual(payload);
 
     const prepared = await session.prepareExec({
@@ -52,24 +59,19 @@ describe.runIf(process.platform !== "win32")("provider-owned remote shell transp
       expect(prepared.argv.join(" ")).not.toContain("synthetic-exec-private");
       expect(prepared.cwd).toBe(root);
       await fs.writeFile(claimFile, "transferred");
-      const refused = await spawnCommand(prepared.argv, {
-        baseEnv: prepared.env,
-        cwd: prepared.cwd,
-        reject: false,
-      });
-      expect(refused.exitCode).toBe(42);
-      expect(refused.stdout).toBe("");
+      const execute = (reject = true) =>
+        spawnCommand(prepared.argv, {
+          baseEnv: prepared.env,
+          cwd: prepared.cwd,
+          reject,
+        });
+      const refused = await execute(false);
+      expect(refused).toMatchObject({ exitCode: 42, stdout: "" });
       await fs.writeFile(path.join(localDir, "payload"), "changed after claim transfer");
-      await expect(
-        session.uploadDirectory({ localDir, remoteDir, remoteRootDir: root }),
-      ).rejects.toThrow();
+      await expect(session.uploadDirectory(upload)).rejects.toThrow();
       expect(await fs.readFile(path.join(remoteDir, "payload"))).toEqual(payload);
       await fs.writeFile(claimFile, "original");
-      const completed = await spawnCommand(prepared.argv, {
-        baseEnv: prepared.env,
-        cwd: prepared.cwd,
-      });
-      expect(completed.stdout).toBe("synthetic-exec-private:unset");
+      await expect(execute()).resolves.toMatchObject({ stdout: "synthetic-exec-private:unset" });
     } finally {
       await fs.writeFile(claimFile, "original");
       await prepared.cleanup();
@@ -78,27 +80,15 @@ describe.runIf(process.platform !== "win32")("provider-owned remote shell transp
   });
 
   it("rejects an upload when the remote shell dies from a signal without a status", async () => {
-    // A signal-killed remote (OOM kill, dropped connection, supervisor
-    // teardown) closes with a null exit code. The transfer cannot have
-    // completed, so the upload must fail instead of resolving silently.
-    const root = await fs.realpath(tempDirs.make("remote-shell-signal-"));
-    const localDir = path.join(root, "local");
-    await fs.mkdir(localDir);
-    await fs.writeFile(path.join(localDir, "payload"), "payload-bytes");
-    const session = createRemoteShellSandboxSession({
-      buildCommand: () => ({
-        argv: ["/bin/sh", "-c", 'cat >/dev/null; kill -TERM "$$"'],
-        env: { ...process.env },
-        cwd: root,
-      }),
-    });
-    await expect(
-      session.uploadDirectory({
-        localDir,
-        remoteDir: path.join(root, "remote"),
-        remoteRootDir: root,
-      }),
-    ).rejects.toThrow("remote exited from signal SIGTERM");
+    const upload = await uploadFixture("remote-shell-signal-", "payload-bytes");
+    const session = sessionFor(upload.root, () => [
+      "/bin/sh",
+      "-c",
+      'cat >/dev/null; kill -TERM "$$"',
+    ]);
+    await expect(session.uploadDirectory(upload)).rejects.toThrow(
+      "remote exited from signal SIGTERM",
+    );
     await session.dispose();
   });
 });

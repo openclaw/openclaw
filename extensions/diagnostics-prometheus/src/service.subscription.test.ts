@@ -6,7 +6,14 @@ import {
 import { onTrustedInternalDiagnosticEvent } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { expect, it, vi } from "vitest";
 import { createDiagnosticsPrometheusExporter } from "./service.js";
-import { createMetricsHarness, untrusted } from "./service.test-helpers.js";
+import { createMetricsHarness, scrapeMetrics, untrusted } from "./service.test-helpers.js";
+
+// mock-isolation: Keep Gateway runtime initialization outside the fixture; scrape as a read-authorized operator.
+vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
+  getPluginRuntimeGatewayRequestScope: () => ({
+    client: { connect: { scopes: ["operator.read"] } },
+  }),
+}));
 
 it("exports trusted WebSocket event totals and the current operator socket count", () => {
   const metrics = createMetricsHarness();
@@ -303,7 +310,7 @@ it("records terminal metrics without reading logs or private diagnostic content"
       },
     );
     await waitForDiagnosticEventsDrained();
-    expect(exporter.render()).toContain(
+    expect(scrapeMetrics(exporter.handler)).toContain(
       'openclaw_tool_execution_total{error_category="none",outcome="completed",params_kind="unknown",tool="synthetic",tool_owner="none",tool_source="core"} 1',
     );
     expect(readPrivateContent).not.toHaveBeenCalled();
@@ -323,5 +330,5 @@ it("records terminal metrics without reading logs or private diagnostic content"
     exporter.service.stop?.();
     await waitForDiagnosticEventsDrained();
   }
-  expect(exporter.render()).toBe("");
+  expect(scrapeMetrics(exporter.handler)).toBe("");
 });

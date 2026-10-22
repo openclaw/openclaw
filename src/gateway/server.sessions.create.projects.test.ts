@@ -41,7 +41,9 @@ import { createChatRunState } from "./server-chat-state.js";
 import {
   controlUiClient,
   initializeRepository,
+  removeOwnedSessionWorktree,
   settleWorkspaceRuns,
+  successfulSessionRequest as request,
 } from "./server.sessions.create.projects.test-support.js";
 import { dispatchInboundMessageMock, testState } from "./test-helpers.js";
 import {
@@ -91,12 +93,6 @@ afterEach(async () => {
 
 // Register after the resets so stacked teardown drains fixture stores first.
 const { createSessionStoreDir, withSessionTestState } = setupGatewaySessionsHandlerTestHarness();
-
-async function request<T = unknown>(...args: Parameters<typeof directSessionReq<T>>) {
-  const result = await directSessionReq<T>(...args);
-  expect(result.ok, JSON.stringify(result.error)).toBe(true);
-  return result.payload!;
-}
 
 const readReadme = (dir: string) => fs.readFile(path.join(dir, "README.md"), "utf8");
 const readEntry = (storePath: string, sessionKey: string) =>
@@ -588,10 +584,7 @@ sendReceipt(process.argv[2], "started");
     } finally {
       await fs.writeFile(release, "release setup\n");
       await settleWorkspaceRuns(context, storePath, key, true);
-      const owned = key ? await managedWorktrees.findLiveByOwner("session", key) : undefined;
-      if (owned) {
-        await removeWorktree(owned.id);
-      }
+      await removeOwnedSessionWorktree(key);
     }
   },
 );

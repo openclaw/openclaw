@@ -15,7 +15,7 @@
       "team-reports"
     ],
     "schemaVersions": {
-      "state": 29,
+      "state": 30,
       "agent": 31
     }
   },
@@ -1777,6 +1777,7 @@
     "check:agents-md-size": "node --import ./scripts/tsx.mjs scripts/check-agents-md-size.mts",
     "check:architecture": "pnpm check:import-cycles && pnpm check:madge-import-cycles && pnpm check:deprecated-api-usage && pnpm check:wrapper-shadowing && pnpm check:deprecated-jsdoc && pnpm db:kysely:check && pnpm db:postgres:check && pnpm lint:kysely && pnpm check:database-first-legacy-stores",
     "check:assertion-safety": "node --import ./scripts/tsx.mjs scripts/check-assertion-safety-ratchet.mts",
+    "check:baseline-ratchets": "node --import ./scripts/tsx.mjs scripts/ci-baseline-ratchets.mts",
     "check:base-config-schema": "node --import ./scripts/tsx.mjs scripts/generate-base-config-schema.ts --check",
     "check:bundled-channel-config-metadata": "node --import ./scripts/tsx.mjs scripts/generate-bundled-channel-config-metadata.ts --check",
     "check:changed": "node scripts/check-changed.mjs",
@@ -2039,6 +2040,7 @@
     "release:beta": "node --import ./scripts/tsx.mjs scripts/release-candidate-checklist.mts",
     "release:beta-smoke": "node --import ./scripts/tsx.mjs scripts/release-beta-smoke.ts",
     "release:backport-companions": "node scripts/release-backport-companions.mjs",
+    "release:backport-probe": "node scripts/release-backport-probe.mjs",
     "release:candidate": "node --import ./scripts/tsx.mjs scripts/release-candidate-checklist.mts",
     "release:clawhub-recovery": "node scripts/plugin-clawhub-recovery.mjs",
     "release:check": "pnpm build:package && pnpm release:generated:check && node --import ./scripts/tsx.mjs scripts/release-check.ts",

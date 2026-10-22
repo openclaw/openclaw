@@ -182,17 +182,12 @@ export function createOllamaWebSearchProvider(): Pick<
       execute: async (args, context) => {
         context?.signal?.throwIfAborted();
         const config = ctx.config;
-        const rawQuery = readStringParam(args, "query", { required: true });
+        const query = readStringParam(args, "query", { required: true });
         const requestedCount = readPositiveIntegerParam(args, "count", {
           max: 10,
           message: "count must be an integer from 1 to 10.",
         });
         const signal = context?.signal;
-        const query = rawQuery.trim();
-        if (!query) {
-          throw new Error("query parameter is required");
-        }
-
         const baseUrl = resolveOllamaWebSearchBaseUrl(config);
         const configuredApiKey = resolveConfiguredOllamaWebSearchApiKey(config);
         // Resolve the ambient cloud key independently of the configured selected-host key so a mixed
@@ -279,8 +274,6 @@ export function createOllamaWebSearchProvider(): Pick<
             );
             signal?.throwIfAborted();
             break;
-          } catch (error) {
-            throw error instanceof Error ? error : new Error(String(error));
           } finally {
             // The 401/403 branches throw before the stream is touched, leaving release
             // to force-close the active dispatcher. Start cancellation first; awaiting

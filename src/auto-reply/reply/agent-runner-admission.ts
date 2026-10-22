@@ -167,6 +167,16 @@ export function prepareReplyTurnRunSource(params: AgentTurnParams, runId: string
                   nextCheckEnabled:
                     automation.job.pacing !== undefined ||
                     isCronOneShotContinuationJob(automation.job),
+                  assertCurrent: () => {
+                    automation.assertCurrent();
+                    if (
+                      !params.replyOperation ||
+                      params.replyOperation.result ||
+                      params.replyOperation.abortSignal.aborted
+                    ) {
+                      throw new Error("Automation reply owner has closed");
+                    }
+                  },
                 },
               ],
             ]),

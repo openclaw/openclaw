@@ -51,7 +51,6 @@ export function createMatrixDraftStream(params: {
     const preparedText = prepareMatrixSingleText(trimmed, {
       cfg,
       accountId,
-      preserveWhitespace: true,
     });
     if (!preparedText.fitsInSingleEvent) {
       finalizeInPlaceBlocked = true;
@@ -201,7 +200,6 @@ export function createMatrixDraftStream(params: {
       prepareMatrixSingleText(text.trimEnd(), {
         cfg,
         accountId,
-        preserveWhitespace: true,
       }).trimmedText === lastSentText,
     mustDeliverFinalNormally: () => sendFailed || finalizeInPlaceBlocked,
   };

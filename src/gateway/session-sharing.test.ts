@@ -14,12 +14,12 @@ import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
-import { authorizeSessionSharingTarget } from "./session-sharing-policy.js";
 import {
   allowedSessionVisibilities,
   authorizeIncognitoSessionTarget,
   authorizeResolvedSessionMutationAsync,
   createSessionListEntryFilter,
+  prepareSessionSharing,
   resolveSessionSharingRole,
   resolveSessionSharingTargetAsync,
   resolveSessionVisibility,
@@ -54,6 +54,14 @@ async function captureMutationAuthorization(
 }
 
 type SharingTarget = Parameters<typeof resolveSessionSharingRole>[0]["target"];
+
+function authorizeSharing(params: Parameters<typeof resolveSessionSharingRole>[0]) {
+  const sharing = prepareSessionSharing(params);
+  return sharing.authorizeTarget(
+    params.target,
+    sharing.roleForTarget(params.target, params.isMember),
+  );
+}
 
 function isListed(
   requestClient: GatewayClient,
@@ -304,9 +312,7 @@ describe("session sharing policy", () => {
         expect(resolveSessionSharingRole({ ...sharing, client: viewer, isMember: false })).toBe(
           "viewer",
         );
-        expect(
-          authorizeSessionSharingTarget({ ...sharing, client: viewer, isMember: false }),
-        ).toMatchObject({
+        expect(authorizeSharing({ ...sharing, client: viewer, isMember: false })).toMatchObject({
           details: { code: "SESSION_PARTICIPATION_REQUIRED", visibility: "shared" },
         });
         for (const method of [
@@ -373,16 +379,16 @@ describe("session sharing policy", () => {
           (member) => member.identityId === viewer.authenticatedUserProfile!.profileId,
         );
         expect(resolveSessionSharingRole({ ...sharing, client: viewer, isMember })).toBe("member");
-        expect(authorizeSessionSharingTarget({ ...sharing, client: viewer, isMember })).toBeNull();
+        expect(authorizeSharing({ ...sharing, client: viewer, isMember })).toBeNull();
       }
 
       const writer = roleClient("write");
       expect(resolveSessionSharingRole({ ...sharing, client: writer })).toBe("member");
-      expect(authorizeSessionSharingTarget({ ...sharing, client: writer })).toBeNull();
+      expect(authorizeSharing({ ...sharing, client: writer })).toBeNull();
 
       const unassigned = ensureProfileForEmail("unassigned@example.test");
       expect(
-        authorizeSessionSharingTarget({
+        authorizeSharing({
           ...sharing,
           client: client({ user: unassigned.id }),
           isMember: (
@@ -391,13 +397,13 @@ describe("session sharing policy", () => {
         }),
       ).toMatchObject({ details: { code: "SESSION_PARTICIPATION_REQUIRED" } });
       expect(resolveSessionSharingRole({ ...sharing, client: owner })).toBe("owner");
-      expect(authorizeSessionSharingTarget({ ...sharing, client: owner })).toBeNull();
+      expect(authorizeSharing({ ...sharing, client: owner })).toBeNull();
 
       const admin = client({ user: unassigned.id, scopes: ["operator.admin"] });
       expect(resolveSessionSharingRole({ ...sharing, client: admin })).toBe("admin");
-      expect(authorizeSessionSharingTarget({ ...sharing, client: admin })).toBeNull();
+      expect(authorizeSharing({ ...sharing, client: admin })).toBeNull();
       expect(
-        authorizeSessionSharingTarget({
+        authorizeSharing({
           ...sharing,
           cfg: {},
           client: writer,
@@ -408,12 +414,12 @@ describe("session sharing policy", () => {
           ),
         }),
       ).toBeNull();
-      expect(authorizeSessionSharingTarget({ ...sharing, client: client({}) })).toMatchObject({
+      expect(authorizeSharing({ ...sharing, client: client({}) })).toMatchObject({
         code: "INVALID_REQUEST",
       });
       const systemOwner = client({});
       systemOwner.internal = { operatorRoleActor: { kind: "system" } };
-      expect(authorizeSessionSharingTarget({ ...sharing, client: systemOwner })).toBeNull();
+      expect(authorizeSharing({ ...sharing, client: systemOwner })).toBeNull();
       expect(
         createSessionListEntryFilter({ cfg, client: client({}) })?.(sessionKey, sharedTarget.entry),
       ).toBe(false);

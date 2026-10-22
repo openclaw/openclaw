@@ -57,24 +57,19 @@ it.each([
     await upsertSessionEntryCore({ agentId: "main", sessionKey }, { sessionId, updatedAt: 1 });
     const runAbort = new AbortController();
     const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
-    const operation = createTestReplyOperation({
-      sessionKey,
-      sessionId,
-      target: captureSessionTarget({ storeScope: storePath, sessionKey, incarnation: sessionId }),
-    });
-    operation.setPhase("running");
+    const runningOperation = (storeScope: string) => {
+      const operation = createTestReplyOperation({
+        sessionKey,
+        sessionId,
+        target: captureSessionTarget({ storeScope, sessionKey, incarnation: sessionId }),
+      });
+      operation.setPhase("running");
+      return operation;
+    };
+    const operation = runningOperation(storePath);
     const other = outcome.startsWith("same-ID")
-      ? createTestReplyOperation({
-          sessionKey,
-          sessionId,
-          target: captureSessionTarget({
-            storeScope: state.path("other", "sessions.json"),
-            sessionKey,
-            incarnation: sessionId,
-          }),
-        })
+      ? runningOperation(state.path("other", "sessions.json"))
       : undefined;
-    other?.setPhase("running");
     if (outcome !== "same-ID prepublication" && outcome !== "same-ID unmatched run") {
       operation.attachBackend({ kind: "embedded", runId, cancel: () => {} });
     }
@@ -112,6 +107,10 @@ it.each([
           }),
         };
       });
+    const expectNoHandoff = () => {
+      expect(endpoint).not.toHaveBeenCalled();
+      expect(enqueue).not.toHaveBeenCalled();
+    };
     const run = async () => {
       const createTool = () =>
         createPluginsTool({
@@ -141,11 +140,9 @@ it.each([
         if (refusesHandoff) {
           await expect(execute()).rejects.toThrow(callerRequired);
           expect(order).toEqual([]);
-          expect(endpoint).not.toHaveBeenCalled();
-          expect(enqueue).not.toHaveBeenCalled();
+          expectNoHandoff();
           expect(operation.result).toBeNull();
-          expect(other?.result).toBeNull();
-          expect(other?.abortSignal.aborted).toBe(false);
+          expect(other).toMatchObject({ result: null, abortSignal: { aborted: false } });
           return;
         }
         const result = await execute();
@@ -154,8 +151,7 @@ it.each([
         expect(asyncStarted).toBe(true);
         expect(hasYieldContinuationEvidence({ toolMetas: [{ asyncStarted }] })).toBe(true);
         expect(order).toEqual(["yield"]);
-        expect(endpoint).not.toHaveBeenCalled();
-        expect(enqueue).not.toHaveBeenCalled();
+        expectNoHandoff();
         await expect(sourceTool.execute("duplicate", request)).rejects.toThrow(
           outcome === "same-ID prepublication"
             ? "This turn already handed off a plugin reload."
@@ -223,9 +219,11 @@ it.each([
       expect(text).toContain(expectedText);
       expect(enqueue).toHaveBeenCalledOnce();
       if (other) {
-        expect(other.phase).toBe("running");
-        expect(other.result).toBeNull();
-        expect(other.abortSignal.aborted).toBe(false);
+        expect(other).toMatchObject({
+          phase: "running",
+          result: null,
+          abortSignal: { aborted: false },
+        });
       }
     };
     try {
@@ -245,8 +243,7 @@ it.each([
           ),
       );
       if (outcome === "stop") {
-        expect(endpoint).not.toHaveBeenCalled();
-        expect(enqueue).not.toHaveBeenCalled();
+        expectNoHandoff();
       }
     } finally {
       cleanup.resolve();

@@ -322,7 +322,6 @@ export async function writeConfigFileFromContext(
     typeof snapshot.raw === "string" ? Buffer.byteLength(snapshot.raw, "utf-8") : null;
   const sizeBaselineBytes = resolveConfigSizeBaselineBytes({
     raw: snapshot.raw,
-    json5: deps.json5,
     lastTouchedVersionOverride: options.lastTouchedVersionOverride,
     env: deps.env,
   });

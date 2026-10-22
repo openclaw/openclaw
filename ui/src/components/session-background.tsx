@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
+import { createEffect, createMemo, createSignal, onSettled } from "solid-js";
 import {
   DEFAULT_BACKGROUND_PREFERENCE,
   type BackgroundPreference,
@@ -158,31 +158,35 @@ export const SessionBackground = defineSolidBridge<Props>(
         }
       }),
     );
-    const observer = new MutationObserver(notify);
-    observer.observe(host.ownerDocument.documentElement, {
-      attributes: true,
-      attributeFilter: ["data-theme", "data-theme-mode", "data-theme-background"],
-    });
-    const accessibilityChanged = () => {
-      releaseImage();
-      notify();
-    };
-    const stopAccessibility =
-      accessibility && listen(accessibility, "change", accessibilityChanged);
-    onCleanup(() => {
-      observer.disconnect();
-      stopAccessibility?.();
-      releaseImage();
-      surfaceElement?.removeAttribute("data-background-custom");
-      surfaceElement?.removeAttribute("data-background-painted");
-    });
     onSettled(() => {
+      const observer = new MutationObserver(notify);
+      observer.observe(host.ownerDocument.documentElement, {
+        attributes: true,
+        attributeFilter: ["data-theme", "data-theme-mode", "data-theme-background"],
+      });
+      const stopAccessibility =
+        accessibility &&
+        listen(accessibility, "change", () => {
+          releaseImage();
+          notify();
+        });
       // The bridge's inner root settles before its host joins the outer Solid tree.
       queueMicrotask(() => {
         if (host.isConnected) {
           notify();
         }
       });
+      return () => {
+        observer.disconnect();
+        stopAccessibility?.();
+        request?.controller.abort();
+        if (request?.url) {
+          URL.revokeObjectURL(request.url);
+        }
+        request = null;
+        surfaceElement?.removeAttribute("data-background-custom");
+        surfaceElement?.removeAttribute("data-background-painted");
+      };
     });
     const view = createMemo(() => {
       revision();

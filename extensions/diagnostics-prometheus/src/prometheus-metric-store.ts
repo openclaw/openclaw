@@ -1,3 +1,4 @@
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   escapeHelp,
   formatLabels,
@@ -8,6 +9,7 @@ import {
 
 type ScalarSample = {
   help: string;
+  key: string;
   name: string;
   prefix: string;
   value: number;
@@ -19,11 +21,24 @@ type HistogramSample = {
   counts: number[];
   count: number;
   help: string;
+  key: string;
   name: string;
   sumPrefix: string;
   countPrefix: string;
   sum: number;
 };
+
+type LabelNode<T> = {
+  values?: Map<string, LabelNode<T>>;
+  sample?: T;
+};
+
+type LabelShape<T> = { keys: string[]; root: LabelNode<T> };
+type MetricSeries<T> = { samples: T[]; shapes: Map<string, LabelShape<T>[]> };
+
+function createSeries<T>(): MetricSeries<T> {
+  return { samples: [], shapes: new Map() };
+}
 
 export type PrometheusMetricStore = ReturnType<typeof createPrometheusMetricStore>;
 
@@ -36,78 +51,122 @@ const MAX_PROMETHEUS_SERIES = 2048;
 const DROPPED_SERIES_COUNTER_NAME = "openclaw_prometheus_series_dropped_total";
 
 export function createPrometheusMetricStore() {
-  const counters = new Map<string, ScalarSample>();
-  const gauges = new Map<string, ScalarSample>();
-  const histograms = new Map<string, HistogramSample>();
+  const counters = createSeries<ScalarSample>();
+  const gauges = createSeries<ScalarSample>();
+  const histograms = createSeries<HistogramSample>();
   let droppedSeries = 0;
   // Reuse the scrape workspace; render overwrites it, and reset releases it.
   const parts: string[] = [];
 
-  const canCreateSeries = <T>(map: Map<string, T>, key: string): boolean => {
-    if (map.has(key)) {
-      return true;
-    }
-    if (counters.size + gauges.size + histograms.size < MAX_PROMETHEUS_SERIES) {
-      return true;
-    }
-    droppedSeries += 1;
-    return false;
-  };
-
-  const counter = (name: string, help: string, labels: LabelSet, amount = 1) => {
-    if (!Number.isFinite(amount) || amount <= 0) {
-      return;
-    }
-    const key = metricKey(name, labels);
-    if (!canCreateSeries(counters, key)) {
-      return;
-    }
-    const existing = counters.get(key);
-    if (existing) {
-      existing.value += amount;
-      return;
-    }
-    counters.set(key, { help, name, prefix: `${name}${formatLabels(labels)} `, value: amount });
-  };
-
-  const gauge = (name: string, help: string, labels: LabelSet, value: number | undefined) => {
-    if (value === undefined || !Number.isFinite(value)) {
-      return;
-    }
-    const key = metricKey(name, labels);
-    if (!canCreateSeries(gauges, key)) {
-      return;
-    }
-    const existing = gauges.get(key);
-    if (existing) {
-      existing.value = value;
-      return;
-    }
-    gauges.set(key, { help, name, prefix: `${name}${formatLabels(labels)} `, value });
-  };
-
-  const counterValue = (name: string, help: string, labels: LabelSet, value: number) => {
-    if (!Number.isFinite(value) || value < 0) {
-      return;
-    }
-    const key = metricKey(name, labels);
-    if (!canCreateSeries(counters, key)) {
-      return;
-    }
-    const existing = counters.get(key);
-    if (existing) {
-      existing.value = Math.max(existing.value, value);
-      return;
-    }
-    counters.set(key, { help, name, prefix: `${name}${formatLabels(labels)} `, value });
-  };
-
-  const clearGauges = (name: string) => {
-    for (const key of gauges.keys()) {
-      if (key.startsWith(`${name}|`)) {
-        gauges.delete(key);
+  const series = <T>(map: MetricSeries<T>, name: string, labels: LabelSet) => {
+    let labelCount = 0;
+    for (const key in labels) {
+      if (Object.hasOwn(labels, key)) {
+        labelCount++;
       }
     }
+    let shape: LabelShape<T> | undefined;
+    shapes: for (const candidate of map.shapes.get(name) ?? []) {
+      if (candidate.keys.length !== labelCount) {
+        continue;
+      }
+      let node: LabelNode<T> | undefined = candidate.root;
+      for (const key of candidate.keys) {
+        const value = labels[key];
+        if (value === undefined || !Object.prototype.propertyIsEnumerable.call(labels, key)) {
+          continue shapes;
+        }
+        node = node?.values?.get(value);
+      }
+      shape = candidate;
+      if (node?.sample) {
+        return node;
+      }
+      break;
+    }
+    if (
+      counters.samples.length + gauges.samples.length + histograms.samples.length >=
+      MAX_PROMETHEUS_SERIES
+    ) {
+      droppedSeries++;
+      return undefined;
+    }
+    if (!shape) {
+      // Each metric can have multiple label shapes (for example GC's optional worker slot).
+      shape = {
+        keys: Object.keys(labels).toSorted((left, right) => left.localeCompare(right)),
+        root: {},
+      };
+      const shapes = map.shapes.get(name);
+      if (shapes) {
+        shapes.push(shape);
+      } else {
+        map.shapes.set(name, [shape]);
+      }
+    }
+    let node = shape.root;
+    for (const key of shape.keys) {
+      const value = expectDefined(labels[key], "Prometheus label");
+      const values = (node.values ??= new Map());
+      let child = values.get(value);
+      if (!child) {
+        child = {};
+        values.set(value, child);
+      }
+      node = child;
+    }
+    return node;
+  };
+
+  const scalar = (
+    map: typeof counters,
+    name: string,
+    help: string,
+    labels: LabelSet,
+    value: number | undefined,
+    mode: "add" | "set" | "max",
+  ) => {
+    if (
+      value === undefined ||
+      !Number.isFinite(value) ||
+      (mode !== "set" && value < 0) ||
+      (mode === "add" && value === 0)
+    ) {
+      return;
+    }
+    const node = series(map, name, labels);
+    if (!node) {
+      return;
+    }
+    if (node.sample) {
+      node.sample.value =
+        mode === "add"
+          ? node.sample.value + value
+          : mode === "max"
+            ? Math.max(node.sample.value, value)
+            : value;
+    } else {
+      node.sample = {
+        help,
+        key: metricKey(name, labels),
+        name,
+        prefix: `${name}${formatLabels(labels)} `,
+        value,
+      };
+      map.samples.push(node.sample);
+    }
+  };
+
+  const counter = (name: string, help: string, labels: LabelSet, amount = 1) =>
+    scalar(counters, name, help, labels, amount, "add");
+  const counterValue = (name: string, help: string, labels: LabelSet, value: number) =>
+    scalar(counters, name, help, labels, value, "max");
+  const gauge = (name: string, help: string, labels: LabelSet, value: number | undefined) =>
+    scalar(gauges, name, help, labels, value, "set");
+
+  const clearGauges = (name: string) => {
+    gauges.shapes.delete(name);
+    gauges.samples = gauges.samples.filter((sample) => sample.name !== name);
   };
 
   const histogram = (
@@ -120,11 +179,11 @@ export function createPrometheusMetricStore() {
     if (value === undefined || !Number.isFinite(value)) {
       return;
     }
-    const key = metricKey(name, labels);
-    if (!canCreateSeries(histograms, key)) {
+    const node = series(histograms, name, labels);
+    if (!node) {
       return;
     }
-    let sample = histograms.get(key);
+    let sample = node.sample;
     if (!sample) {
       sample = {
         buckets,
@@ -135,12 +194,14 @@ export function createPrometheusMetricStore() {
         counts: buckets.map(() => 0),
         count: 0,
         help,
+        key: metricKey(name, labels),
         name,
         sumPrefix: `${name}_sum${formatLabels(labels)} `,
         countPrefix: `${name}_count${formatLabels(labels)} `,
         sum: 0,
       };
-      histograms.set(key, sample);
+      node.sample = sample;
+      histograms.samples.push(sample);
     }
     sample.count += 1;
     sample.sum += value;
@@ -167,12 +228,10 @@ export function createPrometheusMetricStore() {
       }
     };
     for (const [type, samples] of [
-      ["counter", counters],
-      ["gauge", gauges],
+      ["counter", counters.samples],
+      ["gauge", gauges.samples],
     ] as const) {
-      for (const [, sample] of [...samples].toSorted(([left], [right]) =>
-        left.localeCompare(right),
-      )) {
+      for (const sample of samples.toSorted((left, right) => left.key.localeCompare(right.key))) {
         header(sample.name, type, sample.help);
         write(sample.prefix, sample.value);
       }
@@ -185,8 +244,8 @@ export function createPrometheusMetricStore() {
         write(`${DROPPED_SERIES_COUNTER_NAME} `, droppedSeries);
       }
     }
-    for (const [, sample] of [...histograms].toSorted(([left], [right]) =>
-      left.localeCompare(right),
+    for (const sample of histograms.samples.toSorted((left, right) =>
+      left.key.localeCompare(right.key),
     )) {
       header(sample.name, "histogram", sample.help);
       sample.bucketPrefixes.forEach((prefix, bucketIndex) => {
@@ -200,9 +259,10 @@ export function createPrometheusMetricStore() {
   };
 
   const reset = () => {
-    counters.clear();
-    gauges.clear();
-    histograms.clear();
+    for (const map of [counters, gauges, histograms]) {
+      map.samples.length = 0;
+      map.shapes.clear();
+    }
     droppedSeries = 0;
     parts.length = 0;
   };

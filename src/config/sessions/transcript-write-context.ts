@@ -6,6 +6,7 @@ import type {
   ModelChangeEntry,
   ThinkingLevelChangeEntry,
 } from "../../agents/sessions/session-manager-types.js";
+import { runWithAsyncStore } from "../../shared/async-store.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import { getCliHistoryWriter, runWithCliHistoryWriter } from "./cli-history-boundary.js";
@@ -130,7 +131,8 @@ export async function withSessionTranscriptSourcePublication<T>(
     publish,
   };
   try {
-    return await ownedTranscriptWriteContext.run(
+    return await runWithAsyncStore(
+      ownedTranscriptWriteContext,
       {
         ...parent,
         withTranscriptWrite: parent ? (write) => parent.withTranscriptWrite(write) : trackAsyncWork,
@@ -297,7 +299,8 @@ export async function withSessionMetadataPublication<T>(
   };
   const metadataPublication: { current?: MetadataPublication } = { current: publication };
   try {
-    return await ownedTranscriptWriteContext.run(
+    return await runWithAsyncStore(
+      ownedTranscriptWriteContext,
       {
         ...parent,
         withTranscriptWrite: parent ? (write) => parent.withTranscriptWrite(write) : trackAsyncWork,
@@ -435,7 +438,7 @@ export async function withOwnedSessionTranscriptWrites<T>(
   context: OwnedSessionTranscriptWriteContext,
   run: () => Promise<T>,
 ): Promise<T> {
-  return await ownedTranscriptWriteContext.run(captureWriteContext(context), run);
+  return await runWithAsyncStore(ownedTranscriptWriteContext, captureWriteContext(context), run);
 }
 
 /** Only the matching transcript owner can admit a restart's interrupted assistant row. */
@@ -463,7 +466,8 @@ export function withSessionTranscriptWriteAssertion<T>(
   const target = captureWriteTarget(scope);
   assertTranscriptWriteContext(parent, target);
   assertCurrent();
-  return ownedTranscriptWriteContext.run(
+  return runWithAsyncStore(
+    ownedTranscriptWriteContext,
     {
       ...parent,
       sessionTarget: parent?.sessionTarget ?? target,
@@ -487,7 +491,7 @@ export function bindOwnedSessionTranscriptWrites<TArgs extends unknown[], TResul
   run: (...args: TArgs) => TResult,
 ): (...args: TArgs) => TResult {
   const captured = captureWriteContext(context);
-  return (...args) => ownedTranscriptWriteContext.run(captured, () => run(...args));
+  return (...args) => runWithAsyncStore(ownedTranscriptWriteContext, captured, () => run(...args));
 }
 
 /**

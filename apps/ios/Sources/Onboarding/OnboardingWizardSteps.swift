@@ -408,7 +408,7 @@ struct OnboardingModeIcon: View {
 
     var body: some View {
         Image(systemName: self.symbol)
-            .font(OpenClawType.subheadSemiBold)
+            .font(.system(size: 15, weight: .semibold))
             .foregroundStyle(self.selected ? OpenClawBrand.activationPrimaryActionText : .secondary)
             .frame(width: 34, height: 34)
             .background {

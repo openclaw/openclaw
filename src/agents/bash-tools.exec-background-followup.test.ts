@@ -148,7 +148,7 @@ async function completion(signal: AbortSignal) {
 }
 
 function backgroundExec(sessionKey: string, overrides: ExecToolDefaults = {}) {
-  return createExecTool({
+  const tool = createExecTool({
     config,
     ...fullGatewayExec,
     sessionKey,
@@ -157,6 +157,11 @@ function backgroundExec(sessionKey: string, overrides: ExecToolDefaults = {}) {
     allowBackground: true,
     ...overrides,
   });
+  return (callId: string, script: string) =>
+    tool.execute(callId, {
+      command: nodeCommand(script),
+      background: true,
+    });
 }
 
 test.each([
@@ -296,10 +301,7 @@ test.for(["ordinary", "live cron", "queued cron", "ended cron", "cron ended duri
     const exec = backgroundExec(sessionKey, { agentId: "main" });
     try {
       const start = async () => {
-        const started = await exec.execute("cron-followup", {
-          command: nodeCommand('process.stdout.write("CRON_EXEC_DONE")'),
-          background: true,
-        });
+        const started = await exec("cron-followup", 'process.stdout.write("CRON_EXEC_DONE")');
         const { sessionId: processSessionId } = runningSession(started.details);
         await withinTest(waitForExecScope(sessionKey), signal);
         if (scenario === "queued cron") {
@@ -377,6 +379,33 @@ test.for(["ordinary", "live cron", "queued cron", "ended cron", "cron ended duri
   },
 );
 
+test.for([
+  { label: "starting run", runId: "origin-run", expected: { runId: "origin-run" } },
+  { label: "no run", runId: undefined, expected: {} },
+])(
+  "names the $label in the completion wake provenance",
+  async ({ runId, expected }, { signal }) => {
+    const sessionKey = `agent:main:dashboard:wake-provenance-${runId ?? "none"}`;
+    await seedOrigin(sessionKey);
+    const started = await backgroundExec(sessionKey, { agentId: "main", runId })(
+      "wake-provenance",
+      'process.stdout.write("WAKE_PROVENANCE_DONE")',
+    );
+    runningSession(started.details);
+    await withinTest(waitForExecScope(sessionKey), signal);
+    await completion(signal);
+    const [params] = expectDefined(model.mock.calls[0], "completion turn");
+    expect(params.prompt).toContain("WAKE_PROVENANCE_DONE");
+    // The wake stays a non-owner internal turn; only the origin fact is added.
+    expect(params.senderIsOwner).not.toBe(true);
+    expect(params.inputProvenance).toStrictEqual({
+      kind: "internal_system",
+      sourceTool: "exec",
+      ...expected,
+    });
+  },
+);
+
 test("starts and notifies when identity enrichment fails, then resolves child identity again", async ({
   signal,
 }) => {
@@ -391,10 +420,10 @@ test("starts and notifies when identity enrichment fails, then resolves child id
     if (recovered) {
       await seedOrigin(sessionKey, "agent:main:main");
     }
-    const started = await exec.execute("notification-possible", {
-      command: nodeCommand('process.stdout.write("EXEC_STARTED"); process.exitCode = 1'),
-      background: true,
-    });
+    const started = await exec(
+      "notification-possible",
+      'process.stdout.write("EXEC_STARTED"); process.exitCode = 1',
+    );
     const { sessionId } = runningSession(started.details);
     await withinTest(waitForExecScope(sessionKey), signal);
     if (!recovered) {
@@ -439,10 +468,7 @@ test("reports manual collection after destination capture fails, then recovers o
     const release = path.join(state.workspaceDir, `release-${recovered}`);
     const child = `const fs = require("node:fs"); const release = ${JSON.stringify(release)}; const watcher = fs.watch(${JSON.stringify(state.workspaceDir)}, () => { if (fs.existsSync(release)) { watcher.close(); process.stdout.write("EXEC_COLLECTED"); } }); if (fs.existsSync(release)) { watcher.close(); process.stdout.write("EXEC_COLLECTED"); }`;
     try {
-      const started = await exec.execute("capture-failure", {
-        command: nodeCommand(child),
-        background: true,
-      });
+      const started = await exec("capture-failure", child);
       expect(faults).toBe(1);
       const handle = runningSession(started.details);
       const followUp = expectDefined(handle.followUp, "background continuation guidance");
@@ -590,10 +616,10 @@ test.for(["completed", "revoked", "missing"] as const)(
       const started = await withGatewayToolCallerIdentity(
         { agentId: "main", sessionKey, operatorAuthority: original },
         () =>
-          backgroundExec(sessionKey, { agentId: "main" }).execute("guest-command", {
-            command: nodeCommand('process.stdout.write("GUEST_COMMAND_DONE")'),
-            background: true,
-          }),
+          backgroundExec(sessionKey, { agentId: "main" })(
+            "guest-command",
+            'process.stdout.write("GUEST_COMMAND_DONE")',
+          ),
       );
       runningSession(started.details);
       references--;

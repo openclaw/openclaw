@@ -1,4 +1,3 @@
-// Provider catalog deprecation contract tests cover deprecated provider catalog metadata.
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -14,35 +13,25 @@ const extensionsRoot = path.join(repoRoot, "extensions");
 
 function isProductionSourcePath(filePath: string): boolean {
   const normalized = toRepoPath(filePath);
-  if (!/\.(?:ts|tsx|js|mjs|cjs)$/.test(normalized)) {
-    return false;
-  }
-  if (/(^|\/)(?:node_modules|dist|\.[^/]+)(?:\/|$)/.test(normalized)) {
-    return false;
-  }
-  return !/(\.test\.|\.spec\.|\/__tests__\/|\/test-support\/)/.test(normalized);
-}
-
-function listGitProductionSourceFiles(root: string): string[] | null {
-  const relativeRoot = toRepoRelativePath(repoRoot, root);
-  if (!relativeRoot || relativeRoot.startsWith("..") || path.isAbsolute(relativeRoot)) {
-    return null;
-  }
-  const files = listGitTrackedFiles({ repoRoot, pathspecs: relativeRoot });
-  if (!files) {
-    return null;
-  }
-  return files
-    .filter(isProductionSourcePath)
-    .map((line) => path.join(repoRoot, ...line.split("/")))
-    .filter((filePath) => fs.existsSync(filePath))
-    .toSorted();
+  return (
+    /\.(?:ts|tsx|js|mjs|cjs)$/.test(normalized) &&
+    !/(^|\/)(?:node_modules|dist|\.[^/]+)(?:\/|$)/.test(normalized) &&
+    !/(\.test\.|\.spec\.|\/__tests__\/|\/test-support\/)/.test(normalized)
+  );
 }
 
 function walkProductionSourceFiles(dir: string): string[] {
-  const gitFiles = listGitProductionSourceFiles(dir);
+  const relativeRoot = toRepoRelativePath(repoRoot, dir);
+  const gitFiles =
+    relativeRoot && !relativeRoot.startsWith("..") && !path.isAbsolute(relativeRoot)
+      ? listGitTrackedFiles({ repoRoot, pathspecs: relativeRoot })
+      : null;
   if (gitFiles) {
-    return gitFiles;
+    return gitFiles
+      .filter(isProductionSourcePath)
+      .map((line) => path.join(repoRoot, ...line.split("/")))
+      .filter((filePath) => fs.existsSync(filePath))
+      .toSorted();
   }
 
   const files: string[] = [];
@@ -55,10 +44,9 @@ function walkProductionSourceFiles(dir: string): string[] {
       files.push(...walkProductionSourceFiles(entryPath));
       continue;
     }
-    if (!isProductionSourcePath(entryPath)) {
-      continue;
+    if (isProductionSourcePath(entryPath)) {
+      files.push(entryPath);
     }
-    files.push(entryPath);
   }
   return files;
 }
@@ -67,27 +55,17 @@ function readBalancedBlock(source: string, openIndex: number): string | undefine
   let depth = 0;
   let quote: '"' | "'" | "`" | undefined;
   let escaped = false;
-  const opener = source[openIndex];
-  const closer = opener === "(" ? ")" : opener === "{" ? "}" : undefined;
-  if (!closer) {
-    return undefined;
-  }
+  // The caller's pattern always ends at an opening parenthesis or brace.
+  const closer = source[openIndex] === "(" ? ")" : "}";
 
   for (let index = openIndex; index < source.length; index += 1) {
     const char = source[index];
-    if (!char) {
-      continue;
-    }
     if (quote) {
       if (escaped) {
         escaped = false;
-        continue;
-      }
-      if (char === "\\") {
+      } else if (char === "\\") {
         escaped = true;
-        continue;
-      }
-      if (char === quote) {
+      } else if (char === quote) {
         quote = undefined;
       }
       continue;
@@ -110,36 +88,16 @@ function readBalancedBlock(source: string, openIndex: number): string | undefine
   return undefined;
 }
 
-function listRegisterProviderObjects(source: string): string[] {
-  const calls: string[] = [];
-  const pattern = /\bregisterProvider\s*\(/g;
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(source))) {
-    const openParenIndex = source.indexOf("(", match.index);
-    const args = readBalancedBlock(source, openParenIndex);
-    if (args !== undefined) {
-      calls.push(args);
-    }
-  }
-  return calls;
-}
-
 function listProviderPluginObjects(source: string): string[] {
   const objects: string[] = [];
-  const pattern = /:\s*[A-Za-z0-9_]*ProviderPlugin\s*=\s*\{/g;
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(source))) {
-    const openBraceIndex = source.indexOf("{", match.index);
-    const object = readBalancedBlock(source, openBraceIndex);
+  const pattern = /\bregisterProvider\s*\(|:\s*[A-Za-z0-9_]*ProviderPlugin\s*=\s*\{/g;
+  for (const match of source.matchAll(pattern)) {
+    const object = readBalancedBlock(source, match.index + match[0].length - 1);
     if (object !== undefined) {
       objects.push(object);
     }
   }
   return objects;
-}
-
-function lineNumberFor(source: string, offset: number): number {
-  return source.slice(0, offset).split("\n").length;
 }
 
 describe("bundled provider catalog deprecation guard", () => {
@@ -159,18 +117,14 @@ describe("bundled provider catalog deprecation guard", () => {
     const offenders: string[] = [];
     for (const filePath of walkProductionSourceFiles(extensionsRoot)) {
       const source = fs.readFileSync(filePath, "utf8");
-      const candidates = [
-        ...listRegisterProviderObjects(source),
-        ...listProviderPluginObjects(source),
-      ];
-      for (const candidate of candidates) {
+      for (const candidate of listProviderPluginObjects(source)) {
         const match = /\bdiscovery\s*:/.exec(candidate);
         if (!match) {
           continue;
         }
         const absoluteOffset = source.indexOf(candidate) + match.index;
         offenders.push(
-          `${path.relative(repoRoot, filePath)}:${lineNumberFor(source, absoluteOffset)}`,
+          `${path.relative(repoRoot, filePath)}:${source.slice(0, absoluteOffset).split("\n").length}`,
         );
       }
     }

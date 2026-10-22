@@ -10,6 +10,7 @@ import {
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
+  markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
 import { resolveEffectiveResponseUsage } from "../thinking.js";
@@ -95,8 +96,32 @@ export const resolveResponseUsageLine = (params: {
   return rendered || formatted || undefined;
 };
 
-export const appendUsageLine = (payloads: ReplyPayload[], line: string): ReplyPayload[] => {
-  const index = payloads.findLastIndex((payload) => payload?.text);
+export const appendUsageLine = (
+  payloads: ReplyPayload[],
+  line: string,
+  options?: { completedSourceReply?: boolean },
+): ReplyPayload[] => {
+  const sourceReplyIndex = options?.completedSourceReply
+    ? payloads.findLastIndex((payload) => {
+        const metadata = getReplyPayloadMetadata(payload);
+        return (
+          Boolean(payload?.text) &&
+          Boolean(metadata?.sourceReplyTranscriptMirror) &&
+          metadata?.deliverDespiteSourceReplySuppression === true
+        );
+      })
+    : -1;
+  if (options?.completedSourceReply && sourceReplyIndex === -1) {
+    // The source reply is already visible; keep private final text suppressed.
+    const footer = markReplyPayloadForSourceSuppressionDelivery({
+      text: line,
+      isStatusNotice: true,
+    });
+    setReplyPayloadMetadata(footer, { responseUsageLine: line });
+    return [...payloads, footer];
+  }
+  const index =
+    sourceReplyIndex >= 0 ? sourceReplyIndex : payloads.findLastIndex((payload) => payload?.text);
   if (index === -1) {
     return [...payloads, { text: line, isStatusNotice: true }];
   }

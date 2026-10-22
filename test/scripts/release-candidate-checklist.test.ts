@@ -53,6 +53,8 @@ import {
   preflightCorePackageTarballs,
   preflightDependencyTarballs,
   reconcileReleaseCandidateState,
+  resolveEarlyPluginSdkApiBases,
+  resolveEarlyPluginSdkApiReviewPaths,
   resolveArtifactName,
   resolveReleaseCandidateOutputDir,
   requireRunIdFromDispatchOutput,
@@ -316,6 +318,48 @@ describe("release candidate checklist", () => {
       phase: "waiting",
     });
     expect(existsSync(join(legacyOutputDir, "frv-request.json"))).toBe(true);
+  });
+
+  it("resolves the early Plugin SDK review against the publication selectors", () => {
+    expect(
+      resolveEarlyPluginSdkApiBases({
+        distTags: { beta: "2026.10.20-beta.1", latest: "2026.10.19" },
+        npmDistTag: "latest",
+        packageVersion: "2026.10.21",
+      }),
+    ).toEqual({ beta: "v2026.10.20-beta.1", latest: "v2026.10.19" });
+    expect(
+      resolveEarlyPluginSdkApiBases({
+        distTags: { beta: "2026.10.20-beta.1", latest: "2026.10.19" },
+        npmDistTag: "beta",
+        packageVersion: "2026.10.21-beta.1",
+      }),
+    ).toEqual({ beta: "v2026.10.20-beta.1" });
+  });
+
+  it("keeps early Plugin SDK artifacts in the candidate output when tooling has another cwd", () => {
+    const candidateRoot = tempDirs.make("candidate-sdk-review-");
+    const toolingRoot = tempDirs.make("tooling-sdk-review-");
+    const outputDir = join(".artifacts", "release-candidate", "v2026.10.21", "candidate-sha");
+    const paths = resolveEarlyPluginSdkApiReviewPaths({ outputDir, targetRoot: candidateRoot });
+    const artifactPaths = [paths.evidencePath, paths.reportPath, paths.diffPath];
+
+    execFileSync(
+      process.execPath,
+      [
+        "-e",
+        "const fs = require('node:fs'); for (const file of process.argv.slice(1)) { fs.mkdirSync(require('node:path').dirname(file), { recursive: true }); fs.writeFileSync(file, file); }",
+        ...artifactPaths,
+      ],
+      { cwd: toolingRoot },
+    );
+
+    expect(paths.reviewDir).toBe(join(candidateRoot, outputDir, "plugin-sdk-api-early-review"));
+    for (const artifactPath of artifactPaths) {
+      expect(readFileSync(artifactPath, "utf8")).toBe(artifactPath);
+      expect(artifactPath.startsWith(candidateRoot)).toBe(true);
+      expect(artifactPath.startsWith(toolingRoot)).toBe(false);
+    }
   });
 
   it.each([
@@ -651,6 +695,9 @@ describe("release candidate checklist", () => {
         source.match(/^function savedPublishWorkflowRef\([\s\S]*?^\}/mu)?.[0] ?? "";
       const statePlanning =
         source.match(/^function canUpdateReleaseCandidateState\([\s\S]*?^\}/mu)?.[0] ?? "";
+      const sdkAcknowledgementFailure =
+        source.match(/^function formatPluginSdkApiAcknowledgementFailure\([\s\S]*?^\}/mu)?.[0] ??
+        "";
       const shellQuote = source.match(/^function shellQuote\([\s\S]*?^\}/mu)?.[0] ?? "";
       const log = vi.fn();
       const stages: string[] = [];
@@ -780,7 +827,7 @@ describe("release candidate checklist", () => {
       const dispatches: string[][] = [];
       const completion = runInNewContext(
         stripNodeTypeScriptTypes(
-          `${android}\n${selectPublication}\n${statePlanning}\n${savedTagReader}\n${helperDispatch}\n${shellQuote}\n${main}\nmain();`,
+          `${android}\n${selectPublication}\n${statePlanning}\n${savedTagReader}\n${helperDispatch}\n${shellQuote}\n${sdkAcknowledgementFailure}\n${main}\nmain();`,
         ),
         {
           process: {
@@ -845,6 +892,7 @@ describe("release candidate checklist", () => {
           validateCandidateReleaseNotes: () => ({ status: "passed" }),
           validateCandidateChangelogProvenance: () => ({ status: "passed", shippedBaselines: [] }),
           runLocalGeneratedCheckIfNeeded: generatedChecks,
+          runEarlyPluginSdkApiReview: () => {},
           releaseBranchForTag,
           readFileSync: (file: string) =>
             file.endsWith("plugin-sdk-api-release-diff.md")

@@ -2,11 +2,13 @@ import {
   createContext,
   createMemo,
   createSignal,
+  createStore,
   createUniqueId,
   onCleanup,
   onSettled,
 } from "solid-js";
 import { registerMenuShortcuts } from "../../../components/menu-shortcuts.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 
 export type ChatModelSearchRow = {
   key: string;
@@ -82,11 +84,6 @@ export function createChatModelSearch() {
   const state: ModelSearchState = { rows: new Map(), query, setQuery };
   const optionId = (key: string) => `${prefix}-option-${encodeURIComponent(key)}`;
   const listId = (key: string) => `${prefix}-list-${encodeURIComponent(key)}`;
-  onCleanup(() => {
-    if (state.details) {
-      pickers.delete(state.details);
-    }
-  });
   onSettled(() =>
     state.details
       ? registerMenuShortcuts(state.details, () =>
@@ -103,23 +100,23 @@ export function createChatModelSearch() {
     optionId,
     listId,
     setOpen,
-    detailsRef(element: HTMLDetailsElement) {
+    detailsRef: elementRef<HTMLDetailsElement>((element) => {
       state.details = element;
       pickers.set(element, state);
-    },
+      return () => pickers.delete(element);
+    }),
     summaryRef(this: void, element: HTMLElement) {
       state.summary = element;
     },
     inputRef() {
-      let current: HTMLInputElement | undefined;
-      onCleanup(() => {
-        if (state.input === current) {
-          state.input = undefined;
-        }
+      return elementRef<HTMLInputElement>((element) => {
+        state.input = element;
+        return () => {
+          if (state.input === element) {
+            state.input = undefined;
+          }
+        };
       });
-      return (element: HTMLInputElement) => {
-        state.input = current = element;
-      };
     },
     rowRef(readKey: () => string) {
       let element: HTMLButtonElement;
@@ -148,33 +145,37 @@ export function createChatModelSearch() {
             a.active === b.active && a.providers.join("\0") === b.providers.join("\0"),
         },
       );
-      // Selection changes reset provider disclosure defaults; refreshes retain explicit choices.
-      const [groups, setGroups] = createSignal(
-        (previous?: { active?: string; choices: ReadonlyMap<string, boolean> }) => {
+      // Selection resets provider defaults; catalog refreshes retain each surviving choice.
+      const [disclosure, updateDisclosure] = createStore<{
+        active: string | undefined;
+        groups: Record<string, { open?: boolean; more: boolean }>;
+      }>(
+        (draft) => {
           const current = scope();
-          return {
-            active: current.active,
-            choices: new Map(
-              previous && previous.active === current.active
-                ? [...previous.choices].filter(([key]) => current.providers.includes(key))
-                : [],
-            ),
-          };
+          const selectionChanged = draft.active !== current.active;
+          draft.active = current.active;
+          for (const provider of Object.keys(draft.groups)) {
+            if (!current.providers.includes(provider)) {
+              delete draft.groups[provider];
+            }
+          }
+          for (const provider of current.providers) {
+            const group = (draft.groups[provider] ??= { more: false });
+            if (selectionChanged) {
+              delete group.open;
+            }
+          }
         },
-      );
-      // All models is a one-way disclosure for each mounted provider.
-      const [more, setMore] = createSignal(
-        (previous: ReadonlySet<string> = new Set()) =>
-          new Set([...previous].filter((key) => scope().providers.includes(key))),
+        { active: undefined, groups: {} },
       );
       const providerOpen = (provider: string) =>
-        groups().choices.get(provider) ?? groups().active === provider;
+        disclosure.groups[provider]?.open ?? disclosure.active === provider;
       const matches = createMemo(() => {
         const term = query().trim().toLocaleLowerCase();
         return read()
           .rows.flatMap((row, index) => {
             const visible = row.provider
-              ? providerOpen(row.provider) && (!row.more || more().has(row.provider))
+              ? providerOpen(row.provider) && (!row.more || disclosure.groups[row.provider]?.more)
               : row.visible !== false;
             const score = term ? modelMatchRank(row, term) : visible ? 0 : null;
             return score === null ? [] : [{ row, score, index }];
@@ -208,7 +209,7 @@ export function createChatModelSearch() {
         highlighted,
         highlight,
         providerOpen,
-        moreOpen: (provider: string) => more().has(provider),
+        moreOpen: (provider: string) => disclosure.groups[provider]?.more ?? false,
         filtering: () => Boolean(query().trim()),
         empty: () => Boolean(query().trim()) && matches().length === 0,
         controls: () => read().lists.map(listId).join(" "),
@@ -218,15 +219,16 @@ export function createChatModelSearch() {
         },
         toggleProvider(provider: string) {
           const next = !providerOpen(provider);
-          setGroups((current) => ({
-            ...current,
-            choices: new Map(current.choices).set(provider, next),
-          }));
+          updateDisclosure((draft) => {
+            draft.groups[provider]!.open = next;
+          });
         },
         expandMore(provider: string, event: MouseEvent) {
           event.stopPropagation();
           const hadFocus = event.currentTarget === state.details?.ownerDocument.activeElement;
-          setMore((current) => new Set(current).add(provider));
+          updateDisclosure((draft) => {
+            draft.groups[provider]!.more = true;
+          });
           if (hadFocus) {
             onSettled(() => {
               const next = selectable().find(({ row }) => row.provider === provider && row.more);
@@ -237,6 +239,7 @@ export function createChatModelSearch() {
           }
         },
       };
+      // Rows read this synchronous bridge while mounting; cleanup belongs to this primitive.
       state.view = view;
       onCleanup(() => {
         if (state.view === view) {

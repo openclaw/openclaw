@@ -1,6 +1,6 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { dynamic } from "@solidjs/web";
-import { createMemo, createSignal, Show } from "solid-js";
+import { createMemo, createSignal, lazy, Loading, Show } from "solid-js";
 import { createFooterControlRef } from "../../../app/shell-layout-traits-solid.tsx";
 import { McpAppCatalog } from "../../../components/mcp-app-catalog.tsx";
 import { McpAppResources } from "../../../components/mcp-app-resources.tsx";
@@ -13,7 +13,7 @@ import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { PaneSubagentStop } from "../chat-pane-header-view.tsx";
 import "../../../styles/chat/composer-context-strip.css";
-import { ChatActivityPills } from "./chat-activity-pills.tsx";
+import { hasVisibleChatActivityPills } from "./chat-activity-pills-visibility.ts";
 import { createChatAttachmentInputHandle } from "./chat-attachment-inputs.ts";
 import { ChatAttachmentInputs } from "./chat-attachment-inputs.tsx";
 import { AttachmentPreview, AttachmentReadStatus } from "./chat-attachments.tsx";
@@ -46,6 +46,10 @@ import { ChatPermissionPicker } from "./chat-permission-picker.tsx";
 import { ChatVoiceStatus, ComposerDictationStatus } from "./chat-voice-activity.tsx";
 
 type ChatComposerViewContext = ReturnType<typeof createChatComposerContext>;
+
+const ChatActivityPills = lazy(() => import("./chat-activity-pills.tsx"), {
+  export: "ChatActivityPills",
+});
 
 export function renderChatComposerView(
   context: () => ChatComposerViewContext,
@@ -329,8 +333,20 @@ export function renderChatComposerView(
             }}
           </Show>
         </div>
-        <Show when={props.mobileComposer && props.mobileActivityPills}>
-          {(activities) => <ChatActivityPills {...activities()} />}
+        <Show
+          when={
+            props.mobileComposer &&
+            props.mobileActivityPills &&
+            hasVisibleChatActivityPills(props.mobileActivityPills)
+              ? props.mobileActivityPills
+              : undefined
+          }
+        >
+          {(activities) => (
+            <Loading>
+              <ChatActivityPills {...activities()} onLayout={props.onActivityPillsLayout} />
+            </Loading>
+          )}
         </Show>
         {props.mobileApprovalContent}
       </div>
@@ -338,7 +354,7 @@ export function renderChatComposerView(
         <ComposerQueue composer={props} showAbortableUi={context().showAbortableUi} />
       </Show>
       {showComposerInput() ? (
-        <ComposerInputScope state={context().state}>
+        <ComposerInputScope>
           <div
             class={[
               "agent-chat__input agent-chat__input--chat agent-chat__input--mobile-toolbar",
@@ -369,7 +385,14 @@ export function renderChatComposerView(
               focusComposerFromChrome(event, context().canCompose, state.composerTextarea)
             }
             ref={[
-              context().state.composerInputRef ?? undefined,
+              elementRef<HTMLDivElement>((element) => {
+                state.composerInputRef?.(element);
+                return () => {
+                  if (state.composerInput === element) {
+                    state.composerInputRef?.();
+                  }
+                };
+              }),
               createBackgroundLayoutRef("composer"),
             ]}
           >

@@ -72,7 +72,7 @@ it.each<{
 });
 
 it.each(
-  [24, 25, 26, 27, 28].flatMap((version) => [
+  [24, 25, 26, 27, 28, 29].flatMap((version) => [
     { version, profiles: false },
     { version, profiles: true },
   ]),
@@ -171,4 +171,21 @@ it("captures only the credential retirement scope plus required schema metadata 
     "sqlite_stat1",
     "sqlite_stat4",
   ]);
+});
+
+it("retains the v29 catalog and backs up only policy-fence metadata", async () => {
+  const predecessor = await loadStatePortDescriptor(29);
+  const current = await loadStatePortDescriptor();
+  expect(predecessor.version).toBe(29);
+  expect(current.version).toBe(30);
+  expect(predecessor.tables).toEqual(current.tables);
+  expect(predecessor.sqlite).toBe(current.sqlite);
+  expect(predecessor.tables.some((table) => table.name === "device_auth_tokens")).toBe(false);
+  expect(
+    resolveSchemaMigrationBackupTables({
+      kind: "state",
+      foundVersion: 29,
+      supportedVersion: 30,
+    }),
+  ).toEqual(["config_machine_state", "schema_meta"]);
 });
