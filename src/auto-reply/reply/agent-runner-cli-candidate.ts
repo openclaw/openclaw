@@ -466,6 +466,13 @@ export async function runCliFallbackCandidate(
             forkCliSessionOnResume,
             ...forkRunParams,
             authProfileId,
+            // The CLI owner rechecks this after awaits and before credential/transport effects.
+            assertCurrent: scheduledInference
+              ? () => {
+                  assertSettlementCurrent();
+                  scheduledInference.runParams.authProfileBinding?.assertCurrent();
+                }
+              : undefined,
             nativeAuthOnly:
               turn.followupRun.run.scheduledAutomation && !params.scheduledInference
                 ? true

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { removeAuthProfilesAcrossOwnerStores } from "../agents/auth-profiles/profiles.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
@@ -378,9 +379,15 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
         provider: "anthropic",
         model: "claude-opus-4-6",
       });
-      h.runCliAgentMock.mockResolvedValue({
-        payloads: [{ text: "stored account reply" }],
-        meta: { agentMeta: { provider: "claude-cli", model: "claude-opus-4-6" } },
+      let assertCurrent: (() => void) | undefined;
+      h.runCliAgentMock.mockImplementation(async (request) => {
+        assertCurrent = request.assertCurrent;
+        expect(assertCurrent).toBeTypeOf("function");
+        assertCurrent?.();
+        return {
+          payloads: [{ text: "stored account reply" }],
+          meta: { agentMeta: { provider: "claude-cli", model: "claude-opus-4-6" } },
+        };
       });
 
       const result = await runWithConfig(cfg, makeAuthJob({ inferenceBinding: binding }));
@@ -393,6 +400,40 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
       });
       expect(h.runCliAgentMock.mock.lastCall?.[0].nativeAuthOnly).toBeUndefined();
       expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();
+      expect(() => assertCurrent?.()).toThrow(/disconnected|replaced|settlement/i);
+    },
+  );
+
+  it.each(["removed", "reconnected"] as const)(
+    "rejects a %s account during CLI preparation before credential use",
+    async (change) => {
+      await saveProfiles({ "anthropic:default": claudeToken() });
+      setupClaudeCliBackend();
+      const cfg = claudeCliConfig();
+      const binding = await captureCronInferenceBinding({ cfg, agentId: "main" });
+      h.resolveConfiguredModelRefMock.mockReturnValue({
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+      });
+      const credentialUse = vi.fn();
+      h.runCliAgentMock.mockImplementation(async (request) => {
+        expect(request.assertCurrent).toBeTypeOf("function");
+        request.assertCurrent?.();
+        await removeAuthProfilesAcrossOwnerStores({
+          profileIds: ["anthropic:default"],
+          agentDir: state.agentDir(),
+        });
+        if (change === "reconnected") {
+          await saveProfiles({ "anthropic:default": claudeToken() });
+        }
+        request.assertCurrent?.();
+        credentialUse();
+        return { payloads: [{ text: "must not run" }], meta: {} };
+      });
+      const result = await runWithConfig(cfg, makeAuthJob({ inferenceBinding: binding }));
+      expect(result.status).toBe("error");
+      expect(result.error).toMatch(/disconnected|replaced/i);
+      expect(credentialUse).not.toHaveBeenCalled();
     },
   );
 

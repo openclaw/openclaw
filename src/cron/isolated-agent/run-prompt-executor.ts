@@ -564,6 +564,13 @@ export function createCronPromptExecutor(
                   ),
                   provider: executionProvider,
                   authProfileId,
+                  // Keep the recorded credential lifetime live through CLI preparation and launch.
+                  assertCurrent: inference
+                    ? () => {
+                        assertSettlementCurrent();
+                        inference.runParams.authProfileBinding?.assertCurrent();
+                      }
+                    : undefined,
                   nativeAuthOnly: trigger === "cron" && !binding ? true : undefined,
                   cliSessionId: cliSessionBinding?.sessionId,
                   cliSessionBinding: guardedCliSessionBinding,
