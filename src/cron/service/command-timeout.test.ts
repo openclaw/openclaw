@@ -22,6 +22,8 @@ import type { CronServiceDeps } from "./state.js";
 import { executeJobCoreWithTimeout } from "./timer-job-runner.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const expectDrained = () =>
+  expect(waitForActiveCronTaskRuns(1_000)).resolves.toEqual({ drained: true, active: 0 });
 
 function commandFixture(
   id: string,
@@ -100,10 +102,7 @@ describe("scheduled command timeouts", () => {
       } finally {
         try {
           await settle();
-          await expect(waitForActiveCronTaskRuns(1_000)).resolves.toEqual({
-            drained: true,
-            active: 0,
-          });
+          await expectDrained();
         } finally {
           clearCronJobActive(job.id, activeJobMarker);
         }
@@ -157,10 +156,7 @@ describe("scheduled command timeouts", () => {
         if (completion === "revoked") {
           await expect(run).rejects.toThrow("Gateway restarting.");
           expect(runCommandJob).not.toHaveBeenCalled();
-          await expect(waitForActiveCronTaskRuns(1_000)).resolves.toEqual({
-            drained: true,
-            active: 0,
-          });
+          await expectDrained();
           return;
         }
         await awaitGateBeforeSettlement(
@@ -181,10 +177,7 @@ describe("scheduled command timeouts", () => {
         });
         expect(getSuspensionVisibleCronTaskRunCount()).toBe(1);
         command.resolve({ status: "ok", summary: "late completion" });
-        await expect(waitForActiveCronTaskRuns(1_000)).resolves.toEqual({
-          drained: true,
-          active: 0,
-        });
+        await expectDrained();
         expect(getSuspensionVisibleCronTaskRunCount()).toBe(0);
       } finally {
         releasePreflight.resolve();

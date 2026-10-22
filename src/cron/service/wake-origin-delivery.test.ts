@@ -31,6 +31,15 @@ function makeStateWithMocks(
   return { state, enqueueSessionEvent, resolveOriginDeliveryContext: resolveOrigin };
 }
 
+async function expectWake(
+  state: ReturnType<typeof makeStateWithMocks>["state"],
+  target: Omit<Parameters<typeof wake>[1], "mode" | "text"> = {},
+) {
+  await expect(wake(state, { mode: "now", text: "check the queue", ...target })).resolves.toEqual({
+    ok: true,
+  });
+}
+
 describe("cron wake() origin delivery-context carry", () => {
   it("preserves a captured origin route and target through delayed wake admission", async () => {
     const { state, enqueueSessionEvent, resolveOriginDeliveryContext } = makeStateWithMocks(() => ({
@@ -43,18 +52,9 @@ describe("cron wake() origin delivery-context carry", () => {
       deliveryContext: TOPIC_DELIVERY_CONTEXT,
     };
 
-    expect(
-      await wake(state, {
-        mode: "now",
-        text: "finish the report",
-        sessionKey,
-        agentId: "main",
-        expectedTarget,
-      }),
-    ).toEqual({ ok: true });
-
+    await expectWake(state, { sessionKey, agentId: "main", expectedTarget });
     expect(resolveOriginDeliveryContext).not.toHaveBeenCalled();
-    expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith("finish the report", {
+    expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith("check the queue", {
       sessionKey,
       agentId: "main",
       deliveryContext: TOPIC_DELIVERY_CONTEXT,
@@ -71,13 +71,7 @@ describe("cron wake() origin delivery-context carry", () => {
       const { state, enqueueSessionEvent, resolveOriginDeliveryContext } =
         makeStateWithMocks(resolve);
       const target = { sessionKey, ...(agentId ? { agentId } : {}) };
-      const result = await wake(state, {
-        mode: "now",
-        text: "check the queue",
-        ...target,
-      });
-
-      expect(result).toEqual({ ok: true });
+      await expectWake(state, target);
       expect(resolveOriginDeliveryContext).toHaveBeenCalledExactlyOnceWith({ sessionKey, agentId });
       expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith("check the queue", {
         ...target,
@@ -89,13 +83,7 @@ describe("cron wake() origin delivery-context carry", () => {
   it("omits deliveryContext when no origin context resolves (unchanged default routing)", async () => {
     const { state, enqueueSessionEvent } = makeStateWithMocks(() => undefined);
 
-    const result = await wake(state, {
-      mode: "now",
-      text: "check the queue",
-      sessionKey,
-    });
-    expect(result).toEqual({ ok: true });
-
+    await expectWake(state, { sessionKey });
     expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith("check the queue", {
       sessionKey,
     });
@@ -108,11 +96,9 @@ describe("cron wake() origin delivery-context carry", () => {
       () => TOPIC_DELIVERY_CONTEXT,
     );
 
-    const result = await wake(state, { mode: "now", text: "no origin" });
-    expect(result).toEqual({ ok: true });
-
+    await expectWake(state);
     expect(resolveOriginDeliveryContext).not.toHaveBeenCalled();
-    expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith("no origin", {
+    expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith("check the queue", {
       createIfMissing: undefined,
       assertAcceptanceCurrent: undefined,
     });
