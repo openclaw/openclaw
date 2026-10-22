@@ -155,7 +155,7 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
           throw new Error(outcome.error);
         }
       });
-      setCopyCompletion(completed);
+      void setCopyCompletion(completed);
       void completed.catch(() => undefined);
     }
     const outcome = await pending;

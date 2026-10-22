@@ -197,17 +197,19 @@ export function createChatSessionSharingPresentation(
     const target = scope();
     const pending = (async () => {
       // Admission and its synchronous publication precede the presentation transaction.
-      const pending = selectChatSessionSharingItem(props, value);
-      if (!(pending instanceof Promise)) {
-        return pending;
+      const selected = selectChatSessionSharingItem(props, value);
+      if (!(selected instanceof Promise)) {
+        return selected;
       }
       await Promise.resolve();
-      return await present(target, pending);
+      return await present(target, selected);
     })().catch((cause: unknown) => {
-      if (!target.signal?.aborted && scope() === target) throw cause;
+      if (!target.signal?.aborted && scope() === target) {
+        throw cause;
+      }
     });
     const completed = pending.then(() => undefined);
-    setCompletion(completed);
+    void setCompletion(completed);
     // The view may retire before its error slot observes this operation.
     void completed.catch(() => undefined);
     return pending.catch(
