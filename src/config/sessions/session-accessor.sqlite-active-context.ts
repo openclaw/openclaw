@@ -447,16 +447,27 @@ export function readSessionTranscriptBoundedActiveContextCore(
         }
       }
     }
-    const contextSequences = selectedSequences.toSorted((left, right) => left - right);
     let injectedBoundarySeq: number | undefined;
     if (boundary && !selectedSequences.includes(boundary.seq)) {
-      if (serializedBytes + boundary.serialized_bytes <= maxBytes) {
+      // The latest boundary carries the previous summary; canonical replay and compaction
+      // both need it before any of the tail, so it takes the tail's oldest bytes when the
+      // tail alone fills the cap. A boundary larger than the cap itself stays out, as before.
+      if (headerBytes + boundary.serialized_bytes <= maxBytes) {
+        while (serializedBytes + boundary.serialized_bytes > maxBytes) {
+          serializedBytes -= selectedRows.pop()!.serialized_bytes;
+          truncated = true;
+        }
         injectedBoundarySeq = boundary.seq;
-        contextSequences.unshift(boundary.seq);
         serializedBytes += boundary.serialized_bytes;
       } else {
         truncated = true;
       }
+    }
+    const contextSequences = selectedRows
+      .map((row) => row.event_seq)
+      .toSorted((left, right) => left - right);
+    if (injectedBoundarySeq !== undefined) {
+      contextSequences.unshift(injectedBoundarySeq);
     }
     const payloadSequences = header ? [header.seq, ...contextSequences] : contextSequences;
     // One payload read follows all byte decisions; header-first ordering also supports migrated mirrors.

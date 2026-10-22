@@ -73,16 +73,23 @@ export function readSessionActorBoundedHistory(
     ({ event }) => isRecord(event) && (event.type === "reset" || event.type === "compaction"),
   );
   const boundary = boundaries.at(-1);
-  const rows = selectedRows.toSorted((left, right) => left.rawSeq - right.rawSeq);
   let injected: typeof boundary;
   if (boundary && !selectedRows.includes(boundary)) {
-    if (serializedBytes + boundary.serialized_bytes <= maxBytes) {
+    // Same reservation as the SQLite reader: the boundary's summary precedes the tail.
+    if (headerBytes + boundary.serialized_bytes <= maxBytes) {
+      while (serializedBytes + boundary.serialized_bytes > maxBytes) {
+        serializedBytes -= selectedRows.pop()!.serialized_bytes;
+        truncated = true;
+      }
       injected = boundary;
-      rows.unshift(boundary);
       serializedBytes += boundary.serialized_bytes;
     } else {
       truncated = true;
     }
+  }
+  const rows = selectedRows.toSorted((left, right) => left.rawSeq - right.rawSeq);
+  if (injected) {
+    rows.unshift(injected);
   }
   const parents = new Map(
     rows.map((row) => [row.node.id, active[row.activePosition - 1]?.node.id ?? null]),

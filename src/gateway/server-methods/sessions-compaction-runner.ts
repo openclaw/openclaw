@@ -1,6 +1,10 @@
+import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { resolveModelContextTokenProjection } from "../../agents/context.js";
+import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import type { PreparedCompactionSession } from "../../agents/embedded-agent-runner/run/compaction-accounting-bridge.js";
+import { resolveEmbeddedSessionContextLimits } from "../../agents/embedded-agent-runner/run/session-context-limits.js";
 import { compactEmbeddedAgentSession } from "../../agents/embedded-agent.js";
 import { resolveManualCompactionCliTarget } from "../../agents/session-runtime-compat.js";
 import { preflightManualSessionCompaction } from "../../agents/sessions/manual-compaction-preflight.js";
@@ -61,7 +65,23 @@ export async function prepareGatewaySessionCompaction(
     const stats = await readTranscriptStatsAsync(transcriptTarget);
     return { entry, reason: stats.eventCount === 0 ? "no transcript" : undefined };
   }
+  // Manual compaction hydrates the same bounded view a turn on this session would: the
+  // session's recorded context window, else the foreground model's projected window from the
+  // catalog. The summarizer model's ceiling never sizes this read.
+  const resolvedModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
+  const hydrationTokenBudget =
+    floorPositiveFiniteNumber(params.entry.contextTokens) ??
+    floorPositiveFiniteNumber(
+      resolveModelContextTokenProjection({
+        cfg: params.cfg,
+        provider: resolvedModel.provider,
+        model: resolvedModel.model,
+        allowAsyncLoad: true,
+      }).contextTokens,
+    ) ??
+    DEFAULT_CONTEXT_TOKENS;
   const prepared = await SessionManager[sessionManagerOpenCompaction](transcriptTarget, {
+    ...resolveEmbeddedSessionContextLimits(hydrationTokenBudget),
     signal: params.abortSignal,
   });
   const { entry, runtimeEntry, sessionManager } = prepared;

@@ -89,7 +89,7 @@ export function prepareSessionTranscriptHydration(
       read: async (options) => {
         if (!memory.missing) {
           const prepared = await memory.read("session.history.hydrate", { limits });
-          if (options?.compaction && prepared.kind === "full") {
+          if (options?.compaction && prepared.kind === "bounded") {
             const { resolveCurrentSessionPrimaryConversation } =
               await import("./conversation-registry.js");
             const entry = memory.currentEntry();
@@ -121,10 +121,6 @@ export function prepareSessionTranscriptHydration(
                 truncated: false,
                 completeActivePath: true,
               },
-            }
-          : {
-              kind: "full",
-              snapshot: { events: [], eventJson: [], eventSeqs: [], version: version() },
               ...(options?.compaction
                 ? {
                     compaction: {
@@ -135,6 +131,10 @@ export function prepareSessionTranscriptHydration(
                     },
                   }
                 : {}),
+            }
+          : {
+              kind: "full",
+              snapshot: { events: [], eventJson: [], eventSeqs: [], version: version() },
             };
       },
       readCurrentTurnEntry: async (request) => {

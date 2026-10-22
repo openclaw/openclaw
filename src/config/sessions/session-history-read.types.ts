@@ -73,7 +73,6 @@ export type PreparedSessionTranscriptHydration =
   | {
       kind: "full";
       snapshot: SessionTranscriptReadSnapshot;
-      compaction?: SessionCompactionPreparation;
     }
   | {
       kind: "bounded";
@@ -81,6 +80,8 @@ export type PreparedSessionTranscriptHydration =
       transcript?: SessionTranscriptAnchorFacts;
       /** Byte and sequence facts for the actor's bounded context residency. */
       residentRows?: Array<{ rawSeq: number; serializedBytes: number }>;
+      /** Compaction reads its session facts in the same snapshot as its bounded view. */
+      compaction?: SessionCompactionPreparation;
     };
 
 export type SessionPendingInputReceipt =

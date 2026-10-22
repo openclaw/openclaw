@@ -68,6 +68,7 @@ import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./run/attempt.model-diagnostic-events.js";
 import { readCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
 import { estimateLlmBoundaryTokenPressure } from "./run/preemptive-compaction.js";
+import { resolveEmbeddedSessionContextLimits } from "./run/session-context-limits.js";
 import { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
 import { collectRegisteredToolNames, toSessionToolAllowlist } from "./tool-name-allowlist.js";
 import { mapThinkingLevel, mapThinkingLevelForProvider } from "./utils.js";
@@ -95,6 +96,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
     effectiveWorkspace,
     effectiveCwd,
     contextTokenBudget,
+    hydrationTokenBudget,
     effectiveModel,
     runtimePlan,
     runtimePlanModelContext,
@@ -131,10 +133,17 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       memoryTranscript?.assertActive ?? captureOwnedTranscriptWriteAssertion(sessionTarget);
     assertActive();
     const transcriptPolicy = runtimePlan.transcript.resolvePolicy(runtimePlanModelContext);
+    // Compaction summarizes the model-context view; hydrating the whole retained
+    // transcript would read every pre-reset event under the history worker's budget.
     const preparedSessionManager =
       memoryTranscript?.sessionManager ??
       preparedSession?.sessionManager ??
-      (await SessionManager.openAsync(sessionTarget, undefined, undefined, params.abortSignal));
+      (await SessionManager.openAsync(
+        sessionTarget,
+        undefined,
+        resolveEmbeddedSessionContextLimits(hydrationTokenBudget),
+        params.abortSignal,
+      ));
     assertActive();
     const responsesApi =
       effectiveModel.api === "openai-responses" ||

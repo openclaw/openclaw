@@ -3,6 +3,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { observeTranscriptHydrations } from "../../../test/helpers/transcript-hydration-observer.js";
 import type * as ConfigRuntime from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
@@ -25,6 +26,7 @@ import {
   triggerInternalHookMock,
 } from "./compact.hooks.harness.js";
 import type * as CompactionHooks from "./compaction-hooks.js";
+import { resolveEmbeddedSessionContextLimits } from "./run/session-context-limits.js";
 
 const { requestPreparedCompaction } = vi.hoisted(() => ({
   requestPreparedCompaction:
@@ -120,7 +122,11 @@ beforeEach(async () => {
   );
 });
 
-async function createFixture(operation: "summary" | "endpoint", globalAlias = false) {
+async function createFixture(
+  operation: "summary" | "endpoint",
+  globalAlias = false,
+  options: { archivedTurns?: number; previousSummary?: string; liveOutputChars?: number } = {},
+) {
   const target = {
     agentId: globalAlias ? "marketing" : "main",
     sessionId: "compaction-session",
@@ -138,14 +144,39 @@ async function createFixture(operation: "summary" | "endpoint", globalAlias = fa
   const sessionManager = sessions.SessionManager.open(target, workspaceDir);
   await sessionManager.appendModelChange(model.provider, model.id);
   await sessionManager.appendThinkingLevelChange("off");
+  // A long-lived session keeps its id across resets, so the archive behind the
+  // latest reset stays in the same transcript and must not be hydrated to compact.
+  for (let index = 0; index < (options.archivedTurns ?? 0); index += 1) {
+    await sessionManager.appendMessageAsync({
+      role: "user",
+      content: `Archived request ${index}`,
+      timestamp: 1,
+    });
+    await sessionManager.appendMessageAsync(
+      createAssistant(model, [{ type: "text", text: `Archived output ${index} `.repeat(6_000) }]),
+    );
+  }
+  if (options.archivedTurns) {
+    await sessionManager.appendResetBoundaryAsync("new");
+  }
+  if (options.previousSummary) {
+    await sessionManager.appendMessageAsync({
+      role: "user",
+      content: "Earlier request",
+      timestamp: 1,
+    });
+    const firstKeptEntryId = sessionManager.getEntries().at(-1)!.id;
+    await sessionManager.appendCompactionAsync(options.previousSummary, firstKeptEntryId, 100);
+  }
   for (const content of [
     "Review the deployment checklist.",
     "Compare the remaining options.",
     "Keep the rollout notes.",
   ]) {
     sessionManager.appendMessage({ role: "user", content, timestamp: 1 });
+    const repeat = Math.max(1, Math.ceil((options.liveOutputChars ?? 0) / (content.length + 11)));
     sessionManager.appendMessage(
-      createAssistant(model, [{ type: "text", text: `Recorded: ${content}` }]),
+      createAssistant(model, [{ type: "text", text: `Recorded: ${content} `.repeat(repeat) }]),
     );
   }
   sessionManager.flushPendingPersistence();
@@ -158,9 +189,10 @@ async function createFixture(operation: "summary" | "endpoint", globalAlias = fa
   authStorage.setRuntimeApiKey(model.provider, "test-api-key");
   const modelRegistry = sessions.ModelRegistry.inMemory(authStorage);
   modelRegistry.registerProvider(model.provider, { api: model.api, streamSimple: stream });
+  // A configured summarizer id resolves to the same stub transport under its own id.
   resolveModelMock.mockImplementation((provider = model.provider, modelId = model.id) => ({
     logicalRef: { provider, model: modelId },
-    model,
+    model: modelId === model.id ? model : { ...model, id: modelId, contextWindow: 32_000 },
     error: null,
     authStorage,
     modelRegistry,
@@ -341,6 +373,7 @@ describe("direct compactor through the context-engine delegate", () => {
       const preparation = prepared
         ? await sessions.SessionManager[sessionManagerCore.sessionManagerOpenCompaction](
             fixture.target,
+            resolveEmbeddedSessionContextLimits(model.contextWindow),
           )
         : undefined;
       const persistBoundary = vi.fn(
@@ -732,6 +765,159 @@ describe("direct compactor through the context-engine delegate", () => {
       }
     },
   );
+
+  // Reset keeps the session id, so a daily-reset session accumulates its whole archive
+  // behind the latest boundary; hydrating it to compact exceeds the history worker's
+  // fixed read budget (#180514). Both compaction owners read the bounded view instead.
+
+  it("keeps the previous summary when the recent turns alone fill the bounded view", async () => {
+    const marker = "Earlier work: the first rollout plan was approved and shipped.";
+    // A 200k budget allows a 1.6 MB view. Three ~500 KB live turns fit it, the ~320 KB earlier
+    // summary then does not, and the bounded read must displace the oldest turn for it.
+    const fixture = await createFixture("summary", false, {
+      previousSummary: `${marker} ${"Detail. ".repeat(40_000)}`,
+      liveOutputChars: 500_000,
+    });
+    const backend = vi.fn<ContextEngine["compact"]>(delegate);
+    resolveContextEngineMock.mockResolvedValueOnce({
+      info: { ownsCompaction: false },
+      compact: backend,
+    });
+    const observed = await observeTranscriptHydrations();
+    try {
+      const result = await compactQueued({ ...fixture.queuedParams, contextTokenBudget: 200_000 });
+      expect(result, JSON.stringify(result)).toMatchObject({ ok: true, compacted: true });
+    } finally {
+      observed.restore();
+    }
+    expect(observed.hydrations).toHaveLength(1);
+    expect(observed.hydrations[0]).toMatchObject({ kind: "bounded" });
+    expect(observed.hydrations[0]?.events).toBeLessThan(fixture.originalEntries.length);
+    // The summarizer request for the middle turn carries the earlier summary to update.
+    expect(fixture.stream).toHaveBeenCalled();
+    expect(fixture.stream.mock.calls.some((call) => JSON.stringify(call[1]).includes(marker))).toBe(
+      true,
+    );
+  });
+
+  it.each([
+    [200_000, undefined, false],
+    [undefined, 1_000_000, false],
+    [undefined, undefined, true],
+  ])(
+    "compacts the bounded view sized from the foreground (caller budget %s, recorded window %s, catalog %s) without hydrating the pre-reset archive",
+    async (contextTokenBudget, recordedWindow, catalog) => {
+      const fixture = await createFixture("summary", false, { archivedTurns: 40 });
+      // The foreground session window is larger than the summarizer model's; the view
+      // compaction loads must follow the session, not the summarizer's ceiling.
+      if (recordedWindow) {
+        await accessor.upsertSessionEntryCore(fixture.target, { contextTokens: recordedWindow });
+      }
+      // Third row: nothing recorded, so the foreground model's catalog window (1M) decides,
+      // not the configured 32k summarizer that replaces provider/model before delegation.
+      const base = fixture.queuedParams.config;
+      const models = [
+        { id: model.id, name: model.id, contextWindow: 1_000_000 },
+        { id: "summarizer-fixture", name: "summarizer", contextWindow: 32_000 },
+      ];
+      const defaults = { ...base.agents?.defaults };
+      defaults.compaction = { ...defaults.compaction, model: "openai/summarizer-fixture" };
+      const config = catalog
+        ? {
+            ...base,
+            models: { providers: { openai: { models } } },
+            agents: { ...base.agents, defaults },
+          }
+        : base;
+      const archivedEntries = fixture.originalEntries.length;
+      const backend = vi.fn<ContextEngine["compact"]>(delegate);
+      resolveContextEngineMock.mockResolvedValueOnce({
+        info: { ownsCompaction: false },
+        compact: backend,
+      });
+      const observed = await observeTranscriptHydrations();
+      try {
+        const result = await compactQueued({ ...fixture.queuedParams, config, contextTokenBudget });
+        expect(result, JSON.stringify(result)).toMatchObject({ ok: true, compacted: true });
+      } finally {
+        observed.restore();
+      }
+      const limits = resolveEmbeddedSessionContextLimits(
+        contextTokenBudget ?? recordedWindow ?? 1_000_000,
+      );
+      expect(limits.maxBytes).toBeGreaterThan(
+        resolveEmbeddedSessionContextLimits(model.contextWindow).maxBytes,
+      );
+      expect(observed.hydrations).toHaveLength(1);
+      expect(observed.hydrations[0]).toMatchObject({ kind: "bounded", limits });
+      // The archive is 80 messages; the 200k view holds the live turns and the boundary,
+      // while the recorded 1M window (8 MB) has room for the whole archive.
+      expect(observed.hydrations[0]?.totalEvents).toBeGreaterThanOrEqual(archivedEntries);
+      if (contextTokenBudget) {
+        expect(observed.hydrations[0]?.events).toBeLessThan(archivedEntries / 2);
+      }
+      const manager = sessions.SessionManager.open(fixture.target);
+      expect(manager.getBranch().filter((entry) => entry.type === "compaction")).toHaveLength(1);
+      const originalIds = new Set(fixture.originalEntries.map((entry) => entry.id));
+      const added = manager
+        .getEntries()
+        .filter((entry) => !originalIds.has(entry.id))
+        .map((entry) => entry.type);
+      expect(added).toContain("compaction");
+      expect(added.filter((type) => type === "message" || type === "reset")).toEqual([]);
+      for (const entry of fixture.originalEntries) {
+        expect(manager.getEntries()).toContainEqual(entry);
+      }
+      expect(JSON.stringify(manager.buildSessionContext().messages)).not.toContain(
+        "Archived request",
+      );
+    },
+  );
+
+  it("opens Gateway manual compaction on the bounded view sized from the session's recorded window", async () => {
+    const fixture = await createFixture("summary", false, { archivedTurns: 40 });
+    const { prepareGatewaySessionCompaction } =
+      await import("../../gateway/server-methods/sessions-compaction-runner.js");
+    // A catalog-only large-context model: the entry records the window the turns used.
+    const entry = await accessor.upsertSessionEntryCore(fixture.target, {
+      contextTokens: 1_000_000,
+    });
+    if (!entry) {
+      throw new Error("expected the fixture session entry");
+    }
+    const observed = await observeTranscriptHydrations();
+    let prepared: Awaited<ReturnType<typeof prepareGatewaySessionCompaction>>;
+    try {
+      prepared = await prepareGatewaySessionCompaction({
+        agentId: fixture.target.agentId,
+        cfg: fixture.runtimeContext.config,
+        entry,
+        sessionId: fixture.target.sessionId,
+        sessionKey: fixture.target.sessionKey,
+        sessionStoreKey: fixture.target.sessionKey,
+        storePath: fixture.target.storePath,
+      });
+    } finally {
+      observed.restore();
+    }
+    const session = prepared.preparedSession;
+    expect(session?.sessionManager).toBeDefined();
+    expect(observed.hydrations).toEqual([
+      expect.objectContaining({
+        kind: "bounded",
+        limits: resolveEmbeddedSessionContextLimits(1_000_000),
+        totalEvents: session?.eventCount,
+      }),
+    ]);
+    // The bounded open still reports the whole active count and the session facts from
+    // the same snapshot; the reset cut keeps the archive out of the model context.
+    expect(session?.eventCount).toBe(fixture.originalEntries.length);
+    expect(session?.entry?.sessionId).toBe(fixture.target.sessionId);
+    expect(session?.runtimeEntry).toEqual(session?.entry);
+    expect(JSON.stringify(session?.sessionManager.buildSessionContext().messages)).not.toContain(
+      "Archived request",
+    );
+  });
 
   it("rejects contradictory physical identity without touching either durable transcript", async () => {
     const fixture = await createFixture("summary");

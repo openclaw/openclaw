@@ -393,6 +393,28 @@ it("retains the latest boundary and counts earlier resets before a truncated tai
   expect(context.boundaryCount).toBe(2);
 });
 
+it("gives the latest boundary the tail's oldest bytes when the tail alone fills the cap", async ({
+  scope,
+}) => {
+  await persist(scope, [user("old", null)]);
+  await appendTranscriptEvent(scope, reset("prior-reset", "old"));
+  await appendTranscriptEvent(
+    scope,
+    compaction("summary", "prior-reset", "old", "earlier work ".repeat(20)),
+  );
+  await persist(scope, [user("middle", "summary"), assistant("new", "middle")]);
+  const whole = readContext(scope, 65_536, 10);
+  const bytes = (id: string) =>
+    serializedBytes(whole.events.filter((event) => (event as { id: string }).id === id));
+  // The newest tail ("middle", "new") fits this cap; the larger summary would not fit after it.
+  const context = readContext(scope, bytes(scope.sessionId) + bytes("summary") + bytes("new"), 10);
+
+  expect(eventIds(context.events)).toEqual([scope.sessionId, "summary", "new"]);
+  expect(context.truncated).toBe(true);
+  expect(context.serializedBytes).toBe(bytes(scope.sessionId) + bytes("summary") + bytes("new"));
+  expect(context.opaqueParents.get("middle")).toBe("summary");
+});
+
 it("keeps reset history closed across compaction with a warm history cache", async ({ scope }) => {
   const manager = SessionManager.open(scope);
   const appendUser = (content: string) =>
