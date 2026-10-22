@@ -7,6 +7,7 @@ import {
   listAgentEntriesWithSource,
   resolveAgentConfig,
 } from "../../../agents/agent-scope-config.js";
+import { resolveDefaultModelForAgent } from "../../../agents/model-selection-config.js";
 import {
   normalizeToolProviderPolicyKey,
   resolveProviderToolPolicy,
@@ -28,7 +29,6 @@ import type {
 import { VERSION_BOUND_RUNTIME_PLUGIN_POLICY_IDS_BY_SURFACE } from "../../../plugins/official-runtime-plugins.js";
 import { collectChannelRouteTargets } from "../../../routing/channel-route-targets.js";
 import type { BlockedLegacyOpenAICodexProviderPlan } from "./legacy-config-migrations.runtime.models.js";
-import { resolveDoctorPrimaryModelRef } from "./primary-model-ref.js";
 
 function resolveMessageToolAvailability(params: {
   cfg: OpenClawConfig;
@@ -37,8 +37,11 @@ function resolveMessageToolAvailability(params: {
   agentTools?: AgentToolsConfig;
   runtimeAlsoAllow?: string[];
 }): boolean {
-  const agentConfig = params.agentId ? resolveAgentConfig(params.cfg, params.agentId) : undefined;
-  const modelRef = resolveDoctorPrimaryModelRef(params.cfg, agentConfig?.model);
+  const modelRef = resolveDefaultModelForAgent({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    allowPluginNormalization: false,
+  });
   const [providerPolicy, agentProviderPolicy] = [
     params.globalTools?.byProvider,
     params.agentTools?.byProvider,
@@ -415,8 +418,7 @@ export async function collectDoctorPreviewNotes(params: {
   for (const { entry: agent, source } of listAgentEntriesWithSource(cfg)) {
     const agentTools = asOptionalRecord(agent.tools);
     const agentId = typeof agent.id === "string" ? agent.id : undefined;
-    const agentConfig = agentId ? resolveAgentConfig(cfg, agentId) : undefined;
-    const modelRef = resolveDoctorPrimaryModelRef(cfg, agentConfig?.model);
+    const modelRef = resolveDefaultModelForAgent({ cfg, agentId, allowPluginNormalization: false });
     const agentPath = `agents.${source.kind === "entries" ? `entries.${source.key}` : `list[${source.index}]`}.tools`;
     const ownAgentConfiguredEntries = collectConfiguredToolSectionGrantEntries({
       tools: agentTools,

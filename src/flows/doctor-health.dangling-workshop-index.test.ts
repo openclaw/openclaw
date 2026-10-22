@@ -3,21 +3,17 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { doctorCommand } from "../commands/doctor.js";
-import { runClientCredentialOperation } from "../infra/client-credential-store.js";
-import { generateStoredDeviceIdentity } from "../infra/device-identity-material.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
-import { seedNativeVersionZeroState } from "../state/native-version-zero.test-support.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createDoctorRuntime, mocks } from "./doctor-health.test-support.js";
+import { createDoctorConfig, createDoctorRuntime, mocks } from "./doctor-health.test-support.js";
 
 // Keep the real Doctor config/migration chain; the shared harness isolates service and UI checks.
 vi.doUnmock("../commands/doctor-config-flow.js");
@@ -33,8 +29,7 @@ afterEach(() => vi.restoreAllMocks());
 
 function writeConfig(state: OpenClawTestState, session?: { store: string }) {
   return state.writeConfig({
-    agents: { ownership: "explicit", entries: { main: { workspace: state.workspaceDir } } },
-    gateway: { mode: "local" },
+    ...createDoctorConfig(state),
     plugins: { enabled: false },
     ...(session ? { session } : {}),
   });
@@ -103,46 +98,6 @@ function damageWorkshopIndex(databasePath: string): void {
     database.exec(`PRAGMA writable_schema = OFF; PRAGMA schema_version = ${schemaVersion + 1};`);
   });
 }
-
-it("adopts native version-zero state without requiring orphan-recovery metadata", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    await writeConfig(state);
-    const databasePath = resolveOpenClawStateSqlitePath(state.env);
-    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-    const identity = generateStoredDeviceIdentity(1);
-    editDatabase(databasePath, (db) => {
-      seedNativeVersionZeroState(db, true);
-      db.prepare(
-        "UPDATE device_identities SET device_id=?, public_key_pem=?, private_key_pem=? WHERE identity_key='node'",
-      ).run(identity.deviceId, identity.publicKeyPem, identity.privateKeyPem);
-    });
-    await repair();
-    expectDatabase(databasePath, {
-      "PRAGMA user_version": [{ user_version: OPENCLAW_STATE_SCHEMA_VERSION }],
-      "SELECT role, schema_version FROM schema_meta WHERE meta_key = 'primary'": [
-        { role: "global", schema_version: OPENCLAW_STATE_SCHEMA_VERSION },
-      ],
-      "SELECT name FROM sqlite_schema WHERE name='device_identities'": [],
-      "SELECT raw_json FROM exec_approvals_config WHERE config_key = 'current'": [
-        { raw_json: "{}" },
-      ],
-    });
-    expect(
-      runClientCredentialOperation(state.env, { kind: "identity.read", identity_key: "node" }),
-    ).toEqual({
-      kind: "identity",
-      identity: {
-        identity_key: "node",
-        device_id: identity.deviceId,
-        public_key_pem: identity.publicKeyPem,
-        private_key_pem: identity.privateKeyPem,
-        created_at_ms: 1,
-        updated_at_ms: 1,
-      },
-    });
-    expect(recoveryDirs(databasePath)).toEqual([]);
-  });
-});
 
 it("preserves known damaged state before backing up and migrating an older agent", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

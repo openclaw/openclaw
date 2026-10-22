@@ -38,6 +38,7 @@ it.each<[string, PluginOrigin | "official", PluginEntryConfig["hooks"], Grant, G
 it("normalizes every manifest contract family, surface and configured model grant", () => {
   const contracts = {
     codeModeExecutors: ["quickjs"],
+    commandRuntimeCapabilities: ["subagents"],
     agentToolResultMiddleware: ["middleware"],
     trustedToolPolicies: ["trusted-policy"],
     externalAuthProviders: ["external-auth"],
@@ -106,6 +107,7 @@ it("normalizes every manifest contract family, surface and configured model gran
     skills: ["alpha", "zulu"],
     dangerousConfigFlags: ["plugins.alpha", "plugins.zulu"],
   });
+  expect(summary.declared.contracts).toContain("commandRuntimeCapabilities: subagents");
   expect(summary.grants.llm).toEqual({
     allowModelOverride: true,
     allowedModels: ["alpha/model", "zulu/model"],

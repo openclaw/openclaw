@@ -161,7 +161,7 @@ export function createAgentsPageState(
   const readData: () => AgentsViewData = observation.read;
   const readChannels: () => Pick<
     ReturnType<typeof channels.read>,
-    "channelsSnapshot" | "channelsLoading" | "channelsError" | "channelsLastSuccess"
+    "channelsSnapshot" | "channelsRead" | "channelsError" | "channelsLastSuccess"
   > = channels.read;
   const publish = observation.invalidate;
   const cron = createAgentCronPresenter({

@@ -1,5 +1,7 @@
 .chat-pane__presence--desktop .viewer-facepile {
+  gap: calc(var(--space-1) * 1.5);
   margin-inline-start: 0;
+  padding: calc(var(--space-1) / 2);
 }
 
 .chat-pane__presence--desktop .viewer-avatar {
@@ -11,14 +13,29 @@
 
 .chat-pane__presence--desktop .viewer-facepile > openclaw-tooltip:not(:first-child) .viewer-avatar,
 .chat-pane__presence--desktop .viewer-facepile > .viewer-avatar:not(:first-child) {
-  margin-left: calc(-1 * var(--space-2));
+  margin-left: 0;
+}
+
+.chat-pane__presence--desktop .viewer-avatar:not(.viewer-avatar--overflow) {
+  border-width: 1px;
+  outline: 2px solid var(--viewer-avatar-color);
+  outline-offset: 0;
 }
 
 .chat-pane__presence--desktop .viewer-avatar--overflow {
-  width: 26px;
-  height: 26px;
-  background: color-mix(in srgb, var(--muted) 28%, var(--panel-strong));
+  width: 28px;
+  height: 28px;
+  border: 0;
+  background: color-mix(in srgb, var(--muted) 12%, var(--panel-strong));
   color: var(--text);
+  font-size: 11px;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
+}
+
+.chat-pane__presence--desktop
+  .viewer-facepile
+  > openclaw-tooltip:not(:first-child)
+  .viewer-avatar--overflow {
+  margin-inline-start: calc(var(--space-1) / 2);
 }

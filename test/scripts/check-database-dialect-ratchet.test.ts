@@ -461,6 +461,19 @@ it.each([
   })),
   ...(
     [
+      ["SELECT rowid FROM previous", "rowid", 0],
+      ["INSERT OR IGNORE INTO t VALUES (1)", "insert-conflict", 1],
+      ["SELECT json_extract(value, '$') FROM t", "json-projection", 1],
+    ] as const
+  ).map(([sql, construct, result]) => ({
+    file: "src/state/openclaw-state-db-schema-v31-workspace-manifests.ts",
+    sql,
+    construct,
+    result,
+    owner: result === 0,
+  })),
+  ...(
+    [
       ["BEGIN EXCLUSIVE", "transaction-mode"],
       ["SELECT * FROM archive ORDER BY rowid", "rowid"],
     ] as const

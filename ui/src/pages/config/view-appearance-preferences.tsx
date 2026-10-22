@@ -1,6 +1,4 @@
 import { createMemo, Errored, Loading, Show, For } from "solid-js";
-import { dedupeByKey } from "../../../../src/shared/dedupe-by-key.js";
-import type { ModelCatalogEntry } from "../../api/types.ts";
 import type { ServerUiPrefProvenance } from "../../app/server-prefs.ts";
 import {
   normalizeCatalogOpenTarget,
@@ -10,7 +8,6 @@ import {
   UI_APPEARANCE_DEFAULTS,
 } from "../../app/settings.ts";
 import { Picker } from "../../components/select-picker.ts";
-import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import {
   SettingsDefaultDescription,
   SettingsRow,
@@ -20,10 +17,10 @@ import { SUPPORTED_LOCALES, type Locale } from "../../i18n/index.ts";
 import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { formatCompletionRoute } from "../../lib/model-runtime-label.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { LocalToggleRow } from "./local-toggle-row.tsx";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./route-data.ts";
+import { SessionObserverSettings } from "./session-observer-settings-view.tsx";
 import { SettingsSectionHeader } from "./settings-section-header.tsx";
 import { SettingsSelectRow } from "./settings-select-row.tsx";
 import type { ConfigProps } from "./view-types.ts";
@@ -35,39 +32,6 @@ registerEnglishCatalog(registerSettingsEnglish);
 function languageLabel(locale: Locale) {
   const key = locale.replace(/-([a-zA-Z])/g, (_, character) => character.toUpperCase());
   return t(`languages.${key}`);
-}
-
-const AUTO_VALUE = "__openclaw_observer_auto__";
-
-function resolvedModelLabel(status: ConfigProps["sessionObserverResolvedModel"]): string {
-  if (!status || status.status === "unavailable") {
-    return t("configView.sessionObserver.modelUnavailable");
-  }
-  if (status.status === "disabled") {
-    return t("configView.sessionObserver.modelDisabled");
-  }
-  const runtime = formatCompletionRoute(status.runtime)?.label;
-  return t(
-    status.status === "auto"
-      ? "configView.sessionObserver.modelAuto"
-      : "configView.sessionObserver.modelConfigured",
-    { model: runtime ? `${status.model} · ${runtime}` : status.model },
-  );
-}
-
-function modelOptions(models: readonly ModelCatalogEntry[]) {
-  return dedupeByKey(
-    models
-      .filter((model) => model.available !== false)
-      .map((model) => ({
-        value: model.id.startsWith(`${model.provider}/`)
-          ? model.id
-          : `${model.provider}/${model.id}`,
-        label: model.name || model.id,
-        provider: model.provider,
-      })),
-    (model) => model.value,
-  ).toSorted((a, b) => a.label.localeCompare(b.label));
 }
 
 export { LobsterPetSection } from "./view-appearance-lobster.tsx";
@@ -466,7 +430,6 @@ export function ChatPreferencesSection(props: ConfigProps) {
 export function SidebarPreferencesSection(props: ConfigProps) {
   const catalogLabelsScope = createMemo(() => props.hiddenSessionCatalogLabels.scope);
   const hiddenCatalogIds = createMemo(() => [...props.hiddenSessionCatalogIds].toSorted());
-  const modelsScope = createMemo(() => props.sessionObserverModelsScope);
   // The delete dialog's "Don't ask me again" writes this off; this row is where
   // the operator turns it back on, so it has to stay next to the session prefs.
 
@@ -520,104 +483,7 @@ export function SidebarPreferencesSection(props: ConfigProps) {
           </div>
         </>
       ) : undefined}
-      <div class="settings-section__header settings-section__header--subsection">
-        <h3 class="settings-section__heading">{t("configView.sessionObserver.title")}</h3>
-      </div>
-      <p class="settings-section__desc">{t("configView.sessionObserver.hint")}</p>
-      <div class="settings-group">
-        <SettingsToggleRow
-          title={t("configView.sessionObserver.toggle")}
-          description={t("configView.sessionObserver.toggleHint")}
-          checked={props.sessionObserverEnabled !== false}
-          disabled={props.sessionObserverDisabled === true}
-          onChange={(enabled) => props.setSessionObserverEnabled?.(enabled)}
-        />
-        <SettingsRow
-          title={t("configView.sessionObserver.resolvedModel")}
-          description={resolvedModelLabel(props.sessionObserverResolvedModel)}
-        />
-        <Errored
-          fallback={(_error) => (
-            <SessionObserverModelPicker config={props} models={[]} unavailable />
-          )}
-        >
-          <Loading
-            on={modelsScope()}
-            fallback={
-              <SessionObserverModelPicker
-                config={props}
-                models={[]}
-                unavailable={props.sessionObserverModelsUnavailable === true}
-              />
-            }
-          >
-            <SessionObserverModelPicker
-              config={props}
-              models={props.sessionObserverModels ?? []}
-              unavailable={props.sessionObserverModelsUnavailable === true}
-            />
-          </Loading>
-        </Errored>
-      </div>
+      <SessionObserverSettings config={props} />
     </section>
-  );
-}
-
-function SessionObserverModelPicker(props: {
-  config: ConfigProps;
-  models: readonly ModelCatalogEntry[];
-  unavailable: boolean;
-}) {
-  const selected = () =>
-    props.config.sessionObserverUtilityModel === undefined
-      ? AUTO_VALUE
-      : props.config.sessionObserverUtilityModel;
-  const options = createMemo(() => {
-    const catalog = modelOptions(props.models);
-    const result = [
-      { value: AUTO_VALUE, label: t("configView.sessionObserver.auto") },
-      { value: "", label: t("configView.sessionObserver.disabled") },
-      ...(selected() !== AUTO_VALUE &&
-      selected() !== "" &&
-      !catalog.some((option) => option.value === selected())
-        ? [
-            {
-              value: selected(),
-              label: selected(),
-              disabled: props.unavailable,
-            },
-          ]
-        : []),
-      ...catalog.map((option) => Object.assign({}, option, { disabled: props.unavailable })),
-    ];
-    return result;
-  });
-
-  return (
-    <SettingsRow
-      title={t("configView.sessionObserver.modelPicker")}
-      description={t(
-        props.unavailable
-          ? "configView.sessionObserver.modelCatalogUnavailable"
-          : "configView.sessionObserver.modelPickerHint",
-      )}
-      control={
-        <ModelPicker
-          label={t("configView.sessionObserver.modelPicker")}
-          value={selected()}
-          options={options()}
-          disabled={props.config.sessionObserverDisabled === true}
-          onChange={(value) =>
-            props.config.setSessionObserverUtilityModel?.(
-              value === AUTO_VALUE
-                ? { kind: "auto" }
-                : value === ""
-                  ? { kind: "disabled" }
-                  : { kind: "model", model: value },
-            )
-          }
-        />
-      }
-    />
   );
 }

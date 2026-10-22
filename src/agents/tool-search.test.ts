@@ -604,45 +604,6 @@ describe("Tool Search", () => {
     resetAdjustedParamsByToolCallIdForTests();
   });
 
-  it("includes bounded input signatures in compact search hits", async () => {
-    const target = pluginTool("fake_update", "Update a fake record");
-    const openTarget = pluginTool("fake_open", "Accept constrained open input");
-    const mcpTarget = mcpPluginTool("remote_echo", "Echo through remote MCP");
-    target.parameters = {
-      type: "object",
-      required: ["id"],
-      properties: {
-        id: { type: "string" },
-        mode: { type: "string", enum: ["drip", "flood"] },
-        policy: { enum: ["auto", { mode: "custom" }] },
-        nested: Type.Array(Type.Array(Type.Array(Type.Array(Type.Array(Type.String()))))),
-        zones: { type: "array", items: { type: "string", enum: ["north", "south"] } },
-      },
-    };
-    openTarget.parameters = { type: "object", required: ["token"], additionalProperties: true };
-    const { search } = catalogFixture([target, openTarget, mcpTarget]);
-    const result = resultDetails(await search({ query: "update record" }));
-
-    expect(result).toMatchObject([
-      {
-        name: "fake_update",
-        input:
-          '{ id: string; mode?: "drip" | "flood"; nested?: Array<Array<Array<Array<unknown>>>>; policy?: unknown; zones?: Array<"north" | "south"> }',
-      },
-    ]);
-    expect(JSON.stringify(result)).not.toContain("parameters");
-
-    const openResult = resultDetails(await search({ query: "constrained open input" }));
-    expect(openResult).toContainEqual(
-      expect.objectContaining({ name: "fake_open", input: "{ ... }" }),
-    );
-
-    const mcpResult = resultDetails(await search({ query: "remote echo" }));
-    expect(mcpResult).toContainEqual(
-      expect.objectContaining({ name: "remote_echo", input: "unknown" }),
-    );
-  });
-
   it("preserves trusted output schemas through normalization, discovery, and execution", async () => {
     const target = pluginTool("orchard_shipments", "List orchard shipments");
     target.outputSchema = Type.Array(

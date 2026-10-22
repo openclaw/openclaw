@@ -168,14 +168,6 @@ export function makeGatewayService(
   } as unknown as GatewayService;
 }
 
-export function firstCallArg(mock: { mock: { calls: unknown[][] } }): unknown {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error("Expected first mock call");
-  }
-  return call[0];
-}
-
 export function portUsage(
   listeners: PortUsage["listeners"] = [],
   overrides: Partial<PortUsage> = {},

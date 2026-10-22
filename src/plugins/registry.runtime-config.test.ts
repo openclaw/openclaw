@@ -58,6 +58,25 @@ function createHarness(id: string) {
   };
 }
 
+function scopeCapture() {
+  const scopes: ReturnType<typeof getPluginRuntimeGatewayRequestScope>[] = [];
+  return {
+    capture<T>(result: () => T) {
+      return () => {
+        scopes.push(getPluginRuntimeGatewayRequestScope());
+        return result();
+      };
+    },
+    expectOwner(id: string, count: number) {
+      expect(scopes).toHaveLength(count);
+      for (const scope of scopes) {
+        expect(scope).toMatchObject({ pluginId: id, pluginSource: `/plugins/${id}/index.js` });
+      }
+    },
+    scopes,
+  };
+}
+
 function createRecord(
   id: string,
   overrides: Partial<Parameters<typeof createPluginRecord>[0]> = {},
@@ -553,17 +572,11 @@ describe("plugin registry runtime config scope", () => {
 
   it("resolves plugin API paths against the plugin root", () => {
     const pluginRoot = path.join(os.tmpdir(), "openclaw-plugins", "demo");
-    const pluginRegistry = createRuntimeTestRegistry(createPluginRuntime());
-    const record = createPluginRecord({
-      id: "path-plugin",
+    const { api } = registered("path-plugin", {
       name: "Path Plugin",
       source: path.join(pluginRoot, "index.js"),
       rootDir: pluginRoot,
-      origin: "global",
-      enabled: true,
-      configSchema: false,
     });
-    const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
     const absolute = path.resolve(pluginRoot, "..", "outside.txt");
 
     expect(api.resolvePath("data/cache.json")).toBe(path.join(pluginRoot, "data", "cache.json"));
@@ -602,9 +615,7 @@ describe("plugin registry runtime config scope", () => {
   });
 
   it("runs config helpers with the owning plugin scope", async () => {
-    let currentScope = getPluginRuntimeGatewayRequestScope();
-    let mutateScope = getPluginRuntimeGatewayRequestScope();
-    let replaceScope = getPluginRuntimeGatewayRequestScope();
+    const scope = scopeCapture();
     const config = {} as OpenClawConfig;
     const replaceResult = {
       path: "/tmp/openclaw.json",
@@ -615,31 +626,20 @@ describe("plugin registry runtime config scope", () => {
       afterWrite: { mode: "auto" },
       followUp: { mode: "auto", requiresRestart: false },
     } as unknown as Awaited<ReturnType<PluginRuntime["config"]["replaceConfigFile"]>>;
-    const mutateConfigFile: PluginRuntime["config"]["mutateConfigFile"] = async () => {
-      mutateScope = getPluginRuntimeGatewayRequestScope();
-      return {
+    const configRuntime = {
+      current: vi.fn(scope.capture(() => config)),
+      mutateConfigFile: scope.capture(async () => ({
         ...replaceResult,
         result: undefined,
         attempts: 1,
-      };
-    };
-    const replaceConfigFile: PluginRuntime["config"]["replaceConfigFile"] = async () => {
-      replaceScope = getPluginRuntimeGatewayRequestScope();
-      return replaceResult;
-    };
-    const configRuntime = {
-      current: vi.fn(() => {
-        currentScope = getPluginRuntimeGatewayRequestScope();
-        return config;
-      }),
-      mutateConfigFile,
-      replaceConfigFile,
+      })),
+      replaceConfigFile: scope.capture(async () => replaceResult),
     } satisfies PluginRuntime["config"];
     const runtime = createPluginRuntime();
     runtime.config = configRuntime;
-    const pluginRegistry = createRuntimeTestRegistry(runtime);
+    const builder = createRuntimeTestRegistry(runtime);
     const record = createRecord("legacy-plugin", { name: "Legacy Plugin" });
-    const api = pluginRegistry.createApi(record, { config });
+    const api = builder.createApi(record, { config });
 
     expect(api.runtime.config.current()).toBe(config);
     await api.runtime.config.mutateConfigFile({
@@ -651,37 +651,25 @@ describe("plugin registry runtime config scope", () => {
       afterWrite: { mode: "none", reason: "test" },
     });
 
-    expect(currentScope).toMatchObject({
-      pluginId: "legacy-plugin",
-      pluginSource: "/plugins/legacy-plugin/index.js",
-    });
-    expect(mutateScope).toMatchObject({
-      pluginId: "legacy-plugin",
-      pluginSource: "/plugins/legacy-plugin/index.js",
-    });
-    expect(replaceScope).toMatchObject({
-      pluginId: "legacy-plugin",
-      pluginSource: "/plugins/legacy-plugin/index.js",
-    });
+    scope.expectOwner("legacy-plugin", 3);
   });
 
   it("runs local service acquisition with the owning plugin scope", async () => {
-    let acquireScope = getPluginRuntimeGatewayRequestScope();
+    const scope = scopeCapture();
     const runtime = createPluginRuntime();
-    runtime.llm.acquireLocalService = vi.fn(async () => {
-      acquireScope = getPluginRuntimeGatewayRequestScope();
-      return undefined;
-    });
-    const pluginRegistry = createRuntimeTestRegistry(runtime);
-    const record = createRecord("memory-provider", { name: "Memory Provider", origin: "bundled" });
-    const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
+    runtime.llm.acquireLocalService = vi.fn(scope.capture(async () => undefined));
+    const { api } = registered(
+      "memory-provider",
+      { name: "Memory Provider", origin: "bundled" },
+      runtime,
+    );
 
     await api.runtime.llm.acquireLocalService({
       providerId: "gpu-host",
       baseUrl: "http://127.0.0.1:11434",
     });
 
-    expect(acquireScope).toMatchObject({ pluginId: "memory-provider" });
+    scope.expectOwner("memory-provider", 1);
   });
 
   it("keeps scoped LLM acquisition lazy and rejects retained calls after retirement", async () => {
@@ -711,27 +699,18 @@ describe("plugin registry runtime config scope", () => {
   });
 
   it("runs lazy node helpers with the owning plugin scope", async () => {
-    let listScope = getPluginRuntimeGatewayRequestScope();
-    let invokeScope = getPluginRuntimeGatewayRequestScope();
-    let duplexScope = getPluginRuntimeGatewayRequestScope();
+    const scope = scopeCapture();
     const nodes: PluginRuntime["nodes"] = {
-      list: vi.fn(async () => {
-        listScope = getPluginRuntimeGatewayRequestScope();
-        return { nodes: [] };
-      }),
-      invoke: vi.fn(async () => {
-        invokeScope = getPluginRuntimeGatewayRequestScope();
-        return { ok: true };
-      }),
-      openDuplex: vi.fn(async () => {
-        duplexScope = getPluginRuntimeGatewayRequestScope();
-        return {
+      list: vi.fn(scope.capture(async () => ({ nodes: [] }))),
+      invoke: vi.fn(scope.capture(async () => ({ ok: true }))),
+      openDuplex: vi.fn(
+        scope.capture(async () => ({
           send: vi.fn(async () => {}),
           onMessage: vi.fn(() => () => {}),
           closed: Promise.resolve({ ok: true }),
           close: vi.fn(),
-        };
-      }),
+        })),
+      ),
     };
     const resolveRuntimeModule = vi
       .spyOn(sdkAlias, "resolvePluginRuntimeModulePathWithDiagnostics")
@@ -753,35 +732,24 @@ describe("plugin registry runtime config scope", () => {
     });
     await api.runtime.nodes.openDuplex({ nodeId: "node-1", command: "image.bridge" });
 
-    for (const scope of [listScope, invokeScope, duplexScope]) {
-      expect(scope).toMatchObject({
-        pluginId: "google-meet",
-        pluginSource: "/plugins/google-meet/index.js",
-      });
-    }
-    expect(duplexScope?.pluginRegistry).toBe(builder.registry);
+    scope.expectOwner("google-meet", 3);
+    expect(scope.scopes[2]?.pluginRegistry).toBe(builder.registry);
     expect(resolveRuntimeModule).not.toHaveBeenCalled();
   });
 
   it("runs gateway requests with the owning plugin scope", async () => {
-    let requestScope = getPluginRuntimeGatewayRequestScope();
+    const scope = scopeCapture();
     const runtime = createPluginRuntime();
     runtime.gateway.isAvailable = async () => true;
-    vi.spyOn(runtime.gateway, "request").mockImplementation(async () => {
-      requestScope = getPluginRuntimeGatewayRequestScope();
-      return { ok: true };
-    });
-    const pluginRegistry = createRuntimeTestRegistry(runtime);
-    const record = createRecord("google-meet", { name: "Google Meet", origin: "bundled" });
-    const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
+    vi.spyOn(runtime.gateway, "request").mockImplementation(
+      scope.capture(async () => ({ ok: true })),
+    );
+    const { api } = registered("google-meet", { name: "Google Meet", origin: "bundled" }, runtime);
 
     await api.runtime.gateway.request("voicecall.start", { to: "+15550001234" });
 
-    expect(requestScope).toMatchObject({
-      pluginId: "google-meet",
-      pluginOrigin: "bundled",
-      pluginSource: "/plugins/google-meet/index.js",
-    });
+    scope.expectOwner("google-meet", 1);
+    expect(scope.scopes[0]?.pluginOrigin).toBe("bundled");
   });
 
   it("limits harness session creation to the registering plugin", async () => {
