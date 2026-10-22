@@ -518,6 +518,10 @@ export function formatControlUiPerformanceReport(
     lines.push("  route boot accounting: unavailable (build has no route preload templates)");
   }
   if (baseMetrics) {
+    const startupGrowth = metrics.startup.js.gzipBytes - baseMetrics.startup.js.gzipBytes;
+    lines.push(
+      `  startup JS gzip vs base: ${baseMetrics.startup.js.gzipBytes} B -> ${metrics.startup.js.gzipBytes} B (${startupGrowth >= 0 ? "+" : ""}${startupGrowth} B); requests ${baseMetrics.startup.js.requests} -> ${metrics.startup.js.requests}`,
+    );
     for (const area of ["startup", "largest"] as const) {
       const growth = metrics[area].css.gzipBytes - baseMetrics[area].css.gzipBytes;
       lines.push(

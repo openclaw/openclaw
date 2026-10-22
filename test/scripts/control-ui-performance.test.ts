@@ -837,6 +837,9 @@ export default {
     const { output } = await repo.runComparison(repo.base, 1);
     expect(output).toContain(`head ${head}; base ${repo.base}; Node ${process.version}; Vite `);
     expect(output).toContain("Pako ");
+    expect(output).toMatch(
+      /startup JS gzip vs base: \d+ B -> \d+ B \([+-]\d+ B\); requests \d+ -> \d+/u,
+    );
     expect(output).toMatch(/startup CSS gzip vs base: \d+ B -> \d+ B \(\+\d+ B/u);
     expect(output).toContain("startup CSS gzip growth:");
     const identities = repo.readIdentities();
