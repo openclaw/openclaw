@@ -7,6 +7,7 @@ import {
 } from "../infra/sqlite-worker-operation-settlement.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import * as stateRead from "../state/openclaw-state-db-readonly.js";
+import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
