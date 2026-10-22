@@ -2,7 +2,10 @@
 import { createSignal, flush } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
+import type { GatewaySessionRow, SessionMembersListEvidenceResult } from "../../../api/types.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { createMountedPanes, refreshPane } from "../chat-pane-mounted.test-support.ts";
 import {
   createChatSessionSharingMobileAdapter,
   type ChatSessionSharingMobileAdapter,
@@ -69,6 +72,91 @@ function accessFixture(initial: PreparedChatSessionSharing) {
   };
 }
 
+it("keeps sharing busy through refresh and retires it for a same-key successor", async () => {
+  const initial = prepared();
+  const previous = { ...initial.session, agentId: "main", visibility: "draft" as const };
+  const replacement = {
+    ...previous,
+    sessionId: "successor",
+    visibility: "read-only" as const,
+    updatedAt: 2,
+  };
+  const rows: GatewaySessionRow[] = [previous];
+  const fixture = createMountedPanes(rows);
+  const pane = fixture.mount(previous.key) as ReturnType<typeof fixture.mount> & {
+    prepareSessionSharing: (row: GatewaySessionRow) => PreparedChatSessionSharing;
+    loadSessionSharing: (row: GatewaySessionRow) => Promise<void>;
+    syncSelectedSessionSharing: (row: GatewaySessionRow) => void;
+  };
+  const snapshot = pane.context.gateway.snapshot;
+  snapshot.phase = "connected";
+  snapshot.hello = {
+    ...snapshot.hello,
+    auth: { role: "operator", scopes: ["operator.admin"] },
+    features: {
+      ...snapshot.hello?.features,
+      methods: [
+        "session.visibility.set",
+        "session.members.listEvidence",
+        "session.members.add",
+        "session.members.remove",
+        "session.publicShare.set",
+      ],
+    },
+  } as typeof snapshot.hello;
+  await refreshPane(pane);
+  const response = createDeferred<unknown>();
+  const refresh = createDeferred<SessionMembersListEvidenceResult>();
+  let reads = 0;
+  const originalRequest = pane.state.client!.request.bind(pane.state.client!);
+  vi.spyOn(pane.state.client!, "request").mockImplementation((method, params, options) => {
+    if (method === "session.visibility.set") {
+      return response.promise;
+    }
+    if (method === "session.members.listEvidence") {
+      reads += 1;
+      return reads === 2 ? refresh.promise : Promise.resolve(initial.state!.result);
+    }
+    return originalRequest(method, params, options);
+  });
+  await pane.loadSessionSharing(previous);
+  const source = pane.prepareSessionSharing(previous);
+  const operation = vi.spyOn(source, "onVisibilityChange");
+  const view = accessFixture(source);
+  view.getByRole("button", { name: /Shared/ }).click();
+  await waitForSolid(() =>
+    expect(view.getByRole("button", { name: /Shared/ }).hasAttribute("disabled")).toBe(true),
+  );
+  response.resolve({});
+  await waitForSolid(() => expect(reads).toBe(2));
+  expect(view.getByRole("button", { name: /Shared/ }).hasAttribute("disabled")).toBe(true);
+  expect(view.applied).not.toHaveBeenCalled();
+  rows[0] = replacement;
+  fixture.emitGatewayEvent("sessions.changed", {
+    sessionKey: previous.key,
+    agentId: "main",
+    sessionId: replacement.sessionId,
+    reason: "update",
+    session: replacement,
+  });
+  await waitForSolid(() => expect(source.operationSignal?.aborted).toBe(true));
+  pane.syncSelectedSessionSharing(replacement);
+  await waitForSolid(() =>
+    expect(pane.prepareSessionSharing(replacement)?.state?.loading).toBe(false),
+  );
+  view.setSource(pane.prepareSessionSharing(replacement));
+  await waitForSolid(() =>
+    expect(view.getByRole("button", { name: /Read only/ }).getAttribute("aria-pressed")).toBe(
+      "true",
+    ),
+  );
+  expect(view.getByRole("button", { name: /Shared/ }).hasAttribute("disabled")).toBe(false);
+  refresh.resolve(initial.state!.result!);
+  await operation.mock.results[0]!.value;
+  flush();
+  expect(view.applied).not.toHaveBeenCalled();
+});
+
 it("returns from Session access only after a confirmed native success", async () => {
   const change = vi.fn<PreparedChatSessionSharing["onVisibilityChange"]>();
   const view = accessFixture(prepared({ onVisibilityChange: change }));
@@ -82,10 +170,14 @@ it("returns from Session access only after a confirmed native success", async ()
     view.getByRole("button", { name: /Draft/ }).click();
     expect(change).toHaveBeenLastCalledWith("draft");
     expect(view.applied).not.toHaveBeenCalled();
+    await waitForSolid(() => {
+      expect(view.getByRole("button", { name: /Draft/ }).hasAttribute("disabled")).toBe(true);
+    });
     pending.resolve(outcome);
     await pending.promise;
-    await Promise.resolve();
-    flush();
+    await waitForSolid(() => {
+      expect(view.getByRole("button", { name: /Draft/ }).hasAttribute("disabled")).toBe(false);
+    });
     if (outcome.status === "success") {
       expect(view.applied).toHaveBeenCalledOnce();
     } else {
@@ -95,29 +187,49 @@ it("returns from Session access only after a confirmed native success", async ()
 });
 
 it.each(["destination", "session"] as const)(
-  "does not navigate a replacement %s when an older update succeeds",
+  "does not navigate or publish a retired error into a replacement %s",
   async (replacement) => {
     const pending = createDeferred<ChatSessionSharingOutcome>();
     const change = vi
       .fn<PreparedChatSessionSharing["onVisibilityChange"]>()
       .mockReturnValue(pending.promise);
-    const view = accessFixture(prepared({ onVisibilityChange: change }));
+    const lifetime = new AbortController();
+    const view = accessFixture(
+      prepared({ onVisibilityChange: change, operationSignal: lifetime.signal }),
+    );
     view.getByRole("button", { name: /Draft/ }).click();
+    await waitForSolid(() => {
+      expect(view.getByRole("button", { name: /Draft/ }).hasAttribute("disabled")).toBe(true);
+    });
     if (replacement === "destination") {
       view.replaceTarget();
     } else {
+      pending.reject(new Error("Retired update rejected"));
+      lifetime.abort();
       view.setSource({
         ...view.source(),
-        session: { ...view.source().session, sessionId: "replacement" },
+        operationSignal: new AbortController().signal,
+        session: { ...view.source().session, sessionId: "replacement", visibility: "read-only" },
+      });
+      await waitForSolid(() => {
+        expect(view.getByRole("button", { name: /Read only/ }).getAttribute("aria-pressed")).toBe(
+          "true",
+        );
+        expect(view.getByRole("button", { name: /Draft/ }).hasAttribute("disabled")).toBe(false);
       });
     }
     flush();
-    pending.resolve({ status: "success" });
-    await pending.promise;
+    if (replacement === "destination") {
+      pending.resolve({ status: "success" });
+      await pending.promise;
+    } else {
+      await expect(pending.promise).rejects.toThrow("Retired update rejected");
+    }
     await Promise.resolve();
     flush();
     expect(change).toHaveBeenCalledOnce();
     expect(view.applied).not.toHaveBeenCalled();
+    expect(view.queryByRole("alert")).toBeNull();
   },
 );
 
@@ -195,9 +307,12 @@ it("keeps Public confirmed until its owner publishes and preserves membership fo
   expect(member).toHaveBeenCalledTimes(1);
 });
 
-it("replaces initial permission loading with people and retains them through refresh and failure", () => {
+it("reads native permission readiness and retains people through refresh and failure", async () => {
   const initial = prepared();
-  const [source, setSource] = createSignal(prepared({ state: { loading: true } }));
+  const read = createDeferred();
+  const [source, setSource] = createSignal(
+    prepared({ state: { loading: false, read: read.promise } }),
+  );
   const view = mountSolid(() => {
     const adapter = createChatSessionSharingMobileAdapter(source, {
       onOpenSharing: vi.fn(),
@@ -210,10 +325,14 @@ it("replaces initial permission loading with people and retains them through ref
   expect(view.getByRole("status", { name: "Loading…" }).getAttribute("aria-busy")).toBe("true");
   expect(view.queryByRole("checkbox", { name: /^Pat Member,/ })).toBeNull();
   setSource(initial);
-  flush();
+  read.resolve();
+  await waitForSolid(() =>
+    expect(view.queryByRole("checkbox", { name: /^Pat Member,/ })).not.toBeNull(),
+  );
   const person = view.getByRole("checkbox", { name: /^Pat Member,/ });
   expect(view.queryByRole("status", { name: "Loading…" })).toBeNull();
-  setSource({ ...initial, state: { ...initial.state!, loading: true } });
+  const refresh = createDeferred();
+  setSource({ ...initial, state: { ...initial.state!, loading: true, read: refresh.promise } });
   flush();
   expect(view.getByRole("checkbox", { name: /^Pat Member,/ })).toBe(person);
   expect(person.getAttribute("aria-disabled")).toBe("true");
@@ -222,7 +341,8 @@ it("replaces initial permission loading with people and retains them through ref
     ...initial,
     state: { ...initial.state!, loading: false, error: "Permission refresh failed" },
   });
-  flush();
+  refresh.resolve();
+  await waitForSolid(() => expect(view.queryByRole("alert")).not.toBeNull());
   expect(view.getByRole("alert").textContent).toContain("Permission refresh failed");
   expect(view.getByRole("checkbox", { name: /^Pat Member,/ })).toBe(person);
 });
