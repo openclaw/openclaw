@@ -124,7 +124,7 @@ export function DeviceUpdates(props: {
             title={t("updates.device.check")}
             control={
               <button
-                class="btn btn--sm"
+                class="btn primary"
                 type="button"
                 onClick={() => props.capability.checkForUpdates()}
               >

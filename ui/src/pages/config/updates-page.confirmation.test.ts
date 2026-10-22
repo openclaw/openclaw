@@ -62,7 +62,7 @@ it.each(["loading", "open"] as const)(
       }),
     );
     const updateButton = () => {
-      const button = mounted.getByRole<HTMLButtonElement>("button", { name: "Update now" });
+      const button = mounted.getByRole<HTMLButtonElement>("button", { name: "Update Gateway…" });
       expect(button).toMatchObject({ disabled: false });
       return button;
     };
