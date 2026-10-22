@@ -18,6 +18,7 @@ import {
   getInstallationTarget,
   LOCAL_INSTALLATION_TARGET_UNSUPPORTED,
 } from "../infra/installation-target-context.js";
+import { applyProcessEnvKeys } from "../infra/process-env.js";
 import { writeRuntimeJson, writeRuntimeStdout, type RuntimeEnv } from "../runtime.js";
 import {
   applyExecConfigOverrides,
@@ -89,15 +90,7 @@ function setAgentExecEnvironment(params: { stateDir: string; cwd: string }): () 
   process.env.OPENCLAW_STATE_DIR = params.stateDir;
   delete process.env.OPENCLAW_CONFIG_PATH;
   process.env.OPENCLAW_WORKSPACE_DIR = params.cwd;
-  return () => {
-    for (const [key, value] of Object.entries(previous)) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  };
+  return () => applyProcessEnvKeys(Object.keys(previous), previous);
 }
 
 function formatActiveGatewayExecRefusal(identity: GatewayLockIdentity): string {
