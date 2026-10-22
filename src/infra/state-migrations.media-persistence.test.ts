@@ -745,6 +745,30 @@ it.each([
     expect(metadata(fs.lstatSync(archivePath))).toEqual(metadata(before));
   }
 });
+it("rejects and preserves an archive whose bytes are not valid UTF-8", async () => {
+  const { env } = fixture();
+  const archivePath = archiveFile(env, "corrupt-encoding.jsonl.deleted.2026-07-24T01-02-03.000Z");
+  writeArchive(
+    archivePath,
+    [event({ role: "user", content: "café", MediaPath: "/media/a.png" })],
+    false,
+  );
+  const original = fs.readFileSync(archivePath);
+  // One invalid byte inside a string keeps the JSON parseable after lossy decoding,
+  // so a rewritten archive would carry the replacement character permanently.
+  original[original.indexOf(0xc3)] = 0xff;
+  fs.writeFileSync(archivePath, original);
+
+  const result = await migrate({ env });
+
+  const warning = result.warnings.find((entry) =>
+    entry.includes("Skipped archived transcript media migration"),
+  );
+  expect(warning).toContain("must be valid UTF-8");
+  expect(result.warningDisposition).toBe("recoverable");
+  expect(result.changes).not.toContain(`Migrated archived transcript media in ${archivePath}.`);
+  expect(fs.readFileSync(archivePath)).toEqual(original);
+});
 it("rejects ambiguous sparse arrays and ignores stale interrupted temp files", async () => {
   const { env } = fixture();
   const archivePath = archiveFile(env, "sparse.jsonl.bak.2026-07-24T01-02-03.000Z");

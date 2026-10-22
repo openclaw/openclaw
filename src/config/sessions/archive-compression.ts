@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { walkDirectorySync } from "@openclaw/fs-safe/walk";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
+import { decodeUtf8Input } from "../../infra/utf8-input.js";
 import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import { SESSION_ARCHIVE_ZSTD_SUFFIX } from "./transcript-file-names.js";
 export { SESSION_ARCHIVE_ZSTD_SUFFIX } from "./transcript-file-names.js";
@@ -32,11 +33,18 @@ export function readSessionArchiveContentSync(filePath: string): string {
   return zstdCodec.decompress(fs.readFileSync(filePath)).toString("utf8");
 }
 
-export function decodeSessionArchiveBytes(bytes: Uint8Array, compressed: boolean): string {
-  if (!compressed) {
-    return Buffer.from(bytes).toString("utf8");
+export function decodeSessionArchiveBytes(
+  bytes: Uint8Array,
+  compressed: boolean,
+  options?: { fatal?: boolean },
+): string {
+  const plain = compressed ? zstdCodec.decompress(Buffer.from(bytes)) : Buffer.from(bytes);
+  // Writers that persist the decoded text must not bake replacement characters
+  // into the archive; read-only viewers keep the lossy default.
+  if (options?.fatal) {
+    return decodeUtf8Input(plain, "Session transcript archive");
   }
-  return zstdCodec.decompress(Buffer.from(bytes)).toString("utf8");
+  return plain.toString("utf8");
 }
 
 /**

@@ -446,7 +446,8 @@ async function migrateAgentDatabase(params: {
 function migrateTranscriptArchive(filePath: string): boolean {
   const source = readRegularFileSync({ filePath });
   const compressed = filePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX);
-  const content = decodeSessionArchiveBytes(source.buffer, compressed);
+  // Fatal decode: lossy replacement would bake U+FFFD into the rewritten archive.
+  const content = decodeSessionArchiveBytes(source.buffer, compressed, { fatal: true });
   const transformed = transformMediaArchiveContent(content, filePath);
   if (!transformed.changed) {
     return false;
