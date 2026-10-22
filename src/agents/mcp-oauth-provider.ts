@@ -9,7 +9,7 @@ import type {
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawStateAsyncLeaseContext } from "../state/openclaw-state-lease.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
-import type { McpOAuthIdentity } from "./mcp-oauth-identity.js";
+import { mcpOAuthSignInHint, type McpOAuthIdentity } from "./mcp-oauth-identity.js";
 import type { McpOAuthRefreshBoundary } from "./mcp-oauth-refresh-boundary.js";
 import { readMcpOAuthStore, mutateMcpOAuthStore, type McpOAuthStore } from "./mcp-oauth-store.js";
 import { MCP_OAUTH_DEFAULT_REDIRECT_URL } from "./mcp-oauth-store.mutations.js";
@@ -150,7 +150,7 @@ export async function createMcpOAuthClientProvider(params: {
     params.login?.assertCurrent();
     if (params.allowAuthorizationRedirect !== true) {
       throw new Error(
-        `MCP server "${params.identity.serverName}" requires OAuth authorization. Run openclaw mcp login ${params.identity.serverName}.`,
+        `MCP server "${params.identity.serverName}" requires OAuth authorization. ${mcpOAuthSignInHint(params.identity)}`,
       );
     }
   };

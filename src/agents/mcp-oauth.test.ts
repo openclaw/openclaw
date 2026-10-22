@@ -5,6 +5,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { OAuthClientProvider } from "@modelcontextprotocol/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { McpServerConfig } from "../config/types.mcp.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { handleMcpOAuthCallback } from "../gateway/mcp-oauth-callback.js";
 import { createRequest, createResponse } from "../gateway/server-http.test-harness.js";
 import {
@@ -41,7 +42,8 @@ const CALENDLY_IDENTITY = operatorMcpOAuthIdentity("Calendly", "https://mcp.cale
 const metadataUrl = () => new URL("https://mcp.example.com/.well-known/oauth-protected-resource");
 const readStore = () => readStoreFor(REMOTE_IDENTITY.storeKey);
 const storedTokens = () => withProvider(async (provider) => provider.tokens());
-const loginInstruction = "Run openclaw mcp login Remote Docs.";
+const loginInstruction =
+  "Sign in again from Settings: select Connect on the plugin's page, or Sign in on the MCP page.";
 
 const resolveRemoteToken = (options: Omit<Parameters<typeof resolveToken>[0], "identity"> = {}) =>
   resolveToken({ identity: REMOTE_IDENTITY, ...options });
@@ -213,6 +215,21 @@ describe("MCP OAuth provider", () => {
     }, "openclaw-mcp-oauth-existing-session-");
   });
 
+  it("names terminal sign-in only for servers defined under mcp.servers", async () => {
+    await withTempHome(async () => {
+      const url = "https://mcp.example.com/mcp";
+      const missingToken = (cfg: OpenClawConfig) =>
+        resolveToken({ identity: operatorMcpOAuthIdentity("Remote Docs", url, cfg) });
+      await expect(missingToken({ mcp: { servers: { "Remote Docs": { url } } } })).rejects.toThrow(
+        `MCP server "Remote Docs" requires OAuth authorization. Sign in from Settings → MCP, or from the Gateway's terminal: stop the Gateway with openclaw gateway stop, run openclaw mcp login 'Remote Docs', then start the Gateway again.`,
+      );
+      // A plugin-declared server is absent from mcp.servers; the CLI cannot resolve it.
+      await expect(missingToken({})).rejects.toThrow(
+        `MCP server "Remote Docs" requires OAuth authorization. Select Connect on the plugin's page in Settings to sign in again.`,
+      );
+    }, "openclaw-mcp-oauth-sign-in-hint-");
+  });
+
   it("preserves insufficient scope and forces the next login through authorization", async () => {
     await withTempHome(async () => {
       await saveTokens(makeTokens("decoy-token", "test-auth-token"));
@@ -225,7 +242,7 @@ describe("MCP OAuth provider", () => {
           scope: "docs.write",
         }),
       ).rejects.toThrow(
-        'MCP server "Remote Docs" requires additional OAuth authorization. Run openclaw mcp login Remote Docs.',
+        `MCP server "Remote Docs" requires additional OAuth authorization. Sign in again from Settings: select Connect on the plugin's page, or Sign in on the MCP page.`,
       );
       expect(authMock).not.toHaveBeenCalled();
       expect(await storedTokens()).toMatchObject({

@@ -45,36 +45,23 @@ function isMattermostId(value: string): boolean {
 }
 
 export function parseMattermostTarget(raw: string): MattermostTarget {
-  const trimmed = raw.trim();
+  let trimmed = raw.trim();
   if (!trimmed) {
     throw new Error("Recipient is required for Mattermost sends");
   }
   const lower = normalizeLowercaseStringOrEmpty(trimmed);
   if (lower.startsWith("channel:")) {
-    const id = trimmed.slice("channel:".length).trim();
-    if (!id) {
+    trimmed = trimmed.slice("channel:".length).trim();
+    if (!trimmed) {
       throw new Error("Channel id is required for Mattermost sends");
     }
-    if (id.startsWith("#")) {
-      const name = id.slice(1).trim();
-      if (!name) {
-        throw new Error("Channel name is required for Mattermost sends");
-      }
-      return { kind: "channel-name", name };
-    }
-    if (!isMattermostId(id)) {
-      return { kind: "channel-name", name: id };
-    }
-    return { kind: "channel", id };
-  }
-  if (lower.startsWith("user:") || lower.startsWith("mattermost:")) {
+  } else if (lower.startsWith("user:") || lower.startsWith("mattermost:")) {
     const id = trimmed.slice(trimmed.indexOf(":") + 1).trim();
     if (!id) {
       throw new Error("User id is required for Mattermost sends");
     }
     return { kind: "user", id };
-  }
-  if (trimmed.startsWith("@")) {
+  } else if (trimmed.startsWith("@")) {
     const username = trimmed.slice(1).trim();
     if (!username) {
       throw new Error("Username is required for Mattermost sends");

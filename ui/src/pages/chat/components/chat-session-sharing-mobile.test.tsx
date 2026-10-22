@@ -209,6 +209,30 @@ it("returns from Session access only after a confirmed native success", async ()
   }
 });
 
+it("retains access controls through a rejected command and a held retry", async () => {
+  const retry = createDeferred<ChatSessionSharingOutcome>();
+  const change = vi
+    .fn<PreparedChatSessionSharing["onVisibilityChange"]>()
+    .mockRejectedValueOnce(new Error("Visibility command failed"))
+    .mockReturnValueOnce(retry.promise);
+  const view = accessFixture(prepared({ onVisibilityChange: change }));
+  const draft = view.getByRole("button", { name: /Draft/ });
+  draft.click();
+  await waitForSolid(() =>
+    expect(view.queryByRole("alert")?.textContent).toContain("Visibility command failed"),
+  );
+  expect(view.getByRole("button", { name: /Draft/ })).toBe(draft);
+  expect(view.applied).not.toHaveBeenCalled();
+  draft.click();
+  await waitForSolid(() => {
+    expect(view.queryByRole("alert")).toBeNull();
+    expect(draft.hasAttribute("disabled")).toBe(true);
+  });
+  retry.resolve({ status: "success" });
+  await waitForSolid(() => expect(view.applied).toHaveBeenCalledOnce());
+  expect(view.getByRole("button", { name: /Draft/ })).toBe(draft);
+});
+
 it.each(["destination", "session"] as const)(
   "does not navigate or publish a retired error into a replacement %s",
   async (replacement) => {

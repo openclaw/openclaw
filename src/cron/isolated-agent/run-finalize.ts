@@ -183,6 +183,7 @@ export async function finalizeCronRun(params: {
   }
   const cronPayloadOutcome = resolveCronPayloadOutcome({
     payloads,
+    terminalReplyDisposition: replyDisposition,
     runLevelError: finalRunResult.meta?.error,
     failureSignal: finalRunResult.meta?.failureSignal,
     finalAssistantVisibleText:
@@ -287,25 +288,20 @@ export async function finalizeCronRun(params: {
     });
   };
   const acceptedSessionSpawn = hasAcceptedSessionSpawn(finalRunResult.acceptedSessionSpawns);
-  const heartbeatOnlyResponse = !hasFatalErrorPayload && deliveryDisposition.kind !== "visible";
-  const heartbeatControlOnlyResponse =
-    heartbeatOnlyResponse &&
-    (deliveryDisposition.kind === "empty" ||
-      (deliveryDisposition.kind === "heartbeat" && deliveryDisposition.controlOnly));
+  const quietResponse = !hasFatalErrorPayload && deliveryDisposition.kind !== "visible";
   const spawnOnlyHandoff =
     acceptedSessionSpawn &&
-    (heartbeatControlOnlyResponse ||
+    (quietResponse ||
       (deliveryPayloads.length === 0 && normalizeOptionalString(synthesizedText) === undefined));
-  if (spawnOnlyHandoff && heartbeatControlOnlyResponse) {
-    // Parent heartbeat acknowledgments cannot fulfill child delivery; one-shot
+  if (spawnOnlyHandoff && quietResponse) {
+    // Parent control replies cannot fulfill child delivery; one-shot
     // cleanup must wait for actual descendant output before retiring the job.
     deliveryPayloads = [];
     synthesizedText = undefined;
     summary = undefined;
     outputText = undefined;
   }
-  const skipHeartbeatDelivery =
-    prepared.deliveryRequested && heartbeatOnlyResponse && !spawnOnlyHandoff;
+  const skipQuietDelivery = prepared.deliveryRequested && quietResponse && !spawnOnlyHandoff;
   const noChange = params.automationResult?.outcome === "no_change" && !hasFatalErrorPayload;
   const policySuppression = !prepared.resolvedDelivery.ok
     ? prepared.resolvedDelivery.deliverySuppressionReason
@@ -359,7 +355,7 @@ export async function finalizeCronRun(params: {
       policySuppression ??
       (noChange
         ? "silent"
-        : skipHeartbeatDelivery
+        : skipQuietDelivery
           ? hasIntentionalSilentReply
             ? "silent"
             : deliveryDisposition.kind

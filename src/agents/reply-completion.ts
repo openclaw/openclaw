@@ -98,10 +98,10 @@ export function resolveCommandReplyExpectation(params: {
 /** Returns true when a lifecycle turn must not redefine session-stable reply policy. */
 export function isSyntheticSourceReplyTurn(params: {
   inputProvenance?: InputProvenance;
-  isHeartbeat?: boolean;
+  scheduledAutomation?: boolean;
 }): boolean {
   return (
-    params.isHeartbeat === true ||
+    params.scheduledAutomation === true ||
     params.inputProvenance?.kind === "inter_session" ||
     params.inputProvenance?.kind === "internal_system"
   );
@@ -110,6 +110,7 @@ export function isSyntheticSourceReplyTurn(params: {
 export function resolveReplyExpectation(params: {
   terminalReplyExpectation?: ReplyExpectation;
   allowEmptyAssistantReplyAsSilent?: boolean;
+  scheduledAutomation?: boolean;
   trigger?: EmbeddedRunTrigger;
   inputProvenance?: InputProvenance;
   config?: OpenClawConfig;
@@ -146,7 +147,6 @@ export function resolveReplyExpectation(params: {
 /** Background failures are recorded; only an admitted user's missing answer needs chat text. */
 export function shouldDeliverMissingReplyNotice(
   params: Parameters<typeof resolveReplyExpectation>[0] & {
-    isHeartbeat?: boolean;
     currentInboundEventKind?: InboundEventKind;
   },
 ): boolean {

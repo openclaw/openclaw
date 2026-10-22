@@ -6,7 +6,6 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { persistAuthProfileBatch } from "../../agents/auth-profiles/upsert-with-lock.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
-import { enqueueSwarmRun, releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { withAdminIngress } from "../../channels/message-access/operator-authority.test-support.js";
 import {
   listSessionChildEntriesReadOnly,
@@ -50,6 +49,7 @@ import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { getCommandOwnerAuthority } from "../command-owner-authority.js";
 import { handlePluginCommand } from "./commands-plugin.js";
+import { holdScheduledChildCapacity } from "./commands-plugin.scheduled-capacity.test-support.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
 import { runWithCommandNativeSubagents } from "./dispatch-native-subagent.js";
@@ -201,6 +201,7 @@ async function withCommandPlugin(
     );
     const runAgentJob = createGatewayCronAgentJobRunner({
       deps: {},
+      storePath: cronStorePath,
       resolveCronAgent: () => ({ agentId: "main", cfg }),
       resolveGatewayContext: () => gateway,
       resolvePluginRegistry: () => registry,
@@ -695,24 +696,8 @@ describe("native scheduled command execution", () => {
     guards.stubModelChoice = true;
     await withCommandPlugin(async (fixture) => {
       const id = await createContinuation(fixture);
-      const blockers: string[] = [];
-      let scheduledRunId: string | undefined;
       // Hold swarm capacity so the accepted child stays queued and never reaches a model.
-      fixture.onExecutionStarted = (info) => {
-        const runId = expectDefined(info.runId, "scheduled occurrence run id");
-        const sessionKey = expectDefined(info.sessionKey, "scheduled occurrence parent");
-        scheduledRunId = runId;
-        const blocker = "capacity-" + runId;
-        blockers.push(blocker);
-        enqueueSwarmRun({
-          groupId: JSON.stringify(["main", sessionKey, "swarm:" + sessionKey + ":" + runId]),
-          runId: blocker,
-          maxConcurrent: 1,
-          activeRunIds: [],
-          start: async () => {},
-          onStartFailure: () => true,
-        });
-      };
+      const capacity = holdScheduledChildCapacity(fixture);
       let childRunId: string | undefined;
       let childSessionKey: string | undefined;
       fixture.handler.mockImplementation(async (ctx) => {
@@ -731,10 +716,9 @@ describe("native scheduled command execution", () => {
       });
       try {
         await fixture.cron.run(id, "force");
+        capacity.expectWaiting(expectDefined(childRunId, "accepted child run"));
       } finally {
-        for (const blocker of blockers) {
-          releaseSwarmRun(blocker);
-        }
+        capacity.release();
       }
       expect(fixture.scheduledResults[0]).toMatchObject({
         status: "ok",
@@ -751,77 +735,66 @@ describe("native scheduled command execution", () => {
       expect(child?.inheritedToolAllow).toEqual(["read", "sessions_spawn", "agents_wait"]);
       expect(subagentRuns.get(expectDefined(childRunId, "accepted child run"))).toMatchObject({
         requesterSessionKey: parent.sessionKey,
-        requesterTurnRunId: expectDefined(scheduledRunId, "scheduled occurrence run"),
+        requesterTurnRunId: expectDefined(capacity.occurrenceRunId(), "scheduled occurrence run"),
       });
     });
   });
-  it("admits a queued scheduled child's agent turn only while its requester stays authorized", async () => {
+  /** Queues one native child from a scheduled occurrence, then releases it after settlement. */
+  async function releaseQueuedScheduledChild(demoteFirst: boolean) {
     guards.stubModelChoice = true;
+    let outcome: unknown;
     await withCommandPlugin(async (fixture) => {
       fixture.installAgentTurnFacade();
       const id = await createContinuation(fixture);
-      const blockers: string[] = [];
-      // Hold swarm capacity so each child is still queued when its occurrence settles.
-      fixture.onExecutionStarted = (info) => {
-        const runId = expectDefined(info.runId, "scheduled occurrence run id");
-        const sessionKey = expectDefined(info.sessionKey, "scheduled occurrence parent");
-        const blocker = "capacity-" + runId;
-        blockers.push(blocker);
-        enqueueSwarmRun({
-          groupId: JSON.stringify(["main", sessionKey, "swarm:" + sessionKey + ":" + runId]),
-          runId: blocker,
-          maxConcurrent: 1,
-          activeRunIds: [],
-          start: async () => {},
-          onStartFailure: () => true,
-        });
-      };
-      const children: string[] = [];
+      // Hold swarm capacity so the child is still queued when its occurrence settles.
+      const capacity = holdScheduledChildCapacity(fixture);
+      let childRunId: string | undefined;
       fixture.handler.mockImplementation(async (ctx) => {
         const native = expectDefined(ctx.runtimeContext?.subagents, "scheduled native runtime");
         const child = await native.spawn({
-          requestId: "scheduled-queued-" + children.length,
+          requestId: "scheduled-queued",
           task: "Synthetic scheduled child released after its occurrence settles",
           context: "isolated",
         });
-        children.push(child.runId);
+        childRunId = child.runId;
         return { text: "child queued" };
       });
-      const releaseSettledOccurrence = async (index: number, demoteFirst: boolean) => {
-        try {
-          await fixture.cron.run(id, "force");
-          expect(fixture.scheduledResults[index]).toMatchObject({
-            status: "ok",
-            outputText: "child queued",
-          });
-          const runId = expectDefined(children[index], "queued child run");
-          expect(subagentRuns.get(runId)?.execution).toMatchObject({ status: "queued" });
-          if (demoteFirst) {
-            fixture.demoteOwner();
-          }
-        } finally {
-          for (const blocker of blockers.splice(0)) {
-            releaseSwarmRun(blocker);
-          }
-        }
-        const runId = expectDefined(children[index], "queued child run");
-        await vi.waitFor(() => expect(subagentRuns.get(runId)?.execution.status).toBe("terminal"), {
-          timeout: 15_000,
+      try {
+        await fixture.cron.run(id, "force");
+        expect(fixture.scheduledResults[0]).toMatchObject({
+          status: "ok",
+          outputText: "child queued",
         });
-        return subagentRuns.get(runId)?.execution.outcome;
-      };
-      // Authorized: after its occurrence settled, the child passed the real agent turn's
-      // admission revalidation. This harness publishes no reply runtime, so the turn stops at
-      // that next seam, still before the model runner (the fixture's no-embedded-run guard).
-      await expect(releaseSettledOccurrence(0, false)).resolves.toMatchObject({
-        status: "error",
-        error: "published reply runtime missing for main",
+        const runId = expectDefined(childRunId, "queued child run");
+        expect(subagentRuns.get(runId)?.execution).toMatchObject({ status: "queued" });
+        capacity.expectWaiting(runId);
+        if (demoteFirst) {
+          fixture.demoteOwner();
+        }
+      } finally {
+        capacity.release();
+      }
+      const runId = expectDefined(childRunId, "queued child run");
+      await vi.waitFor(() => expect(subagentRuns.get(runId)?.execution.status).toBe("terminal"), {
+        timeout: 15_000,
       });
-      // Demoted while queued: the next child is refused at that admission, before any runner.
-      await expect(releaseSettledOccurrence(1, true)).resolves.toMatchObject({
-        status: "error",
-        error: "Queued channel operator authority changed; submit a new request.",
-      });
+      outcome = subagentRuns.get(runId)?.execution.outcome;
+    });
+    return outcome;
+  }
+  it("admits a queued scheduled child's agent turn while its requester stays authorized", async () => {
+    // After its occurrence settled, the child passed the real agent turn's admission
+    // revalidation. This harness publishes no reply runtime, so the turn stops at that next
+    // seam, still before the model runner (the fixture's no-embedded-run guard).
+    await expect(releaseQueuedScheduledChild(false)).resolves.toMatchObject({
+      status: "error",
+      error: "published reply runtime missing for main",
+    });
+  });
+  it("refuses a queued scheduled child's agent turn after its requester is demoted", async () => {
+    await expect(releaseQueuedScheduledChild(true)).resolves.toMatchObject({
+      status: "error",
+      error: "Queued channel operator authority changed; submit a new request.",
     });
   });
   it("refuses a same-metadata plugin reload before command or input acceptance", async () => {

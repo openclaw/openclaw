@@ -81,7 +81,6 @@ it("refreshes a retained pane from a persisted profile-only selection through th
       desktopNavigationExpanded: false,
       lastLocalePrefSignature: null,
       outboxStoreImport: { load: async () => undefined },
-      observeDeletedSessions() {},
       recoverDeletedActiveSession() {},
       selectChatSession() {},
       invalidate() {},

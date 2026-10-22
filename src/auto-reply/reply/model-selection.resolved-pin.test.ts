@@ -54,44 +54,6 @@ test("keeps thinking defaults separate for distinct literal model IDs", async ()
   });
 });
 
-test.each(["origin", "notice"])("resets stale heartbeat fallback from %s", async (source) => {
-  await withStateDirEnv("reply-heartbeat-origin-", async () => {
-    const entry: SessionEntry = {
-      sessionId: "heartbeat",
-      updatedAt: 1,
-      providerOverride: "custom",
-      modelOverride: "fallback",
-      modelOverrideSource: "auto",
-      modelOverrideRouteResolution: "resolved",
-    };
-    if (source === "origin") {
-      entry.modelOverrideFallbackOriginProvider = "custom";
-      entry.modelOverrideFallbackOriginModel = "model";
-    } else {
-      entry.fallbackNotice = {
-        kind: "active",
-        selectedModel: "custom/model",
-        activeModel: "custom/fallback",
-      };
-    }
-    const selection = await selectModel({
-      sessionEntry: entry,
-      sessionStore: { heartbeat: entry },
-      sessionKey: "heartbeat",
-      defaultModel: "custom/model",
-      model: "fallback",
-      isHeartbeat: true,
-    });
-    expect(selection).toMatchObject({
-      provider: "custom",
-      model: "custom/model",
-      resetModelOverride: true,
-      resetModelOverrideReason: "stale",
-    });
-    expect(entry.modelOverride).toBeUndefined();
-  });
-});
-
 const metadataSnapshot = createPluginMetadataSnapshotFixture({
   plugins: [
     {
@@ -111,7 +73,7 @@ type SelectionOptions = {
   inherited?: boolean;
   locked?: boolean;
   configuredProvider?: boolean;
-  heartbeat?: boolean;
+  turnOverride?: boolean;
   operator?: "stored" | "inherited" | "locked";
 };
 
@@ -122,7 +84,7 @@ const literal = "custom/model";
 test.each<[string, string, string, SelectionOptions]>([
   ["resolved alias-like model", "middle", "middle", {}],
   ["legacy normalization once", "latest", "middle", { raw: true }],
-  ["heartbeat override", "middle", "heartbeat", { heartbeat: true }],
+  ["scheduled override", "middle", "scheduled", { turnOverride: true }],
   ["role-denied stored pin", "middle", "default", { operator: "stored" }],
   ["role-denied inherited pin", "middle", "default", { operator: "inherited" }],
   ["role-denied locked pin", "middle", "middle", { operator: "locked" }],
@@ -172,11 +134,13 @@ test.each<[string, string, string, SelectionOptions]>([
       [sessionKey]: entry,
       ...(inherited ? { [parentSessionKey]: pinnedEntry } : {}),
     };
-    const entries = ["default", "model", "custom/model", "middle", "final"].map((id) => ({
-      provider: "custom",
-      id,
-      name: id,
-    }));
+    const entries = ["default", "model", "custom/model", "middle", "final", "scheduled"].map(
+      (id) => ({
+        provider: "custom",
+        id,
+        name: id,
+      }),
+    );
     await withPluginRuntimeGenerationScope(
       { metadataSnapshot, pluginRegistry: registry },
       async () => {
@@ -188,9 +152,8 @@ test.each<[string, string, string, SelectionOptions]>([
           sessionKey,
           parentSessionKey: inherited ? parentSessionKey : undefined,
           defaultModel: "default",
-          model: fixture.heartbeat ? "heartbeat" : inherited ? pin : "default",
-          isHeartbeat: fixture.heartbeat,
-          hasResolvedHeartbeatModelOverride: fixture.heartbeat,
+          model: fixture.turnOverride ? "scheduled" : inherited ? pin : "default",
+          hasResolvedTurnModelOverride: fixture.turnOverride,
           preparedModelCatalog: { entries, routeVariants: entries, authoritative: true },
           operatorAuthority: fixture.operator
             ? createAdmittedRunOperatorAuthority({

@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { assert, expect, it, vi } from "vitest";
-import { HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
+import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { GetReplyOptions } from "../types.js";
 import { setupExecutionSuite } from "./agent-runner-execution-suite.test-support.js";
@@ -55,32 +55,28 @@ async function classifyPrimary(params: FallbackRunnerParams) {
 }
 
 it.each([
-  { stopReason: "error", isHeartbeat: true, failureText: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT },
-  { stopReason: "superseded", isHeartbeat: false, failureText: undefined },
-])(
-  "preserves canonical $stopReason after private partial output (heartbeat=$isHeartbeat)",
-  async (testCase) => {
-    const followupRun = createFollowupRun();
-    followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "Private partial output before the run ended." }],
-      meta: { stopReason: testCase.stopReason },
-    });
+  { stopReason: "error", failureText: GENERIC_EXTERNAL_RUN_FAILURE_TEXT },
+  { stopReason: "superseded", failureText: undefined },
+])("preserves canonical $stopReason after private partial output", async (testCase) => {
+  const followupRun = createFollowupRun();
+  followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
+  state.runEmbeddedAgentMock.mockResolvedValueOnce({
+    payloads: [{ text: "Private partial output before the run ended." }],
+    meta: { stopReason: testCase.stopReason },
+  });
 
-    const result = await runTurn({ followupRun, isHeartbeat: testCase.isHeartbeat });
+  const result = await runTurn({ followupRun });
 
-    assert(result.kind === "success");
-    expect(result.terminalFailurePayload?.text).toBe(testCase.failureText);
-    if (testCase.failureText !== undefined) {
-      assert(result.terminalFailurePayload);
-      expect(result.terminalFailurePayload.isError).toBe(true);
-      expect(
-        getReplyPayloadMetadata(result.terminalFailurePayload)
-          ?.deliverDespiteSourceReplySuppression,
-      ).toBe(true);
-    }
-  },
-);
+  assert(result.kind === "success");
+  expect(result.terminalFailurePayload?.text).toBe(testCase.failureText);
+  if (testCase.failureText !== undefined) {
+    assert(result.terminalFailurePayload);
+    expect(result.terminalFailurePayload.isError).toBe(true);
+    expect(
+      getReplyPayloadMetadata(result.terminalFailurePayload)?.deliverDespiteSourceReplySuppression,
+    ).toBe(true);
+  }
+});
 
 it("preserves one core missing-answer notice through queued message-tool-only delivery", async () => {
   const followupRun = createFollowupRun();
@@ -120,7 +116,7 @@ it("preserves one core missing-answer notice through queued message-tool-only de
     cfg: followupRun.run.config,
     defaultModel: followupRun.run.model,
     followupRun,
-    isHeartbeat: false,
+
     pendingToolTasks: params.pendingToolTasks,
     preflightCompactionApplied: false,
     resolvedVerboseLevel: "off",

@@ -25,6 +25,8 @@ export type RunCronAgentTurnParams = {
   assertCurrent?: () => void;
   admissionSource?: import("../../agents/admitted-run-context.js").AdmittedRunContext["admissionSource"];
   cfg: OpenClawConfig;
+  /** Gateway-selected cron partition; standalone callers resolve it from config. */
+  cronStorePath?: string;
   deps: CliDeps;
   job: CronStoredJob;
   /** Trusted caller classification; stored jobs default to cron, not their payload or audit ingress. */

@@ -10,6 +10,7 @@ import type { GatewayContextResolver } from "./server-methods/types.js";
 /** Select the reserved command path before any ordinary cron prompt processing. */
 export function createGatewayCronAgentJobRunner(params: {
   deps: CliDeps;
+  storePath: string;
   resolveCronAgent: (requested?: string | null) => { agentId: string; cfg: OpenClawConfig };
   resolveGatewayContext?: GatewayContextResolver;
   resolvePluginRegistry?: () => PluginRegistry | undefined;
@@ -32,6 +33,7 @@ export function createGatewayCronAgentJobRunner(params: {
       ...request,
       cfg,
       deps: params.deps,
+      cronStorePath: params.storePath,
       agentId,
       sessionKey: `cron:${job.id}`,
       trigger: "cron",

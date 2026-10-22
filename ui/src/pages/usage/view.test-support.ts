@@ -60,6 +60,7 @@ export function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProp
       read: null,
       exporting: false,
       error: null,
+      partialNotice: null,
       sessions: [],
       creatorOptions: [],
       totals: null,

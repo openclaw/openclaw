@@ -45,6 +45,7 @@ export function McpAppContextStrip(props: McpAppContextStripProps) {
   const [pending, setPending] = createOptimisticStore<Record<string, (() => boolean) | undefined>>(
     {},
   );
+  const refreshes = new WeakMap<McpAppContextEntry, Promise<{ state: McpAppContextState }>>();
   let mounted = false;
   const contexts = createMemo(() => {
     const client = gateway.read().snapshot.client;
@@ -85,16 +86,31 @@ export function McpAppContextStrip(props: McpAppContextStripProps) {
         publishMcpAppContext(client, { ...entry, state: null });
         return;
       }
-      const publish = (state: McpAppContextState) =>
-        publishMcpAppContext(client, { ...entry, state });
-      void client
-        .request<{ state: McpAppContextState }>("mcp.app.modelContext", {
-          sessionKey: entry.sessionKey,
-          agentId: entry.agentId,
-          viewId: entry.viewId,
+      const scope = gatewayPresentationScope(context.gateway).key;
+      const sessionKey = props.sessionKey;
+      const agentId = props.agentId;
+      const request = client.request<{ state: McpAppContextState }>("mcp.app.modelContext", {
+        sessionKey: entry.sessionKey,
+        agentId: entry.agentId,
+        viewId: entry.viewId,
+      });
+      refreshes.set(entry, request);
+      void request
+        .then((result) => {
+          if (
+            mounted &&
+            refreshes.get(entry) === request &&
+            context.gateway.snapshot.client === client &&
+            gatewayPresentationScope(context.gateway).key === scope &&
+            props.sessionKey === sessionKey &&
+            props.agentId === agentId &&
+            readMcpAppContexts(client, sessionKey, agentId).includes(entry)
+          ) {
+            publishMcpAppContext(client, { ...entry, state: result.state });
+          }
         })
-        .then((result) => publish(result.state))
-        .catch(() => publish(null));
+        // A failed refresh does not revoke the accepted context.
+        .catch(() => {});
     });
     return () => {
       mounted = false;

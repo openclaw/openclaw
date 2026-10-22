@@ -3,7 +3,10 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { flattenTranslations } from "../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import { i18n } from "../i18n/index.ts";
 import { de } from "../i18n/locales/de.ts";
-import "./native-link-menu.runtime.ts";
+import * as clipboard from "../lib/clipboard.ts";
+import "../lib/toast-host.tsx";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
+import { mountNativeLinkMenu } from "./native-link-menu.runtime.ts";
 import { settleTooltip, tooltipSurface } from "./tooltip.test-support.ts";
 
 const containers: HTMLElement[] = [];
@@ -24,6 +27,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   containers.splice(0).forEach((container) => container.remove());
+  vi.restoreAllMocks();
   await i18n.setLocale("en");
 });
 async function mountMenu(withTrigger = false) {
@@ -54,6 +58,36 @@ it("renders native actions in order and closes before dispatch", async () => {
   item.click();
   await Promise.resolve();
   expect(calls).toEqual(["close", "inline"]);
+});
+
+it.each([
+  [true, "Copied!"],
+  [false, "Copy failed"],
+])("reports clipboard success=%s after the menu closes", async (copied, message) => {
+  const pending = Promise.withResolvers<boolean>();
+  const copy = vi.spyOn(clipboard, "copyToClipboard").mockReturnValue(pending.promise);
+  const host = append("openclaw-toast-host");
+  const anchor = Object.assign(append("a"), { href: "https://example.com/report" });
+  const menu = mountNativeLinkMenu({
+    path: [anchor, document, window],
+    anchor,
+    url: new URL(anchor.href),
+    x: 100,
+    y: 100,
+    close: (current) => current.remove(),
+    openExternal: vi.fn(),
+    openInline: vi.fn(),
+  })!;
+  await menu.updateComplete;
+  menu.querySelector<HTMLButtonElement>('[data-value="copy"]')!.click();
+  expect(menu.isConnected).toBe(false);
+  expect(copy).toHaveBeenCalledExactlyOnceWith(anchor.href);
+  expect(host.querySelector('[role="status"]')).toBeNull();
+
+  pending.resolve(copied);
+  await waitForSolid(() => {
+    expect(host.querySelector('[role="status"]')?.textContent).toContain(message);
+  });
 });
 
 it("rerenders open actions when the locale changes", async () => {

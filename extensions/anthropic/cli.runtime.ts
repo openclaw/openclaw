@@ -383,28 +383,6 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
     return;
   }
   if (turn.interrupted) {
-    if (message.type === "result") {
-      // Native interrupt can report an empty error result instead of a success.
-      // Only its known abort terminals belong to this requested turn interruption.
-      const aborted =
-        message.terminal_reason === "aborted_tools" ||
-        message.terminal_reason === "aborted_streaming";
-      turn.sawTerminalResult = true;
-      const result = aborted
-        ? {
-            ...message,
-            subtype: "success",
-            is_error: false,
-            result: "",
-            errors: undefined,
-            terminal_reason: undefined,
-          }
-        : { ...message, result: "" };
-      if (!turn.events.write(result)) {
-        await once(turn.events, "drain", { signal: turn.controller.signal });
-      }
-      completeTurn(session, turn);
-    }
     return;
   }
   if (message.type === "command_lifecycle") {
@@ -728,7 +706,23 @@ export async function* executeClaudeCli(
             throw new Error("The Claude CLI turn is no longer active.");
           }
           turn.interrupted = true;
-          await transport.interrupt();
+          // The host requests this only after consuming a successful yield tool result.
+          // Native interrupt would persist a false user stop in the resumable transcript.
+          turn.sawTerminalResult = true;
+          // Native output owns the session ID; the input ID may still name a fork's parent.
+          if (
+            !turn.events.write({
+              type: "result",
+              subtype: "success",
+              is_error: false,
+              result: "",
+            })
+          ) {
+            await once(turn.events, "drain", { signal: turn.controller.signal });
+          }
+          completeTurn(session, turn);
+          session.handle.close("idle");
+          await session.handle.waitForExit();
         },
       });
       await transport.send(createUserInput(context, context.prompt, turn.inputUuid));

@@ -1,17 +1,31 @@
-import { createUniqueId } from "solid-js";
+import { createMemo, createUniqueId, Errored, Loading } from "solid-js";
 import type { CronJob } from "../../api/types.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
 import { SettingsToggle } from "../../components/solid/settings-ui.tsx";
+import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { CronProps } from "./view-types.ts";
-export function ErrorBanner(props: { error: string | null }) {
+export function ErrorBanner(props: { error: string | null; reads?: CronProps["reads"] }) {
+  const modelRequest = createMemo(() => props.reads?.modelRequest());
   return (
     <>
       {props.error ? (
         <div class="cron-error-banner" role="alert">
           {props.error}
         </div>
+      ) : props.reads ? (
+        <Loading on={modelRequest()}>
+          <Errored
+            fallback={(error) => (
+              <div class="cron-error-banner" role="alert">
+                {formatUiError(error())}
+              </div>
+            )}
+          >
+            {props.reads.models()}
+          </Errored>
+        </Loading>
       ) : undefined}
     </>
   );

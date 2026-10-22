@@ -203,7 +203,7 @@ it.each([false, true])(
         hasRows ? "Some models could not be refreshed" : "Models unavailable",
       ),
     );
-    expect(page.cronModelSuggestions).toEqual([]);
+    await expectModels(page, []);
   },
 );
 

@@ -402,7 +402,6 @@ export function createAppearanceBackground(
     }
     dismissReadStatus();
     patchSettings({ background: { ...readPreference(), ...patch } });
-    application.theme.refresh();
     mutation = null;
     setMessage(null);
   }

@@ -26,7 +26,7 @@ import type {
 } from "../types.js";
 import { abortErrorMessage, cronAbortErrorClassification } from "./execution-errors.js";
 import { waitForCronExecutionIdle } from "./execution-idle.js";
-import { admitCronOccurrence } from "./occurrence-admission.js";
+import { admitCronOccurrence, resolvePausedOccurrence } from "./occurrence-admission.js";
 import {
   describeCronHostExecutionRestriction,
   type CronServiceState,
@@ -246,6 +246,10 @@ export async function executeJobCore(
     }
     // One admission per occurrence, shared by its trigger and payload executors.
     occurrence = await admitCronOccurrence(state, job, agentId);
+    const paused = resolvePausedOccurrence(job, occurrence);
+    if (paused) {
+      return paused;
+    }
     assertCurrent();
     let effectiveJob = job;
     let triggerEval: CronTriggerEvalOutcome | undefined;

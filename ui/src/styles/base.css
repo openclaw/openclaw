@@ -219,6 +219,12 @@
   --info: #60a5fa;
   --info-subtle: rgba(96, 165, 250, 0.08);
   --pr-merged: #a78bfa;
+  /* Categorical chart series: distinct hues validated for color-vision separation on this surface. */
+  --chart-series-1: #3987e5;
+  --chart-series-2: #d95926;
+  --chart-series-3: #199e70;
+  --chart-series-4: #c98500;
+  --chart-series-5: #d55181;
 
   --focus: rgba(255, 92, 92, 0.2);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 80%, transparent);
@@ -631,6 +637,11 @@
   --info: #1d4ed8;
   --info-subtle: rgba(29, 78, 216, 0.08);
   --pr-merged: #7c3aed;
+  --chart-series-1: #2a78d6;
+  --chart-series-2: #eb6834;
+  --chart-series-3: #1baf7a;
+  --chart-series-4: #eda100;
+  --chart-series-5: #e87ba4;
 
   --focus: rgba(189, 69, 49, 0.15);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 70%, transparent);

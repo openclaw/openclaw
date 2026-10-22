@@ -42,7 +42,7 @@ export function buildSlackManifest() {
   const manifest = {
     display_information: {
       name: "OpenClaw",
-      description: "OpenClaw connector for OpenClaw",
+      description: "OpenClaw app for OpenClaw",
     },
     features: {
       bot_user: {

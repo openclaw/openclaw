@@ -517,6 +517,11 @@ suite.define(() => {
     expect(request.params).not.toHaveProperty("title");
     expect(JSON.stringify(request.params)).not.toContain("token");
     expect(request.params).not.toHaveProperty("repository");
+    // Admission moves the action into a menu that can close during the handoff.
+    await openChatPublication(page);
+    await page.keyboard.press("Escape");
+    await expect.poll(() => page.locator(".chat-pr-branch-menu").isVisible()).toBe(false);
+    await openChatPublication(page);
     await expect
       .poll(() => page.getByRole("button", { name: "Publishing…" }).isDisabled())
       .toBe(true);
@@ -662,7 +667,12 @@ suite.define(() => {
     });
     expect(requestB.params).toMatchObject({ sessionKey: sessionB });
     const publishingB = page.getByRole("button", { name: "Publishing…" });
-    await expect.poll(() => publishingB.isDisabled()).toBe(true);
+    const publishingBState = () =>
+      publishingB.evaluateAll((buttons) => ({
+        count: buttons.length,
+        disabled: buttons.map((button) => button.matches(":disabled")),
+      }));
+    await expect.poll(publishingBState).toEqual({ count: 1, disabled: [true] });
 
     await gateway.resolveDeferred("sessions.github.publish", {
       requestId: "publication-a",
@@ -672,7 +682,7 @@ suite.define(() => {
       branch: "openclaw/publication-a",
       headCommit: "a".repeat(40),
     });
-    await expect.poll(() => publishingB.isDisabled()).toBe(true);
+    await expect.poll(publishingBState).toEqual({ count: 1, disabled: [true] });
     expect(
       await page.locator('a[href="https://github.com/openclaw/openclaw/pull/125301"]').count(),
     ).toBe(0);
@@ -738,9 +748,9 @@ suite.define(() => {
       code: "UNAVAILABLE",
       message: "Publication response was lost.",
     });
+    await openChatPublication(page);
     await pollCount(page.getByRole("button", { name: "Retry publication" })).toBe(1);
 
-    await openChatPublication(page);
     requestCount = (await gateway.getRequests("sessions.github.publish")).length;
     await page.getByRole("button", { name: "Retry publication" }).click();
     const second = await gateway.waitForRequest("sessions.github.publish", {

@@ -313,6 +313,11 @@ brings the selected agent into view.
 
 ## Download files
 
+Chat filename links first try the named path. If a bare filename is missing there,
+the preview opens a nested file only when a complete workspace search finds exactly
+one matching filename. Ambiguous or incomplete searches keep the missing-file error;
+use an explicit path to select the intended file.
+
 If the **Files** panel shows a listing error, select **Retry** to load the current
 folder or search again. This keeps the session and query in place; access checks
 still apply, and a failed retry displays its error.

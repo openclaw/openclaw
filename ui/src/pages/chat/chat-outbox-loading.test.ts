@@ -2,13 +2,13 @@
 import { createEffect, createRoot, flush } from "@solidjs/signals";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { makeChatHost, makeRequestMock, expectRequestCounts } from "./chat-host.test-support.ts";
 import { idleChatHistory } from "./chat-outbox-recovery.test-support.ts";
 import { createTestPageState } from "./chat-page-state.test-support.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
-import { listStoredChatOutboxes } from "./composer-persistence.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 
 useChatSendBrowserFixture();
