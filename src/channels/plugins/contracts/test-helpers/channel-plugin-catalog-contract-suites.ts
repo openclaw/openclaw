@@ -14,18 +14,6 @@ type ChannelCatalogContractCase = {
   };
 };
 
-type RichExternalCatalogFixture = {
-  name: string;
-  prefix: string;
-  channelId: string;
-  packageName?: string;
-  meta: Record<string, unknown>;
-  aliases: string[];
-  order: number;
-  install: Record<string, unknown>;
-  installSource?: Record<string, unknown>;
-};
-
 function createCatalogEntry(params: {
   packageName?: string;
   channelId: string;
@@ -51,23 +39,6 @@ function createCatalogEntry(params: {
   };
 }
 
-function writeCatalog(catalogPath: string, entry: Record<string, unknown>, richManifest = false) {
-  fs.writeFileSync(
-    catalogPath,
-    JSON.stringify({
-      ...(richManifest
-        ? {
-            $schema: "./manifest.schema.json",
-            schemaVersion: 1,
-            description:
-              "Extension manifest. Declares plugin packages that OpenClaw can discover during onboarding and install on demand via `openclaw plugins install`.",
-          }
-        : {}),
-      entries: [entry],
-    }),
-  );
-}
-
 function createTemporaryCatalogFile(
   prefix: string,
   entry: Record<string, unknown>,
@@ -75,8 +46,22 @@ function createTemporaryCatalogFile(
 ) {
   const directory = fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), prefix));
   const catalogPath = path.join(directory, "catalog.json");
-  writeCatalog(catalogPath, entry, richManifest);
+  writeJson(catalogPath, {
+    ...(richManifest
+      ? {
+          $schema: "./manifest.schema.json",
+          schemaVersion: 1,
+          description:
+            "Extension manifest. Declares plugin packages that OpenClaw can discover during onboarding and install on demand via `openclaw plugins install`.",
+        }
+      : {}),
+    entries: [entry],
+  });
   return catalogPath;
+}
+
+function writeJson(file: string, value: unknown) {
+  fs.writeFileSync(file, JSON.stringify(value), "utf8");
 }
 
 function writeDiscoveredChannelPlugin(stateDir: string) {
@@ -87,22 +72,28 @@ function writeDiscoveredChannelPlugin(stateDir: string) {
     channelId: "demo-channel",
     label: "Demo Channel Runtime",
   });
-  fs.writeFileSync(
-    path.join(pluginDir, "package.json"),
-    JSON.stringify({ ...entry, openclaw: { ...entry.openclaw, extensions: ["./index.js"] } }),
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(pluginDir, "openclaw.plugin.json"),
-    JSON.stringify({ id: "@vendor/demo-channel-runtime", configSchema: {} }),
-    "utf8",
-  );
+  writeJson(path.join(pluginDir, "package.json"), {
+    ...entry,
+    openclaw: { ...entry.openclaw, extensions: ["./index.js"] },
+  });
+  writeJson(path.join(pluginDir, "openclaw.plugin.json"), {
+    id: "@vendor/demo-channel-runtime",
+    configSchema: {},
+  });
   fs.writeFileSync(path.join(pluginDir, "index.js"), "module.exports = {}", "utf8");
 }
 
-function createRichExternalCatalogCase(
-  fixture: RichExternalCatalogFixture,
-): ChannelCatalogContractCase {
+function createRichExternalCatalogCase(fixture: {
+  name: string;
+  prefix: string;
+  channelId: string;
+  packageName?: string;
+  meta: Record<string, unknown>;
+  aliases: string[];
+  order: number;
+  install: Record<string, unknown>;
+  installSource?: Record<string, unknown>;
+}): ChannelCatalogContractCase {
   const entry = {
     name: fixture.packageName,
     source: "external",
@@ -132,7 +123,7 @@ function createRichExternalCatalogCase(
   };
 }
 
-const [richNpmCatalogFixture, clawhubCatalogFixture, yuanbaoCatalogFixture] = [
+const richCatalogCases = [
   {
     name: "accepts rich external manifest entries with pinned npm metadata",
     prefix: "openclaw-catalog-rich-",
@@ -220,7 +211,7 @@ const [richNpmCatalogFixture, clawhubCatalogFixture, yuanbaoCatalogFixture] = [
       expectedIntegrity: "sha512-yuanbao",
     },
   },
-] satisfies [RichExternalCatalogFixture, RichExternalCatalogFixture, RichExternalCatalogFixture];
+].map(createRichExternalCatalogCase);
 
 export function describeChannelPluginCatalogEntriesContract() {
   const cases: ChannelCatalogContractCase[] = [
@@ -232,14 +223,15 @@ export function describeChannelPluginCatalogEntriesContract() {
         );
         const catalogPath = path.join(stateDir, "catalog.json");
         writeDiscoveredChannelPlugin(stateDir);
-        writeCatalog(
-          catalogPath,
-          createCatalogEntry({
-            packageName: "@vendor/demo-channel-catalog",
-            channelId: "demo-channel",
-            label: "Demo Channel Catalog",
-          }),
-        );
+        writeJson(catalogPath, {
+          entries: [
+            createCatalogEntry({
+              packageName: "@vendor/demo-channel-catalog",
+              channelId: "demo-channel",
+              label: "Demo Channel Catalog",
+            }),
+          ],
+        });
         return {
           channelId: "demo-channel",
           catalogPaths: [catalogPath],
@@ -257,7 +249,6 @@ export function describeChannelPluginCatalogEntriesContract() {
         };
       },
     },
-    createRichExternalCatalogCase(richNpmCatalogFixture),
     {
       name: "pins bare external prerelease package specs to the entry version",
       setup: () => ({
@@ -286,8 +277,7 @@ export function describeChannelPluginCatalogEntriesContract() {
         },
       }),
     },
-    createRichExternalCatalogCase(clawhubCatalogFixture),
-    createRichExternalCatalogCase(yuanbaoCatalogFixture),
+    ...richCatalogCases,
   ];
 
   describe("channel plugin catalog entries contract", () => {
@@ -325,7 +315,7 @@ export function describeChannelPluginCatalogPathResolutionContract() {
       );
       const catalogPath = path.join(dir, relativePath);
       fs.mkdirSync(path.dirname(catalogPath), { recursive: true });
-      writeCatalog(catalogPath, createCatalogEntry(entry));
+      writeJson(catalogPath, { entries: [createCatalogEntry(entry)] });
       expect(
         listRawChannelPluginCatalogEntries({ env: { ...process.env, ...env(dir) } }).map(
           (item) => item.id,

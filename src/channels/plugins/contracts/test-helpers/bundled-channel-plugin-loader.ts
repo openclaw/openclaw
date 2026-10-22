@@ -155,20 +155,24 @@ async function importBundledChannelSourceSurface(
   return (await import(pathToFileURL(sourcePath).href)) as ChannelPluginApiModule;
 }
 
-async function loadBundledChannelDirectoryContractSurface(
+async function loadBundledChannelSurface(
   id: ChannelId,
-): Promise<ChannelDirectoryContractModule> {
-  return await loadBundledPluginFacade<ChannelDirectoryContractModule>({
+  artifactBasename: string,
+): Promise<ChannelPluginApiModule> {
+  return await loadBundledPluginFacade<ChannelPluginApiModule>({
     pluginId: id,
-    artifactBasename: "directory-contract-api.js",
+    artifactBasename,
   }).catch((error: unknown) => {
-    if (isMissingBundledArtifact(error, id, "directory-contract-api.js")) {
+    if (
+      artifactBasename === "directory-contract-api.js" &&
+      isMissingBundledArtifact(error, id, artifactBasename)
+    ) {
       throw new MissingBundledDirectoryContractArtifactError(id);
     }
     if (!isBuiltArtifactMissingDependency(error) || !canFallbackToPackageSource()) {
       throw error;
     }
-    return importBundledChannelSourceSurface(id, "directory-contract-api.js");
+    return importBundledChannelSourceSurface(id, artifactBasename);
   });
 }
 
@@ -195,27 +199,21 @@ export function listBundledChannelPluginIds(): readonly ChannelId[] {
 
 /** Returns a bundled channel plugin from its generated public API artifact. */
 export const getBundledChannelPluginAsync = cachePluginLoader(async (id) => {
-  const loaded = await loadBundledPluginFacade<ChannelPluginApiModule>({
-    pluginId: id,
-    artifactBasename: "channel-plugin-api.js",
-  }).catch((error: unknown) => {
-    if (!isBuiltArtifactMissingDependency(error) || !canFallbackToPackageSource()) {
-      throw error;
-    }
-    return importBundledChannelSourceSurface(id);
-  });
+  const loaded = await loadBundledChannelSurface(id, "channel-plugin-api.js");
   return await resolveBundledChannelPluginFromSurface(id, loaded);
 });
 
 export const getBundledChannelDirectoryPluginAsync = cachePluginLoader<
   Pick<ChannelPlugin, "id" | "directory">
 >(async (id) => {
-  const loaded = await loadBundledChannelDirectoryContractSurface(id).catch((error: unknown) => {
-    if (error instanceof MissingBundledDirectoryContractArtifactError) {
-      return null;
-    }
-    throw error;
-  });
+  const loaded = await loadBundledChannelSurface(id, "directory-contract-api.js").catch(
+    (error: unknown) => {
+      if (error instanceof MissingBundledDirectoryContractArtifactError) {
+        return null;
+      }
+      throw error;
+    },
+  );
   return (
     (loaded && findChannelDirectoryContractPlugin(loaded)) ??
     (await getBundledChannelPluginAsync(id)) ??

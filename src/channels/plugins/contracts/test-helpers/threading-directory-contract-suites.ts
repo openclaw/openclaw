@@ -1,19 +1,8 @@
 import { expect } from "vitest";
 import type { OpenClawConfig } from "../../../../config/config.js";
 import type { RuntimeEnv } from "../../../../runtime.js";
-import type {
-  ChannelDirectoryEntry,
-  ChannelThreadingAdapter,
-  ChannelThreadingToolContext,
-} from "../../types.core.js";
+import type { ChannelDirectoryEntry, ChannelThreadingToolContext } from "../../types.core.js";
 import type { ChannelPlugin } from "../../types.plugin.js";
-
-type ChannelReplyTransport = NonNullable<
-  ReturnType<NonNullable<ChannelThreadingAdapter["resolveReplyTransport"]>>
->;
-type ChannelFocusedBindingContext = NonNullable<
-  ReturnType<NonNullable<ChannelThreadingAdapter["resolveFocusedBinding"]>>
->;
 
 const contractRuntime = new Proxy(Object.create(null), {
   get(_target, property) {
@@ -27,10 +16,14 @@ function expectOptionalType(value: unknown, type: string | string[]) {
   }
 }
 
+function expectNonemptyString(value: string) {
+  expect(typeof value).toBe("string");
+  expect(value.trim()).not.toBe("");
+}
+
 function expectDirectoryEntryShape(entry: ChannelDirectoryEntry) {
   expect(["user", "group", "channel"]).toContain(entry.kind);
-  expect(typeof entry.id).toBe("string");
-  expect(entry.id.trim()).not.toBe("");
+  expectNonemptyString(entry.id);
   for (const value of [entry.name, entry.handle, entry.avatarUrl]) {
     expectOptionalType(value, "string");
   }
@@ -51,20 +44,6 @@ function expectThreadingToolContextShape(context: ChannelThreadingToolContext) {
   }
   expectOptionalType(context.hasRepliedRef, "object");
   expectOptionalType(context.skipCrossContextDecoration, "boolean");
-}
-
-function expectReplyTransportShape(transport: ChannelReplyTransport) {
-  expectOptionalType(transport.replyToId ?? undefined, "string");
-  expectOptionalType(transport.threadId ?? undefined, ["string", "number"]);
-}
-
-function expectFocusedBindingShape(binding: ChannelFocusedBindingContext) {
-  expect(typeof binding.conversationId).toBe("string");
-  expect(binding.conversationId.trim()).not.toBe("");
-  expectOptionalType(binding.parentConversationId, "string");
-  expect(["current", "child"]).toContain(binding.placement);
-  expect(typeof binding.labelNoun).toBe("string");
-  expect(binding.labelNoun.trim()).not.toBe("");
 }
 
 export function expectChannelThreadingReturnValuesNormalized(
@@ -113,8 +92,7 @@ export function expectChannelThreadingReturnValuesNormalized(
     replyToId: null,
   });
   if (autoThreadId !== undefined) {
-    expect(typeof autoThreadId).toBe("string");
-    expect(autoThreadId.trim()).not.toBe("");
+    expectNonemptyString(autoThreadId);
   }
 
   const replyTransport = threading?.resolveReplyTransport?.({
@@ -123,7 +101,8 @@ export function expectChannelThreadingReturnValuesNormalized(
     replyToId: "msg-0",
   });
   if (replyTransport) {
-    expectReplyTransportShape(replyTransport);
+    expectOptionalType(replyTransport.replyToId ?? undefined, "string");
+    expectOptionalType(replyTransport.threadId ?? undefined, ["string", "number"]);
   }
 
   const focusedBinding = threading?.resolveFocusedBinding?.({
@@ -131,7 +110,10 @@ export function expectChannelThreadingReturnValuesNormalized(
     context: context(),
   });
   if (focusedBinding) {
-    expectFocusedBindingShape(focusedBinding);
+    expectNonemptyString(focusedBinding.conversationId);
+    expectOptionalType(focusedBinding.parentConversationId, "string");
+    expect(["current", "child"]).toContain(focusedBinding.placement);
+    expectNonemptyString(focusedBinding.labelNoun);
   }
 }
 

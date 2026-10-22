@@ -2,8 +2,8 @@ import { expect } from "vitest";
 import type { AnyChannelPlugin as ChannelPlugin } from "../../types.plugin.js";
 import type { channelPluginSurfaceKeys } from "./manifest.js";
 
-function expectCallableHook(...hooks: unknown[]) {
-  expect(hooks.some((value) => typeof value === "function")).toBe(true);
+function expectCallableHook<T>(adapter: T | undefined, keys: (keyof T)[]) {
+  expect(keys.some((key) => typeof adapter?.[key] === "function")).toBe(true);
 }
 
 export function expectChannelSurfaceContract(params: {
@@ -27,49 +27,44 @@ export function expectChannelSurfaceContract(params: {
   }
 
   if (surface === "outbound") {
-    const outbound = plugin.outbound;
-    expect(["direct", "gateway", "hybrid"]).toContain(outbound?.deliveryMode);
-    expectCallableHook(
-      outbound?.sendPayload,
-      outbound?.sendFormattedText,
-      outbound?.sendFormattedMedia,
-      outbound?.sendText,
-      outbound?.sendMedia,
-      outbound?.sendPoll,
-    );
+    expect(["direct", "gateway", "hybrid"]).toContain(plugin.outbound?.deliveryMode);
+    expectCallableHook(plugin.outbound, [
+      "sendPayload",
+      "sendFormattedText",
+      "sendFormattedMedia",
+      "sendText",
+      "sendMedia",
+      "sendPoll",
+    ]);
     return;
   }
 
   if (surface === "messaging") {
     const messaging = plugin.messaging;
-    expectCallableHook(
-      messaging?.normalizeTarget,
-      messaging?.inferTargetChatType,
-      messaging?.buildCrossContextPresentation,
-      messaging?.hasStructuredReplyPayload,
-      messaging?.formatTargetDisplay,
-      messaging?.resolveOutboundSessionRoute,
-    );
-    if (messaging?.targetResolver) {
+    expectCallableHook(messaging, [
+      "normalizeTarget",
+      "inferTargetChatType",
+      "buildCrossContextPresentation",
+      "hasStructuredReplyPayload",
+      "formatTargetDisplay",
+      "resolveOutboundSessionRoute",
+    ]);
+    const resolver = messaging?.targetResolver;
+    if (resolver) {
       // Optional resolvers must expose callable hooks or stable tool-UX metadata.
-      for (const hook of [
-        messaging.targetResolver.looksLikeId,
-        messaging.targetResolver.resolveTarget,
-      ]) {
+      for (const hook of [resolver.looksLikeId, resolver.resolveTarget]) {
         if (hook) {
           expect(typeof hook).toBe("function");
         }
       }
-      if (messaging.targetResolver.hint !== undefined) {
-        expect(typeof messaging.targetResolver.hint).toBe("string");
-        expect(messaging.targetResolver.hint.trim()).not.toBe("");
+      if (resolver.hint !== undefined) {
+        expect(typeof resolver.hint).toBe("string");
+        expect(resolver.hint.trim()).not.toBe("");
       }
-      if (messaging.targetResolver.reservedLiterals !== undefined) {
-        expect(Array.isArray(messaging.targetResolver.reservedLiterals)).toBe(true);
+      if (resolver.reservedLiterals !== undefined) {
+        expect(Array.isArray(resolver.reservedLiterals)).toBe(true);
         expect(
-          messaging.targetResolver.reservedLiterals.every(
-            (value) => typeof value === "string" && value.trim(),
-          ),
+          resolver.reservedLiterals.every((value) => typeof value === "string" && value.trim()),
         ).toBe(true);
       }
     }
@@ -77,38 +72,35 @@ export function expectChannelSurfaceContract(params: {
   }
 
   if (surface === "threading") {
-    const threading = plugin.threading;
-    expectCallableHook(
-      threading?.resolveReplyToMode,
-      threading?.buildToolContext,
-      threading?.resolveAutoThreadId,
-      threading?.resolveReplyTransport,
-      threading?.resolveFocusedBinding,
+    expectCallableHook(plugin.threading, [
+      "resolveReplyToMode",
+      "buildToolContext",
+      "resolveAutoThreadId",
+      "resolveReplyTransport",
+      "resolveFocusedBinding",
       // source-reply-mirror.ts permits target matching without reply-shaping hooks.
-      threading?.matchesToolContextTarget,
-    );
+      "matchesToolContextTarget",
+    ]);
     return;
   }
 
   if (surface === "directory") {
-    const directory = plugin.directory;
-    expectCallableHook(
-      directory?.self,
-      directory?.listPeers,
-      directory?.listPeersLive,
-      directory?.listGroups,
-      directory?.listGroupsLive,
-      directory?.listGroupMembers,
-    );
+    expectCallableHook(plugin.directory, [
+      "self",
+      "listPeers",
+      "listPeersLive",
+      "listGroups",
+      "listGroupsLive",
+      "listGroupMembers",
+    ]);
     return;
   }
 
-  const gateway = plugin.gateway;
-  expectCallableHook(
-    gateway?.startAccount,
-    gateway?.stopAccount,
-    gateway?.loginWithQrStart,
-    gateway?.loginWithQrWait,
-    gateway?.logoutAccount,
-  );
+  expectCallableHook(plugin.gateway, [
+    "startAccount",
+    "stopAccount",
+    "loginWithQrStart",
+    "loginWithQrWait",
+    "logoutAccount",
+  ]);
 }

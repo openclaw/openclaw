@@ -191,10 +191,6 @@ async function ensureManager(id: "discord" | "imessage" | "telegram") {
   managers[id] = manager;
 }
 
-async function prepareMatrixSessionBindingContract() {
-  resetMatrixSessionBindingStateDir();
-}
-
 async function prepareTelegramSessionBindingContract() {
   const telegramPlugin = await getBindingPlugin("telegram");
   const { setTelegramRuntime } = await loadBundledPluginFacade<{
@@ -224,11 +220,36 @@ type SessionBindingContractFixture = {
   label: string;
   metadata?: Record<string, unknown>;
   placements: SessionBindingCapabilities["placements"];
-  preload: () => Promise<unknown>;
-  beforeEach?: () => Promise<void>;
-  ensureManager: () => Promise<void>;
-  restartBindingManager?: () => Promise<void>;
 };
+
+async function preloadBindingContract(id: SessionBindingContractChannelId) {
+  return id === "matrix" || id === "feishu" ? getContractApi(id) : getBindingPlugin(id);
+}
+
+async function prepareBindingContract(id: SessionBindingContractChannelId) {
+  await stopManager(id);
+  if (id === "matrix") {
+    resetMatrixSessionBindingStateDir();
+  } else if (id === "telegram") {
+    await prepareTelegramSessionBindingContract();
+  } else if (id !== "feishu") {
+    registerPlugin(id, await getBindingPlugin(id));
+  }
+}
+
+async function ensureBindingContractManager(id: SessionBindingContractChannelId) {
+  if (id === "matrix") {
+    await createContractMatrixThreadBindingManager();
+  } else if (id === "feishu") {
+    const { createFeishuThreadBindingManager } = await getContractApi<FeishuContractApi>(id);
+    managers.feishu ??= createFeishuThreadBindingManager({
+      accountId: "default",
+      cfg: baseSessionBindingCfg,
+    });
+  } else {
+    await ensureManager(id);
+  }
+}
 
 function createSessionBindingContractEntry(
   fixture: SessionBindingContractFixture,
@@ -242,12 +263,9 @@ function createSessionBindingContractEntry(
 
   return {
     preload: async () => {
-      await fixture.preload();
+      await preloadBindingContract(fixture.id);
     },
-    beforeEach: async () => {
-      await stopManager(fixture.id);
-      await fixture.beforeEach?.();
-    },
+    beforeEach: () => prepareBindingContract(fixture.id),
     expectedCapabilities: {
       adapterAvailable: true,
       bindSupported: true,
@@ -255,14 +273,14 @@ function createSessionBindingContractEntry(
       placements: fixture.placements,
     },
     getCapabilities: async () => {
-      await fixture.ensureManager();
+      await ensureBindingContractManager(fixture.id);
       return getSessionBindingService().getCapabilities({
         channel: fixture.id,
         accountId: conversation.accountId,
       });
     },
     bindAndResolve: async () => {
-      await fixture.ensureManager();
+      await ensureBindingContractManager(fixture.id);
       const binding = await getSessionBindingService().bind({
         targetSessionKey: fixture.targetSessionKey,
         targetKind: fixture.targetKind ?? "subagent",
@@ -280,8 +298,10 @@ function createSessionBindingContractEntry(
         ...conversation,
         targetSessionKey: fixture.targetSessionKey,
       });
-      if (fixture.restartBindingManager) {
-        await fixture.restartBindingManager();
+      if (fixture.id === "imessage") {
+        await stopManager(fixture.id);
+        closeOpenClawStateDatabaseForTest();
+        await ensureBindingContractManager(fixture.id);
         expectResolvedSessionBinding({
           ...conversation,
           targetSessionKey: fixture.targetSessionKey,
@@ -308,11 +328,6 @@ const sessionBindingContractEntries = {
     targetSessionKey: "agent:discord:child:thread-1",
     label: "discord-child",
     placements: ["current", "child"],
-    preload: () => getBindingPlugin("discord"),
-    beforeEach: async () => {
-      registerPlugin("discord", await getBindingPlugin("discord"));
-    },
-    ensureManager: () => ensureManager("discord"),
   }),
   feishu: createSessionBindingContractEntry({
     id: "feishu",
@@ -321,15 +336,6 @@ const sessionBindingContractEntries = {
     targetSessionKey: "agent:feishu:child:thread-1",
     label: "feishu-child",
     placements: ["current"],
-    preload: () => getContractApi<FeishuContractApi>("feishu"),
-    ensureManager: async () => {
-      const { createFeishuThreadBindingManager } =
-        await getContractApi<FeishuContractApi>("feishu");
-      managers.feishu ??= createFeishuThreadBindingManager({
-        accountId: "default",
-        cfg: baseSessionBindingCfg,
-      });
-    },
   }),
   imessage: createSessionBindingContractEntry({
     id: "imessage",
@@ -340,16 +346,6 @@ const sessionBindingContractEntries = {
     label: "imessage-main",
     metadata: { opaque: { ownerEpoch: 7, capabilities: ["approve", "resume"] } },
     placements: ["current"],
-    preload: () => getBindingPlugin("imessage"),
-    beforeEach: async () => {
-      registerPlugin("imessage", await getBindingPlugin("imessage"));
-    },
-    ensureManager: () => ensureManager("imessage"),
-    restartBindingManager: async () => {
-      await stopManager("imessage");
-      closeOpenClawStateDatabaseForTest();
-      await ensureManager("imessage");
-    },
   }),
   matrix: createSessionBindingContractEntry({
     id: "matrix",
@@ -359,11 +355,6 @@ const sessionBindingContractEntries = {
     targetSessionKey: "agent:matrix:thread",
     label: "matrix-thread",
     placements: ["current", "child"],
-    preload: () => getContractApi<MatrixContractApi>("matrix"),
-    beforeEach: prepareMatrixSessionBindingContract,
-    ensureManager: async () => {
-      await createContractMatrixThreadBindingManager();
-    },
   }),
   telegram: createSessionBindingContractEntry({
     id: "telegram",
@@ -371,9 +362,6 @@ const sessionBindingContractEntries = {
     targetSessionKey: "agent:telegram:child:thread-1",
     label: "telegram-topic",
     placements: ["current", "child"],
-    preload: () => getBindingPlugin("telegram"),
-    beforeEach: prepareTelegramSessionBindingContract,
-    ensureManager: () => ensureManager("telegram"),
   }),
 } satisfies Record<SessionBindingContractChannelId, Omit<SessionBindingContractEntry, "id">>;
 
