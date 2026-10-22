@@ -510,38 +510,6 @@ describe("ClickClack discussion service", () => {
     );
   });
 
-  it("adopts a remotely created channel by external reference after an interrupted open", async () => {
-    const h = createHarness({ label: "Release Planning", category: "Projects" });
-    const sessionKey = "agent:main:recover";
-    const externalRef = await reserveTestExternalRef(h.runtime, sessionKey);
-    h.channels.mockResolvedValue([
-      discussionChannel({
-        id: "chn_recovered",
-        route_id: "recovered-route",
-        name: "release-planning",
-        external_managed: true,
-        external_ref: externalRef,
-        external_url: "https://control.example/control/chat/main/release-planning-12345678",
-        sidebar_section: "Projects",
-      }),
-    ]);
-    legacyPatchResponse(h, {
-      id: "chn_recovered",
-      route_id: "recovered-route",
-      name: "release-planning",
-    });
-    const opened = await h.service.open(sessionKey);
-    expect(h.createChannel).not.toHaveBeenCalled();
-    expectPatched(h, { external_ref: externalRef, external_managed: true }, "chn_recovered");
-    expect(h.store.lookup(sessionKey)).not.toHaveProperty("displayTitle");
-    expect(opened).toEqual({
-      state: "open",
-      embedUrl:
-        "https://clickclack.example/embed/channel/team-route/recovered-route?openclawHostTheme=1",
-      openUrl: "https://clickclack.example/app/team-route/recovered-route",
-    });
-  });
-
   it("reuses a pending generation after an interrupted create", async () => {
     const h = createHarness({ label: "Interrupted create" });
     const sessionKey = "agent:main:interrupted-create";
@@ -701,8 +669,14 @@ describe("ClickClack discussion service", () => {
       external_ref: externalRef,
       archived: false,
     });
-    await h.service.open(sessionKey);
-    expectPatched(h, { external_ref: externalRef }, "chn_ambiguous_old");
+    expect(await h.service.open(sessionKey)).toEqual({
+      state: "open",
+      embedUrl:
+        "https://clickclack.example/embed/channel/team-route/ambiguous-old-route?openclawHostTheme=1",
+      openUrl: "https://clickclack.example/app/team-route/ambiguous-old-route",
+    });
+    expectPatched(h, { external_ref: externalRef, external_managed: true }, "chn_ambiguous_old");
+    expect(h.store.lookup(sessionKey)).not.toHaveProperty("displayTitle");
     expect(h.createChannel).toHaveBeenCalledTimes(1);
     expect(h.store.lookup(sessionKey)).toMatchObject({
       sessionId: "new-session",
