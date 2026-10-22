@@ -1,6 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { canonicalizePath } from "../../agents/utils/paths.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { makeCronJob } from "../../cron/delivery.test-helpers.js";
+import { resolveCronJobsStorePath, saveCronJobsStore } from "../../cron/store.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import {
   createOpenClawTestState,
@@ -19,7 +25,9 @@ import {
   writeWorkshopSkillFile,
   type WorkshopMutationContext,
 } from "./library.js";
+import { registerSkillUsageTracking } from "./skill-usage.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
+import { archiveUnusedWorkshopSkills } from "./unused-archive.js";
 
 let state: OpenClawTestState;
 let ctx: WorkshopMutationContext;
@@ -309,4 +317,106 @@ it("keeps a longer legacy skill manageable while new names stay within 63 charac
   expect(await readLive(legacy)).toContain("step 1");
 
   await refuses(create("x", `${legacy}-copy`), /use 1-63 lowercase letters/);
+});
+
+describe("archiveUnusedWorkshopSkills", () => {
+  const DAY_MS = 24 * 60 * 60_000;
+  function agentConfig(runtime = "openclaw", sandbox?: "non-main"): OpenClawConfig {
+    return {
+      agents: {
+        defaults: {
+          model: "anthropic/claude-test",
+          models: { "anthropic/*": { agentRuntime: { id: runtime } } },
+          ...(sandbox ? { sandbox: { mode: sandbox } } : {}),
+        },
+      },
+    };
+  }
+  const config = agentConfig();
+  let stopTracking: (() => Promise<void>) | undefined;
+  const archiveUnused = (cfg = config, now = Date.now() + 31 * DAY_MS) =>
+    archiveUnusedWorkshopSkills(cfg, "main", now);
+  const createNamed = (name: string) => create("1. Do it.", name, `${name} steps`);
+  beforeEach(() => {
+    ctx = { config, agentId: "main", actor: "agent" };
+    setRuntimeConfigSnapshot(config);
+    stopTracking = registerSkillUsageTracking();
+  });
+  afterEach(async () => {
+    await stopTracking?.();
+    stopTracking = undefined;
+  });
+
+  it("archives only learned skills unused for 30 days, as an undoable change", async () => {
+    const createdAtMs = Date.now();
+    await createNamed("stale");
+    await createNamed("used");
+    expect(await archiveUnused(config, createdAtMs + 29 * DAY_MS)).toEqual([]);
+    await stateWorker.executeOpenClawStateWorker(captureOpenClawStateWorkerContext(), {
+      type: "skills.usage.record",
+      input: {
+        skillFile: canonicalizePath(skillPath("used", "SKILL.md")),
+        skillKey: "used",
+        skillName: "used",
+        skillSource: "workspace",
+        agentId: "main",
+        ts: createdAtMs + 20 * DAY_MS,
+      },
+    });
+    expect(await archiveUnused(config, createdAtMs + 31 * DAY_MS)).toMatchObject([
+      {
+        skillName: "stale",
+        action: "archive",
+        actor: "curator",
+        summary: "archived: unused for 30 days",
+        versionId: expect.any(String),
+      },
+    ]);
+    expect(await liveNames()).toEqual(["used"]);
+    await restoreWorkshopSkill({ config, agentId: "main", actor: "user" }, { name: "stale" });
+    expect(await liveNames()).toEqual(["stale", "used"]);
+  });
+
+  it("keeps a skill that a cron job names, even a paused one", async () => {
+    await createNamed("quarterly-taxes");
+    await createNamed("quarterly-taxes-old");
+    await saveCronJobsStore(resolveCronJobsStorePath(), {
+      version: 1,
+      jobs: [
+        makeCronJob({
+          enabled: false,
+          payload: {
+            kind: "agentTurn",
+            message: "Use the quarterly-taxes skill to file.",
+          },
+        }),
+      ],
+    });
+    expect((await archiveUnused()).map((change) => change.skillName)).toEqual([
+      "quarterly-taxes-old",
+    ]);
+  });
+
+  it.each(["runtime", "sandbox", "tracking", "learning"] as const)(
+    "fails closed at the %s guard",
+    async (guard) => {
+      await createNamed("stale");
+      const cfg = agentConfig(
+        guard === "runtime" ? "codex" : "openclaw",
+        guard === "sandbox" ? "non-main" : undefined,
+      );
+      if (guard === "tracking") {
+        await stopTracking?.();
+        stopTracking = undefined;
+      }
+      if (guard === "learning") {
+        setRuntimeConfigSnapshot({
+          ...config,
+          skills: { workshop: { autonomous: { mode: "off" } } },
+        });
+      }
+      expect(await archiveUnused(cfg)).toEqual([]);
+      expect(await liveNames()).toEqual(["stale"]);
+    },
+  );
 });
