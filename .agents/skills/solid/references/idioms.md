@@ -118,17 +118,15 @@ using it to mirror owner state. Gateway decisions and synchronous domain state
 remain in their existing TypeScript owners.
 
 Split effects into tracked preparation and imperative application. For example,
-`components/solid/tabs.tsx` collects options and items in compute, then calls the
-plain tabs controller's `sync()` after DOM bindings. That controller integration
-is an effect; calculating which tab is selected is a derivation.
+`lib/reactive/shadow-styles.ts` tracks the style list, binds it to the external
+shadow root in apply, and returns the binding's disposal. That DOM integration
+is an effect; calculating the style list is a derivation.
 
 ```ts
-createEffect(
-  () => props.title,
-  (title) => {
-    element.title = title;
-  },
-);
+createEffect(getStyles, (styles) => {
+  const binding = bindShadowStyles(getElement(), styles);
+  return () => binding.dispose();
+});
 ```
 
 An apply callback is untracked and unowned. Capture all reactive facts in

@@ -172,6 +172,13 @@ Keep admission and write settlement in the existing owner. Derive an
 optimistic store from the owner's readable result; never write optimistic
 values into its authoritative snapshot.
 
+An action schedules its transaction drain before resolving its promise; do not
+add `flush()` solely because the caller awaits it. The
+[update card](../../../../ui/src/components/sidebar-update-card.tsx) awaits its
+target check and then revalidates live authority before opening confirmation.
+Its test publishes new target props as that check completes, proving the
+confirmation reads the fresh target without a forced flush.
+
 ```ts
 // Construct these inside a memo keyed by scope() and connectionEpoch().
 const [jobs, setJobs] = createOptimisticStore(
@@ -533,9 +540,8 @@ action made Solid retain runtime initializers; the generated boot groups
 initially put them beside Markdown code, which pulled that entire chunk into
 startup even though cron stayed lazy. The chunking owner keeps these small
 runtime modules together. Do not fix grouping by importing private package
-internals. The one-time shared Solid action/optimistic runtime cost was explicitly
-approved for W-SOLID2-RECIPES, with its offset tracked by HF-STARTUP-BUDGET;
-that exception does not authorize later pages to increase startup budgets.
+internals. The measured startup ratchet owns the budget; later pages must not
+increase a boot surface beyond its build-variance allowance.
 
 ## Reveal sibling regions
 
