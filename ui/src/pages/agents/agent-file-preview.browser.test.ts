@@ -19,6 +19,8 @@ type Params = Parameters<typeof AgentFiles>[0] &
     | "agentFileActive"
     | "agentFileEditors"
     | "agentFilesLoading"
+    | "agentFileRead"
+    | "agentFileOutcome"
     | "agentFileSaving"
     | "agentFileConflict"
   >;

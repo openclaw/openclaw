@@ -107,7 +107,7 @@ it("leaves Agents through RouterOutlet while its admitted file write settles", a
     editor.value = "Saved after leaving";
     editor.dispatchEvent(new Event("input", { bubbles: true }));
     const save = await waitForSolid(() =>
-      mounted.getByRole<HTMLButtonElement>("button", { name: "Save", exact: true }),
+      mounted.getByRole<HTMLButtonElement>("button", { name: /^Save$/ }),
     );
     save.click();
     await waitForSolid(() =>
