@@ -35,7 +35,7 @@ openclaw configure --section gateway --section daemon
 
 Selecting `gateway`, `daemon`, or `health` (or running the full wizard with no `--section`) prompts where the Gateway runs and updates `gateway.mode`. Section filters that skip all three go straight to the requested setup with no gateway-mode prompt. Picking remote gateway mode writes the remote config and exits immediately. It does not run local-only steps like plugin installs.
 
-Gateway, daemon, health, and web settings do not require an agent owner. Workspace, model, memory, plugin, skill, and channel setup use the configured System Agent in an explicit fleet. If none is configured, the wizard asks which existing agent to use. That selection applies to the remaining agent-scoped sections without changing the System Agent setting. Channel setup uses the selected workspace for plugin discovery. Removing channel configuration does not require an agent selection.
+Gateway, daemon, health, and web settings do not require an agent owner. Workspace, model, memory, plugin, skill, and channel setup use the configured System Agent in an explicit fleet. If none is configured, the wizard asks which existing agent to use. In an explicit fleet with two or more agents, the model section first asks for its scope; see [Fleet model scope](#fleet-model-scope). That selection applies to the remaining agent-scoped sections without changing the System Agent setting. Channel setup uses the selected workspace for plugin discovery. Removing channel configuration does not require an agent selection.
 
 <Note>
 `openclaw configure` requires an interactive terminal (both stdin and stdout must be TTYs). Without one it prints the equivalent non-interactive `openclaw config get|set|patch|validate` commands and exits with an error instead of partially running.
@@ -67,6 +67,13 @@ Reconfiguring trusted-proxy mode defaults the loopback prompt to the existing op
 
 Re-running provider auth from configure preserves an existing `agents.defaults.model.primary`, even when the provider's auth step returns a config patch with its own recommended default model. Adding or reauthing a provider makes its models available without taking over your current primary model. Use `openclaw models auth login --provider <id> --set-default` or `openclaw models set <model>` to intentionally change the default model.
 </Note>
+
+### Fleet model scope
+
+In an explicit fleet (`agents.ownership: "explicit"`) with two or more agents, the model section asks **Where should this model setup apply?** Single-agent setups skip this prompt.
+
+- **One agent** (default): pick the agent that receives the model policy; the System Agent is preselected. The primary model, allowlist, and model catalog entries are written to that agent's `agents.entries.<id>`, and provider credentials are stored in that agent's auth store.
+- **Shared defaults**: the primary model, allowlist, and model catalog entries are written to `agents.defaults`, and provider credentials are stored in the shared auth store that every agent inherits. Agents with their own model settings keep them. Without a configured System Agent, the wizard asks which agent to use for provider discovery.
 
 When configure starts from a provider auth choice, the default-model and model-policy pickers prefer that provider automatically. For paired providers such as Volcengine and BytePlus, the same preference also matches their coding-plan variants (`volcengine-plan/*`, `byteplus-plan/*`). If the preferred-provider filter would produce an empty list, configure falls back to the unfiltered catalog instead of showing a blank picker.
 
