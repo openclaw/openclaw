@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
@@ -13,17 +14,11 @@ function readBody(request: IncomingMessage, receive: (body: string) => void) {
 }
 function expectStopped(client: UrbitSSEClient, requests: string[], count: number) {
   expect(requests).toHaveLength(count);
-  expect(client.isConnected).toBe(false);
-  expect(client.streamRelease).toBeNull();
+  expect(client).toMatchObject({ isConnected: false, streamRelease: null });
 }
 async function listen(server: Server): Promise<string> {
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
   runningServers.push(server);
   const address = server.address() as AddressInfo;
   return `http://127.0.0.1:${address.port}`;
@@ -32,11 +27,13 @@ function createClient(
   baseUrl: string,
   options: ConstructorParameters<typeof UrbitSSEClient>[2] = {},
 ) {
-  return new UrbitSSEClient(baseUrl, proofCookie, {
+  const client = new UrbitSSEClient(baseUrl, proofCookie, {
     ship: "zod",
     ssrfPolicy: { allowPrivateNetwork: true },
     ...options,
   });
+  cleanups.push(() => client.stopReceiving());
+  return client;
 }
 function trackConnectTimeout() {
   const armed = vi.spyOn(globalThis, "setTimeout");
@@ -66,25 +63,24 @@ afterEach(async () => {
   );
 });
 describe("UrbitSSEClient real transport ownership", () => {
-  it("cancels unread non-OK stream bodies and clears the connect timeout", async () => {
+  it.each(["status", "socket"])("clears connect timeout on %s failure", async (failure) => {
     const closed = Promise.withResolvers<void>();
     const server = createServer((request, response) => {
       request.socket.once("close", () => closed.resolve());
       response.writeHead(503, { "Content-Type": "text/event-stream" });
       response.write("retry: 1000\n");
     });
+    if (failure === "socket") {
+      server.on("connection", (socket) => socket.destroy());
+    }
     const client = createClient(await listen(server));
     const expectTimeoutCleared = trackConnectTimeout();
-    await expect(client.openStream()).rejects.toThrow("Stream connection failed: 503");
-    await expect(closed.promise).resolves.toBeUndefined();
-    expectTimeoutCleared();
-  });
-  it("clears the connect timer when production urbitFetch rejects", async () => {
-    const server = createServer();
-    server.on("connection", (socket) => socket.destroy());
-    const client = createClient(await listen(server));
-    const expectTimeoutCleared = trackConnectTimeout();
-    await expect(client.openStream()).rejects.toThrow();
+    if (failure === "socket") {
+      await expect(client.openStream()).rejects.toThrow();
+    } else {
+      await expect(client.openStream()).rejects.toThrow("Stream connection failed: 503");
+      await expect(closed.promise).resolves.toBeUndefined();
+    }
     expectTimeoutCleared();
   });
   it.each([
@@ -132,11 +128,7 @@ describe("UrbitSSEClient real transport ownership", () => {
     const delivered: unknown[] = [];
     const errors: string[] = [];
     const requestBodies: unknown[] = [];
-    const requests: Array<{
-      method: string | undefined;
-      url: string | undefined;
-      cookie: string | undefined;
-    }> = [];
+    const requests: string[] = [];
     let streamSocket: import("node:net").Socket | undefined;
     const data = ['data: {"id":1,', 'data: "json":{"message":"delivered😀"}}'];
     const event = ["id:21", ...data, "", ""].join(newline);
@@ -144,7 +136,7 @@ describe("UrbitSSEClient real transport ownership", () => {
     // fails an assertion instead of waiting for a timeout or reconnect.
     const wireBody = `${event}id:22\ndata:{"id":1,"json":{"marker":"sentinel"}}\n\n`;
     const server = createServer((request, response) => {
-      requests.push({ method: request.method, url: request.url, cookie: request.headers.cookie });
+      requests.push(`${request.method} ${request.url} ${request.headers.cookie}`);
       if (request.method === "GET") {
         streamSocket = request.socket;
         streamSocket.once("close", () => streamClosed.resolve());
@@ -162,47 +154,43 @@ describe("UrbitSSEClient real transport ownership", () => {
     const client = createClient(await listen(server), {
       logger: { error: (message) => errors.push(message) },
     });
-    try {
-      await client.subscribe({
-        app: "chat",
-        path: "/inbox",
-        event: (payload) => {
-          delivered.push(payload);
-          if (
-            typeof payload === "object" &&
-            payload !== null &&
-            "marker" in payload &&
-            payload.marker === "sentinel"
-          ) {
-            sentinel.resolve();
-          }
-        },
-      });
-      await client.connect();
-      await withinTest(sentinel.promise, signal);
-      expect(delivered).toEqual([{ message: "delivered😀" }, { marker: "sentinel" }]);
-      expect(errors).toEqual([]);
-      expect(requestBodies).toContainEqual([
-        expect.objectContaining({ action: "ack", "event-id": 21 }),
-      ]);
-      expect(requests.filter((request) => request.method === "GET")).toEqual([
-        { method: "GET", url: `/~/channel/${client.channelId}`, cookie: proofCookie },
-      ]);
-      expect(streamSocket?.destroyed).toBe(false);
-      await client.close();
-      await withinTest(streamClosed.promise, signal);
-      expect(client.streamRelease).toBeNull();
-    } finally {
-      await client.close();
-    }
+    cleanups.push(() => client.close());
+    await client.subscribe({
+      app: "chat",
+      path: "/inbox",
+      event: (payload) => {
+        delivered.push(payload);
+        if (
+          typeof payload === "object" &&
+          payload !== null &&
+          "marker" in payload &&
+          payload.marker === "sentinel"
+        ) {
+          sentinel.resolve();
+        }
+      },
+    });
+    await client.connect();
+    await withinTest(sentinel.promise, signal);
+    expect(delivered).toEqual([{ message: "delivered😀" }, { marker: "sentinel" }]);
+    expect(errors).toEqual([]);
+    expect(requestBodies).toContainEqual([
+      expect.objectContaining({ action: "ack", "event-id": 21 }),
+    ]);
+    expect(requests.filter((request) => request.startsWith("GET "))).toEqual([
+      `GET /~/channel/${client.channelId} ${proofCookie}`,
+    ]);
+    expect(streamSocket?.destroyed).toBe(false);
+    await client.close();
+    await withinTest(streamClosed.promise, signal);
+    expect(client.streamRelease).toBeNull();
   });
 });
-async function startReconnectFixture(holdStreamAfter = Number.POSITIVE_INFINITY) {
+async function startReconnectFixture(holdStreamAfter = Number.POSITIVE_INFINITY, missing = false) {
   const requests: string[] = [];
   const logs: string[] = [];
   let unauthorizedRequests = 0;
   let streamRequests = 0;
-  let channelExists = false;
   const actions: Array<{ action: string }> = [];
   const retryScheduled = Promise.withResolvers<void>();
   const onReconnect = vi.fn();
@@ -214,8 +202,13 @@ async function startReconnectFixture(holdStreamAfter = Number.POSITIVE_INFINITY)
     }
     requests.push(`${request.method ?? "GET"} ${request.url ?? "/"}`);
     if (request.method === "GET") {
+      streamRequests++;
+      if (missing && streamRequests === 2) {
+        response.writeHead(404).end();
+        return;
+      }
       response.writeHead(200, { "Cache-Control": "no-cache", "Content-Type": "text/event-stream" });
-      if (++streamRequests >= holdStreamAfter) {
+      if (streamRequests >= holdStreamAfter) {
         response.write(": connected\n\n");
       } else {
         response.end();
@@ -229,7 +222,6 @@ async function startReconnectFixture(holdStreamAfter = Number.POSITIVE_INFINITY)
     readBody(request, (body) => {
       const received = JSON.parse(body) as Array<{ action: string }>;
       actions.push(...received);
-      channelExists = !received.some((action) => action.action === "delete");
       response.writeHead(204).end();
     });
   });
@@ -253,7 +245,6 @@ async function startReconnectFixture(holdStreamAfter = Number.POSITIVE_INFINITY)
     logs,
     onReconnect,
     actions,
-    channelExists: () => channelExists,
     unauthorizedRequests: () => unauthorizedRequests,
     async pendingReconnect(signal: AbortSignal) {
       await withinTest(retryScheduled.promise, signal);
@@ -289,14 +280,12 @@ describe("UrbitSSEClient real reconnect shutdown lifecycle", () => {
     await proof.client.subscribe({ app: "chat", path: "/inbox" });
     await proof.client.connect();
     const { reconnect } = await proof.pendingReconnect(signal);
-    expect(proof.channelExists()).toBe(true);
     const actionsBeforeClose = proof.actions.length;
     await proof.client.close();
     const requestsAfterClose = proof.requests.length;
     await withinTest(reconnect, signal);
     expect(proof.onReconnect).not.toHaveBeenCalled();
     expect(proof.requests).toHaveLength(requestsAfterClose);
-    expect(proof.channelExists()).toBe(false);
     expect(proof.actions.slice(actionsBeforeClose)).toEqual([{ action: "delete" }]);
     expect(proof.requests.some((request) => request.startsWith("DELETE /~/channel/"))).toBe(false);
   });
@@ -335,35 +324,41 @@ describe("UrbitSSEClient real reconnect shutdown lifecycle", () => {
       });
       const client = createClient(await listen(server));
       const reconnect = client.attemptReconnect();
-      try {
-        await vi.advanceTimersByTimeAsync(1_000);
-        const response = await withinTest(pending.promise, signal);
-        client.stopReceiving();
-        const requestsAfterStop = requests.length;
-        response.writeHead(204).end();
-        await withinTest(reconnect, signal);
-        expectStopped(client, requests, requestsAfterStop);
-      } finally {
-        client.stopReceiving();
-      }
+      await vi.advanceTimersByTimeAsync(1_000);
+      const response = await withinTest(pending.promise, signal);
+      client.stopReceiving();
+      const requestsAfterStop = requests.length;
+      response.writeHead(204).end();
+      await withinTest(reconnect, signal);
+      expectStopped(client, requests, requestsAfterStop);
     },
   );
-  it("still reconnects an uninterrupted authenticated SSE stream", async ({ signal }) => {
-    const proof = await startReconnectFixture(2);
-    const channelId = proof.client.channelId;
-    await proof.client.connect();
-    const { reconnect } = await proof.pendingReconnect(signal);
-    await vi.advanceTimersByTimeAsync(999);
-    expect(proof.onReconnect).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    await withinTest(reconnect, signal);
-    expect(proof.onReconnect).toHaveBeenCalledOnce();
-    expect(proof.requests.filter((request) => request.startsWith("GET /~/channel/"))).toEqual([
-      `GET /~/channel/${channelId}`,
-      `GET /~/channel/${channelId}`,
-    ]);
-    expect(proof.client.channelId).toBe(channelId);
-    expect(proof.client.reconnectAttempts).toBe(0);
-    expect(proof.unauthorizedRequests()).toBe(0);
-  });
+  it.for([false, true])(
+    "reconnects and restores subscriptions (missing channel: %s)",
+    async (missing, { signal }) => {
+      const proof = await startReconnectFixture(2, missing);
+      const channelId = proof.client.channelId;
+      await proof.client.subscribe({ app: "chat", path: "/inbox" });
+      await proof.client.connect();
+      const { reconnect } = await proof.pendingReconnect(signal);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(proof.onReconnect).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await withinTest(reconnect, signal);
+      expect(proof.onReconnect).toHaveBeenCalledOnce();
+      expect(proof.requests.filter((request) => request.startsWith("GET /~/channel/"))).toEqual([
+        `GET /~/channel/${channelId}`,
+        `GET /~/channel/${channelId}`,
+        ...(missing ? [`GET /~/channel/${proof.client.channelId}`] : []),
+      ]);
+      expect(proof.client.channelId === channelId).toBe(!missing);
+      expect(proof.actions.filter(({ action }) => action === "subscribe")).toEqual(
+        Array.from({ length: missing ? 2 : 1 }, () =>
+          expect.objectContaining({ app: "chat", path: "/inbox" }),
+        ),
+      );
+      expect(proof.client.reconnectAttempts).toBe(0);
+      expect(proof.unauthorizedRequests()).toBe(0);
+    },
+  );
 });

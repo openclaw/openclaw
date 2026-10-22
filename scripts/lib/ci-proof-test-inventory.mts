@@ -827,7 +827,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "extensions/tlon/src/monitor/approval.test.ts",
   "extensions/tlon/src/monitor/index.history.test.ts",
   "extensions/tlon/src/outbound-tool-trace-sanitize.test.ts",
-  "extensions/tlon/src/urbit/error-body-boundary.test.ts",
   "extensions/tlon/src/urbit/fetch.test.ts",
   "extensions/tlon/src/urbit/send.test.ts",
   "extensions/tokenjuice/index.test.ts",

@@ -11,6 +11,7 @@ vi.mock("@urbit/aura", () => ({
 describe("sendDm", () => {
   const sentAt = 1_700_000_000_000;
   const poke = vi.fn(async () => ({}));
+  const sender = { api: { poke }, fromShip: "~zod" };
   beforeEach(() => {
     vi.clearAllMocks();
     vi.spyOn(Date, "now").mockReturnValue(sentAt);
@@ -18,18 +19,8 @@ describe("sendDm", () => {
   afterEach(() => vi.restoreAllMocks());
 
   it("uses aura v3 helpers for the DM id", async () => {
-    const aura = await import("@urbit/aura");
-    const scot = vi.mocked(aura.scot);
-    const fromUnix = vi.mocked(aura.da.fromUnix);
-
-    const result = await sendDm({
-      api: { poke },
-      fromShip: "~zod",
-      toShip: "~nec",
-      text: "hi",
-    });
-
-    expect(fromUnix).toHaveBeenCalledWith(sentAt);
+    const result = await sendDm({ ...sender, toShip: "~nec", text: "hi" });
+    expect(da.fromUnix).toHaveBeenCalledWith(sentAt);
     expect(scot).toHaveBeenCalledWith("ud", 123n);
     expect(poke).toHaveBeenCalledTimes(1);
     expect(result.messageId).toBe("~zod/mocked-ud");
@@ -37,13 +28,10 @@ describe("sendDm", () => {
   });
 
   it("passes numeric group reply ids through aura formatting", async () => {
-    const aura = await import("@urbit/aura");
-    const scot = vi.mocked(aura.scot);
-    scot.mockReturnValueOnce("~2024.1.1");
+    vi.mocked(scot).mockReturnValueOnce("~2024.1.1");
 
     const result = await sendGroupMessage({
-      api: { poke },
-      fromShip: "~zod",
+      ...sender,
       hostShip: "~nec",
       channelName: "general",
       text: "threaded",
@@ -51,21 +39,12 @@ describe("sendDm", () => {
     });
 
     expect(scot).toHaveBeenCalledWith("ud", 1_700_000_000_000n);
-    const reply = {
-      id: "~2024.1.1",
-      action: {
-        add: { content: [{ inline: ["threaded"] }], author: "~zod", sent: 1_700_000_000_000 },
-      },
-    };
+    const memo = { content: [{ inline: ["threaded"] }], author: "~zod", sent: sentAt };
+    const action = { post: { reply: { id: "~2024.1.1", action: { add: memo } } } };
     expect(poke).toHaveBeenCalledWith({
       app: "channels",
       mark: "channel-action-1",
-      json: {
-        channel: {
-          nest: "chat/~nec/general",
-          action: { post: { reply } },
-        },
-      },
+      json: { channel: { nest: "chat/~nec/general", action } },
     });
     expect(result.receipt.threadId).toBe("~nec/general");
   });
@@ -89,3 +68,4 @@ describe("buildMediaStory", () => {
     ]);
   });
 });
+import { da, scot } from "@urbit/aura";
