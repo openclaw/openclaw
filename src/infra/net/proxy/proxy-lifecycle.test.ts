@@ -48,7 +48,6 @@ import { logInfo, logWarn } from "../../../logger.js";
 import { getActiveManagedProxyTlsOptions, getActiveManagedProxyUrl } from "./active-proxy-state.js";
 import {
   ensureInheritedManagedProxyRoutingActive,
-  LOOPBACK_NO_PROXY,
   registerManagedProxyBrowserCdpBypass,
   registerManagedProxyGatewayLoopbackBypass,
   startProxy as startProxyRuntime,
@@ -204,7 +203,7 @@ describe("startProxy", () => {
     process.env["NO_PROXY"] = "127.0.0.1,localhost,corp.example.com";
     process.env["no_proxy"] = "localhost";
     await startProxy();
-    expect(process.env["NO_PROXY"]).toBe(LOOPBACK_NO_PROXY);
+    expect(process.env["NO_PROXY"]).toBe("127.0.0.1,localhost,localhost.,::1,[::1],127.0.0.0/8");
     expect(process.env["NO_PROXY"]).not.toContain("corp.example.com");
     expect(process.env["no_proxy"]).toBe(process.env["NO_PROXY"]);
   });

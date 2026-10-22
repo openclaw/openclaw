@@ -1,6 +1,5 @@
 import { createNativeSessionBindingScope } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { LOOPBACK_NO_PROXY } from "../../../../src/infra/net/proxy/proxy-lifecycle.js";
 import {
   CodexInferenceAuthorizationError,
   createCodexInferenceModelBinding,
@@ -16,6 +15,8 @@ import {
 } from "./inference-routing.js";
 import type { CodexConfigReadResponse, JsonObject } from "./protocol.js";
 import type { CodexBindingAuthority } from "./session-binding.js";
+
+const MANAGED_LOOPBACK_NO_PROXY = "127.0.0.1,localhost,localhost.,::1,[::1],127.0.0.0/8";
 import { createClientHarness, stubCodexInferenceTransportEnv } from "./test-support.js";
 import { fingerprintCodexThreadConfig } from "./thread-fingerprints.js";
 
@@ -602,14 +603,18 @@ it.each([
     supported: true,
   },
   {
-    env: { ...bothProxies, NO_PROXY: LOOPBACK_NO_PROXY, no_proxy: LOOPBACK_NO_PROXY },
+    env: {
+      ...bothProxies,
+      NO_PROXY: MANAGED_LOOPBACK_NO_PROXY,
+      no_proxy: MANAGED_LOOPBACK_NO_PROXY,
+    },
     supported: true,
   },
   {
     env: {
       ...bothProxies,
-      NO_PROXY: `${LOOPBACK_NO_PROXY},corp.example.com`,
-      no_proxy: `${LOOPBACK_NO_PROXY},corp.example.com`,
+      NO_PROXY: `${MANAGED_LOOPBACK_NO_PROXY},corp.example.com`,
+      no_proxy: `${MANAGED_LOOPBACK_NO_PROXY},corp.example.com`,
     },
     supported: false,
   },

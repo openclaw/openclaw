@@ -38,7 +38,7 @@ export type ProxyHandle = {
 
 const PROXY_ENV_KEYS = ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"] as const;
 const NO_PROXY_ENV_KEYS = ["no_proxy", "NO_PROXY"] as const;
-export const LOOPBACK_NO_PROXY = "127.0.0.1,localhost,localhost.,::1,[::1],127.0.0.0/8";
+const LOOPBACK_NO_PROXY = "127.0.0.1,localhost,localhost.,::1,[::1],127.0.0.0/8";
 const managedLoopbackBypassPolicy: ProxylineBypassPolicy = ({ url }) =>
   getActiveManagedProxyLoopbackMode() === "gateway-only" && isLoopbackProxyUrl(url);
 const PROXY_ACTIVE_KEYS = [
