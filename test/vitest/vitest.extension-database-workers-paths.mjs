@@ -512,8 +512,6 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/voice-call/src/manager.notify.test.ts",
   "extensions/voice-call/src/manager.restore.test.ts",
   "extensions/voice-call/src/manager.test-harness.test.ts",
-  "extensions/voice-call/src/manager/events.inbound.test.ts",
-  "extensions/voice-call/src/manager/events.amd.test.ts",
   "extensions/voice-call/src/manager/events.test.ts",
   "extensions/voice-call/src/manager/outbound.persistence.test.ts",
   "extensions/voice-call/src/manager/store.test.ts",
