@@ -3,7 +3,10 @@ import { createHash } from "node:crypto";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../config/state-dir.js";
-import { loadDeviceIdentityIfPresent, loadOrCreateDeviceIdentity } from "./device-identity.js";
+import {
+  loadDeviceIdentityIfPresent,
+  loadOrCreateDeviceIdentity,
+} from "../infra/device-identity.js";
 
 /** Doctor previews and migrations retain their synchronous one-shot admission. */
 export function resolveHeartbeatSchedulerSeed(

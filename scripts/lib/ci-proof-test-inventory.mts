@@ -2352,7 +2352,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/cron/service.session-reaper-in-finally.test.ts",
   "src/cron/service.skips-main-jobs-empty-systemevent-text.test.ts",
   "src/cron/service.stale-family.test.ts",
-  "src/cron/service.startup-heartbeat.test.ts",
   "src/cron/service.startup-overflow-clobber.test.ts",
   "src/cron/service.stream-validation.test.ts",
   "src/cron/service.test-harness.test.ts",

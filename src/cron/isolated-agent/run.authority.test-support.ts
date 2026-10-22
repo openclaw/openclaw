@@ -114,7 +114,6 @@ export function createAuthorityCronService(
     defaultAgentId: "main",
     log: createNoopLogger(),
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runSessionEvent: (request) =>
       runCronSessionTurn({
         ...request,

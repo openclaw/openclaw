@@ -1,7 +1,9 @@
 /** Identity and execution metadata for heartbeat tasks migrated into cron. */
 import { createHash } from "node:crypto";
-import { HEARTBEAT_TASK_DECLARATION_PREFIX } from "./system-owned-declaration.js";
-import type { CronJob } from "./types.js";
+import type { CronStoredJob as CronJob } from "../cron/types.js";
+import type { DoctorCronJob } from "./doctor-heartbeat-jobs.js";
+
+const HEARTBEAT_TASK_DECLARATION_PREFIX = "heartbeat-task:";
 
 /** Whether a declaration key belongs to the doctor-owned heartbeat-task namespace. */
 function isHeartbeatTaskDeclarationKey(declarationKey: string | undefined): boolean {
@@ -25,7 +27,7 @@ export function heartbeatTaskDeclarationKey(
 }
 
 /** Migrated jobs keep public system-event payloads so cron tools can edit or remove them normally. */
-export function isHeartbeatTaskCronJob(job: CronJob): job is CronJob & {
+export function isHeartbeatTaskCronJob(job: DoctorCronJob): job is CronJob & {
   declarationKey: string;
   payload: Extract<CronJob["payload"], { kind: "systemEvent" }>;
   sessionTarget: "main";
