@@ -10,7 +10,10 @@ import {
 } from "../agents/agent-scope-config.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { appendConfigPathSegment } from "../shared/dot-path.js";
+import {
+  appendConfigPathSegment,
+  readConfigPathValue as getPathValue,
+} from "../shared/dot-path.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { isRecord } from "../utils.js";
 import { configIncludeOwnsAgentRosterValues } from "./agent-roster-provenance.js";
@@ -185,25 +188,6 @@ function hasNewEquivalentArraySibling(value: unknown, nextValue: unknown, index:
       isDeepStrictEqual(item, includedValue) &&
       !isDeepStrictEqual(value[itemIndex], includedValue),
   );
-}
-
-function getPathValue(value: unknown, path: readonly string[]): unknown {
-  let current = value;
-  for (const segment of path) {
-    if (Array.isArray(current)) {
-      const index = parseConfigPathArrayIndex(segment);
-      if (index === undefined || index >= current.length) {
-        return undefined;
-      }
-      current = current[index];
-      continue;
-    }
-    if (!isRecord(current)) {
-      return undefined;
-    }
-    current = current[segment];
-  }
-  return current;
 }
 
 function setPathValue(
