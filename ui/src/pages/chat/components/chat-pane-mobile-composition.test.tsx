@@ -6,7 +6,11 @@ import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import type { ChatMobileHost } from "../chat-mobile-host.ts";
 import { offlineDeviceSession } from "../chat-pane.test-support.ts";
-import { mountChatPaneHeader } from "./chat-pane-header.test-support.ts";
+import {
+  chatPaneHeaderSessionMenu,
+  mountChatPaneHeader,
+  selectNativeMenu,
+} from "./chat-pane-header.test-support.ts";
 import type { ChatPaneHeaderProps } from "./chat-pane-header.types.ts";
 
 const containers: HTMLElement[] = [];
@@ -102,13 +106,14 @@ it("retains the People page and lookup across native host replacement and deskto
       participantsComplete: false,
     },
     mobilePeopleMentions: mentions,
+    sessionMenuAction: chatPaneHeaderSessionMenu(),
   });
   function refreshHost() {
     mounted.update({ detailsControl: { ...detailsControl, mobileHost: { ...mobileHost } } });
   }
-  const trigger = mounted.container.querySelector<HTMLButtonElement>(".chat-mobile-people-grid")!;
+  const menu = mounted.container.querySelector("openclaw-chat-header-session-menu")!;
   expect(mentions.activate).not.toHaveBeenCalled();
-  trigger.click();
+  await selectNativeMenu(menu, "quick:header-people");
   const renderPage = mobileHost.destination.page!.render!;
   const mountPage = () =>
     mountSolid(() => {
@@ -131,7 +136,7 @@ it("retains the People page and lookup across native host replacement and deskto
     detailsControl: { ...detailsControl, mobileHost: undefined },
   });
   mounted.update({ mergedChrome: true, detailsControl });
-  expect(mounted.container.querySelector(".chat-mobile-people-grid")).toBe(trigger);
+  expect(mounted.container.querySelector("openclaw-chat-header-session-menu")).toBe(menu);
   expect(mentions.activate).toHaveBeenCalledOnce();
   expect(release).not.toHaveBeenCalled();
   firstPage.unmount();
