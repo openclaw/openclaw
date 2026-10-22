@@ -1,13 +1,27 @@
+import type { JSX } from "@solidjs/web";
 import { flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelsStatusSnapshot } from "../../api/types.ts";
 import type { JsonSchema } from "../../components/config-form.shared.ts";
+import type { SelectPicker } from "../../components/select-picker.ts";
 import { i18n } from "../../i18n/lib/translate.ts";
 import { channelSnapshotEntryIsActive } from "../../lib/channels/index.ts";
 import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
+import { updatePickers, openPicker, choosePickerValue } from "../../test-helpers/select-picker.ts";
+import {
+  pairingAccount as personal,
+  pairingRequest as request,
+  pairingSnapshot,
+} from "./pairing.test-support.ts";
 import { ChannelConfig } from "./view.config.tsx";
 import { renderChannelDetail } from "./view.detail.tsx";
+import {
+  renderChannelPairingDetail,
+  renderChannelPairingPrompt,
+  renderChannelPairingQueue,
+} from "./view.pairing.tsx";
 import { resolveChannelDisplayState } from "./view.shared.tsx";
+import type { ChannelsViewTestOverrides } from "./view.test-support.ts";
 import {
   renderChannelView,
   disposeChannelViews,
@@ -30,6 +44,16 @@ function createProps(snapshot: ChannelsProps["channels"]["channelsSnapshot"]): C
 
 function renderHub(props: ChannelsProps) {
   return renderChannelView(ChannelsView, props);
+}
+
+function mountNavigableHub(current: ChannelsProps) {
+  const container = document.createElement("div");
+  current.onShowDetail = (selectedChannel) => {
+    current.selectedChannel = selectedChannel;
+    renderChannelView(ChannelsView, current, container);
+  };
+  renderChannelView(ChannelsView, current, container);
+  return container;
 }
 
 function channelProps(
@@ -99,7 +123,7 @@ describe("channel hub refresh actions", () => {
 const channelPlugin: PluginCatalogItem = {
   id: "slack",
   name: "Slack",
-  description: "OpenClaw Slack channel plugin for channels, DMs, commands, and app events.",
+  description: "Slack plugin description",
   origin: "bundled",
   installed: true,
   enabled: false,
@@ -123,26 +147,17 @@ describe("channels plugin presentation metadata", () => {
     props.wizardHost.state = () => ({ phase: "error", channel: "slack", message: "Setup failed" });
     const container = renderHub(props);
 
-    const row = container.querySelector(".channels-item");
-    expect(row?.querySelector(".settings-row__title")?.textContent).toBe("Slack");
-    expect(row?.querySelector(".settings-row__desc")?.textContent).toBe(
-      "OpenClaw Slack channel plugin for channels, DMs, commands, and app events.",
-    );
-    expect(row?.querySelector("img")?.getAttribute("src")).toBe("blob:slack-plugin-icon");
-    const detailIcon = container.querySelector(
-      ".channels-detail__header .channels-cover--icon img",
-    );
-    expect(detailIcon?.getAttribute("src")).toBe("blob:slack-plugin-icon");
-    expect(container.querySelector(".channels-wizard h2")?.textContent).toBe("Set up Slack");
-    expect(container.querySelector(".channels-wizard img")?.getAttribute("src")).toBe(
-      "blob:slack-plugin-icon",
-    );
-    expect(container.textContent).not.toContain("Legacy channel subtitle");
     const selectors = [".channels-item", ".channels-detail__header", ".channels-wizard"];
-    const originalIcons = selectors.map((selector) => container.querySelector(`${selector} img`)!);
+    const icons = () => selectors.map((selector) => container.querySelector(`${selector} img`));
+    const iconSources = () => icons().map((icon) => icon?.getAttribute("src") ?? null);
+    expect(text(container, ".channels-item .settings-row__title")).toBe("Slack");
+    expect(text(container, ".channels-item .settings-row__desc")).toBe(channelPlugin.description);
+    expect(text(container, ".channels-wizard h2")).toBe("Set up Slack");
+    expect(container.textContent).not.toContain("Legacy channel subtitle");
+    expect(iconSources()).toEqual(Array(3).fill("blob:slack-plugin-icon"));
+    const originalIcons = icons();
     for (const [index, selector] of selectors.entries()) {
-      const icon = originalIcons[index]!;
-      icon.dispatchEvent(new Event("error"));
+      originalIcons[index]!.dispatchEvent(new Event("error"));
       flush();
       expect(container.querySelector(`${selector} img`)).toBeNull();
       expect(
@@ -152,9 +167,7 @@ describe("channels plugin presentation metadata", () => {
       ).toContain("SL");
     }
     renderChannelView(ChannelsView, props, container);
-    for (const selector of selectors) {
-      expect(container.querySelector(`${selector} img`)).toBeNull();
-    }
+    expect(icons()).toEqual([null, null, null]);
     Object.assign(props.presentation, { pluginIconUrls: { slack: "blob:replacement-slack-icon" } });
     renderChannelView(ChannelsView, props, container);
     for (const [index, selector] of selectors.entries()) {
@@ -166,11 +179,7 @@ describe("channels plugin presentation metadata", () => {
     }
     Object.assign(props.presentation, { pluginIconUrls: { slack: "blob:slack-plugin-icon" } });
     renderChannelView(ChannelsView, props, container);
-    for (const selector of selectors) {
-      expect(container.querySelector(`${selector} img`)?.getAttribute("src")).toBe(
-        "blob:slack-plugin-icon",
-      );
-    }
+    expect(iconSources()).toEqual(Array(3).fill("blob:slack-plugin-icon"));
     Object.assign(props.presentation, {
       pluginIconUrls: {},
       pluginCatalog: {
@@ -305,25 +314,19 @@ describe("channel status issues", () => {
         channel: "discord",
         accountId: "community",
         kind: "config",
-        message: "Guild messages are blocked because the guild allowlist is empty.",
-        fix: "Add the intended guild to the allowlist.",
+        message: "Guild allowlist is empty.",
+        fix: "Add the intended guild.",
       },
       {
         channel: "discord",
         accountId: "community",
         kind: "runtime",
-        message: "Channel restart is pending while active work drains.",
-        fix: "Wait for active work to finish, then refresh status.",
+        message: "Channel restart is pending.",
+        fix: "Wait, then refresh status.",
       },
     ];
     const props = createProps(snapshot);
-    const container = document.createElement("div");
-    props.onShowDetail = (channel) => {
-      props.selectedChannel = channel;
-      renderChannelView(ChannelsView, props, container);
-    };
-
-    renderChannelView(ChannelsView, props, container);
+    const container = mountNavigableHub(props);
 
     const discord = findChannelRow(container, "Discord");
     expect(text(discord, ".settings-status")).toBe("Needs attention");
@@ -466,18 +469,13 @@ describe("channel config advanced tier", () => {
       channels: objectSchema({
         whatsapp: objectSchema({
           enabled: { type: "boolean" },
-          timeoutMs: { type: "integer" },
-          retry: objectSchema({ attempts: { type: "integer" } }),
         }),
       }),
     });
     props.config.configUiHints = {
       "channels.whatsapp.enabled": { advanced: false, help: "Turn this channel on or off." },
-      "channels.whatsapp.timeoutMs": { advanced: true },
-      "channels.whatsapp.retry": { advanced: true },
-      "channels.whatsapp.retry.attempts": { advanced: true },
     };
-    props.config.configForm = { channels: { whatsapp: { enabled: true, timeoutMs: 5000 } } };
+    props.config.configForm = { channels: { whatsapp: { enabled: true } } };
     const container = renderChannelView(
       (viewProps: ChannelsProps) => <ChannelConfig channelId="whatsapp" props={viewProps} />,
       props,
@@ -486,22 +484,6 @@ describe("channel config advanced tier", () => {
     expect(texts(container, ".settings-row__desc")).toContain("Turn this channel on or off.");
   });
 });
-
-const CHANNEL_DETAIL_CASES = [
-  ["discord", "Discord", []],
-  [
-    "googlechat",
-    "Google Chat",
-    [
-      ["Credential", "service-account"],
-      ["Audience", "url · https://chat.example"],
-    ],
-  ],
-  ["imessage", "iMessage", []],
-  ["signal", "Signal", [["Base URL", "https://signal.example"]]],
-  ["slack", "Slack", []],
-  ["telegram", "Telegram", [["Mode", "polling"]]],
-] satisfies Array<[string, string, Array<[string, string]>]>;
 
 describe("channel detail", () => {
   it("shows an escaped configuration save error inside the Nostr editor", () => {
@@ -517,36 +499,24 @@ describe("channel detail", () => {
     expect(alert?.querySelector("img")).toBeNull();
   });
 
-  it.each(CHANNEL_DETAIL_CASES)(
-    "preserves localized status facts and probe actions for %s",
-    (channelId, title, extraFacts) => {
-      const onRefresh = vi.fn();
-      const status = {
-        configured: true,
-        running: true,
-        baseUrl: "https://signal.example",
-        credentialSource: "service-account",
-        audienceType: "url",
-        audience: "https://chat.example",
-        mode: "polling",
-      };
-      const container = renderChannelDetailFixture(
-        channelId,
-        { [channelId]: status },
-        { onRefresh },
-      );
-      expect(text(container, heading)).toBe(title);
-      expect(facts(container)).toEqual([
-        ["Configured", "Yes"],
-        ["Running", "Yes"],
-        ...extraFacts,
-        ["Last start", "n/a"],
-        ["Last connection check", "n/a"],
-      ]);
-      container.querySelector<HTMLButtonElement>(probeButton)!.click();
-      expect(onRefresh).toHaveBeenCalledWith(true);
-    },
-  );
+  // The standard-channel E2E owns per-plugin titles, credentials, audience and base URL.
+  it("renders the remaining mode/common facts and invokes the probe action", () => {
+    const onRefresh = vi.fn();
+    const container = renderChannelDetailFixture(
+      "telegram",
+      { telegram: { configured: true, running: true, mode: "polling" } },
+      { onRefresh },
+    );
+    expect(facts(container)).toEqual([
+      ["Configured", "Yes"],
+      ["Running", "Yes"],
+      ["Mode", "polling"],
+      ["Last start", "n/a"],
+      ["Last connection check", "n/a"],
+    ]);
+    container.querySelector<HTMLButtonElement>(probeButton)!.click();
+    expect(onRefresh).toHaveBeenCalledWith(true);
+  });
 
   it("keeps the cold recommended Google Chat detail available", () => {
     const props = createProps(null);
@@ -609,15 +579,16 @@ describe("channel detail", () => {
       const rows = Array.from(container.querySelectorAll(".settings-row")).filter((row) =>
         row.querySelector(".settings-row__title"),
       );
-      expect(rows.map((row) => row.querySelector(".settings-row__title")?.textContent)).toEqual([
-        "@first_bot",
-        "Second",
+      expect(
+        rows.map((row) => [
+          row.querySelector(".settings-row__title")?.textContent,
+          row.querySelector(".settings-row__desc")?.textContent,
+          text(row, ".settings-status"),
+        ]),
+      ).toEqual([
+        ["@first_bot", "first · Configured: Yes", "No"],
+        ["Second", "second · Configured: No", "Running"],
       ]);
-      expect(rows.map((row) => row.querySelector(".settings-row__desc")?.textContent)).toEqual([
-        "first · Configured: Yes",
-        "second · Configured: No",
-      ]);
-      expect(rows.map((row) => text(row, ".settings-status"))).toEqual(["No", "Running"]);
     }
   });
 
@@ -671,12 +642,7 @@ describe("channel detail", () => {
             channelLabels: { [channelId]: "Custom channel" },
           },
         );
-        const container = document.createElement("div");
-        props.onShowDetail = (selected) => {
-          props.selectedChannel = selected;
-          renderChannelView(ChannelsView, props, container);
-        };
-        renderChannelView(ChannelsView, props, container);
+        const container = mountNavigableHub(props);
         const trigger = container.querySelector<HTMLButtonElement>(
           configured ? "button.channels-item" : ".channels-item__detail",
         );
@@ -714,4 +680,166 @@ describe("channel display selectors", () => {
   });
 });
 
-afterEach(disposeChannelViews);
+afterEach(() => {
+  disposeChannelViews();
+  document.body.replaceChildren();
+});
+
+describe("channel pairing", () => {
+  const pairingProps = (overrides: ChannelsViewTestOverrides = {}): ChannelsProps =>
+    createChannelsViewProps(null, pairingSnapshot(), overrides);
+
+  function renderInto(
+    props: ChannelsProps = pairingProps(),
+    component: (props: ChannelsProps) => JSX.Element = renderChannelPairingQueue,
+  ) {
+    const container = document.createElement("div");
+    document.body.append(container);
+    renderChannelView(component, props, container);
+    return container;
+  }
+
+  const button = (container: HTMLElement, label: string) =>
+    Array.from(container.querySelectorAll("button")).find(
+      (candidate) => candidate.textContent?.trim() === label,
+    )!;
+
+  it("renders pending senders and keeps dismissal current across refresh", () => {
+    const onDismiss = vi.fn();
+    const props = pairingProps({ onPairingDismiss: onDismiss });
+    const container = renderInto(props);
+
+    expect(container.textContent).toContain("+15551234567");
+    expect(container.textContent).toContain("Alice");
+    const dismiss = button(container, "Dismiss");
+    dismiss.click();
+    expect(onDismiss).toHaveBeenCalledWith(request);
+
+    const refreshed = { ...request, metadata: { name: "Alice Updated" } };
+    props.channels.pairingSnapshot = {
+      ...props.channels.pairingSnapshot!,
+      requests: [refreshed],
+    };
+    renderChannelView(renderChannelPairingQueue, props, container);
+    expect(container.textContent).toContain("Alice Updated");
+    expect(container.contains(dismiss)).toBe(true);
+    dismiss.click();
+    expect(onDismiss).toHaveBeenLastCalledWith(refreshed);
+  });
+
+  it("hides cached sender data without pairing access", () => {
+    const container = renderInto(pairingProps({ canManagePairing: false }));
+
+    expect(container.textContent).toContain("operator.pairing access");
+    expect(text(container, ".settings-status--warn")).toContain("operator.pairing access");
+    expect(container.querySelector(".callout")).toBeNull();
+    expect(container.textContent).not.toContain("+15551234567");
+    expect(container.textContent).not.toContain("Alice");
+  });
+
+  it("renders notice and error feedback as status rows without nested callouts", () => {
+    const props = pairingProps({
+      pairingNotice: "Request approved",
+      channels: { pairingError: "Approval failed" },
+    });
+    const container = renderInto(props);
+    const selector = '.channels-pairing-feedback[role="status"]';
+    const notice = container.querySelector(selector);
+
+    expect(notice?.textContent).toContain("Request approved");
+    expect(text(container, '.channels-pairing-feedback[role="alert"]')).toContain(
+      "Approval failed",
+    );
+    expect(container.querySelector(".callout")).toBeNull();
+    props.pairingNotice = "Request dismissed";
+    renderChannelView(renderChannelPairingQueue, props, container);
+    expect(container.querySelector(selector)).toBe(notice);
+    expect(notice?.textContent).toContain("Request dismissed");
+    props.pairingNotice = null;
+    renderChannelView(renderChannelPairingQueue, props, container);
+    expect(container.querySelector(selector)).toBeNull();
+  });
+
+  it("uses the channel picker and clears the account filter when the channel changes", async () => {
+    const onPairingFilterChange = vi.fn();
+    const props = pairingProps({
+      pairingChannelFilter: "whatsapp",
+      pairingAccountFilter: "personal",
+      onPairingFilterChange,
+    });
+    props.channels.pairingSnapshot!.accounts.push({
+      ...personal,
+      channel: "telegram",
+      channelLabel: "Telegram",
+      accountId: "work",
+      accountLabel: "Work",
+    });
+    const container = renderInto(props);
+    await updatePickers(container);
+    const selects = container.querySelectorAll<SelectPicker>("openclaw-select-picker");
+    const channel = selects.item(0);
+    const account = selects.item(1);
+    expect(selects).toHaveLength(2);
+    expect(container.querySelectorAll("select.settings-select")).toHaveLength(0);
+    await openPicker(account);
+    expect(
+      account.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
+    ).toBe("personal");
+    await choosePickerValue(channel, "telegram");
+    expect(onPairingFilterChange).toHaveBeenCalledWith("telegram", null);
+  });
+
+  it("disables every request action while one mutation is active", () => {
+    const props = pairingProps({ channels: { pairingBusyRequestId: request.requestId } });
+    props.channels.pairingSnapshot!.requests.push({
+      ...request,
+      requestId: "other-request",
+      senderId: "987654321",
+    });
+    const container = renderInto(props);
+    const actions = container.querySelectorAll<HTMLButtonElement>(
+      'button[aria-label^="Approve "], button[aria-label^="Dismiss "]',
+    );
+    expect(Array.from(actions, (action) => action.disabled)).toEqual([true, true, true, true]);
+  });
+
+  it("shows explicit notification and first-owner choices for an admin", () => {
+    const container = renderInto(
+      pairingProps({
+        pairingPrompt: {
+          kind: "approve",
+          request,
+          notify: false,
+          bootstrapCommandOwner: false,
+        },
+      }),
+      renderChannelPairingPrompt,
+    );
+
+    expect(container.textContent).toContain("Notify the requester after approval");
+    expect(container.textContent).toContain("Also make this sender the first command owner");
+    expect(container.querySelectorAll('input[type="checkbox"]')).toHaveLength(2);
+  });
+
+  it("links a channel account detail back to the filtered request queue", () => {
+    const review = vi.fn();
+    const props = pairingProps({ onPairingReviewAccount: review });
+    const detail = (current: ChannelsProps) => renderChannelPairingDetail("whatsapp", current);
+    const container = renderInto(props, detail);
+
+    expect(container.textContent).toContain("1 pending");
+    const reviewButton = button(container, "Review requests");
+    reviewButton.click();
+    expect(review).toHaveBeenCalledWith("whatsapp", "personal");
+
+    props.channels.pairingSnapshot = {
+      ...props.channels.pairingSnapshot!,
+      accounts: structuredClone(props.channels.pairingSnapshot!.accounts),
+      requests: [],
+    };
+    renderChannelView(detail, props, container);
+    expect(container.querySelector("button")).toBe(reviewButton);
+    expect(container.textContent).toContain("No pending requests");
+    expect(container.textContent).not.toContain("1 pending");
+  });
+});
