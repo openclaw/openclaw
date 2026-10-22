@@ -1,6 +1,6 @@
 import type { SessionsCompanionStateResult } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
-import { shellViewport, type ShellViewportSnapshot } from "../../app/shell-viewport.ts";
+import { shellViewport } from "../../app/shell-viewport.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { showToast } from "../../lib/toast.ts";
@@ -197,10 +197,11 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
     if (previousSuspended !== this.mobilePresentation.suspended) {
       this.syncMobileObserverVisibility();
     }
-    this.onMobileViewportChange(viewport);
+    this.onMobileViewportChange();
   };
 
-  private readonly onMobileViewportChange = (viewport: ShellViewportSnapshot | undefined): void => {
+  private readonly onMobileViewportChange = (): void => {
+    const viewport = shellViewport.snapshot;
     const recovery = this.mobilePresentation.viewportRecovery;
     const previousSuspended = this.mobilePresentation.suspended;
     if (viewport && recovery && this.mobilePresentation.suspended && viewport.nativeScale) {
@@ -235,9 +236,8 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
   };
 
   observeMobileViewport(): () => void {
-    const update = () => this.onMobileViewportChange(shellViewport.snapshot);
-    update();
-    return shellViewport.subscribe(update);
+    this.onMobileViewportChange();
+    return shellViewport.subscribe(this.onMobileViewportChange);
   }
 
   protected navigateMobileHost(destination: MobileHostDestination, source?: HTMLElement): void {
