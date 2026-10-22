@@ -82,12 +82,15 @@ describe("postWorkshopChangeNotice", () => {
     createdAtMs: 1,
     ...overrides,
   });
+  const sessionEntry = {
+    sessionId: "reviewed-session",
+    lifecycleRevision: "reviewed-revision",
+  };
   const generation = (sessionKey: string) => ({
     agentId: "main",
     storePath: "/tmp/sessions.json",
     sessionKey,
-    sessionId: "reviewed-session",
-    lifecycleRevision: "reviewed-revision",
+    ...sessionEntry,
   });
   const reviewId = "0b6a4a52-1f43-4f0e-9d55-3c1d8e1f7a10";
   const runId = `skill-workshop-review:${reviewId}`;
@@ -132,10 +135,7 @@ describe("postWorkshopChangeNotice", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.entry.mockReturnValue({
-      sessionId: "reviewed-session",
-      lifecycleRevision: "reviewed-revision",
-    });
+    mocks.entry.mockReturnValue({ ...sessionEntry });
     mocks.readEntries.mockImplementation(async (inputs, consume) =>
       consume(
         inputs.map(({ sessionKeys }: { sessionKeys: readonly string[] }) => ({
@@ -230,16 +230,10 @@ describe("postWorkshopChangeNotice", () => {
   });
 
   it.each([
-    {
-      change: "reset",
-      entry: { sessionId: "reviewed-session", lifecycleRevision: "reset-revision" },
-    },
-    {
-      change: "replacement",
-      entry: { sessionId: "replacement-session", lifecycleRevision: "reviewed-revision" },
-    },
-    { change: "deletion", entry: undefined },
-  ])("leaves a conversation untouched after $change", async ({ entry }) => {
+    ["reset", { ...sessionEntry, lifecycleRevision: "reset-revision" }],
+    ["replacement", { ...sessionEntry, sessionId: "replacement-session" }],
+    ["deletion", undefined],
+  ])("leaves a conversation untouched after %s", async (_change, entry) => {
     mocks.entry.mockReturnValue(entry);
     delivery();
     await post([change({})]);
@@ -248,10 +242,7 @@ describe("postWorkshopChangeNotice", () => {
 
   it("observes a reset during delivery lookup before enqueueing undo instructions", async () => {
     mocks.delivery.mockImplementationOnce(async () => {
-      mocks.entry.mockReturnValueOnce({
-        sessionId: "reviewed-session",
-        lifecycleRevision: "reset-revision",
-      });
+      mocks.entry.mockReturnValueOnce({ ...sessionEntry, lifecycleRevision: "reset-revision" });
       return { deliveryContext: { channel: "telegram", to: "42" } };
     });
     await post([change({})]);
@@ -272,11 +263,7 @@ describe("postWorkshopChangeNotice", () => {
       ...generation("agent:main:workshop-worker"),
       storePath: path.join(dirs.make(), "sessions.sqlite"),
     };
-    const entry = {
-      sessionId: currentGeneration.sessionId,
-      lifecycleRevision: currentGeneration.lifecycleRevision,
-      updatedAt: 1,
-    };
+    const entry = { ...sessionEntry, updatedAt: 1 };
     const { withSessionEntriesFromStoresInWorker } = await vi.importActual<
       typeof import("../../config/sessions/session-entry-read-runtime.js")
     >("../../config/sessions/session-entry-read-runtime.js");
