@@ -1,9 +1,8 @@
 import { expect, it } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { createGateway, createSessionsHarness, mountSidebar } from "../app-sidebar.ts";
+import { createSessionsHarness } from "../app-sidebar.ts";
 import { waitForFast } from "../wait-for.ts";
-import { sessionList } from "./compact.test-support.ts";
+import { mountSidebarFixture, sessionList } from "./compact.test-support.ts";
 import "../../components/app-sidebar.tsx";
 
 it("shows a categorized Discord-spawned dashboard session on a cold sidebar without its parent", async () => {
@@ -26,10 +25,7 @@ it("shows a categorized Discord-spawned dashboard session on a cold sidebar with
     createdActor: { type: "agent" },
   });
   harness.publish({ groups: ["HOME ASSISTANT"] });
-  const { sidebar } = await mountSidebar(
-    createGateway({} as GatewayBrowserClient),
-    harness.sessions,
-  );
+  const { sidebar } = await mountSidebarFixture(undefined, harness.sessions);
   sidebar.sessionKey = wakeKey;
   await sidebar.updateComplete;
   const group = sidebar.querySelector('[data-session-section="category:HOME ASSISTANT"]');
@@ -72,10 +68,7 @@ it("promotes a categorized child loaded through the expanded-parent cache", asyn
   );
   harness.publish({ groups: ["Research"] });
 
-  const { sidebar } = await mountSidebar(
-    createGateway({} as GatewayBrowserClient),
-    harness.sessions,
-  );
+  const { sidebar } = await mountSidebarFixture(undefined, harness.sessions);
   const find = sidebar.querySelector.bind(sidebar);
   const tree = `[data-session-tree="${parentKey}"]`;
   const ordinaryChild = () => find(`${tree} [data-session-key="${ordinaryKey}"]`);

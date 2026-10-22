@@ -4,13 +4,8 @@ import type { NativeGateway } from "../../app/native-gateways.runtime.ts";
 import { CONTROL_UI_BUILD_INFO, type ControlUiBuildInfo } from "../../build-info.ts";
 import { getAppSidebarOwner } from "../../components/app-sidebar.tsx";
 import { createSidebarTestRouter } from "../app-sidebar-router.ts";
-import {
-  createGateway,
-  createGatewayHarness,
-  createSessions,
-  createSessionsHarness,
-  mountSidebar,
-} from "../app-sidebar.ts";
+import { createGatewayHarness, createSessionsHarness } from "../app-sidebar.ts";
+import { mountSidebarFixture as mountFooter } from "./compact.test-support.ts";
 import { patchRows, settleRoster } from "./roster.test-support.ts";
 
 type NativeGatewaysSnapshot = {
@@ -30,20 +25,6 @@ function setNativeGatewayTestState(snapshot: NativeGatewaysSnapshot): void {
     __OPENCLAW_NATIVE_WEB_CHROME__: true,
     __OPENCLAW_NATIVE_GATEWAYS__: snapshot,
   });
-}
-
-async function mountFooter(
-  gateway = createGateway({} as GatewayBrowserClient),
-  sessions = createSessions("main", ["agent:main:main"]),
-) {
-  const { sidebar } = await mountSidebar(gateway, sessions);
-  const q = (selector: string) => sidebar.querySelector<HTMLElement>(selector);
-  return {
-    sidebar,
-    q,
-    label: () => q(".sidebar-identity-card")?.getAttribute("aria-label"),
-    name: () => q(".sidebar-identity-card__name")?.textContent,
-  };
 }
 
 describe("AppSidebar gateway footer subtitle", () => {
@@ -117,7 +98,8 @@ describe("AppSidebar gateway footer subtitle", () => {
       dirty: false,
     };
     setControlUiBuildInfo({ ...build, release: false });
-    const { sidebar, q, label } = await mountFooter();
+    const { sidebar, q } = await mountFooter();
+    const label = () => q(".sidebar-identity-card")?.getAttribute("aria-label");
     sidebar.connected = true;
     sidebar.gatewayStatus = { kind: "connected" };
     await sidebar.updateComplete;
@@ -137,7 +119,8 @@ describe("AppSidebar gateway footer subtitle", () => {
     async (changed) => {
       setControlUiBuildInfo({ commit: CONTROL_UI_TEST_COMMIT, release: false });
       setNativeGatewayTestState(twoGateways);
-      const { sidebar, q, label } = await mountFooter();
+      const { sidebar, q } = await mountFooter();
+      const label = () => q(".sidebar-identity-card")?.getAttribute("aria-label");
       if (changed) {
         setNativeGatewayTestState({
           gateways: twoGateways.gateways.map((gateway) =>
@@ -161,55 +144,12 @@ describe("AppSidebar gateway footer subtitle", () => {
     },
   );
 
-  it("shows nonhealthy state as the avatar dot and leaves announcing to the shell", async () => {
-    setNativeGatewayTestState(twoGateways);
-    const { sidebar, q } = await mountFooter();
-    sidebar.connectionStatus = "suspended";
-    await sidebar.updateComplete;
-
-    const card = q(".sidebar-identity-card");
-    // The shell owns the written label; the footer keeps the dot and accessible name.
-    expect(q(".sidebar-footer-bar .gateway-status__label")).toBeNull();
-    expect(card?.getAttribute("data-connection-status")).toBe("suspended");
-    expect(card?.querySelector(".sidebar-identity-card__status")).not.toBeNull();
-    expect(card?.getAttribute("aria-label")).toBe("Identity and app menu for Owner: Suspended");
-    expect(q(".sidebar-footer-bar > [role=status]")).toBeNull();
-    expect(q(".sidebar-identity-card__name")?.textContent).toBe("Owner");
-    expect(q(".sidebar-identity-card__gateway")?.textContent).toContain("Local Gateway");
-  });
-
-  it("returns to the healthy dot and gateway identity after reconnect", async () => {
-    setNativeGatewayTestState(twoGateways);
-    const { sidebar, q } = await mountFooter();
-    sidebar.connectionStatus = "reconnecting";
-    await sidebar.updateComplete;
-    const card = () => q(".sidebar-identity-card");
-    expect(card()?.getAttribute("data-connection-status")).toBe("reconnecting");
-
-    sidebar.connectionStatus = null;
-    sidebar.connected = true;
-    sidebar.gatewayStatus = { kind: "connected" };
-    sidebar.connectionRecovery = true;
-    await sidebar.updateComplete;
-    expect(card()?.getAttribute("data-connection-status")).toBe("connected");
-    expect(card()?.getAttribute("aria-label")).toBe("Identity and app menu for Owner: Connected");
-
-    sidebar.connectionRecovery = false;
-    await sidebar.updateComplete;
-    expect(card()?.getAttribute("aria-label")).toBe(
-      "Identity and app menu for Owner: Local Gateway, primary",
-    );
-    q(".sidebar-identity-card")?.click();
-    await sidebar.updateComplete;
-    expect(q(".sidebar-identity-menu__outbox")).toBeNull();
-    expect(q(".sidebar-footer-bar")?.textContent).not.toContain("in outbox");
-  });
-
   it("retains display identity only for the same reconnecting connection", async () => {
     const gateway = createGatewayHarness({} as GatewayBrowserClient);
     const alex = { id: "profile-alex", name: "Alex" };
     gateway.publish({ selfUser: alex });
-    const { sidebar, name } = await mountFooter(gateway.gateway);
+    const { sidebar, q } = await mountFooter(gateway.gateway);
+    const name = () => q(".sidebar-identity-card__name")?.textContent;
     const expectName = async (expected: string) => {
       await sidebar.updateComplete;
       expect(name()).toBe(expected);

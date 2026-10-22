@@ -1,23 +1,13 @@
 import { expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { activateSessionMenuValue } from "../app-sidebar-menu.ts";
 import { selectSidebarView } from "../app-sidebar-setup.ts";
-import { createGateway, createSessions, mountSidebar, TWO_AGENTS } from "../app-sidebar.ts";
+import { createSessions, TWO_AGENTS } from "../app-sidebar.ts";
+import { mountSidebarFixture } from "./compact.test-support.ts";
 import "../../components/app-sidebar.tsx";
 
 async function mountMenus(keys = ["agent:main:main"], agents?: typeof TWO_AGENTS) {
-  const mounted = await mountSidebar(
-    createGateway({} as GatewayBrowserClient),
-    createSessions("main", keys),
-    "panel",
-    agents,
-  );
-  const { sidebar } = mounted;
-  const q = (selector: string) => sidebar.querySelector<HTMLElement>(selector);
-  const click = async (element: HTMLElement) => {
-    element.click();
-    await sidebar.updateComplete;
-  };
+  const mounted = await mountSidebarFixture(undefined, createSessions("main", keys), agents);
+  const { sidebar, q, click } = mounted;
   const remove = (menu: HTMLElement) =>
     click(menu.querySelector<HTMLElement>('[data-value="remove"]')!);
   const hide = async (menu: HTMLElement | null) => {

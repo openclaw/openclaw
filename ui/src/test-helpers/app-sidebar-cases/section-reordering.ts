@@ -1,15 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { activateSessionMenuValue } from "../app-sidebar-menu.ts";
-import {
-  catalogPage,
-  createGatewayHarness,
-  createSessionsHarness,
-  mountSidebar,
-} from "../app-sidebar.ts";
+import { catalogPage, createGatewayHarness, createSessionsHarness } from "../app-sidebar.ts";
 import { createDataTransferStub } from "../drag-data.ts";
 import { gatewayHelloForMethods } from "../gateway-methods.ts";
 import { waitForFast } from "../wait-for.ts";
+import { mountSidebarFixture } from "./compact.test-support.ts";
 import "../../components/app-sidebar.tsx";
 
 function dispatchDragEvent(
@@ -63,7 +59,7 @@ describe("AppSidebar section reordering", () => {
         ...(options.groupSessions ? { kind: "group" } : {}),
       });
     }
-    const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
+    const { sidebar } = await mountSidebarFixture(gateway.gateway, harness.sessions);
     sidebar.connected = true;
     harness.publish({ groups, sectionOrder });
     await sidebar.updateComplete;

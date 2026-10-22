@@ -5,12 +5,25 @@ import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "..
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import {
+  createGateway,
   createGatewayHarness,
   createSessions,
   mountSidebar,
   type SidebarLifecycleState,
 } from "../app-sidebar.ts";
 import { waitForFast } from "../wait-for.ts";
+import { sidebarDriver } from "./sidebar-driver.test-support.ts";
+
+export async function mountSidebarFixture(
+  gateway = createGateway({} as GatewayBrowserClient),
+  sessions = createSessions("main", ["agent:main:main"]),
+  agents?: Parameters<typeof mountSidebar>[3],
+) {
+  const mounted = await mountSidebar(gateway, sessions, "panel", agents);
+  const q = <T extends Element = HTMLElement>(selector: string) =>
+    mounted.sidebar.querySelector<T>(selector);
+  return { ...mounted, ...sidebarDriver(mounted.sidebar), q };
+}
 
 const catalogHello = {
   auth: { role: "operator", scopes: ["operator.read"] },
