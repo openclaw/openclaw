@@ -12,7 +12,10 @@ import {
 } from "../../infra/agent-events.js";
 import { projectMainSessionRecoveryLifecycle as projectLifecycle } from "./main-session-recovery-lifecycle.js";
 import type { MainSessionRecoveryReservation } from "./main-session-recovery-state.js";
-import { executionIdentity, recoveryEntry } from "./main-session-recovery-state.test-support.js";
+import {
+  executionIdentity,
+  interruptedRecoveryEntry as interruptedEntry,
+} from "./main-session-recovery-state.test-support.js";
 import {
   claimMainSessionRecoveryOwner as claimOwner,
   commitMainSessionRecovery as commit,
@@ -67,10 +70,6 @@ describe("main session recovery store", () => {
       upserts: Object.entries(entries).map(([key, entry]) => ({ sessionKey: key, entry })),
       skipMaintenance: true,
     });
-  }
-
-  function interruptedEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
-    return recoveryEntry({ status: "interrupted", abortedLastRun: true, ...overrides });
   }
 
   type ClaimParams = Parameters<typeof claimOwner>[0];

@@ -3,38 +3,27 @@ import { describe, expect, it } from "vitest";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { transitionMainSessionRecovery as transition } from "./main-session-recovery-state.js";
 import {
+  admitRecoveryAttempt as admit,
   claimForeground,
   executionIdentity,
-  recoveryEntry,
+  interruptedRecoveryEntry as interruptedEntry,
+  interruptRecoveryAttempt,
+  observeRecovery as observe,
+  prepareRecoveryAttempt,
+  recoveryRun as run,
   recoveryState,
 } from "./main-session-recovery-state.test-support.js";
 import type { MainSessionRecoveryCommand } from "./main-session-recovery-types.js";
 
-const run = {
-  cycleId: "cycle-1",
-  lifecycleGeneration: "generation-1",
-  runId: "recovery-1",
-  sessionId: "session-1",
-};
 function prepare(
   entry: SessionEntry,
   overrides: Partial<Extract<MainSessionRecoveryCommand, { kind: "prepare_attempt" }>> = {},
 ) {
-  return transition(entry, {
-    ...run,
-    kind: "prepare_attempt",
-    attempt: 1,
-    now: 200,
-    observation: { sessionId: "session-1", cycleId: "cycle-1", revision: 1 },
-    executionIdentity: { state: "enabled" },
-    ...overrides,
-  });
+  return prepareRecoveryAttempt(entry, { executionIdentity: { state: "enabled" }, ...overrides });
 }
-function admit(entry: SessionEntry, now: number) {
-  return transition(entry, { ...run, kind: "admit_recovery", now });
-}
+
 function interrupt(entry: SessionEntry, attempt: number, now: number) {
-  return transition(entry, { ...run, kind: "mark_admitted_recovery_interrupted", attempt, now });
+  return interruptRecoveryAttempt(entry, { attempt, now });
 }
 function bind(entry: SessionEntry) {
   return transition(entry, {
@@ -43,21 +32,6 @@ function bind(entry: SessionEntry) {
     attempt: 1,
     token: executionIdentity(run.runId),
   });
-}
-
-function interruptedEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
-  return recoveryEntry({ status: "interrupted", abortedLastRun: true, ...overrides });
-}
-
-function observe(entry: SessionEntry, lifecycleGeneration: string) {
-  const result = transition(entry, {
-    kind: "observe",
-    cycleId: "unused-cycle",
-    lifecycleGeneration,
-    sessionKey: "agent:main:main",
-  });
-  assert(result.kind === "observed", "expected recovery observation");
-  return result.view;
 }
 
 describe("main session recovery execution identity state", () => {
@@ -70,6 +44,7 @@ describe("main session recovery execution identity state", () => {
       expect(
         prepare(entry, { attempt, now: 200 + attempt, observation: view.observation }).kind,
       ).toBe("reserved");
+      expect(entry.status).toBe("interrupted");
       expect(admit(entry, 300 + attempt).kind).toBe("admitted_recovery");
       if (attempt <= 4) {
         const registration = { kind: "register_recovery_turn" as const, attempt, ...run };
