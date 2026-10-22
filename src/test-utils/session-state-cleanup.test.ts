@@ -1,7 +1,7 @@
-// Tests session-state cleanup helpers used by integration fixtures.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { closeAuthProfileReadPool } from "../agents/auth-profiles/sqlite-read-pool.js";
@@ -21,100 +21,65 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { cleanupSessionStateForTest } from "./session-state-cleanup.js";
 
 describe("cleanupSessionStateForTest", () => {
-  beforeEach(() => {
+  const reset = () => {
     vi.useRealTimers();
     clearSessionStoreCacheForTest();
     resetFileLockStateForTest();
-  });
+  };
+  beforeEach(reset);
+  afterEach(reset);
 
-  afterEach(() => {
-    vi.useRealTimers();
-    clearSessionStoreCacheForTest();
-    resetFileLockStateForTest();
-  });
-
-  it("waits for in-flight session store writer queues before clearing test state", async () => {
+  it.each(["store", "sqlite"] as const)("waits for %s writers before cleanup", async (kind) => {
     const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-cleanup-"));
-    const storePath = path.join(fixtureRoot, "openclaw-sessions.json");
-    const started = createDeferred();
-    const release = createDeferred();
-    let cleanupPromise: Promise<void> | undefined;
-    let running: Promise<void> | undefined;
-    try {
-      running = runExclusiveSessionStoreWrite(storePath, async () => {
-        started.resolve();
-        await release.promise;
-      });
-
-      await started.promise;
-
-      let settled = false;
-      cleanupPromise = cleanupSessionStateForTest().then(() => {
-        settled = true;
-      });
-
-      // An empty drain settles before this event-loop checkpoint.
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(settled).toBe(false);
-
-      release.resolve();
-      await running;
-      await cleanupPromise;
-    } finally {
-      release.resolve();
-      await running?.catch(() => undefined);
-      await cleanupPromise;
-      await cleanupSessionStateForTest();
-      await fs.rm(fixtureRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("waits for SQLite session writers before closing their database handles", async () => {
-    const fixtureRoot = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-session-cleanup-sqlite-"),
-    );
     const databasePath = path.join(fixtureRoot, "openclaw-agent.sqlite");
     const env = { ...process.env, OPENCLAW_STATE_DIR: fixtureRoot };
     const started = createDeferred();
     const release = createDeferred();
-    let database: ReturnType<typeof openOpenClawAgentDatabase> | undefined;
     let cleanupPromise: Promise<void> | undefined;
-
-    const running = runExclusiveSqliteSessionWrite(
-      { agentId: "main", env, path: databasePath },
-      async () => {
-        started.resolve();
-        await release.promise;
+    let running: Promise<void> | undefined;
+    let database: ReturnType<typeof openOpenClawAgentDatabase> | undefined;
+    const write = async () => {
+      started.resolve();
+      await release.promise;
+      if (kind === "sqlite") {
         database = openOpenClawAgentDatabase({ agentId: "main", env, path: databasePath });
-      },
-      "session.transcript.batch",
-    );
+      }
+    };
     try {
+      running =
+        kind === "store"
+          ? runExclusiveSessionStoreWrite(path.join(fixtureRoot, "openclaw-sessions.json"), write)
+          : runExclusiveSqliteSessionWrite(
+              { agentId: "main", env, path: databasePath },
+              write,
+              "session.transcript.batch",
+            );
       await started.promise;
-      let cleanupSettled = false;
-      cleanupPromise = cleanupSessionStateForTest({ stateDir: fixtureRoot }).then(() => {
-        cleanupSettled = true;
+      let settled = false;
+      cleanupPromise = cleanupSessionStateForTest(
+        kind === "sqlite" ? { stateDir: fixtureRoot } : undefined,
+      ).then(() => {
+        settled = true;
       });
-
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(cleanupSettled).toBe(false);
-
+      // An empty drain settles before this event-loop checkpoint.
+      await nextTurn();
+      expect(settled).toBe(false);
       release.resolve();
       await running;
       await cleanupPromise;
-      expect(database?.db.isOpen).toBe(false);
+      if (kind === "sqlite") {
+        expect(database?.db.isOpen).toBe(false);
+      }
     } finally {
       release.resolve();
-      await running;
-      if (cleanupPromise) {
-        await cleanupPromise;
+      await running?.catch(() => undefined);
+      await cleanupPromise;
+      if (kind === "sqlite") {
+        closeOpenClawAgentDatabasesForTest();
+        closeOpenClawStateDatabaseForTest();
+      } else {
+        await cleanupSessionStateForTest();
       }
-      closeOpenClawAgentDatabasesForTest();
-      closeOpenClawStateDatabaseForTest();
       await fs.rm(fixtureRoot, { recursive: true, force: true });
     }
   });

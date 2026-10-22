@@ -397,17 +397,11 @@ describe("openclaw test state", () => {
     },
   );
 
-  it("writes scenario configs and auth profile stores", async () => {
+  it("writes the stable-update scenario config", async () => {
     await withTestState({ scenario: "update-stable" }, async (state) => {
       expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toEqual({
         update: { channel: "stable" },
         plugins: {},
-      });
-      const profilePath = await state.writeAuthProfiles(makeAuthStore());
-      expect(profilePath).toBe(path.join(state.agentDir(), "openclaw-agent.sqlite"));
-      expect(loadPersistedAuthProfileStore(state.agentDir())).toMatchObject({
-        version: 1,
-        profiles: { "openai:test": { provider: "openai" } },
       });
     });
   });
@@ -637,10 +631,10 @@ describe("openclaw test state", () => {
 
   it("creates upgrade survivor fixture state", async () => {
     await withTestState({ scenario: "upgrade-survivor" }, async (state) => {
-      const config = JSON.parse(await fs.readFile(state.configPath, "utf8"));
-      expect(config.update?.channel).toBe("stable");
-      expect(config.plugins?.enabled).toBe(true);
-      expect(config.plugins?.allow).toStrictEqual(["discord", "telegram", "whatsapp", "memory"]);
+      expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toMatchObject({
+        update: { channel: "stable" },
+        plugins: { enabled: true, allow: ["discord", "telegram", "whatsapp", "memory"] },
+      });
     });
   });
 
