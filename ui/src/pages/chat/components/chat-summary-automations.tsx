@@ -9,6 +9,7 @@ import { loadCompactCronJobsPage, retireCronJobsRequest } from "../../../lib/cro
 import { createInitialCronState } from "../../../lib/cron/state.ts";
 import { createGatewayConnectionLifecycle } from "../../../lib/gateway-connection-lifecycle.ts";
 import { canCallGatewayMethod, canPresentGatewayMethod } from "../../../lib/gateway-methods.ts";
+import { createGatewayRetryOwner } from "../../../lib/gateway-retry.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
@@ -42,9 +43,11 @@ export function createSessionAutomationInventory(
   const publish = () => setRevision((value) => value + 1);
   // The loader owns synchronous request state; Solid only observes its revision.
   let cron = createInitialCronState<CronCompactJob>();
-  let showError = false;
+  let showError: false | "read" | "access" = false;
   let readAccess = false;
   let dirty = true;
+  let retryPending = false;
+  const retry = createGatewayRetryOwner();
   let active = true;
   let presentationScope = 0;
   const visible = (isPresented = presented()) =>
@@ -58,7 +61,7 @@ export function createSessionAutomationInventory(
   };
   const error = () => {
     revision();
-    return showError;
+    return Boolean(showError);
   };
 
   const readable = () => {
@@ -67,6 +70,8 @@ export function createSessionAutomationInventory(
   };
 
   function reset(source: ApplicationGateway | undefined, key: string, retain = false) {
+    retry.reset();
+    retryPending = false;
     retireCronJobsRequest(cron);
     readAccess = canPresentGatewayMethod(source?.snapshot, "cron.list", "operator.read", {
       requireAdvertisement: false,
@@ -122,6 +127,8 @@ export function createSessionAutomationInventory(
     ) {
       return;
     }
+    retry.cancel();
+    retryPending = false;
     dirty = false;
     const pending = loadCompactCronJobsPage(current, { append, event });
     publish();
@@ -130,8 +137,20 @@ export function createSessionAutomationInventory(
       return;
     }
     // The loader pauses trailing reads while hidden; retain one visible catch-up.
-    dirty ||= !visible();
-    showError = current.cronJobsError !== null;
+    showError =
+      current.cronJobsError !== null ? (current.cronJobsReadDenied ? "access" : "read") : false;
+    dirty ||= !visible() || Boolean(showError);
+    if (showError && visible() && !current.cronJobsReadDenied) {
+      retryPending = true;
+      retry.schedule(() => {
+        retryPending = false;
+        if (cron === current) {
+          void load();
+        }
+      });
+    } else if (!showError || current.cronJobsReadDenied) {
+      retry.reset();
+    }
     publish();
   }
 
@@ -162,7 +181,7 @@ export function createSessionAutomationInventory(
               reset(source, key, identity === nextIdentity && readAccess === nextReadAccess);
               identity = nextIdentity;
             }
-            if (dirty) {
+            if (dirty && !retryPending && !cron.cronJobsReadDenied) {
               void load();
             }
           });
@@ -177,6 +196,8 @@ export function createSessionAutomationInventory(
             unsubscribe();
             unsubscribeEvents();
             connection.dispose();
+            retry.reset();
+            retryPending = false;
             retireCronJobsRequest(cron);
           };
         });
@@ -184,10 +205,12 @@ export function createSessionAutomationInventory(
           <For each={[presented()]}>
             {(shown) => {
               onSettled(() => {
-                if (shown) {
+                if (shown && !cron.cronJobsReadDenied) {
                   void load({ isPresented: true });
                 }
                 return () => {
+                  retry.cancel();
+                  retryPending = false;
                   dirty = true;
                 };
               });
@@ -200,7 +223,10 @@ export function createSessionAutomationInventory(
   );
   onSettled(() => {
     const activate = () => {
-      if (dirty) {
+      if (!visible()) {
+        retry.cancel();
+        retryPending = false;
+      } else if (dirty && !cron.cronJobsReadDenied) {
         void load();
       }
     };
@@ -209,6 +235,7 @@ export function createSessionAutomationInventory(
     activate();
     return () => {
       active = false;
+      retry.reset();
       stopVisibility();
       stopFocus();
     };
@@ -225,6 +252,10 @@ export function createSessionAutomationInventory(
     available: () => readable() && Boolean(state().cronSessionFilter),
     readable,
     error,
+    readDenied: () => {
+      revision();
+      return showError === "access";
+    },
     refresh: () => load(),
     loadMore: () => load({ append: true }),
   };
@@ -237,8 +268,6 @@ export type ChatSummaryAutomationsProps = SessionAutomationInventoryProps & {
   desktop?: { expanded: boolean; onExpandedChange: (expanded: boolean) => void };
   /** Stable session-owned instance shared with mobile, when supplied by the parent. */
   inventory?: SessionAutomationInventory;
-  /** A positive native fact only; false does not exclude paused automations. */
-  hasAutomation?: boolean;
   onNavigate?: (jobId: string) => void;
 };
 
@@ -439,7 +468,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
           );
         }}
       </For>
-      {inventory.error() && inventory.connected() && (
+      {inventory.readDenied() && inventory.connected() && (
         <div class="chat-summary__automation-error">
           <span role="status">
             {t(
@@ -476,22 +505,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
       <Show when={inventory.readable()}>
         <Show
           when={inventory.jobs().length > 0}
-          fallback={
-            <>
-              {props.hasAutomation &&
-                inventory.available() &&
-                inventory.connected() &&
-                !inventory.loaded() &&
-                !inventory.error() && (
-                  <div class="chat-summary__automation-pending" role="status">
-                    {t("chat.sessionDetails.automations")}
-                    <span class="session-run-spinner" aria-hidden="true" />
-                    <span class="sr-only">{t("chat.sessionDetails.automationLoading")}</span>
-                  </div>
-                )}
-              {inventory.error() && inventory.connected() && content()}
-            </>
-          }
+          fallback={<>{inventory.readDenied() && inventory.connected() && content()}</>}
         >
           <Show
             when={props.desktop}

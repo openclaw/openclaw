@@ -443,6 +443,7 @@ export async function resolveGatewayScopedTools(
     sessionControlAuthority,
     sandboxSessionRenameOnly,
     conversationReadOrigin: params.conversationReadOrigin,
+    inputProvenance: params.inputProvenance,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     skillWorkshop: params.skillWorkshop,
     allowMediaInvokeCommands: params.allowMediaInvokeCommands,

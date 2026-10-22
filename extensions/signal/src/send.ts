@@ -2,7 +2,6 @@ import type { MediaPlaceholderTextFact } from "openclaw/plugin-sdk/channel-inbou
 import {
   createMessageReceiptFromOutboundResults,
   type MessageReceipt,
-  type MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
@@ -148,77 +147,6 @@ function buildTargetParams(target: SignalTarget): SignalTargetParams {
   return { username: [target.username] };
 }
 
-function createSignalSendReceipt(params: {
-  messageId: string;
-  timestamp?: number;
-  target: SignalTarget;
-  kind: MessageReceiptPartKind;
-  replyToId?: string;
-  nativeReplyStatus?: "sent" | "fallback";
-}): MessageReceipt {
-  const messageId = params.messageId.trim();
-  return createMessageReceiptFromOutboundResults({
-    results:
-      messageId && messageId !== "unknown"
-        ? [
-            {
-              channel: "signal",
-              messageId,
-              ...(params.timestamp != null ? { timestamp: params.timestamp } : {}),
-              ...(params.target.type === "group"
-                ? { chatId: params.target.groupId }
-                : {
-                    toJid:
-                      params.target.type === "recipient"
-                        ? params.target.recipient
-                        : params.target.username,
-                  }),
-              meta: {
-                targetType: params.target.type,
-                ...(params.replyToId
-                  ? {
-                      replyToId: params.replyToId,
-                      nativeReplyStatus: params.nativeReplyStatus ?? "sent",
-                    }
-                  : {}),
-              },
-            },
-          ]
-        : [],
-    kind: params.kind,
-    ...(params.replyToId ? { replyToId: params.replyToId } : {}),
-  });
-}
-
-function parseSignalReplyTimestamp(raw: string | null | undefined): number | undefined {
-  const value = normalizeOptionalString(raw);
-  if (!value || !/^\d+$/.test(value)) {
-    return undefined;
-  }
-  return asPositiveSafeInteger(Number(value));
-}
-
-function resolveSignalQuoteParams(opts: SignalSendOpts):
-  | {
-      replyToId: string;
-      params: Record<string, unknown>;
-    }
-  | undefined {
-  const timestamp = parseSignalReplyTimestamp(opts.replyToId);
-  const author = normalizeOptionalString(opts.replyToAuthor);
-  if (timestamp === undefined || !author) {
-    return undefined;
-  }
-  return {
-    replyToId: String(timestamp),
-    params: {
-      quoteTimestamp: timestamp,
-      quoteAuthor: author,
-      quoteMessage: opts.replyToBody ?? "",
-    },
-  };
-}
-
 export async function sendMessageSignal(
   to: string,
   text: string,
@@ -289,7 +217,23 @@ export async function sendMessageSignal(
 
   Object.assign(params, buildTargetParams(target));
 
-  const quote = resolveSignalQuoteParams(opts);
+  const rawReplyToId = normalizeOptionalString(opts.replyToId);
+  const quoteTimestamp =
+    rawReplyToId && /^\d+$/.test(rawReplyToId)
+      ? asPositiveSafeInteger(Number(rawReplyToId))
+      : undefined;
+  const quoteAuthor = normalizeOptionalString(opts.replyToAuthor);
+  const quote =
+    quoteTimestamp !== undefined && quoteAuthor
+      ? {
+          replyToId: String(quoteTimestamp),
+          params: {
+            quoteTimestamp,
+            quoteAuthor,
+            quoteMessage: opts.replyToBody ?? "",
+          },
+        }
+      : undefined;
   const sendOpts = {
     baseUrl,
     timeoutMs: opts.timeoutMs,
@@ -328,15 +272,32 @@ export async function sendMessageSignal(
       sourceTimestamp: timestamp,
     });
   }
+  const receiptMessageId = messageId.trim();
   return {
     messageId,
     timestamp,
-    receipt: createSignalSendReceipt({
-      messageId,
-      target,
+    receipt: createMessageReceiptFromOutboundResults({
+      results:
+        receiptMessageId && receiptMessageId !== "unknown"
+          ? [
+              {
+                channel: "signal",
+                messageId: receiptMessageId,
+                ...(timestamp != null ? { timestamp } : {}),
+                ...(target.type === "group"
+                  ? { chatId: target.groupId }
+                  : { toJid: target.type === "recipient" ? target.recipient : target.username }),
+                meta: {
+                  targetType: target.type,
+                  ...(quote
+                    ? { replyToId: quote.replyToId, nativeReplyStatus: nativeReplyStatus ?? "sent" }
+                    : {}),
+                },
+              },
+            ]
+          : [],
       kind: attachments && attachments.length > 0 ? "media" : "text",
-      ...(quote ? { replyToId: quote.replyToId, nativeReplyStatus } : {}),
-      ...(timestamp != null ? { timestamp } : {}),
+      ...(quote ? { replyToId: quote.replyToId } : {}),
     }),
   };
 }

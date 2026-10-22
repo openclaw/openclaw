@@ -64,7 +64,6 @@ describe("native parent retirement after rotation", () => {
     async (_difference, parentOverride, historyOverride) => {
       const releasePin = vi.fn();
       const { client, monitor } = createMonitorFixture({
-        recoveryPollDelaysMs: [],
         retainParentThread: () => releasePin,
       });
       const original = {

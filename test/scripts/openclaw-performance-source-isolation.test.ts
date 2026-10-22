@@ -5,24 +5,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-
-const WORKFLOW = ".github/workflows/openclaw-performance.yml";
+import { readPerformanceWorkflow } from "./openclaw-performance-workflow.test-support.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-type WorkflowStep = {
-  name?: string;
-  run?: string;
-  env?: Record<string, string>;
-  with?: Record<string, string>;
-};
-
-type Workflow = {
-  env?: Record<string, string>;
-  jobs?: Record<string, { env?: Record<string, string>; steps?: WorkflowStep[] }>;
-};
-
 it("isolates the source performance gateway from network and scheduled work", () => {
-  const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
+  const workflow = readPerformanceWorkflow();
   const job = workflow.jobs?.source_performance;
   const targetStepName = "Run OpenClaw source performance probes";
   const jobSteps = job?.steps ?? [];
@@ -262,7 +249,9 @@ exit "$status"
       `dist/entry.js\ngateway\nhealth\n--port\n${gatewayPort}\n`,
     );
     expect(readCapture("benchmark.argv")).toContain(
-      "--import\ntsx\n/fixture/helpers/scripts/bench-cli-startup.ts\n",
+      "--import\ntsx\n/fixture/helpers/scripts/bench-cli-startup.ts\n" +
+        "--entry\n/fixture/workspace/openclaw.mjs\n" +
+        "--case\ngatewayHealthJsonWarmState\n--case\ngatewayHealthJsonFreshState\n",
     );
     expect(readCapture("gateway.terminated")).toBe("terminated\n");
     expect([gatewayPaths.home, healthPaths.home].map(existsSync)).toEqual([false, false]);

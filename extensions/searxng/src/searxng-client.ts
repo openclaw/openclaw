@@ -135,7 +135,6 @@ export async function runSearxngSearch(params: {
   count?: number;
   categories?: string;
   language?: string;
-  baseUrl?: string;
   timeoutSeconds?: number;
   cacheTtlMinutes?: number;
   signal?: AbortSignal;
@@ -147,7 +146,7 @@ export async function runSearxngSearch(params: {
   );
   const categories = params.categories ?? resolveSearxngCategories(params.config);
   const language = params.language ?? resolveSearxngLanguage(params.config);
-  const baseUrl = params.baseUrl ?? resolveSearxngBaseUrl(params.config);
+  const baseUrl = resolveSearxngBaseUrl(params.config);
   const timeoutSeconds = resolveTimeoutSeconds(
     params.timeoutSeconds ?? params.config?.tools?.web?.search?.timeoutSeconds,
     DEFAULT_TIMEOUT_SECONDS,
