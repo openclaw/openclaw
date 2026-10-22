@@ -364,38 +364,6 @@ describe("createBeamMirrorRunner", () => {
     expect(warnings).toEqual([]);
   });
 
-  it("stops before a paused transcript read settles without resuming mirror work", async () => {
-    vi.useFakeTimers();
-    const read = beamTestBarrier();
-    const list = vi.fn();
-    const { sent, warnings } = fixture;
-    const runner = fixture.scheduled({
-      sessions: beamTestSessions(["t1", "t2"]),
-      onList: list,
-      onRead: read.run,
-    });
-
-    try {
-      const tick = runner.tick();
-      await read.started;
-      const firstStop = runner.stop();
-      expect(runner.stop()).toBe(firstStop);
-      await Promise.all([firstStop, tick]);
-
-      read.release();
-      await read.run.mock.results[0]?.value;
-
-      expect(read.run).toHaveBeenCalledOnce();
-      expect(sent).toEqual([]);
-      expect(warnings).toEqual([]);
-      await runner.tick();
-      expect(list).toHaveBeenCalledOnce();
-    } finally {
-      read.release();
-      await runner.stop();
-    }
-  });
-
   it("keeps one catalog and upload path active across missed scheduler periods", async () => {
     vi.useFakeTimers();
     const list = beamTestBarrier();
@@ -590,48 +558,53 @@ describe("createBeamMirrorRunner", () => {
 });
 
 describe("createBeamMirrorService", () => {
-  it("stops before catalog listing settles without starting reads or uploads", async () => {
-    vi.useFakeTimers();
-    const context = beamTestServiceContext();
-    const list = beamTestBarrier();
-    const read = vi.fn();
-    const catalog = createBeamTestCatalog({
-      sessions: beamTestSessions(["t1"], Date.now()),
-      onList: list.run,
-      onRead: read,
-    });
-    const listCatalogs = vi
-      .spyOn(sessionCatalogRuntime, "listActiveSessionCatalogs")
-      .mockReturnValue([catalog]);
-    const upload = vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockResolvedValue({
-      response: new Response("{}", { status: 200 }),
-      finalUrl: "https://team.example/api/v1/beam/sessions",
-      release: vi.fn(async () => undefined),
-    });
-    const service = createBeamMirrorService({
-      runtime: createBeamTestRuntime(beamTestMirrorConfig()),
-    });
-
-    try {
-      await service.start(context);
-      await vi.advanceTimersByTimeAsync(0);
-      await list.started;
-
-      await context.scheduler.stop();
-      expect(read).not.toHaveBeenCalled();
-      expect(upload).not.toHaveBeenCalled();
-
-      list.release();
-      await list.run.mock.results[0]?.value;
-
-      expect(read).not.toHaveBeenCalled();
-      expect(upload).not.toHaveBeenCalled();
-    } finally {
-      list.release();
-      upload.mockRestore();
-      listCatalogs.mockRestore();
-      await context.scheduler.stop();
-      vi.useRealTimers();
-    }
-  });
+  it.each(["list", "read"] as const)(
+    "stops before a paused %s settles without resuming work",
+    async (stage) => {
+      vi.useFakeTimers();
+      const context = beamTestServiceContext(),
+        pause = beamTestBarrier();
+      const list = stage === "list" ? pause.run : vi.fn();
+      const read = stage === "read" ? pause.run : vi.fn();
+      const catalogs = vi
+        .spyOn(sessionCatalogRuntime, "listActiveSessionCatalogs")
+        .mockReturnValue([
+          createBeamTestCatalog({
+            sessions: beamTestSessions(["t1", "t2"], Date.now()),
+            onList: list,
+            onRead: read,
+          }),
+        ]);
+      const upload = vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockResolvedValue({
+        response: new Response("{}", { status: 200 }),
+        finalUrl: "https://team.example/api/v1/beam/sessions",
+        release: vi.fn(async () => undefined),
+      });
+      const service = createBeamMirrorService({
+        runtime: createBeamTestRuntime(beamTestMirrorConfig()),
+      });
+      try {
+        await service.start(context);
+        const tick = vi.advanceTimersByTimeAsync(0);
+        await pause.started;
+        const stop = context.scheduler.stop();
+        expect(context.scheduler.stop()).toBe(stop);
+        await Promise.all([tick, stop]);
+        expect(read).toHaveBeenCalledTimes(stage === "read" ? 1 : 0);
+        expect(upload).not.toHaveBeenCalled();
+        pause.release();
+        await pause.run.mock.results[0]?.value;
+        await vi.advanceTimersByTimeAsync(0);
+        expect(list).toHaveBeenCalledOnce();
+        expect(read).toHaveBeenCalledTimes(stage === "read" ? 1 : 0);
+        expect(upload).not.toHaveBeenCalled();
+        expect(context.logger.warn).not.toHaveBeenCalled();
+      } finally {
+        pause.release();
+        upload.mockRestore();
+        catalogs.mockRestore();
+        await context.scheduler.stop();
+      }
+    },
+  );
 });
