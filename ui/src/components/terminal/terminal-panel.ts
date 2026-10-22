@@ -382,12 +382,24 @@ export function createTerminalPanel(
       const tab = terminalSessions.state.tabs.find((entry) => entry.id === id);
       const client = element.client;
       if (element.mobile && tab?.status === "live" && !tab.agentOwned) {
-        const confirmed = await showConfirmDialog({
-          title: i18n.t("terminal.closeSession"),
-          message: i18n.t("terminal.closeSessionMessage"),
-          confirmLabel: i18n.t("common.close"),
-          danger: true,
-        });
+        let confirmed: boolean;
+        try {
+          confirmed = await showConfirmDialog({
+            title: i18n.t("terminal.closeSession"),
+            message: i18n.t("terminal.closeSessionMessage"),
+            confirmLabel: i18n.t("common.close"),
+            danger: true,
+          });
+        } catch (error) {
+          if (
+            owner.isConnected &&
+            element.client === client &&
+            terminalSessions.state.tabs.includes(tab)
+          ) {
+            terminalSessions.setError(formatUiError(error));
+          }
+          return;
+        }
         if (
           !confirmed ||
           !owner.isConnected ||

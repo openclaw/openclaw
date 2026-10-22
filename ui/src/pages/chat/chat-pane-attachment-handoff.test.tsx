@@ -42,10 +42,8 @@ import { createChatAttachmentInputHandle } from "./components/chat-attachment-in
 import { ChatAttachmentInputs } from "./components/chat-attachment-inputs.tsx";
 import { AttachmentPreview } from "./components/chat-attachments.tsx";
 import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.tsx";
-import {
-  CHAT_COMPOSER_DRAFT_STORAGE_ERROR,
-  loadChatComposerState,
-} from "./composer-draft-storage.ts";
+import { loadChatComposerState } from "./composer-draft-storage.ts";
+import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "./composer-persistence-feedback.ts";
 import { ChatComposerPersistence } from "./composer-persistence.ts";
 import {
   activeQueuedMessageEdit,

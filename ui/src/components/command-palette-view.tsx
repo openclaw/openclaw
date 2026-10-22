@@ -246,10 +246,11 @@ function PaletteSearch(props: {
     latest(props.sessionRead);
     return null;
   };
+  // A cold receipt can suspend a pending probe; owner facts keep filtering live.
   const catalogSearchPending = () =>
     Boolean(current().searchQuery.trim()) &&
     !current().promptMode &&
-    (isPending(props.catalogRead) || isPending(props.modelRead));
+    current().catalogSearchPending;
   const readCatalog = () => {
     latest(props.catalogRead);
     latest(props.modelRead);

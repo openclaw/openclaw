@@ -661,7 +661,6 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     reads: presentation.reads,
     canManageCron,
     cronModelSuggestions: presentation.modelSuggestions,
-    modelSuggestionsError: presentation.modelError,
     listTab,
     detailTab,
     actions,

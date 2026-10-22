@@ -1,8 +1,9 @@
-import { createMemo, lazy, Loading, Show } from "solid-js";
+import { createMemo, lazy, Show } from "solid-js";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import type { ChatAttachmentRead } from "./chat-attachment-reads.ts";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 
 registerEnglishCatalog(registerChatComposerEnglish);
 
@@ -59,9 +60,9 @@ export function AttachmentPreview(
   });
   return (
     <Show when={entries().length > 0}>
-      <Loading>
+      <ChatLazyBoundary>
         <AttachmentPreviewStrip entries={entries()} controls={props} />
-      </Loading>
+      </ChatLazyBoundary>
     </Show>
   );
 }
