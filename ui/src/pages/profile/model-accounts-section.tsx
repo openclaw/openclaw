@@ -30,6 +30,7 @@ function gatewayEndpoint(gatewayUrl: string): string {
 
 function AccountRow(
   props: StateProps & {
+    pending: boolean;
     row:
       | { kind: "linked"; link: { provider: string; authProfileId: string } }
       | { kind: "saved"; account: UserModelAccount };
@@ -96,7 +97,7 @@ function AccountRow(
                 ? `${action()}: ${provider()} · ${account()?.label ?? reference().authProfileId}`
                 : `${action()}: ${provider()} · ${label()} (${reference().authProfileId})`
             }
-            disabled={props.actions.saving() || state().busy}
+            disabled={props.pending || props.actions.saving() || state().busy}
             onClick={() => {
               void (linked()
                 ? props.actions.updateAccount("unlink", reference().provider)
@@ -338,7 +339,7 @@ function SignIn(props: StateProps) {
   );
 }
 
-function ModelAccountRows(props: StateProps) {
+export function ModelAccountInventory(props: StateProps & { pending: boolean }) {
   const state = () => props.readState();
   return (
     <>
@@ -351,6 +352,7 @@ function ModelAccountRows(props: StateProps) {
             <AccountRow
               readState={props.readState}
               actions={props.actions}
+              pending={props.pending}
               row={{ kind: "linked", link: link() }}
             />
           )}
@@ -367,6 +369,7 @@ function ModelAccountRows(props: StateProps) {
           <AccountRow
             readState={props.readState}
             actions={props.actions}
+            pending={props.pending}
             row={{ kind: "saved", account: account() }}
           />
         )}
@@ -378,7 +381,7 @@ function ModelAccountRows(props: StateProps) {
             <button
               type="button"
               class="btn btn--sm profile-auth-accounts-more"
-              disabled={props.actions.saving() || state().busy}
+              disabled={props.pending || props.actions.saving() || state().busy}
               onClick={() => void state().loadAccounts(state().nextCursor)}
             >
               {t("profilePage.modelAccounts.loadMore")}
@@ -386,6 +389,14 @@ function ModelAccountRows(props: StateProps) {
           }
         />
       </Show>
+    </>
+  );
+}
+
+function ModelAccountActions(props: StateProps) {
+  const state = () => props.readState();
+  return (
+    <>
       <SignIn readState={props.readState} actions={props.actions} />
       <Show when={state().target?.canAdmin}>
         <SettingsRow
@@ -441,7 +452,7 @@ function ModelAccountRows(props: StateProps) {
   );
 }
 
-export function ModelAccountsSection(props: StateProps) {
+export function ModelAccountsSection(props: StateProps & { inventory: JSX.Element }) {
   const state = () => props.readState();
   const snapshot = () => state().props.target.read().gateway;
   const person = () =>
@@ -528,7 +539,8 @@ export function ModelAccountsSection(props: StateProps) {
           />
         }
       >
-        <ModelAccountRows readState={props.readState} actions={props.actions} />
+        {props.inventory}
+        <ModelAccountActions readState={props.readState} actions={props.actions} />
       </Show>
     </SettingsSection>
   );

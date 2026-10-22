@@ -9,6 +9,7 @@ const usageArgs = ["sdk-usage-token", 137, fetchFn] as const;
 const codexArgs = [usageArgs[0], "sdk-account", usageArgs[1], fetchFn] as const;
 const geminiArgs = [...usageArgs, "openai"] as const;
 const minimaxArgs = [...usageArgs, { baseUrl: "https://usage.example/anthropic" }] as const;
+type UsageSdk = typeof import("./provider-usage.js");
 const preparationParams = {
   cfg: { agents: { defaults: { model: "synthetic/model" } } },
   agentId: "sdk-agent",
@@ -19,32 +20,24 @@ const preparationParams = {
 
 function usageCase(
   name: string,
-  provider: string,
   args: readonly unknown[],
-  invoke: (sdk: typeof import("./provider-usage.js")) => Promise<unknown>,
+  invoke: (sdk: UsageSdk) => Promise<unknown>,
 ) {
   return {
     name,
     ownerExport: name,
-    owner: `../infra/provider-usage.fetch.${provider}.js`,
+    owner: `../infra/provider-usage.fetch.${name.slice(5, -5).toLowerCase()}.js`,
     args,
-    load: async () => {
-      const sdk = await import("./provider-usage.js");
-      return () => invoke(sdk);
-    },
+    load: async () => invoke.bind(null, await import("./provider-usage.js")),
   };
 }
 const cases = [
-  usageCase("fetchClaudeUsage", "claude", usageArgs, (sdk) => sdk.fetchClaudeUsage(...usageArgs)),
-  usageCase("fetchCodexUsage", "codex", codexArgs, (sdk) => sdk.fetchCodexUsage(...codexArgs)),
-  usageCase("fetchDeepSeekUsage", "deepseek", usageArgs, (sdk) =>
-    sdk.fetchDeepSeekUsage(...usageArgs),
-  ),
-  usageCase("fetchGeminiUsage", "gemini", geminiArgs, (sdk) => sdk.fetchGeminiUsage(...geminiArgs)),
-  usageCase("fetchMinimaxUsage", "minimax", minimaxArgs, (sdk) =>
-    sdk.fetchMinimaxUsage(...minimaxArgs),
-  ),
-  usageCase("fetchZaiUsage", "zai", usageArgs, (sdk) => sdk.fetchZaiUsage(...usageArgs)),
+  usageCase("fetchClaudeUsage", usageArgs, (sdk) => sdk.fetchClaudeUsage(...usageArgs)),
+  usageCase("fetchCodexUsage", codexArgs, (sdk) => sdk.fetchCodexUsage(...codexArgs)),
+  usageCase("fetchDeepSeekUsage", usageArgs, (sdk) => sdk.fetchDeepSeekUsage(...usageArgs)),
+  usageCase("fetchGeminiUsage", geminiArgs, (sdk) => sdk.fetchGeminiUsage(...geminiArgs)),
+  usageCase("fetchMinimaxUsage", minimaxArgs, (sdk) => sdk.fetchMinimaxUsage(...minimaxArgs)),
+  usageCase("fetchZaiUsage", usageArgs, (sdk) => sdk.fetchZaiUsage(...usageArgs)),
   {
     name: "prepareSimpleCompletionModelForAgent",
     ownerExport: "acquireSimpleCompletionModelForAgent",

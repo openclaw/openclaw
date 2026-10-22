@@ -38,9 +38,8 @@ export type PreparedAgentRunTerminalReply = {
 /** Projects payloads through the shared message-presentation acknowledgement rule. */
 export function filterAgentRunTerminalPayloadsForPresentation(params: {
   payloads: ReplyPayload[] | undefined;
-  isHeartbeatTrigger: boolean;
 }): ReplyPayload[] | undefined {
-  if (params.isHeartbeatTrigger || !params.payloads) {
+  if (!params.payloads) {
     return params.payloads;
   }
   return params.payloads.filter((payload) => {

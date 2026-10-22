@@ -28,11 +28,7 @@ vi.mock("../infra/outbound/deliver-runtime.js", () => {
   };
 });
 
-const log = {
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-};
+const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
 function drain(deliver?: Parameters<typeof drainPendingDeliveries>[0]["deliver"]) {
   return drainPendingDeliveries({
@@ -49,9 +45,6 @@ beforeEach(() => {
   resetGatewayWorkAdmission();
   mocks.coreDrainPendingDeliveries.mockReset().mockResolvedValue(undefined);
   mocks.deliverOutboundPayloads.mockReset().mockResolvedValue([]);
-  log.info.mockClear();
-  log.warn.mockClear();
-  log.error.mockClear();
 });
 
 afterEach(resetGatewayWorkAdmission);

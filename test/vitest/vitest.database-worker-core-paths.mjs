@@ -189,10 +189,10 @@ export const databaseWorkerCoreTestFiles = [
   "src/plugin-sdk/session-store-runtime.writer-claim.test.ts",
   "src/talk/client-voice-session.digest-retry.test.ts",
   "src/talk/voice-consult-transcript-race.test.ts",
-  "src/infra/heartbeat-runner.exact-session-busy.test.ts",
-  "src/infra/heartbeat-runner.wake-owner-resolution.test.ts",
-  "src/infra/heartbeat-exec-session-event.test.ts",
-  "src/infra/heartbeat-runner.restart-continuation.test.ts",
+  "src/infra/exec-session-event.test.ts",
+  "src/infra/session-delivery-restart.test.ts",
+  "src/infra/manual-session-wake.test.ts",
+  "test/e2e/qa-lab/runtime/heartbeat-active-hours-runtime.test.ts",
   "src/plugin-sdk/session-transcript-lock.native.test.ts",
   "src/plugin-sdk/session-transcript-lock.worker.test.ts",
   "src/gateway/worker-environments/worker-turn-transcript-target.test.ts",
@@ -1375,7 +1375,6 @@ const databaseWorkerCoreTestFileSet = new Set(databaseWorkerCoreTestFiles);
 
 // Preserve watch admission for consumers previously inferred into fast lanes.
 export const databaseWorkerCoreFormerFastKinds = new Map([
-  ["src/infra/heartbeat-runner.exact-session-busy.test.ts", "unitFast"],
   ["src/commands/doctor/shared/xai-auto-retirement.test.ts", "unitFast"],
   ["src/agents/auth-profiles/session-override.model-endpoint.test.ts", "unitFast"],
   ["src/agents/harness/execution-environment.worker.test.ts", "unitFastIsolated"],

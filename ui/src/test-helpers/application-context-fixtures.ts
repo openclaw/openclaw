@@ -69,16 +69,11 @@ export function createApplicationGateway(
   } as unknown as ApplicationGateway;
   return {
     gateway,
-    publishEvent: (event: GatewayEventFrame) => {
-      for (const listener of eventListeners) {
-        listener(event);
-      }
-    },
+    publishEvent: (event: GatewayEventFrame) =>
+      eventListeners.forEach((listener) => listener(event)),
     publish(this: void, next: ApplicationGatewaySnapshot) {
       snapshot = next;
-      for (const listener of listeners) {
-        listener(snapshot);
-      }
+      listeners.forEach((listener) => listener(snapshot));
     },
   };
 }
@@ -97,9 +92,7 @@ export function createNavigationPreferencesFixture(): ApplicationContext["naviga
     },
     update(patch) {
       snapshot = { ...snapshot, ...patch };
-      for (const listener of listeners) {
-        listener(snapshot);
-      }
+      listeners.forEach((listener) => listener(snapshot));
     },
     subscribe: (listener) => registerListener(listeners, listener),
   };

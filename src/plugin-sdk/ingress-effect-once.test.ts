@@ -1,9 +1,8 @@
 import { mkdirSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { createIngressEffectOnce } from "./ingress-effect-once.js";
 
@@ -14,23 +13,19 @@ const EFFECT_ONCE_PARAMS = {
   stateMaxEntries: 100,
 };
 
-let stateDir = "";
+const tempDirs = createTempDirTracker();
+let stateDir: string;
 
-beforeEach(async () => {
+beforeEach(() => {
   resetPluginStateStoreForTests();
-  stateDir = await fs.realpath(
-    await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ingress-effect-once-")),
-  );
+  stateDir = tempDirs.make("openclaw-ingress-effect-once-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
 });
 
-afterEach(async () => {
+afterEach(() => {
   resetPluginStateStoreForTests();
   vi.unstubAllEnvs();
-  if (stateDir) {
-    await fs.rm(stateDir, { recursive: true, force: true });
-    stateDir = "";
-  }
+  tempDirs.cleanup();
 });
 
 async function breakStateDirectory() {

@@ -45,6 +45,7 @@ export class ModelAccountsState {
   nextCursor: string | undefined;
   inventoryLoading = false;
   inventoryError: string | null = null;
+  inventoryReceipt = { result: Promise.resolve<string | null>(null) };
   action: AccountAction | null = null;
   error: string | null = null;
   notice: "connected" | "cancelled" | "expired" | "selected" | "cleared" | null = null;
@@ -128,6 +129,7 @@ export class ModelAccountsState {
     this.inventoryRequest += 1;
     this.inventoryLoading = false;
     this.inventoryError = null;
+    this.inventoryReceipt = { result: Promise.resolve<string | null>(null) };
     this.catalogReceipt = { result: Promise.resolve(null) };
     this.statusReceipt = { result: Promise.resolve(null) };
     this.action = null;
@@ -160,17 +162,23 @@ export class ModelAccountsState {
     }));
   }
 
-  async loadAccounts(cursor?: string) {
+  loadAccounts(cursor?: string): Promise<void> {
     const target = this.target;
     if (!target || !this.connected) {
-      return;
+      return Promise.resolve();
     }
     const request = ++this.inventoryRequest;
-    const isCurrent = () =>
-      this.connected && this.target === target && request === this.inventoryRequest;
     this.inventoryLoading = true;
     this.inventoryError = null;
+    const result = this.readAccounts(target, request, cursor);
+    this.inventoryReceipt = { result };
     this.publish();
+    return result.then(() => {});
+  }
+
+  private async readAccounts(target: AccountTarget, request: number, cursor?: string) {
+    const isCurrent = () =>
+      this.connected && this.target === target && request === this.inventoryRequest;
     try {
       const result = await target.client.request<UsersListModelAccountsResult>(
         "users.listModelAccounts",
@@ -181,10 +189,13 @@ export class ModelAccountsState {
         this.nextCursor = result.nextCursor;
         this.applyLinks(result.links);
       }
+      return null;
     } catch (error) {
       if (isCurrent()) {
         this.inventoryError = formatUiError(error);
+        return this.inventoryError;
       }
+      return null;
     } finally {
       if (isCurrent()) {
         this.inventoryLoading = false;

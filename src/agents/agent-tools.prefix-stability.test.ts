@@ -76,13 +76,11 @@ it.each<[string, ToolOptions]>([
   ],
   ["media completion", completionTurn("image_generate")],
   [
-    "heartbeat",
+    "scheduled",
     {
       ...session,
-      runId: "run-heartbeat",
-      trigger: "heartbeat",
-      enableHeartbeatTool: true,
-      forceHeartbeatTool: true,
+      runId: "run-scheduled",
+      trigger: "cron",
       sourceReplyDeliveryMode: "message_tool_only",
     },
   ],

@@ -431,7 +431,6 @@ src/auto-reply/commands-registry.data.ts
 src/auto-reply/commands-registry.shared.ts
 src/auto-reply/group-activation.ts
 src/auto-reply/heartbeat-filter.ts
-src/auto-reply/heartbeat-tool-response.ts
 src/auto-reply/heartbeat.ts
 src/auto-reply/reply/commands-slash-parse.ts
 src/auto-reply/reply/delivery-hints.ts

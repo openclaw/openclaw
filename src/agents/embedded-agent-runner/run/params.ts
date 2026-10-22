@@ -76,7 +76,7 @@ export type RunEmbeddedAgentParams = Pick<
   sandboxSessionKey?: string;
   /** Explicit sandbox and tool-policy owner when the policy session key is unscoped. */
   sandboxAgentId?: string;
-  /** What initiated this agent run: "user", "heartbeat", "cron", "memory", "overflow", or "manual". */
+  /** The user, event, automation, or maintenance owner that initiated this run. */
   trigger?: EmbeddedRunTrigger;
   /** Store-private runtime authority forwarded only by the cron execution owner. */
   scheduledRuntimeAuthority?: CronRuntimeAuthority;
@@ -127,12 +127,6 @@ export type RunEmbeddedAgentParams = Pick<
   promptMode?: PromptMode;
   /** Keep the message tool available even when a narrow profile would omit it. */
   forceMessageTool?: boolean;
-  /** Include the heartbeat response tool for structured heartbeat outcomes. */
-  enableHeartbeatTool?: boolean;
-  /** Keep the heartbeat response tool available even when a narrow profile would omit it. */
-  forceHeartbeatTool?: boolean;
-  /** Heartbeat-transported turn that continues a conversation (its own command completion). */
-  continuesConversation?: boolean;
   /** Allow runtime plugins for this run to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
   /** @deprecated Use sessionTarget plus sessionId/sessionKey/agentId for runtime identity. */
@@ -307,9 +301,6 @@ export type EmbeddedForegroundPromptContext = Pick<
   | "contextWindow"
   | "promptMode"
   | "forceMessageTool"
-  | "enableHeartbeatTool"
-  | "forceHeartbeatTool"
-  | "continuesConversation"
   | "allowGatewaySubagentBinding"
   | "extraSystemPrompt"
   | "gitCoauthorPrompt"

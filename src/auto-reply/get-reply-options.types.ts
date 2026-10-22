@@ -279,12 +279,6 @@ export type GetReplyOptions = {
   forceCodeModeTools?: boolean;
   /** Runtime tool allow-list for this turn. Empty means no tools. */
   toolsAllow?: string[];
-  /** If true, include the heartbeat response tool for structured heartbeat outcomes. */
-  enableHeartbeatTool?: boolean;
-  /** If true, keep the heartbeat response tool available even under narrow tool profiles. */
-  forceHeartbeatTool?: boolean;
-  /** Heartbeat-transported turn that continues a conversation (its own command completion). */
-  continuesConversation?: boolean;
   /**
    * @deprecated Ignored. The tool-failure warning is delivered whenever a run ends
    * without a reply and cannot be suppressed. Kept only so plugin-sdk callers that
