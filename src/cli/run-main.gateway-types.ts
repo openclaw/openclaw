@@ -4,6 +4,7 @@ import type { ExplicitGatewayAuth } from "../gateway/credentials.js";
 export type GatewayLaunchTarget = Parameters<typeof runRemoteGatewayInferenceOnboarding>[0];
 
 export type BareRootLaunchTarget =
+  | { kind: "config-read-failure"; diagnostic: string }
   | { kind: "onboarding"; classic?: boolean }
   | { kind: "remote-gateway-inference"; target: GatewayLaunchTarget }
   | { kind: "tui"; local: true }

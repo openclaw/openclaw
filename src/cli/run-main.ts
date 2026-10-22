@@ -31,7 +31,7 @@ import {
 import { resolveCliStartupPolicy as resolveCliStartupPolicyForArgv } from "./command-startup-policy.js";
 import { maybeRunCliInContainer, parseCliContainerArgs } from "./container-target.js";
 import { tryRunGatewayServiceUpdateCapabilityProbe } from "./daemon-cli/update-capability.js";
-import { shouldStartLocalOnboarding } from "./fresh-install-config.js";
+import { resolveBareRootLaunchTarget } from "./fresh-install-config.js";
 import {
   isGatewayRunInvocationArgv,
   resolveGatewayCommandPath,
@@ -167,23 +167,6 @@ async function tryRunGatewayRunFastPath(
     process.exitCode = error.exitCode;
   }
   return true;
-}
-
-async function resolveBareRootLaunchTarget(): Promise<BareRootLaunchTarget> {
-  const { readConfigSnapshotForEngineSelection } =
-    await import("../commands/config-preflight-snapshot.js");
-  await readConfigSnapshotForEngineSelection();
-  const { readConfigFileSnapshot } = await import("../config/config.js");
-  const snapshot = await readConfigFileSnapshot();
-  if (await shouldStartLocalOnboarding(snapshot)) {
-    return { kind: "onboarding" };
-  }
-  if (!snapshot.valid) {
-    return { kind: "onboarding", classic: true };
-  }
-  return resolveConfiguredTuiLaunchTarget(snapshot.config ?? snapshot.sourceConfig, {
-    hasConfiguredGateway: snapshot.sourceConfig.gateway !== undefined,
-  });
 }
 
 async function resolveConfiguredTuiLaunchTarget(
@@ -1115,10 +1098,15 @@ async function runCliWithPreparedOutputMode(
       await ensureCliEnvProxyDispatcher();
     }
     const bareRootLaunchTarget = shouldRunBareRootCommand
-      ? await resolveBareRootLaunchTarget()
+      ? await resolveBareRootLaunchTarget(resolveConfiguredTuiLaunchTarget)
       : null;
 
     if (bareRootLaunchTarget) {
+      if (bareRootLaunchTarget.kind === "config-read-failure") {
+        console.error(bareRootLaunchTarget.diagnostic);
+        process.exitCode = 1;
+        return;
+      }
       const launchPolicy = resolveBareRootLaunchPolicy(bareRootLaunchTarget);
       if (!requireInteractiveTty(launchPolicy.ttyMessage)) {
         return;

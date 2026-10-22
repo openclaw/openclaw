@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OnboardOptions } from "../commands/onboard-types.js";
+import { createConfigFileSnapshot } from "../config/io.snapshot-shared.js";
 import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -121,14 +122,20 @@ const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 const prompter = createEmptyWizardPrompter();
 const unchangedConfig = async (config: OpenClawConfig) => config;
 const unchangedParams = async ({ config }: { config: OpenClawConfig }) => config;
-const snapshot = (config: OpenClawConfig) => ({
-  exists: true,
-  valid: true,
-  config,
-  sourceConfig: config,
-  sourceConfigBeforeMigrations: config,
-  issues: [],
-});
+const snapshot = (config: OpenClawConfig) =>
+  createConfigFileSnapshot({
+    path: "/tmp/openclaw.json",
+    exists: true,
+    raw: JSON.stringify(config),
+    parsed: config,
+    sourceConfig: config,
+    sourceConfigBeforeMigrations: config,
+    runtimeConfig: config,
+    valid: true,
+    issues: [],
+    warnings: [],
+    legacyIssues: [],
+  });
 
 function runWizard(opts: OnboardOptions = {}) {
   return runSetupWizard(
@@ -264,9 +271,7 @@ describe("runSetupWizard default-agent ownership", () => {
       });
       mocks.readAuthority.mockResolvedValue({
         snapshot: {
-          exists: true,
-          valid: true,
-          config,
+          ...snapshot(config),
           hash: changed ? "foreign-revision" : "created-revision",
         },
         assertCurrent: () => {},

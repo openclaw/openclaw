@@ -323,6 +323,7 @@ describe("setupCommand", () => {
           issues: expect.arrayContaining([
             expect.objectContaining({ path: "<root>", message: expect.any(String) }),
           ]),
+          repairHint: "Run `openclaw doctor --fix` to repair, then retry.",
         });
       }
       expect(await fs.readFile(configPath)).toStrictEqual(original);
