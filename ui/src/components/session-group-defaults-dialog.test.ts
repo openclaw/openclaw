@@ -203,13 +203,18 @@ it("gates saving synchronously and lets a failed save retry the restored worktre
       inspectRepository: async () => repository,
       submit,
     });
-    const save = saveButton(modal)!;
     submitForm(modal);
     expect(submit).not.toHaveBeenCalled();
-    expect(save.disabled).toBe(true);
+    expect(saveButton(modal)?.disabled).toBe(true);
+    const cancelButton = Array.from(modal.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent === "Cancel",
+    )!;
+    cancelButton.focus();
     resolveRepository("git");
     await waitForSolid(() => {
-      expect(save.disabled).toBe(false);
+      expect(saveButton(modal)?.disabled).toBe(false);
+      expect(cancelButton.isConnected).toBe(true);
+      expect(document.activeElement).toBe(cancelButton);
       expect(
         modal.querySelector("#session-group-defaults-mode-trigger")?.getAttribute("data-value"),
       ).toBe("worktree");
@@ -222,7 +227,7 @@ it("gates saving synchronously and lets a failed save retry the restored worktre
     expect(submit).toHaveBeenCalledExactlyOnceWith(worktreeDefaults);
     resolveSave("Try saving again");
     await waitForSolid(() => {
-      expect(save.disabled).toBe(false);
+      expect(saveButton(modal)?.disabled).toBe(false);
       expect(modal.querySelector('[role="alert"]')?.textContent).toBe("Try saving again");
     });
     submitForm(modal);
@@ -231,5 +236,69 @@ it("gates saving synchronously and lets a failed save retry the restored worktre
   } finally {
     resolveRepository("git");
     resolveSave(null);
+  }
+});
+
+it("keeps the selected folder pending across a stale inspection and permission retry", async () => {
+  const initial = createDeferred<"git">();
+  const selected = createDeferred<"git">();
+  const retried = createDeferred<"git">();
+  const inspectRepository = fixture.mockRequest(
+    vi
+      .fn<DialogOptions["inspectRepository"]>()
+      .mockReturnValueOnce(initial.promise)
+      .mockReturnValueOnce(selected.promise)
+      .mockReturnValueOnce(retried.promise),
+  );
+  try {
+    const { modal, completed, submit } = await openDialog({
+      defaults: { ...defaults, worktree: true },
+      inspectRepository,
+    });
+    const folder = await openFolderPicker(modal);
+    modal.querySelector<HTMLButtonElement>('[data-value="agent-workspace"]')!.click();
+    await waitForSolid(() => {
+      expect(inspectRepository).toHaveBeenLastCalledWith(undefined);
+      expect(folder.textContent).toContain("Use the agent workspace");
+      expect(saveButton(modal)?.disabled).toBe(true);
+    });
+    initial.resolve("git");
+    await initial.promise;
+    await waitForSolid(() => {
+      expect(modal.querySelector('[data-session-group-environment="checking"]')).not.toBeNull();
+      expect(saveButton(modal)?.disabled).toBe(true);
+    });
+    submitForm(modal);
+    expect(submit).not.toHaveBeenCalled();
+
+    selected.reject({ code: "FORBIDDEN", message: "missing scope: operator.admin" });
+    await selected.promise.catch(() => {});
+    await waitForSolid(() => {
+      expect(modal.querySelector('[data-session-group-environment="restricted"]')).not.toBeNull();
+      expect(saveButton(modal)?.disabled).toBe(true);
+      expect(modal.querySelector("#session-group-defaults-folder-trigger")).toBe(folder);
+      expect(document.activeElement).toBe(folder);
+    });
+    const retry = Array.from(modal.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent === "Retry",
+    )!;
+    retry.click();
+    await waitForSolid(() => {
+      expect(inspectRepository).toHaveBeenCalledTimes(3);
+      expect(inspectRepository).toHaveBeenLastCalledWith(undefined);
+      expect(modal.querySelector('[data-session-group-environment="checking"]')).not.toBeNull();
+    });
+    retried.resolve("git");
+    await waitForSave(modal);
+    expect(
+      modal.querySelector("#session-group-defaults-mode-trigger")?.getAttribute("data-value"),
+    ).toBe("local");
+    submitForm(modal);
+    await completed;
+    expect(submit).toHaveBeenCalledExactlyOnceWith({ cwd: "", worktree: false });
+  } finally {
+    initial.resolve("git");
+    selected.resolve("git");
+    retried.resolve("git");
   }
 });

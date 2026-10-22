@@ -235,3 +235,53 @@ it("keeps details process observation through refreshes and follows its presente
   expect(request.mock.calls).toEqual([mainRead, workerRead, mainRead]);
   expect(details.querySelector(".chat-details__process")?.textContent).toContain("Main build");
 });
+
+it("keeps the full panel read-error flow while compact Details retains its shared rows", async () => {
+  const result = { ...completeList, processes: [process()] };
+  const retry = createDeferred<SessionsProcessesListResult>();
+  const request = vi
+    .fn()
+    .mockResolvedValueOnce(result)
+    .mockRejectedValueOnce(new Error("Worker reconnecting"))
+    .mockReturnValueOnce(retry.promise);
+  const { connection, mount } = mountProcesses(request);
+  const panel = document.createElement("openclaw-chat-processes-panel");
+  panel.sessionKey = "agent:main:parent";
+  const details = document.createElement("openclaw-chat-details-session");
+  details.props = {
+    sessionKey: panel.sessionKey,
+    currentAgentId: "main",
+    selectedSession: undefined,
+    messages: [],
+    onOpenProcesses: () => {},
+  };
+  details.presented = true;
+  details.desktop = true;
+  const surfaces = document.createElement("div");
+  surfaces.append(panel, details);
+  mount(surfaces);
+  await settle(panel, 0);
+  expect(request).toHaveBeenCalledOnce();
+  expect(panel.textContent).toContain("Build app");
+  expect(details.textContent).toContain("Build app");
+  connection.publishEvent("sessions.processes.changed", {
+    sessionKey: panel.sessionKey,
+    agentId: "main",
+  });
+  await settle(panel, 0);
+  expect(panel.textContent).not.toContain("Build app");
+  expect(panel.querySelector('[role="alert"]')?.textContent).toContain("Worker reconnecting");
+  expect(details.textContent).toContain("Build app");
+  expect(details.textContent).not.toContain("Worker reconnecting");
+  panel.querySelector<HTMLButtonElement>(".chat-processes__error button")!.click();
+  await settle(panel, 0);
+  expect(panel.querySelector('[role="alert"]')).toBeNull();
+  expect(panel.textContent).not.toContain("Build app");
+  expect(panel.querySelector('[role="status"]')?.getAttribute("aria-label")).toBe("Loading…");
+  expect(details.textContent).toContain("Build app");
+  retry.resolve(result);
+  await settle(panel, 0);
+  expect(panel.textContent).toContain("Build app");
+  expect(details.textContent).toContain("Build app");
+  expect(request).toHaveBeenCalledTimes(3);
+});

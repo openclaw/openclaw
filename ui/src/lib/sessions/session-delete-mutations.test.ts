@@ -9,6 +9,7 @@ import {
 import type { SessionsListResult } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
 import { sessionsResult } from "./session-capability.test-support.ts";
+import type { SessionListScope } from "./session-capability.ts";
 import { createSessionDeletionHarness as createDeletionHarness } from "./session-deletion.test-support.ts";
 
 function createSessionDeletionHarness(...args: Parameters<typeof createDeletionHarness>) {
@@ -21,7 +22,20 @@ function createSessionDeletionHarness(...args: Parameters<typeof createDeletionH
     ...h,
     rows: () => h.sessions.state.result?.sessions,
     keys: () => h.sessions.state.result?.sessions.map(({ key }) => key),
+    hold(scope: SessionListScope) {
+      onTestFinished(h.sessions.subscribeList(scope, () => {}));
+    },
+    async finish(operation: Promise<unknown>, row = h.beta, deleted = false) {
+      h.responses.get(row.key)!.resolve({ deleted });
+      await operation;
+    },
   };
+}
+
+async function loadedHarness() {
+  const h = createSessionDeletionHarness();
+  await h.sessions.refresh({ force: true });
+  return h;
 }
 
 describe("optimistic session deletion", () => {
@@ -46,28 +60,21 @@ describe("optimistic session deletion", () => {
           source: { generation: 5, environmentId: "device-environment", ownerEpoch: 70 },
         },
       });
-      try {
-        await h.sessions.refresh({ force: true });
-        const operation =
-          mode === "single"
-            ? h.sessions.delete(target.key, target)
-            : h.sessions.deleteMany([target]);
-        const settled =
-          mode === "single"
-            ? expect(operation).rejects.toBe(error)
-            : expect(operation).resolves.toEqual({
-                deleted: [],
-                errors: [{ target, error }],
-                preservedWorktrees: [],
-              });
-        h.responses.get(target.key)!.reject(error);
-        await settled;
-        expect(h.sessions.deletionState(target.key)).toBeUndefined();
-        expect(h.sessions.state.result?.sessions).toContainEqual(h.alpha);
-      } finally {
-        h.responses.get(target.key)?.resolve({ deleted: false });
-        h.sessions.dispose();
-      }
+      await h.sessions.refresh({ force: true });
+      const operation =
+        mode === "single" ? h.sessions.delete(target.key, target) : h.sessions.deleteMany([target]);
+      const settled =
+        mode === "single"
+          ? expect(operation).rejects.toBe(error)
+          : expect(operation).resolves.toEqual({
+              deleted: [],
+              errors: [{ target, error }],
+              preservedWorktrees: [],
+            });
+      h.responses.get(target.key)!.reject(error);
+      await settled;
+      expect(h.sessions.deletionState(target.key)).toBeUndefined();
+      expect(h.rows()).toContainEqual(h.alpha);
     },
   );
 
@@ -134,9 +141,8 @@ describe("optimistic session deletion", () => {
       vi.useFakeTimers();
       const h = createSessionDeletionHarness();
       const scope = { archivedFilter: "all" as const };
-      const stop = h.sessions.subscribeList(scope, () => {});
+      h.hold(scope);
       onTestFinished(() => {
-        stop();
         vi.useRealTimers();
       });
       await h.sessions.refresh({ force: true });
@@ -266,10 +272,9 @@ describe("optimistic session deletion", () => {
     const h = createSessionDeletionHarness();
     const smaller = { archivedFilter: "all" as const, limit: 1 };
     const larger = { ...smaller, limit: 2 };
-    const stops = [smaller, larger].map((scope) => h.sessions.subscribeList(scope, () => {}));
-    onTestFinished(() => {
-      stops.forEach((stop) => stop());
-    });
+    for (const scope of [smaller, larger]) {
+      h.hold(scope);
+    }
     await h.sessions.refreshList(smaller);
     await h.sessions.refreshList(larger);
     const operation = h.sessions.delete(h.beta.key);
@@ -292,14 +297,12 @@ describe("optimistic session deletion", () => {
   it("keeps held rollback positions separate from one-shot enumeration", async () => {
     const h = createSessionDeletionHarness();
     const scope = { archivedFilter: "all" as const, limit: 2 };
-    const stop = h.sessions.subscribeList(scope, () => {});
-    onTestFinished(stop);
+    h.hold(scope);
     await h.sessions.refreshList(scope);
     const operation = h.sessions.delete(h.beta.key);
     h.setRows([h.beta, h.alpha, h.sibling]);
     await h.sessions.list(scope);
-    h.responses.get(h.beta.key)!.resolve({ deleted: false });
-    await operation;
+    await h.finish(operation);
     expect(h.sessions.listSnapshot(scope).result?.sessions).toEqual([h.alpha, h.beta]);
   });
 
@@ -326,13 +329,11 @@ describe("optimistic session deletion", () => {
   it.each(["primary", "managed"] as const)("retains %s rollback through append", async (kind) => {
     const h = createSessionDeletionHarness();
     const scope = { limit: 2, ...(kind === "managed" ? { archivedFilter: "all" as const } : {}) };
-    const stop = h.sessions.subscribeList(scope, () => {});
-    onTestFinished(stop);
+    h.hold(scope);
     await h.sessions.refreshList(scope);
     const operation = h.sessions.delete(h.beta.key);
     await h.sessions.refreshList({ ...scope, offset: 2, append: true });
-    h.responses.get(h.beta.key)!.resolve({ deleted: false });
-    await operation;
+    await h.finish(operation);
     expect(h.sessions.listSnapshot(scope).result).toMatchObject({
       sessions: [h.alpha, h.beta, h.sibling],
       count: 3,
@@ -345,8 +346,7 @@ describe("optimistic session deletion", () => {
     await h.sessions.refresh({ limit: 2, force: true });
     const operation = h.sessions.delete(h.beta.key);
     await h.sessions.refresh({ limit: 1, force: true });
-    h.responses.get(h.beta.key)!.resolve({ deleted: false });
-    await operation;
+    await h.finish(operation);
     expect(h.sessions.state.result).toMatchObject({
       sessions: [h.alpha],
       count: 1,
@@ -357,23 +357,20 @@ describe("optimistic session deletion", () => {
   it("does not restore an old generation into another held list after seeing its replacement", async () => {
     const h = createSessionDeletionHarness();
     const scope = { archivedFilter: "all" as const };
-    const stop = h.sessions.subscribeList(scope, () => {});
-    onTestFinished(stop);
+    h.hold(scope);
     await h.sessions.refresh({ force: true });
     await h.sessions.refreshList(scope);
     const operation = h.sessions.delete(h.beta.key);
     const replacement = { ...h.beta, sessionId: "replacement-beta" };
     h.setRows([h.alpha, replacement, h.sibling]);
     await h.sessions.refresh({ force: true });
-    h.responses.get(h.beta.key)!.resolve({ deleted: false });
-    await operation;
+    await h.finish(operation);
     expect(h.rows()).toContainEqual(replacement);
     expect(h.sessions.listSnapshot(scope).result?.sessions).toEqual([h.alpha, h.sibling]);
   });
 
   it("shares an overlapping delete and restores lifecycle no-ops without deleting drafts", async () => {
-    const h = createSessionDeletionHarness();
-    await h.sessions.refresh({ force: true });
+    const h = await loadedHarness();
     const facts: string[] = [];
     h.sessions.subscribe((state) => {
       facts.push(...state.deletedSessions.map((fact) => fact.key));
@@ -390,8 +387,7 @@ describe("optimistic session deletion", () => {
   });
 
   it("preserves a replacement identity and rejects delayed rows from the deleted identity", async () => {
-    const h = createSessionDeletionHarness();
-    await h.sessions.refresh({ force: true });
+    const h = await loadedHarness();
     const operation = h.sessions.delete(h.alpha.key, { expectedSessionId: h.alpha.sessionId });
     const replacement = { ...h.alpha, sessionId: "replacement", label: "New thread" };
     h.setRows([replacement, h.beta, h.sibling]);
@@ -409,8 +405,7 @@ describe("optimistic session deletion", () => {
   it.each([false, true])(
     "cancels unsent batch members after reconnect (client replaced: %s)",
     async (replaceClient) => {
-      const h = createSessionDeletionHarness();
-      await h.sessions.refresh({ force: true });
+      const h = await loadedHarness();
       const errors: string[] = [];
       h.sessions.subscribe((state) => {
         if (state.error) {
@@ -446,8 +441,7 @@ describe("optimistic session deletion", () => {
     async (mode) => {
       const h = createSessionDeletionHarness();
       const filtered = { agentId: "main", archivedFilter: "all" as const };
-      const stop = h.sessions.subscribeList(filtered, () => undefined);
-      onTestFinished(stop);
+      h.hold(filtered);
       await h.sessions.refresh({ force: true });
       await h.sessions.refreshList(filtered);
       const targets = mode === "single" ? [h.alpha] : [h.alpha, h.beta];
@@ -502,8 +496,7 @@ describe("optimistic session deletion", () => {
   it("rolls back only the failed row while preserving a concurrent deletion and unrelated edits", async () => {
     const h = createSessionDeletionHarness();
     const filtered = { archivedFilter: "all" as const };
-    const stop = h.sessions.subscribeList(filtered, () => undefined);
-    onTestFinished(stop);
+    h.hold(filtered);
     await h.sessions.refresh({ force: true });
     await h.sessions.refreshList(filtered);
     const alpha = h.sessions.delete(h.alpha.key);
@@ -527,14 +520,12 @@ describe("optimistic session deletion", () => {
     ]);
     expect(h.sessions.state.error).toContain("cloud cleanup failed");
     h.setRows([h.alpha, { ...h.sibling, label: "new sibling name" }]);
-    h.responses.get(h.beta.key)!.resolve({ deleted: true });
-    await beta;
+    await h.finish(beta, h.beta, true);
     expect(h.keys()).toEqual([h.alpha.key, h.sibling.key]);
   });
 
   it("keeps pending deletion hidden through a same-client reconnect", async () => {
-    const h = createSessionDeletionHarness();
-    await h.sessions.refresh({ force: true });
+    const h = await loadedHarness();
     const operation = h.sessions.delete(h.alpha.key);
     h.publish(false);
     h.publish(true);

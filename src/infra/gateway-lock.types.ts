@@ -18,7 +18,6 @@ export type GatewayLockOptions = {
   timeoutMs?: number;
   lifecycleDeadlineMs?: number;
   pollIntervalMs?: number;
-  staleMs?: number;
   allowInTests?: boolean;
   platform?: NodeJS.Platform;
   port?: number;
@@ -34,8 +33,4 @@ export type GatewayLockOptions = {
   databaseAccess?: "none";
   listenerMode?: "foreground" | "supervised";
   supervisor?: GatewayOwnerSupervisor | null;
-  /** Override process command-line reader (testing seam). */
-  readProcessCmdline?: (pid: number) => string[] | null;
-  /** Override process start-identity reader (testing seam). */
-  readProcessStartTime?: (pid: number) => number | null;
 };

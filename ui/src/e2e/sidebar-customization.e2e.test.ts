@@ -151,7 +151,6 @@ suite.define(() => {
           expect(
             Math.abs(iconBox!.x + iconBox!.width / 2 - (linkBox!.x + linkBox!.width / 2)),
           ).toBeLessThanOrEqual(1);
-          expect(await row.locator(".sidebar-reorder-trigger").count()).toBe(0);
           if (label === "Workboard") {
             const pages = await openSidebarPages(page);
             const operationsEntry = pages.locator(

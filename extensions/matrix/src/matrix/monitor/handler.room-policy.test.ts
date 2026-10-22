@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as matrixTargets from "../../resolve-targets.js";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import { resolveMatrixMonitorConfig } from "./config.js";
 import {
@@ -14,6 +15,8 @@ vi.mock("../send.js", async (importOriginal) => ({
 beforeEach(() => {
   installMatrixMonitorTestRuntime();
 });
+
+afterEach(() => vi.restoreAllMocks());
 
 describe("Matrix inbound room identity", () => {
   it("keeps the display name for presentation and the room id for policy", async () => {
@@ -52,12 +55,13 @@ describe("Matrix inbound room identity", () => {
         },
       },
     };
+    vi.spyOn(matrixTargets, "resolveMatrixTargets").mockImplementation(async ({ inputs }) =>
+      inputs.map((input) => ({ input, resolved: true, id: "!room:example.org" })),
+    );
     const { roomsConfig } = await resolveMatrixMonitorConfig({
       cfg,
       roomsConfig: cfg.channels.matrix.groups,
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      resolveTargets: async ({ inputs }) =>
-        inputs.map((input) => ({ input, resolved: true, id: "!room:example.org" })),
     });
     const { handler, runPrepared } = createMatrixHandlerTestHarness({
       cfg,

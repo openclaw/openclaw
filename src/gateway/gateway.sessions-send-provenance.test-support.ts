@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterAll, beforeAll, beforeEach, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, expect, vi } from "vitest";
 import { readRequestText, respondJson } from "../../test/helpers/gateway-integration-fixtures.js";
 import {
   awaitGateBeforeSettlement,
@@ -189,6 +189,11 @@ export async function settleProofScenario(
 
 export function waitForProofRun(runId: unknown): Promise<RunResult> {
   return gateway.client.request<RunResult>("agent.wait", { runId, timeoutMs: 30_000 });
+}
+
+export async function expectProofIdle() {
+  await waitForGatewayActiveWork(30_000);
+  expect(providerErrors).toEqual([]);
 }
 
 function resetGatewayState() {
