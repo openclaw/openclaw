@@ -53,7 +53,7 @@ export function resolveChatPaneParentSession(
   return parent ? { key: parent.key, title: resolveSessionDisplayName(parent.key, parent) } : null;
 }
 
-export function canRevealSessionWorkspace(params: {
+function canRevealSessionWorkspace(params: {
   session: GatewaySessionRow | undefined;
   workspaceRoot: string | null;
   methodAdvertised: boolean;
