@@ -35,6 +35,20 @@ function key(target: Element, value: string) {
   return event;
 }
 
+it("defers cold trigger pointer focus until click without suppressing context menus", () => {
+  const { handle, trigger } = mountMenu();
+  const down = (button: number) => {
+    const event = new PointerEvent("pointerdown", { button, bubbles: true, cancelable: true });
+    trigger.dispatchEvent(event);
+    return event;
+  };
+  expect(down(0).defaultPrevented).toBe(true);
+  expect(handle.overlay.open).toBe(false);
+  expect(down(2).defaultPrevented).toBe(false);
+  trigger.click();
+  expect(handle.overlay.open).toBe(true);
+});
+
 it("queues retained-focus input navigation outside the listbox during first load", async () => {
   const selections: string[][] = [];
   const view = render(() => (

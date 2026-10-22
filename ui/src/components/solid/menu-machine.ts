@@ -312,6 +312,17 @@ export function useMenuMachine(
         "data-state": overlay.open ? "open" : "closed",
         "aria-disabled": disabled ? "true" : undefined,
         "data-disabled": disabled ? "" : undefined,
+        onPointerDown: (event: PointerEvent) => {
+          if (
+            disabled ||
+            event.button === 2 ||
+            (event.button === 0 && event.ctrlKey && /^Mac/i.test(navigator.platform))
+          ) {
+            return;
+          }
+          // Match Zag: focus can settle an animated ancestor and move the trigger before pointerup.
+          event.preventDefault();
+        },
         onClick: (event: MouseEvent) => {
           if (disabled || event.defaultPrevented) {
             return;
