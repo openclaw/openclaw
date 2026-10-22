@@ -419,10 +419,10 @@ describe("CLI transcript account boundary", () => {
       await f.withRun("direct-cli-blocked", async (direct) => {
         direct.sessionEntry = loadSessionEntryReadOnly(f.target);
         const before = structuredClone(direct.sessionEntry);
-        const run = vi.fn((provider: string) =>
+        const run = vi.fn(async (provider: string) =>
           provider === "fixture-next"
-            ? Promise.resolve("replayed")
-            : prepareCliHistoryBoundary(direct, identity),
+            ? "replayed"
+            : (await prepareCliHistoryBoundary(direct, identity), "prepared"),
         );
         // The refusal is local session ownership; replaying on another model cannot repair it.
         const refusal = runWithModelFallback({
