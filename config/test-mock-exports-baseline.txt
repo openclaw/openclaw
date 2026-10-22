@@ -2627,7 +2627,6 @@
 ["src/auto-reply/reply/acp-attach-identity.test.ts","../../infra/outbound/session-binding-service.js","39b266996c3b250e45e4615d643a7b74888ef711b39cbc416667f08f4bbe43eb",1]
 ["src/auto-reply/reply/acp-attach-identity.test.ts","./dispatch-acp-transcript.runtime.js","cabaea388edf9e1f4c1a375d1e36be13ff6ab6dc0fb70d83ef7f0ee46df2081a",1]
 ["src/auto-reply/reply/acp-elicitation-handler.test.ts","../../agents/tools/gateway.js","909511d0d3b8d3d2679685cad752968d6d082d621c903ccb863151d51a7fb61f",1]
-["src/auto-reply/reply/agent-lifecycle-terminal.test.ts","../../infra/agent-events.js","e909463ea2b10e1742109e0bb396cbdccb1432b7547ee56525e083ac82f66e3f",1]
 ["src/auto-reply/reply/agent-runner-cli-dispatch.test.ts","../../agents/cli-runner.js","d49cf3459d32e0ed9cfb2500ea5a7a1d94fc58772eddfb044b46f79d62e84920",1]
 ["src/auto-reply/reply/agent-runner-direct-runtime-config.test.ts","../../agents/embedded-agent.js","bf609deb85b8a69124a84f75d2baf53c41e2aafe98149e235d5dc8346a406f82",1]
 ["src/auto-reply/reply/agent-runner-direct-runtime-config.test.ts","./agent-runner-memory.js","a473be7ed581e62d9965d354f3d215606d6c1fe3317ec2842c767fde6befad5b",1]
