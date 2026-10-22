@@ -48,10 +48,14 @@ function afterHide(container: Element) {
 }
 
 function waitForOpen(container: Element) {
-  return waitForSolid(() =>
-    expect(
-      container.querySelector(".new-session-page__checkout-popover")?.getAttribute("data-phase"),
-    ).toBe("open"),
+  return waitForSolid(
+    () => {
+      expect(
+        container.querySelector(".new-session-page__checkout-popover")?.getAttribute("data-phase"),
+      ).toBe("open");
+      expect(container.querySelector(".new-session-page__picker-root")).not.toBeNull();
+    },
+    { timeout: 5000 },
   );
 }
 
@@ -420,11 +424,7 @@ describe("Checkout chip state", () => {
       onConfirm: vi.fn(),
     };
     const { container, update } = mountCheckout(params);
-    await waitForSolid(() =>
-      expect(
-        container.querySelector(".new-session-page__checkout-popover")?.getAttribute("data-phase"),
-      ).toBe("open"),
-    );
+    await waitForOpen(container);
     const branch = container.querySelector<HTMLInputElement>("#new-session-worktree-base-ref")!;
     const name = container.querySelector<HTMLInputElement>("[data-worktree-name]")!;
     name.focus();

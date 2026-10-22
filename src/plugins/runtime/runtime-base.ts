@@ -30,6 +30,7 @@ export function createRuntimeBase(): PluginRuntimeBase {
       NATIVE_SUBAGENT_LIST_CAPABILITY,
       COMMAND_SCHEDULED_TURNS_CAPABILITY,
       COMMAND_SCHEDULED_TURNS_RESTART_CAPABILITY,
+      "channel-ingress-transform-v1",
     ]),
     config: createRuntimeConfig(),
     llm: createRuntimeLlmFacade(getRuntimeConfig),

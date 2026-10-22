@@ -748,7 +748,8 @@ export default function controlUiViteConfig(
       // Source builds retain automatic debugger discovery.
       sourcemap: buildInfo.release ? "hidden" : true,
       modulePreload: {
-        polyfill: true,
+        // Every supported browser has native modulepreload (see docs/web/control-ui.md).
+        polyfill: false,
         resolveDependencies: resolveModulePreloadDependencies,
       },
       rolldownOptions: {

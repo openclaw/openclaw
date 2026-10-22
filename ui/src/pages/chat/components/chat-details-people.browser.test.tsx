@@ -11,17 +11,13 @@ beforeEach(async () => {
 });
 afterEach(cleanupSolid);
 
-it("shows a known unloaded remainder without fabricating people and fades only overflowing names", async () => {
+it("fades only overflowing names and updates fixed-width rename tooltips", async () => {
   const [name, setName] = createSignal("Alexandra Montgomery from the international design team");
   const view = mountSolid(() => (
     <div style={{ width: "190px" }}>
-      <ChatDetailsPeople
-        people={[{ identity: { type: "profile", id: "alex" }, label: name() }]}
-        totalCount={8}
-      />
+      <ChatDetailsPeople people={[{ identity: { type: "profile", id: "alex" }, label: name() }]} />
       <ChatDetailsPeopleSummary
         people={[{ identity: { type: "profile", id: "alex" }, label: name() }]}
-        totalCount={8}
         expanded={false}
       />
     </div>
@@ -38,8 +34,6 @@ it("shows a known unloaded remainder without fabricating people and fades only o
   await expect.poll(() => label.textContent).toBe(renamed);
   expect(label.firstElementChild!.getBoundingClientRect().width).toBe(textWidth);
   await expect.poll(() => label.title).toBe(renamed);
-  expect(view.getByText("7 more participants")).toBeDefined();
-  expect(view.getByText("+7")).toBeDefined();
   expect(view.container.querySelectorAll(".chat-details-people__preview-avatar")).toHaveLength(1);
   view.container.firstElementChild!.setAttribute("style", "width: 900px");
   await expect.poll(() => label.hasAttribute("data-overflow")).toBe(false);

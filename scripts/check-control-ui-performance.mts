@@ -52,14 +52,14 @@ const CONTROL_UI_LOCALE_GZIP_BYTES = 300 * KIB;
 // Small, explicit headroom over the optimized baseline. Budget changes should
 // accompany an intentional loading or chunking decision.
 const controlUiPerformanceBudgets = {
-  // Deferred menu navigation uses 7/23/18 requests; retain two per path.
+  // Deferred menu navigation uses 7/23/17 requests; retain two per path.
   startupJsRequests: 9,
   chatBootJsRequests: 25,
-  newBootJsRequests: 20,
-  // Deferred menu navigation: 1,384,932 B Chat and 921,067 B New Session.
+  newBootJsRequests: 19,
+  // Deferred menu navigation: 1,383,333 B Chat and 883,638 B New Session.
   // Preserve each route's relative headroom against its measured merge base.
-  chatBootJsGzipBytes: 1_437_747,
-  newBootJsGzipBytes: 934_504,
+  chatBootJsGzipBytes: 1_435_831,
+  newBootJsGzipBytes: 896_021,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   startupJsGzipBytes: 325_081,
@@ -518,6 +518,10 @@ export function formatControlUiPerformanceReport(
     lines.push("  route boot accounting: unavailable (build has no route preload templates)");
   }
   if (baseMetrics) {
+    const startupGrowth = metrics.startup.js.gzipBytes - baseMetrics.startup.js.gzipBytes;
+    lines.push(
+      `  startup JS gzip vs base: ${baseMetrics.startup.js.gzipBytes} B -> ${metrics.startup.js.gzipBytes} B (${startupGrowth >= 0 ? "+" : ""}${startupGrowth} B); requests ${baseMetrics.startup.js.requests} -> ${metrics.startup.js.requests}`,
+    );
     for (const area of ["startup", "largest"] as const) {
       const growth = metrics[area].css.gzipBytes - baseMetrics[area].css.gzipBytes;
       lines.push(
@@ -680,9 +684,10 @@ function runControlUiPerformanceCheck(
   };
 }
 
-function main(argv: string[] = process.argv.slice(2)): void {
+async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   let json = false;
   let reportOnly = false;
+  let moduleAttribution = false;
   let distDir: string | undefined;
   let baseDistDir: string | undefined;
   let updateBaseline = false;
@@ -694,6 +699,8 @@ function main(argv: string[] = process.argv.slice(2)): void {
       json = true;
     } else if (arg === "--report-only") {
       reportOnly = true;
+    } else if (arg === "--module-attribution") {
+      moduleAttribution = true;
     } else if (arg === "--base-dist" || arg === "--dist") {
       const value = argv[++index];
       if (!value || value.startsWith("--")) {
@@ -735,6 +742,9 @@ function main(argv: string[] = process.argv.slice(2)): void {
   if (json && updateBaseline) {
     throw new Error("--json cannot be combined with --update-baseline");
   }
+  if (moduleAttribution && updateBaseline) {
+    throw new Error("--module-attribution cannot be combined with --update-baseline");
+  }
   if (updateBaseline && (reportOnly || baseDistDir || distDir)) {
     throw new Error(
       "--report-only, --base-dist and --dist cannot be combined with --update-baseline",
@@ -761,8 +771,20 @@ function main(argv: string[] = process.argv.slice(2)): void {
     return;
   }
   const result = runControlUiPerformanceCheck(distDir, undefined, undefined, baseDistDir);
+  let attribution;
+  if (moduleAttribution) {
+    const { collectControlUiModuleAttribution, formatControlUiModuleAttribution } =
+      await import("./lib/control-ui-module-attribution.mts");
+    if (!result.metrics.routeBoot) {
+      throw new Error("Module attribution requires a build with route preload templates");
+    }
+    attribution = collectControlUiModuleAttribution(distDir, result.metrics.routeBoot);
+    result.report += `\n${formatControlUiModuleAttribution(attribution)}`;
+  }
   if (json) {
-    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    process.stdout.write(
+      `${JSON.stringify({ ...result, ...(attribution ? { moduleAttribution: attribution } : {}) }, null, 2)}\n`,
+    );
   } else {
     process.stdout.write(`${result.report}\n`);
   }
@@ -784,10 +806,8 @@ function main(argv: string[] = process.argv.slice(2)): void {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  try {
-    main();
-  } catch (error) {
+  main().catch((error: unknown) => {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
-  }
+  });
 }

@@ -1,8 +1,5 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, expect, it } from "vitest";
 import { createPromptScenario } from "./translator.scenario.test-support.js";
-
-// mock-isolation: Command discovery loads unrelated plugin runtimes outside the text-stream contract.
-vi.mock("./commands.js", () => ({ getAvailableCommands: () => [] }));
 
 async function createHarness() {
   const harness = createPromptScenario({ send: () => ({}) });
