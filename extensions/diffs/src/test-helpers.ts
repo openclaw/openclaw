@@ -5,8 +5,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { OpenClawPluginHttpRouteHandler } from "openclaw/plugin-sdk/plugin-entry";
-import type { OpenBlobStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  OpenClawPluginApi,
+  OpenClawPluginToolContext,
+} from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  OpenBlobStoreOptions,
+  PluginBlobStoreWithReceipts,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginBlobStoreForTests,
   createPluginBlobKernelStore,
@@ -20,39 +26,85 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { vi } from "vitest";
 import { registerDiffsPlugin } from "./plugin.js";
 import { DiffArtifactStore } from "./store.js";
 import type { DiffArtifactBlobMetadata } from "./types.js";
 
 const execFileAsync = promisify(execFile);
+export const diffContext = {
+  agentId: "main",
+  sessionId: "session-123",
+  messageChannel: "discord",
+  agentAccountId: "default",
+};
+
+export function registerDiffsForTest(params: {
+  stateDir: string;
+  config?: OpenClawConfig;
+  getConfig?: () => OpenClawConfig;
+  pluginConfig?: Record<string, unknown>;
+  rootDir?: string;
+  blobStore?: PluginBlobStoreWithReceipts<DiffArtifactBlobMetadata>;
+}) {
+  const getConfig = params.getConfig ?? (() => params.config ?? {});
+  const on = vi.fn();
+  const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
+  const registerHttpRoute = vi.fn<OpenClawPluginApi["registerHttpRoute"]>();
+  const registerService = vi.fn<OpenClawPluginApi["registerService"]>();
+  const runtime = createPluginRuntimeMock({ config: { current: getConfig } });
+  runtime.state.openBlobStore = params.blobStore
+    ? vi.fn().mockReturnValue(params.blobStore)
+    : <TMetadata>(options: OpenBlobStoreOptions) =>
+        createPluginBlobStoreForTests<TMetadata>("diffs", options, {
+          ...process.env,
+          OPENCLAW_STATE_DIR: params.stateDir,
+        });
+  const api = createTestPluginApi({
+    config: getConfig(),
+    pluginConfig: params.pluginConfig,
+    rootDir: params.rootDir,
+    runtime,
+    on,
+    registerTool,
+    registerHttpRoute,
+    registerService,
+  });
+  registerDiffsPlugin(api);
+  const factory = registerTool.mock.calls[0]?.[0];
+  assert.ok(typeof factory === "function", "Diffs must register its tool factory");
+  const handler = registerHttpRoute.mock.calls.find(
+    ([route]) => route.path === "/plugins/diffs",
+  )?.[0].handler;
+  assert.ok(handler, "Diffs must register its viewer route");
+  return {
+    api,
+    on,
+    handler,
+    tool(context: OpenClawPluginToolContext = {}) {
+      const tool = factory(context);
+      assert.ok(tool && !Array.isArray(tool), "Diffs must return one tool");
+      return tool;
+    },
+    async stop() {
+      for (const [service] of registerService.mock.calls) {
+        if (service.apiVersion !== 2) {
+          await service.stop?.({
+            config: getConfig(),
+            stateDir: params.stateDir,
+            logger: api.logger,
+          });
+        }
+      }
+    },
+  };
+}
 
 export function registerDiffsHttpRouteForTest(params: {
   stateDir: string;
   config?: OpenClawConfig;
-}): OpenClawPluginHttpRouteHandler {
-  const config = params.config ?? {};
-  let handler: OpenClawPluginHttpRouteHandler | undefined;
-  const api = createTestPluginApi({
-    config,
-    runtime: createPluginRuntimeMock({
-      config: { current: () => config },
-      state: {
-        openBlobStore: <TMetadata>(options: OpenBlobStoreOptions) =>
-          createPluginBlobStoreForTests<TMetadata>("diffs", options, {
-            ...process.env,
-            OPENCLAW_STATE_DIR: params.stateDir,
-          }),
-      },
-    }),
-    registerHttpRoute(route) {
-      if (route.path === "/plugins/diffs") {
-        handler = route.handler;
-      }
-    },
-  });
-  registerDiffsPlugin(api);
-  assert.ok(handler, "Diffs plugin must register its viewer route");
-  return handler;
+}) {
+  return registerDiffsForTest(params).handler;
 }
 
 export async function expireDiffArtifactForTest(

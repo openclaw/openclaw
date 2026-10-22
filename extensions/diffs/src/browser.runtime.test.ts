@@ -3,27 +3,25 @@ import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { disposeHighlighter } from "@pierre/diffs";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type {
-  OpenClawPluginApi,
-  OpenClawPluginToolContext,
-} from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerDiffsPlugin } from "./plugin.js";
-import { createDiffStoreHarness, createTempDiffRoot } from "./test-helpers.js";
+import {
+  createDiffStoreHarness,
+  createTempDiffRoot,
+  diffContext as toolContext,
+  registerDiffsForTest,
+} from "./test-helpers.js";
+import { parseViewerPayloadJson } from "./viewer-payload.js";
 
 const { launchMock } = vi.hoisted(() => ({
   launchMock: vi.fn(),
 }));
-const toolContext = {
-  agentId: "main",
-  sessionId: "session-123",
-  messageChannel: "discord",
-  agentAccountId: "default",
-};
 const browserConfig: OpenClawConfig = { browser: { executablePath: process.execPath } };
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -43,7 +41,8 @@ vi.mock("playwright-core", () => ({
   },
 }));
 
-afterAll(() => {
+afterAll(async () => {
+  await disposeHighlighter();
   vi.doUnmock("playwright-core");
   vi.resetModules();
 });
@@ -238,71 +237,43 @@ describe("PlaywrightDiffScreenshotter", () => {
 async function createRegistrationHarness(
   pluginConfig: Record<string, unknown> = {},
   initialConfig = createRuntimeConfig(pluginConfig),
+  rootDir?: string,
 ) {
   let config = initialConfig;
-  const registered: {
-    tool?: Parameters<OpenClawPluginApi["registerTool"]>[0];
-    httpHandler?: Parameters<OpenClawPluginApi["registerHttpRoute"]>[0]["handler"];
-  } = {};
-  const on = vi.fn();
   const fixture = await createDiffStoreHarness("openclaw-diffs-registration-");
-  const registerService = vi.fn<OpenClawPluginApi["registerService"]>();
+  const { api, on, handler, tool, stop } = registerDiffsForTest({
+    stateDir: path.join(path.dirname(fixture.rootDir), "state"),
+    blobStore: fixture.blobStore,
+    getConfig: () => config,
+    pluginConfig,
+    rootDir,
+  });
   cleanups.push(async () => {
     try {
-      for (const [service] of registerService.mock.calls) {
-        if (service.apiVersion !== 2) {
-          await service.stop?.({
-            config,
-            stateDir: path.dirname(fixture.rootDir),
-            logger: api.logger,
-          });
-        }
-      }
+      await stop();
     } finally {
       await fixture.cleanup();
     }
   });
-  const api = createTestPluginApi({
-    id: "diffs",
-    config: { gateway: { port: 18789, bind: "loopback" } },
-    pluginConfig,
-    runtime: {
-      config: { current: () => config },
-      state: { openBlobStore: () => fixture.blobStore },
-    } as never,
-    registerTool(tool) {
-      registered.tool = tool;
-    },
-    registerHttpRoute(route) {
-      registered.httpHandler = route.handler;
-    },
-    on,
-    registerService,
-  });
-  registerDiffsPlugin(api);
-  const registration = expectDefined(registered.tool, "registered diffs tool");
-  if (typeof registration !== "function") {
-    throw new Error("expected diffs tool factory");
-  }
-  const handleRequest = expectDefined(registered.httpHandler, "registered diffs HTTP handler");
 
   return {
     on,
+    openBlobStore: api.runtime.state.openBlobStore,
     setConfig: (next: OpenClawConfig) => {
       config = next;
     },
     get: async (url: string, headers: IncomingMessage["headers"] = {}) => {
       const res = createMockServerResponse();
       const req = { method: "GET", url, headers, socket: { remoteAddress: "127.0.0.1" } };
-      expect(await handleRequest(req as IncomingMessage, res)).toBe(true);
+      expect(await handler(req as IncomingMessage, res)).toBe(true);
       return res;
     },
-    render: async (context: OpenClawPluginToolContext = toolContext) => {
-      const tool = expectDefined(registration(context), "diffs tool for context");
-      if (Array.isArray(tool)) {
-        throw new Error("expected one registered diffs tool");
-      }
-      const result = await tool.execute("tool-1", { before: "one\n", after: "two\n" });
+    render: async (context: OpenClawPluginToolContext = toolContext, args = {}) => {
+      const result = await tool(context).execute("tool-1", {
+        before: "one\n",
+        after: "two\n",
+        ...args,
+      });
       const details = expectDefined(asOptionalRecord(result.details), "diffs tool details");
       expect(typeof details.viewerPath).toBe("string");
       return { details, viewerPath: String(details.viewerPath) };
@@ -340,12 +311,8 @@ describe("diffs plugin registration", () => {
         viewerBaseUrl: "https://live.example.com/gateway",
         defaults: {
           mode: "view",
-          theme: "dark",
-          background: true,
-          layout: "unified",
-          showLineNumbers: true,
-          diffIndicators: "bars",
-          lineSpacing: 1.6,
+          fontFamily: "JetBrains Mono",
+          fontSize: 17,
         },
       }),
     );
@@ -359,7 +326,10 @@ describe("diffs plugin registration", () => {
     expect(String(res.body)).toContain('"diffStyle":"unified"');
     expect(String(res.body)).toContain('"disableLineNumbers":false');
     expect(String(res.body)).toContain('"diffIndicators":"bars"');
-    expect(String(res.body)).toContain("--diffs-line-height: 24px;");
+    expect(String(res.body)).toContain("--diffs-line-height: 27px;");
+    expect(String(res.body)).toContain("--diffs-font-size: 17px;");
+    expect(String(res.body)).toContain("JetBrains Mono");
+    expect(details.mode).toBe("view");
   });
 
   it("uses live runtime viewer-access config through the registered HTTP handler", async () => {
@@ -465,3 +435,44 @@ function createMockPage(options?: {
     close: vi.fn(async () => {}),
   };
 }
+
+describe("plugin discovery", () => {
+  it("skips runtime registration while collecting CLI metadata", () => {
+    const hooks = { registerTool: vi.fn(), registerHttpRoute: vi.fn(), on: vi.fn() };
+    registerDiffsPlugin(createTestPluginApi({ registrationMode: "cli-metadata", ...hooks }));
+    for (const hook of Object.values(hooks)) {
+      expect(hook).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each(["assets", "dist/assets"])("requires a manifest and runtime in %s", async (assetDir) => {
+    const { rootDir, cleanup } = await createTempDiffRoot("diffs-language-pack-");
+    cleanups.push(cleanup);
+    const pack = path.join(rootDir, "diffs-language-pack");
+    await fs.mkdir(pack, { recursive: true });
+    await fs.writeFile(path.join(pack, "openclaw.plugin.json"), '{"id":"diffs-language-pack"}\n');
+    const { render, get, openBlobStore } = await createRegistrationHarness(
+      { defaults: { mode: "view" } },
+      undefined,
+      path.join(rootDir, "diffs"),
+    );
+    expect(openBlobStore).toHaveBeenCalledWith({
+      namespace: "diff-artifacts",
+      maxEntries: 2_048,
+      maxBytesPerEntry: 32 * 1024 * 1024,
+      maxBytesPerNamespace: 256 * 1024 * 1024,
+      overflowPolicy: "reject-new",
+    });
+    const before = await render(toolContext, { lang: "abap" });
+    expect(String((await get(before.viewerPath)).body)).not.toContain("diffs-language-pack/assets");
+    await fs.mkdir(path.join(pack, assetDir), { recursive: true });
+    await fs.writeFile(path.join(pack, assetDir, "viewer-runtime.js"), "export {};\n");
+    const after = await render(toolContext, { lang: "abap" });
+    const html = String((await get(after.viewerPath)).body);
+    expect(html).toContain("diffs-language-pack/assets/viewer.js");
+    expect(
+      parseViewerPayloadJson(html.match(/data-openclaw-diff-payload>(.*?)<\/script>/)?.[1] ?? "")
+        .langs,
+    ).toEqual(["abap"]);
+  });
+});

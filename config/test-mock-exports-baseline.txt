@@ -314,7 +314,6 @@
 ["extensions/diagnostics-prometheus/src/service.http-scope.test.ts","openclaw/plugin-sdk/plugin-runtime","ba816043b52dc31b09ad819acf2c2cbb58549ff2d10763e1136a207bb7af63ca",1]
 ["extensions/diagnostics-prometheus/src/service.test.ts","openclaw/plugin-sdk/plugin-runtime","363fd565d32a964c34ba6f19ce242e44a749d026b009db8bf12fa2785c853902",1]
 ["extensions/diffs/plugin-startup-laziness.test.ts","./src/browser.runtime.js","b4aae09dc3b6f70ddb4e319f43d55a3ed0c35281021d7a3e325e216ad3d51fb8",1]
-["extensions/diffs/src/plugin.test.ts","./tool.js","af41bac9a7610b19cdf0c889c484aa2242433c26f36bf1238c4ec1f1e733fd32",1]
 ["extensions/discord/src/activities/presenter.test.ts","../send.components.js","651dcb255bc6d4cabdee3627e59c5060dc829f1962583dbef8be7a4fe58ef097",1]
 ["extensions/discord/src/durable-forum-batch.test.ts","openclaw/plugin-sdk/web-media","e47cba8f82f96ad127026c676bf2fb761d56d38235f37bf39736ca44715580b3",1]
 ["extensions/discord/src/monitor/gateway-metadata.test.ts","openclaw/plugin-sdk/ssrf-runtime","a3ce707d769abd4161c6409027ccb072ad349b24dad8f2ca2f4077b66deb5878",1]

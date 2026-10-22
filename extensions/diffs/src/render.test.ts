@@ -3,7 +3,6 @@ import { afterEach, expect, it } from "vitest";
 import { resolveDiffImageRenderOptions, resolveDiffsPluginDefaults } from "./config.js";
 import { renderDiffDocument } from "./render.js";
 import type { DiffFileDefaults, DiffRenderOptions } from "./types.js";
-import { parseViewerPayloadJson } from "./viewer-payload.js";
 
 const DEFAULT_DIFFS_TOOL_DEFAULTS = resolveDiffsPluginDefaults(undefined);
 function makeOptions(
@@ -55,22 +54,6 @@ it("renders before/after input into a complete viewer document", async () => {
   expect(rendered.imageHtml).toContain("--diffs-font-size: 16px;");
   expect(rendered.html).not.toContain("fonts.googleapis.com");
   expect(rendered.html).not.toContain('<nav class="oc-diff-card oc-diff-nav"');
-});
-
-it("uses the language-pack viewer runtime for uncommon languages when available", async () => {
-  const rendered = await renderDiffDocument(
-    { kind: "before_after", before: "REPORT z_demo.\n", after: "REPORT z_demo2.\n", lang: "abap" },
-    { ...renderOptions, languagePackAvailable: true },
-    "viewer",
-  );
-
-  const html = rendered.html ?? "";
-  const payload = parseViewerPayloadJson(
-    html.match(/data-openclaw-diff-payload>(.*?)<\/script>/)?.[1] ?? "",
-  );
-
-  expect(html).toContain("../../../diffs-language-pack/assets/viewer.js");
-  expect(payload.langs).toEqual(["abap"]);
 });
 
 it("renders multi-file patch input with a changed-files summary nav", async () => {
