@@ -157,6 +157,7 @@ describe("secret store mutation lifecycle", () => {
 
   it("reports committed operator policy without secrets", async () => {
     await withState(async () => {
+      setRuntimeConfigSnapshot({ tools: { alsoAllow: ["secrets"] } });
       const run = claimRun("tool");
       const client = {
         ...run.client,

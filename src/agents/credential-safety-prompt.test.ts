@@ -12,7 +12,7 @@ describe("buildCredentialSafetyPrompt", () => {
     const prompt = buildCredentialSafetyPrompt(input);
 
     // Legacy and unknown callers keep handoff-only credential guidance.
-    expect(prompt.split("\n")).toHaveLength(lines);
+    expect(prompt.split("\n")).toHaveLength(lines + 1);
     expect(prompt.includes("openclaw channels add <channel>")).toBe(lines === 4);
     expect(prompt.includes("In the final reply, briefly acknowledge")).toBe(lines > 2);
     expect(prompt.includes("without repeating its value")).toBe(lines > 2);

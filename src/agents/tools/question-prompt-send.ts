@@ -63,7 +63,7 @@ export async function sendQuestionToolPrompt(params: {
     ].join("\n\n");
     const text = url
       ? `${prompt}\n\nOpen secure form: ${url}`
-      : "Credential request unavailable here: no reachable Control UI link. Open a trusted Control UI or native app and retry, or ask the operator to enable Control UI and configure gateway.publicOrigin. Never send credentials in chat.";
+      : "Credential request unavailable here: no configured Control UI link. Use an existing trusted Control UI or native app and retry, or enter the credential locally in Settings or the masked CLI. Never send credentials in chat.";
     await send({
       text,
       ...(url

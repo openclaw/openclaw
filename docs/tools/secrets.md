@@ -16,10 +16,25 @@ agent receives only entry metadata and its store SecretRef.
 The tool is available in primary agent sessions, not just the main
 conversation. Subagent and ACP worker sessions do not receive it.
 
-It is enabled by default and governed by the normal tool policy — there is no
-dedicated config key. To remove it, deny it like any other tool (for example
-`tools.deny: ["secrets"]` in `openclaw.json`). Allowlists and tool profiles
-apply to it the same way.
+The entire agent-facing tool (`request`, `list`, and `delete`) is **disabled by
+default**. An operator can opt in by adding the exact name `secrets` to
+`tools.alsoAllow`, or to an existing restrictive `tools.allow` list. The same
+settings can be scoped to an agent. For example:
+
+```json5
+{ tools: { alsoAllow: ["secrets"] } }
+```
+
+Profiles, wildcards, and broad groups do not opt in. Normal profile, provider,
+sandbox, channel, and deny restrictions still apply; an explicit denial wins.
+This does not disable the Settings secret store, CLI, or supported config
+SecretRefs, and does not change stored credentials.
+
+Agents may suggest enabling credential requests only when the user **already
+has public HTTPS or Tailscale configured**. They must not suggest exposing a
+Gateway just to collect a key, enable the tool automatically, or ask for the
+value in chat. A configured address alone is not proof that a phone can reach
+it. Without an existing secure route, use Settings or the masked CLI locally.
 
 The tool description tells the agent to list metadata first,
 then request only a missing credential needed for the task, with a name and
@@ -126,7 +141,8 @@ not captured as an answer. Links require an enabled Control
 UI and a configured `gateway.publicOrigin`. Without a usable link, delivery
 reports a visible blocker, returns the same retry guidance to the agent, and
 cancels the pending request. Open a trusted Control UI or native app and retry,
-or ask the operator to configure the public origin.
+or use Settings or the masked CLI locally. Do not set up public exposure just
+to fulfill a credential request.
 
 Creating a credential request requires `operator.admin` plus the agent's trusted,
 live runtime authority. A run ID or an administrator connection alone is not

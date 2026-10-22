@@ -473,11 +473,10 @@ describe("handleToolExecutionStart read path checks", () => {
             false,
           );
         } else {
-          await expect(outcome).resolves.toMatchObject({
-            error: expect.objectContaining({
-              message: expect.stringContaining("Open a trusted Control UI or native app and retry"),
-            }),
-          });
+          await expect(outcome).resolves.toHaveProperty(
+            "error.message",
+            expect.stringContaining("Use an existing trusted Control UI or native app and retry"),
+          );
           expect(gatewayCall).toHaveBeenCalledWith(
             "question.resolve",
             { timeoutMs: 10_000 },
