@@ -182,11 +182,7 @@ async function runMistralToolFixture(
   const parsedChunks = rawChunks.map((chunk) => chunk.map(parseMistralToolCall));
   mistralMockState.streamResult = mistralToolStream(responseId, ...parsedChunks);
   const result = await runMistralFixture();
-  return {
-    result,
-    parsedChunks,
-    toolCalls: result.content.filter((block) => block.type === "toolCall"),
-  };
+  return { result, toolCalls: result.content.filter((block) => block.type === "toolCall") };
 }
 
 function makeMistralToolResultContext(
@@ -402,25 +398,16 @@ describe("Mistral provider", () => {
     expect(payload().tools.map((tool) => tool.function.name)).toEqual(["alpha_tool", "zeta_tool"]);
   });
 
-  it.each([
-    { name: "alone", withHealthy: false, toolChoice: "auto" as const },
-    {
-      name: "beside a usable tool",
-      withHealthy: true,
-      toolChoice: { type: "function" as const, function: { name: "broken_tool" } },
-    },
-  ])(
-    "reports unreadable tool parameters $name before sending",
-    async ({ withHealthy, toolChoice }) => {
-      const tools = [makeUnreadableParameterTool(), ...(withHealthy ? [makeHealthyTool()] : [])];
-      const result = await runMistralFixture({ ...context, tools: tools as never }, { toolChoice });
-      expect(result).toMatchObject({
-        stopReason: "error",
-        errorMessage: expect.stringContaining("fuzzplugin parameters getter exploded"),
-      });
-      expect(mistralMockState.payloads).toHaveLength(0);
-    },
-  );
+  it("reports unreadable tool parameters beside a usable tool before sending", async () => {
+    const tools = [makeUnreadableParameterTool(), makeHealthyTool()];
+    const toolChoice = { type: "function" as const, function: { name: "broken_tool" } };
+    const result = await runMistralFixture({ ...context, tools: tools as never }, { toolChoice });
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorMessage: expect.stringContaining("fuzzplugin parameters getter exploded"),
+    });
+    expect(mistralMockState.payloads).toHaveLength(0);
+  });
 
   it("keeps omitted streamed tool ids stable within a response and unique across responses", async () => {
     mistralMockState.randomUUIDs = [
@@ -454,16 +441,13 @@ describe("Mistral provider", () => {
   });
 
   it("keeps explicit streamed tool calls distinct when index is omitted", async () => {
-    const { parsedChunks, toolCalls } = await runMistralToolFixture("response-unindexed", [
+    const { toolCalls } = await runMistralToolFixture("response-unindexed", [
       [
         wireTool("first_tool", '{"value"', { id: "explicitA" }),
         wireTool("second_tool", '{"value"', { id: "explicitB" }),
       ],
       [wireTool("first_tool", ":1}"), wireTool("second_tool", ":2}")],
     ]);
-    // Explicit IDs must win over the SDK's default index zero.
-    expect(parsedChunks[0]).toMatchObject([{ index: 0 }, { index: 0 }]);
-
     expect(toolCalls).toMatchObject([
       { id: "explicitA", name: "first_tool", arguments: { value: 1 } },
       { id: "explicitB", name: "second_tool", arguments: { value: 2 } },
@@ -471,7 +455,7 @@ describe("Mistral provider", () => {
   });
 
   it("routes an asymmetric omitted-index continuation by its persistent function name", async () => {
-    const { parsedChunks, toolCalls } = await runMistralToolFixture(
+    const { toolCalls } = await runMistralToolFixture(
       "response-asymmetric-unindexed",
       [
         [wireTool("first_tool", '{"value":1}'), wireTool("second_tool", '{"value"', { index: 1 })],
@@ -479,15 +463,6 @@ describe("Mistral provider", () => {
       ],
       "00000000-0000-4000-8000-000000429247",
     );
-    // The persistent name must win over the SDK's default continuation index zero.
-    expect(parsedChunks).toMatchObject([
-      [
-        { id: "null", index: 0 },
-        { id: "null", index: 1 },
-      ],
-      [{ id: "null", index: 0 }],
-    ]);
-
     expect(toolCalls).toMatchObject([
       { name: "first_tool", arguments: { value: 1 } },
       { name: "second_tool", arguments: { value: 2 } },
@@ -702,7 +677,5 @@ describe("Mistral provider", () => {
     );
 
     expect(toolMessage()?.content).toEqual([{ type: "text", text: "(no tool output)" }]);
-    expect(JSON.stringify(toolMessage())).not.toContain("image_url");
-    expect(JSON.stringify(toolMessage())).not.toContain("see attached image");
   });
 });

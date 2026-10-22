@@ -215,54 +215,41 @@ describe("Mistral terminal ownership through the installed SDK and real HTTP/SSE
     ]);
   });
 
-  it("discards unfinished tool arguments when the operator cancels generation", async () => {
-    const { result, events } = await streamMistralTerminalFixture({
-      finishReason: null,
-      done: false,
-      abort: true,
-      toolArguments: ['{"action":"delete_all"'],
-    });
-    expect(result.stopReason).toBe("aborted");
-    expect(events).not.toContain("toolcall_end");
-    expect(result.content).not.toContainEqual(expect.objectContaining({ type: "toolCall" }));
-  });
-
+  const partial = { type: "text", text: "Safe partial answer" };
+  const eofError = "Mistral stream ended without a terminal finish reason";
+  const unknownError = "Provider finish_reason: provider_guardrail";
+  const badJson = expect.stringContaining("invalid JSON arguments");
   it.each([
-    { name: "EOF without a provider terminal", finishReason: null, done: false },
-    { name: "an unknown provider terminal", finishReason: "provider_guardrail", done: true },
-    { name: "malformed arguments on a tool terminal", finishReason: "tool_calls", done: true },
-  ] as const)("rejects $name without executable calls", async (fixture) => {
-    const { result, events } = await streamMistralTerminalFixture({
-      ...fixture,
-      toolArguments: ['{"action":"delete_all"'],
-      text: "Safe partial answer",
-    });
-    expect(result.stopReason).toBe("error");
-    if (fixture.finishReason === null) {
-      expect(result.errorMessage).toBe("Mistral stream ended without a terminal finish reason");
-    } else if (fixture.finishReason === "tool_calls") {
-      expect(result.errorMessage).toContain("invalid JSON arguments");
-    } else {
-      expect(result.errorMessage).toBe(`Provider finish_reason: ${fixture.finishReason}`);
-    }
-    expect(events).toContain("error");
-    expect(events).not.toContain("toolcall_end");
-    expect(result.content).not.toContainEqual(expect.objectContaining({ type: "toolCall" }));
-    expect(result.content).toContainEqual({ type: "text", text: "Safe partial answer" });
-  });
-
-  it("preserves a model_length terminal and visible text without finalizing partial tools", async () => {
-    const { result, events } = await streamMistralTerminalFixture({
-      finishReason: "model_length",
-      done: true,
-      toolArguments: ['{"action":"delete_all"'],
-      text: "Safe partial answer",
-    });
-    expect(result.stopReason).toBe("length");
-    expect(result.content).toEqual([{ type: "text", text: "Safe partial answer" }]);
-    expect(events).not.toContain("toolcall_end");
-    expect(events).toContain("done");
-  });
+    ["operator cancellation", null, false, true, "aborted", undefined, undefined],
+    ["EOF", null, false, false, "error", eofError, "error"],
+    ["unknown terminal", "provider_guardrail", true, false, "error", unknownError, "error"],
+    ["malformed tool terminal", "tool_calls", true, false, "error", badJson, "error"],
+    ["model_length alias", "model_length", true, false, "length", undefined, "done"],
+  ] as const)(
+    "never executes incomplete arguments after %s",
+    async (_name, finishReason, done, abort, stopReason, errorMessage, terminalEvent) => {
+      const { result, events } = await streamMistralTerminalFixture({
+        finishReason,
+        done,
+        abort,
+        toolArguments: ['{"action":"delete_all"'],
+        ...(abort ? {} : { text: partial.text }),
+      });
+      expect(result.stopReason).toBe(stopReason);
+      if (errorMessage !== undefined) {
+        expect(result.errorMessage).toEqual(errorMessage);
+      }
+      if (terminalEvent) {
+        expect(events).toContain(terminalEvent);
+      }
+      expect(events).not.toContain("toolcall_end");
+      if (abort) {
+        expect(result.content).not.toContainEqual(expect.objectContaining({ type: "toolCall" }));
+      } else {
+        expect(result.content).toEqual([partial]);
+      }
+    },
+  );
 
   it("drops every pending parallel tool when a later call is truncated", async () => {
     const { result, events } = await streamMistralTerminalFixture({
