@@ -125,4 +125,29 @@ describe("toolCallXmlTextFilter streamed projection work", () => {
     expect(projection.text).not.toContain('{"path":"a.ts"}');
     expect(deltas.join("")).not.toContain('{"path":"a.ts"}');
   });
+
+  it("withholds an unresolved tool-tag prefix instead of retracting it later", () => {
+    const projection = createTextProjection([
+      toolCallXmlTextFilter({ stripFunctionResponseAfterPluralToolCalls: true }, true),
+    ]);
+    const partial = projection.append("Before. <too");
+    expect(projection.text).toBe("Before. ");
+    expect(partial.delta).toBe("Before. ");
+
+    const completed = projection.append('l_call>{"path":"a.ts"}</tool_call>');
+    expect(projection.text).toBe("Before. ");
+    expect(completed.delta).toBe("");
+  });
+
+  it("reconsiders inline code ownership revoked by a later image reference", () => {
+    const first = '![x `<tool_call>{"path":"a.ts"}</tool_call>`][id]';
+    const source = `${first}\n\n[id]: /url`;
+    const projection = createTextProjection([
+      toolCallXmlTextFilter({ stripFunctionResponseAfterPluralToolCalls: true }, true),
+    ]);
+    projection.append(first);
+    projection.append("\n\n[id]: /url");
+    expect(projection.text).toBe(stripToolCallXmlTags(source));
+    expect(projection.text).not.toContain('{"path":"a.ts"}');
+  });
 });

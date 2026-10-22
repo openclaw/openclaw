@@ -1,10 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { findFenceSpanAt, scanFenceSpans } from "../../../packages/markdown-core/src/fences.js";
 import {
   consumeLineBreak,
   skipHorizontalWhitespace,
   skipWhitespace,
 } from "../../../packages/tool-call-repair/src/grammar.js";
-import { findCodeRegions, isInsideCode } from "./code-regions.js";
+import { findCodeRegions, isInsideCode, isInsideSettledBlockCode } from "./code-regions.js";
 import { isGlmArgPayload } from "./glm-arg-key-payload.js";
 import { createConditionalTextProjector, type TextFilter } from "./text-projection.js";
 import { createQuotedStringScanner, parseXmlTagAt, type ParsedToolCallTag } from "./xml-tag-at.js";
@@ -450,6 +451,27 @@ export function toolCallXmlTextFilter(
       let scannedThrough = 0;
       let active = false;
       let codeRegions: ReturnType<typeof findCodeRegions> | undefined;
+      let fenceSpans: ReturnType<typeof scanFenceSpans>["spans"] | undefined;
+      let mayContainFence = false;
+      // A settled top-level fence is block code without a Markdown parse; container
+      // fences and indented code stay with the canonical ownership resolver.
+      const isInsideSettledFence = (text: string, pos: number) => {
+        if (!mayContainFence) {
+          return false;
+        }
+        fenceSpans ??= scanFenceSpans(text).spans;
+        const span = findFenceSpanAt(fenceSpans, pos);
+        if (!span) {
+          return false;
+        }
+        // CommonMark forbids backticks in a backtick fence's info string, so such a
+        // line is not code for the canonical resolver and must not short-circuit here.
+        const info = span.openLine.slice(span.indent.length + span.marker.length);
+        if (span.marker.startsWith("`") && info.includes("`")) {
+          return false;
+        }
+        return /[\r\n]/.test(text.slice(span.start, pos));
+      };
       return createConditionalTextProjector(
         (text) => {
           const regions = codeRegions;
@@ -470,7 +492,12 @@ export function toolCallXmlTextFilter(
             scannedThrough = text.length;
             return false;
           }
-          let deferredStart: number | undefined;
+          if (!mayContainFence && (appended.includes("`") || appended.includes("~"))) {
+            mayContainFence = text.includes("```") || text.includes("~~~");
+          }
+          fenceSpans = undefined;
+          let recheckStart: number | undefined;
+          let pendingPrefix: number | undefined;
           for (let start = text.indexOf("<", scannedThrough); start !== -1;) {
             const next = text.indexOf("<", start + 1);
             const candidate = text.slice(start, next === -1 ? text.length : next);
@@ -480,23 +507,33 @@ export function toolCallXmlTextFilter(
             const prefixCandidate = isToolCallTagPrefix(candidate, 0);
             if (quickCandidate || prefixCandidate) {
               if (prefixCandidate && !quickCandidate) {
-                // A partial prefix cannot be stripped yet. Defer it without parsing
-                // Markdown ownership; a later delta that completes a tool-call tag
-                // follows the canonical resolver, while ordinary HTML stays identity.
-                deferredStart ??= start;
+                recheckStart ??= start;
+                // Every partial candidate stays in the unscanned tail so a later delta
+                // that completes it still reaches the canonical resolver.
+                if (!isInsideSettledFence(text, start)) {
+                  // A partial prefix cannot be stripped yet. Withhold it so completing
+                  // the tag never retracts visible text; a later delta that resolves it
+                  // still starts scanning here, and ordinary HTML becomes identity.
+                  pendingPrefix ??= start;
+                }
                 start = next;
                 continue;
               }
               codeRegions ??= findCodeRegions(text);
-              if (!isInsideCode(start, codeRegions)) {
+              // Appends cannot revoke block code after its opening line; inline
+              // ownership can change through references or later Markdown structure.
+              if (!isInsideSettledBlockCode(start, text, codeRegions)) {
                 active = true;
                 return true;
               }
             }
             start = next;
           }
-          scannedThrough = deferredStart ?? text.length;
+          scannedThrough = recheckStart ?? text.length;
           codeRegions = undefined;
+          if (pendingPrefix !== undefined) {
+            return { hold: pendingPrefix };
+          }
           return false;
         },
       );

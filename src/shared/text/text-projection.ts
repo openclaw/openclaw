@@ -18,20 +18,45 @@ export type TextFilter = {
   boundaryWhitespaceOnly?: true;
 } & ({ activationTokens: readonly string[] } | { create: () => TextProjector });
 
+/** A hold projection is the input prefix that is safe to emit now. */
+export type ConditionalTextProjection = boolean | { hold: number };
+
 /** Preserve append provenance while a probe proves that the canonical transform is identity. */
 export function createConditionalTextProjector(
   transform: (text: string) => string,
-  shouldTransform: (input: TextProjection) => boolean,
+  shouldTransform: (input: TextProjection) => ConditionalTextProjection,
   checkpoint?: CheckpointTransform,
 ): TextProjector {
   const project = checkpoint ? createCheckpointTransform(checkpoint) : undefined;
   let previous = "";
   let identity = true;
+  let previousLength = 0;
+  // Hold outputs are input prefixes, so the next delta needs only a length skip.
+  let previousWasInputPrefix = true;
   return (input) => {
     if (input.delta === "") {
       return identity ? input : { text: previous, delta: "" };
     }
-    const shouldProject = shouldTransform(input);
+    const decision = shouldTransform(input);
+    if (typeof decision === "object") {
+      const hold = Math.max(0, Math.min(decision.hold, input.text.length));
+      const text = hold === input.text.length ? input.text : input.text.slice(0, hold);
+      const nextIdentity = text === input.text;
+      const delta =
+        input.delta === null
+          ? null
+          : previousWasInputPrefix && hold >= previousLength
+            ? input.text.slice(previousLength, hold)
+            : text.startsWith(previous)
+              ? text.slice(previous.length)
+              : null;
+      previous = text;
+      previousLength = text.length;
+      previousWasInputPrefix = true;
+      identity = nextIdentity;
+      return nextIdentity && delta === input.delta ? input : { text, delta };
+    }
+    const shouldProject = decision;
     const checkpointResult = shouldProject
       ? project?.(input.text, input.delta, previous)
       : undefined;
@@ -44,10 +69,14 @@ export function createConditionalTextProjector(
           ? checkpointResult.delta
           : identity && nextIdentity
             ? input.delta
-            : text.startsWith(previous)
-              ? text.slice(previous.length)
-              : null;
+            : previousWasInputPrefix && nextIdentity
+              ? input.text.slice(previousLength)
+              : text.startsWith(previous)
+                ? text.slice(previous.length)
+                : null;
     previous = text;
+    previousLength = text.length;
+    previousWasInputPrefix = nextIdentity;
     identity = nextIdentity;
     return nextIdentity && delta === input.delta ? input : { text, delta };
   };
