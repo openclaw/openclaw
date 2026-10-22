@@ -33,7 +33,7 @@ import {
   buildCommandPaletteSessionItems,
   SESSION_SEARCH_LIMIT,
 } from "./command-palette-session-search.ts";
-import type { OpenClawModalDialog } from "./modal-dialog.ts";
+import type { OpenClawModalDialog } from "./modal-dialog.tsx";
 
 const SEARCH_DEBOUNCE_MS = 200;
 const SESSION_SEARCH_MIN_CHARS = 2;

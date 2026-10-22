@@ -388,13 +388,10 @@ export function resolveRunnerMatrix(params: {
     suites
       .filter((suite) => suiteFilter.matches(runner.os_id, suite))
       .flatMap((suite) => {
-        // Windows packaged-fresh retains the validated version before the
-        // Node 24.19 libuv fs-event crash on Windows Server 2025 RUNNER~1 paths.
-        const node24Version =
-          runner.os_id === "windows" && suite === "packaged-fresh" ? "24.16.0" : "24.21.0";
+        const node24Version = "24.22.1";
         const nodeVersions =
           suite === "packaged-fresh" || suite === "packaged-upgrade"
-            ? [node24Version, "26.1.0"]
+            ? [node24Version, "26.12.1"]
             : [node24Version];
         return nodeVersions.map((nodeVersion) =>
           Object.assign({}, runner, {

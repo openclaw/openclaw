@@ -21,6 +21,7 @@ import {
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { DEFAULT_POSIX_TMP_ROOT } from "../infra/tmp-openclaw-dir.js";
+import { readParsedField } from "../utils/string-readers.js";
 import { invalidateLoggingConfigCache, readLoggingConfig } from "./config.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, isLogLevelEnabled, levelToMinLevel, normalizeLogLevel } from "./levels.js";
@@ -207,14 +208,9 @@ function readFirstContextString(
   keys: readonly string[],
 ): string | undefined {
   for (const source of sources) {
-    if (!source) {
-      continue;
-    }
-    for (const key of keys) {
-      const value = normalizeFileLogContextValue(source[key]);
-      if (value) {
-        return value;
-      }
+    const value = source ? readParsedField(source, keys, normalizeFileLogContextValue) : undefined;
+    if (value) {
+      return value;
     }
   }
   return undefined;

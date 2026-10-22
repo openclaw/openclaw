@@ -85,7 +85,7 @@ export function createModelSetup(
   let wizardReturnFocus: HTMLElement | null = null;
   let manualInput: HTMLInputElement | undefined;
   let feedback: HTMLElement | undefined;
-  let wizardDialog: import("../../components/modal-dialog.ts").OpenClawModalDialog | undefined;
+  let wizardDialog: import("../../components/modal-dialog.tsx").OpenClawModalDialog | undefined;
   const firstRun = new FirstRunSetup({
     context: () => context,
     routeData: () => props.routeData,
@@ -597,7 +597,7 @@ export function createModelSetup(
       onFeedback: (element: HTMLDivElement) => {
         feedback = element;
       },
-      onWizardDialog: (element: import("../../components/modal-dialog.ts").OpenClawModalDialog) => {
+      onWizardDialog: (element: NonNullable<typeof wizardDialog>) => {
         wizardDialog = element;
       },
       detecting: state.detectionRequest !== null,

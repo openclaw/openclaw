@@ -38,11 +38,7 @@ export function parseCliContainerArgs(argv: string[]): CliContainerParseResult {
     return { kind: "pass" };
   });
 
-  if (!scanned.ok) {
-    return scanned;
-  }
-
-  return { ok: true, container, argv: scanned.argv };
+  return scanned.ok ? { ok: true, container, argv: scanned.argv } : scanned;
 }
 
 export function resolveCliContainerTarget(

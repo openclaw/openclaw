@@ -68,6 +68,56 @@ describe("WizardSession", () => {
     expect(wizardStepAwaitsInput({ id: "step", type, executor })).toBe(expected);
   });
 
+  test("steps progress in order through a spread prompter with a note adapter", async () => {
+    const session = new WizardSession(async (prompter) => {
+      const adapted: WizardPrompter = { ...prompter, note: async () => {} };
+      await adapted.note("Hidden install details");
+      await adapted.intro("Welcome");
+      const name = await adapted.text({ message: "Name" });
+      await prompter.note(`Hello ${name}`, "Greeting");
+      await adapted.outro("Finished");
+    });
+    cleanupSession(session);
+
+    const first = await session.next();
+    expect(first.done).toBe(false);
+    expect(first.step?.type).toBe("note");
+    expect(first.step).toMatchObject({ title: "Welcome", message: "", executor: "client" });
+
+    const secondPeek = await session.next();
+    expect(secondPeek.step?.id).toBe(first.step?.id);
+
+    await session.answer(expectDefined(first.step, "wizard step").id, null);
+
+    const second = await session.next();
+    expect(second.done).toBe(false);
+    expect(second.step?.type).toBe("text");
+
+    await session.answer(expectDefined(second.step, "wizard step").id, "Peter");
+
+    const third = await session.next();
+    expect(third.step?.type).toBe("note");
+    expect(third.step).toMatchObject({
+      title: "Greeting",
+      message: "Hello Peter",
+      executor: "client",
+    });
+
+    await session.answer(expectDefined(third.step, "wizard step").id, null);
+
+    const last = await nextStep(session, {
+      type: "note",
+      title: "Done",
+      message: "Finished",
+      executor: "client",
+    });
+    await session.answer(last.id, null);
+
+    const done = await session.next();
+    expect(done.done).toBe(true);
+    expect(done.status).toBe("done");
+  });
+
   test("plain output is a client note with plain format", async () => {
     const session = new WizardSession(async (prompter) => {
       await prompter.plain?.('{"ok":true}');

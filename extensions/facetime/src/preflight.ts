@@ -3,6 +3,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { asRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { FACETIME_FEED_DEVICE_NAME, FACETIME_MIC_DEVICE_NAME } from "./audio-pump.js";
+import { firstLine } from "./command-output.js";
 import type { FaceTimeConfig } from "./config.js";
 import { agentIdFromSessionKey, resolveFaceTimeRealtimeProvider } from "./talk-driver-config.js";
 
@@ -60,10 +61,6 @@ export type FaceTimePreflightResult = {
   currentAudioError?: string;
   checks: FaceTimePreflightCheck[];
 };
-
-function firstLine(value: unknown) {
-  return typeof value === "string" ? value.trim().split(/\r?\n/u)[0] || undefined : undefined;
-}
 
 function pushCheck(
   checks: FaceTimePreflightCheck[],

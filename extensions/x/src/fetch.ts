@@ -1,3 +1,4 @@
+export type XFetch = (input: string, init?: RequestInit) => Promise<Response>;
 export type XAssertActive = () => void | (() => void) | Promise<void | (() => void)>;
 
 export async function fetchXService(

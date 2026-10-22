@@ -1146,7 +1146,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
         openAIProfileIdMap.forEach((_target, id) => blockedProfileIds.add(id));
       }
       result.warnings.push(
-        `Failed to migrate auth profile JSON for ${shortenHomePath(candidate.authPath)}: ${String(err)}`,
+        `Failed to migrate auth profile JSON for ${shortenHomePath(candidate.authPath)}: ${String(err)} Preserve the source; restore valid UTF-8 JSON from a verified backup if unreadable, then rerun ${formatCliCommand("openclaw doctor --fix")}.`,
       );
     } finally {
       if (!completed) {
@@ -1734,7 +1734,7 @@ function recoverArchivedAuthProfileMappings(params: {
         ) {
           continue;
         }
-        const archivedStore = JSON.parse(sourceBytes.toString("utf8")) as unknown;
+        const archivedStore = parseAuthProfileMigrationSource({ sourceBytes, sourcePath });
         const sourceStore =
           coerceLegacyAuthProfileStore(archivedStore) ??
           coerceLegacyFlatAuthProfileStore(archivedStore);

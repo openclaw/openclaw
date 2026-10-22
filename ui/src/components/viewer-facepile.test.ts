@@ -72,44 +72,68 @@ it.each(["session", "profile"] as const)(
   },
 );
 
-it("uses the same user initials and identity hue in the roster and attributed chat", async () => {
-  const user: PresenceViewer = {
-    id: "profile-riley",
-    name: "Riley",
-    email: "riley@example.test",
-    watchedSessions: [],
-  };
-  const viewerAvatar = mountAvatar(user);
+it.each([false, true])(
+  "keeps identity colors consistent through avatar updates (photo: %s)",
+  async (photo) => {
+    const user: PresenceViewer = {
+      id: "profile-riley",
+      name: "Riley",
+      email: "riley@example.test",
+      ...(photo ? { avatarUrl: "/api/users/profile-riley/avatar?v=1" } : {}),
+      watchedSessions: [],
+    };
+    const viewerAvatar = mountAvatar(user);
 
-  const chat = document.createElement("div");
-  document.body.append(chat);
-  mountSolid(
-    () =>
-      createComponent(ChatAuthorAvatar, {
-        sender: { id: user.id, name: user.name, username: user.email },
-      }),
-    { container: chat },
-  );
-
-  const expected = resolveAvatarInitials({
-    id: user.id,
-    name: user.name,
-    username: user.email,
-  });
-  await waitForSolid(async () => {
-    await viewerAvatar.updateComplete;
-    const rosterInitials = viewerAvatar.querySelector<HTMLElement>(".viewer-avatar > span");
-    const chatInitials = chat.querySelector(".chat-author-avatar__initials");
-    expect(rosterInitials?.textContent?.trim()).toBe(expected.initials);
-    expect(chatInitials?.textContent?.trim()).toBe(expected.initials);
-    const expectedStyle = document.createElement("span").style;
-    expectedStyle.background = `hsl(${expected.colorSeed % 360} 48% 42%)`;
-    expect(rosterInitials?.style.background).toBe(expectedStyle.background);
-    expect(chatInitials?.getAttribute("style")).toContain(
-      `--chat-author-avatar-hue: ${expected.colorSeed % 360}`,
+    const chat = document.createElement("div");
+    document.body.append(chat);
+    mountSolid(
+      () =>
+        createComponent(ChatAuthorAvatar, {
+          sender: { id: user.id, name: user.name, username: user.email },
+        }),
+      { container: chat },
     );
-  });
-});
+
+    const expected = resolveAvatarInitials({
+      id: user.id,
+      name: user.name,
+      username: user.email,
+    });
+    await waitForSolid(async () => {
+      await viewerAvatar.updateComplete;
+      const rosterInitials = viewerAvatar.querySelector<HTMLElement>(".viewer-avatar > span");
+      const chatInitials = chat.querySelector(".chat-author-avatar__initials");
+      expect(rosterInitials?.textContent?.trim()).toBe(expected.initials);
+      expect(chatInitials?.textContent?.trim()).toBe(expected.initials);
+      const expectedStyle = document.createElement("span").style;
+      expectedStyle.background = `hsl(${expected.colorSeed % 360} 48% 42%)`;
+      expect(rosterInitials?.style.background).toBe(expectedStyle.background);
+      expect(
+        viewerAvatar
+          .querySelector<HTMLElement>(".viewer-avatar")
+          ?.style.getPropertyValue("--viewer-avatar-color"),
+      ).toBe(`hsl(${expected.colorSeed % 360} 48% 42%)`);
+      expect(chatInitials?.getAttribute("style")).toContain(
+        `--chat-author-avatar-hue: ${expected.colorSeed % 360}`,
+      );
+    });
+    const nextUser = {
+      ...user,
+      id: "profile-jordan",
+      name: "Jordan",
+      ...(photo ? { avatarUrl: "/api/users/profile-jordan/avatar?v=1" } : {}),
+    };
+    viewerAvatar.user = nextUser;
+    await viewerAvatar.updateComplete;
+    const nextColor = `hsl(${resolveAvatarInitials(nextUser).colorSeed % 360} 48% 42%)`;
+    expect(nextColor).not.toBe(`hsl(${expected.colorSeed % 360} 48% 42%)`);
+    expect(
+      viewerAvatar
+        .querySelector<HTMLElement>(".viewer-avatar")
+        ?.style.getPropertyValue("--viewer-avatar-color"),
+    ).toBe(nextColor);
+  },
+);
 
 it("uses the shared resolver and rejects cross-origin presence avatar metadata", async () => {
   const avatar = mountAvatar({

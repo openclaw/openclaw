@@ -37,6 +37,29 @@ const initial = <T>(value: T): T => value;
 
 const mutableValue = <T>(value: T) => ({ value });
 
+export function createGatewayTestState() {
+  return {
+    agentConfig: initial<Record<string, unknown> | undefined>(undefined),
+    agentsConfig: initial<Record<string, unknown> | undefined>(undefined),
+    bindingsConfig: initial<AgentBinding[] | undefined>(undefined),
+    channelsConfig: initial<Record<string, unknown> | undefined>(undefined),
+    sessionStorePath: initial<string | undefined>(undefined),
+    sessionConfig: initial<Record<string, unknown> | undefined>(undefined),
+    allowFrom: initial<string[] | undefined>(undefined),
+    cronStorePath: initial<string | undefined>(undefined),
+    cronEnabled: initial<boolean | undefined>(false),
+    cronTriggersEnabled: initial<boolean | undefined>(undefined),
+    gatewayBind: initial<"auto" | "lan" | "tailnet" | "loopback" | undefined>(undefined),
+    gatewayAuth: initial<Record<string, unknown> | undefined>(undefined),
+    gatewayControlUi: initial<Record<string, unknown> | undefined>(undefined),
+    hooksConfig: initial<HooksConfig | undefined>(undefined),
+    legacyIssues: new Array<{ path: string; message: string }>(),
+    legacyParsed: initial<Record<string, unknown>>({}),
+    migrationConfig: initial<Record<string, unknown> | null>(null),
+    migrationChanges: new Array<string>(),
+  };
+}
+
 const gatewayTestHoisted = resolveGatewayTestFileFixture(
   Symbol.for("openclaw.gatewayTestHelpers.hoisted"),
   () => ({
@@ -81,26 +104,7 @@ const gatewayTestHoisted = resolveGatewayTestFileFixture(
     sendWhatsAppMock: vi
       .fn<SendWhatsAppFn>()
       .mockResolvedValue({ messageId: "msg-1", toJid: "jid-1" }),
-    testState: {
-      agentConfig: initial<Record<string, unknown> | undefined>(undefined),
-      agentsConfig: initial<Record<string, unknown> | undefined>(undefined),
-      bindingsConfig: initial<AgentBinding[] | undefined>(undefined),
-      channelsConfig: initial<Record<string, unknown> | undefined>(undefined),
-      sessionStorePath: initial<string | undefined>(undefined),
-      sessionConfig: initial<Record<string, unknown> | undefined>(undefined),
-      allowFrom: initial<string[] | undefined>(undefined),
-      cronStorePath: initial<string | undefined>(undefined),
-      cronEnabled: initial<boolean | undefined>(false),
-      cronTriggersEnabled: initial<boolean | undefined>(undefined),
-      gatewayBind: initial<"auto" | "lan" | "tailnet" | "loopback" | undefined>(undefined),
-      gatewayAuth: initial<Record<string, unknown> | undefined>(undefined),
-      gatewayControlUi: initial<Record<string, unknown> | undefined>(undefined),
-      hooksConfig: initial<HooksConfig | undefined>(undefined),
-      legacyIssues: new Array<{ path: string; message: string }>(),
-      legacyParsed: initial<Record<string, unknown>>({}),
-      migrationConfig: initial<Record<string, unknown> | null>(null),
-      migrationChanges: new Array<string>(),
-    },
+    testState: createGatewayTestState(),
   }),
 );
 

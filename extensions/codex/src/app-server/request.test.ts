@@ -22,6 +22,7 @@ const shared = vi.hoisted(() => ({
   retire: vi.fn(),
 }));
 
+// mock-isolation: Quota notifications belong to live leases; this suite exercises isolated fallback.
 vi.mock("./shared-client-usage.js", () => ({
   readSharedCodexAppServerUsage: vi.fn(async () => undefined),
 }));

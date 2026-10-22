@@ -40,6 +40,8 @@ compaction with session-store patches and harness calls. The result contains
 `compacted`, optional `reason`, and optional `tokensBefore` and `tokensAfter`
 snapshots; OpenClaw owns all persistence and lifecycle coordination.
 
+Opted-in authorized commands may also use [command-scoped native children](/plugins/sdk-runtime/background-work#command-scoped-native-children) through `ctx.runtimeContext?.subagents`.
+
 ## Auth-profile resolution
 
 The experimental `openclaw/plugin-sdk/agent-runtime` entrypoint exports
