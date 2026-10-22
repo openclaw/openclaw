@@ -8,6 +8,7 @@ import {
   stateDir,
 } from "../../gateway/server-methods/requester-cron-authority.test-support.js";
 import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
+import { TEST_SCHEDULED_OCCURRENCE } from "../scheduled-occurrence.test-support.js";
 import type { CronJob } from "../types.js";
 import {
   prepareAuthorityConfig,
@@ -109,6 +110,7 @@ async function runAndTouchSibling(params: {
   await runCronIsolatedAgentTurn({
     cfg: config,
     deps: {},
+    occurrence: TEST_SCHEDULED_OCCURRENCE,
     job: hookShapedJob(params.toolsAllow),
     trigger: params.trigger,
     deliveryAttemptFence: null,
