@@ -124,7 +124,7 @@ export function projectDetailsOutputs(
     outputs: {
       ...icons,
       artifacts: artifacts?.resolved ? artifacts.items : null,
-      artifactsLoading: artifacts?.loading ?? false,
+      artifactRead: artifacts,
       artifactsError: artifacts?.error ?? null,
       dashboard: !board.available
         ? null

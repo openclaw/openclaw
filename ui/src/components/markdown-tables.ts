@@ -213,7 +213,7 @@ async function showTableDialog(
   // Reserve through teardown before loading; reconnect cannot revive this request.
   state.closeDialog = close;
   try {
-    await import("./modal-dialog.ts");
+    await import("./modal-dialog.tsx");
     if (state.closeDialog !== close || !owner.isConnected || !trigger.isConnected) {
       return;
     }

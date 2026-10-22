@@ -177,6 +177,13 @@ it("stores attachment payloads without secure-context-only browser APIs", async 
 it("does not settle payload preparation under a pending connected recovery owner", async () => {
   const host = hostFor();
   const original = await prepare(host, "pending-owner");
+  const allocate = vi.fn(() => "blob:unexpected-preview");
+  vi.stubGlobal(
+    "URL",
+    class extends URL {
+      static override createObjectURL = allocate;
+    },
+  );
   const started = createDeferred();
   const release = createDeferred();
   const read = payloadStore.readOutboxPayload;
@@ -193,6 +200,7 @@ it("does not settle payload preparation under a pending connected recovery owner
     .mockReturnValue(false);
   release.resolve();
   expect(await prepared).toEqual({ status: "failed", reason: "unavailable" });
+  expect(allocate).not.toHaveBeenCalled();
   ready.mockRestore();
   await expectBytes(host, original);
 });

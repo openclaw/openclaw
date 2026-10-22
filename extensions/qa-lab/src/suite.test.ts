@@ -5,13 +5,12 @@ import type { QaLabServerHandle } from "./lab-server.types.js";
 import { remapModelRefForForcedRuntime } from "./model-selection.js";
 import { sanitizeQaProgressValue as sanitizeQaSuiteProgressValue } from "./progress-format.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
-import { artifactPaths, createTestLab } from "./suite-runtime-parity.test-support.js";
+import { createTestLab } from "./suite-runtime-parity.test-support.js";
 import {
   buildQaGatewayHeapCheckpointRuntimeEnvPatch,
   mergeQaRuntimeEnvPatches,
 } from "./suite-support.js";
-import { makeQaSuiteTestScenario, recordQaSuiteTestResults } from "./suite-test-helpers.js";
-import type { QaSuiteResult } from "./suite-types.js";
+import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 import {
   buildQaSuiteRuntimeMetrics,
   buildQaSuiteSummaryJson,
@@ -148,24 +147,12 @@ describe("qa suite", () => {
     expect(thrown.message).toContain("failed cleanup phases: transport stop: cleanup failed");
   });
 
-  it("reports completed counts, labeled failures, and only written artifact paths", () => {
+  it("reports completed counts and labeled failures", () => {
     const scenarios = (["pass", "fail", "skip"] as const).map((status) => ({
       name: status,
       status,
       steps: [],
     }));
-    const result = {
-      outputDir: "/qa-output\nretained",
-      ...artifactPaths,
-      ...recordQaSuiteTestResults(
-        undefined,
-        scenarios.map(({ name }) => makeQaSuiteTestScenario(name)),
-        scenarios,
-      ),
-      startedScenarioIds: ["pass", "fail", "skip"],
-      watchUrl: "http://127.0.0.1:43123",
-    } satisfies QaSuiteResult;
-
     const thrown = cleanupErrorForTest({
       cleanupFailures: [
         { phase: "agent\nharnesses", error: new Error("dispose failed") },
@@ -173,8 +160,7 @@ describe("qa suite", () => {
       ],
       runFailed: false,
       runError: undefined,
-      result,
-      evidenceWritten: false,
+      scenarios,
     });
 
     expect(thrown.message).toBe(
@@ -182,11 +168,9 @@ describe("qa suite", () => {
         "QA scenarios completed, but cleanup failed",
         "scenario counts: passed=1 failed=1 skipped=1 total=3",
         "failed cleanup phases: agent harnesses: dispose failed; lab stop: stop failed",
-        "retained artifacts: output=/qa-output retained report=/qa-output/qa-suite-report.md summary=/qa-output/qa-suite-summary.json",
       ].join("\n"),
     );
     expect("cause" in thrown).toBe(false);
-    expect(thrown.message).not.toContain("evidence=");
   });
 
   it.each(["never-spawned", "unconfirmed"] as const)(

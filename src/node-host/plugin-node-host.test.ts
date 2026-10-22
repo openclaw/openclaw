@@ -6,12 +6,12 @@ import type { PluginNodeHostCommandRegistration } from "../plugins/registry-type
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
-  hasRegisteredNodeHostCommandActiveWork,
-  invokeRegisteredNodeHostCommand,
-  isRegisteredNodeHostCommandDuplex,
-  listRegisteredNodeHostCapsAndCommands,
-  notifyRegisteredNodeHostCommandDisconnect,
-  watchRegisteredNodeHostCommandAvailability,
+  hasRegisteredNodeHostCommandActiveWork as hasActiveWork,
+  invokeRegisteredNodeHostCommand as invoke,
+  isRegisteredNodeHostCommandDuplex as isDuplex,
+  listRegisteredNodeHostCapsAndCommands as listCommands,
+  notifyRegisteredNodeHostCommandDisconnect as disconnect,
+  watchRegisteredNodeHostCommandAvailability as watchAvailability,
 } from "./plugin-node-host.js";
 
 const availabilityContext = { config: {}, env: {} };
@@ -46,43 +46,29 @@ it.each([undefined, "optional", true] as const)(
       return paramsJSON ?? "";
     });
     const registry = registerCommands({ command: "file.fetch", cap: "file", duplex, handle });
-    expect(listRegisteredNodeHostCapsAndCommands(availabilityContext)).toEqual({
+    expect(listCommands(availabilityContext)).toEqual({
       caps: ["file"],
       commands: ["file.fetch"],
       nodePluginTools: [],
     });
-    expect(isRegisteredNodeHostCommandDuplex("file.fetch")).toBe(duplex !== undefined);
+    expect(isDuplex("file.fetch")).toBe(duplex !== undefined);
     const payload = '{"ok":true}';
     if (duplex === undefined) {
-      const context = {
-        sendNodeEvent: vi.fn(async () => undefined),
-        sessionKey: "agent:main:canvas",
-      };
-      await expect(
-        invokeRegisteredNodeHostCommand("file.fetch", payload, undefined, context),
-      ).resolves.toBe(payload);
-      expect(handle).toHaveBeenCalledWith(payload, undefined, {
-        ...context,
-        prepareExecAuthorization: expect.any(Function),
-      });
-      await expect(invokeRegisteredNodeHostCommand("missing.command", null)).resolves.toBeNull();
+      await expect(invoke("file.fetch", payload)).resolves.toBe(payload);
+      await expect(invoke("missing.command", null)).resolves.toBeNull();
     } else {
       if (duplex === "optional") {
-        await expect(invokeRegisteredNodeHostCommand("file.fetch", payload)).resolves.toBe(payload);
+        await expect(invoke("file.fetch", payload)).resolves.toBe(payload);
         expect(handle).toHaveBeenLastCalledWith(payload, undefined);
       } else {
-        await expect(invokeRegisteredNodeHostCommand("file.fetch", null)).rejects.toThrow(
-          "requires duplex transport",
-        );
+        await expect(invoke("file.fetch", null)).rejects.toThrow("requires duplex transport");
       }
       const io = {
         signal: new AbortController().signal,
         emitChunk: async () => {},
         onInput: () => {},
       };
-      await expect(invokeRegisteredNodeHostCommand("file.fetch", payload, io)).resolves.toBe(
-        payload,
-      );
+      await expect(invoke("file.fetch", payload, io)).resolves.toBe(payload);
       expect(handle).toHaveBeenLastCalledWith(payload, io);
     }
   },
@@ -128,7 +114,7 @@ it.each([true, false])(
         }),
       },
     );
-    const listed = listRegisteredNodeHostCapsAndCommands({
+    const listed = listCommands({
       config: { browser: { enabled } },
       env: {},
     });
@@ -183,7 +169,7 @@ it("scopes watcher callbacks, shares reentrant cleanup, and fences late notifica
       return cleanup;
     },
   });
-  const stop = watchRegisteredNodeHostCommandAvailability(availabilityContext, () => {
+  const stop = watchAvailability(availabilityContext, () => {
     scopedRegistry(getPluginRuntimeGatewayRequestScope()?.pluginRegistry);
     onChange();
   });
@@ -219,7 +205,7 @@ it("retries failed watcher cleanup without replaying successful siblings", async
       watchAvailability: () => cleanup,
     })),
   );
-  const stop = watchRegisteredNodeHostCommandAvailability(availabilityContext, vi.fn());
+  const stop = watchAvailability(availabilityContext, vi.fn());
   await expect(Promise.resolve(stop())).rejects.toBe(failure);
   await stop();
   expect(successful).toHaveBeenCalledOnce();
@@ -247,12 +233,12 @@ it("retains unavailable plugin work until its shared disconnect owner cleans up 
       onDisconnect,
     })),
   );
-  expect(hasRegisteredNodeHostCommandActiveWork()).toBe(false);
-  await invokeRegisteredNodeHostCommand("meeting.start");
+  expect(hasActiveWork()).toBe(false);
+  await invoke("meeting.start");
   available = false;
-  expect(listRegisteredNodeHostCapsAndCommands(availabilityContext).commands).toEqual([]);
-  expect(hasRegisteredNodeHostCommandActiveWork()).toBe(true);
-  await notifyRegisteredNodeHostCommandDisconnect();
+  expect(listCommands(availabilityContext).commands).toEqual([]);
+  expect(hasActiveWork()).toBe(true);
+  await disconnect();
   expect(onDisconnect).toHaveBeenCalledOnce();
-  expect(hasRegisteredNodeHostCommandActiveWork()).toBe(false);
+  expect(hasActiveWork()).toBe(false);
 });

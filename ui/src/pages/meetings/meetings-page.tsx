@@ -103,9 +103,7 @@ export function MeetingsPage(props: { routeSearch?: string }) {
     { ownedWrite: true },
   );
   let summaryAbort: AbortController | null = null;
-  const [readerPages, setReaderPages] = createSignal<TranscriptsGetResult[]>([], {
-    ownedWrite: true,
-  });
+  const [readerPages, setReaderPages] = createStore<TranscriptsGetResult[]>([]);
   const [exportState, setExportState] = createSignal<OperationState>(
     { kind: "idle" },
     { ownedWrite: true },
@@ -196,11 +194,14 @@ export function MeetingsPage(props: { routeSearch?: string }) {
       accept: (result, current) => {
         setReaderDenial(null);
         // A background read replaces the current page; only forward paging appends.
-        setReaderPages((pages) =>
-          cursor
-            ? [...(cursor === loadedReaderCursor ? pages.slice(0, -1) : pages), result]
-            : [result],
-        );
+        setReaderPages((pages) => {
+          if (!cursor) {
+            pages.length = 0;
+          } else if (cursor === loadedReaderCursor) {
+            pages.pop();
+          }
+          pages.push(result);
+        });
         loadedReaderCursor = cursor;
         onSettled(focusCurrentTarget);
         if (
@@ -299,7 +300,9 @@ export function MeetingsPage(props: { routeSearch?: string }) {
         setReaderDenial(error);
         setList(null);
         setSummary(null);
-        setReaderPages([]);
+        setReaderPages((pages) => {
+          pages.length = 0;
+        });
         cancelExport();
         onSettled(focusCurrentTarget);
       }
@@ -324,7 +327,9 @@ export function MeetingsPage(props: { routeSearch?: string }) {
   function resetReader() {
     readerCursor = null;
     loadedReaderCursor = null;
-    setReaderPages([]);
+    setReaderPages((pages) => {
+      pages.length = 0;
+    });
   }
 
   function cancelExport() {
@@ -435,7 +440,7 @@ export function MeetingsPage(props: { routeSearch?: string }) {
     if (!selection().selector) {
       return;
     }
-    const session = summary()?.session ?? readerPages().at(-1)?.session;
+    const session = summary()?.session ?? readerPages.at(-1)?.session;
     const storedSummary = summary()?.summary;
     const interimSummary =
       session?.stoppedAt &&
@@ -609,7 +614,7 @@ export function MeetingsPage(props: { routeSearch?: string }) {
             return summary();
           },
           get pages() {
-            return readerPages();
+            return readerPages;
           },
           read: () => activeReaderTask().read(),
           get loading() {
@@ -630,7 +635,7 @@ export function MeetingsPage(props: { routeSearch?: string }) {
         }}
         onRefresh={refresh}
         onReaderRetry={() => {
-          if (!readerPages().length) {
+          if (!readerPages.length) {
             resetReader();
           }
           if (readerTab() === "summary") {

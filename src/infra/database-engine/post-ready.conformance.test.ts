@@ -140,7 +140,6 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
           cronEnabled: false,
           log: { debug() {}, info() {}, warn() {}, error() {} },
           enqueueSystemEvent: unexpectedDispatch,
-          requestHeartbeat: unexpectedDispatch,
           runIsolatedAgentJob: unexpectedDispatch,
         });
       const original = createCron();

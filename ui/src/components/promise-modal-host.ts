@@ -66,7 +66,7 @@ export function withPromiseModalHost<T>(
       fail(error);
     }
     if (!ready && !modal.settled) {
-      void ensureCustomElementDefined("openclaw-modal-dialog", () => import("./modal-dialog.ts"))
+      void ensureCustomElementDefined("openclaw-modal-dialog", () => import("./modal-dialog.tsx"))
         .then(() => {
           ready = true;
           if (!modal.settled && pendingContent) {

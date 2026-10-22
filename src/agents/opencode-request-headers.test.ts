@@ -19,7 +19,7 @@ import { resolveProviderRequestPolicyConfig } from "./provider-request-config.js
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 type Protocol = (typeof protocolPaths)[number][0];
-type Route = [api: Protocol, provider: string, baseUrl: string, native: boolean, suffix?: string];
+type Route = [api: Protocol, provider: string, baseUrl: string, native: boolean, suffix: string];
 
 // Usage accounting has dedicated provider tests; these fixtures prove request headers and replies.
 const replies: Record<Protocol, Record<string, unknown>[]> = {
@@ -57,35 +57,28 @@ function responseFor(api: Protocol): Response {
 }
 
 const protocolPaths = [
-  ["openai-completions", "openai/v1"],
-  ["openai-responses", "openai/v1"],
-  ["anthropic-messages", "anthropic/v1"],
-  ["google-generative-ai", "google/v1beta"],
+  ["openai-completions", "openai/v1", "/chat/completions"],
+  ["openai-responses", "openai/v1", "/responses"],
+  ["anthropic-messages", "anthropic/v1", "/messages"],
+  ["google-generative-ai", "google/v1beta", "/models/fixture-model:streamGenerateContent?alt=sse"],
 ] as const;
 
 // Exercise both manifest owners, each proxy adapter, and both legacy Zen URL shapes.
 const routes: Route[] = [
-  ...protocolPaths.flatMap(([api, path]): Route[] => [
-    [api, "opencode-go", "https://opencode.ai/inference/go/" + path, true],
-    [api, "opencode", "https://opencode.ai/inference/" + path, true],
-    [api, "opencode-go", "https://proxy.example/" + path, false],
+  ...protocolPaths.flatMap(([api, path, suffix]): Route[] => [
+    [api, "opencode-go", "https://opencode.ai/inference/go/" + path, true, suffix],
+    [api, "opencode", "https://opencode.ai/inference/" + path, true, suffix],
+    [api, "opencode-go", "https://proxy.example/" + path, false, suffix],
   ]),
   ...(["opencode-go", "opencode"] as const).flatMap((provider): Route[] => {
     const baseUrl =
       provider === "opencode-go" ? "https://opencode.ai/zen/go" : "https://opencode.ai/zen";
     return [
-      ["openai-completions", provider, baseUrl + "/v1", true],
+      ["openai-completions", provider, baseUrl + "/v1", true, "/chat/completions"],
       ["anthropic-messages", provider, baseUrl, true, "/v1/messages"],
     ];
   }),
 ];
-
-const requestSuffix: Record<Protocol, string> = {
-  "openai-completions": "/chat/completions",
-  "openai-responses": "/responses",
-  "anthropic-messages": "/messages",
-  "google-generative-ai": "/models/fixture-model:streamGenerateContent?alt=sse",
-};
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -155,7 +148,7 @@ it.each(routes)(
     for (const [index, request] of requests.entries()) {
       const header = (name: string) => request.headers.get(name);
       expect(request.method).toBe("POST");
-      expect(request.url).toBe(baseUrl + (suffix ?? requestSuffix[api]));
+      expect(request.url).toBe(baseUrl + suffix);
       expect(header("x-model")).toBe("keep-model");
       expect(header("x-custom")).toBe("keep-caller");
       if (native) {

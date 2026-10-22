@@ -90,25 +90,6 @@ export function deliveryContextFromChannelRoute(
   });
 }
 
-function mergeRouteMetadataWithDeliveryContext(
-  route: ChannelRouteRef | undefined,
-  context: DeliveryContext,
-): ChannelRouteRef | undefined {
-  if (!route) {
-    return normalizeChannelRouteTarget(normalizeDeliveryContext(context));
-  }
-  return normalizeChannelRouteRef({
-    channel: route.channel ?? context.channel,
-    to: route.target?.to ?? context.to,
-    rawTo: route.target?.rawTo,
-    chatType: route.target?.chatType,
-    accountId: route.accountId ?? context.accountId,
-    threadId: route.thread?.id ?? context.threadId,
-    threadKind: route.thread?.kind,
-    threadSource: route.thread?.source,
-  });
-}
-
 function isInternalRouteContext(context?: DeliveryContext): boolean {
   const channel = context?.channel;
   return Boolean(
@@ -124,21 +105,6 @@ function hasExternalDeliveryTarget(context?: DeliveryContext): boolean {
     !isInternalNonDeliveryChannel(channel) &&
     context?.to,
   );
-}
-
-function mergeExternalDeliveryContextOverInternalRoute(
-  deliveryContext?: DeliveryContext,
-  internalContext?: DeliveryContext,
-): DeliveryContext | undefined {
-  // Internal webchat/heartbeat routes are session plumbing. When a real channel
-  // target is also present, preserve internal account/thread hints but let the
-  // external channel/to pair own delivery.
-  return normalizeDeliveryContext({
-    channel: deliveryContext?.channel,
-    to: deliveryContext?.to,
-    accountId: deliveryContext?.accountId ?? internalContext?.accountId,
-    threadId: deliveryContext?.threadId ?? internalContext?.threadId,
-  });
 }
 
 type SessionDeliveryProjection = {
@@ -190,11 +156,19 @@ export function normalizeSessionDeliveryState(params?: {
   const fallbackContext = mergeDeliveryContext(context, originContext);
   const routeIsInternalFallback =
     isInternalRouteContext(routeContext) && hasExternalDeliveryTarget(context);
+  const internalContext = routeIsInternalFallback
+    ? mergeDeliveryContext(routeContext, originContext)
+    : undefined;
+  // Internal webchat/heartbeat routes are session plumbing. When a real channel
+  // target is also present, preserve internal account/thread hints but let the
+  // external channel/to pair own delivery.
   const merged = routeIsInternalFallback
-    ? mergeExternalDeliveryContextOverInternalRoute(
-        context,
-        mergeDeliveryContext(routeContext, originContext),
-      )
+    ? normalizeDeliveryContext({
+        channel: context?.channel,
+        to: context?.to,
+        accountId: context?.accountId ?? internalContext?.accountId,
+        threadId: context?.threadId ?? internalContext?.threadId,
+      })
     : mergeDeliveryContext(routeContext, fallbackContext);
 
   if (!merged) {
@@ -203,10 +177,19 @@ export function normalizeSessionDeliveryState(params?: {
   if (isInternalRouteContext(merged)) {
     return { kind: "internal" };
   }
-  const route = mergeRouteMetadataWithDeliveryContext(
-    routeIsInternalFallback ? undefined : normalizedRoute,
-    merged,
-  );
+  const deliveryRoute = routeIsInternalFallback ? undefined : normalizedRoute;
+  const route = deliveryRoute
+    ? normalizeChannelRouteRef({
+        channel: deliveryRoute.channel ?? merged.channel,
+        to: deliveryRoute.target?.to ?? merged.to,
+        rawTo: deliveryRoute.target?.rawTo,
+        chatType: deliveryRoute.target?.chatType,
+        accountId: deliveryRoute.accountId ?? merged.accountId,
+        threadId: deliveryRoute.thread?.id ?? merged.threadId,
+        threadKind: deliveryRoute.thread?.kind,
+        threadSource: deliveryRoute.thread?.source,
+      })
+    : normalizeChannelRouteTarget(normalizeDeliveryContext(merged));
   if (!route) {
     return { kind: "none" };
   }

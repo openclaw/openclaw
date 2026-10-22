@@ -47,6 +47,7 @@ export type DefaultModelsViewProps = {
   canMutate: boolean;
   mutationBlockedReason: string | null;
   busy: Record<string, boolean>;
+  defaultsSaving?: boolean;
   message?: ModelProviderRowMessage;
   onPrimaryChange: (model: string) => void;
   onFallbackChange: (model: string | null) => void;
@@ -135,7 +136,9 @@ function BehaviorSetting<Value extends string>(props: {
       value={props.value}
       ariaLabel={t(`quickSettings.model.${props.field}`)}
       options={[{ value: "" as const, label: t("quickSettings.model.default") }, ...props.options]}
-      disabled={Boolean(props.view.busy.defaults) || !props.view.canMutate}
+      disabled={
+        props.view.defaultsSaving || Boolean(props.view.busy.defaults) || !props.view.canMutate
+      }
       onChange={(value) => (value === "" ? props.onReset() : props.onChange(value))}
       onReselect={(value) => {
         if (value === "" && props.overridden) {
@@ -243,7 +246,7 @@ function FallbackModel(props: {
 
 export function DefaultModels(props: DefaultModelsViewProps) {
   const modelControlsDisabled = () => !props.canMutate || props.models.length === 0;
-  const saving = () => Boolean(props.busy.defaults);
+  const saving = () => props.defaultsSaving || Boolean(props.busy.defaults);
   const title = () => props.mutationBlockedReason ?? "";
   const primaryModel = createMemo(() =>
     props.models.find((model) => modelCatalogRef(model) === props.selection.primary),

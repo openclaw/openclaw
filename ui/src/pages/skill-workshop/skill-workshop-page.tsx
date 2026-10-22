@@ -378,6 +378,10 @@ class SkillWorkshopPageState {
           navigationKey: result.key,
         }).options,
       );
+    } catch (error) {
+      if (isCurrent()) {
+        this.learningError = formatUiError(error);
+      }
     } finally {
       if (isCurrent()) {
         this.learningBusy = false;

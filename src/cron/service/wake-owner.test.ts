@@ -14,7 +14,6 @@ function createHarness(runSessionEvent: RunSessionEvent) {
     storePath: "unused-cron-wake-owner.json",
     log: { debug() {}, info() {}, warn() {}, error() {} },
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runSessionEvent,
     runIsolatedAgentJob: vi.fn<CronServiceDeps["runIsolatedAgentJob"]>(async () => ({
       status: "ok",

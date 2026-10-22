@@ -256,6 +256,7 @@ suite.define(() => {
           text: box(".sidebar-recent-session__text"),
           indicator: box(".sidebar-session-indicator:not(:empty)"),
           actions: box(".session-row-actions"),
+          archive: box("[data-sidebar-session-archive]"),
         };
       });
     const header = await page
@@ -281,6 +282,10 @@ suite.define(() => {
     );
     const hovered = await rowGeometry("running");
     expect(hovered.indicator?.right).toBeLessThanOrEqual(hovered.actions?.left ?? -Infinity);
+    // At rest, trailing status sits in the archive action's column.
+    const centerX = (rect?: { left: number; right: number }) =>
+      rect ? (rect.left + rect.right) / 2 : Number.NaN;
+    expect(centerX(unread.indicator)).toBeCloseTo(centerX(hovered.archive), 1);
   });
 
   it("derives People controls and owner filtering from current session owners", async () => {

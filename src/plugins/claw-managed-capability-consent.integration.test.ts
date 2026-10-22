@@ -55,6 +55,8 @@ function manifest(id: string, tools: string[]) {
   return { id, contracts: { tools }, configSchema: { type: "object" } };
 }
 
+const acceptReview = async ({ reviewToken }: { reviewToken: string }) => ({ reviewToken });
+
 async function expectUnpublished(env: NodeJS.ProcessEnv, id = "claw-audit") {
   await expect(
     fs.stat(path.join(resolveDefaultPluginExtensionsDir(env), id)),
@@ -122,6 +124,14 @@ async function findStagedPluginArtifactDir(env: NodeJS.ProcessEnv): Promise<stri
   return path.join(extensionsDir, stages[0]!);
 }
 
+async function replaceStagedTools(env: NodeJS.ProcessEnv, tools: string[]) {
+  await writeJson(
+    await findStagedPluginArtifactDir(env),
+    "openclaw.plugin.json",
+    manifest("claw-audit", tools),
+  );
+}
+
 it("denies an official ClawHub plugin before artifact and record commit, then installs after review", async () => {
   const root = dirs.make("openclaw-official-claw-plugin-consent-");
   const archive = await createClawHubArchive({
@@ -169,9 +179,7 @@ it("denies an official ClawHub plugin before artifact and record commit, then in
     );
     await expectUnpublished(env, "diffs");
 
-    const accepted = vi.fn(async (review: { reviewToken: string }) => ({
-      reviewToken: review.reviewToken,
-    }));
+    const accepted = vi.fn(acceptReview);
     await expect(
       installManagedPlugin({ request, env, clawManaged: true, onCapabilityConsent: accepted }),
     ).resolves.toMatchObject({ plugin: { id: "diffs", installed: true } });
@@ -230,18 +238,13 @@ it("rejects a staged capability change during the Claw owner's final check", asy
     let stageChanged = false;
     await expect(
       install({
-        onCapabilityConsent: async (review) => ({ reviewToken: review.reviewToken }),
+        onCapabilityConsent: acceptReview,
         beforePersistentEffect: async () => {
           if (stageChanged) {
             return;
           }
           stageChanged = true;
-          const stagedArtifactDir = await findStagedPluginArtifactDir(env);
-          await writeJson(
-            stagedArtifactDir,
-            "openclaw.plugin.json",
-            manifest("claw-audit", ["audit.read", "audit.write"]),
-          );
+          await replaceStagedTools(env, ["audit.read", "audit.write"]);
         },
       }),
     ).rejects.toMatchObject({ capabilityConsent: { pluginId: "claw-audit" } });
@@ -267,7 +270,7 @@ it("rejects sibling-entry drift even when the merged capability token is unchang
     const expected = inspectClawPluginCapabilities(sourceDir, "claw-audit", env);
     let changed: ReturnType<typeof inspectClawPluginCapabilities> | undefined;
     const pending = install({
-      onCapabilityConsent: async (review) => ({ reviewToken: review.reviewToken }),
+      onCapabilityConsent: acceptReview,
       onBeforePluginArtifactCommit: async (artifact) => {
         const current = inspectClawPluginCapabilities(
           artifact.stagedArtifactDir,
@@ -302,9 +305,7 @@ it("rejects sibling-entry drift even when the merged capability token is unchang
 
 it("rejects final-stage capability drift without replacing the installed plugin", async () => {
   await withLocalFixture(async ({ root, env, install }) => {
-    const onCapabilityConsent = async (review: { reviewToken: string }) => ({
-      reviewToken: review.reviewToken,
-    });
+    const onCapabilityConsent = acceptReview;
     await install({ onCapabilityConsent });
     const original = await readInstalled(env);
 
@@ -313,14 +314,7 @@ it("rejects final-stage capability drift without replacing the installed plugin"
       install({
         mode: "update",
         onCapabilityConsent,
-        beforePersistentEffect: async () => {
-          const stagedArtifactDir = await findStagedPluginArtifactDir(env);
-          await writeJson(
-            stagedArtifactDir,
-            "openclaw.plugin.json",
-            manifest("claw-audit", ["audit.write", "audit.admin"]),
-          );
-        },
+        beforePersistentEffect: () => replaceStagedTools(env, ["audit.write", "audit.admin"]),
       }),
     ).rejects.toMatchObject({ capabilityConsent: { pluginId: "claw-audit" } });
 
