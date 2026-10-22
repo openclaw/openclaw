@@ -228,7 +228,7 @@ function Save-InstallerDownload {
         [IO.File]::WriteAllText($OutFile, "$hash  $name")
         return
     }
-    if ($Uri -notmatch '^https://nodejs\.org/dist/v26\.1\.0/node-v26\.1\.0-win-(x64|arm64)\.zip$') { throw "unexpected archive URL: $Uri" }
+    if ($Uri -notmatch '^https://nodejs\.org/dist/v26\.12\.1/node-v26\.12\.1-win-(x64|arm64)\.zip$') { throw "unexpected archive URL: $Uri" }
     [IO.File]::WriteAllText($OutFile, 'downloaded archive bytes')
 }
 function Expand-PortableNodeArchive {
