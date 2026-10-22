@@ -78,6 +78,11 @@ const messageRecorder = () => ({
   addOutboundMessage: vi.fn(),
   editMessage: vi.fn(),
 });
+const privateEvidence = "preserve private evidence";
+const uncertainReceipt = "without a definitive Slack receipt";
+function expectEvidence(artifact: { evidence: unknown[] }, evidence: Record<string, unknown>) {
+  expect(artifact.evidence).toContainEqual(expect.objectContaining(evidence));
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -225,6 +230,7 @@ async function nativeAdapterFixture(
     timeoutMs: 30_000,
     waitForConfigRestartSettle: vi.fn(),
   });
+  const requestMethods = (since = 0) => requests.slice(since).map(({ method }) => method);
   return {
     adapter,
     controller,
@@ -232,6 +238,7 @@ async function nativeAdapterFixture(
     driver: prepared?.channelE2e as QaChannelE2eDriver,
     outputDir,
     requests,
+    requestMethods,
     deletedMessageIds: () =>
       requests
         .filter((request) => request.method === "chat.delete")
@@ -264,7 +271,15 @@ function busObservationFixture() {
     sutUserId: "U123",
     messages: state,
   };
-  return { state, base };
+  return {
+    state,
+    observe: (text: string, ts = "123.000001", thread_ts?: string) =>
+      testing.recordSlackObservedMessage({
+        ...base,
+        message: { text, ts, thread_ts, user: "U123" },
+      }),
+    busMessageIds,
+  };
 }
 
 describe("Slack live adapter reconciliation", () => {
@@ -319,13 +334,10 @@ describe("Slack live adapter reconciliation", () => {
   });
 
   it("records streamed updates to the same Slack timestamp as bus edits", async () => {
-    const { state, base } = busObservationFixture();
+    const { state, observe } = busObservationFixture();
 
     for (const text of ["QA-", "QA-CHANNEL-BASELINE-OK"]) {
-      await testing.recordSlackObservedMessage({
-        ...base,
-        message: { text, ts: "123.000001", user: "U123" },
-      });
+      await observe(text);
     }
 
     const snapshot = state.getSnapshot();
@@ -337,24 +349,15 @@ describe("Slack live adapter reconciliation", () => {
   });
 
   it("maps observed thread replies to the root bus message", async () => {
-    const { state, base } = busObservationFixture();
+    const { state, observe, busMessageIds } = busObservationFixture();
     const root = state.addInboundMessage({
       accountId: "sut",
       conversation: { id: "C123", kind: "channel" },
       senderId: "U456",
       text: "root",
     });
-    base.busMessageIds.set("123.000001", root.id);
-
-    await testing.recordSlackObservedMessage({
-      ...base,
-      message: {
-        text: "thread reply",
-        thread_ts: "123.000001",
-        ts: "123.000002",
-        user: "U123",
-      },
-    });
+    busMessageIds.set("123.000001", root.id);
+    await observe("thread reply", "123.000002", "123.000001");
 
     expect(state.getSnapshot().messages.at(-1)).toMatchObject({
       direction: "outbound",
@@ -394,18 +397,14 @@ describe("Slack agent E2E request settlement", () => {
       "final capture is incomplete",
     );
     capturedEvents.length = 0;
-    await expect(f.adapter.cleanupAfterGatewayStop?.()).rejects.toThrow(
-      "preserve private evidence",
-    );
-    expect((await f.artifact()).evidence).toContainEqual(
-      expect.objectContaining({
-        operation: "Gateway chat.postMessage",
-        outcome: "uncertain",
-        requestEventId: 1,
-        threadId: owned.id,
-        detail: "response-not-captured",
-      }),
-    );
+    await expect(f.adapter.cleanupAfterGatewayStop?.()).rejects.toThrow(privateEvidence);
+    expectEvidence(await f.artifact(), {
+      operation: "Gateway chat.postMessage",
+      outcome: "uncertain",
+      requestEventId: 1,
+      threadId: owned.id,
+      detail: "response-not-captured",
+    });
     expect(f.deletedMessageIds()).toEqual([owned.id]);
     expect(mocks.credentialRelease).toHaveBeenCalledOnce();
   });
@@ -445,23 +444,21 @@ describe("Slack agent E2E request settlement", () => {
       const cleaned =
         operation === "read"
           ? expect(cleaning).resolves.toBeUndefined()
-          : expect(cleaning).rejects.toThrow("preserve private evidence");
+          : expect(cleaning).rejects.toThrow(privateEvidence);
       f.expire(signal);
       await rejected;
       await cleaned;
 
-      expect(f.requests.slice(baseline).map((request) => request.method)).toEqual(
+      expect(f.requestMethods(baseline)).toEqual(
         operation === "upload" ? ["files.getUploadURLExternal", "upload-data"] : [method],
       );
       const artifact = await f.artifact();
       expect(artifact).toMatchObject({ ownedMessages: [], ownedFileIds: [] });
       if (operation !== "read") {
-        expect(artifact.evidence).toContainEqual(
-          expect.objectContaining({
-            operation: operation === "send" ? "chat.postMessage" : "files.uploadV2",
-            outcome: "uncertain",
-          }),
-        );
+        expectEvidence(artifact, {
+          operation: operation === "send" ? "chat.postMessage" : "files.uploadV2",
+          outcome: "uncertain",
+        });
       }
       expectLeaseReleased();
     },
@@ -475,7 +472,7 @@ describe("Slack agent E2E request settlement", () => {
     );
     const first = await f.driver.send({ text: "first receipt" });
     const second = await f.driver.send({ text: "second receipt" });
-    const cleaned = expect(f.cleanup()).rejects.toThrow("preserve private evidence");
+    const cleaned = expect(f.cleanup()).rejects.toThrow(privateEvidence);
     const signal = await response.started;
     f.expire(signal);
     await cleaned;
@@ -489,14 +486,12 @@ describe("Slack agent E2E request settlement", () => {
       }),
       { message: expect.objectContaining({ id: second.id }) },
     ]);
-    expect(artifact.evidence).toContainEqual(
-      expect.objectContaining({
-        operation: "cleanup chat.delete",
-        messageId: second.id,
-        outcome: "failed",
-        detail: expect.stringContaining("without a definitive Slack receipt"),
-      }),
-    );
+    expectEvidence(artifact, {
+      operation: "cleanup chat.delete",
+      messageId: second.id,
+      outcome: "failed",
+      detail: expect.stringContaining(uncertainReceipt),
+    });
     expectLeaseReleased();
   });
 
@@ -514,7 +509,7 @@ describe("Slack agent E2E request settlement", () => {
     await expect(f.driver.send({ text: "must not dispatch" })).rejects.toThrow("stopped");
     await f.cleanup();
 
-    expect(f.requests.filter((request) => request.method === "chat.postMessage")).toHaveLength(1);
+    expect(f.requestMethods().filter((method) => method === "chat.postMessage")).toHaveLength(1);
     expect(f.deletedMessageIds()).toEqual(["7.000000"]);
     expect((await f.artifact()).ownedMessages).toMatchObject([
       { message: { id: "7.000000" }, deleted: true },
@@ -528,12 +523,10 @@ describe("Slack agent E2E request settlement", () => {
         ? new Response("rate limited", { status: 429, headers: { "retry-after": "86400" } })
         : undefined,
     );
-    await expect(f.driver.send({ text: "refused write" })).rejects.toThrow(
-      "without a definitive Slack receipt",
-    );
-    await expect(f.cleanup()).rejects.toThrow("preserve private evidence");
-    expect(f.requests.filter((request) => request.method === "chat.postMessage")).toHaveLength(1);
-    expect(f.requests.filter((request) => request.method === "chat.delete")).toEqual([]);
+    await expect(f.driver.send({ text: "refused write" })).rejects.toThrow(uncertainReceipt);
+    await expect(f.cleanup()).rejects.toThrow(privateEvidence);
+    expect(f.requestMethods().filter((method) => method === "chat.postMessage")).toHaveLength(1);
+    expect(f.requestMethods().filter((method) => method === "chat.delete")).toEqual([]);
     expect(mocks.credentialRelease).toHaveBeenCalledOnce();
   });
 });
