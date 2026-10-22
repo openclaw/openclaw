@@ -60,6 +60,17 @@ describe("toSanitizedMarkdownHtml links", () => {
   });
 
   describe("explicit protocol links", () => {
+    it("keeps preparation status metadata outside its PR link", () => {
+      const input =
+        `PR preparation result: {"status":"prepared","url":"${pullUrl}","headCommit":"abc123","headChanged":false,"review":{"mode":"local","base":"def456"}}\n` +
+        "Continue the original task in this conversation. Do not repeat a completed operation.";
+      const fragment = render(input);
+      const link = fragment.querySelector<HTMLAnchorElement>("a");
+      expect(link?.getAttribute("href")).toBe(pullUrl);
+      expect(link?.textContent).toBe(itemLabel);
+      expect(fragment.textContent).toBe(input.replace(pullUrl, itemLabel) + "\n");
+    });
+
     it.each([
       [
         "Visit http://github.com/openclaw",
@@ -96,6 +107,19 @@ describe("toSanitizedMarkdownHtml links", () => {
         `<p>${opening} rel="noreferrer noopener" target="_blank">${ending}</p>\n`,
       );
     });
+  });
+
+  it("preserves adjacent quoted links and authored or encoded URL content", () => {
+    const encoded = "https://example.com/a%22b?q=%22value%22";
+    const plain = "http://example.com/path_(part)?a=1&b=2#section";
+    const input = `Links: {"first":"${encoded}","second":"${plain}"} [authored](${encoded})`;
+    const fragment = render(input);
+    expect(Array.from(fragment.querySelectorAll("a"), (link) => link.getAttribute("href"))).toEqual(
+      [encoded, plain, encoded],
+    );
+    expect(fragment.textContent).toBe(
+      `Links: {"first":"https://example.com/a"b?q="value"","second":"${plain}"} authored\n`,
+    );
   });
 
   describe("link favicon placeholders", () => {
