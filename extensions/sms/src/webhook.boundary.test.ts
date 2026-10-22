@@ -310,7 +310,7 @@ describe("SMS delivery callback admission", () => {
     const rejected = await submit(3_000);
     expect(rejected.statusCode).toBe(503);
     expect(rejected.setHeader).not.toHaveBeenCalledWith("x-openclaw-delivery-accepted", "durable");
-    expect(delivery.record).toHaveBeenCalledTimes(3_000);
+    expect(delivery.record.mock.calls).toHaveLength(3_000);
     expect(warn).toHaveBeenCalledWith("SMS delivery callback rate limit exceeded");
 
     const other = createDeliveryRoute(
@@ -328,6 +328,6 @@ describe("SMS delivery callback admission", () => {
     const reopened = await submit(3_000);
     expect(reopened.statusCode).toBe(200);
     expect(reopened.setHeader).toHaveBeenCalledWith("x-openclaw-delivery-accepted", "durable");
-    expect(delivery.record).toHaveBeenCalledTimes(3_001);
+    expect(delivery.record.mock.calls).toHaveLength(3_001);
   });
 });

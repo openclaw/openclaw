@@ -54,7 +54,7 @@ export function createSmsTestDeliveryRecorder(
       observations: [],
     },
   })),
-): { record: typeof record } {
+): SmsDeliveryRecorder & { record: typeof record } {
   return { record };
 }
 
