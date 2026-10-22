@@ -183,12 +183,10 @@ export function McpAppPanel(props: McpAppPanelProps) {
       return;
     }
     const { client, launch, current, identity } = admitted;
-    // This samples live admission, outside the async reader's tracked dependencies.
-    const currentAtSettlement = () => untrack(current);
     const result = client.request<McpAppSettings>("mcp.app.settings", params(launch, "read")).then(
-      (value) => (currentAtSettlement() ? value : null),
+      (value) => (current() ? value : null),
       (failure: unknown) => {
-        if (currentAtSettlement()) {
+        if (current()) {
           throw failure;
         }
         return null;

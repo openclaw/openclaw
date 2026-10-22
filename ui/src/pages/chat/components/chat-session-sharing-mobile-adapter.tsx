@@ -16,7 +16,7 @@ import {
   ChatSessionSharingModeIcon,
   projectChatSessionSharingRoster,
   createChatSessionSharingPresentation,
-} from "./chat-session-sharing.solid.tsx";
+} from "./chat-session-sharing-shared.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 

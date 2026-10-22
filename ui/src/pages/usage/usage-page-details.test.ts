@@ -20,6 +20,7 @@ import {
   createPendingUsageRouteData,
   focusDocument,
   refreshButton,
+  showRecentSessions,
   queryUsagePage,
   selectUsageSession,
   settleUsagePage,
@@ -131,6 +132,7 @@ describe("UsagePage detail requests", () => {
         : { providers: [], points: [], logs: [] },
     );
     const { page } = await loadUsagePage(request);
+    await showRecentSessions(page);
     const settle = () => settleUsagePage(page);
     const changePage = async (label: string) => {
       usageButton(page, label, ".data-table-pagination button").click();

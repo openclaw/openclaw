@@ -7,6 +7,7 @@ import type { HeapSpaceInfo } from "node:v8";
 import type { sampleTrackedWorkerMemory } from "../../src/infra/worker-cpu.ts";
 import type { WorkerMessageMetric } from "../../src/infra/worker-message-metrics.ts";
 import type { startGatewayBenchDiagnostics } from "./gateway-bench-diagnostics.ts";
+import type { GatewayWorkerCpuSnapshot } from "./gateway-bench-worker-profile.ts";
 
 export const GATEWAY_PROFILE_CHANNEL = "openclaw-gateway-bench-profile";
 export const GATEWAY_GC_TRACE_MARKER = "OPENCLAW_GATEWAY_BENCH_GC ";
@@ -29,6 +30,7 @@ export type GatewayCpuUsageSnapshot = {
   atMonotonicMicros: number;
   process: NodeJS.CpuUsage;
   mainThread: NodeJS.CpuUsage;
+  workerCpu?: GatewayWorkerCpuSnapshot;
 };
 
 export type GatewayResourceSnapshot = GatewayCpuUsageSnapshot & {
@@ -53,7 +55,12 @@ export type GatewayBenchCommand =
       action: "start" | "stop";
       captureId?: string;
     }
-  | { channel: typeof GATEWAY_PROFILE_CHANNEL; kind: "cpu-usage"; action: "sample" }
+  | {
+      channel: typeof GATEWAY_PROFILE_CHANNEL;
+      kind: "cpu-usage";
+      action: "sample";
+      includeWorkers?: boolean;
+    }
   | {
       channel: typeof GATEWAY_PROFILE_CHANNEL;
       kind: "resource-usage";
@@ -246,11 +253,15 @@ export async function startGatewayDiagnostics(child: ChildProcess, captureId?: s
   };
 }
 
-export async function readGatewayCpuUsage(child: ChildProcess): Promise<GatewayCpuUsageSnapshot> {
+export async function readGatewayCpuUsage(
+  child: ChildProcess,
+  options: { includeWorkers?: boolean } = {},
+): Promise<GatewayCpuUsageSnapshot> {
   const reply = await sendGatewayBenchCommand(child, {
     channel: GATEWAY_PROFILE_CHANNEL,
     kind: "cpu-usage",
     action: "sample",
+    ...options,
   });
   if (!reply.cpuUsage) {
     throw new Error("Gateway did not report CPU usage");
@@ -311,6 +322,9 @@ export function measureGatewayCpuUsage(
     wallMs: (after.atMonotonicMicros - before.atMonotonicMicros) / 1_000,
     process: delta(before.process, after.process),
     mainThread: delta(before.mainThread, after.mainThread),
+    ...(before.workerCpu && after.workerCpu
+      ? { workerCpu: { before: before.workerCpu, after: after.workerCpu } }
+      : {}),
   };
 }
 

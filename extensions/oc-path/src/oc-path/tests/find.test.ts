@@ -192,6 +192,20 @@ describe("findOcPaths — JSONC", () => {
 
 describe("quoted union targets", () => {
   it.each([
+    { key: "a,b", pattern: '{"a,b",plain}' },
+    { key: 'a,,"b', pattern: '{"a,,\\"b",plain}' },
+    { key: 'a,,"b', pattern: '{{"a,,\\"b",missing},plain}' },
+    { key: "{a,,b}", pattern: '{"{a,,b}",plain}' },
+  ])("keeps commas inside the quoted union key $key", ({ key, pattern }) => {
+    const ast = parseJsonc(JSON.stringify({ [key]: "selected", plain: "sibling" }));
+    const out = findOcPaths(ast, parseOcPath("oc://f.json/" + pattern));
+    expect(leafValues(out)).toEqual(["selected", "sibling"]);
+    for (const { path, match } of out) {
+      expect(resolveOcPath(ast, parseOcPath(formatOcPath(path)))).toEqual(match);
+    }
+  });
+
+  it.each([
     { file: "f.json", parse: parseJsonc, raw: '{"a.b":1}' },
     { file: "f.yaml", parse: parseYaml, raw: "a.b: 1\n" },
   ])("resolves either ordering of literal key aliases in $file", ({ file, parse, raw }) => {

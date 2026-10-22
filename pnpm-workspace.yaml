@@ -16,6 +16,22 @@ minimumReleaseAgeExclude:
   # Solid itself is exempt from the release-age gate (Peter, 2026-10-11).
   - "solid-js"
   - "@solidjs/*"
+  # Reviewed pnpm security bump (#179992); remove after 2026-10-28T11:16:18.199Z.
+  - "pnpm@12.15.0"
+  - "@pnpm/exe.android-arm64@12.15.0"
+  - "@pnpm/exe.android-x64@12.15.0"
+  - "@pnpm/exe.darwin-arm64@12.15.0"
+  - "@pnpm/exe.darwin-x64@12.15.0"
+  - "@pnpm/exe.freebsd-x64@12.15.0"
+  - "@pnpm/exe.linux-arm64-musl@12.15.0"
+  - "@pnpm/exe.linux-arm64@12.15.0"
+  - "@pnpm/exe.linux-ppc64@12.15.0"
+  - "@pnpm/exe.linux-riscv64@12.15.0"
+  - "@pnpm/exe.linux-s390x@12.15.0"
+  - "@pnpm/exe.linux-x64-musl@12.15.0"
+  - "@pnpm/exe.linux-x64@12.15.0"
+  - "@pnpm/exe.win32-arm64@12.15.0"
+  - "@pnpm/exe.win32-x64@12.15.0"
   # Reviewed Edge TTS 403 fix; remove after 2026-10-19T16:27:27.581Z.
   - "node-edge-tts@1.2.11"
   # Reviewed fs-safe 0.26.8 release and native helpers; remove after 2026-10-25T20:33:09.777Z.

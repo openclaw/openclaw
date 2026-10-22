@@ -16,6 +16,7 @@ import { resolveCronJobConfigRevision } from "../config-revision.js";
 import {
   getPluginCommandRunBudgetError,
   isPluginCommandCronJob,
+  rebindPluginCommandSchedule,
   retirePluginCommandJob,
 } from "../plugin-command-schedule.js";
 import {
@@ -436,6 +437,8 @@ function drainCronQueueInDatabase(
     ) {
       continue;
     }
+    // Restart continuity shares the claim transaction with the budget check and the charge.
+    rebindPluginCommandSchedule(job, input.nowMs, input.hostProcessId, input.pluginCommandHosts);
     const budgetError = getPluginCommandRunBudgetError(job, input.nowMs, input.hostProcessId);
     if (budgetError) {
       // Retire with the terminal receipt, before any attempt is spent, so it never wakes again.
@@ -505,7 +508,12 @@ export function requestAndDrainCronRunsInWorker(
   input: CronRunQueueOperations["cron.requestRuns"]["input"],
   queue: Pick<
     CronRunQueueOperations["cron.drainQueue"]["input"],
-    "requests" | "maxConcurrentRuns" | "schedulingPaused" | "preparingAgentIds" | "hostProcessId"
+    | "requests"
+    | "maxConcurrentRuns"
+    | "schedulingPaused"
+    | "preparingAgentIds"
+    | "hostProcessId"
+    | "pluginCommandHosts"
   >,
   jobs: Map<string, CronStoredJob>,
 ): CronRunQueueOperations["cron.requestRuns"]["output"] &

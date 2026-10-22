@@ -39,9 +39,6 @@ import {
 } from "./composer-persistence-state.ts";
 import { serializeQueueItemForScope } from "./composer-queue-persistence.ts";
 
-export const CHAT_COMPOSER_DRAFT_STORAGE_ERROR =
-  "Could not store the previous draft in browser storage. It remains available in this tab.";
-
 export function loadCapturedChatComposerState(
   state: ChatComposerScope,
   captured: StoredChatOutboxScope,

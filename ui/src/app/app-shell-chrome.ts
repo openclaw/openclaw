@@ -679,7 +679,7 @@ export class ShellChromeOwner {
     replay: () => unknown = () => this.dispatchLazyShellEvent(event),
   ): void {
     if (element !== this.host.commandPaletteElement) {
-      this.commandPaletteLoading.clear();
+      this.commandPaletteLoading.dismiss();
     }
     this.pendingLazyAction = event;
     persistLazyShellAction(event);
@@ -713,7 +713,7 @@ export class ShellChromeOwner {
   }
 
   cancelPendingLazyAction(): void {
-    this.commandPaletteLoading.clear();
+    this.commandPaletteLoading.dismiss();
     const event = this.pendingLazyAction;
     if (event) {
       this.clearPendingLazyAction(event);

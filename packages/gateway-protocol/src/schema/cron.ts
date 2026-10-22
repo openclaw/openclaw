@@ -480,6 +480,17 @@ export const CronJobSchema = closedObject({
   streamExecutionHost: Type.Optional(
     Type.Union([Type.Literal("gateway"), Type.Literal("sandbox")]),
   ),
+  /**
+   * Report-only stored payload kind. Present when `payload` is a compatibility placeholder, such
+   * as the reserved agentTurn sentinel of a requester-scheduled plugin command.
+   */
+  payloadSource: Type.Optional(
+    closedObject({
+      kind: Type.Literal("pluginCommand"),
+      pluginId: NonEmptyString,
+      command: NonEmptyString,
+    }),
+  ),
   agentId: Type.Optional(NonEmptyString),
   sessionKey: Type.Optional(NonEmptyString),
   name: NonEmptyString,

@@ -1,5 +1,6 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import {
@@ -13,19 +14,28 @@ import type {
 } from "../../lib/sessions/session-capability.ts";
 import {
   areUiSessionKeysEquivalent,
+  buildAgentMainSessionKey,
+  isUiSelectedGlobalSessionKey,
+  resolveUiConfiguredMainKey,
   parseAgentSessionKey,
   resolveUiSessionNavigationParentKey,
   uiConversationMatches,
 } from "../../lib/sessions/session-key.ts";
+import { commitCurrentChatHistorySnapshot } from "./chat-history-snapshot.ts";
 import { ChatPaneSessionCreation } from "./chat-pane-session-creation.ts";
+import { applySelectedSessionProjection } from "./chat-pane-state.ts";
 import { holdProviderReviewQueuedInputs } from "./chat-provider-review.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
-import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
+import { flushChatQueueForEvent, resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { resolveChatAgentId } from "./chat-state-route.ts";
+import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { getChatSessionProjection } from "./history-merge.ts";
-import { replayPendingChatAbort } from "./run-lifecycle.ts";
+import {
+  reconcileChatRunAfterSessionStatePublication,
+  replayPendingChatAbort,
+} from "./run-lifecycle.ts";
+import { clearChatMessagesFromCache, readChatSessionSnapshot } from "./session-message-cache.ts";
 
 function createSessionObservationRefresh(
   sessions: Pick<SessionCapability, "describe" | "canonicalListRevision">,
@@ -160,6 +170,147 @@ function applyObservedChatSessionRow(
 }
 
 export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation {
+  // Capability identity matters because a replacement restarts its canonical revision at zero.
+  private canonicalSessionList?: {
+    sessions: SessionCapability;
+    revision: number;
+    outboxState?: string;
+  };
+
+  protected transcriptSessionProps(selectedSession: GatewaySessionRow | undefined) {
+    const state = this.state;
+    if (!state || parseCatalogSessionKey(state.sessionKey)) {
+      return { selectedSession: undefined };
+    }
+    const observation = this.resourceSessionObservation();
+    const session = selectedSession ?? observation?.row ?? undefined;
+    if (
+      !this.ownsChatSnapshot({ sessionKey: state.sessionKey }) ||
+      observation?.hasObserved ||
+      (session && !state.sessions.state.resultCached)
+    ) {
+      return { selectedSession: session };
+    }
+    const snapshot = readChatSessionSnapshot(state.chatMessagesBySession, state, {
+      sessionKey: state.sessionKey,
+    });
+    return {
+      selectedSession: session,
+      transcriptMetadata:
+        snapshot?.sessionId === state.currentSessionId ? snapshot?.transcriptMetadata : undefined,
+    };
+  }
+
+  protected applySessionsState(stateValue: SessionCapability["state"]) {
+    const state = this.state;
+    if (!state) {
+      return;
+    }
+    const canonicalListRevision = this.context.sessions.canonicalListRevision;
+    const previousCanonical = this.canonicalSessionList;
+    const canonicalListPublished =
+      previousCanonical?.sessions === this.context.sessions &&
+      canonicalListRevision > previousCanonical.revision;
+    const selectedSessionDeleted = this.context.sessions.deletionState(
+      state.sessionKey,
+      resolveChatAgentId(state),
+    );
+    for (const { key, agentId } of stateValue.deletedSessions) {
+      clearChatMessagesFromCache(state.chatMessagesBySession, state, { sessionKey: key, agentId });
+    }
+    // Live rows retire on disconnect; the session owner retains same-identity
+    // presentation (including deferred metadata) until the next canonical list.
+    const presentation = this.context.sessions.presentation;
+    // A list for another agent must not overwrite this pane's global history.
+    if (
+      !isUiSelectedGlobalSessionKey(state, state.sessionKey) ||
+      presentation.agentId === resolveChatAgentId(state)
+    ) {
+      state.sessionsResult = presentation.result;
+      state.sessionsResultAgentId = presentation.agentId;
+    }
+    this.projectObservedSessionRow();
+    state.sessionsLoading = stateValue.loading;
+    state.sessionsError = stateValue.error;
+    if (state.connected && state.pendingAbort) {
+      void replayPendingChatAbort(state);
+    }
+    this.refreshSwarmRoster();
+    const selectedSession = selectedChatSessionRow(state);
+    if (
+      (!stateValue.resultCached || this.resourceSessionObservation()?.hasObserved) &&
+      selectedSession?.sessionId &&
+      selectedSession.sessionId === state.currentSessionId &&
+      this.ownsChatSnapshot({ sessionKey: state.sessionKey })
+    ) {
+      commitCurrentChatHistorySnapshot(state, undefined, selectedSession);
+    }
+    const outboxState = selectedSession
+      ? JSON.stringify([
+          state.sessionKey,
+          resolveChatAgentId(state),
+          selectedSession.sessionId,
+          selectedSession.status,
+          isSessionRunStateActive(selectedSession),
+          selectedSession.lastRunId,
+          selectedSession.activeLeafEntryId,
+        ])
+      : undefined;
+    this.canonicalSessionList = {
+      sessions: this.context.sessions,
+      revision: canonicalListRevision,
+      outboxState: canonicalListPublished
+        ? outboxState
+        : previousCanonical?.sessions === this.context.sessions
+          ? previousCanonical.outboxState
+          : undefined,
+    };
+    if (applySelectedSessionProjection(state, selectedSession)) {
+      // Hidden retained panes keep this subscription alive; only the pane the
+      // user is actually looking at may clear unread/attention state.
+      if (this.presented) {
+        this.markSessionRead(selectedSession);
+      }
+    }
+    this.syncSessionSuggestionTarget(
+      resolveChatAgentId(state) ?? stateValue.agentId ?? "main",
+      selectedSession,
+    );
+    if (selectedSessionDeleted) {
+      const agentId = resolveChatAgentId(state);
+      this.onSessionDeleted?.(
+        this.paneId,
+        state.sessionKey,
+        buildAgentMainSessionKey({
+          agentId,
+          mainKey: resolveUiConfiguredMainKey({
+            agentsList: this.context.agents.state.agentsList,
+            hello: this.context.gateway.snapshot.hello,
+          }),
+        }),
+        selectedSessionDeleted === "pending",
+      );
+      return;
+    }
+    const reconciledLocalCompletion = reconcileChatRunAfterSessionStatePublication(state);
+    this.reconcileWaitingApprovalSnapshot();
+    if (reconciledLocalCompletion) {
+      void resumeStoredChatOutboxes(state);
+      return;
+    }
+    // First canonical idle and changed run/branch identity can release a queue.
+    // Re-decoding an unchanged row after foreign activity is not new delivery intent.
+    if (
+      canonicalListPublished &&
+      previousCanonical?.outboxState !== outboxState &&
+      selectedSession &&
+      !isSessionRunStateActive(selectedSession) &&
+      state.chatQueue.length > 0
+    ) {
+      void flushChatQueueForEvent(state);
+    }
+  }
+
   private publishParentRow?: () => void;
   readonly parentSession = {
     read: () => this.observedParentSessionRow(),
@@ -478,7 +629,7 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
     }
   }
 
-  protected projectObservedSessionRow() {
+  private projectObservedSessionRow() {
     const state = this.state;
     const binding = this.sessionObservation;
     if (!state || !binding) {

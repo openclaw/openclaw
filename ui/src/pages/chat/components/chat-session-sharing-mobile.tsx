@@ -220,10 +220,6 @@ function SharingPermissions(props: {
       ),
     );
   };
-  const readPermissions = () => {
-    latest(props.data.read);
-    return null;
-  };
   const closeSearch = () => {
     setSearching(false);
     setQuery("");
@@ -284,7 +280,7 @@ function SharingPermissions(props: {
         on={props.data.scope()}
         fallback={<PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />}
       >
-        {readPermissions()}
+        {(latest(props.data.read), null)}
         <div
           class="chat-sharing-mobile__group"
           aria-busy={isPending(props.data.read) || props.data.loading ? "true" : "false"}

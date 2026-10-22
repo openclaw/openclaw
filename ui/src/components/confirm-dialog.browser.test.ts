@@ -2,7 +2,7 @@ import { createRoot, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import { getRenderedModalDialog } from "../test-helpers/modal-dialog.ts";
-import { flush } from "../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import { showConfirmChoiceDialog, showConfirmDialog } from "./confirm-dialog.ts";
 import { showInputDialog } from "./input-dialog.tsx";
 import "../styles.css";
@@ -130,15 +130,15 @@ describe("promise dialog native focus and dismissal", () => {
     input.dispatchEvent(new Event("input", { bubbles: true }));
     flush();
     button("Save").click();
-    flush();
-    expect(input.disabled).toBe(true);
+    await waitForSolid(() => expect(input.disabled).toBe(true));
     dialog.dispatchEvent(new Event("cancel", { cancelable: true }));
     expect(dialog.open).toBe(true);
     pending.resolve("This name is already in use");
-    await Promise.resolve();
-    flush();
-    await Promise.resolve();
-    expect(modal.querySelector('[role="alert"]')?.textContent).toBe("This name is already in use");
+    await waitForSolid(() =>
+      expect(modal.querySelector('[role="alert"]')?.textContent).toBe(
+        "This name is already in use",
+      ),
+    );
     expect(input.value).toBe("Renamed synthetic session");
     expect(document.activeElement).toBe(input);
     button("Cancel").click();

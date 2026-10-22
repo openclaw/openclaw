@@ -368,8 +368,12 @@ suite.define(() => {
           const failed = await catalogRefresh(() =>
             settings.getByRole("button", { name: "Refresh", exact: true }).click(),
           );
+          const providerStatus = settings.locator(
+            '[data-provider-id="ollama"] .model-providers__head',
+          );
+          await expect.poll(() => providerStatus.textContent()).toContain("Models unavailable");
           const retry = settings
-            .locator(".model-providers__catalog-progress")
+            .locator('.model-providers__catalog-progress[role="alert"]')
             .getByRole("button", { name: "Retry", exact: true });
           try {
             await retry.waitFor({ state: "visible" });
@@ -429,7 +433,7 @@ suite.define(() => {
           });
           expect(await pickerValue(primary)).toBe("fixture/anchor");
           stages.push({ stage: "failed-refresh", acquisitions: acquisitions() });
-          await retry.scrollIntoViewIfNeeded();
+          await providerStatus.scrollIntoViewIfNeeded();
           await capture("settings-refresh-failed.png");
 
           providerMode = "ready";
@@ -437,6 +441,7 @@ suite.define(() => {
           acquisitionDiagnostics.trigger("retry");
           await catalogRefresh(() => retry.click());
           await retry.waitFor({ state: "hidden" });
+          await expect.poll(() => providerStatus.textContent()).not.toContain("Models unavailable");
           await open();
           await primary
             .locator('[role="option"][data-value="ollama/recovered-fixture:latest"]')

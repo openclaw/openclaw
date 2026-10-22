@@ -83,7 +83,7 @@ function log(timestamp: number, role: SessionLogEntry["role"], content: string):
 function toolRows(root: ParentNode) {
   return [...root.querySelectorAll(".usage-list-item")].map((item) => [
     item.firstElementChild?.textContent,
-    text(item, ".usage-list-value > span"),
+    text(item, ".usage-list-value"),
   ]);
 }
 

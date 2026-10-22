@@ -1,5 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, For, onSettled, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, Errored, For, onSettled, Show } from "solid-js";
 import {
   BOARD_GRID_COLUMNS,
   BOARD_DOCUMENT_AUTO_MAX_ROWS,
@@ -254,10 +254,16 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
             </div>
           </Show>
         </Show>
-        <Show when={view().state.actionError}>
-          <div class="board-view__error" role="alert">
-            {view().state.actionError}
-          </div>
+        <Show when={view().state.mutationFailure} keyed>
+          <Errored
+            fallback={() => (
+              <div class="board-view__error" role="alert">
+                {t("board.actionFailed")}
+              </div>
+            )}
+          >
+            {owner.mutationFailure()}
+          </Errored>
         </Show>
         <div class="board-announcer" aria-live="polite" aria-atomic="true">
           <Show when={view().state.announcementRevision || undefined} keyed>

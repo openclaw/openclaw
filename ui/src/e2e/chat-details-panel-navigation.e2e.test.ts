@@ -133,6 +133,8 @@ async function openOutputs(details: Locator) {
     await summary.click();
   }
   await details.getByRole("button", { name: "View all", exact: true }).waitFor();
+  // The row is visible before its disclosure finishes changing height.
+  await waitForLayoutSettled(details.page(), '[data-details-group="outputs"]');
 }
 
 suite.define(() => {

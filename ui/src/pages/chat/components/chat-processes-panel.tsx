@@ -525,10 +525,6 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
       </div>
     );
     const retry = () => void panel().refresh();
-    const consumeRead = () => {
-      latest(presentation.read);
-      return null;
-    };
     // Read fallbacks must not replace the retained content's navigation refs.
     const ReadFallback = (fallbackProps: { loading: boolean; retry: () => void }) => (
       <div class="chat-processes__panel" data-mobile={props.mobile ? "true" : "false"}>
@@ -553,7 +549,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
         )}
       >
         <Loading on={presentation.scope()} fallback={<ReadFallback loading retry={retry} />}>
-          {consumeRead()}
+          {(latest(presentation.read), null)}
           <Content loading={isPending(presentation.read)} retry={retry} />
         </Loading>
       </Errored>

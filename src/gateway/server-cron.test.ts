@@ -648,7 +648,7 @@ describe("buildGatewayCronService", () => {
         consecutiveErrors: 0,
       });
       expect(state.cron.getJob(job.id)?.state.lastError).toBeUndefined();
-      expectIsolatedRunFields({ agentId: "main" });
+      expectIsolatedRunFields({ agentId: "main", cronStorePath: state.storePath });
     } finally {
       state.cron.stop();
       vi.useRealTimers();

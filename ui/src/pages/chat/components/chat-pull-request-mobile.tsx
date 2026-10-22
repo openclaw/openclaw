@@ -1,4 +1,4 @@
-import { For, Show } from "solid-js";
+import { Errored, For, latest, Show } from "solid-js";
 import type {
   ControlUiSessionPullRequest,
   ControlUiSessionPullRequestSnapshot,
@@ -283,10 +283,16 @@ export function ChatPullRequestMobileDetail(props: ChatPullRequestMobileDetailPr
                 <Icon name="link" />
                 <span>{t("chat.pullRequests.copyLink")}</span>
               </button>
-              <Show when={clipboard.failed()}>
-                <p class="chat-pr-menu__error" role="alert">
-                  {t("chat.pullRequests.copyFailed")}
-                </p>
+              <Show when={!clipboard.copying()}>
+                <Errored
+                  fallback={
+                    <p class="chat-pr-menu__error" role="alert">
+                      {t("chat.pullRequests.copyFailed")}
+                    </p>
+                  }
+                >
+                  {latest(clipboard.outcome)}
+                </Errored>
               </Show>
               <button
                 type="button"

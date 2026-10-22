@@ -331,6 +331,47 @@ it.each(["global", "per-sender"] as const)(
   },
 );
 
+it("retires hidden publication feedback while retaining the admitted write and its result", async () => {
+  const { pane, request, responses, publications, settled } = createPublicationPane();
+  const response = Promise.withResolvers<unknown>();
+  responses.set("sessions.github.publish", response.promise);
+  const ready = await settled();
+  let retired = false;
+  void ready.readiness.retired.then(() => {
+    retired = true;
+  });
+  const completion = ready.onPublish?.();
+  let completed = false;
+  void Promise.resolve(completion).then(() => {
+    completed = true;
+  });
+  expect(publications()).toHaveLength(1);
+
+  pane.presented = false;
+  // Hiding must retire the receipt before any render of the parked frame or RPC settlement.
+  await Promise.resolve();
+  expect(retired).toBe(true);
+  expect(completed).toBe(false);
+
+  const result = {
+    requestId,
+    publisher: shared,
+    status: "published",
+    url: "https://github.com/openclaw/openclaw/pull/111532",
+    repository: "openclaw/openclaw",
+    branch: "feature/publication",
+    headCommit: "a".repeat(40),
+  };
+  response.resolve(result);
+  await completion;
+  pane.presented = true;
+  expect((await settled()).result).toEqual(result);
+  expect(publications()).toHaveLength(1);
+  expect(
+    request.mock.calls.filter(([method]) => method === "sessions.github.options"),
+  ).toHaveLength(1);
+});
+
 it.each(["shared", "personal"] as const)(
   "retains an unknown %s publication across a retained-pane navigation",
   async (source) => {

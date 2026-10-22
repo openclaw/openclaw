@@ -16,7 +16,7 @@ import { captureNativeSignalBridge } from "../infra/embedded-state-lock.test-sup
 import * as gatewayLockProcessModule from "../infra/gateway-lock-process.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { registerSqliteAuditRecordAsync } from "../infra/sqlite-audit-record-store.async.js";
+import { createSqliteAuditRecordWriter } from "../infra/sqlite-audit-record-store.async.js";
 import { createSqliteAuditRecordStore } from "../infra/sqlite-audit-record-store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
@@ -260,10 +260,10 @@ it("closes temporary databases before removal and preserves independent handles"
           deleteTranscriptWithoutArchive: true,
         });
         expect(deletion.deleted).toBe(true);
-        await registerSqliteAuditRecordAsync(
-          { scope: "agent-exec-cleanup", maxEntries: 1 },
-          { key: "completed", value: "synthetic", createdAt: 1 },
-        );
+        await createSqliteAuditRecordWriter({
+          scope: "agent-exec-cleanup",
+          maxEntries: 1,
+        }).register("completed", "synthetic", 1);
         expect(
           createSqliteAuditRecordStore({ scope: "agent-exec-cleanup", maxEntries: 1 }).entries(),
         ).toEqual([{ key: "completed", value: "synthetic", createdAt: 1 }]);
