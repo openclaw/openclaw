@@ -236,6 +236,7 @@ export class LocalMemoryFileWatcher {
         agentId: this.options.agentId,
         settings: {
           extraPaths: this.options.settings.extraPaths,
+          excludePaths: this.options.settings.excludePaths,
           multimodal: this.options.settings.multimodal,
           sync: { watchDebounceMs: this.options.settings.sync.watchDebounceMs },
         },

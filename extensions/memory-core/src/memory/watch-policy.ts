@@ -12,6 +12,7 @@ import { classifyMemoryMultimodalPath } from "openclaw/plugin-sdk/memory-core-ho
 import {
   matchesExtraMemoryPathEntry,
   normalizeExtraMemoryPathEntries,
+  shouldSkipConfiguredMemorySearchPath,
   type MemoryWorkspaceWatchRequest,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import type { MemoryWatchFile } from "./watch-settle.js";
@@ -66,7 +67,7 @@ export class MemoryWatchPolicy {
   private readonly extras: ReturnType<typeof normalizeExtraMemoryPathEntries>;
 
   constructor(
-    workspace: string,
+    private readonly workspace: string,
     private readonly settings: Settings,
   ) {
     this.extras = normalizeExtraMemoryPathEntries(workspace, settings.extraPaths);
@@ -152,16 +153,27 @@ export class MemoryWatchPolicy {
   }
 
   selectionKeys(group: MemoryObservation): string[] {
-    // Exclusion depends on selections and enabled file kinds, not indexing limits or globs.
+    // A shared watcher baseline must refresh when a subscriber changes which
+    // workspace paths it excludes, even if its scopes are otherwise identical.
     const modalities = this.settings.multimodal.enabled ? this.settings.multimodal.modalities : [];
+    const excludePaths = this.settings.excludePaths ?? [];
     return group.selections.flatMap(({ scope, resolved, lexical, alias }) =>
       ["text", ...modalities].map((modality) =>
-        JSON.stringify([scope, resolved, lexical, alias, modality]),
+        JSON.stringify([scope, resolved, lexical, alias, modality, excludePaths]),
       ),
     );
   }
 
   private ignored(relative: string, file: string, kind: WatchEntry["kind"]): boolean {
+    if (
+      shouldSkipConfiguredMemorySearchPath({
+        workspaceDir: this.workspace,
+        absPath: file,
+        excludePaths: this.settings.excludePaths,
+      })
+    ) {
+      return true;
+    }
     if (relative.split(path.sep).some((part) => IGNORED.has(part.toLowerCase()))) {
       return true;
     }

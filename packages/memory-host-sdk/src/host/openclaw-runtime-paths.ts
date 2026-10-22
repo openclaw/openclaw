@@ -10,6 +10,7 @@ export {
 } from "../../../../src/agents/agent-roster.js";
 export {
   resolveCanonicalRootMemoryFile,
+  shouldSkipConfiguredMemorySearchPath,
   shouldSkipRootMemoryAuxiliaryPath,
 } from "../../../../src/memory/root-memory-files.js";
 export {

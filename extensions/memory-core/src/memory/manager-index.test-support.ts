@@ -38,6 +38,7 @@ type ManagerResult = Awaited<ReturnType<GetMemorySearchManager>>;
 
 type ManagerIndexFixtureConfig = {
   extraPaths?: MemoryExtraPath[];
+  excludePaths?: string[];
   sources?: Array<"memory" | "sessions">;
   sessionMemory?: boolean;
   rememberAcrossConversations?: boolean;
@@ -366,6 +367,7 @@ export function createManagerIndexFixture(deps: {
           query: { minScore: params.minScore ?? 0 },
           cache: params.cacheEnabled !== undefined ? { enabled: params.cacheEnabled } : undefined,
           extraPaths: params.extraPaths,
+          excludePaths: params.excludePaths,
           multimodal: params.multimodal,
           sources: params.sources,
           rememberAcrossConversations:

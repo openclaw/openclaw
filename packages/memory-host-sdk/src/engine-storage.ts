@@ -12,6 +12,7 @@ export {
   hashText,
   INVALID_PROJECT_ANNOTATION_KEY,
   listMemoryFiles,
+  shouldSkipConfiguredMemorySearchPath,
   matchesExtraMemoryPathEntry,
   MEMORY_CHUNKING_VERSION,
   normalizeExtraMemoryPathEntries,

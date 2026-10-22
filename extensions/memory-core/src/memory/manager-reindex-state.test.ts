@@ -321,6 +321,29 @@ describe("memory reindex state", () => {
     ).toMatchObject({ status: "mismatched", code: "scope", owner: "configuration" });
   });
 
+  it("keeps the default scope and invalidates it only for opted-in exclusions", () => {
+    const base = {
+      workspaceDir: "/tmp/workspace",
+      extraPaths: [] as string[],
+      multimodal: { enabled: false, modalities: [], maxFileBytes: 20 * 1024 * 1024 },
+    };
+    const original = resolveConfiguredScopeHash(base);
+    expect(resolveConfiguredScopeHash({ ...base, excludePaths: [] })).toBe(original);
+    const excluded = resolveConfiguredScopeHash({
+      ...base,
+      excludePaths: ["memory/dreaming/**"],
+    });
+    expect(excluded).not.toBe(original);
+    expect(
+      resolveMemoryIndexIdentityState(
+        createIdentityParams({
+          meta: createMeta({ scopeHash: original }),
+          configuredScopeHash: excluded,
+        }),
+      ),
+    ).toMatchObject({ status: "mismatched", code: "scope", owner: "configuration" });
+  });
+
   it("includes extra path patterns in stable scope identity", () => {
     const paths = [
       { path: "notes", pattern: "runbooks/**/*.md" },

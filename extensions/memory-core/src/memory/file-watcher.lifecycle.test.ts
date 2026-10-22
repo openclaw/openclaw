@@ -57,6 +57,7 @@ describe("Memory observation lifecycle", () => {
   function owner({
     images = false,
     extraPaths = [],
+    excludePaths = [],
     onChange = vi.fn<() => void | Promise<void>>(),
     ...options
   }: Partial<
@@ -64,6 +65,7 @@ describe("Memory observation lifecycle", () => {
   > & {
     onChange?: ReturnType<typeof vi.fn<() => void | Promise<void>>>;
     extraPaths?: MemoryFileWatcherOptions["settings"]["extraPaths"];
+    excludePaths?: string[];
     images?: boolean;
   } = {}) {
     const onDirty = vi.fn();
@@ -74,6 +76,7 @@ describe("Memory observation lifecycle", () => {
       agentId: "main",
       settings: {
         extraPaths,
+        excludePaths,
         multimodal: {
           enabled: images,
           modalities: images ? ["image"] : [],
@@ -259,6 +262,27 @@ describe("Memory observation lifecycle", () => {
     await media.watcher.close();
     expect(entry.setScopes).toHaveBeenCalledTimes(2);
     expect(entry.options.exclude?.(image)).toBe(true);
+  });
+
+  it("rebaselines shared exclusions when a differently scoped agent joins and leaves", async () => {
+    const dreaming = path.join(state.workspaceDir, "memory", "dreaming", "light");
+    await fs.mkdir(dreaming, { recursive: true });
+    await start({ excludePaths: ["memory/dreaming/**"] });
+    const entry = observer.observations[0]!;
+    const report = {
+      path: path.relative(entry.root.rootDir, path.join(dreaming, "report.md")),
+      kind: "file" as const,
+    };
+    expect(entry.options.exclude?.(report)).toBe(true);
+
+    const including = await start({ agentId: "including" });
+    expect(observer.observations).toHaveLength(1);
+    expect(entry.setScopes).toHaveBeenCalledOnce();
+    expect(entry.options.exclude?.(report)).toBe(false);
+
+    await including.watcher.close();
+    expect(entry.setScopes).toHaveBeenCalledTimes(2);
+    expect(entry.options.exclude?.(report)).toBe(true);
   });
 
   it("does not share a replaced root with an agent admitted to the new directory", async () => {

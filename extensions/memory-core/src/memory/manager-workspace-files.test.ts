@@ -70,6 +70,46 @@ describe("Gateway index over Harness workspace files", () => {
     release = undefined;
   });
 
+  it("indexes adjacent canonical memory without admitting generated Dream reports", async () => {
+    const dreamingDir = path.join(fixture.paths.memory, "dreaming", "light");
+    await fs.mkdir(dreamingDir, { recursive: true });
+    await fs.writeFile(path.join(dreamingDir, "report.md"), "generatedmarker only in dream");
+    await fs.writeFile(path.join(fixture.paths.memory, "current.md"), "canonicalmarker in memory");
+    const manager = await fixture.getFreshManager(
+      createConfig({ excludePaths: ["memory/dreaming/**"] }),
+      "cli",
+    );
+    await manager.sync({ reason: "generated-dream-exclusion", force: true });
+    expect(await manager.search("generatedmarker", { minScore: 0 })).toEqual([]);
+    expect(
+      (await manager.search("canonicalmarker", { minScore: 0 })).some(
+        (hit) => hit.path === "memory/current.md",
+      ),
+    ).toBe(true);
+  });
+
+  it("removes a previously indexed Dream source on a disposable forced reindex", async () => {
+    const manager = await fixture.getFreshManager(
+      createConfig({ excludePaths: ["memory/dreaming/**"] }),
+      "cli",
+    );
+    await manager.sync({ reason: "baseline", force: true });
+    const dreamingDir = path.join(fixture.paths.memory, "dreaming", "light");
+    await fs.mkdir(dreamingDir, { recursive: true });
+    const report = path.join(dreamingDir, "report.md");
+    await fs.writeFile(report, "legacydreammarker retained from old index");
+    const entry = await buildFileEntry(report, fixture.paths.workspace);
+    expect(entry).not.toBeNull();
+    await (
+      manager as unknown as {
+        indexFile: (file: NonNullable<typeof entry>, source: "memory") => Promise<void>;
+      }
+    ).indexFile(entry!, "memory");
+    expect((await manager.search("legacydreammarker", { minScore: 0 })).length).toBeGreaterThan(0);
+    await manager.sync({ reason: "exclude-generated-dream", force: true });
+    expect(await manager.search("legacydreammarker", { minScore: 0 })).toEqual([]);
+  });
+
   async function registerHarness() {
     const gateway = fixture.paths.workspace;
     const harness = path.join(fixture.paths.root, "harness");
@@ -82,8 +122,10 @@ describe("Gateway index over Harness workspace files", () => {
     };
     const files: MemoryWorkspaceFiles = {
       assertCurrent() {},
-      async listFiles(_workspace, extraPaths, multimodal, skipped) {
-        return (await listMemoryFiles(harness, extraPaths, multimodal, skipped)).map(local);
+      async listFiles(_workspace, extraPaths, multimodal, skipped, excludePaths) {
+        return (await listMemoryFiles(harness, extraPaths, multimodal, skipped, excludePaths)).map(
+          local,
+        );
       },
       async inspectFile(file, _workspace, multimodal) {
         const entry = await buildFileEntry(remote(file), harness, multimodal);
@@ -291,6 +333,7 @@ describe("Gateway index over Harness workspace files", () => {
       await manager.sync({ reason: "initial", force: true });
       expect(changed).toBeTypeOf("function");
       expect(Object.keys(watchRequest!.settings).toSorted()).toEqual([
+        "excludePaths",
         "extraPaths",
         "multimodal",
         "sync",

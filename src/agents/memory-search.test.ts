@@ -262,6 +262,7 @@ describe("memory search config", () => {
           " docs ",
           { path: "../team-notes", pattern: "runbooks/**/*.md" },
         ],
+        excludePaths: ["memory/dreaming/**"],
       },
       {
         extraPaths: [
@@ -269,6 +270,7 @@ describe("memory search config", () => {
           { path: "../team-notes", pattern: "runbooks/**/*.md" },
           { path: "../team-notes", pattern: "decisions/**/*.md" },
         ],
+        excludePaths: ["memory/.dreams/**"],
       },
     );
     expect(resolved?.extraPaths).toEqual([
@@ -277,6 +279,7 @@ describe("memory search config", () => {
       { path: "../team-notes", pattern: "runbooks/**/*.md" },
       { path: "../team-notes", pattern: "decisions/**/*.md" },
     ]);
+    expect(resolved?.excludePaths).toEqual(["memory/dreaming/**", "memory/.dreams/**"]);
   });
 
   it("normalizes multimodal settings", () => {

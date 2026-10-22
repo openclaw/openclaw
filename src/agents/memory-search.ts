@@ -110,6 +110,7 @@ export function resolveMemorySearchIndexConfig(cfg: OpenClawConfig, agentId: str
       ...(defaults?.extraPaths ?? []),
       ...(overrides?.extraPaths ?? []),
     ]),
+    excludePaths: [...(defaults?.excludePaths ?? []), ...(overrides?.excludePaths ?? [])],
     query: {
       maxResults:
         overrides?.query?.maxResults ?? defaults?.query?.maxResults ?? DEFAULT_MAX_RESULTS,

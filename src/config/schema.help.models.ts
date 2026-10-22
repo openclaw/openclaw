@@ -200,6 +200,8 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     'Chooses which sources are indexed: "memory" reads MEMORY.md + memory files, and "sessions" includes transcript history. Keep ["memory"] unless you need recall from prior chat transcripts.',
   "memory.search.extraPaths":
     "Adds extra directories or .md files to the memory index beyond default memory files. Entries may be path strings or objects with a root-relative glob pattern. When multimodal memory is enabled, matching image/audio files under these paths are also eligible for indexing.",
+  "memory.search.excludePaths":
+    'Optional workspace-relative globs excluded from memory indexing and file watching, for example ["memory/dreaming/**", "memory/.dreams/**"]. Defaults to no exclusions. Existing indexed files are removed on the next full reindex.',
   "memory.search.extraPaths.*.path":
     "Sets the extra memory directory or file. Relative paths resolve from the agent workspace; direct file entries are indexed exactly.",
   "memory.search.extraPaths.*.pattern":

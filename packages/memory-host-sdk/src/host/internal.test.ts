@@ -225,6 +225,24 @@ describe("memory host SDK package internals", () => {
     ]);
   });
 
+  it("keeps generated dreaming reports out of default and overlapping extra paths", async () => {
+    const workspaceDir = getTmpDir();
+    const memoryDir = path.join(workspaceDir, "memory");
+    const dreamingDir = path.join(memoryDir, "dreaming", "light");
+    await fs.mkdir(dreamingDir, { recursive: true });
+    await fs.writeFile(path.join(memoryDir, "current.md"), "Current truth");
+    await fs.writeFile(path.join(dreamingDir, "report.md"), "Generated report");
+    expect(
+      (await listMemoryFiles(workspaceDir)).map((file) => path.relative(workspaceDir, file)),
+    ).toContain(path.join("memory", "dreaming", "light", "report.md"));
+    const files = await listMemoryFiles(workspaceDir, [memoryDir], undefined, undefined, [
+      "memory/dreaming/**",
+    ]);
+    expect(files.map((file) => path.relative(workspaceDir, file))).toEqual([
+      path.join("memory", "current.md"),
+    ]);
+  });
+
   it.each([
     {
       label: "primary memory file",

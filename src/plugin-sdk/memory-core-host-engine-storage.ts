@@ -28,6 +28,7 @@ export {
   isAutomaticMemoryEntryEligible,
   isFileMissingError,
   listMemoryFiles,
+  shouldSkipConfiguredMemorySearchPath,
   matchesExtraMemoryPathEntry,
   MEMORY_SEARCH_DEADLINE_CONTROL,
   MEMORY_CHUNKING_VERSION,

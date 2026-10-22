@@ -521,9 +521,10 @@ auto-injected.
 
 ## Additional memory paths
 
-| Key          | Type                                                                       | Description                              |
-| ------------ | -------------------------------------------------------------------------- | ---------------------------------------- |
-| `extraPaths` | `Array<string \| { path: string; pattern?: string; evergreen?: boolean }>` | Additional directories or files to index |
+| Key            | Type                                                                       | Description                                    |
+| -------------- | -------------------------------------------------------------------------- | ---------------------------------------------- |
+| `extraPaths`   | `Array<string \| { path: string; pattern?: string; evergreen?: boolean }>` | Additional directories or files to index       |
+| `excludePaths` | `string[]`                                                                 | Workspace-relative globs omitted from indexing |
 
 ```json5
 {
@@ -533,6 +534,7 @@ auto-injected.
         "../team-docs",
         { path: "/srv/shared-notes", pattern: "runbooks/**/*.md", evergreen: true },
       ],
+      excludePaths: ["memory/dreaming/**", "memory/.dreams/**"],
     },
   },
 }
@@ -557,6 +559,12 @@ re-embed unchanged content.
 Before downgrading to a version that does not support `evergreen`, remove that property from
 every global and per-agent `extraPaths` object. Older strict configuration schemas reject the
 unknown property, including `evergreen: false`; removing it restores the older decay policy.
+
+`excludePaths` is opt-in; when omitted, all otherwise eligible files keep their current indexing
+behavior. Patterns use `/` separators and match paths relative to the workspace, including
+default memory files and overlapping `extraPaths`. Outside-workspace extra roots are unaffected.
+Changing this list changes the index scope and removes excluded rows on the next full sync; it
+does not delete source files or change which files are eligible for short-term recall/promotion.
 
 For shared notes, keep each workspace's `memory/` directory local and add the shared directory's
 resolved filesystem path to `extraPaths`. This setting indexes notes; it does not authorize legacy host-event

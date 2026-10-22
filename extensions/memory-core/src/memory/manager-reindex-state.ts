@@ -121,6 +121,7 @@ function configuredIndexMismatch(
 export function resolveConfiguredScopeHash(params: {
   workspaceDir: string;
   extraPaths?: MemoryExtraPath[];
+  excludePaths?: readonly string[];
   multimodal: {
     enabled: boolean;
     modalities: string[];
@@ -136,6 +137,9 @@ export function resolveConfiguredScopeHash(params: {
   return hashText(
     JSON.stringify({
       extraPaths,
+      ...(params.excludePaths?.length
+        ? { excludePaths: [...new Set(params.excludePaths)].toSorted() }
+        : {}),
       multimodal: {
         enabled: params.multimodal.enabled,
         modalities: [...params.multimodal.modalities].toSorted(),

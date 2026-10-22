@@ -197,6 +197,7 @@ export abstract class MemoryManagerReindexOps extends MemoryManagerSourceSyncOps
           scopeHash: resolveConfiguredScopeHash({
             workspaceDir: this.workspaceDir,
             extraPaths: this.settings.extraPaths,
+            excludePaths: this.settings.excludePaths,
             multimodal: this.settings.multimodal,
           }),
           chunkTokens: this.settings.chunking.tokens,

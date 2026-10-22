@@ -2,10 +2,42 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { exactWorkspaceEntryExists } from "./root-memory-files.js";
+import {
+  exactWorkspaceEntryExists,
+  shouldSkipConfiguredMemorySearchPath,
+} from "./root-memory-files.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const canTestPermissions = process.platform !== "win32" && process.getuid?.() !== 0;
+
+it("excludes generated dreaming trees without excluding adjacent memory or outside paths", () => {
+  const workspaceDir = path.resolve("/test/workspace");
+  const skipped = (relative: string) =>
+    shouldSkipConfiguredMemorySearchPath({
+      workspaceDir,
+      absPath: path.resolve(workspaceDir, relative),
+      excludePaths: ["memory/dreaming/**", "memory/.dreams/**"],
+    });
+  expect(skipped("memory/dreaming")).toBe(true);
+  expect(skipped("memory/dreaming/light/report.md")).toBe(true);
+  expect(skipped("memory/.dreams/report.md")).toBe(true);
+  expect(skipped("memory/dreaming-notes.md")).toBe(false);
+  expect(skipped("memory/current.md")).toBe(false);
+  expect(skipped("../other/memory/dreaming/report.md")).toBe(false);
+  expect(
+    shouldSkipConfiguredMemorySearchPath({
+      workspaceDir,
+      absPath: path.join(workspaceDir, "..notes", "report.md"),
+      excludePaths: ["..notes/**"],
+    }),
+  ).toBe(true);
+  expect(
+    shouldSkipConfiguredMemorySearchPath({
+      workspaceDir,
+      absPath: path.join(workspaceDir, "memory/dreaming/light/report.md"),
+    }),
+  ).toBe(false);
+});
 
 describe("exactWorkspaceEntryExists", () => {
   it("distinguishes exact entries, missing entries, and missing path components", async () => {

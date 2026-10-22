@@ -48,6 +48,7 @@ export type MemoryWorkspaceMaintenance = {
 export type MemoryWorkspaceWatchRequest = {
   agentId: string;
   settings: Pick<ResolvedMemorySearchConfig, "extraPaths" | "multimodal"> & {
+    excludePaths?: readonly string[];
     sync: Pick<ResolvedMemorySearchConfig["sync"], "watchDebounceMs">;
   };
 };

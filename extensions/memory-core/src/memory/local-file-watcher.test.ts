@@ -171,6 +171,23 @@ afterEach(() => {
   }
 });
 
+it("passes index exclusions to the local worker", async () => {
+  const { instance } = watcher({
+    settings: {
+      extraPaths: [],
+      excludePaths: ["memory/dreaming/**"],
+      multimodal: { enabled: false, modalities: [], maxFileBytes: 10485760 },
+      sync: { watchDebounceMs: 0 },
+    },
+  });
+  const worker = await start(instance);
+  expect(worker.commands[0]).toMatchObject({
+    type: "open",
+    request: { settings: { excludePaths: ["memory/dreaming/**"] } },
+  });
+  await close(instance, worker);
+});
+
 it("waits for readiness, publishes facts, and delivers dirty before settled in the owner's context", async () => {
   const context = new AsyncLocalStorage<string>();
   const events: string[] = [];

@@ -43,6 +43,7 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
             agentId: this.agentId,
             settings: {
               extraPaths: this.settings.extraPaths,
+              excludePaths: this.settings.excludePaths,
               multimodal: this.settings.multimodal,
               sync: { watchDebounceMs: this.settings.sync.watchDebounceMs },
             },
