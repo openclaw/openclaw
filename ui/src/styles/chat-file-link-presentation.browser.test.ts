@@ -48,28 +48,24 @@ function fixtureDocument(themeMode: "dark" | "light"): string {
 const LONG_CHIP_PATH = "packages/gateway-protocol/src/session-transport-envelope.ts";
 
 // Unbroken labels need overflow-wrap; the glyph must stay with the first character.
+function separationCase(id: string, filePath: string, line?: number, label = filePath) {
+  return { id: `sep-${id}`, filePath, line, label };
+}
 const SEPARATION_CASES = [
-  { filePath: "src/app.ts", id: "sep-short", label: "app.ts", line: undefined },
-  {
-    filePath: "superlongfilenamewithoutanyslashesordashesorspacesatalljustonebigword.ts",
-    id: "sep-unbroken",
-    label: "superlongfilenamewithoutanyslashesordashesorspacesatalljustonebigword.ts",
-    line: undefined,
-  },
-  { filePath: LONG_CHIP_PATH, id: "sep-path-with-line", label: LONG_CHIP_PATH, line: 182 },
-  {
-    filePath: `${"abcdefghij".repeat(24)}.ts`,
-    id: "sep-enormous",
-    label: `${"abcdefghij".repeat(24)}.ts`,
-    line: 7,
-  },
-  {
-    filePath: "~/repo/docs/spec.md",
-    id: "sep-cjk",
-    label: "文档/会话传输封装规范化适配器/协议架构第十七版/规范化器.ts",
-    line: 88,
-  },
-] as const;
+  separationCase("short", "src/app.ts", undefined, "app.ts"),
+  separationCase(
+    "unbroken",
+    "superlongfilenamewithoutanyslashesordashesorspacesatalljustonebigword.ts",
+  ),
+  separationCase("path-with-line", LONG_CHIP_PATH, 182),
+  separationCase("enormous", `${"abcdefghij".repeat(24)}.ts`, 7),
+  separationCase(
+    "cjk",
+    "~/repo/docs/spec.md",
+    88,
+    "文档/会话传输封装规范化适配器/协议架构第十七版/规范化器.ts",
+  ),
+];
 
 // The panel does not inherit chat-text's wrapping and clips horizontal overflow.
 const WRAP_CONTAINERS = ["chat-text", "sidebar-markdown"] as const;
@@ -101,31 +97,8 @@ function wrapFixtureDocument(themeMode: "dark" | "light", container: WrapContain
   );
 }
 
-type SeparationSample = {
-  readonly caseId: (typeof SEPARATION_CASES)[number]["id"];
-  readonly columnWidth: number;
-  readonly glyphToLabelGapPx: number;
-  readonly lineHeightPx: number;
-  readonly labelOverflowPx: number;
-  readonly wrapped: boolean;
-};
-
-type WrapSample = {
-  readonly chipLineCount: number;
-  readonly chipTop: number;
-  readonly columnWidth: number;
-  readonly longChipLineCount: number;
-  readonly longChipWidth: number;
-};
-
 // Sweep widths so changing fonts/prose cannot silently miss the wrap boundary.
-async function probeWrap(
-  themeMode: "dark" | "light",
-  container: WrapContainer,
-): Promise<{
-  readonly samples: readonly WrapSample[];
-  readonly separation: readonly SeparationSample[];
-}> {
+async function probeWrap(themeMode: "dark" | "light", container: WrapContainer) {
   return fixture.withPage(
     `${themeMode}-${container}-wrap`,
     wrapFixtureDocument(themeMode, container),
@@ -146,8 +119,8 @@ async function probeWrap(
             caseId,
             element: resolve(`#${caseId}`),
           }));
-          const samples: WrapSample[] = [];
-          const separation: SeparationSample[] = [];
+          const samples = [];
+          const separation = [];
           for (let columnWidth = 220; columnWidth <= 900; columnWidth += 4) {
             column.style.width = `${columnWidth}px`;
             samples.push({

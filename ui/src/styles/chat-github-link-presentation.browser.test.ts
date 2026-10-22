@@ -39,18 +39,8 @@ function fixtureDocument(themeMode: "dark" | "light"): string {
   );
 }
 
-type WrapSample = {
-  readonly fragments: number;
-  readonly labelFragments: number;
-  readonly overflows: boolean;
-  readonly labelStartsMarkLine: boolean;
-  readonly markLineTop: number;
-};
-
 // Sweep widths so font/prose changes cannot silently miss the wrap boundary.
-async function probeWrap(
-  themeMode: "dark" | "light",
-): Promise<Record<string, readonly WrapSample[]>> {
+async function probeWrap(themeMode: "dark" | "light") {
   return withFixture(themeMode, async (page) => {
     return await page.evaluate(
       (ids: readonly string[]) => {
@@ -61,35 +51,35 @@ async function probeWrap(
           }
           return element;
         };
-        const samples: Record<string, WrapSample[]> = {};
-        for (const id of ids) {
-          const column = resolve(`#column-${id}`);
-          const link = resolve(`#${id}`);
-          const collected: WrapSample[] = [];
-          for (let columnWidth = 200; columnWidth <= 900; columnWidth += 4) {
-            column.style.width = `${columnWidth}px`;
-            // The mark and first label character must start on the same line.
-            const linkStart = link.getClientRects()[0];
-            const labelRange = document.createRange();
-            const labelText = link.firstChild;
-            if (!labelText || !linkStart) {
-              throw new Error(`Missing label geometry for ${id}`);
+        return Object.fromEntries(
+          ids.map((id) => {
+            const column = resolve(`#column-${id}`);
+            const link = resolve(`#${id}`);
+            const collected = [];
+            for (let columnWidth = 200; columnWidth <= 900; columnWidth += 4) {
+              column.style.width = `${columnWidth}px`;
+              // The mark and first label character must start on the same line.
+              const linkStart = link.getClientRects()[0];
+              const labelRange = document.createRange();
+              const labelText = link.firstChild;
+              if (!labelText || !linkStart) {
+                throw new Error(`Missing label geometry for ${id}`);
+              }
+              labelRange.setStart(labelText, 0);
+              labelRange.setEnd(labelText, 1);
+              const labelStart = labelRange.getBoundingClientRect();
+              labelRange.selectNodeContents(link);
+              collected.push({
+                fragments: link.getClientRects().length,
+                labelFragments: labelRange.getClientRects().length,
+                overflows: column.scrollWidth > column.clientWidth,
+                labelStartsMarkLine: Math.abs(labelStart.top - linkStart.top) < 2,
+                markLineTop: Math.round(linkStart.top),
+              });
             }
-            labelRange.setStart(labelText, 0);
-            labelRange.setEnd(labelText, 1);
-            const labelStart = labelRange.getBoundingClientRect();
-            labelRange.selectNodeContents(link);
-            collected.push({
-              fragments: link.getClientRects().length,
-              labelFragments: labelRange.getClientRects().length,
-              overflows: column.scrollWidth > column.clientWidth,
-              labelStartsMarkLine: Math.abs(labelStart.top - linkStart.top) < 2,
-              markLineTop: Math.round(linkStart.top),
-            });
-          }
-          samples[id] = collected;
-        }
-        return samples;
+            return [id, collected] as const;
+          }),
+        );
       },
       LINK_FORMS.map((form) => form.id),
     );
@@ -130,6 +120,12 @@ fixture.describe("chat GitHub link presentation", () => {
                 (id !== "repository-ref" && sample.labelFragments !== 1),
             ),
           ).toEqual([]);
+        } else {
+          // Non-item links fill their starting line instead of moving whole.
+          expect({ id, splits: collected.some((sample) => sample.fragments > 1) }).toEqual({
+            id,
+            splits: true,
+          });
         }
       }
     },
@@ -161,18 +157,6 @@ fixture.describe("chat GitHub link presentation", () => {
       });
     },
   );
-
-  it("keeps GitHub links breaking across lines instead of moving whole", async () => {
-    const samples = await probeWrap("dark");
-    // Non-item links still fill the line they start on rather than moving whole.
-    for (const id of ["bare-url", "authored"]) {
-      const collected = samples[id] ?? [];
-      expect({ id, splits: collected.some((sample) => sample.fragments > 1) }).toEqual({
-        id,
-        splits: true,
-      });
-    }
-  });
 
   it.each(["light", "dark"] as const)(
     "paints distinct kind icons and visible hover and keyboard focus states in %s",
