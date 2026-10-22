@@ -42,30 +42,6 @@ export async function noteSourceInstallIssues(root: string | null) {
     warnings.push("- tsx binary is missing for source runs. Run: pnpm install.");
   }
 
-  warnings.push(...detectSelfLinkWarnings(root));
-
-  if (warnings.length > 0) {
-    note(warnings.join("\n"), "Install");
-  }
-}
-
-const SELF_LINK_RECOVERY =
-  "Inspect the diff: git diff -- package.json pnpm-workspace.yaml pnpm-lock.yaml. Selectively restore the damaged dependency and override entries (including any missing override pins) and matching lockfile changes from a known-good revision, preserving unrelated edits in all three files. Then verify recovery: pnpm install --frozen-lockfile. Never run pnpm link/npm link inside a deployment checkout.";
-
-function isSelfLink(root: string, value: unknown): boolean {
-  if (typeof value !== "string" || !value.startsWith("link:")) {
-    return false;
-  }
-  const target = path.resolve(root, value.slice("link:".length));
-  try {
-    return fs.realpathSync(target) === fs.realpathSync(root);
-  } catch {
-    return target === path.resolve(root);
-  }
-}
-
-function detectSelfLinkWarnings(root: string): string[] {
-  const warnings: string[] = [];
   for (const [filename, description] of [
     ["package.json", 'has a self-referential "openclaw": "link:" dependency'],
     ["pnpm-workspace.yaml", 'contains a self-referential "openclaw: link:" entry'],
@@ -91,5 +67,23 @@ function detectSelfLinkWarnings(root: string): string[] {
       // Unreadable or malformed files must not abort the remaining install checks.
     }
   }
-  return warnings;
+
+  if (warnings.length > 0) {
+    note(warnings.join("\n"), "Install");
+  }
+}
+
+const SELF_LINK_RECOVERY =
+  "Inspect the diff: git diff -- package.json pnpm-workspace.yaml pnpm-lock.yaml. Selectively restore the damaged dependency and override entries (including any missing override pins) and matching lockfile changes from a known-good revision, preserving unrelated edits in all three files. Then verify recovery: pnpm install --frozen-lockfile. Never run pnpm link/npm link inside a deployment checkout.";
+
+function isSelfLink(root: string, value: unknown): boolean {
+  if (typeof value !== "string" || !value.startsWith("link:")) {
+    return false;
+  }
+  const target = path.resolve(root, value.slice("link:".length));
+  try {
+    return fs.realpathSync(target) === fs.realpathSync(root);
+  } catch {
+    return target === path.resolve(root);
+  }
 }
