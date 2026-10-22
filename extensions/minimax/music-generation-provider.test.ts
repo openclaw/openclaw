@@ -131,9 +131,7 @@ describe("minimax music generation provider", () => {
 
   it("cancels invalid music responses before releasing their guarded dispatcher", async () => {
     const cleanupOrder: string[] = [];
-    mockMusicResponse({
-      data: { audio_url: "https://example.com/invalid-open.mp3" },
-    });
+    mockMusicResponse({ data: { audio_url: "https://example.com/invalid-open.mp3" } });
     fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
       response: new Response(
         new ReadableStream({
@@ -158,27 +156,24 @@ describe("minimax music generation provider", () => {
     expect(cleanupOrder).toEqual(["body canceled", "dispatcher released"]);
   });
 
-  it("rejects streamed audio outside MiniMax's documented hex format", async () => {
-    mockResponse(streamFrame({ status: 1, audio: "ZE==" }));
-    await expect(generateMusic({ model: "", prompt: "short track" })).rejects.toThrow(
+  it.each([
+    [
+      streamFrame({ status: 1, audio: "ZE==" }),
       "MiniMax music generation returned malformed hex audio",
-    );
-  });
-
-  it("reports streaming music task failures", async () => {
-    mockResponse(streamFrame({}) + streamFrame({}, 2013, "render rejected"));
-    await expect(generateMusic()).rejects.toThrow(
+    ],
+    [
+      streamFrame({}) + streamFrame({}, 2013, "render rejected"),
       "MiniMax music generation failed (2013): render rejected",
-    );
+    ],
+  ])("rejects invalid music stream %s", async (body, message) => {
+    mockResponse(body);
+    await expect(generateMusic()).rejects.toThrow(message);
   });
 
   it("rejects inline generated music that exceeds the configured media cap before decoding", async () => {
-    mockMusicResponse({
-      data: { audio: Buffer.from("too-large").toString("hex") },
-    });
+    mockMusicResponse({ data: { audio: Buffer.from("too-large").toString("hex") } });
     await expect(
       generateMusic({
-        prompt: "short track",
         cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
       }),
     ).rejects.toThrow("MiniMax generated music download exceeds 1 bytes");
@@ -248,10 +243,7 @@ describe("minimax music generation provider", () => {
       allowPrivateNetwork: true,
       headers: { "X-MiniMax-Music-Policy": "enabled" },
     };
-    mockMusicResponse({
-      task_id: "task-retry",
-      audio_url: "https://example.com/retry.mp3",
-    });
+    mockMusicResponse({ task_id: "task-retry", audio_url: "https://example.com/retry.mp3" });
     fetchWithTimeoutMock.mockRejectedValueOnce(new Error("request timeout"));
     mockMusicDownload();
     const result = await generateMusic({
