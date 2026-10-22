@@ -20,7 +20,7 @@ import { LightboxAction, LightboxChrome, lightboxImageStyle } from "./image-ligh
 import type { ImageLightboxProps } from "./image-lightbox.types.ts";
 import { Icon } from "./solid/icon.tsx";
 import imageLightboxStyles from "./image-lightbox.css?inline";
-import "./modal-dialog.ts";
+import "./modal-dialog.tsx";
 
 const MAX_SCALE = 4;
 const DOUBLE_TAP_SCALE = 2.5;

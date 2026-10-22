@@ -42,6 +42,7 @@ export class ProcessesPanelData {
   private readonly entries: Map<string, SharedObservation>;
   private entry: SharedObservation | null = null;
   private key: string | null = null;
+  private lifetime = Promise.withResolvers<void>();
 
   constructor(
     private readonly context: ApplicationContext,
@@ -57,6 +58,18 @@ export class ProcessesPanelData {
 
   get snapshot(): ProcessSnapshot {
     return this.entry?.data ?? EMPTY_PROCESSES;
+  }
+
+  get pendingRead(): Promise<void> | null {
+    return this.entry?.data.pendingRead ?? null;
+  }
+
+  get retired(): Promise<void> {
+    return this.lifetime.promise;
+  }
+
+  get connectionRetired(): Promise<void> | undefined {
+    return this.entry?.data.retired;
   }
 
   sync(input: ProcessesPanelInput): void {
@@ -95,7 +108,14 @@ export class ProcessesPanelData {
     return this.entry?.data.stop(row) ?? Promise.resolve();
   }
 
+  reportStopError(row: SessionProcessSummary, error: unknown): void {
+    this.entry?.data.reportStopError(row, error);
+  }
+
   dispose(): void {
+    // A closed presentation retires independently of other shared consumers.
+    this.lifetime.resolve();
+    this.lifetime = Promise.withResolvers<void>();
     if (this.entry) {
       this.entry.listeners.delete(this.changed);
       if (this.entry.listeners.size === 0) {
@@ -136,6 +156,7 @@ class ProcessObservation {
   private generation = 0;
   private disposed = false;
   private pending: Promise<void> | null = null;
+  private lifetime = Promise.withResolvers<void>();
   private refreshAgain = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private readonly visibilityDocument = globalThis.document;
@@ -143,6 +164,14 @@ class ProcessObservation {
   private readonly unsubscribe: () => void;
   private readonly unsubscribeEvents: () => void;
   private readonly stopVisibility: (() => void) | undefined;
+
+  get pendingRead(): Promise<void> | null {
+    return this.pending;
+  }
+
+  get retired(): Promise<void> | undefined {
+    return this.scope ? this.lifetime.promise : undefined;
+  }
 
   constructor(
     private readonly context: ApplicationContext,
@@ -244,7 +273,6 @@ class ProcessObservation {
     this.refreshAgain = false;
     this.clearTimer();
     this.loading = true;
-    this.changed();
     const pending = scope.client
       .request<SessionsProcessesListResult>("sessions.processes.list", this.target())
       .then((result) => {
@@ -306,7 +334,14 @@ class ProcessObservation {
         }
       });
     this.pending = pending;
+    this.changed();
     return pending;
+  }
+
+  reportStopError(row: SessionProcessSummary, error: unknown): void {
+    this.actionError = formatUiError(error);
+    this.actionInstanceId = row.instanceId;
+    this.changed();
   }
 
   async stop(row: SessionProcessSummary): Promise<void> {
@@ -395,6 +430,8 @@ class ProcessObservation {
   }
 
   private retire(): void {
+    this.lifetime.resolve();
+    this.lifetime = Promise.withResolvers<void>();
     this.generation += 1;
     this.clearTimer();
     this.scope = null;

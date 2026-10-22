@@ -15,7 +15,7 @@ import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { UpdateGitRevisions } from "../components/solid/update-git-revisions.tsx";
 import { UpdateRunView } from "../components/update-run-view.tsx";
 import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
-import "../components/modal-dialog.ts";
+import "../components/modal-dialog.tsx";
 import { formatUiError } from "../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { hasNativeUpdateBridge, postNativeUpdate } from "./native-link-routing.ts";

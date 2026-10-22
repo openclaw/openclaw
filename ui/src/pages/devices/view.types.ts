@@ -12,6 +12,7 @@ export type DevicesProps = Omit<
   loading: boolean;
   inventoryRead: () => void;
   inventoryScope: object;
+  inventorySaving?: boolean;
   onReloadInventory: () => void;
   presence: PresenceEntry[];
   gatewayVersion: string | null;

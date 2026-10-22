@@ -325,6 +325,44 @@ it("reports rejected artifacts without another confirmation", async () => {
   expect(request.mock.calls.some(([method]) => method === "plugins.inspect")).toBe(false);
 });
 
+it("shows inspection failures and can close a held consent retry without approving", async () => {
+  const first = deferred<ReturnType<typeof createInspectResult>>();
+  const retry = deferred<ReturnType<typeof createInspectResult>>();
+  let pending = first.promise;
+  let inspections = 0;
+  const { client, request } = scriptedClient({
+    "plugins.inspect": () => (++inspections === 1 ? createInspectResult() : pending),
+    "plugins.setEnabled": () => {
+      throw consentError("review-required");
+    },
+  });
+  const { page } = await mountInventory(client);
+  await clickPluginAction(page, "Enable Workboard");
+  const dialog = () => page.querySelector('[data-plugin-consent="enable"]');
+  await waitForSolid(() => {
+    expect(dialog()?.querySelector('[role="status"]')).not.toBeNull();
+    expect(consentAction(page)?.disabled).toBe(true);
+  });
+  first.reject(new Error("Synthetic inspection unavailable"));
+  await waitForSolid(() =>
+    expect(dialog()?.querySelector('[role="alert"]')?.textContent).toContain(
+      "Synthetic inspection unavailable",
+    ),
+  );
+  pending = retry.promise;
+  dialog()?.querySelector<HTMLButtonElement>('[role="alert"] button')?.click();
+  await waitForSolid(() => {
+    expect(inspections).toBe(3);
+    expect(dialog()?.querySelector('[role="status"]')).not.toBeNull();
+  });
+  dialog()?.querySelector<HTMLButtonElement>("openclaw-modal-actions button")?.click();
+  await waitForSolid(() => expect(dialog()).toBeNull());
+  retry.resolve(createInspectResult());
+  await settlePlugins();
+  expect(dialog()).toBeNull();
+  expect(methodCalls(request, "plugins.setEnabled")).toHaveLength(1);
+});
+
 it("requires fresh inspection and acknowledgement when a reviewed capability surface changes", async () => {
   const plugin = createPlugin({ origin: "global" });
   const updated = createPlugin({ ...plugin, enabled: true, state: "enabled" });

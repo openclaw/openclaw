@@ -8,7 +8,8 @@ import {
   createMemo,
   createOptimistic,
   createSignal,
-  onCleanup,
+  onSettled,
+  isPending,
 } from "solid-js";
 import type {
   WebSearchStatusParams,
@@ -57,8 +58,7 @@ export function SearchPage() {
   const [result, setResult] = createSignal<WebSearchStatusResult | null>(null);
   const [loadRequest, setLoadRequest] = createSignal<{ promise: Promise<void> } | null>(null);
   const loadCompletion = createMemo(() => loadRequest()?.promise.then(() => null) ?? null);
-  // isPending's first-use runtime hooks eagerly link the shared Markdown/menu chunk.
-  const [loading, setLoading] = createSignal(false);
+  const loading = () => isPending(loadCompletion);
   const [testing, setTesting] = createOptimistic(false);
   const [testResult, setTestResult] = createSignal<WebSearchTestResult | null>(null);
   const [testError, setTestError] = createSignal("");
@@ -109,12 +109,14 @@ export function SearchPage() {
     }
   }
   // Invalidate admitted tests and reads before config or selection changes can settle them.
-  const stopRuntime = runtimeView.subscribe(syncRuntime);
-  const stopSelection = selectionProjection.subscribe(syncAgent);
-  onCleanup(() => {
-    disposed = true;
-    stopRuntime();
-    stopSelection();
+  onSettled(() => {
+    const stopRuntime = runtimeView.subscribe(syncRuntime);
+    const stopSelection = selectionProjection.subscribe(syncAgent);
+    return () => {
+      disposed = true;
+      stopRuntime();
+      stopSelection();
+    };
   });
 
   function invalidateTest() {
@@ -173,7 +175,6 @@ export function SearchPage() {
     }
     invalidateTest();
     loadingActive = true;
-    setLoading(true);
     const selected = selection(modelValue);
     let requestedConfigRevision = configRevision;
     const current = () =>
@@ -223,7 +224,6 @@ export function SearchPage() {
       } finally {
         loadingActive = false;
         if (active()) {
-          setLoading(false);
           if (!current() && gateway.connected) {
             void load();
           }

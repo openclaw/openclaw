@@ -95,40 +95,32 @@ it.each([
   },
 );
 
-it("records entry marks and measured spans in the diagnostics timeline", async () => {
-  const { trace, timelinePath } = timelineFixture("timeline");
-  await trace.measure("run-main-import", () => Promise.resolve());
-  await expect(
-    trace.measure("command-execution", async () => "done", { timeline: false }),
-  ).resolves.toBe("done");
+it.each(["timeline", ""])(
+  "records startup phases with initial diagnostics=%j",
+  async (diagnostics) => {
+    const { trace, timelinePath } = timelineFixture(diagnostics);
+    await trace.measure("run-main-import", () => Promise.resolve());
+    await expect(
+      trace.measure("command-execution", async () => "done", { timeline: false }),
+    ).resolves.toBe("done");
 
-  const events = readTimelineEvents(timelinePath);
-  expect(events).toEqual(
-    expect.arrayContaining([
-      timelineEvent("mark", "bootstrap", {
-        durationMs: expect.any(Number),
-        attributes: expect.objectContaining({ totalMs: expect.any(Number) }),
-      }),
-      timelineEvent("span.start", "run-main-import"),
-      timelineEvent("span.end", "run-main-import", { durationMs: expect.any(Number) }),
-    ]),
-  );
-  expect(events).not.toContainEqual(expect.objectContaining({ name: "entry.command-execution" }));
-});
+    if (!diagnostics) {
+      expect(await trace.requiresDiagnosticsConfig()).toBe(true);
+      expect(fs.existsSync(timelinePath)).toBe(false);
+      await trace.configureDiagnosticsTimeline({ diagnostics: { flags: ["timeline"] } });
+    }
 
-it("flushes buffered startup phases when config enables the timeline", async () => {
-  const { trace, timelinePath } = timelineFixture("");
-  await trace.measure("run-main-import", async () => "loaded");
-
-  expect(await trace.requiresDiagnosticsConfig()).toBe(true);
-  expect(fs.existsSync(timelinePath)).toBe(false);
-
-  await trace.configureDiagnosticsTimeline({ diagnostics: { flags: ["timeline"] } });
-
-  expect(readTimelineEvents(timelinePath)).toEqual(
-    expect.arrayContaining([
-      timelineEvent("mark", "bootstrap"),
-      timelineEvent("span.end", "run-main-import", { durationMs: expect.any(Number) }),
-    ]),
-  );
-});
+    const events = readTimelineEvents(timelinePath);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        timelineEvent("mark", "bootstrap", {
+          durationMs: expect.any(Number),
+          attributes: expect.objectContaining({ totalMs: expect.any(Number) }),
+        }),
+        timelineEvent("span.start", "run-main-import"),
+        timelineEvent("span.end", "run-main-import", { durationMs: expect.any(Number) }),
+      ]),
+    );
+    expect(events).not.toContainEqual(expect.objectContaining({ name: "entry.command-execution" }));
+  },
+);

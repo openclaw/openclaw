@@ -252,7 +252,7 @@ export function DreamingDiarySection(props: DreamingProps) {
           <DreamingAction
             label={
               memoryWikiUnavailable()
-                ? t("dreaming.wiki.howToEnable")
+                ? t(props.configOpening ? "common.loading" : "dreaming.wiki.howToEnable")
                 : activeDiarySubTab() === "dreams"
                   ? t(diary().loading ? "dreaming.diary.reloading" : "dreaming.diary.reload")
                   : diary().loading
@@ -261,15 +261,16 @@ export function DreamingDiarySection(props: DreamingProps) {
             }
             disabled={
               memoryWikiUnavailable()
-                ? !props.access.canOpenConfig
+                ? props.configOpening || !props.access.canOpenConfig
                 : props.modeSaving || diary().loading
             }
+            busy={memoryWikiUnavailable() && props.configOpening}
             onClick={() => {
               props.onViewStateChange((draft) => {
                 draft.diaryPage = 0;
               });
               if (memoryWikiUnavailable()) {
-                props.onOpenConfig();
+                void props.onOpenConfig();
               } else {
                 diary().refresh();
               }
@@ -310,9 +311,10 @@ export function DreamingDiarySection(props: DreamingProps) {
               </div>
               <div class="dreams-diary__empty-actions">
                 <DreamingAction
-                  label={t("dreaming.wiki.openConfig")}
-                  disabled={!props.access.canOpenConfig}
-                  onClick={() => props.onOpenConfig()}
+                  label={t(props.configOpening ? "common.loading" : "dreaming.wiki.openConfig")}
+                  disabled={props.configOpening || !props.access.canOpenConfig}
+                  busy={props.configOpening}
+                  onClick={() => void props.onOpenConfig()}
                 />
               </div>
             </div>

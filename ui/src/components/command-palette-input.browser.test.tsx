@@ -202,6 +202,10 @@ describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
         },
         { timeout: 5_000 },
       );
+      edit(input, "One line");
+      observer.takeRecords();
+      await threeFrames();
+      expect(styleChanges).toEqual([]);
     } finally {
       observer.disconnect();
     }

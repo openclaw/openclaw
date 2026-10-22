@@ -400,6 +400,7 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
               registerIcon={page().icons.register}
               consent={consent()}
               inspection={page().consent.read().inspection}
+              inspectionRead={page().consent.read().inspectionRead}
               loading={page().consent.read().inspectionLoading}
               error={page().consent.read().inspectionError}
               iconUrl={icon().url}
