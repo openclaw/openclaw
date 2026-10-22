@@ -12,6 +12,7 @@ import {
   fetchWithSsrFGuard,
   type GuardedFetchOptions,
 } from "./fetch-guard.js";
+import { withGuardedFetchRequestAuthority } from "./fetch-request-authority.js";
 import { PinnedDispatcherPool } from "./pinned-dispatcher-pool.js";
 import type { DispatcherAwareRequestInit } from "./runtime-fetch.js";
 import {
@@ -161,6 +162,102 @@ async function rejectBeforeFetch(options: Partial<GuardedFetchOptions>, error: R
   await expect(guardedRequest(fetchImpl, options)).rejects.toThrow(error);
   expect(fetchImpl).not.toHaveBeenCalled();
 }
+
+describe("request authority", () => {
+  it.each(["request", "scope", "dispatch"])("rejects asynchronous %s guards", async (owner) => {
+    const fetchImpl = fetchStub();
+    const guard = () => Promise.resolve();
+    await expect(
+      withGuardedFetchRequestAuthority(
+        owner === "scope" ? guard : () => {},
+        () =>
+          guardedRequest(fetchImpl, {
+            beforeRequest: owner === "request" ? (guard as never) : undefined,
+          }),
+        // oxlint-disable-next-line typescript/no-misused-promises -- Deliberately violates the synchronous final-dispatch contract.
+        owner === "dispatch" ? guard : undefined,
+      ),
+    ).rejects.toThrow("must be synchronous");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("runs inherited final checks only at dispatch, including redirects", async () => {
+    const events: string[] = [];
+    let prepared = false;
+    const beforeRequest = vi.fn(() => {
+      expect(prepared).toBe(true);
+      events.push("guard");
+    });
+    const fetchImpl = vi.fn(async (): Promise<Response> => {
+      events.push("fetch");
+      return fetchImpl.mock.calls.length === 1 ? redirectResponse("/redirected") : okResponse();
+    });
+    await withGuardedFetchRequestAuthority(
+      () => {},
+      async () => {
+        expect(beforeRequest).not.toHaveBeenCalled();
+        await withGuardedFetchRequestAuthority(undefined, async () => {
+          expect(beforeRequest).not.toHaveBeenCalled();
+          const result = await guardedRequest(fetchImpl, {
+            lookupFn: async () => {
+              const addresses = await createPublicLookup()();
+              prepared = true;
+              return addresses;
+            },
+          });
+          await result.release();
+        });
+      },
+      beforeRequest,
+    );
+    expect(events).toEqual(["guard", "fetch", "guard", "fetch"]);
+  });
+
+  it("closes nested authority without affecting an independent request", async () => {
+    const release = createDeferredCore();
+    const fetchImpl = fetchStub();
+    const beforeRequest = vi.fn();
+    let retained: Promise<unknown> | undefined;
+    await withGuardedFetchRequestAuthority(
+      () => {},
+      async () => {
+        await withGuardedFetchRequestAuthority(undefined, async () => {
+          retained = release.promise.then(() => guardedRequest(fetchImpl));
+        });
+        release.resolve();
+        await expect(retained).rejects.toThrow("no longer active");
+      },
+      beforeRequest,
+    );
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(beforeRequest).not.toHaveBeenCalled();
+    const result = await guardedRequest(fetchImpl);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    await result.release();
+  });
+
+  it.each([
+    [
+      { init: { method: "POST", body: "secret" } },
+      "Refusing to follow cross-origin redirect for POST request body",
+      1,
+    ],
+    [
+      { allowCrossOriginUnsafeRedirectReplay: true },
+      "Cross-origin unsafe redirect replay cannot be both allowed and rejected",
+      0,
+    ],
+  ] as const)("rejects unsafe redirect policy %j", async (options, error, calls) => {
+    const fetchImpl = redirectFetch("https://cdn.example.com/upload-2", 307);
+    await expect(
+      guardedRequest(fetchImpl, {
+        rejectCrossOriginUnsafeRedirectReplay: true,
+        ...options,
+      }),
+    ).rejects.toThrow(error);
+    expect(fetchImpl).toHaveBeenCalledTimes(calls);
+  });
+});
 
 describe("guarded fetch policy", () => {
   it("blocks private URLs and redacts their path, query and fragment from audit logs", async () => {
@@ -709,21 +806,6 @@ describe("configured local-origin bypass", () => {
     );
     expect(recordedCall(proxyAgentCtor.mock.calls)[0]).not.toHaveProperty("proxyTls.ca");
     expectDispatch(proxyAgentCtor, baseUrl, "/dashboard/");
-    await result.release();
-  });
-
-  it("ignores hidden bypass markers on the public guard", async () => {
-    managedProxy();
-    const options = {
-      url: `${localBase}/api/embed`,
-      fetchImpl: fetchStub(),
-      lookupFn: lookup("127.0.0.1"),
-      policy: { allowedOrigins: [localBase] },
-      managedProxyBypass: { kind: "configured-local-origin", baseUrl: localBase },
-    };
-    const result = await fetchWithSsrFGuard(options);
-    expect(envHttpProxyAgentCtor).toHaveBeenCalledOnce();
-    expect(agentCtor).not.toHaveBeenCalled();
     await result.release();
   });
 

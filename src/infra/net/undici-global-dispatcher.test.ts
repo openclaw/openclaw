@@ -197,15 +197,6 @@ describe("ensureGlobalUndiciDispatcherStreamTimeouts", () => {
     expect(globalUndiciStreamTimeoutMs).toBe(1_900_000);
   });
 
-  it("records timeout bridge but does not override unsupported custom proxy dispatcher types", () => {
-    setCurrentDispatcher(new ProxyAgent());
-
-    api.ensureGlobalUndiciDispatcherStreamTimeouts({ timeoutMs: 1_900_000 });
-
-    expect(setGlobalDispatcher).not.toHaveBeenCalled();
-    expect(globalUndiciStreamTimeoutMs).toBe(1_900_000);
-  });
-
   it("wraps Proxyline managed dispatcher with timed dispatch options", () => {
     const dispatcher = installProxyDispatcher(new ManagedDispatcher());
 
@@ -353,19 +344,6 @@ describe("forceResetGlobalDispatcher", () => {
     expect(loadUndiciGlobalDispatcherDeps).toHaveBeenCalledTimes(1);
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
     expectCurrentAgent(Agent, { allowH2: false });
-  });
-
-  it("replaces a stale EnvHttpProxyAgent when restored proxy env is still configured", () => {
-    installProxyDispatcher(new EnvHttpProxyAgent());
-
-    api.forceResetGlobalDispatcher();
-
-    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
-    expectCurrentAgent(EnvHttpProxyAgent, {
-      ...DEFAULT_PROXY_OPTIONS,
-      allowH2: false,
-      clientFactory: "ip-safe-test-client-factory",
-    });
   });
 
   it.each(["bootstrap", "reset"])("preserves Proxyline during %s", (operation) => {

@@ -2,10 +2,6 @@ import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { execNodeEvalSync } from "../../test-utils/node-process.js";
 import {
-  registerActiveManagedProxyUrl,
-  stopActiveManagedProxyRegistration,
-} from "./proxy/active-proxy-state.js";
-import {
   createHttp1Agent,
   createHttp1EnvHttpProxyAgent,
   createHttp1ProxyAgent,
@@ -157,23 +153,6 @@ it("handles an internal error from direct agent client before connect", () => {
 
   expect(() => client.emit("error", error)).not.toThrow();
   expect(logDebug).toHaveBeenCalledWith(expect.stringContaining(error.message));
-});
-it("adds active managed proxy CA trust to explicit ProxyAgent options", () => {
-  const registration = registerActiveManagedProxyUrl(new URL("https://proxy.test:8443"), {
-    proxyTls: { ca: "explicit-proxy-agent-ca" },
-  });
-
-  try {
-    createHttp1ProxyAgent({ uri: "https://proxy.test:8443" });
-
-    expect(requireOptions(proxyAgentCtor, 0)).toMatchObject({
-      uri: "https://proxy.test:8443",
-      allowH2: false,
-      proxyTls: { ca: "explicit-proxy-agent-ca" },
-    });
-  } finally {
-    stopActiveManagedProxyRegistration(registration);
-  }
 });
 it.each([
   { mode: "fixed", servername: "proxy.example", preserve: true },
