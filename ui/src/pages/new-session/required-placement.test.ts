@@ -1,8 +1,15 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
+import type { ModelCatalogEntry } from "../../api/types.ts";
 import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
-import { hostedRuntime, mountPlacement, nativeRuntime } from "./placement.test-support.ts";
+import {
+  hostedRuntime,
+  mountPlacement,
+  nativeRuntime,
+  placementDevice,
+  placementFixture,
+} from "./placement.test-support.ts";
 
 const runtime = nativeRuntime();
 const profile = {
@@ -13,7 +20,7 @@ const profile = {
 };
 const catalog = { requiredProfile: profile.id, profiles: [profile], environments: [] };
 const optionalCatalog = { profiles: [], environments: [] };
-const model = () => ({
+const model = (): ModelCatalogEntry => ({
   id: "default",
   provider: "openai",
   name: "Default",
@@ -22,7 +29,7 @@ const model = () => ({
   agentRuntime: runtime,
   runtimeChoices: [
     hostedRuntime,
-    { ...runtime, id: "external-runtime", cloudPlacementExecutionMode: "remote-exec" },
+    { ...runtime, id: "external-runtime", cloudPlacementExecutionMode: "remote-exec" as const },
   ].map((agentRuntime) => ({ agentRuntime, available: true })),
 });
 function fixture(
@@ -30,17 +37,9 @@ function fixture(
   modelSelectionPolicy?: { restricted: true; defaultModel: string | null },
   modelReady: Promise<void> = Promise.resolve(),
 ) {
-  return createDraftFixture({
+  return placementFixture(model(), {
     methods: ["environments.list", "sessions.create", "sessions.send", "sessions.describe"],
     scopes: ["operator.read", "operator.write"],
-    agents: [
-      {
-        id: "main",
-        workspace: "/workspace",
-        model: { primary: "openai/default" },
-        agentRuntime: runtime,
-      },
-    ],
     modelCatalog: async () => {
       await modelReady;
       return {
@@ -70,12 +69,6 @@ async function ready(f = fixture()) {
   f.place.restorePreferenceSelections();
   f.flow.setMessage("Inspect the workspace");
   return f;
-}
-
-function expectRecovery(f: ReturnType<typeof fixture>, recovery: Record<string, unknown>) {
-  expect(f.context.placementStartup.start).toHaveBeenCalledWith(
-    expect.objectContaining({ recovery: expect.objectContaining(recovery) }),
-  );
 }
 
 async function expectBlocked(f: ReturnType<typeof fixture>) {
@@ -108,11 +101,14 @@ it.each(["idle", "rejected"] as const)(
       expect.anything(),
     );
     expect(f.context.sessions.createResult).toHaveBeenCalledOnce();
-    expectRecovery(
-      f,
-      status === "idle"
-        ? { target: { kind: "profile", profileId: profile.id, required: true } }
-        : { sessionKey: key, phase: "paused", reason: "not-sent", error },
+    expect(f.context.placementStartup.start).toHaveBeenCalledWith(
+      expect.objectContaining({
+        recovery: expect.objectContaining(
+          status === "idle"
+            ? { target: { kind: "profile", profileId: profile.id, required: true } }
+            : { sessionKey: key, phase: "paused", reason: "not-sent", error },
+        ),
+      }),
     );
     expect(f.request).not.toHaveBeenCalledWith("sessions.dispatch", expect.anything());
     expect(f.request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(0);
@@ -334,4 +330,79 @@ it("does not hold an ordinary local start behind unrelated pending inventory", a
     await refresh;
     f.gateway.disconnect();
   }
+});
+async function inferenceFixture(reason: "missing-auth" | "auth-failed" = "missing-auth") {
+  const deviceProfile = { providerId: "device", executionModes: ["worker-turn"] };
+  const result = placementFixture(
+    {
+      id: "gpt-4.1-mini",
+      name: "GPT-4.1 mini",
+      provider: "openai",
+      available: false,
+      unavailableReason: reason,
+      agentRuntime: runtime,
+    },
+    {
+      methods: ["environments.list", "sessions.create", "sessions.dispatch"],
+      scopes: ["operator.admin", "operator.read", "operator.write"],
+      request: async (method) =>
+        method === "environments.list"
+          ? {
+              environments: [placementDevice("paired", { label: "Paired worker" })],
+              profiles: [
+                { ...deviceProfile, id: "direct", inference: "worker" },
+                { ...deviceProfile, id: "proxied" },
+                { ...deviceProfile, id: "raw-settings", settings: { inference: "worker" } },
+              ],
+            }
+          : {},
+    },
+  );
+  await Promise.all([
+    result.gateway.refreshCloudProfiles(),
+    loadModelCatalog(result.context.gateway.snapshot.client!, { agentId: "main" }),
+  ]);
+  result.flow.setMessage("Check the workspace");
+  return result;
+}
+
+describe("worker inference New Session scope", () => {
+  it("uses worker credentials only for the selected direct profile", async () => {
+    const { flow, place } = await inferenceFixture("auth-failed");
+    expect(flow.submitBlock()?.gate).toBe("model-unavailable");
+    place.selectCloudProfile("direct");
+    expect(flow.canSubmit()).toBe(true);
+    expect(place.modelControl.modelForSubmission()).toBe("");
+    place.selectCloudProfile("proxied");
+    expect(flow.submitBlock()?.gate).toBe("model-unavailable");
+    place.selectCloudProfile("raw-settings");
+    expect(flow.submitBlock()?.gate).toBe("model-unavailable");
+    place.selectDevice("paired");
+    expect(flow.submitBlock()?.gate).toBe("model-unavailable");
+    place.selectDevice("");
+    expect(flow.submitBlock()?.gate).toBe("model-unavailable");
+    place.selectCloudProfile("direct");
+    expect(flow.canSubmit()).toBe(true);
+  });
+
+  it("preserves explicit model/runtime validation instead of discarding a selection", async () => {
+    const { flow, place } = await inferenceFixture();
+    place.selectCloudProfile("direct");
+    place.modelControl.selected = "openai/gpt-4.1-mini";
+    place.modelControl.agentRuntime = "openclaw";
+    expect(flow.submitBlock()?.gate).toBe("model-unavailable");
+    expect(place.modelControl.modelForSubmission()).toBe("openai/gpt-4.1-mini");
+    place.modelControl.agentRuntime = "unavailable-runtime";
+    expect(flow.submitBlock()?.gate).toBe("model-unavailable");
+  });
+
+  it("still waits for current agent defaults on a worker-inference profile", async () => {
+    const { flow, place, context } = await inferenceFixture();
+    place.selectCloudProfile("direct");
+    const agentsList = context.agents.state.agentsList;
+    context.agents.state.agentsList = null;
+    expect(flow.submitBlock()?.gate).toBe("agents");
+    context.agents.state.agentsList = agentsList;
+    expect(flow.canSubmit()).toBe(true);
+  });
 });

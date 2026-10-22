@@ -11,6 +11,7 @@ import {
   hostedRuntime as runtime,
   mountPlacement as renderPlace,
   nativeRuntime,
+  placementDevice,
 } from "./placement.test-support.ts";
 const modelRef = "openai/hosted-model";
 const createSelection = { message: "hello", visibility: "normal" as const };
@@ -192,13 +193,7 @@ it("describes Auto using the eligible host runtime while a hosted workspace is s
     methods: ["environments.list", "sessions.create"],
     request: async () => ({
       profiles: [],
-      environments: ["desktop", "laptop"].map((id) => ({
-        id: `node:${id}`,
-        type: "node",
-        status: "available",
-        sessionHost: true,
-        workerSlots: { total: 1, available: 1 },
-      })),
+      environments: ["desktop", "laptop"].map((id) => placementDevice(id)),
     }),
     agents: [{ ...agent, workspace: "/workspace" }],
     modelCatalog: async () =>
