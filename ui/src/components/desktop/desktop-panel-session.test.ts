@@ -16,7 +16,6 @@ import {
   expectObserve,
   mountDesktop,
   rpcCalls,
-  type RpcParams,
   usePanelStorage,
   waitForConnections,
   unmountPanel,
@@ -36,10 +35,8 @@ function waitForStatus(request: unknown) {
     }),
   );
 }
-type Reply = (params?: RpcParams) => unknown;
-function requests(handlers: Record<string, Reply>, fallback: Reply = () => observation) {
-  return desktopRequest(handlers, fallback);
-}
+const requests: typeof desktopRequest = (handlers, fallback = () => observation) =>
+  desktopRequest(handlers, fallback);
 const describeSession = (key: string, environmentId = desktopEnvironment.id) => ({
   session: { key, placement: { state: "active", environmentId } },
 });
@@ -377,23 +374,17 @@ describe("observation abandonment", () => {
     preauthenticated: true,
   };
 
-  function desktopRequests(result: DesktopObserveResult | Promise<DesktopObserveResult>) {
-    return vi.fn(async (method: string, _params?: unknown) => {
-      if (method === "desktop.observe") {
-        return result;
-      }
-      if (method === "desktop.release") {
-        return { released: true };
-      }
-      throw new Error(`Unexpected Desktop request: ${method}`);
-    });
-  }
+  const desktopRequests = (result: DesktopObserveResult | Promise<DesktopObserveResult>) =>
+    desktopRequest(
+      { "desktop.observe": () => result, "desktop.release": () => ({ released: true }) },
+      () => {
+        throw new Error("Unexpected Desktop request");
+      },
+    );
 
   type Requests = ReturnType<typeof desktopRequests>;
-  const calls = (request: Requests, method: string) =>
-    request.mock.calls.filter(([name]) => name === method);
   function expectReleased(request: Requests, released = true) {
-    expect(calls(request, "desktop.release")).toEqual(
+    expect(rpcCalls(request, "desktop.release")).toEqual(
       released ? [["desktop.release", { wsPath: observed.wsPath }]] : [],
     );
   }
@@ -406,7 +397,7 @@ describe("observation abandonment", () => {
     });
     await panel.updateComplete;
     clickPanelButton(panel);
-    await waitForSolid(() => expect(calls(request, "desktop.observe")).toHaveLength(1));
+    await waitForSolid(() => expect(rpcCalls(request, "desktop.observe")).toHaveLength(1));
     return panel;
   }
 

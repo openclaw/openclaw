@@ -34,6 +34,11 @@ export async function waitForConnections(panel: Panel, connect: unknown, count =
   await panel.updateComplete;
 }
 
+export async function updateAndSettle(panel: Panel, changes: Partial<Panel>) {
+  updatePanel(panel, changes);
+  await panel.updateComplete;
+}
+
 export async function mountDesktop(
   client: GatewayBrowserClient,
   connect: DesktopClient["connect"] | undefined,
@@ -117,10 +122,11 @@ export function createConnectionHandle(overrides: Partial<DesktopConnectionHandl
 }
 
 export function clickPanelButton(panel: Panel, selector = ".desktop-environment button") {
-  expectDefined(
-    panel.querySelector<HTMLButtonElement>(selector),
-    `Desktop element: ${selector}`,
-  ).click();
+  panelElement<HTMLButtonElement>(panel, selector).click();
+}
+
+export function panelElement<T extends Element>(panel: Panel, selector: string): T {
+  return expectDefined(panel.querySelector<T>(selector), `Desktop element: ${selector}`);
 }
 
 export const sizingMenu = (panel: Panel) =>

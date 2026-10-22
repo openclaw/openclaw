@@ -15,6 +15,7 @@ import {
   desktopEnvironment,
   expectObserve,
   mountDesktop as mount,
+  panelElement,
   rpcCalls,
   type RpcParams,
   selectSizing,
@@ -23,6 +24,7 @@ import {
   usePanelStorage,
   waitForConnections,
   updatePanel,
+  updateAndSettle,
 } from "./desktop-panel.test-support.ts";
 
 const node = { id: "node:workstation", type: "node", status: "available", desktop: true };
@@ -121,8 +123,7 @@ describe("embedded desktop panel presentation", () => {
 
     const nextInventory = createDeferred();
     refresh = nextInventory.promise;
-    updatePanel(panel, { requestedSource: replacement.id });
-    await panel.updateComplete;
+    await updateAndSettle(panel, { requestedSource: replacement.id });
     expect(disconnect).toHaveBeenCalledOnce();
     expect(connect).toHaveBeenCalledOnce();
     nextInventory.resolve();
@@ -130,8 +131,7 @@ describe("embedded desktop panel presentation", () => {
     await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(2));
     expectObserve(request, replacement.id);
 
-    updatePanel(panel, { requestedSource: null });
-    await panel.updateComplete;
+    await updateAndSettle(panel, { requestedSource: null });
     await waitForSolid(() => {
       expect(disconnect).toHaveBeenCalledTimes(2);
       expect(connect).toHaveBeenCalledTimes(2);
@@ -198,27 +198,21 @@ describe("embedded desktop panel presentation", () => {
         );
         clickPanelButton(panel);
       }
-      const credentialForm = (stage: "initial" | "reconnected") => {
-        const form = panel.querySelector<HTMLFormElement>("form");
-        const username = form?.querySelector<HTMLInputElement>('input[name="username"]');
-        const password = form?.querySelector<HTMLInputElement>('input[name="password"]');
-        if (!form || !username || !password) {
-          throw new Error(`expected the ${stage} ARD credential form`);
-        }
-        return { form, username, password };
-      };
-      const initial = await waitForSolid(() => credentialForm("initial"));
+      const credentialForm = () => ({
+        form: panelElement<HTMLFormElement>(panel, "form"),
+        username: panelElement<HTMLInputElement>(panel, 'form input[name="username"]'),
+        password: panelElement<HTMLInputElement>(panel, 'form input[name="password"]'),
+      });
+      const initial = await waitForSolid(credentialForm);
       initial.username.value = "operator";
       initial.password.value = "synthetic";
       initial.form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
       await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
 
-      updatePanel(panel, { available: false, client: null });
-      await panel.updateComplete;
+      await updateAndSettle(panel, { available: false, client: null });
       expect(disconnect).toHaveBeenCalledOnce();
       online = false;
-      updatePanel(panel, { client: gateway.client, available: true });
-      await panel.updateComplete;
+      await updateAndSettle(panel, { client: gateway.client, available: true });
       await waitForSolid(() => {
         expect(panel.querySelector(".desktop-picker")).not.toBeNull();
         expect(panel.querySelectorAll(".desktop-environment")).toHaveLength(0);
@@ -239,7 +233,7 @@ describe("embedded desktop panel presentation", () => {
         expect(observations()).toHaveLength(2);
         clickPanelButton(panel);
       }
-      const reconnected = await waitForSolid(() => credentialForm("reconnected"));
+      const reconnected = await waitForSolid(credentialForm);
       expect(observations().at(-1)?.[1]).toEqual({
         source: { kind: "node", nodeId: "workstation" },
         control: false,
@@ -252,84 +246,71 @@ describe("embedded desktop panel presentation", () => {
     },
   );
 
-  it("discovers a node that arrives before an older empty inventory response finishes", async () => {
-    const empty = createDeferred<{ environments: [] }>();
-    let inventory: Promise<{ environments: (typeof node)[] }> = empty.promise;
-    const { request, gateway, disconnect, connect } = viewer({
-      "environments.status": async () =>
-        (await inventory).environments[0] ?? { ...node, desktop: false },
-      "environments.list": () => inventory,
-    });
-    const panel = await mount(gateway.client, connect, {
-      documentMode: true,
-      requestedSource: node.id,
-    });
-    try {
-      await panel.updateComplete;
-      expect(request).toHaveBeenCalledWith("environments.status", { environmentId: node.id });
-      const initialInventoryRequest = request.mock.results[0]!.value;
-      inventory = Promise.resolve({ environments: [node] });
-      nodeConnected(gateway);
-      await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
-      empty.resolve({ environments: [] });
-      await initialInventoryRequest;
-      await panel.updateComplete;
-      expectViewer(panel, connect, disconnect);
-    } finally {
-      empty.resolve({ environments: [] });
-      await unmountPanel(panel);
-      await panel.updateComplete;
-    }
-  });
-
-  it("ignores a session lookup superseded by a renewed target refresh", async () => {
-    const session = { key: "agent:main:desktop", execNode: "workstation" };
-    const oldSession = createDeferred<unknown>();
-    const nextInventory = createDeferred<{ environments: (typeof node)[] }>();
-    let inventory: Promise<{ environments: (typeof node)[] }> = Promise.resolve({
-      environments: [],
-    });
-    let sessionRead: Promise<unknown> = Promise.resolve({ session });
-    const { request, gateway, disconnect, connect } = viewer({
-      "environments.list": () => inventory,
-      "environments.status": async () =>
-        (await inventory).environments[0] ?? { ...node, desktop: false },
-      "sessions.describe": () => sessionRead,
-    });
-    const panel = await mount(gateway.client, connect, {
-      documentMode: true,
-      sessionKey: session.key,
-    });
-    let oldSessionRequest: Promise<unknown> | undefined;
-    const startOldSessionRead = async () => {
-      const reads = rpcCalls(request, "sessions.describe").length;
-      sessionRead = oldSession.promise;
-      gateway.emit("sessions.changed", { sessionKey: session.key });
-      await waitForSolid(() =>
-        expect(rpcCalls(request, "sessions.describe")).toHaveLength(reads + 1),
-      );
-      oldSessionRequest = request.mock.results.at(-1)!.value;
-      sessionRead = Promise.resolve({ session });
-    };
-    const retired = { session: { key: session.key, placement: { state: "reclaimed" } } };
-    try {
-      await waitForSolid(() => expect(panel.querySelector(".desktop-picker")).not.toBeNull());
-      await startOldSessionRead();
-      inventory = nextInventory.promise;
-      nodeConnected(gateway);
-      oldSession.resolve(retired);
-      await oldSessionRequest;
-      await panel.updateComplete;
-      nextInventory.resolve({ environments: [node] });
-      await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
-      expectViewer(panel, connect, disconnect);
-    } finally {
-      oldSession.resolve(retired);
-      nextInventory.resolve({ environments: [] });
-      await unmountPanel(panel);
-      await panel.updateComplete;
-    }
-  });
+  it.each(["inventory", "session"] as const)(
+    "keeps renewed node discovery current after an older %s reply",
+    async (pendingRead) => {
+      const session = { key: "agent:main:desktop", execNode: "workstation" };
+      const oldInventory = createDeferred<{ environments: (typeof node)[] }>();
+      const oldSession = createDeferred<unknown>();
+      const nextInventory = createDeferred<{ environments: (typeof node)[] }>();
+      const retired = { session: { key: session.key, placement: { state: "reclaimed" } } };
+      let inventory: Promise<{ environments: (typeof node)[] }> =
+        pendingRead === "inventory" ? oldInventory.promise : Promise.resolve({ environments: [] });
+      let sessionRead: Promise<unknown> = Promise.resolve({ session });
+      const { request, gateway, disconnect, connect } = viewer({
+        "environments.list": () => inventory,
+        "environments.status": async () =>
+          (await inventory).environments[0] ?? { ...node, desktop: false },
+        ...(pendingRead === "session" ? { "sessions.describe": () => sessionRead } : {}),
+      });
+      const panel = await mount(gateway.client, connect, {
+        documentMode: true,
+        ...(pendingRead === "inventory"
+          ? { requestedSource: node.id }
+          : { sessionKey: session.key }),
+      });
+      try {
+        let heldRequest: Promise<unknown>;
+        if (pendingRead === "inventory") {
+          await panel.updateComplete;
+          expect(request).toHaveBeenCalledWith("environments.status", { environmentId: node.id });
+          heldRequest = request.mock.results[0]!.value;
+          inventory = Promise.resolve({ environments: [node] });
+        } else {
+          await waitForSolid(() => expect(panel.querySelector(".desktop-picker")).not.toBeNull());
+          const reads = rpcCalls(request, "sessions.describe").length;
+          sessionRead = oldSession.promise;
+          gateway.emit("sessions.changed", { sessionKey: session.key });
+          await waitForSolid(() =>
+            expect(rpcCalls(request, "sessions.describe")).toHaveLength(reads + 1),
+          );
+          heldRequest = request.mock.results.at(-1)!.value;
+          sessionRead = Promise.resolve({ session });
+          inventory = nextInventory.promise;
+        }
+        nodeConnected(gateway);
+        if (pendingRead === "session") {
+          oldSession.resolve(retired);
+          await heldRequest;
+          await panel.updateComplete;
+          nextInventory.resolve({ environments: [node] });
+        }
+        await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
+        if (pendingRead === "inventory") {
+          oldInventory.resolve({ environments: [] });
+          await heldRequest;
+          await panel.updateComplete;
+        }
+        expectViewer(panel, connect, disconnect);
+      } finally {
+        oldInventory.resolve({ environments: [] });
+        oldSession.resolve(retired);
+        nextInventory.resolve({ environments: [] });
+        await unmountPanel(panel);
+        await panel.updateComplete;
+      }
+    },
+  );
 
   it.each(["hide", "replace", "unmount"] as const)(
     "ignores queued presence after the picker is retired by %s",
@@ -554,13 +535,10 @@ describe("embedded desktop panel presentation", () => {
           await panel.updateComplete;
         }
         const inventoryReads = rpcCalls(request, "environments.list").length;
-        const toggle = panel.querySelector<HTMLButtonElement>(
+        clickPanelButton(
+          panel,
           `button[aria-label="${initialControl ? "Switch to view only" : "Take control"}"]`,
         );
-        if (!toggle) {
-          throw new Error("expected the desktop control toggle");
-        }
-        toggle.click();
         await waitForSolid(() => expect(rpcCalls(request, "desktop.observe")).toHaveLength(2));
         expect(previous.disconnect).not.toHaveBeenCalled();
         expect(previous.disableInput).toHaveBeenCalledOnce();
@@ -591,10 +569,7 @@ describe("embedded desktop panel presentation", () => {
         }
         expect(previous.disconnect).not.toHaveBeenCalled();
         expect(sizingMenu(panel).querySelector('option[value="match"]')).toBeNull();
-        const input = panel.querySelector<HTMLTextAreaElement>(".desktop-keyboard-input");
-        if (!input) {
-          throw new Error("expected the mobile keyboard input");
-        }
+        const input = panelElement<HTMLTextAreaElement>(panel, ".desktop-keyboard-input");
         const sendKey = () =>
           input.dispatchEvent(
             new KeyboardEvent("keydown", { key: "x", code: "KeyX", bubbles: true }),

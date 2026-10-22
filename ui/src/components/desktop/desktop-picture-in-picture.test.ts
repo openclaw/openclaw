@@ -3,7 +3,6 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { createStorageMock } from "../../test-helpers/storage.ts";
 import type { DesktopClient } from "./desktop-client.ts";
 import * as panels from "./desktop-panel.test-support.ts";
 
@@ -40,12 +39,12 @@ async function setup(mode: "mirror" | "pending" | "denied" = "mirror") {
     } as unknown as CanvasRenderingContext2D);
   }
   const environment = { id: "gateway", type: "local", status: "available", desktop: true };
-  const request = vi.fn(async (method: string) =>
-    method === "environments.status"
-      ? environment
-      : method === "environments.list"
-        ? { environments: [environment] }
-        : { transport: "rfb", wsPath: "/desktop/observe?token=fixture", control: false },
+  const request = panels.desktopRequest(
+    {
+      "environments.status": () => environment,
+      "environments.list": () => ({ environments: [environment] }),
+    },
+    () => ({ transport: "rfb", wsPath: "/desktop/observe?token=fixture", control: false }),
   );
   const disconnect = vi.fn();
   const connection = panels.createConnectionHandle({ disconnect });
@@ -59,8 +58,7 @@ async function setup(mode: "mirror" | "pending" | "denied" = "mirror") {
     connect,
     { embedded: true, presented: true, requestedSource: "gateway" },
   );
-  await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
-  await panel.updateComplete;
+  await panels.waitForConnections(panel, connect);
   const button = () =>
     panel.querySelector<HTMLButtonElement>(".desktop-picture-in-picture-button")!;
   const canvas = () => popup.document.querySelector("canvas");
@@ -93,15 +91,9 @@ async function setup(mode: "mirror" | "pending" | "denied" = "mirror") {
   };
 }
 
-beforeEach(() => {
-  vi.stubGlobal("localStorage", createStorageMock());
-  vi.stubGlobal("isSecureContext", true);
-});
-afterEach(() => {
-  document.body.replaceChildren();
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-});
+panels.usePanelStorage();
+beforeEach(() => vi.stubGlobal("isSecureContext", true));
+afterEach(() => vi.restoreAllMocks());
 
 it("accepts a native close before the Solid panel mounts", () => {
   const panel = document.createElement("openclaw-desktop-panel");

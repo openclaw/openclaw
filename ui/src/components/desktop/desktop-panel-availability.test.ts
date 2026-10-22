@@ -4,13 +4,14 @@ import type { EnvironmentSummary } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import type { DesktopClient } from "./desktop-client.ts";
 import {
+  connectedClient,
   createConnectionHandle,
   createGatewayClient,
   createPanel,
   mountDesktop,
   mountPanel,
+  rpcCalls,
   unmountPanel,
   updatePanel,
 } from "./desktop-panel.test-support.ts";
@@ -47,10 +48,7 @@ async function mount(
   handle?: ReturnType<typeof createConnectionHandle>,
 ) {
   const gateway = createGatewayClient(request);
-  const connect = vi.fn(async (connection: Parameters<DesktopClient["connect"]>[0]) => {
-    connection.onConnect?.();
-    return handle ?? createConnectionHandle();
-  });
+  const connect = connectedClient(handle);
   const panel = await mountDesktop(gateway.client, connect, {
     requestedSource: workstation.id,
     ...options,
@@ -115,7 +113,7 @@ describe("Desktop native availability", () => {
       expect(connect).toHaveBeenCalledOnce();
       expect(handle.disconnect).not.toHaveBeenCalled();
       expect(handle.disableInput).not.toHaveBeenCalled();
-      expect(request.mock.calls.filter(([method]) => method === "desktop.observe")).toHaveLength(1);
+      expect(rpcCalls(request, "desktop.observe")).toHaveLength(1);
       expect(request.mock.calls.slice(initialRequests)).toEqual([
         ["environments.status", { environmentId: workstation.id }],
         ["environments.status", { environmentId: workstation.id }],
@@ -254,7 +252,7 @@ const observeHost = (request: ReturnType<typeof vi.fn>) =>
   );
 
 describe("Desktop host setup guidance", () => {
-  it("offers to enable Host Desktop and connects afterwards", async () => {
+  it("offers Host Desktop setup, keeps failed configuration retryable, and connects afterwards", async () => {
     const { panel, request, connect, button, runtimeConfig } = await mountHost(
       gatewayHost,
       { state: "ready" },
@@ -273,9 +271,17 @@ describe("Desktop host setup guidance", () => {
     expect(request).toHaveBeenCalledWith("environments.list", { includeDesktopSetup: true });
     expect(connect).not.toHaveBeenCalled();
 
+    runtimeConfig.patch.mockResolvedValueOnce(false);
+    runtimeConfig.state.lastError = "Config write rejected.";
+    button(ENABLE)?.click();
+    await waitForSolid(() =>
+      expect(panel.querySelector('[role="alert"]')?.textContent).toBe("Config write rejected."),
+    );
+    expect(button(ENABLE)?.disabled).toBe(false);
+    expect(connect).not.toHaveBeenCalled();
     button(ENABLE)?.click();
     await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
-    expect(runtimeConfig.patch).toHaveBeenCalledOnce();
+    expect(runtimeConfig.patch).toHaveBeenCalledTimes(2);
     expect(runtimeConfig.patch).toHaveBeenCalledWith(
       expect.objectContaining({ raw: { desktop: { host: { enabled: true } } } }),
     );
@@ -317,41 +323,29 @@ describe("Desktop host setup guidance", () => {
     expect(button("Check again")).toBeDefined();
   });
 
-  it("keeps the generic notice for non-gateway targets without asking for setup", async () => {
-    const unavailableNode: EnvironmentSummary = {
-      id: "node:workstation",
-      type: "node",
-      status: "available",
-    };
-    const { panel, request, button } = await mountHost(unavailableNode, { state: "ready" }, true);
-    await waitForSolid(() => expect(panel.textContent).toContain(UNAVAILABLE));
-    expect(button("Retry")).toBeDefined();
-    expect(panel.textContent).not.toContain("Screen Sharing");
-    expect(request.mock.calls.some(([, params]) => params && "includeDesktopSetup" in params)).toBe(
-      false,
-    );
-  });
-
-  it("shows the config error and stays on setup when enabling fails", async () => {
-    const { panel, connect, button, runtimeConfig } = await mountHost(
-      gatewayHost,
-      { state: "ready" },
-      true,
-    );
-    runtimeConfig.patch.mockResolvedValueOnce(false);
-    runtimeConfig.state.lastError = "Config write rejected.";
-    await waitForSolid(() => expect(button(ENABLE)).toBeDefined());
-    button(ENABLE)?.click();
-    await waitForSolid(() =>
-      expect(panel.querySelector('[role="alert"]')?.textContent).toBe("Config write rejected."),
-    );
-    expect(button(ENABLE)?.disabled).toBe(false);
-    expect(connect).not.toHaveBeenCalled();
-  });
-
-  it("keeps the generic notice when the setup check fails", async () => {
-    const { panel, button } = await mountHost(gatewayHost, new Error("setup check failed"), true);
-    await waitForSolid(() => expect(panel.textContent).toContain(UNAVAILABLE));
-    expect(button("Retry")).toBeDefined();
-  });
+  it.each([false, true])(
+    "keeps the generic notice when setup is unavailable (host=%s)",
+    async (host) => {
+      const environment = host
+        ? gatewayHost
+        : ({
+            id: "node:workstation",
+            type: "node",
+            status: "available",
+          } satisfies EnvironmentSummary);
+      const { panel, request, button } = await mountHost(
+        environment,
+        host ? new Error("setup check failed") : { state: "ready" },
+        true,
+      );
+      await waitForSolid(() => expect(panel.textContent).toContain(UNAVAILABLE));
+      expect(button("Retry")).toBeDefined();
+      if (!host) {
+        expect(panel.textContent).not.toContain("Screen Sharing");
+        expect(
+          request.mock.calls.some(([, params]) => params && "includeDesktopSetup" in params),
+        ).toBe(false);
+      }
+    },
+  );
 });
