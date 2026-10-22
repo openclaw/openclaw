@@ -1,4 +1,3 @@
-// Irc tests cover monitor plugin behavior.
 import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
@@ -18,34 +17,6 @@ import { onIrcTestLine, startIrcTestServer } from "./irc-server.test-support.js"
 import { monitorIrcProvider } from "./monitor.js";
 import { setIrcRuntime } from "./runtime.js";
 import type { CoreConfig, IrcInboundMessage } from "./types.js";
-
-type DisconnectingIrcServer = {
-  port: number;
-  lines: string[];
-  connectionCount: number;
-  joined: Promise<void>;
-  rejoined: Promise<void>;
-  disconnectFirst(): void;
-  close(): Promise<void>;
-};
-
-type InboundIrcServer = {
-  port: number;
-  lines: string[];
-  sendInbound(target: string, colonlessBody?: boolean, senderNick?: string): void;
-  sendNotice(target: string, text: string): void;
-  close(): Promise<void>;
-};
-
-type ReconnectingReplyIrcServer = {
-  port: number;
-  linesByConnection: string[][];
-  replacementQuitReceived: Promise<void>;
-  connectionCount: number;
-  sendInbound(): void;
-  disconnectFirst(): void;
-  close(): Promise<void>;
-};
 
 type IrcIngressQueue = NonNullable<Parameters<typeof createIrcIngressMonitor>[0]["queue"]>;
 type IrcIngressPayload = Parameters<IrcIngressQueue["enqueue"]>[1];
@@ -100,7 +71,7 @@ function observeReconnect() {
   return { statusSink, reconnected: reconnected.promise };
 }
 
-async function startDisconnectingIrcServer(loginError?: string): Promise<DisconnectingIrcServer> {
+async function startDisconnectingIrcServer(loginError?: string) {
   const lines: string[] = [];
   const joined = createDeferred<void>();
   const rejoined = createDeferred<void>();
@@ -141,7 +112,7 @@ async function startDisconnectingIrcServer(loginError?: string): Promise<Disconn
   };
 }
 
-async function startInboundIrcServer(welcomeNick = "bot"): Promise<InboundIrcServer> {
+async function startInboundIrcServer(welcomeNick = "bot") {
   let clientSocket: net.Socket;
   const lines: string[] = [];
   const server = await startIrcTestServer((socket) => {
@@ -156,19 +127,19 @@ async function startInboundIrcServer(welcomeNick = "bot"): Promise<InboundIrcSer
   return {
     ...server,
     lines,
-    sendInbound: (target, colonlessBody = false, senderNick = "alice") => {
+    sendInbound: (target: string, colonlessBody = false, senderNick = "alice") => {
       const bodySeparator = colonlessBody ? " " : " :";
       clientSocket.write(
         `:${senderNick}!ident@example.org PRIVMSG ${target}${bodySeparator}hello\r\n`,
       );
     },
-    sendNotice: (target, text) => {
+    sendNotice: (target: string, text: string) => {
       clientSocket.write(`:server NOTICE ${target} :${text}\r\n`);
     },
   };
 }
 
-async function startReconnectingReplyIrcServer(): Promise<ReconnectingReplyIrcServer> {
+async function startReconnectingReplyIrcServer() {
   // Retain closed sockets in order so reconnect assertions keep their original connection index.
   const sockets: net.Socket[] = [];
   const linesByConnection: string[][] = [];
@@ -285,18 +256,7 @@ describe("IRC automatic reply outcomes", () => {
       let monitor: Awaited<ReturnType<typeof monitorIrcProvider>> | undefined;
       try {
         monitor = await monitorIrcProvider({
-          config: {
-            channels: {
-              irc: {
-                host: "127.0.0.1",
-                port: server.port,
-                tls: false,
-                nick: "bot",
-                dmPolicy: "open",
-                allowFrom: ["*"],
-              },
-            },
-          },
+          config: monitorConfig(server.port, "bot", { dmPolicy: "open", allowFrom: ["*"] }),
           ingressQueue,
           runtime,
           statusSink,

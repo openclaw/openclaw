@@ -1,4 +1,3 @@
-// Irc tests cover client plugin behavior.
 import { syncBuiltinESMExports } from "node:module";
 import net from "node:net";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
@@ -7,7 +6,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { connectIrcClient } from "./client.js";
+import { connectIrcClient, type IrcClientOptions } from "./client.js";
 import { onIrcTestLine, startIrcTestServer } from "./irc-server.test-support.js";
 
 const effectGate = vi.hoisted(() => ({
@@ -33,25 +32,21 @@ vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
   };
 });
 
-type LoopbackIrcServer = {
-  port: number;
-  lines: string[];
-  quitReceived: Promise<void>;
-  close(): Promise<void>;
-};
+function connectTestClient(server: { port: number }, overrides: Partial<IrcClientOptions> = {}) {
+  return connectIrcClient({
+    host: "127.0.0.1",
+    port: server.port,
+    tls: false,
+    nick: "bot",
+    username: "bot",
+    realname: "OpenClaw Bot",
+    ...overrides,
+  });
+}
 
-type HangingIrcServer = {
-  port: number;
-  acceptedCount: number;
-  closedCount: number;
-  socketClosed: Promise<void>;
-  openSocketCount(): number;
-  close(): Promise<void>;
-};
+type LoopbackIrcServer = Awaited<ReturnType<typeof startLoopbackIrcServer>>;
 
-async function startLoopbackIrcServer(options?: {
-  rejectInitialNick?: boolean;
-}): Promise<LoopbackIrcServer> {
+async function startLoopbackIrcServer(options?: { rejectInitialNick?: boolean }) {
   const lines: string[] = [];
   const quitReceived = createDeferred<void>();
   const server = await startIrcTestServer((socket) => {
@@ -85,13 +80,7 @@ async function connectAndCollectRegistration(params: {
   const errors: Error[] = [];
   let client: Awaited<ReturnType<typeof connectIrcClient>> | undefined;
   try {
-    client = await connectIrcClient({
-      host: "127.0.0.1",
-      port: server.port,
-      tls: false,
-      nick: "bot",
-      username: "bot",
-      realname: "OpenClaw Bot",
+    client = await connectTestClient(server, {
       password: params.password,
       nickserv: params.nickserv,
       onError: (error) => errors.push(error),
@@ -110,14 +99,7 @@ async function connectAfterNickCollision(nick: string): Promise<string> {
   const server = await startLoopbackIrcServer({ rejectInitialNick: true });
   let client: Awaited<ReturnType<typeof connectIrcClient>> | undefined;
   try {
-    client = await connectIrcClient({
-      host: "127.0.0.1",
-      port: server.port,
-      tls: false,
-      nick,
-      username: "bot",
-      realname: "OpenClaw Bot",
-    });
+    client = await connectTestClient(server, { nick });
     const nickLines = server.lines.filter((line) => line.startsWith("NICK "));
     expect(nickLines).toHaveLength(2);
     return nickLines[1]!.slice("NICK ".length);
@@ -127,7 +109,7 @@ async function connectAfterNickCollision(nick: string): Promise<string> {
   }
 }
 
-async function startHangingIrcServer(): Promise<HangingIrcServer> {
+async function startHangingIrcServer() {
   let acceptedCount = 0;
   let closedCount = 0;
   const socketClosed = createDeferred<void>();
@@ -206,17 +188,9 @@ describe("irc client readiness timeout", () => {
   it("closes the socket when registration never becomes ready", async () => {
     const server = await startHangingIrcServer();
     try {
-      await expect(
-        connectIrcClient({
-          host: "127.0.0.1",
-          port: server.port,
-          tls: false,
-          nick: "bot",
-          username: "bot",
-          realname: "OpenClaw Bot",
-          connectTimeoutMs: 50,
-        }),
-      ).rejects.toThrow(/IRC connect/);
+      await expect(connectTestClient(server, { connectTimeoutMs: 50 })).rejects.toThrow(
+        /IRC connect/,
+      );
 
       await withTimeout(server.socketClosed, 1000, "timed-out IRC socket close");
       expect(server.acceptedCount).toBeGreaterThanOrEqual(1);
@@ -257,13 +231,7 @@ async function collectPrivmsgBodies(
   text: string,
   messageChunkMaxChars?: number,
 ): Promise<string[]> {
-  const client = await connectIrcClient({
-    host: "127.0.0.1",
-    port: server.port,
-    tls: false,
-    nick: "bot",
-    username: "bot",
-    realname: "OpenClaw Bot",
+  const client = await connectTestClient(server, {
     connectTimeoutMs: 5000,
     messageChunkMaxChars,
   });
@@ -325,15 +293,7 @@ describe("irc client PRIVMSG chunking on the wire", () => {
     effectGate.beforeInitiate = async () => {
       throw refusal;
     };
-    const client = await connectIrcClient({
-      host: "127.0.0.1",
-      port: server.port,
-      tls: false,
-      nick: "bot",
-      username: "bot",
-      realname: "OpenClaw Bot",
-      messageChunkMaxChars: 3,
-    });
+    const client = await connectTestClient(server, { messageChunkMaxChars: 3 });
     try {
       await expect(client.sendPrivmsg("#general", "abcdefghi")).rejects.toBe(refusal);
       client.quit("refusal test complete");
@@ -355,15 +315,7 @@ describe("irc client PRIVMSG chunking on the wire", () => {
     // Node's named exports otherwise retain the original connection factory.
     syncBuiltinESMExports();
     try {
-      const client = await connectIrcClient({
-        host: "127.0.0.1",
-        port: server.port,
-        tls: false,
-        nick: "bot",
-        username: "bot",
-        realname: "OpenClaw Bot",
-        messageChunkMaxChars: 3,
-      });
+      const client = await connectTestClient(server, { messageChunkMaxChars: 3 });
       const failure = new Error("socket write failed");
       const originalWrite = socket.write.bind(socket);
       let sends = 0;
@@ -459,7 +411,6 @@ describe("irc client PRIVMSG chunking on the wire", () => {
 describe("irc client inbound line bound", () => {
   type FloodOptions = {
     payload: () => string;
-    terminated?: boolean;
   };
 
   async function startFloodServer(options: FloodOptions) {
@@ -481,13 +432,7 @@ describe("irc client inbound line bound", () => {
     const errors: Error[] = [];
     const lines: string[] = [];
     const disconnected = createDeferred<void>();
-    const client = await connectIrcClient({
-      host: "127.0.0.1",
-      port: server.port,
-      tls: false,
-      nick: "bot",
-      username: "bot",
-      realname: "OpenClaw Bot",
+    const client = await connectTestClient(server, {
       onError: (error) => errors.push(error),
       onPrivmsg: (event) => {
         lines.push(event.rawLine);
@@ -586,13 +531,7 @@ describe("irc client liveness", () => {
     const onError = vi.fn();
     const disconnected = createDeferred<void>();
     const onDisconnect = vi.fn(() => disconnected.resolve());
-    const client = await connectIrcClient({
-      host: "127.0.0.1",
-      port: server.port,
-      tls: false,
-      nick: "bot",
-      username: "bot",
-      realname: "OpenClaw Bot",
+    const client = await connectTestClient(server, {
       abortSignal: abort.signal,
       onError,
       onDisconnect,
@@ -695,13 +634,7 @@ describe("irc client inbound CTCP", () => {
     });
     const dispatched: string[] = [];
     try {
-      const client = await connectIrcClient({
-        host: "127.0.0.1",
-        port: server.port,
-        tls: false,
-        nick: "bot",
-        username: "bot",
-        realname: "OpenClaw Bot",
+      const client = await connectTestClient(server, {
         onPrivmsg: (event) => {
           dispatched.push(event.rawLine);
         },

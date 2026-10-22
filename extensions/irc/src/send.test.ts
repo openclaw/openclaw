@@ -101,20 +101,14 @@ describe("sendMessageIrc cfg threading", () => {
   });
 
   it("uses explicitly provided cfg without loading runtime config", async () => {
-    const namedCfg = {
+    const namedCfg: CoreConfig = {
       channels: {
         irc: {
-          host: "irc.example.com",
-          nick: "openclaw",
-          accounts: {
-            work: {
-              host: "irc.example.com",
-              nick: "workbot",
-            },
-          },
+          ...providedCfg.channels!.irc,
+          accounts: { work: { host: "irc.example.com", nick: "workbot" } },
         },
       },
-    } as unknown as CoreConfig;
+    };
     const client = createClient();
 
     const result = await sendMessageIrc("#room", "hello", {
@@ -134,6 +128,7 @@ describe("sendMessageIrc cfg threading", () => {
     expect(result.messageId.length).toBeGreaterThan(0);
     expect(result.receipt.sentAt).toBeTypeOf("number");
     expect(result.receipt.sentAt).toBeGreaterThan(0);
+    const raw = { channel: "irc", conversationId: "#room", messageId: "irc-msg-1" };
     expect({ ...result.receipt, sentAt: 123 }).toEqual({
       primaryPlatformMessageId: "irc-msg-1",
       platformMessageIds: ["irc-msg-1"],
@@ -142,22 +137,12 @@ describe("sendMessageIrc cfg threading", () => {
           platformMessageId: "irc-msg-1",
           kind: "text",
           index: 0,
-          raw: {
-            channel: "irc",
-            conversationId: "#room",
-            messageId: "irc-msg-1",
-          },
+          raw,
         },
       ],
       sentAt: 123,
       sourceResults: [{ channel: "irc", messageId: "irc-msg-1" }],
-      raw: [
-        {
-          channel: "irc",
-          conversationId: "#room",
-          messageId: "irc-msg-1",
-        },
-      ],
+      raw: [raw],
     });
   });
 
@@ -370,47 +355,37 @@ describe("sendMessageIrc cfg threading", () => {
 
   it("declares message adapter durable text, media, and reply with receipt proofs", async () => {
     const client = createClient();
+    const mediaUrl = "https://example.com/image.png";
+    const proveSend = async (kind: "text" | "media", text: string, replyToId?: string) => {
+      const context = { cfg: providedCfg, to: "#room", text, replyToId };
+      const result =
+        kind === "media"
+          ? await ircMessageAdapter.send!.media!({ ...context, mediaUrl })
+          : await ircMessageAdapter.send!.text!(context);
+      expect(result?.receipt.platformMessageIds).toEqual(["irc-msg-1"]);
+      expect(client.join).toHaveBeenCalledWith("#room");
+      expect(client.sendPrivmsg).toHaveBeenCalledWith(
+        "#room",
+        kind === "media" ? `${text}\n\nAttachment: ${mediaUrl}` : text,
+        replyToId,
+      );
+      return result;
+    };
 
     const proofResults = await verifyChannelMessageAdapterCapabilityProofs({
       adapterName: "irc",
       adapter: ircMessageAdapter,
       proofs: {
         text: async () => {
-          const result = await ircMessageAdapter.send?.text?.({
-            cfg: providedCfg,
-            to: "#room",
-            text: "hello",
-          });
-          expect(result?.receipt.platformMessageIds).toEqual(["irc-msg-1"]);
+          const result = await proveSend("text", "hello");
           expect(result?.target).toEqual({ kind: "conversation", id: "#room" });
-          expect(client.join).toHaveBeenCalledWith("#room");
-          expect(client.sendPrivmsg).toHaveBeenCalledWith("#room", "hello", undefined);
         },
         media: async () => {
-          const result = await ircMessageAdapter.send?.media?.({
-            cfg: providedCfg,
-            to: "#room",
-            text: "image",
-            mediaUrl: "https://example.com/image.png",
-          });
-          expect(result?.receipt.platformMessageIds).toEqual(["irc-msg-1"]);
-          expect(client.join).toHaveBeenCalledWith("#room");
-          expect(client.sendPrivmsg).toHaveBeenCalledWith(
-            "#room",
-            "image\n\nAttachment: https://example.com/image.png",
-            undefined,
-          );
+          await proveSend("media", "image");
         },
         replyTo: async () => {
-          const result = await ircMessageAdapter.send?.text?.({
-            cfg: providedCfg,
-            to: "#room",
-            text: "threaded",
-            replyToId: "parent-1",
-          });
+          const result = await proveSend("text", "threaded", "parent-1");
           expect(result?.receipt.replyToId).toBe("parent-1");
-          expect(client.join).toHaveBeenCalledWith("#room");
-          expect(client.sendPrivmsg).toHaveBeenCalledWith("#room", "threaded", "parent-1");
         },
       },
     });
