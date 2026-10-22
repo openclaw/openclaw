@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as fetchRuntime from "openclaw/plugin-sdk/fetch-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { probeTwitch } from "./probe.js";
 import { resolveTwitchToken } from "./token.js";
 import { TwitchClientManager } from "./twitch-client.js";
 import type {
@@ -204,9 +205,7 @@ describe("TwitchClientManager", () => {
 
   it("publishes ready and recovering from authentication and disconnect events", async () => {
     await manager.getClient(testAccount);
-    expect(statusSink).toHaveBeenCalledWith(
-      expect.objectContaining({ lifecycle: "ready", connected: true }),
-    );
+    expectStatus({ lifecycle: "ready", connected: true });
     authFailureHandlers.at(-1)?.("retrying auth", 1);
     expectStatus({ lifecycle: "recovering", lastError: "retrying auth" });
     disconnectHandlers.at(-1)?.(false, new Error("connection lost"));
@@ -511,5 +510,57 @@ describe("TwitchClientManager", () => {
     emit(1, "msg2");
     expect(messages1).toEqual([expect.objectContaining({ message: "msg1" })]);
     expect(messages2).toEqual([expect.objectContaining({ message: "msg2" })]);
+  });
+
+  describe("probeTwitch", () => {
+    it("returns error when username is missing", async () => {
+      expect(await probeTwitch({ ...testAccount, username: "" }, 5000)).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("missing credentials"),
+      });
+    });
+
+    it("times out when connection takes too long", async () => {
+      vi.useFakeTimers();
+      try {
+        mockConnect.mockImplementationOnce(() => {});
+        const result = probeTwitch(testAccount, 100);
+        await vi.advanceTimersByTimeAsync(100);
+        expect(await result).toMatchObject({ ok: false, error: "timeout after 100ms" });
+        expect(mockQuit).toHaveBeenCalledOnce();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it.each(["authentication", "disconnect"] as const)("reports %s failure", async (kind) => {
+      mockConnect.mockImplementationOnce(() => {
+        if (kind === "authentication") {
+          authFailureHandlers[0]?.("", 0);
+        } else {
+          disconnectHandlers[0]?.(false, "String error" as unknown as Error);
+        }
+      });
+      expect(await probeTwitch(testAccount, 5000)).toMatchObject({
+        ok: false,
+        error: kind === "authentication" ? "Authentication failed" : "String error",
+      });
+      expect(mockQuit).toHaveBeenCalledOnce();
+    });
+
+    it("trims whitespace before removing the token prefix", async () => {
+      expect(
+        await probeTwitch({ ...testAccount, accessToken: "  oauth:test123456789  " }, 5000),
+      ).toMatchObject({
+        ok: true,
+        connected: true,
+        username: "testbot",
+        channel: "testchannel",
+      });
+      expect(mockAuthProvider.constructor).toHaveBeenCalledExactlyOnceWith(
+        "test-client-id",
+        "test123456789",
+      );
+    });
   });
 });
