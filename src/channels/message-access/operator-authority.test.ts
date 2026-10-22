@@ -230,52 +230,32 @@ it.each(["equivalent", "sessions", "sandbox", "agents", "roles-disabled"] as con
   },
 );
 
-it("exposes verified requester metadata without widening owner tools", () =>
-  withOperator(async ({ cfg, admins, context }) => {
-    using reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
-    for (const [index, sender, verified, role, linked, owner] of [
-      [0, undefined, true, "admin", true, true],
-      [1, undefined, true, "admin", true, true],
-      [0, undefined, false, "admin", false, false],
-      [0, "unlinked", true, "admin", false, false],
-      [0, undefined, true, "member", true, false],
-    ] as const) {
-      const admin = admins[index]!;
-      setDisplayName(admin.profile.id, "Ada Lovelace");
-      setUserProfileRole(admin.profile.id, role);
-      reads.mockClear();
-      const ctx = await context(sender ?? admin.identity.senderId, verified);
-      if (verified) {
-        expect(
-          reads.mock.calls.filter(
-            ([, command]) => command.type === "userProfiles.channelIdentity.resolve",
-          ),
-        ).toHaveLength(1);
-      }
-      const prompt = buildInboundUserContextPrefix({ ...ctx });
-      expect(requesterProfile(prompt)).toEqual(linked ? namedProfile(admin.profile.id) : undefined);
-      expect(prompt.includes("requester_profile is the verified linked requester")).toBe(linked);
-      const auth = authorize(cfg, { ...ctx });
-      expect(auth).toMatchObject({ senderIsOwner: owner, isAuthorizedSender: true });
-      const { senderIsOwner } = auth;
-      expect(await hasSessionTools(cfg, ctx, senderIsOwner)).toBe(owner);
-    }
-  }));
-
 it("refreshes requester facts and rejects forged context", () =>
   withOperator(async ({ cfg, admin, admins, context, retire }) => {
+    using reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
     const original = await context(admin.identity.senderId);
+    expect(
+      reads.mock.calls.filter(
+        ([, command]) => command.type === "userProfiles.channelIdentity.resolve",
+      ),
+    ).toHaveLength(1);
     const stablePrompt = buildInboundMetaSystemPrompt(original, cfg);
     for (const sender of [admins[1]!.identity.senderId, "unlinked"]) {
       expect(buildInboundMetaSystemPrompt(await context(sender), cfg)).toBe(stablePrompt);
     }
     expect(stablePrompt).not.toContain("requester_profile");
-    expect(buildInboundUserContextPrefix(original)).toContain(admin.profile.id);
+    expect(buildInboundUserContextPrefix({ ...original })).toContain(admin.profile.id);
+    expect(authorize(cfg, { ...original })).toMatchObject({
+      senderIsOwner: true,
+      isAuthorizedSender: true,
+    });
     setDisplayName(admin.profile.id, "Current label");
     expect(buildInboundUserContextPrefix(await context(admin.identity.senderId))).toContain(
       '"display_name":"Current label"',
     );
     for (const forged of [
+      await context(admin.identity.senderId, false),
+      await context("unlinked"),
       structuredClone(original),
       { ...original, SenderId: admins[1]!.identity.senderId },
       { ...original, AccountId: "different-account" },
@@ -343,14 +323,7 @@ it.each(["role-scopes", "grant", "host"] as const)(
       async ({ cfg, admin, context, retire }) => {
         const ctx = await context(admin.identity.senderId);
         expect(authorize(cfg, ctx).senderIsOwner).toBe(true);
-        const prepared = prepareChannelRunAdmission({
-          cfg,
-          runId: `linked-admin-${change}`,
-          agentId: "main",
-          ingressKind: "channel",
-          boundary: "test.channel",
-          assertSourceCurrent: captureCommandOwnerAssertion(ctx),
-        });
+        using prepared = prepareRun(cfg, ctx, `linked-admin-${change}`, false);
         const assertCurrent = resolveAdmittedRunActiveAssertion(await prepared.admit("embedded"));
         expect(assertCurrent).toBeTypeOf("function");
         expect(assertCurrent).not.toThrow();
@@ -363,7 +336,6 @@ it.each(["role-scopes", "grant", "host"] as const)(
         }
         expect(authorize(cfg, ctx).senderIsOwner).toBe(false);
         expect(assertCurrent).toThrow();
-        prepared.close();
       },
       change === "grant" ? "identity-grant" : "role",
     ),
@@ -386,14 +358,7 @@ it.each([
       }
       const ctx = await context(admin.identity.senderId);
       expect(authorize(cfg, ctx).senderIsOwner).toBe(true);
-      const run = prepareChannelRunAdmission({
-        cfg,
-        runId: `linked-admin-${change}`,
-        agentId: "main",
-        ingressKind: "channel",
-        boundary: "test.channel",
-        assertSourceCurrent: captureCommandOwnerAssertion(ctx),
-      });
+      const run = prepareRun(cfg, ctx, `linked-admin-${change}`, false);
       const assertCurrent = resolveAdmittedRunActiveAssertion(await run.admit("embedded"));
       expect(assertCurrent).toBeTypeOf("function");
       expect(assertCurrent).not.toThrow();
@@ -676,7 +641,11 @@ it("carries native Slack requester authority and keeps relay replays asserted", 
           expect
             .soft(requesterProfile(prompt))
             .toEqual(linked ? namedProfile(profile.id) : undefined);
+          expect(prompt.includes("requester_profile is the verified linked requester")).toBe(
+            linked,
+          );
           const { senderIsOwner } = authorize(cfg, turn);
+          expect(authorize(cfg, { ...turn }).isAuthorizedSender).toBe(true);
           expect.soft(senderIsOwner).toBe(isOwner);
           expect.soft(await hasSessionTools(cfg, turn, senderIsOwner)).toBe(isOwner);
         };
@@ -733,16 +702,21 @@ function withOperatorModels(
   }
 }
 
-function prepareRun(cfg: Fixture["cfg"], turn: MsgContext, runId = "channel-assignment") {
+function prepareRun(
+  cfg: Fixture["cfg"],
+  turn: MsgContext,
+  runId = "channel-assignment",
+  includeOperator = true,
+) {
   return autoClose(
     prepareChannelRunAdmission({
       cfg,
       runId,
       agentId: "main",
       ingressKind: "channel",
-      boundary: turn.Provider!,
+      boundary: includeOperator ? turn.Provider! : "test.channel",
       assertSourceCurrent: captureCommandOwnerAssertion(turn),
-      operatorAuthority: prepareInternalGetReplyOptions(undefined, turn)?.operatorAuthority,
+      operatorAuthority: includeOperator ? authorityFor(turn) : undefined,
     }),
   );
 }

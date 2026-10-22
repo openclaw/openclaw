@@ -109,6 +109,9 @@ async function evidenceFor(audit: ChannelAdmissionAudit, participantId: string) 
 function inspectChannelContext(context: object) {
   return consumeChannelAdmissionEvidence(readChannelContextAdmissionEvidence(context));
 }
+function expectUnknown(evidence: ChannelAdmissionEvidence | undefined) {
+  expect(consumeChannelAdmissionEvidence(evidence)).toMatchObject(unknownEvidence);
+}
 
 it("keeps Gateway routing instance-bound when audit collection is disabled", async () => {
   const audit = createAudit(false);
@@ -134,7 +137,7 @@ it("carries the resolver participant to one run admission without route inferenc
 
   expect(consumed).toEqual(admittedEvidence("person:42"));
   expect([Object.isFrozen(consumed), Object.isFrozen(consumed.invoker)]).toEqual([true, true]);
-  expect(consumeChannelAdmissionEvidence(evidence)).toMatchObject(unknownEvidence);
+  expectUnknown(evidence);
 });
 
 it("rejects implicit context custody transfer and forged private carriers", async () => {
@@ -243,18 +246,12 @@ it.each([
 
 it("reports same-participant collection while mixed participants fail closed", async () => {
   const audit = createAudit();
-  const first = await evidenceFor(audit, "c");
-  const same = await evidenceFor(audit, "c");
-  const tupleCollisionCandidate = await evidenceFor(audit, "b:c");
-
-  expect(consumeChannelAdmissionEvidence(combineChannelAdmissionEvidence([first, same]))).toEqual(
-    admittedEvidence("c"),
-  );
-  expect(
-    consumeChannelAdmissionEvidence(
-      combineChannelAdmissionEvidence([await evidenceFor(audit, "c"), tupleCollisionCandidate]),
-    ),
-  ).toMatchObject(unknownEvidence);
+  const combined = async (...participants: string[]) =>
+    combineChannelAdmissionEvidence(
+      await Promise.all(participants.map((id) => evidenceFor(audit, id))),
+    );
+  expect(consumeChannelAdmissionEvidence(await combined("c", "c"))).toEqual(admittedEvidence("c"));
+  expectUnknown(await combined("c", "b:c"));
 });
 
 it("keeps wildcard admission attribution-only because identity did not affect the outcome", async () => {
@@ -272,12 +269,8 @@ it("rejects forged and prior-lifecycle carriers and stays empty when collection 
   audit.close();
 
   const nextAudit = createAudit();
-  expect(consumeChannelAdmissionEvidence(stale)).toMatchObject(unknownEvidence);
-  expect(
-    consumeChannelAdmissionEvidence({
-      kind: "channel-admission-evidence",
-    } as ChannelAdmissionEvidence),
-  ).toMatchObject(unknownEvidence);
+  expectUnknown(stale);
+  expectUnknown({ kind: "channel-admission-evidence" } as ChannelAdmissionEvidence);
   expect(inspectChannelContext(await buildAdmittedContext(nextAudit, "person-1"))).toMatchObject({
     ingressState: "present",
   });
@@ -325,18 +318,16 @@ it("expires a carrier at the bounded retention edge", async () => {
   const audit = createAudit();
   const evidence = await evidenceFor(audit, "person-1");
   vi.setSystemTime(1_000 + 30 * 24 * 60 * 60_000 + 1);
-  expect(consumeChannelAdmissionEvidence(evidence)).toMatchObject(unknownEvidence);
+  expectUnknown(evidence);
 });
 
 it("bounds aggregate fan-in and participant material", async () => {
   const audit = createAudit();
   const oversizedParticipant = await evidenceFor(audit, "x".repeat(4_097));
-  expect(consumeChannelAdmissionEvidence(oversizedParticipant)).toMatchObject(unknownEvidence);
+  expectUnknown(oversizedParticipant);
 
   const sources = await Promise.all(
     Array.from({ length: 17 }, async (_, index) => await evidenceFor(audit, `person-${index}`)),
   );
-  expect(consumeChannelAdmissionEvidence(combineChannelAdmissionEvidence(sources))).toMatchObject(
-    unknownEvidence,
-  );
+  expectUnknown(combineChannelAdmissionEvidence(sources));
 });

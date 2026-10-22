@@ -63,12 +63,10 @@ it.each(["linked owner", "configured owner", "allowlisted non-owner"])(
       publishConfig();
       const handler = vi.fn(async () => ({ text: "owner-ok" }));
       const name = "ownerprobe";
-      const registered = registerPluginCommand(name, { name, description: "Owner", handler });
-      expect(registered).toEqual({ ok: true });
+      registerPluginCommand(name, { name, description: "Owner", handler });
       const candidate = createPluginCommandRuntime()
         .listNativeCandidates("discord")
         .find((entry) => entry.name === name)!;
-      expect(candidate).toBeDefined();
       const selected = candidate.prepareDispatch();
       if (selected.kind !== "plugin") {
         throw new Error("Expected a plugin dispatch");
@@ -143,9 +141,8 @@ it.each([
         effects.length = 0;
         const target = { cfg, agentId: "main", sessionKey: binding.statefulTarget.sessionKey };
         const before = manager.resolveSession(target);
-        const expectUnchanged = async () => {
+        const expectUnchanged = () =>
           expect([effects, manager.resolveSession(target)]).toEqual([[], before]);
-        };
         const expectDenied = (interaction: Awaited<ReturnType<typeof run>>) => {
           expect(interaction.followUp).toHaveBeenCalledWith({
             content: "You are not authorized to use this command.",
@@ -162,11 +159,11 @@ it.each([
           expect(completed.respond).toHaveBeenCalledWith(
             expect.arrayContaining([expect.objectContaining({ value: "high" })]),
           );
-          await expectUnchanged();
+          expectUnchanged();
           setUserProfileRole(profile.id, "member");
           const revoked = await autocomplete();
           expect(revoked.respond).toHaveBeenCalledWith([]);
-          await expectUnchanged();
+          expectUnchanged();
           setUserProfileRole(profile.id, "admin");
         }
         const deniedInteraction = await run({ ...command, senderId: "100000000000000009" });
@@ -198,7 +195,7 @@ it.each([
           return;
         }
         expectDenied(deniedInteraction);
-        await expectUnchanged();
+        expectUnchanged();
         pause();
         const allowedRun = run(command);
         if (preparation === "revoke" || preparation === "settle") {
@@ -208,7 +205,7 @@ it.each([
           expectDenied(await allowedRun);
           const after = manager.resolveSession(target);
           if (preparation === "revoke") {
-            await expectUnchanged();
+            expectUnchanged();
           } else {
             expect(effects).toEqual(["configure:model"]);
             expect(after).toMatchObject({

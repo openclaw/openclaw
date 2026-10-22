@@ -117,23 +117,16 @@ it.each(["inbound", "origin-subject"] as const)(
 );
 
 it("combines each matched entry with the exact same-kind subject identifier", async () => {
-  const identity = emailIdentity("verified", "secondary-email", "verified");
-  const subject = {
-    stableId: "strong@example.test",
-    aliases: { "secondary-email": "weak@example.test" },
-    authentication: {
-      "primary-email": "verified" as const,
-      "secondary-email": "unverified" as const,
+  const input = {
+    identity: emailIdentity("verified", "secondary-email", "verified"),
+    subject: {
+      stableId: "strong@example.test",
+      aliases: { "secondary-email": "weak@example.test" },
+      authentication: { "primary-email": "verified", "secondary-email": "unverified" },
     },
-  };
-
-  const resolveEntry = (value: string) =>
-    resolve({
-      identity,
-      subject,
-      allowFrom: [value],
-      policy: verifiedPolicy,
-    });
+    policy: verifiedPolicy,
+  } satisfies Input;
+  const resolveEntry = (value: string) => resolve({ ...input, allowFrom: [value] });
   const strong = await resolveEntry("strong@example.test");
   const weak = await resolveEntry("weak@example.test");
 
@@ -190,9 +183,8 @@ it.each<[string, Input, boolean, string, string]>([
         aliases: [{ key: "alias", authentication: "verified" }],
       },
       subject: {
-        stableId: "sender-1",
+        ...claimed("sender-1", "stableId", "verified"),
         aliases: { alias: "alias-1" },
-        authentication: { stableId: "verified" },
       },
       allowFrom: ["alias-1"],
     },
