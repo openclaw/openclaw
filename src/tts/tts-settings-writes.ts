@@ -9,7 +9,7 @@ function updateTtsPrefs(
   prefsPath: string,
   update: (tts: TtsUserPrefs["tts"]) => TtsUserPrefs["tts"],
 ): void {
-  const prefs = readTtsPrefs(prefsPath);
+  const prefs = readTtsPrefs(prefsPath, { forUpdate: true });
   prefs.tts = update(prefs.tts);
   writePrivateTextFileAtomicSync(prefsPath, JSON.stringify(prefs, null, 2), resolveStateDir());
 }

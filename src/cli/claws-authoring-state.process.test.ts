@@ -58,7 +58,6 @@ function runClaws(root: string, args: string[]) {
         NODE_OPTIONS: undefined,
         NO_COLOR: "1",
         OPENCLAW_CONFIG_PATH: path.join(root, "config", "openclaw.json"),
-        OPENCLAW_EXPERIMENTAL_CLAWS: "1",
         OPENCLAW_HIDE_BANNER: "1",
         OPENCLAW_HOME: root,
         OPENCLAW_NO_RESPAWN: "1",

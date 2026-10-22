@@ -10,7 +10,10 @@ import {
 } from "../../infra/runtime-worker-url.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandBuffersWithTimeout } from "../../process/exec-runner.js";
-import type { GitProcessOperation } from "../../process/spawn-diagnostics.js";
+import {
+  withChildProcessOperation,
+  type GitProcessOperation,
+} from "../../process/spawn-diagnostics.js";
 import { WorktreeGcProgress } from "./gc-progress.js";
 import { listGitWorktrees, requireGit, resolveGitMetadataPath, runGit } from "./git.js";
 import { readRegistryWorktrees } from "./registry-read.js";
@@ -160,10 +163,29 @@ async function maintainWorktreePacks(
     operation,
     signal: params.signal,
     beforeRun: assertCurrent,
+    timeoutMs: WORKTREE_GIT_MAINTENANCE_TIMEOUT_MS,
     killProcessTree: true,
     lowerPriority: true,
     env: { GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" },
   };
+  const packDirectory = await withContentGitSlot(
+    () => resolveGitMetadataPath(repoRoot, "objects/pack", options),
+    params.signal,
+  );
+  // Git rejects an empty pack directory; inspect only this shallow metadata directory.
+  const readPacks = () =>
+    fs.readdir(packDirectory).catch((error: unknown) => {
+      if (isMissingPathError(error)) {
+        return [];
+      }
+      throw error;
+    });
+  if ((await readPacks()).length === 0) {
+    // Packs arriving after this inventory can wait until the next maintenance pass.
+    assertCurrent();
+    await report(0, 0);
+    return;
+  }
   const commonDir = await requireGit(repoRoot, ["rev-parse", "--git-common-dir"], options);
   // Fetch must not replace the MIDX between batch publication and expiry.
   await enqueueGitRefMutation(
@@ -171,14 +193,7 @@ async function maintainWorktreePacks(
     commonDir,
     () =>
       withContentGitSlot(async () => {
-        const packDirectory = await resolveGitMetadataPath(repoRoot, "objects/pack", options);
-        // Git rejects an empty pack directory; inspect only this shallow metadata directory.
-        const packs = await fs.readdir(packDirectory).catch((error: unknown) => {
-          if (isMissingPathError(error)) {
-            return [];
-          }
-          throw error;
-        });
+        const packs = await readPacks();
         assertCurrent();
         const before = packs.filter((name) => name.endsWith(".pack")).length;
         await report(before);
@@ -203,22 +218,24 @@ async function cleanTemporaryPacks(
     return;
   }
   assertCurrent();
-  const result = await runCommandBuffersWithTimeout(
-    [
-      process.execPath,
-      ...resolveRuntimeWorkerArgv(
-        resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.gitPackCleanup),
-      ),
-    ],
-    {
-      input: JSON.stringify({ files, olderThan: Date.now() - TEMP_PACK_MAX_AGE_MS }),
-      beforeInput: assertCurrent,
-      signal,
-      timeoutMs: 30_000,
-      killProcessTree: true,
-      requireProcessTreeExtinction: true,
-      maxOutputBytes: 4096,
-    },
+  const result = await withChildProcessOperation("worktree.maintenance", () =>
+    runCommandBuffersWithTimeout(
+      [
+        process.execPath,
+        ...resolveRuntimeWorkerArgv(
+          resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.gitPackCleanup),
+        ),
+      ],
+      {
+        input: JSON.stringify({ files, olderThan: Date.now() - TEMP_PACK_MAX_AGE_MS }),
+        beforeInput: assertCurrent,
+        signal,
+        timeoutMs: 30_000,
+        killProcessTree: true,
+        requireProcessTreeExtinction: true,
+        maxOutputBytes: 4096,
+      },
+    ),
   );
   assertCurrent();
   if (result.termination !== "exit" || result.code !== 0) {
@@ -308,48 +325,37 @@ async function consolidatePacks(
         },
       );
     }
-    await requireGit(
-      repoRoot,
-      ["multi-pack-index", "write", "--stdin-packs", `--preferred-pack=${selected.at(-1)!}`],
-      {
-        ...options,
-        input: `${selected.map((name) => name.replace(/\.pack$/, ".idx")).join("\n")}\n`,
-      },
-    );
-    await requireGit(repoRoot, ["multi-pack-index", "expire"], options);
-    const presentAfterExpiry = new Set(await fs.readdir(directory));
-    const remainingBatch = selected.filter((name) => presentAfterExpiry.has(name));
+    let preferred = selected.at(-1)!;
     // The rewrite threshold applies to the inventory, not the byte-limited batch.
-    const remainingCount = candidates.length - selected.length + remainingBatch.length;
-    if (remainingCount < 16 || remainingBatch.length < 2) {
-      continue;
+    if (candidates.length >= 16) {
+      // A static Git alias streams between native children without buffering packs in the Gateway.
+      // index-pack publishes the promisor marker before the index; geometric repack cannot do this on older Git.
+      const alias =
+        "!if command -v ionice >/dev/null 2>&1; then ionice -c 3 -p $$ >/dev/null 2>&1; fi; git pack-objects --stdin-packs --stdout --window=0 --threads=1 | git index-pack --stdin --threads=1" +
+        (promisor ? " --promisor" : "");
+      const result = await requireGit(
+        repoRoot,
+        ["-c", `alias.openclaw-consolidate=${alias}`, "openclaw-consolidate"],
+        {
+          ...options,
+          timeoutMs: PACK_BATCH_TIMEOUT_MS,
+          input: `${selected.join("\n")}\n`,
+        },
+      );
+      const hash = /^pack\s+([a-f0-9]{40}|[a-f0-9]{64})$/.exec(result)?.[1];
+      if (!hash) {
+        throw new Error("Git pack consolidation returned an invalid pack identity");
+      }
+      preferred = `pack-${hash}.pack`;
     }
-    // A static Git alias streams between native children without buffering packs in the Gateway.
-    // index-pack publishes the promisor marker before the index; geometric repack cannot do this on older Git.
-    const alias =
-      "!if command -v ionice >/dev/null 2>&1; then ionice -c 3 -p $$ >/dev/null 2>&1; fi; git pack-objects --stdin-packs --stdout --window=0 --threads=1 | git index-pack --stdin --threads=1" +
-      (promisor ? " --promisor" : "");
-    const result = await requireGit(
-      repoRoot,
-      ["-c", `alias.openclaw-consolidate=${alias}`, "openclaw-consolidate"],
-      {
-        ...options,
-        timeoutMs: PACK_BATCH_TIMEOUT_MS,
-        input: `${remainingBatch.join("\n")}\n`,
-      },
-    );
-    const hash = /^pack\s+([a-f0-9]{40}|[a-f0-9]{64})$/.exec(result)?.[1];
-    if (!hash) {
-      throw new Error("Git pack consolidation returned an invalid pack identity");
-    }
-    const replacement = `pack-${hash}.pack`;
     // Expire only this homogeneous batch: a full MIDX could retire an unrelated promisor pack.
+    // Expiry rebuilds the full index after deleting packs, so do it only once per group.
     await requireGit(
       repoRoot,
-      ["multi-pack-index", "write", "--stdin-packs", `--preferred-pack=${replacement}`],
+      ["multi-pack-index", "write", "--stdin-packs", `--preferred-pack=${preferred}`],
       {
         ...options,
-        input: `${[...new Set([...remainingBatch, replacement])].map((name) => name.replace(/\.pack$/, ".idx")).join("\n")}\n`,
+        input: `${[...new Set([...selected, preferred])].map((name) => name.replace(/\.pack$/, ".idx")).join("\n")}\n`,
       },
     );
     await requireGit(repoRoot, ["multi-pack-index", "expire"], options);
@@ -365,7 +371,7 @@ async function consolidatePacks(
   return remainingNames.filter((name) => name.endsWith(".pack")).length;
 }
 
-export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv, now = Date.now) {
+export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
   // Suspend failed tasks without letting graph failures stop bounded pack convergence.
   const failed = new Map<string, "objects" | "packs" | "maintenance">();
   const nextRunAt = new Map<string, number>();
@@ -411,12 +417,12 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv, now = Date.
         await report("suspended");
         continue;
       }
-      if (!params.retryDeferred && now() < (nextRunAt.get(repoRoot) ?? 0)) {
+      if (!params.retryDeferred && Date.now() < (nextRunAt.get(repoRoot) ?? 0)) {
         await report("throttled");
         continue;
       }
       // Archive notifications also run cleanup; repository housekeeping stays hourly.
-      nextRunAt.set(repoRoot, now() + 60 * 60_000);
+      nextRunAt.set(repoRoot, Date.now() + 60 * 60_000);
       let stage: "objects" | "packs" | "maintenance" = "packs";
       try {
         await report(stage);

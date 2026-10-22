@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { isStringArray } from "openclaw/plugin-sdk/collection-input-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import { parse as parseToml, type TomlTable } from "smol-toml";
 import type { CodexAppServerManagedApprovalPolicy, OpenClawExecMode } from "./config-contracts.js";
@@ -101,9 +102,7 @@ function parseCodexRequirements(content: string): TomlTable | undefined {
 }
 
 function readRequirementsStringArray(value: unknown): string[] | undefined {
-  return Array.isArray(value) && value.every((entry) => typeof entry === "string")
-    ? value
-    : undefined;
+  return isStringArray(value) ? value : undefined;
 }
 
 function normalizeRequirementsSandboxMode(value: string): CodexSandboxMode | undefined {

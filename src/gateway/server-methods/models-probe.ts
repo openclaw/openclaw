@@ -1,3 +1,4 @@
+import { listModelRefsFromConfigValue } from "@openclaw/model-catalog-core/configured-model-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   ErrorCodes,
@@ -6,6 +7,7 @@ import {
   validateModelsProbeParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { readUtilityModelSetting } from "../../agents/utility-model-setting.js";
 import {
   type AuthProbeResult,
   type AuthProbeReasonCode,
@@ -85,12 +87,13 @@ function safeProbeTargetError(result: AuthProbeResult): string | undefined {
   );
 }
 
-function modelCandidatesFromConfig(cfg: OpenClawConfig): string[] {
-  const configured = cfg.agents?.defaults?.model;
-  const primary = typeof configured === "string" ? configured : configured?.primary;
-  const fallbacks = typeof configured === "string" ? [] : (configured?.fallbacks ?? []);
-  return [primary, ...fallbacks, cfg.agents?.defaults?.utilityModel]
-    .filter((value): value is string => typeof value === "string")
+function modelCandidatesFromConfig(cfg: OpenClawConfig, agentId: string): string[] {
+  const utility = readUtilityModelSetting(cfg, agentId);
+  return [
+    ...listModelRefsFromConfigValue(cfg.agents?.defaults?.model),
+    ...(utility.kind === "explicit" ? [utility.modelRef] : []),
+    ...(utility.kind !== "disabled" ? utility.fallbacks : []),
+  ]
     .map((value) => value.trim())
     .filter(Boolean);
 }
@@ -168,7 +171,7 @@ export const modelsProbeHandlers: GatewayRequestHandlers = {
         agentDir: scope.agentDir,
         workspaceDir,
         providers: [provider],
-        modelCandidates: modelCandidatesFromConfig(cfg),
+        modelCandidates: modelCandidatesFromConfig(cfg, scope.agentId),
         options: {
           provider,
           ...(profileId ? { profileIds: [profileId] } : {}),

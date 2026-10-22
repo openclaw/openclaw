@@ -1,31 +1,3 @@
-import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
-import { buildTokenHubProvider, buildTokenPlanProvider } from "./provider-catalog.js";
+import { TENCENT_PROVIDER_CATALOG } from "./models.js";
 
-const tencentProviderDiscovery: ProviderPlugin[] = [
-  {
-    id: "tencent-tokenhub",
-    label: "Tencent TokenHub",
-    docsPath: "/providers/tencent",
-    auth: [],
-    staticCatalog: {
-      order: "simple",
-      run: async () => ({
-        provider: buildTokenHubProvider(),
-      }),
-    },
-  },
-  {
-    id: "tencent-tokenplan",
-    label: "Tencent TokenPlan",
-    docsPath: "/providers/tencent",
-    auth: [],
-    staticCatalog: {
-      order: "simple",
-      run: async () => ({
-        provider: buildTokenPlanProvider(),
-      }),
-    },
-  },
-];
-
-export default tencentProviderDiscovery;
+export default TENCENT_PROVIDER_CATALOG.staticDiscovery;

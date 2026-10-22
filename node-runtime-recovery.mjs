@@ -3,6 +3,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { lstatSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resolveOpenClawCliRespawn } from "./cli-invocation.mjs";
 import { consumeRootOptionToken as consumeLauncherRootOptionToken } from "./cli-root-options.mjs";
 import { isForegroundGatewayRunArgv } from "./gateway-run-argv.mjs";
 import {
@@ -17,6 +18,8 @@ import {
 } from "./node-sqlite.mjs";
 
 export { consumeLauncherRootOptionToken };
+
+export { watchCliRespawnParent } from "./cli-parent-lifetime.mjs";
 export const isNativeHookRelayInvocation = (argv) => argv[2] === "hooks" && argv[3] === "relay";
 
 // Mirror the entry's foreground Gmail policy: a wrapper would kill that run before descendant cleanup finishes.
@@ -43,7 +46,7 @@ const respawnSignals =
 const respawnSignalForceKillGraceMs = RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS;
 
 /** Resolve true only after the replacement and its stdio close; the caller must return. */
-export const runRespawnedChild = (command, args, env) => {
+export const runRespawnedChild = ({ command, args, env }) => {
   // The serving Gateway owns drain and cleanup. Reap a stuck child only in the
   // supervisor's exit margin, after that owner has had its full shutdown budget.
   // An already-running older macOS launcher can still enforce its shorter timer;
@@ -55,7 +58,7 @@ export const runRespawnedChild = (command, args, env) => {
   const signalExitGraceMs = launcherStopTimeoutMs - respawnSignalForceKillGraceMs;
   const stdioIsTerminal = process.stdin.isTTY || process.stdout.isTTY;
   const child = spawn(command, args, {
-    stdio: "inherit",
+    stdio: ["inherit", "inherit", "inherit", "ipc"],
     env,
     windowsHide: !stdioIsTerminal,
   });
@@ -327,15 +330,17 @@ export function resolveRecoveryPath(
   const paths = /^(?:[a-zA-Z]:[\\/]|\\\\)/.test(expanded) ? path.win32 : path;
   const absolute = paths.resolve(expanded);
   const cwd = realNodePath(process.cwd()) ?? process.cwd();
+  // POSIX / is a service startup directory, not a workspace; Windows roots can be mapped checkouts.
+  const guardCwd = !allowCwd && cwd !== "/";
   // Trust only the private recovery root when launching from HOME; reject other cwd symlinks.
   const trusted =
     trustedRoot && path.isAbsolute(trustedRoot) && isPathWithin(absolute, trustedRoot);
   const excluded = (filename) =>
-    !allowCwd && isPathWithin(filename, cwd) && !(trusted && isPathWithin(filename, trustedRoot));
+    guardCwd && isPathWithin(filename, cwd) && !(trusted && isPathWithin(filename, trustedRoot));
   if (excluded(absolute)) {
     return null;
   }
-  if (!allowCwd) {
+  if (guardCwd) {
     // A final symlink can hide a workspace-owned intermediate directory.
     for (let prefix = paths.dirname(absolute); ;) {
       if (trusted && !isPathWithin(prefix, trustedRoot)) {
@@ -759,8 +764,9 @@ export async function recoverNodeRuntime({
     `openclaw: Retrying with ${JSON.stringify(nodePath)} (${reason}; current Node failed runtime admission).\n`,
   );
   return await runRespawnedChild(
-    nodePath,
-    [...process.execArgv, process.argv[1], ...process.argv.slice(2)],
-    { ...withNodeRuntimePath(env, nodePath), OPENCLAW_NODE_UPDATE_RESPAWNED: "1" },
+    resolveOpenClawCliRespawn({
+      execPath: nodePath,
+      env: { ...withNodeRuntimePath(env, nodePath), OPENCLAW_NODE_UPDATE_RESPAWNED: "1" },
+    }),
   );
 }

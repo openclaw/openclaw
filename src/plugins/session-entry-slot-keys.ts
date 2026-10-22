@@ -81,7 +81,9 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "lastRunId",
   "activeWriterRunId",
   "mainRestartRecovery",
+  "pendingExecNotifications",
   "restartRecoveryOperatorSource",
+  "restartRecoveryRequesterSource",
   "subagentRecovery",
   "pluginOwnerId",
   "systemSent",
@@ -97,6 +99,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "runtimeMs",
   "status",
   "lastRunError",
+  "suppressErrorNotice",
   "abortCutoffMessageSid",
   "abortCutoffTimestamp",
   "chatType",
@@ -209,6 +212,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "communication",
   "publicShare",
   "profileInvolvement",
+  "priorWorkspace",
 ] as const satisfies ReadonlyArray<
   keyof SessionEntry | "__proto__" | "constructor" | "prototype" | "sessionFile" | "transcriptPath"
 >;

@@ -19,7 +19,7 @@ import { updateRegistryWorktree } from "./registry.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
 import * as leases from "./run-lease.js";
 import { hasLiveWorktreeRunLease } from "./run-lease.test-support.js";
-import { ManagedWorktreeService } from "./service.js";
+import { ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
 import {
   materializeManagedWorktreeFixture,
   useManagedWorktreeTestRepository,
@@ -99,16 +99,6 @@ describe("exact-state retirement admission and recovery", () => {
       exactState,
       request: { id: record.id, reason: "test retirement", exactState },
     };
-  }
-
-  function useExpiryClock() {
-    const clock = { now: Date.now() };
-    service = new ManagedWorktreeService({
-      env,
-      now: () => clock.now,
-      getConfig: () => ({ worktreeAcceleration: false }),
-    });
-    return clock;
   }
 
   it.each(["head", "branch", "index", "file", "activity", "claim", "authority"] as const)(
@@ -495,7 +485,6 @@ describe("exact-state retirement admission and recovery", () => {
     "recovers %s expiry interrupted after retiring recovery refs",
     async (kind) => {
       const f = await fixture();
-      const clock = useExpiryClock();
       const result = await service.remove(f.request);
       const receiptRef = `refs/openclaw/restores/exact-v1/${f.record.id}`;
       const run = commandRunner.runCommandWithTimeout;
@@ -534,7 +523,9 @@ describe("exact-state retirement admission and recovery", () => {
         }
         return value;
       });
-      clock.now = result.recoveryRetainedUntil! + 1;
+      await updateRegistryWorktree(env, f.record.id, {
+        removedAt: Date.now() - SNAPSHOT_RETENTION_MS - 1,
+      });
       expect((await service.gc()).snapshotsPruned).toBe(0);
       expect(interrupted).toBe(true);
       expect(getRegistryWorktree(env, f.record.id)).toBeDefined();
@@ -669,7 +660,6 @@ describe("exact-state retirement admission and recovery", () => {
     "preserves source and snapshot when expiration custody changes (%s)",
     async (kind) => {
       const f = await fixture();
-      const clock = useExpiryClock();
       const result = await service.remove(f.request);
       const original = path.join(path.dirname(f.record.path), "original-source-held");
       if (kind === "replacement") {
@@ -698,7 +688,9 @@ describe("exact-state retirement admission and recovery", () => {
           return value;
         });
       }
-      clock.now = result.recoveryRetainedUntil! + 1;
+      await updateRegistryWorktree(env, f.record.id, {
+        removedAt: Date.now() - SNAPSHOT_RETENTION_MS - 1,
+      });
       expect((await service.gc()).snapshotsPruned).toBe(0);
       expect(getRegistryWorktree(env, f.record.id)?.snapshotRef).toBe(result.snapshotRef);
       expect(await git(repo, "rev-parse", result.snapshotRef!)).toMatch(/^[a-f0-9]{40}$/u);
@@ -744,7 +736,6 @@ describe("exact-state retirement admission and recovery", () => {
     "excludes a competing lifecycle writer through expiry %s admission",
     async (phase) => {
       const f = await fixture();
-      const clock = useExpiryClock();
       const result = await service.remove(f.request);
       let attempted = false;
       let rejected = false;
@@ -786,7 +777,9 @@ describe("exact-state retirement admission and recovery", () => {
           return await run(...args);
         });
       }
-      clock.now = result.recoveryRetainedUntil! + 1;
+      await updateRegistryWorktree(env, f.record.id, {
+        removedAt: Date.now() - SNAPSHOT_RETENTION_MS - 1,
+      });
       const expired = await service.gc();
       if (phase === "registry") {
         expect(expired.snapshotsPruned).toBe(1);

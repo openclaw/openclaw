@@ -9,6 +9,10 @@ import {
   openOpenClawStateDatabase,
   repairOpenClawStateDatabaseSchema,
 } from "./openclaw-state-db.js";
+import {
+  addPreCutoverClientCredentialTablesForTest,
+  withStateMigrationBackupForTest,
+} from "./openclaw-state-schema.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -17,7 +21,7 @@ afterEach(() => {
 });
 
 describe("gateway restart handoff state migration", () => {
-  it("repairs fractional trace timestamps while doctor migrates version 2 to STRICT", () => {
+  it("repairs fractional trace timestamps while captured doctor migration advances version 2 to STRICT", async () => {
     const stateDir = tempDirs.make("openclaw-state-restart-handoff-");
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
     const databasePath = openOpenClawStateDatabase(options).path;
@@ -25,6 +29,7 @@ describe("gateway restart handoff state migration", () => {
 
     const { DatabaseSync } = requireNodeSqlite();
     const legacy = new DatabaseSync(databasePath);
+    addPreCutoverClientCredentialTablesForTest(legacy);
     const strictCreateSql = (
       legacy
         .prepare(
@@ -91,14 +96,29 @@ describe("gateway restart handoff state migration", () => {
       { kind: "creator-namespace-v14", path: databasePath },
       { kind: "predicate-columns-v21", path: databasePath },
       { kind: "portable-identity-columns-v22", path: databasePath },
+      { kind: "meeting-transcript-start-time", path: databasePath },
+      { kind: "task-run-indexes-v24", path: databasePath },
+      { kind: "subagent-operator-recovery-v25", path: databasePath },
+      { kind: "session-state-head-layout-v26", path: databasePath },
+      { kind: "state-write-indexes-v27", path: databasePath },
+      { kind: "github-publication-draft-v28", path: databasePath },
+      { kind: "local-client-credentials-v29", path: databasePath },
+      { kind: "automation-policy-fence-v30", path: databasePath },
+      { kind: "local-workspace-manifests-v31", path: databasePath },
       { kind: "strict-tables-v3", path: databasePath },
       { kind: "session-watch-cursor-provenance-v4", path: databasePath },
     ]);
-    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+    expect(
+      await withStateMigrationBackupForTest(options, () =>
+        repairOpenClawStateDatabaseSchema(options),
+      ),
+    ).toEqual({
       changes: [
         "Migrated cloud worker placements to execution modes",
         "Migrated shared state session watch cursors → provenance column (0 ambient, 0 sentinels removed)",
         "Qualified historical cron creator attribution as unknown (v14)",
+        "Replaced retained task indexes with ordered cron history indexes (v24)",
+        "Removed redundant replay and skill indexes and narrowed the lease-owner index (v27)",
         "Migrated shared state tables to SQLite STRICT typing (1)",
       ],
       warnings: [],

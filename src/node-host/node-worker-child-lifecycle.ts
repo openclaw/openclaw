@@ -1,3 +1,4 @@
+import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
@@ -31,6 +32,7 @@ import { resolveNodeWorkerNativeInferenceWorkspace } from "./node-worker-native-
 import {
   createNodeWorkerCredentialScrubber,
   sanitizeNodeWorkerDiagnostic,
+  warnNodeWorkerIdleCleanupFailure,
 } from "./node-worker-output.js";
 import {
   inspectNodeWorkerProcessIdentity,
@@ -128,12 +130,7 @@ export class NodeWorkerChildLifecycle {
           : [],
       ),
     );
-    const errors = results.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
-    );
-    if (errors.length) {
-      throw new AggregateError(errors, "node worker idle cleanup failed");
-    }
+    throwSettledAggregate(results, "node worker idle cleanup failed");
   }
 
   /** Starts one physical owner behind the durable journal gate, independent of turn reuse. */
@@ -315,6 +312,7 @@ export class NodeWorkerChildLifecycle {
           params.descriptor,
           params.idleRetention === true,
           Boolean(params.assertWorkspaceCurrent),
+          true,
         ),
       );
     } catch (error) {
@@ -397,7 +395,12 @@ export class NodeWorkerChildLifecycle {
       assertWorkspaceCurrent?.();
       await sendNodeWorkerInput(
         active.adapter,
-        buildWorkerProcessTurn(descriptor, active.idleRetention, Boolean(assertWorkspaceCurrent)),
+        buildWorkerProcessTurn(
+          descriptor,
+          active.idleRetention,
+          Boolean(assertWorkspaceCurrent),
+          true,
+        ),
       );
       if (signal.aborted) {
         await this.options.cancelTurn(claim);
@@ -535,6 +538,17 @@ export class NodeWorkerChildLifecycle {
     active: NodeWorkerRunningChild,
     frame: WorkerProcessMessage,
   ): Promise<void> {
+    if (frame.type === "processes-changed") {
+      if (
+        !active.stopState &&
+        !active.retiring &&
+        !this.options.isClosed() &&
+        this.owners.get(active.launchId) === active
+      ) {
+        this.publishProcessesChanged(active);
+      }
+      return;
+    }
     if (frame.type === "process-result") {
       this.processObservations.accept(active, frame);
       return;
@@ -600,7 +614,7 @@ export class NodeWorkerChildLifecycle {
     } else {
       const timer = setTimeout(() => {
         if (active.retention?.reason === "idle" && active.retention.timer === timer) {
-          void this.stopChild(active, "interrupted").catch(() => undefined);
+          void this.stopChild(active, "interrupted").catch(warnNodeWorkerIdleCleanupFailure);
         }
       }, 120_000);
       timer.unref();
@@ -608,7 +622,7 @@ export class NodeWorkerChildLifecycle {
       if (this.options.isClosed()) {
         void this.stopChild(active, "interrupted").catch(() => undefined);
       } else if (this.idleChildren().length > 2) {
-        void this.reclaimIdle().catch(() => undefined);
+        void this.reclaimIdle().catch(warnNodeWorkerIdleCleanupFailure);
       }
     }
     this.publishIdle();
@@ -623,6 +637,8 @@ export class NodeWorkerChildLifecycle {
       return;
     }
     this.owners.set(active.launchId, observed);
+    // A child can exit before its coalesced final registry notification is written.
+    this.publishProcessesChanged(active);
     clearNodeWorkerRetention(active);
     if (active.idleRetention) {
       this.publishIdle();
@@ -634,6 +650,12 @@ export class NodeWorkerChildLifecycle {
       return;
     }
     active.turn = undefined;
+  }
+
+  private publishProcessesChanged(active: NodeWorkerRunningChild): void {
+    const { environmentId, sessionId, ownerEpoch, placementGeneration } = active.binding;
+    const change = { environmentId, sessionId, ownerEpoch, placementGeneration };
+    this.options.onProcessesChanged?.(change);
   }
 
   private async reconcileDeferredOutcome(active: NodeWorkerRunningChild): Promise<void> {
@@ -698,7 +720,7 @@ export class NodeWorkerChildLifecycle {
       if (active.retention?.reason === "idle" && !this.options.isClosed()) {
         clearTimeout(active.retention.timer);
         active.retention.timer = setTimeout(() => {
-          void this.stopChild(active, state).catch(() => undefined);
+          void this.stopChild(active, state).catch(warnNodeWorkerIdleCleanupFailure);
         }, 120_000).unref();
       }
       throw error;

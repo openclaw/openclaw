@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { getRuntimeConfig, type OpenClawConfig } from "../../config/config.js";
+import { lstatIfExists } from "../../infra/path-existence.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import type { WorktreeAllocationGuard } from "./allocation.js";
 import { estimateWorktreeCheckoutTransitionBytes, requireAllocationSpace } from "./capacity.js";
@@ -13,7 +14,6 @@ import {
   worktreePathExists,
   commandError,
   listGitWorktrees,
-  lstatIfExists,
   runGit,
   WORKTREE_CHECKOUT_TIMEOUT_MS,
 } from "./git.js";
@@ -67,7 +67,6 @@ type RestoreInput = {
 } & WorktreeAllocationGuard;
 type RestoreDependencies = {
   env: NodeJS.ProcessEnv;
-  now: () => number;
   getConfig?: () => OpenClawConfig;
   admitCapacity: () => Promise<void>;
 };
@@ -121,7 +120,6 @@ export async function restoreManagedWorktreeSnapshot(
     const context: RestoreContext = {
       env,
       registryContext,
-      now: dependencies.now,
       getConfig: dependencies.getConfig,
       repository,
       admitCapacity: async (requiredPaths, alreadyCounted) => {
@@ -191,7 +189,7 @@ async function restoreSnapshot(
   input: RestoreInput,
   context: RestoreContext,
 ): Promise<ManagedWorktreeRecord> {
-  const { env, now, getConfig, requireSpace, repository } = context;
+  const { env, getConfig, requireSpace, repository } = context;
   let params = input;
   let finalized = false;
   const onFinalized = () => {
@@ -323,7 +321,7 @@ async function restoreSnapshot(
       assertExactStateOwner(record, expected);
       // This is only a local restore plan. A failed recovery must not start an
       // expiration deadline or finalize an unfinished registry lifecycle.
-      record = { ...record, removedAt: now() };
+      record = { ...record, removedAt: Date.now() };
     }
   }
   if (!record?.snapshotRef || record.removedAt === undefined) {
@@ -353,7 +351,7 @@ async function restoreSnapshot(
   };
   const registrationOptions = {
     env,
-    now,
+    now: Date.now,
     repoRoot: record.repoRoot,
     commonDir: repository.commonDir,
     worktreeRoot: path.dirname(path.dirname(record.path)),
@@ -489,7 +487,7 @@ async function restoreSnapshot(
       signal: params.signal,
       assertCurrent: params.commitGuard,
     });
-  const target = await lstatIfExists(record.path);
+  const target = await lstatIfExists(record.path, "ENOENT");
   const registrations = await listGitWorktrees(record.repoRoot, gitOptions);
   if (
     (target && (!target.isDirectory() || (await fs.readdir(record.path)).length > 0)) ||
@@ -622,13 +620,13 @@ async function restoreSnapshot(
 
 async function finishRestoredSnapshot(
   params: { id: string } & WorktreeAllocationGuard,
-  context: Pick<RestoreContext, "env" | "now" | "recoveryClaim">,
+  context: Pick<RestoreContext, "env" | "recoveryClaim">,
   record: ManagedWorktreeRecord,
   restoredProvisionedPaths: string[],
   onFinalized: () => void,
   exact = false,
 ) {
-  const { env, now } = context;
+  const { env } = context;
   const gitOptions = {
     signal: params.signal,
     beforeRun: params.commitGuard,
@@ -638,7 +636,7 @@ async function finishRestoredSnapshot(
   // Advance past the stored stamp even within the same millisecond: stale
   // cleanup writes fence on the activity stamp they observed, so a restore
   // must never revive the row with an identical value.
-  const lastActiveAt = Math.max(now(), record.lastActiveAt + 1);
+  const lastActiveAt = Math.max(Date.now(), record.lastActiveAt + 1);
   const restored = { ...record, lastActiveAt };
   delete restored.removedAt;
   delete restored.runEndCleanup;

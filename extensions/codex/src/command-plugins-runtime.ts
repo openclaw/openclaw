@@ -7,7 +7,10 @@ import {
   resolveCodexAppServerPreparedApiKeyCacheKey,
 } from "./app-server/auth-cache-key.js";
 import { resolveCodexAppServerAuthProfileStore } from "./app-server/auth-profile.js";
-import { resolveCodexAppServerRuntimeOptions } from "./app-server/config.js";
+import {
+  resolveCodexAppServerRuntimeOptions,
+  type CodexPluginConfig,
+} from "./app-server/config.js";
 import { buildCodexPluginAppCacheKey } from "./app-server/plugin-app-cache-key.js";
 import { withCodexAppServerJsonClient } from "./app-server/request.js";
 import { assertCodexHostOwnerCurrent } from "./command-authorization.js";
@@ -33,12 +36,12 @@ export type CodexPluginCommandContext = {
 };
 
 export async function withCodexPluginCommandContext<T>(
-  params: { deps: CodexCommandDeps; ctx: PluginCommandContext; pluginConfig: unknown },
+  params: { deps: CodexCommandDeps; ctx: PluginCommandContext; pluginConfig?: CodexPluginConfig },
   run: (context: CodexPluginCommandContext) => Promise<T>,
 ): Promise<T> {
   const { deps, pluginConfig } = params;
   const ctx = { ...params.ctx, gatewayClientScopes: params.ctx.gatewayClientScopes?.slice() };
-  const current = (await deps.codexPluginsManagementIo?.readConfig()) ?? {};
+  const current = await deps.codexPluginsManagementIo.readConfig();
   const { scope, binding } = await resolveCommandAppServerContext(deps, ctx, pluginConfig);
   using _ = { [Symbol.dispose]: scope.release };
   const conversation = readCodexConversationBindingData(await ctx.getCurrentConversationBinding());

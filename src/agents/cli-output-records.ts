@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { CliBackendConfig } from "../plugins/cli-backend.types.js";
+import { readTrimmedStringAlias } from "../utils/string-readers.js";
 import type {
   CliOutput,
   CliTerminalFailure,
@@ -11,7 +12,7 @@ import type {
 } from "./cli-output-contracts.js";
 import { normalizeUsage, type UsageLike } from "./usage.js";
 
-function isClaudeCliProvider(providerId: string): boolean {
+export function isClaudeCliProvider(providerId: string): boolean {
   return normalizeLowercaseStringOrEmpty(providerId) === "claude-cli";
 }
 
@@ -142,11 +143,10 @@ function normalizeCliUsageRecord(raw: unknown): CliUsage | undefined {
     output: usage.output || undefined,
     cacheRead: usage.cacheRead || undefined,
     cacheWrite: usage.cacheWrite || undefined,
+    cacheWrite1h: usage.cacheWrite1h || undefined,
     total: usage.total || undefined,
   };
-  return Object.values(cliUsage).some((value) => typeof value === "number" && value > 0)
-    ? cliUsage
-    : undefined;
+  return Object.values(cliUsage).some((value) => (value ?? 0) > 0) ? cliUsage : undefined;
 }
 
 export function readCliUsage(parsed: Record<string, unknown>): CliUsage | undefined {
@@ -363,13 +363,7 @@ export function pickCliSessionId(
     "conversation_id",
     "conversationId",
   ];
-  for (const field of fields) {
-    const value = parsed[field];
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-  return undefined;
+  return readTrimmedStringAlias(parsed, fields);
 }
 
 // Claude Code forwards subagent (Agent tool) traffic with `parent_tool_use_id`

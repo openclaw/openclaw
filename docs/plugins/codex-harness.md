@@ -15,6 +15,25 @@ native compaction, and app-server execution. OpenClaw still owns chat
 channels, session files, model selection, OpenClaw dynamic tools, approvals,
 media delivery, and the visible transcript mirror.
 
+Turns without a routable source conversation, such as operator CLI turns, return
+their final response automatically to the caller. The `message` tool needs an
+explicit `target` for sends from these turns; it cannot post progress to a
+current conversation.
+
+Managed inference proxy restarts do not replace an otherwise reusable native
+thread. Thread identity uses the proxy's upstream provider and routing policy, not
+its temporary loopback address. Upstream, authentication-profile, and creation-time
+policy changes still invalidate thread reuse; live requests continue through the
+current owned proxy.
+
+Provider-review acknowledgments must continue the reviewed native thread. If
+changed tools or runtime configuration would require a replacement thread, or
+native resume fails, OpenClaw refuses the acknowledgment before creating or saving
+a replacement. Restore the original tools and runtime configuration and retry
+from the original conversation. The review remains pending until Codex accepts
+the continuation; acknowledgment does not bypass the review checks or repair a
+binding that was already replaced by an earlier failed attempt.
+
 ## Shared output projection
 
 Codex uses the shared native harness projection owners for bounded tool output,
@@ -27,6 +46,13 @@ The Codex adapter retains native item identities, protocol parsing, approvals,
 hook handling, and transcript provenance. Constructed messages are persisted
 through the existing scoped transcript APIs; the shared projection helpers do
 not own storage.
+
+Run tool summaries retain explicit native-tool failures recorded before execution,
+including malformed patches and workspace refusals. A successful retry leaves the
+earlier failure in the count. Code Mode wrapper output does not add another count
+when a native execution item already accounts for it. A completed command result
+with a nonzero exit code also marks the run unsafe to replay, even if its native
+execution item is missing.
 
 During `initialize`, OpenClaw uses `capabilities.optOutNotificationMethods` to
 suppress unused app-server notifications before they reach the transport and JSON
@@ -57,21 +83,36 @@ Display-only catalog refreshes retain prepared metadata selections; stored-entry
 identity, and topology changes still invalidate them.
 Native adoption bindings still use their storage owner, and paired-node enumeration
 can use network I/O. Previews remain limited to 500 characters;
-native hydration and catalog pages remain limited to 64 rows each. Native `thread/list` has no bounded metadata projection, so wire JSON can still be
-large. Complete catalog `thread/list` pages and metadata-only `thread/read` responses
+native hydration and overflow requests ask for at most 16 threads per page.
+Codex `thread/list` has no preview truncation or exclusion option, so wire JSON can
+still be large. Native listing halves a page over 8 MiB and retries the same cursor
+within the original request deadline, retaining the smaller page limit for that
+resident home's lifetime.
+If a single thread still exceeds 8 MiB but fits within 64 MiB, the catalog worker
+parses that page once, retains only its bounded catalog projection as a degraded
+entry, and continues with the server's cursor. The full payload is discarded
+before the worker returns. Interactive entries display `systemError`; their degraded
+marker survives restart and clears when a healthy native response replaces them.
+The normal source filter still applies: noninteractive threads remain hidden
+while discovery continues past them.
+If the singleton exceeds 64 MiB or its identity or continuation cannot be recovered,
+the host reports an error and waits 15 minutes before another native listing attempt; repeated
+reads during backoff reuse that error without repeating its background warning.
+Each local host has
+one eight-second response budget covering all page reads and adoption projection,
+matching the paired-node response budget. Healthy siblings still return; background
+native hydration can continue warming the next request. Complete catalog `thread/list` pages and metadata-only `thread/read` responses
 up to 64 KiB are parsed and projected inline, avoiding worker startup for small
 catalog refreshes. Larger responses use a worker owned by their app-server client.
 Both paths apply the same projection. The stdout reader waits for the compact result
 before delivering later responses or notifications. It transfers larger responses
 as bytes, admits one worker task at a time, and pauses the transport while that task runs.
-Incomplete-frame recovery stays in the worker, including when a malformed
-frame hides its routing header until a later line; its decoded ID selects the catalog
-projection and the captured row admission. Native control reads, normal streaming notifications,
+Malformed JSON frames produce a redacted diagnostic and are dropped; subsequent
+valid frames continue normally. Native control reads, normal streaming notifications,
 and full-history reads keep their in-process decoder. Control reads preserve complete
 native metadata, including model selection and direct-input capability; transcript
 consumers require complete native raw items.
-Each native list page contains at most 64 rows (less than 6 MiB of serialized
-catalog metadata even at all field limits). Both paths apply the existing
+Both paths apply the existing
 prefix-first preview selector and 500-character display bound. Unchanged
 background rows can reuse resident previews before delivery. Large native payloads
 and their temporary objects stay in the worker. Metadata reads preserve exact
@@ -94,7 +135,7 @@ The retained window is not a discovery limit. Once a home reaches 20,000 retaine
 rows, recent unfiltered pages still use memory. Paging at the retained boundary,
 working-directory queries, and title searches use authoritative native database-only
 pages, including sessions absent from memory. Those requests can be slower. Each
-fallback request retains at most one 64-row native page. Search, exclusion filling,
+fallback request retains at most one 16-row native page. Search, exclusion filling,
 and any nested membership, status, or descendant reads share one 20-read budget
 and the existing request deadline, including across scheduler pauses. The request
 returns an opaque continuation when more discovery remains. Continue paging even
@@ -243,7 +284,7 @@ oldest remaining rows. Row eviction preserves independently bounded live status 
 settings while their supporting native connections remain open. Eviction removes only cached metadata: older sessions remain
 discoverable through native paging/search and readable by ID. Initial and full safety walks finish pagination, but rows beyond the
 resident limit are discarded before native-response metadata projection or preview
-sanitization. The native page size stays 64, and pagination continues to completion.
+sanitization. Native requests use 16-row pages, and pagination continues to completion.
 At most 20,000 detached native cursors are remembered during a walk.
 The same archived-oldest row limit applies when restoring a complete snapshot.
 Incomplete snapshots still cannot establish a pageable native prefix.
@@ -377,18 +418,46 @@ unless you opt into the experimental sandbox exec-server path. The effective
 tool profile must allow all native shell and filesystem capabilities: `coding`
 and `full` do, while `messaging` and `minimal` disable the native surface. Agent
 and provider profile overrides and explicit tool restrictions still apply.
+
+Selecting a managed GitHub Identity also uses OpenClaw's host-owned tools instead
+of native Code Mode. The same exec owner used by the built-in runtime binds the
+selected profile at child launch, preserves approval and caller lifetime checks,
+and reports an unavailable profile without falling back to native GitHub auth.
+Other tools and the conversation remain available; identity discovery does not
+block turn startup. Reconnect or change GitHub Identity in Settings to recover.
+With no managed identity selected, native Code Mode and shell defaults are unchanged.
+Ordinary paired-node exec keeps node-local authentication: a Gateway GitHub
+selection and command approval never export that credential to the node.
+
+`openclaw agent exec` also uses host-owned tools so its one-shot cleanup can
+join every command it starts. The generic `--code-mode` setting does not enable
+Codex native Code Mode; `codeModeEngaged` reports OpenClaw Code Mode, not the
+Codex harness's native surface.
+
+For one-shot runs without native commands, cleanup closes app-server stdin and
+waits for normal exit before resorting to process termination. Confirmed forced
+termination produces a warning without replacing a completed answer with an
+error. Unconfirmed process cleanup or native commands whose descendants cannot
+be accounted for still fail cleanup and retain state ownership until exit.
+
 When sandboxing disables the native surface, allowed shell commands remain available
 through `sandbox_exec`. Denying `process` removes `sandbox_process` and background
 continuation, while `sandbox_exec` runs to completion under the existing timeout,
 sandbox backend, and workspace-access policy.
 
-When deferred tools or native delegation are available, normal threads receive
-guidance to call listed tools directly and use `tool_search` for unlisted tools.
-They keep an `exec` / `ALL_TOOLS` fallback for the case where `tool_search` is
-not directly callable (for example a model whose metadata selects code-mode-only
-execution), but are told never to use `exec` to look up a listed tool or to
-repeat a completed call. Configured code-mode-only threads receive the original
-`exec` / `ALL_TOOLS` discovery guidance.
+When native Code Mode is available, normal threads call listed tools by their
+exact qualified names and use `tool_search` for deferred tools when supplied.
+The fallback is Codex's native JavaScript `exec`, where `ALL_TOOLS` and `tools`
+are JavaScript globals. Code-mode-only threads use that JavaScript discovery
+path. These globals are not shell environment variables, and OpenClaw shell
+command tools are separate from the native JavaScript runner.
+
+When the native surface is disabled, OpenClaw publishes its allowed dynamic
+tools directly instead of requiring deferred discovery. This includes managed
+GitHub identity and sandbox-backed execution paths. The current tool policy,
+argument validation, session authority, and effect owners still apply. Dashboard
+and widget actions use those session-bound tools; a shell CLI connection and
+its device pairing do not replace them.
 
 Sandbox turns also use these tools when Codex allows only managed hooks and cannot
 install the native process-admission hook. OpenClaw selects this existing execution
@@ -441,6 +510,8 @@ and finish completion settlement. A child that completes successfully during
 Stop keeps its result. Stop does not cancel a sibling run or a replacement
 session generation. After Stop settles, you can send another message in the same
 chat without reconnecting.
+Stop also retires an already-interrupted child without interrupting its finished
+turn again, so that child cannot keep its parent session blocked.
 If its previous native process is already closing, Stop cancels the waiting run
 without waiting for physical exit. A replacement writer still waits for that exit.
 Session-wide Stop preserves the caller's request ownership, protected-run, and
@@ -514,6 +585,11 @@ Native Codex subagents use Codex's execution and collaboration controls, not
 OpenClaw's retired Tasks view. Their current execution, assignment result, and
 result delivery remain separate facts.
 
+Once every native child has finished and its result has been captured, pending
+result delivery no longer prevents the parent from resuming. OpenClaw retains
+those results for delivery and retry. Running or interrupted children that can
+resume still protect the parent subscription.
+
 Retirement revokes captured requester authority immediately, then joins accepted
 native submission and assignment writes before releasing child subscriptions.
 Client disposal joins those writes before releasing retained owners.
@@ -571,6 +647,12 @@ delegation continues to use `sessions_spawn`. Stored submission and result
 receipts are recovery evidence, not permission to adopt a child or deliver to a
 replacement parent.
 
+When a native child spawns its own child, Codex delivers that grandchild's result
+to the immediate native parent. OpenClaw retires the completed assignment without
+another root continuation, including after restart when native lineage can be
+verified. Unavailable lineage leaves the assignment pending for later recovery;
+native-parent rotation alone does not prove nested delivery.
+
 For native Codex V1 agents, a completed `wait` result also records delivery to
 the foreground parent. OpenClaw does not start another continuation for that
 same child result after the parent replies.
@@ -580,7 +662,7 @@ same child result after the parent replies.
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
 - Managed Codex app-server `0.160.0` or newer. The plugin ships
-  `@openai/codex` `0.160.0` and uses a newer stable `codex` from `PATH` only
+  `@openai/codex` `0.162.1` and uses a newer stable `codex` from `PATH` only
   after it passes a version check and an app-server handshake; see
   [Newer installed Codex](/plugins/codex-harness-reference/app-server-transport#newer-installed-codex).
   Explicit custom, remote, and macOS desktop-owned

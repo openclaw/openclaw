@@ -56,15 +56,14 @@ export function createInterruptedCommitter(
 }
 
 export const ZERO_USAGE = createZeroUsageFixture();
+const MODEL = { provider: "openai", api: "openai-responses", model: "gpt-5.5" };
 export const PROVIDER_REPLAY = {
   v: 1 as const,
   type: "openai-responses-compaction",
   id: "cmp_worker_commit",
   data: "opaque-worker-commit",
   replayIndex: 1,
-  provider: "openai",
-  api: "openai-responses",
-  model: "gpt-5.5",
+  ...MODEL,
   baseUrlHash: "ozhevd1smnk8s",
   sessionHash: "171dzdv17gum5g",
   authProfileHash: "oe8bkr3r8947",
@@ -88,9 +87,7 @@ export function createTurnMessages(userText = "Inspect the workspace"): WorkerTr
           arguments: { path: "README.md" },
         },
       ],
-      api: "openai-responses",
-      provider: "openai",
-      model: "gpt-5.5",
+      ...MODEL,
       providerReplay: structuredClone(PROVIDER_REPLAY),
       diagnostics: [
         {
@@ -112,11 +109,7 @@ export const SESSION_ID = "session-worker-transcript";
 export const RUN_EPOCH = 7;
 
 export function createRequest(
-  params: {
-    baseLeafId?: string | null;
-    messages?: WorkerTranscriptMessage[];
-    seq?: number;
-  } = {},
+  params: Partial<Pick<WorkerTranscriptCommitParams, "baseLeafId" | "messages" | "seq">> = {},
 ): WorkerTranscriptCommitParams {
   return {
     runEpoch: RUN_EPOCH,

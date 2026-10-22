@@ -1,59 +1,53 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createAcceptedFixture } from "./manager.ownership.test-support.js";
 import {
   AcpRuntimeError,
   AcpSessionManager,
   baseCfg,
   createRuntime,
   disposeAcpSessionManagerInstance,
+  expectCalledWith,
   hoisted,
   installAcpSessionManagerTestLifecycle,
-  installMutableAcpSessionMetaUpsert,
   readySessionMeta,
+  resolvedIdentity,
+  runtimeTurn,
   type OpenClawConfig,
   type SessionAcpMeta,
 } from "./manager.test-helpers.js";
 import type { AcpRunTurnInput, WriteManagerSessionMeta } from "./manager.types.js";
 
+const runtimeHandle = (sessionKey: string, runtimeSessionName: string, backend = "acpx") => ({
+  sessionKey,
+  runtimeSessionName,
+  backend,
+});
+const backendFailure = () => ({
+  status: "failed" as const,
+  error: { code: "ACP_TURN_FAILED", message: "backend unavailable" },
+});
+
 describe("AcpSessionManager runtime handles", () => {
   installAcpSessionManagerTestLifecycle();
 
   function fixture(overrides: Partial<SessionAcpMeta> = {}, cfg: OpenClawConfig = baseCfg) {
-    const state = createRuntime();
-    const persisted = { currentMeta: readySessionMeta(overrides) };
-    const sessionKey = `agent:${persisted.currentMeta.agent}:acp:runtime-handles`;
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({ id: "acpx", runtime: state.runtime });
-    hoisted.readAcpSessionEntryMock.mockImplementation(() => ({
-      sessionKey,
-      storeSessionKey: sessionKey,
-      acp: persisted.currentMeta,
-    }));
-    installMutableAcpSessionMetaUpsert(persisted);
-    const manager = new AcpSessionManager();
-    const target = { cfg, sessionKey };
+    const f = createAcceptedFixture({
+      sessionKey: `agent:${overrides.agent ?? "codex"}:acp:runtime-handles`,
+      meta: overrides,
+      cfg,
+    });
     const input = {
-      ...target,
+      ...f.target,
       provenance: "system" as const,
       mode: "prompt" as const,
       text: "work",
     };
-    const run = (requestId = "turn", config = cfg) =>
-      manager.runTurn({ ...input, cfg: config, requestId });
-    return { state, persisted, manager, target, input, run };
-  }
-
-  function sourceMeta(): Partial<SessionAcpMeta> {
     return {
-      backend: "source-backend",
-      runtimeSessionName: "source-runtime",
-      identity: {
-        state: "resolved",
-        source: "status",
-        acpxRecordId: "source-record",
-        acpxSessionId: "source-session",
-        agentSessionId: "source-agent-session",
-        lastUpdatedAt: 1,
-      },
+      ...f,
+      state: f,
+      input,
+      run: (id = "turn", config = cfg) => f.run(id, { cfg: config }),
     };
   }
 
@@ -90,20 +84,30 @@ describe("AcpSessionManager runtime handles", () => {
     await f.run("third", denyCfg);
     expect(successor.ensureSession).toHaveBeenCalledOnce();
     expect(successor.runTurn).toHaveBeenCalledOnce();
-    expect(f.state.close).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: "runtime-handle-replaced" }),
-    );
+    expectCalledWith(f.state.close, { reason: "runtime-handle-replaced" });
   });
 
   it("disposes every retained handle and cancels the active turn before its close", async () => {
     const f = fixture();
     const idleSessionKey = "agent:claude:acp:idle";
+    const persisted = new Map<string, SessionAcpMeta>();
     hoisted.readAcpSessionEntryMock.mockImplementation(
       ({ sessionKey }: { sessionKey: string }) => ({
         sessionKey,
         storeSessionKey: sessionKey,
-        acp: readySessionMeta(),
+        acp: persisted.get(sessionKey) ?? readySessionMeta(),
       }),
+    );
+    hoisted.upsertAcpSessionMetaMock.mockImplementation(
+      async (input: Parameters<WriteManagerSessionMeta>[0]) => {
+        const current = persisted.get(input.sessionKey) ?? readySessionMeta();
+        const entry = { sessionId: input.sessionKey, updatedAt: 1, acp: current };
+        const next = input.mutate(current, entry);
+        if (next) {
+          persisted.set(input.sessionKey, next);
+        }
+        return { ...entry, acp: next ?? current };
+      },
     );
     const entered = createDeferred();
     const release = createDeferred();
@@ -150,11 +154,11 @@ describe("AcpSessionManager runtime handles", () => {
     f.state.ensureSession
       .mockImplementationOnce(async ({ sessionKey }) => {
         lifecycle.push("ensure:old");
-        return { sessionKey, backend: "acpx", runtimeSessionName: "runtime-old" };
+        return runtimeHandle(sessionKey, "runtime-old");
       })
       .mockImplementationOnce(async ({ sessionKey }) => {
         lifecycle.push("ensure:new");
-        return { sessionKey, backend: "acpx", runtimeSessionName: "runtime-new" };
+        return runtimeHandle(sessionKey, "runtime-new");
       });
     f.state.close.mockImplementation(async ({ handle }) => {
       lifecycle.push(`close:${handle.runtimeSessionName}`);
@@ -177,20 +181,16 @@ describe("AcpSessionManager runtime handles", () => {
   });
 
   it("re-ensures cached handles when persisted session identity changes", async () => {
-    const identity = (generation: number): SessionAcpMeta["identity"] => ({
-      state: "resolved",
-      acpxRecordId: "record-1",
-      acpxSessionId: `acpx-session-${generation}`,
-      agentSessionId: `agent-session-${generation}`,
-      source: "status",
-      lastUpdatedAt: 1,
-    });
+    const identity = (generation: number) =>
+      resolvedIdentity({
+        acpxRecordId: "record-1",
+        acpxSessionId: `acpx-session-${generation}`,
+        agentSessionId: `agent-session-${generation}`,
+      });
     const f = fixture({ runtimeSessionName: "runtime-1", identity: identity(1) });
     for (const generation of [1, 2]) {
       f.state.ensureSession.mockResolvedValueOnce({
-        sessionKey: f.target.sessionKey,
-        backend: "acpx",
-        runtimeSessionName: `runtime-${generation}`,
+        ...runtimeHandle(f.target.sessionKey, `runtime-${generation}`),
         acpxRecordId: "record-1",
         backendSessionId: `acpx-session-${generation}`,
         agentSessionId: `agent-session-${generation}`,
@@ -210,23 +210,16 @@ describe("AcpSessionManager runtime handles", () => {
     const f = fixture({
       cwd: "/workspace/stale",
       runtimeOptions: { cwd: "/workspace/project", thinking: "high" },
-      identity: {
-        state: "resolved",
-        source: "status",
-        acpxSessionId: "acpx-sid-1",
-        lastUpdatedAt: 1,
-      },
+      identity: resolvedIdentity({ acpxSessionId: "acpx-sid-1" }),
     });
     await f.run();
-    expect(f.state.ensureSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: f.target.sessionKey,
-        agent: "codex",
-        resumeSessionId: "acpx-sid-1",
-        cwd: "/workspace/project",
-        thinking: "high",
-      }),
-    );
+    expectCalledWith(f.state.ensureSession, {
+      sessionKey: f.target.sessionKey,
+      agent: "codex",
+      resumeSessionId: "acpx-sid-1",
+      cwd: "/workspace/project",
+      thinking: "high",
+    });
     expect(f.state.prepareFreshSession).not.toHaveBeenCalled();
     expect(f.persisted.currentMeta.identity?.acpxSessionId).toBe("acpx-sid-1");
     await expect(f.manager.getSessionStatus(f.target)).resolves.toMatchObject({
@@ -238,12 +231,21 @@ describe("AcpSessionManager runtime handles", () => {
     const cfg = {
       acp: { ...baseCfg.acp, backend: "destination-backend" },
     } satisfies OpenClawConfig;
-    const f = fixture(sourceMeta(), cfg);
-    f.state.ensureSession.mockImplementation(async ({ sessionKey }) => ({
-      sessionKey,
-      backend: "destination-backend",
-      runtimeSessionName: "destination-runtime",
-    }));
+    const f = fixture(
+      {
+        backend: "source-backend",
+        runtimeSessionName: "source-runtime",
+        identity: resolvedIdentity({
+          acpxRecordId: "source-record",
+          acpxSessionId: "source-session",
+          agentSessionId: "source-agent-session",
+        }),
+      },
+      cfg,
+    );
+    f.state.ensureSession.mockImplementation(async ({ sessionKey }) =>
+      runtimeHandle(sessionKey, "destination-runtime", "destination-backend"),
+    );
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
       id: "destination-backend",
       runtime: f.state.runtime,
@@ -271,9 +273,7 @@ describe("AcpSessionManager runtime handles", () => {
           throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "Backend has no model capability");
         }
         return {
-          sessionKey: input.sessionKey,
-          backend: "acpx",
-          runtimeSessionName: "legacy-runtime",
+          ...runtimeHandle(input.sessionKey, "legacy-runtime"),
           backendSessionId: "legacy-session",
         };
       });
@@ -313,13 +313,10 @@ describe("AcpSessionManager runtime handles", () => {
 
   it("prefers the agent resume id then retries fresh without resurrecting stale identifiers", async () => {
     const f = fixture({
-      identity: {
-        state: "resolved",
-        source: "status",
+      identity: resolvedIdentity({
         acpxSessionId: "acpx-sid-stale",
         agentSessionId: "agent-sid-stale",
-        lastUpdatedAt: 1,
-      },
+      }),
     });
     f.state.ensureSession.mockImplementation(async (input) => {
       if (input.resumeSessionId) {
@@ -329,9 +326,7 @@ describe("AcpSessionManager runtime handles", () => {
         );
       }
       return {
-        sessionKey: input.sessionKey,
-        backend: "acpx",
-        runtimeSessionName: "fresh-runtime",
+        ...runtimeHandle(input.sessionKey, "fresh-runtime"),
         backendSessionId: "acpx-sid-fresh",
       };
     });
@@ -348,9 +343,7 @@ describe("AcpSessionManager runtime handles", () => {
       resumeSessionId: "agent-sid-stale",
     });
     expect(f.state.ensureSession.mock.calls[1]?.[0].resumeSessionId).toBeUndefined();
-    expect(f.state.runTurn.mock.calls[0]?.[0].handle).toMatchObject({
-      backendSessionId: "acpx-sid-fresh",
-    });
+    expect(f.state.runTurn.mock.calls[0]?.[0].handle.backendSessionId).toBe("acpx-sid-fresh");
     expect(f.state.runTurn.mock.calls[0]?.[0].handle.agentSessionId).toBeUndefined();
     expect(f.persisted.currentMeta.identity?.acpxSessionId).toBe("acpx-sid-fresh");
     expect(f.persisted.currentMeta.identity?.agentSessionId).toBeUndefined();
@@ -358,19 +351,21 @@ describe("AcpSessionManager runtime handles", () => {
 });
 
 function failoverFixture(primaryUnavailableError?: Error) {
-  const primary = createRuntime();
-  const fallback = createRuntime();
   const sessionKey = "agent:codex:acp:failover";
-  let meta = readySessionMeta({ backend: "primary", runtimeSessionName: "primary-runtime" });
+  const cfg = { acp: { ...baseCfg.acp, backend: "primary", fallbacks: ["fallback"] } };
+  const primary = createAcceptedFixture({
+    sessionKey,
+    cfg,
+    meta: { backend: "primary", runtimeSessionName: "primary-runtime" },
+  });
+  const fallback = createRuntime();
   for (const [backend, runtime] of [
     ["primary", primary],
     ["fallback", fallback],
   ] as const) {
-    runtime.ensureSession.mockImplementation(async () => ({
-      sessionKey,
-      backend,
-      runtimeSessionName: `${backend}-runtime`,
-    }));
+    runtime.ensureSession.mockImplementation(async () =>
+      runtimeHandle(sessionKey, `${backend}-runtime`, backend),
+    );
   }
   hoisted.requireAcpRuntimeBackendMock.mockImplementation((backend?: string) => {
     if (backend === "primary" && primaryUnavailableError) {
@@ -381,32 +376,11 @@ function failoverFixture(primaryUnavailableError?: Error) {
     }
     return { id: backend, runtime: backend === "primary" ? primary.runtime : fallback.runtime };
   });
-  hoisted.readAcpSessionEntryMock.mockImplementation(() => ({
-    sessionKey,
-    storeSessionKey: sessionKey,
-    acp: meta,
-  }));
-  hoisted.upsertAcpSessionMetaMock.mockImplementation(
-    async (input: Parameters<WriteManagerSessionMeta>[0]) => {
-      meta = input.mutate(meta, { acp: meta, sessionId: "failover", updatedAt: 1 }) ?? meta;
-      return { sessionId: "failover", updatedAt: 1, acp: meta };
-    },
-  );
-  const cfg = { acp: { ...baseCfg.acp, backend: "primary", fallbacks: ["fallback"] } };
-  const manager = new AcpSessionManager();
   return {
     primary,
     fallback,
     turn(requestId: string, observers: Pick<AcpRunTurnInput, "onEvent" | "onLifecycle"> = {}) {
-      return manager.runTurn({
-        cfg,
-        sessionKey,
-        provenance: "system",
-        mode: "prompt",
-        text: requestId,
-        requestId,
-        ...observers,
-      });
+      return primary.run(requestId, { text: requestId, ...observers });
     },
   };
 }
@@ -431,25 +405,35 @@ describe("AcpSessionManager backend failover", () => {
     expect(hoisted.requireAcpRuntimeBackendMock).toHaveBeenCalledWith("fallback");
   });
 
-  it("does not fail over after prompt submission even when no output was emitted", async () => {
+  it.each(["submitted", "output"] as const)("does not fail over after %s", async (phase) => {
     const f = failoverFixture();
-    const startTurn = vi.fn<NonNullable<typeof f.primary.runtime.startTurn>>((input) => ({
-      requestId: input.requestId,
-      promptStarted: Promise.resolve(),
-      events: (async function* () {})(),
-      result: Promise.resolve({
-        status: "failed",
-        error: { code: "ACP_TURN_FAILED", message: "backend unavailable" },
+    const events: unknown[] = [];
+    const startTurn = vi.fn<NonNullable<typeof f.primary.runtime.startTurn>>((input) =>
+      runtimeTurn(input.requestId, {
+        promptStarted: Promise.resolve(),
+        result: Promise.resolve(backendFailure()),
       }),
-      cancel: vi.fn(async () => {}),
-      closeStream: vi.fn(async () => {}),
-    }));
-    f.primary.runtime.startTurn = startTurn;
-    await expect(f.turn("submitted")).rejects.toMatchObject({
-      code: "ACP_TURN_FAILED",
-      message: "backend unavailable",
-    });
-    expect(startTurn).toHaveBeenCalledOnce();
+    );
+    if (phase === "submitted") {
+      f.primary.runtime.startTurn = startTurn;
+    } else {
+      f.primary.runTurn.mockImplementation(async function* () {
+        yield { type: "text_delta", text: "partial" };
+        throw new AcpRuntimeError("ACP_TURN_FAILED", "backend unavailable");
+      });
+    }
+    await expect(
+      f.turn(phase, {
+        onEvent: (event) => {
+          events.push(event);
+        },
+      }),
+    ).rejects.toMatchObject(backendFailure().error);
+    if (phase === "submitted") {
+      expect(startTurn).toHaveBeenCalledOnce();
+    } else {
+      expect(events).toEqual([expect.objectContaining({ type: "text_delta", text: "partial" })]);
+    }
     expect(f.fallback.runTurn).not.toHaveBeenCalled();
   });
 
@@ -458,20 +442,15 @@ describe("AcpSessionManager backend failover", () => {
     const transitions: string[] = [];
     const promptStarted = Promise.reject(new Error("backend unavailable"));
     promptStarted.catch(() => {});
-    f.primary.runtime.startTurn = vi.fn((input) => ({
-      requestId: input.requestId,
-      promptStarted,
-      events: (async function* () {})(),
-      result: Promise.resolve().then(() => {
-        transitions.push("primary-cleaned-up");
-        return {
-          status: "failed" as const,
-          error: { code: "ACP_TURN_FAILED", message: "backend unavailable" },
-        };
+    f.primary.runtime.startTurn = vi.fn((input) =>
+      runtimeTurn(input.requestId, {
+        promptStarted,
+        result: Promise.resolve().then(() => {
+          transitions.push("primary-cleaned-up");
+          return backendFailure();
+        }),
       }),
-      cancel: vi.fn(async () => {}),
-      closeStream: vi.fn(async () => {}),
-    }));
+    );
     f.fallback.runTurn.mockImplementation(async function* () {
       transitions.push("fallback-started");
       yield { type: "done" };
@@ -485,23 +464,5 @@ describe("AcpSessionManager backend failover", () => {
     expect(transitions).toEqual(["primary-cleaned-up", "fallback-started"]);
     expect(lifecycleEvents).toEqual(["prompt_submitted"]);
     expect(f.fallback.runTurn).toHaveBeenCalledOnce();
-  });
-
-  it("does not fail over after a backend has emitted output", async () => {
-    const f = failoverFixture();
-    f.primary.runTurn.mockImplementation(async function* () {
-      yield { type: "text_delta", text: "partial" };
-      throw new AcpRuntimeError("ACP_TURN_FAILED", "backend unavailable");
-    });
-    const events: unknown[] = [];
-    await expect(
-      f.turn("output", {
-        onEvent: (event) => {
-          events.push(event);
-        },
-      }),
-    ).rejects.toMatchObject({ code: "ACP_TURN_FAILED" });
-    expect(events).toEqual([expect.objectContaining({ type: "text_delta", text: "partial" })]);
-    expect(f.fallback.runTurn).not.toHaveBeenCalled();
   });
 });

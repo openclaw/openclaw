@@ -2,7 +2,6 @@ import { render, type JSX } from "@solidjs/web";
 import { ensureCustomElementDefined } from "../app/lazy-custom-element.ts";
 
 type PromiseModalHost<T> = {
-  host: HTMLDivElement;
   finish: (value: T) => void;
   render: (content: () => JSX.Element) => void;
   readonly settled: boolean;
@@ -29,7 +28,6 @@ export function withPromiseModalHost<T>(
       host.remove();
     };
     const modal = {
-      host,
       settled: false,
       render(content: () => JSX.Element) {
         if (modal.settled) {
@@ -68,7 +66,7 @@ export function withPromiseModalHost<T>(
       fail(error);
     }
     if (!ready && !modal.settled) {
-      void ensureCustomElementDefined("openclaw-modal-dialog", () => import("./modal-dialog.ts"))
+      void ensureCustomElementDefined("openclaw-modal-dialog", () => import("./modal-dialog.tsx"))
         .then(() => {
           ready = true;
           if (!modal.settled && pendingContent) {

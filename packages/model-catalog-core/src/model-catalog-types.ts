@@ -12,6 +12,12 @@ import {
   type ModelRoutingPercentiles,
   type ModelRoutingSortConfig,
 } from "../../llm-core/src/model-data.js";
+import type { ModelInferenceCapabilities } from "./model-inference-capabilities.js";
+
+export type {
+  ModelInferenceCapabilities,
+  ModelDecisionCapabilities,
+} from "./model-inference-capabilities.js";
 
 // Tier capacity is separate from the model's full context window. Leave room
 // below the observed serving boundary for output and tool-round growth.
@@ -107,7 +113,8 @@ export type ModelCatalogImageInputConfig = ModelDataImageInputConfig;
 
 export type ModelCatalogMediaInputConfig = ModelDataMediaInputConfig;
 
-export type ModelCatalogInput = "text" | "image" | "document";
+export const MODEL_CATALOG_INPUTS = ["text", "image", "video", "document"] as const;
+export type ModelCatalogInput = (typeof MODEL_CATALOG_INPUTS)[number];
 export const MODEL_CATALOG_THINKING_LEVELS = [...MODEL_DATA_THINKING_LEVELS] as const;
 export type ModelCatalogThinkingLevel = (typeof MODEL_CATALOG_THINKING_LEVELS)[number];
 export type ModelCatalogThinkingLevelMap = ModelDataThinkingLevelMap;
@@ -156,7 +163,8 @@ export function listMappedModelThinkingLevels(model: {
 }
 
 export type ModelCatalogDiscovery = "static" | "refreshable" | "runtime";
-export type ModelCatalogStatus = "available" | "preview" | "deprecated" | "disabled";
+export const MODEL_CATALOG_STATUSES = ["available", "preview", "deprecated", "disabled"] as const;
+export type ModelCatalogStatus = (typeof MODEL_CATALOG_STATUSES)[number];
 export type ModelCatalogSource =
   | "manifest"
   | "provider-index"
@@ -215,6 +223,8 @@ export const MODEL_CATALOG_MAX_CONTEXT_WINDOWS = 16;
 
 export type ModelCatalogModel = {
   id: string;
+  /** Task facts for this exact served route, independent of chat wire metadata. */
+  inference?: ModelInferenceCapabilities;
   name?: string;
   api?: ModelCatalogApi;
   baseUrl?: string;
@@ -225,6 +235,8 @@ export type ModelCatalogModel = {
   contextWindows?: ModelCatalogContextWindowOption[];
   contextWindowDefault?: string;
   contextTokens?: number;
+  /** Total model parameters, including inactive experts. */
+  parameterCount?: number;
   maxTokens?: number;
   thinkingLevelMap?: ModelCatalogThinkingLevelMap;
   cost?: ModelCatalogCost;
@@ -245,6 +257,8 @@ export type ModelCatalogModel = {
 };
 
 export type ModelCatalogProvider = {
+  /** Credential owner; omitted providers keep agent-owned profile/env/config auth. */
+  authScope?: "agent" | "plugin";
   baseUrl?: string;
   api?: ModelCatalogApi;
   headers?: Record<string, string>;

@@ -79,40 +79,37 @@ describe("OpenAI realtime voice bridge connection", () => {
     restoreTestEnvironment();
   });
 
-  it.each([
-    "wss://voice.example.test/custom/inference/?realtime=true&signature=a~b%20c&m%6fdel=old",
-  ])(
-    "uses the configured realtime endpoint %s without minting a client secret",
-    async (baseUrl) => {
-      const provider = buildOpenAIRealtimeVoiceProvider();
-      const bridge = provider.createBridge({
-        providerConfig: { apiKey: "test-realtime-key", baseUrl, model: "custom/realtime model" },
-        onAudio: vi.fn(),
-        onClearAudio: vi.fn(),
+  it("uses the configured realtime endpoint without minting a client secret", async () => {
+    const baseUrl =
+      "wss://voice.example.test/custom/inference/?realtime=true&signature=a~b%20c&m%6fdel=old";
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "test-realtime-key", baseUrl, model: "custom/realtime model" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+    const { connecting, socket } = beginBridgeConnection(bridge);
+    openSocket(socket);
+    emitSessionUpdated(socket);
+    await connecting;
+    try {
+      const url = new URL(String(socket.args[0]));
+      const expected = new URL(baseUrl);
+      expect(url.protocol).toBe(expected.protocol.replace("http", "ws"));
+      expect(url.host).toBe(expected.host);
+      expect(url.pathname).toBe(expected.pathname);
+      expect(url.searchParams.get("realtime")).toBe("true");
+      expect(url.search).toContain("signature=a~b%20c");
+      expect(url.searchParams.getAll("model")).toEqual(["custom/realtime model"]);
+      expect(socket.args[1]).toMatchObject({
+        headers: { Authorization: "Bearer test-realtime-key" },
       });
-      const { connecting, socket } = beginBridgeConnection(bridge);
-      openSocket(socket);
-      emitSessionUpdated(socket);
-      await connecting;
-      try {
-        const url = new URL(String(socket.args[0]));
-        const expected = new URL(baseUrl);
-        expect(url.protocol).toBe(expected.protocol.replace("http", "ws"));
-        expect(url.host).toBe(expected.host);
-        expect(url.pathname).toBe(expected.pathname);
-        expect(url.searchParams.get("realtime")).toBe("true");
-        expect(url.search).toContain("signature=a~b%20c");
-        expect(url.searchParams.getAll("model")).toEqual(["custom/realtime model"]);
-        expect(socket.args[1]).toMatchObject({
-          headers: { Authorization: "Bearer test-realtime-key" },
-        });
-        expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
-        expect(bridge.isConnected()).toBe(true);
-      } finally {
-        await bridge.close();
-      }
-    },
-  );
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+      expect(bridge.isConnected()).toBe(true);
+    } finally {
+      await bridge.close();
+    }
+  });
 
   it.each([
     "file:///private/voice",
@@ -146,15 +143,11 @@ describe("OpenAI realtime voice bridge connection", () => {
     expect(FakeWebSocket.instances).toHaveLength(0);
   });
 
-  it.each([
-    { binding: "modern", throwingCloseCallback: true },
-    { binding: "v2026.8.1", throwingCloseCallback: false },
-  ] as const)(
-    "shares GA policy and retires the $binding binding with throwing callback=$throwingCloseCallback",
-    async ({ binding, throwingCloseCallback }) => {
-      const { broker, createBrowserSession } = createQuicksilverBrowserBrokerFixture({
-        session: { clientSecret: "gateway-token" },
-      });
+  it.each([true, false])(
+    "shares GA policy and retires the gateway binding with throwing callback=%s",
+    async (throwingCloseCallback) => {
+      const { broker, createBrowserSession } =
+        createQuicksilverBrowserBrokerFixture("gateway-token");
       const provider = buildOpenAIRealtimeVoiceProvider({
         quicksilverBrowserSessionBroker: broker,
       });
@@ -191,12 +184,13 @@ describe("OpenAI realtime voice bridge connection", () => {
           tools: [createRealtimeTool("openclaw_agent_consult")],
           vadThreshold: 0.7,
           voice: "marin",
+          clientControl: { owner: "gateway" },
           gatewayControl: {
             bindBridge,
+            bindControl,
             onEvent,
             onReady,
             onClose,
-            ...(binding === "modern" ? { bindControl } : {}),
           },
         }),
       ).resolves.toMatchObject({
@@ -247,13 +241,8 @@ describe("OpenAI realtime voice bridge connection", () => {
         callId: "rtc_gateway",
         onTerminal,
       });
-      if (binding === "modern") {
-        expect(bindControl).toHaveBeenCalledOnce();
-        expect(bindBridge).not.toHaveBeenCalled();
-      } else {
-        expect(bindBridge).toHaveBeenCalledWith(bridge);
-        expect(bindControl).not.toHaveBeenCalled();
-      }
+      expect(bindControl).toHaveBeenCalledOnce();
+      expect(bindBridge).not.toHaveBeenCalled();
       const { connecting, socket } = beginBridgeConnection(bridge);
       let connectResolved = false;
       void connecting.then(() => {
@@ -304,22 +293,20 @@ describe("OpenAI realtime voice bridge connection", () => {
           audio_end_ms: 3_700,
         },
       ]);
-      if (binding === "modern") {
-        const control = bindControl.mock.calls[0]?.[0];
-        if (!control?.sendUserMessage || !control.submitToolResult) {
-          throw new Error("Expected both GA control operations");
-        }
-        await control.submitToolResult("unknown-call", {});
-        control.sendUserMessage("Read the current status");
-        expect(parseSent(socket)).toContainEqual({
-          type: "conversation.item.create",
-          item: {
-            type: "message",
-            role: "user",
-            content: [{ type: "input_text", text: "Read the current status" }],
-          },
-        });
+      const control = bindControl.mock.calls[0]?.[0];
+      if (!control?.sendUserMessage || !control.submitToolResult) {
+        throw new Error("Expected both GA control operations");
       }
+      await control.submitToolResult("unknown-call", {});
+      control.sendUserMessage("Read the current status");
+      expect(parseSent(socket)).toContainEqual({
+        type: "conversation.item.create",
+        item: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Read the current status" }],
+        },
+      });
       if (throwingCloseCallback) {
         expect(() => bridge.close()).toThrow("close callback failed");
       } else {

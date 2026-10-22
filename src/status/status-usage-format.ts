@@ -4,8 +4,8 @@ export const formatTokensPairValue = (input?: number | null, output?: number | n
   if (input == null && output == null) {
     return null;
   }
-  const inputLabel = typeof input === "number" ? formatTokenCount(input) : "?";
-  const outputLabel = typeof output === "number" ? formatTokenCount(output) : "?";
+  const inputLabel = input == null ? "?" : formatTokenCount(input);
+  const outputLabel = output == null ? "?" : formatTokenCount(output);
   return `${inputLabel} in / ${outputLabel} out`;
 };
 
@@ -14,24 +14,15 @@ export const formatCacheHitValue = (
   cacheRead?: number | null,
   cacheWrite?: number | null,
 ) => {
-  if (
-    (typeof cacheRead !== "number" || cacheRead < 0) &&
-    (typeof cacheWrite !== "number" || cacheWrite < 0)
-  ) {
+  if ((cacheRead == null || cacheRead < 0) && (cacheWrite == null || cacheWrite < 0)) {
     return null;
   }
 
-  const cachedLabel = typeof cacheRead === "number" ? formatTokenCount(cacheRead) : "0";
-  const newLabel = typeof cacheWrite === "number" ? formatTokenCount(cacheWrite) : "0";
+  const cachedLabel = formatTokenCount(cacheRead ?? 0);
+  const newLabel = formatTokenCount(cacheWrite ?? 0);
 
-  const totalInput =
-    (typeof cacheRead === "number" ? cacheRead : 0) +
-    (typeof cacheWrite === "number" ? cacheWrite : 0) +
-    (typeof input === "number" ? input : 0);
-  const hitRate =
-    totalInput > 0 && typeof cacheRead === "number"
-      ? Math.round((cacheRead / totalInput) * 100)
-      : 0;
+  const totalInput = (cacheRead ?? 0) + (cacheWrite ?? 0) + (input ?? 0);
+  const hitRate = totalInput > 0 ? Math.round(((cacheRead ?? 0) / totalInput) * 100) : 0;
 
   return `${hitRate}% hit · ${cachedLabel} cached, ${newLabel} new`;
 };

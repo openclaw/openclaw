@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
 import { buildMainSessionRecoveryClearPatch } from "../../agents/main-session-recovery/main-session-recovery-clear.js";
@@ -63,7 +64,7 @@ type AgentSessionReuseInput = {
 };
 
 /** Re-evaluate the entry from each read; callers retain admission and concurrent-rotation fencing. */
-export async function evaluateAgentSessionReuse(params: AgentSessionReuseInput) {
+async function evaluateAgentSessionReuse(params: AgentSessionReuseInput) {
   const lifecycleTimestamps = params.freshEntry
     ? await resolveSessionLifecycleTimestampsAsync({
         entry: params.freshEntry,
@@ -165,7 +166,7 @@ export async function buildAgentSessionPatch(
     requestLabel?: string;
     explicitSessionKey?: string;
     pluginOwnerId?: string;
-    fallbackSessionId: string;
+    fallbackSessionId?: string;
     touchInteraction: boolean;
   },
 ): Promise<AgentSessionPatchBuild> {
@@ -235,7 +236,7 @@ export async function buildAgentSessionPatch(
     params.freshEntry?.sessionId &&
     params.freshEntry.sessionId !== params.initialEntry.sessionId,
   );
-  const freshSessionId = reuse.sessionId ?? params.fallbackSessionId;
+  const freshSessionId = reuse.sessionId ?? params.fallbackSessionId ?? randomUUID();
   const freshRotatedSessionId = Boolean(
     params.freshEntry?.sessionId && params.freshEntry.sessionId !== freshSessionId,
   );
@@ -256,7 +257,7 @@ export async function buildAgentSessionPatch(
     sessionId: patchSessionId,
     updatedAt: params.now,
     ...(reuse.isNewSession && !freshSessionRotatedSinceLoad
-      ? { sessionStartedAt: params.now }
+      ? { lifecycleRevision: randomUUID(), sessionStartedAt: params.now }
       : params.freshEntry?.sessionStartedAt === undefined &&
           patchSessionId === params.freshEntry?.sessionId &&
           reuse.lifecycleTimestamps?.sessionStartedAt !== undefined

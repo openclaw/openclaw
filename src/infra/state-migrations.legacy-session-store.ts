@@ -37,16 +37,14 @@ import { migrateLegacySessionCreator } from "../state/creator-namespace-migratio
 import {
   deliveryContextFromChannelRoute,
   isCanonicalSessionDeliveryState,
+  isInternalRouteContext,
   mergeDeliveryContext,
+  mergeExternalDeliveryContextOverInternalRoute,
   normalizeDeliveryChannelRoute,
   normalizeDeliveryContext,
   normalizeSessionDeliveryState,
 } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
-import {
-  INTERNAL_MESSAGE_CHANNEL,
-  isInternalNonDeliveryChannel,
-} from "../utils/message-channel-constants.js";
 import { writeTextAtomic } from "./json-files.js";
 import { readSessionStoreJson5 } from "./state-migrations.fs.js";
 
@@ -365,27 +363,8 @@ const LEGACY_SESSION_DELIVERY_KEYS = [
   "lastThreadId",
 ] as const;
 
-function isInternalContext(context?: DeliveryContext): boolean {
-  return Boolean(
-    context?.channel &&
-    (context.channel === INTERNAL_MESSAGE_CHANNEL || isInternalNonDeliveryChannel(context.channel)),
-  );
-}
-
 function hasExternalTarget(context?: DeliveryContext): boolean {
-  return Boolean(context?.channel && !isInternalContext(context) && context.to);
-}
-
-function mergeExternalOverInternal(
-  external?: DeliveryContext,
-  internal?: DeliveryContext,
-): DeliveryContext | undefined {
-  return normalizeDeliveryContext({
-    channel: external?.channel,
-    to: external?.to,
-    accountId: external?.accountId ?? internal?.accountId,
-    threadId: external?.threadId ?? internal?.threadId,
-  });
+  return Boolean(context?.channel && !isInternalRouteContext(context) && context.to);
 }
 
 /** Canonicalizes file-era delivery fields before doctor imports a row into SQLite. */
@@ -409,8 +388,13 @@ export function normalizeLegacySessionEntryDelivery(value: SessionEntry | Record
   const routeContext = deliveryContextFromChannelRoute(route);
   const explicitContext = normalizeDeliveryContext(legacy.deliveryContext);
   const lastChannel = normalizeDeliveryContext({ channel: legacy.lastChannel })?.channel;
-  const storedChannel = normalizeDeliveryContext({ channel: legacy.channel })?.channel;
-  const originChannel = normalizeDeliveryContext({ channel: legacy.origin?.provider })?.channel;
+  const channelContext = normalizeDeliveryContext({ channel: legacy.channel });
+  const originContext = normalizeDeliveryContext({
+    channel: legacy.origin?.provider,
+    to: legacy.origin?.to,
+    accountId: legacy.origin?.accountId,
+    threadId: legacy.origin?.threadId,
+  });
   const normalizedLastFields = normalizeDeliveryContext({
     to: legacy.lastTo,
     accountId: legacy.lastAccountId,
@@ -423,40 +407,34 @@ export function normalizeLegacySessionEntryDelivery(value: SessionEntry | Record
   );
   const lastCandidate = normalizeDeliveryContext({
     channel:
-      lastChannel ?? (hasNormalizedLastFields ? (storedChannel ?? originChannel) : undefined),
+      lastChannel ??
+      (hasNormalizedLastFields ? (channelContext?.channel ?? originContext?.channel) : undefined),
     to: normalizedLastFields?.to,
     accountId: normalizedLastFields?.accountId,
     threadId: normalizedLastFields?.threadId,
   });
   const lastContext =
-    isInternalContext(lastCandidate) ||
+    isInternalRouteContext(lastCandidate) ||
     hasExternalTarget(lastCandidate) ||
     (lastChannel != null && lastCandidate?.channel != null) ||
     (lastCandidate?.channel && lastCandidate.channel === explicitContext?.channel)
       ? lastCandidate
       : undefined;
-  const channelContext = normalizeDeliveryContext({ channel: legacy.channel });
-  const originContext = normalizeDeliveryContext({
-    channel: legacy.origin?.provider,
-    to: legacy.origin?.to,
-    accountId: legacy.origin?.accountId,
-    threadId: legacy.origin?.threadId,
-  });
   const fallbackContext = mergeDeliveryContext(
     lastContext,
     mergeDeliveryContext(explicitContext, mergeDeliveryContext(channelContext, originContext)),
   );
-  const internalFallbackContext = isInternalContext(routeContext)
+  const internalFallbackContext = isInternalRouteContext(routeContext)
     ? mergeDeliveryContext(routeContext, lastContext)
-    : isInternalContext(lastContext)
+    : isInternalRouteContext(lastContext)
       ? lastContext
-      : isInternalContext(channelContext)
+      : isInternalRouteContext(channelContext)
         ? mergeDeliveryContext(channelContext, lastContext)
         : undefined;
   const hasInternalFallback =
     internalFallbackContext !== undefined && hasExternalTarget(explicitContext);
   const context = hasInternalFallback
-    ? mergeExternalOverInternal(explicitContext, internalFallbackContext)
+    ? mergeExternalDeliveryContextOverInternalRoute(explicitContext, internalFallbackContext)
     : mergeDeliveryContext(routeContext, fallbackContext);
   const migratedDelivery = normalizeSessionDeliveryState({
     route: hasInternalFallback ? undefined : route,

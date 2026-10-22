@@ -1,5 +1,4 @@
-// Logbook node-host tests cover screenshot subprocess deadline behavior.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const { readFileMock, rmMock, runExecMock } = vi.hoisted(() => ({
   readFileMock: vi.fn(async () => Buffer.from("jpeg")),
@@ -44,61 +43,33 @@ function rejectWhenAborted(signal: AbortSignal): Promise<never> {
   });
 }
 
-describe("handleLogbookSnapshot", () => {
-  let timeoutSpy: ReturnType<typeof vi.spyOn>;
-
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockImplementation((timeoutMs) => {
-      const controller = new AbortController();
-      setTimeout(() => {
-        controller.abort(new DOMException("snapshot command timed out", "TimeoutError"));
-      }, timeoutMs);
-      return controller.signal;
-    });
-    runExecMock.mockReset();
-    readFileMock.mockClear();
-    rmMock.mockClear();
+let timeoutSpy: ReturnType<typeof vi.spyOn>;
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+  timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockImplementation((timeoutMs) => {
+    const controller = new AbortController();
+    setTimeout(() => {
+      controller.abort(new DOMException("snapshot command timed out", "TimeoutError"));
+    }, timeoutMs);
+    return controller.signal;
   });
+  vi.clearAllMocks();
+});
 
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-  });
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
-  it("aborts a stalled capture before the node.invoke deadline and skips resize", async () => {
-    runExecMock.mockImplementationOnce(
-      async (_command: string, _args: string[], options: RunExecOptions) =>
-        await rejectWhenAborted(options.signal as AbortSignal),
-    );
-
-    const snapshot = handleLogbookSnapshot({});
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(runExecMock).toHaveBeenCalledTimes(1);
-    expect(timeoutSpy).toHaveBeenCalledWith(25_000);
-    const signal = runExecSignal(0);
-    expect(signal.aborted).toBe(false);
-
-    await vi.advanceTimersByTimeAsync(24_999);
-    expect(signal.aborted).toBe(false);
-    expect(runExecMock).toHaveBeenCalledTimes(1);
-
-    await vi.advanceTimersByTimeAsync(1);
-    await expect(snapshot).resolves.toEqual({ error: "snapshot command timed out" });
-    expect(signal.aborted).toBe(true);
-    expect(runExecMock).toHaveBeenCalledTimes(1);
-    expect(readFileMock).not.toHaveBeenCalled();
-    expect(rmMock).toHaveBeenCalledOnce();
-  });
-
-  it("shares the capture deadline with the resize command", async () => {
+it.each([0, 20_000])(
+  "aborts at the shared deadline with capture progress after %i ms",
+  async (captureMs) => {
     runExecMock.mockImplementation(
       async (command: string, _args: string[], options: RunExecOptions) => {
-        if (command === "screencapture") {
+        if (command === "screencapture" && captureMs) {
           return await new Promise<{ stdout: string; stderr: string }>((resolve) => {
-            setTimeout(() => resolve({ stdout: "", stderr: "" }), 20_000);
+            setTimeout(() => resolve({ stdout: "", stderr: "" }), captureMs);
           });
         }
         return await rejectWhenAborted(options.signal as AbortSignal);
@@ -108,23 +79,26 @@ describe("handleLogbookSnapshot", () => {
     const snapshot = handleLogbookSnapshot({});
     await vi.advanceTimersByTimeAsync(0);
     const captureSignal = runExecSignal(0);
-
-    await vi.advanceTimersByTimeAsync(19_999);
     expect(runExecMock).toHaveBeenCalledTimes(1);
-
-    await vi.advanceTimersByTimeAsync(1);
-    expect(runExecMock).toHaveBeenCalledTimes(2);
-    const resizeSignal = runExecSignal(1);
-    expect(resizeSignal).toBe(captureSignal);
-    expect(resizeSignal.aborted).toBe(false);
-
-    await vi.advanceTimersByTimeAsync(4_999);
-    expect(resizeSignal.aborted).toBe(false);
-
+    expect(timeoutSpy).toHaveBeenCalledWith(25_000);
+    expect(captureSignal.aborted).toBe(false);
+    if (captureMs) {
+      await vi.advanceTimersByTimeAsync(captureMs - 1);
+      expect(runExecMock).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(runExecSignal(1)).toBe(captureSignal);
+      expect(captureSignal.aborted).toBe(false);
+    }
+    const calls = captureMs ? 2 : 1;
+    expect(runExecMock).toHaveBeenCalledTimes(calls);
+    await vi.advanceTimersByTimeAsync(24_999 - captureMs);
+    expect(captureSignal.aborted).toBe(false);
+    expect(runExecMock).toHaveBeenCalledTimes(calls);
     await vi.advanceTimersByTimeAsync(1);
     await expect(snapshot).resolves.toEqual({ error: "snapshot command timed out" });
-    expect(resizeSignal.aborted).toBe(true);
+    expect(captureSignal.aborted).toBe(true);
+    expect(runExecMock).toHaveBeenCalledTimes(calls);
     expect(readFileMock).not.toHaveBeenCalled();
     expect(rmMock).toHaveBeenCalledOnce();
-  });
-});
+  },
+);

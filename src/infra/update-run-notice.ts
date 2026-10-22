@@ -31,6 +31,18 @@ export function renderUpdateRunSummary(
   return `${headline}\n${nextStep}`;
 }
 
+/** Only this renderer's terminal summaries may settle an earlier completion. */
+export function isUpdateRunTerminalNoticeText(text: string): boolean {
+  return (
+    [...UPDATE_RUN_HEADLINES.keys()].some(
+      (status) => status !== "running" && text === renderUpdateRunSummary({ status, reason: null }),
+    ) ||
+    [null, ...SKIPPED_UPDATE_RUN_HEADLINES.keys()].some(
+      (reason) => text === renderUpdateRunSummary({ status: "skipped", reason }),
+    )
+  );
+}
+
 /** Only the current milestone may produce a conversation notice. */
 export function renderUpdateRunNotice(
   run: Pick<UpdateRunRecord, "status" | "reason" | "phase">,

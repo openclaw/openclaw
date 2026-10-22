@@ -26,7 +26,12 @@ import {
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,
 } from "../../../state/openclaw-state-worker-error.js";
-import { freezeSubagentRunReadRecord, immutableSubagentRun } from "./subagent-registry-memory.js";
+import {
+  freezeSubagentRunReadRecord,
+  immutableSubagentRun,
+  isSubagentRunPayloadEvicted,
+  restoreSubagentRunPayload,
+} from "./subagent-registry-memory.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import { readAllSubagentRunsInWorker } from "./subagent-registry.store.read.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -251,7 +256,6 @@ export function getSubagentRunsSnapshot<T extends SubagentRunReadRecord>(
   scope?: {
     context?: OpenClawStateReadContext;
     load?: () => Iterable<T>;
-    selectCached?: (lookup: SubagentSessionReadLookup) => readonly string[];
     liveRunIds?: ReadonlySet<string>;
     matches: (entry: SubagentRunReadRecord) => boolean;
   },
@@ -259,11 +263,7 @@ export function getSubagentRunsSnapshot<T extends SubagentRunReadRecord>(
   const merged = new Map<string, T>();
   if (shouldReadPersistedSubagentRuns()) {
     const cached = loadPersistedSubagentRunsForRead(cache, scope?.context);
-    const persisted = scope?.load
-      ? scope.load()
-      : scope?.selectCached
-        ? indexedSnapshotRows(cached, scope.selectCached(getSessionListLookup(cache, cached)))
-        : cached.values();
+    const persisted = scope?.load ? scope.load() : cached.values();
     for (const entry of persisted) {
       if (!scope || scope.matches(entry)) {
         merged.set(entry.runId, entry);
@@ -297,9 +297,6 @@ export async function readCompactSubagentRuns(context: OpenClawStateWorkerContex
   );
   if (!reply) {
     return new Map<string, SubagentRunReadRecord>();
-  }
-  if (!reply.ok || reply.type !== "subagents.sessionList") {
-    throw new Error("Unexpected compact subagent registry read result");
   }
   if ("unavailable" in reply) {
     const failure = new Error(reply.unavailable.message);
@@ -470,9 +467,15 @@ export function mergeSelectedFullRuns(
 ): Map<string, SubagentRunRecord> {
   const current = context && !freshPersisted ? acceptedFullSnapshot(cache, context) : undefined;
   const merged = new Map<string, SubagentRunRecord>();
+  const withPayload = (entry: SubagentRunRecord) => {
+    const payload = persisted.get(entry.runId);
+    return isSubagentRunPayloadEvicted(entry) && payload && !isSubagentRunPayloadEvicted(payload)
+      ? restoreSubagentRunPayload(entry, payload)
+      : entry;
+  };
   for (const [runId, entry] of selectedEntries(current ?? persisted, runIds)) {
     if (matches(entry)) {
-      merged.set(runId, entry);
+      merged.set(runId, withPayload(entry));
     }
   }
   const state = selectSubagentCacheStateForRead(cache.state, context);
@@ -485,11 +488,11 @@ export function mergeSelectedFullRuns(
     })
   ) {
     for (const [runId, { entry }] of state.changes ? selectedEntries(state.changes, runIds) : []) {
-      setOrDeleteRun(merged, runId, entry && matches(entry) ? entry : undefined);
+      setOrDeleteRun(merged, runId, entry && matches(entry) ? withPayload(entry) : undefined);
     }
   }
   for (const [runId, entry] of selectedEntries(inMemoryRuns, runIds)) {
-    setOrDeleteRun(merged, runId, matches(entry) ? entry : undefined);
+    setOrDeleteRun(merged, runId, matches(entry) ? withPayload(entry) : undefined);
   }
   return merged;
 }

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -35,6 +36,39 @@ function writeCapture(root: string, name: string, sealed: boolean, marked = true
   if (sealed) {
     fs.writeFileSync(path.join(directory, "manifest.json"), "{}\n");
   }
+  return directory;
+}
+
+function writeSealedCapture(root: string, runId: string, createdAt: string): string {
+  const directory = writeCapture(root, runId, true);
+  fs.writeFileSync(
+    path.join(directory, "manifest.json"),
+    JSON.stringify({
+      schemaVersion: 2,
+      kind: "update-recovery",
+      generation: { kind: "baseline" },
+      databases: [],
+      runId,
+      installRoot: root,
+      stateDir: path.dirname(root),
+      configPath: path.join(root, "config.json"),
+      configPaths: [path.join(root, "config.json")],
+      creator: { host: "fixture", pid: 1, startIdentity: "1" },
+      drivers: [],
+      createdAt,
+      roots: [path.join(root, "config.json")],
+      excludedRoots: [],
+      protectedPaths: [path.join(root, "config.json")],
+      entries: [
+        {
+          kind: "missing",
+          sourcePath: path.join(root, "config.json"),
+          sqlite: false,
+          directory: false,
+        },
+      ],
+    }),
+  );
   return directory;
 }
 
@@ -83,6 +117,9 @@ async function withCaptureHistory(
       captures[label] = writeCapture(root, runId, sealed);
     }
     clock.mockRestore();
+    captures.orphan = writeSealedCapture(root, randomUUID(), "2026-10-13T10:00:00.000Z");
+    captures.incomplete = writeSealedCapture(root, randomUUID(), "2026-10-13T10:00:00.000Z");
+    fs.writeFileSync(path.join(captures.incomplete, "manifest.json.partial"), "pending");
     captures.unattributed = writeCapture(root, "doctor-unrecorded", true);
     captures.unmarked = writeCapture(root, "c0ffee00-0000-4000-8000-000000000000", true, false);
     closeOpenClawStateDatabaseForTest();
@@ -95,7 +132,7 @@ async function runCleanup(options: { dryRun?: boolean; yes?: boolean }) {
   const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
   await updateCleanupCommand({ ...options, json: true });
   expect(exit).not.toHaveBeenCalled();
-  const report = writeJson.mock.calls[0]?.[0] as {
+  const report = writeJson.mock.calls.at(-1)?.[0] as {
     status: string;
     artifacts: Array<{
       kind?: string;
@@ -141,6 +178,16 @@ const expectedPreview = (captures: Record<string, string>) => ({
     bytes: 1035,
   },
   [captures.unfinished!]: { outcome: "protected", reason: "unfinished-update-run", bytes: 1038 },
+  [captures.orphan!]: {
+    outcome: "protected",
+    reason: "orphan-update-capture",
+    bytes: expect.any(Number),
+  },
+  [captures.incomplete!]: {
+    outcome: "protected",
+    reason: "unmanifested-update-capture",
+    bytes: expect.any(Number),
+  },
   [captures.unattributed!]: {
     outcome: "protected",
     reason: "unmanifested-update-capture",
@@ -170,8 +217,26 @@ it.each(["current", "pre-migration"] as const)(
   "removes only %s candidate captures and keeps protected captures",
   async (location) => {
     await withCaptureHistory(async (captures, root) => {
+      using stderr = vi.spyOn(process.stderr, "write").mockImplementation((text) => {
+        if (!String(text).startsWith("Removing capture ")) {
+          return true;
+        }
+        const directory = Object.values(captures).find((item) => String(text).includes(item));
+        expect(directory).toBeDefined();
+        expect(fs.existsSync(directory!)).toBe(true);
+        return true;
+      });
       const result = await runCleanup({ yes: true });
       expect(result.status).toBe("complete");
+      const progress = stderr.mock.calls
+        .map(([text]) => String(text))
+        .filter((text) => text.startsWith("Removing capture "));
+      expect(progress).toHaveLength(3);
+      for (const [index, text] of progress.entries()) {
+        expect(text).toMatch(
+          new RegExp(`^Removing capture ${index + 1}/3: .+ \\(103[58] bytes\\)\\n$`),
+        );
+      }
       const preview = expectedPreview(captures);
       for (const [directory, item] of Object.entries(preview)) {
         expect(result.captures[directory]).toEqual(
@@ -182,6 +247,36 @@ it.each(["current", "pre-migration"] as const)(
         expect(fs.existsSync(directory)).toBe(item.outcome !== "candidate");
       }
       expect(fs.existsSync(path.join(root, UPDATE_CAPTURE_PRIVACY_MARKER))).toBe(true);
+    }, location);
+  },
+);
+
+it.each(["current", "pre-migration"] as const)(
+  "lists standalone Doctor captures and retires only older %s captures through cleanup",
+  async (location) => {
+    await withCaptureHistory(async (_captures, root) => {
+      const now = Date.now();
+      const doctors = [5, 4, 3, 2, 1].map((age) => {
+        const runId = `doctor-${randomUUID()}`;
+        return writeSealedCapture(root, runId, new Date(now - age * 86_400_000).toISOString());
+      });
+      const preview = await runCleanup({ dryRun: true });
+      for (const [index, directory] of doctors.entries()) {
+        expect(preview.captures[directory]).toMatchObject({
+          outcome: index < 2 ? "candidate" : "protected",
+          reason: index < 2 ? "superseded-doctor-capture" : "retained-doctor-capture",
+        });
+        expect(preview.captures[directory]!.bytes).toBeGreaterThan(1000);
+        expect(fs.existsSync(directory)).toBe(true);
+      }
+      await runCleanup({ yes: true });
+      expect(doctors.map((directory) => fs.existsSync(directory))).toEqual([
+        false,
+        false,
+        true,
+        true,
+        true,
+      ]);
     }, location);
   },
 );

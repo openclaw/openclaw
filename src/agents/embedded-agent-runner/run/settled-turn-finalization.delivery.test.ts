@@ -12,104 +12,119 @@ import { resolveEmbeddedRunTerminal } from "./terminal-resolution.js";
 import { makeTerminalInput } from "./terminal-resolution.test-support.js";
 import { createPendingToolMediaCarry } from "./tool-media-payloads.js";
 
+function deliveryAttempt(
+  assistant: EmbeddedRunAttemptWithReceiptEvidence["lastAssistant"],
+  overrides: Partial<EmbeddedRunAttemptWithReceiptEvidence> = {},
+): EmbeddedRunAttemptWithReceiptEvidence {
+  return makeEmbeddedRunnerAttempt({
+    lastAssistant: assistant,
+    currentAttemptAssistant: assistant,
+    currentAttemptCompletedAssistant: assistant,
+    sourceReplyDeliveryState: "missing",
+    ...overrides,
+  });
+}
+
+type Observation = "pending" | "observation-failed" | "missing" | "delivered";
+const heartbeatResponse = {
+  outcome: "done" as const,
+  notify: true,
+  summary: "Current heartbeat report.",
+};
+const committedReply = { text: "Earlier committed reply.", sourceReplyFinal: true };
+const committedPayload = expect.objectContaining({ text: "Earlier committed reply." });
+const textAssistant = (text: string) =>
+  buildEmbeddedRunnerAssistant({ content: [{ type: "text", text }] });
+
+function observedOutputs<T extends string>(outputs: readonly T[]) {
+  return outputs.flatMap((output) =>
+    (["pending", "observation-failed", "missing"] as const).map((observation) => ({
+      output,
+      observation,
+    })),
+  );
+}
+
+function deliveryInput(
+  attempt: EmbeddedRunAttemptWithReceiptEvidence,
+  observation: Observation,
+  trigger: "user" | "cron" | "heartbeat" = "cron",
+  mode: "automatic" | "message_tool_only" = "automatic",
+) {
+  const input = createSettledFinalizationTestInput(
+    attempt,
+    createTestAdmittedRunContext("run-delivery"),
+  );
+  const params = input.terminalBase.runParams;
+  params.trigger = trigger;
+  params.sourceReplyDeliveryMode = mode;
+  params.resolveReplyDelivery = vi.fn(async () => {
+    if (observation === "observation-failed") {
+      throw new Error("delivery observation unavailable");
+    }
+    return observation;
+  });
+  return input;
+}
+
+function precedingAnswer(
+  lastAssistant = buildEmbeddedRunnerAssistant({}),
+  sourceReplyDeliveryState: "missing" | "delivered" = "delivered",
+  textEnd = 0,
+) {
+  return [
+    { textEnd, messageEnd: 1, finalMessageStart: 1, lastAssistant, sourceReplyDeliveryState },
+  ];
+}
+
+async function resolveCompletion(
+  input: ReturnType<typeof createSettledFinalizationTestInput>,
+  settled: Awaited<ReturnType<typeof prepareTerminalWithSettledTurnFinalization>>,
+) {
+  const resolved = await resolveEmbeddedRunTerminal(
+    makeTerminalInput({
+      runParams: input.terminalBase.runParams,
+      attempt: input.initial.attempt,
+      prepared: settled.prepared,
+      terminalState: settled.terminalState,
+      settledTurnFinalizationOutcome: settled.finalizationOutcome,
+    }),
+  );
+  if (resolved.action !== "complete") {
+    throw new Error("expected terminal completion");
+  }
+  return resolved.result;
+}
+
 describe("terminal preparation delivery custody", () => {
-  it.each(
-    (["response", "failed-response", "failure-only"] as const).flatMap((output) =>
-      (["pending", "observation-failed", "missing"] as const).map((observation) => ({
-        output,
-        observation,
-      })),
-    ),
-  )(
+  it.each(observedOutputs(["response", "failed-response", "failure-only"] as const))(
     "retains observed $observation custody for heartbeat $output",
     async ({ output, observation }) => {
-      const assistant = buildEmbeddedRunnerAssistant({ content: [] });
-      const attempt: EmbeddedRunAttemptWithReceiptEvidence = makeEmbeddedRunnerAttempt({
-        lastAssistant: assistant,
-        currentAttemptAssistant: assistant,
-        currentAttemptCompletedAssistant: assistant,
-        sourceReplyDeliveryState: "missing",
-        ...(output !== "failure-only"
-          ? {
-              heartbeatToolResponse: {
-                outcome: "done",
-                notify: true,
-                summary: "Current heartbeat report.",
-              },
-              messagingToolSourceReplyPayloads: [
-                { text: "Earlier committed reply.", sourceReplyFinal: true },
-              ],
-            }
-          : {}),
-        ...(output !== "response"
-          ? { lastToolError: { toolName: "write", error: "write failed", mutatingAction: true } }
-          : {}),
-      });
+      const attempt = deliveryAttempt(buildEmbeddedRunnerAssistant({ content: [] }));
       if (output !== "failure-only") {
-        attempt.answerSegments = [
-          {
-            textEnd: 0,
-            messageEnd: 1,
-            finalMessageStart: 1,
-            lastAssistant: buildEmbeddedRunnerAssistant({}),
-            sourceReplyDeliveryState: "delivered",
-          },
-        ];
+        attempt.heartbeatToolResponse = { ...heartbeatResponse };
+        attempt.messagingToolSourceReplyPayloads = [{ ...committedReply }];
+        attempt.answerSegments = precedingAnswer();
       }
-      const input = createSettledFinalizationTestInput(
-        attempt,
-        createTestAdmittedRunContext("run-heartbeat-custody"),
-      );
-      input.terminalBase.runParams.trigger = "heartbeat";
-      input.terminalBase.runParams.sourceReplyDeliveryMode = "automatic";
-      input.terminalBase.runParams.resolveReplyDelivery = async () => {
-        if (observation === "observation-failed") {
-          throw new Error("heartbeat delivery observation unavailable");
-        }
-        return observation;
-      };
+      if (output !== "response") {
+        attempt.lastToolError = { toolName: "write", error: "write failed", mutatingAction: true };
+      }
+      const input = deliveryInput(attempt, observation, "heartbeat");
       const settled = await prepareTerminalWithSettledTurnFinalization(input);
-      const resolved = await resolveEmbeddedRunTerminal(
-        makeTerminalInput({
-          runParams: input.terminalBase.runParams,
-          attempt,
-          prepared: settled.prepared,
-          terminalState: settled.terminalState,
-          settledTurnFinalizationOutcome: settled.finalizationOutcome,
-        }),
-      );
-      expect(resolved.action).toBe("complete");
-      if (resolved.action !== "complete") {
-        throw new Error("expected heartbeat terminal completion");
-      }
-      const payloads = resolved.result.payloads ?? [];
+      const result = await resolveCompletion(input, settled);
+      const payloads = result.payloads ?? [];
       if (observation === "missing") {
-        expect(
-          payloads.some((payload) =>
-            output === "failure-only"
-              ? payload.isError
-              : payload.text === "Current heartbeat report.",
-          ),
-        ).toBe(true);
+        const expected =
+          output === "failure-only" ? { isError: true } : { text: "Current heartbeat report." };
+        expect(payloads).toContainEqual(expect.objectContaining(expected));
       } else {
-        expect(payloads).toEqual(
-          output === "failure-only"
-            ? []
-            : [expect.objectContaining({ text: "Earlier committed reply." })],
-        );
-        expect(resolved.result.sourceReplyDeliveryState).toBe("pending");
+        expect(payloads).toEqual(output === "failure-only" ? [] : [committedPayload]);
+        expect(result.sourceReplyDeliveryState).toBe("pending");
       }
     },
   );
 
-  it.each(
-    (["text", "error", "media", "timeout"] as const).flatMap((output) =>
-      (["pending", "observation-failed", "missing"] as const).map((observation) => ({
-        output,
-        observation,
-      })),
-    ),
-  )(
+  it.each(observedOutputs(["text", "error", "media", "timeout"] as const))(
     "carries $observation custody through $output preparation and terminal resolution",
     async ({ output, observation }) => {
       const text = "Current input answer.";
@@ -118,41 +133,16 @@ describe("terminal preparation delivery custody", () => {
         content: output === "media" || output === "error" ? [] : [{ type: "text", text }],
         ...(output === "error" ? { errorMessage: "503 upstream connection refused" } : {}),
       });
-      const attempt: EmbeddedRunAttemptWithReceiptEvidence = makeEmbeddedRunnerAttempt({
+      const attempt = deliveryAttempt(assistant, {
         terminal:
           output === "timeout"
             ? { kind: "timeout", phase: "prompt", source: "runtime" }
             : { kind: "ok" },
         assistantTexts: output === "text" || output === "timeout" ? [text] : [],
-        lastAssistant: assistant,
-        currentAttemptAssistant: assistant,
-        currentAttemptCompletedAssistant: assistant,
-        sourceReplyDeliveryState: "missing",
-        messagingToolSourceReplyPayloads: [
-          { text: "Earlier committed reply.", sourceReplyFinal: true },
-        ],
+        messagingToolSourceReplyPayloads: [{ ...committedReply }],
       });
-      attempt.answerSegments = [
-        {
-          textEnd: 0,
-          messageEnd: 1,
-          finalMessageStart: 1,
-          lastAssistant: buildEmbeddedRunnerAssistant({}),
-          sourceReplyDeliveryState: "delivered",
-        },
-      ];
-      const input = createSettledFinalizationTestInput(
-        attempt,
-        createTestAdmittedRunContext("run-observed-delivery"),
-      );
-      input.terminalBase.runParams.trigger = "user";
-      input.terminalBase.runParams.sourceReplyDeliveryMode = "automatic";
-      input.terminalBase.runParams.resolveReplyDelivery = vi.fn(async () => {
-        if (observation === "observation-failed") {
-          throw new Error("delivery observation unavailable");
-        }
-        return observation;
-      });
+      attempt.answerSegments = precedingAnswer();
+      const input = deliveryInput(attempt, observation, "user");
       const carry = createPendingToolMediaCarry();
       if (output === "media") {
         carry.capture({ toolMediaUrls: ["/tmp/carried-current.pdf"] });
@@ -160,35 +150,22 @@ describe("terminal preparation delivery custody", () => {
       }
       input.terminalBase.mergeToolMedia = carry.merge;
       const finalizeSettledTurn = vi.spyOn(input.finalization.harness, "finalizeSettledTurn");
-
       const settled = await prepareTerminalWithSettledTurnFinalization(input);
       expect(input.terminalBase.runParams.resolveReplyDelivery).toHaveBeenCalledWith(2);
       expect(finalizeSettledTurn).not.toHaveBeenCalled();
-      expect(settled.finalizationOutcome).toBe("not-attempted");
-      expect(settled.prepared.replyDeliveryState).toBe(
-        observation === "missing" ? "missing" : "pending",
-      );
-      const resolved = await resolveEmbeddedRunTerminal(
-        makeTerminalInput({
-          runParams: input.terminalBase.runParams,
-          attempt,
-          prepared: settled.prepared,
-          terminalState: settled.terminalState,
-          settledTurnFinalizationOutcome: settled.finalizationOutcome,
-        }),
-      );
-      expect(resolved.action).toBe("complete");
-      if (resolved.action !== "complete") {
-        throw new Error("expected terminal completion");
-      }
-      const payloads = resolved.result.payloads ?? [];
+      expect(settled).toMatchObject({
+        finalizationOutcome: "not-attempted",
+        prepared: { replyDeliveryState: observation === "missing" ? "missing" : "pending" },
+      });
+      const result = await resolveCompletion(input, settled);
+      const payloads = result.payloads ?? [];
       expect(payloads[0]?.text).toBe("Earlier committed reply.");
       expect(getReplyPayloadMetadata(payloads[0]!)).toHaveProperty("sourceReplyTranscriptMirror");
       if (observation !== "missing") {
         expect(settled.prepared.recoveredFinalAssistantPayloadsAfterPromptTimeout).toBeUndefined();
-        expect(payloads).toEqual([expect.objectContaining({ text: "Earlier committed reply." })]);
+        expect(payloads).toEqual([committedPayload]);
         expect(payloads[0]?.mediaUrls).toBeUndefined();
-        expect(resolved.result.sourceReplyDeliveryState).toBe("pending");
+        expect(result.sourceReplyDeliveryState).toBe("pending");
         if (output === "media") {
           input.terminalBase.runParams.resolveReplyDelivery = async () => "missing";
           const released = await prepareTerminalWithSettledTurnFinalization(input);
@@ -208,35 +185,25 @@ describe("terminal preparation delivery custody", () => {
   );
 
   it.each([
-    { attemptDelivery: "delivered", observedDelivery: "missing" },
-    { attemptDelivery: "pending", observedDelivery: "delivered" },
-    { attemptDelivery: "missing", observedDelivery: "delivered" },
+    ["delivered", "missing"],
+    ["pending", "delivered"],
+    ["missing", "delivered"],
   ] as const)(
-    "reconciles confirmed custody ($attemptDelivery attempt, $observedDelivery observation)",
-    async ({ attemptDelivery, observedDelivery }) => {
-      const assistant = buildEmbeddedRunnerAssistant({
-        content: [{ type: "text", text: "Do not repeat." }],
-      });
-      const attempt = makeEmbeddedRunnerAttempt({
+    "reconciles confirmed custody (%s attempt, %s observation)",
+    async (attemptDelivery, observedDelivery) => {
+      const assistant = textAssistant("Do not repeat.");
+      const attempt = deliveryAttempt(assistant, {
         assistantTexts: ["Do not repeat."],
-        lastAssistant: assistant,
-        currentAttemptAssistant: assistant,
-        currentAttemptCompletedAssistant: assistant,
         sourceReplyDeliveryState: attemptDelivery,
         messagingToolSourceReplyPayloads: [{ text: "Committed reply.", sourceReplyFinal: true }],
       });
-      const input = createSettledFinalizationTestInput(
-        attempt,
-        createTestAdmittedRunContext("run-confirmed-delivery"),
-      );
-      input.terminalBase.runParams.sourceReplyDeliveryMode = "automatic";
-      input.terminalBase.runParams.resolveReplyDelivery = async () => observedDelivery;
+      const input = deliveryInput(attempt, observedDelivery);
       const settled = await prepareTerminalWithSettledTurnFinalization(input);
-      expect(settled.prepared.replyDeliveryState).toBe("delivered");
-      expect(settled.prepared.payloadsWithToolMedia).toEqual([
-        expect.objectContaining({ text: "Committed reply." }),
-      ]);
-      expect(settled.prepared.agentMeta.terminalReceipt?.sourceReplyDelivered).toBe(true);
+      expect(settled.prepared).toMatchObject({
+        replyDeliveryState: "delivered",
+        payloadsWithToolMedia: [expect.objectContaining({ text: "Committed reply." })],
+        agentMeta: { terminalReceipt: { sourceReplyDelivered: true } },
+      });
     },
   );
 
@@ -245,11 +212,7 @@ describe("terminal preparation delivery custody", () => {
       stopReason: "toolUse",
       content: [{ type: "toolCall", id: "reply-tool", name: "report", arguments: {} }],
     });
-    const attempt: EmbeddedRunAttemptWithReceiptEvidence = makeEmbeddedRunnerAttempt({
-      lastAssistant: assistant,
-      currentAttemptAssistant: assistant,
-      currentAttemptCompletedAssistant: assistant,
-      sourceReplyDeliveryState: "missing",
+    const attempt = deliveryAttempt(assistant, {
       toolMediaUrls: ["/tmp/unselected.pdf"],
       messagingToolSourceReplyPayloads: [
         {
@@ -261,11 +224,7 @@ describe("terminal preparation delivery custody", () => {
         },
       ],
     });
-    const input = createSettledFinalizationTestInput(
-      attempt,
-      createTestAdmittedRunContext("run-tool-projection"),
-    );
-    input.terminalBase.runParams.resolveReplyDelivery = async () => "pending";
+    const input = deliveryInput(attempt, "pending", "cron", "message_tool_only");
     const settled = await prepareTerminalWithSettledTurnFinalization(input);
     expect(settled.prepared.payloadsWithToolMedia).toEqual([
       expect.objectContaining({ text: "Committed tool reply.", mediaUrls: ["/tmp/committed.pdf"] }),
@@ -279,43 +238,14 @@ describe("terminal preparation delivery custody", () => {
   it.each([false, true])(
     "preserves a preceding input's answer while current delivery remains pending (heartbeat=%s)",
     async (heartbeat) => {
-      const earlier = buildEmbeddedRunnerAssistant({
-        content: [{ type: "text", text: "Earlier answer." }],
-      });
-      const current = buildEmbeddedRunnerAssistant({
-        content: [{ type: "text", text: "Current answer." }],
-      });
-      const attempt: EmbeddedRunAttemptWithReceiptEvidence = makeEmbeddedRunnerAttempt({
+      const earlier = textAssistant("Earlier answer.");
+      const current = textAssistant("Current answer.");
+      const attempt = deliveryAttempt(current, {
         assistantTexts: ["Earlier answer.", "Current answer."],
-        lastAssistant: current,
-        currentAttemptAssistant: current,
-        currentAttemptCompletedAssistant: current,
-        sourceReplyDeliveryState: "missing",
-        ...(heartbeat
-          ? {
-              heartbeatToolResponse: {
-                outcome: "done" as const,
-                notify: true,
-                summary: "Current heartbeat report.",
-              },
-            }
-          : {}),
+        ...(heartbeat ? { heartbeatToolResponse: heartbeatResponse } : {}),
       });
-      attempt.answerSegments = [
-        {
-          textEnd: 1,
-          messageEnd: 1,
-          finalMessageStart: 1,
-          lastAssistant: earlier,
-          sourceReplyDeliveryState: "missing",
-        },
-      ];
-      const input = createSettledFinalizationTestInput(
-        attempt,
-        createTestAdmittedRunContext("run-preceding-answer"),
-      );
-      input.terminalBase.runParams.sourceReplyDeliveryMode = "automatic";
-      input.terminalBase.runParams.resolveReplyDelivery = async () => "pending";
+      attempt.answerSegments = precedingAnswer(earlier, "missing", 1);
+      const input = deliveryInput(attempt, "pending", "cron");
       const settled = await prepareTerminalWithSettledTurnFinalization(input);
       expect(settled.prepared.payloadsWithToolMedia).toEqual([
         expect.objectContaining({ text: "Earlier answer." }),

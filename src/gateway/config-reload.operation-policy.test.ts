@@ -27,6 +27,8 @@ describe("Gateway operation policy reload", () => {
     "gateway.terminal.enabled",
     "gateway.http.endpoints.chatCompletions.enabled",
     "gateway.tools.allow",
+    "tools.allow",
+    "tools.deny",
     "gateway.cliAgents.enabled",
     "gateway.uploads.enabled",
     "gateway.controlUi.enabled",
@@ -75,7 +77,6 @@ describe("Gateway operation policy reload", () => {
       restartReasons: [],
       hotReasons: [path],
       noopPaths: [],
-      restartHeartbeat: false,
       restartCron: false,
       reloadHooks: false,
       reloadPlugins: false,
@@ -85,6 +86,55 @@ describe("Gateway operation policy reload", () => {
     });
     expect(resolveConfigReloadMetadata(path).kind).toBe("hot");
   });
+
+  const policyConfig: OpenClawConfig = { tools: { gatewayPolicy: { allow: ["read"] } } };
+  it.each([
+    ["adding policy", { tools: {} }, policyConfig, "tools.gatewayPolicy"],
+    [
+      "changing policy",
+      policyConfig,
+      { tools: { gatewayPolicy: { allow: [] } } },
+      "tools.gatewayPolicy.allow",
+    ],
+    ["removing policy", policyConfig, { tools: {} }, "tools.gatewayPolicy"],
+    [
+      "adding automation restrictions",
+      policyConfig,
+      { tools: { gatewayPolicy: { allow: ["read"], automations: { scope: "caller" } } } },
+      "tools.gatewayPolicy.automations",
+    ],
+    [
+      "changing automation restrictions",
+      { tools: { gatewayPolicy: { allow: ["read"], automations: { allowCommandJobs: true } } } },
+      { tools: { gatewayPolicy: { allow: ["read"], automations: { allowCommandJobs: false } } } },
+      "tools.gatewayPolicy.automations.allowCommandJobs",
+    ],
+    [
+      "removing automation restrictions",
+      { tools: { gatewayPolicy: { allow: ["read"], automations: { scope: "caller" } } } },
+      policyConfig,
+      "tools.gatewayPolicy.automations",
+    ],
+    ["adding tools with policy", {}, policyConfig, "tools.gatewayPolicy"],
+    ["removing tools with policy", policyConfig, {}, "tools.gatewayPolicy"],
+  ] satisfies [string, OpenClawConfig, OpenClawConfig, string][])(
+    "requires a Gateway restart when %s",
+    (_name, previous, next, path) => {
+      const changedPaths = diffGatewayReloadPaths(
+        previous,
+        next,
+        listConfigReloadRefinementPrefixes(),
+      );
+      const plan = buildGatewayReloadPlan(changedPaths);
+
+      expect(plan).toMatchObject({
+        restartGateway: true,
+        restartReasons: [path],
+        hotReasons: [],
+      });
+      expect(resolveConfigReloadMetadata(path).kind).toBe("restart");
+    },
+  );
 
   it.each(["cloudWorkers.profiles", "cloudWorkers.profiles.build.settings.machineType"])(
     "refreshes provider activation without restarting the Gateway: %s",

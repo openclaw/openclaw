@@ -50,7 +50,6 @@ final class TalkSpeechInterruptMonitor: @unchecked Sendable {
             self?.handleFlags(keyCode: event.keyCode, modifierFlags: event.modifierFlags)
             return event
         }
-        self.logger.info("talk interrupt monitor started")
     }
 
     @MainActor private func stopMonitoring() {
@@ -62,7 +61,6 @@ final class TalkSpeechInterruptMonitor: @unchecked Sendable {
             self.registration.remove(localMonitor)
             self.localMonitor = nil
         }
-        self.logger.info("talk interrupt monitor stopped")
     }
 
     private func handleFlags(keyCode: UInt16, modifierFlags: NSEvent.ModifierFlags) {

@@ -22,7 +22,10 @@ import { onUserProfilesChanged } from "../../state/user-profile-events.js";
 import { respondControlUiPluginAuthCookieProbe } from "../control-ui-plugin-auth-cookie.js";
 import { listControlUiPluginTabAuthGrants } from "../control-ui-plugin-tabs.js";
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
-import { finishFailedGatewayHttpResponse } from "../http-common.js";
+import {
+  finishFailedGatewayHttpResponse,
+  finishGatewayHttpDatabaseAdmissionError,
+} from "../http-common.js";
 import {
   bindHttpResponseAuthority,
   finishGatewayHttpAuthorityError,
@@ -405,7 +408,10 @@ export function createGatewayPluginRequestHandler(params: {
           return true;
         }
       } catch (err) {
-        if (finishGatewayHttpAuthorityError(res, err)) {
+        if (
+          finishGatewayHttpAuthorityError(res, err) ||
+          finishGatewayHttpDatabaseAdmissionError(res, err)
+        ) {
           return true;
         }
         log.warn(`plugin http route failed (${route.pluginId ?? "unknown"}): ${String(err)}`);

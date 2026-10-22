@@ -1,65 +1,71 @@
-import { inspect } from "node:util";
 import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
+import { resolveAgentDir } from "../../agents/agent-scope.js";
+import { upsertAuthProfile } from "../../agents/auth-profiles.js";
+import type { AgentCommandGatewayIngressOpts } from "../../agents/command/types.js";
 import { registerConfigCli } from "../../cli/config-cli.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import * as configLock from "../../config/write-lock.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
+import {
+  createModelsTestState,
+  settleModelsWork,
+  startModelsGateway,
+} from "./models-integration.test-support.js";
+
+function configuredProvider(apiKey: string, models: { id: string; name: string }[] = []) {
+  return { baseUrl: "http://127.0.0.1:9/v1", api: "openai-completions", apiKey, models };
+}
+
+const inference = vi.hoisted(() => ({ run: vi.fn() }));
+// mock-isolation: Only inference is replaced; Gateway admission, source identity, and credentials remain real.
+vi.mock("../../commands/agent.js", () => ({
+  agentCommand: inference.run,
+  agentCommandFromGatewayIngress: inference.run,
+  agentCommandFromIngress: inference.run,
+}));
 
 describe("models.authLogout with a concurrent registered config set", () => {
   it.each([
     {
       name: "preserves a replacement key and refuses stale removal",
-      updatedProvider: "fixture",
       replacement: "synthetic-inline-B",
-      selectedKey: "synthetic-inline-B",
-      conflict: true,
     },
     {
       name: "removes the selected key after an unrelated provider changes",
       updatedProvider: "other-fixture",
       replacement: "synthetic-unrelated-B",
-      selectedKey: undefined,
       conflict: false,
     },
     {
       name: "preserves a replacement secret reference and refuses stale removal",
-      updatedProvider: "fixture",
       replacement: { source: "env", provider: "default", id: "INLINE_REMOVAL_TEST_KEY" },
-      selectedKey: { source: "env", provider: "default", id: "INLINE_REMOVAL_TEST_KEY" },
-      conflict: true,
     },
     {
       name: "preserves a replacement env reference with the same resolved key",
-      updatedProvider: "fixture",
       replacement: "${INLINE_REMOVAL_SAME_KEY}",
       selectedKey: "synthetic-inline-A",
-      conflict: true,
     },
     {
       name: "publishes removal before returning when config reload is enabled",
       updatedProvider: "other-fixture",
       replacement: "synthetic-unrelated-B",
-      selectedKey: undefined,
       conflict: false,
       reloadMode: "hybrid" as const,
     },
   ])(
     "$name",
-    async ({ updatedProvider, replacement, selectedKey, conflict, reloadMode = "off" }) => {
-      const state = await createOpenClawTestState({
-        label: "models-auth-removal",
+    async ({
+      updatedProvider = "fixture",
+      replacement,
+      selectedKey = replacement,
+      conflict = true,
+      reloadMode = "off",
+    }) => {
+      await using state = await createModelsTestState("models-auth-removal", {
         env: {
-          OPENCLAW_SKIP_CHANNELS: "1",
-          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-          OPENCLAW_SKIP_CRON: "1",
-          OPENCLAW_SKIP_CANVAS_HOST: "1",
-          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
           OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
           INLINE_REMOVAL_TEST_KEY: "synthetic-secret-B",
           INLINE_REMOVAL_SAME_KEY: "synthetic-inline-A",
@@ -67,161 +73,305 @@ describe("models.authLogout with a concurrent registered config set", () => {
       });
       const token = "inline-removal-gateway-token";
       const cfg = {
-        agents: { entries: { main: { workspace: state.workspaceDir } } },
+        agents: {
+          ownership: "explicit" as const,
+          entries: {
+            main: { workspace: state.workspaceDir },
+            writer: { workspace: state.workspaceDir },
+          },
+          defaults: { model: "fixture/fixture-model" },
+        },
         plugins: { enabled: false },
         gateway: { mode: "local", auth: { mode: "token", token }, reload: { mode: reloadMode } },
         models: {
           providers: {
-            fixture: {
-              baseUrl: "http://127.0.0.1:9/v1",
-              api: "openai-completions",
-              apiKey: "synthetic-inline-A",
-              models: [],
-            },
-            FIXTURE: {
-              baseUrl: "http://127.0.0.1:9/v1",
-              api: "openai-completions",
-              apiKey: "${INLINE_REMOVAL_TEST_KEY}",
-              models: [{ id: "fixture-model", name: "Fixture" }],
-            },
-            "other-fixture": {
-              baseUrl: "http://127.0.0.1:9/v1",
-              api: "openai-completions",
-              apiKey: "synthetic-unrelated-A",
-              models: [],
-            },
+            fixture: configuredProvider("synthetic-inline-A", [
+              { id: "fixture-model", name: "Fixture" },
+            ]),
+            FIXTURE: configuredProvider("${INLINE_REMOVAL_TEST_KEY}", [
+              { id: "fixture-model", name: "Fixture" },
+            ]),
+            "other-fixture": configuredProvider("synthetic-unrelated-A", [
+              { id: "fixture-model", name: "Other fixture" },
+            ]),
           },
         },
       };
       const hotReloadRecovery = vi.fn(() => ({ status: "emitted" as const }));
+      await using gateway = await startModelsGateway(state, cfg, token, { hotReloadRecovery });
+      const { client } = gateway;
+      const acquired = createDeferredCore();
+      const save = createDeferredCore();
+      const attempted = createDeferredCore();
+      let performSave = false;
+      let writer: Promise<void> | undefined;
+      let logout: Promise<unknown> | undefined;
       try {
-        const { client, server } = await startGatewayWithClient({
-          cfg,
-          configPath: state.configPath,
-          token,
-          scopes: ["operator.admin"],
-          hotReloadRecovery,
+        await gateway.server.startupSettled;
+        vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
+          throw new Error(`Registered config command exited with ${code}`);
         });
-        const acquired = createDeferredCore();
-        const save = createDeferredCore();
-        const attempted = createDeferredCore();
-        let performSave = false;
-        let writer: Promise<void> | undefined;
-        let logout: Promise<unknown> | undefined;
-        try {
-          await server.startupSettled;
-          vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
-            throw new Error(`Registered config command exited with ${code}`);
+        const withConfigWriteLock = configLock.withConfigWriteLock;
+        writer = withConfigWriteLock(state.configPath, async () => {
+          acquired.resolve();
+          await save.promise;
+          if (!performSave) {
+            return;
+          }
+          const program = new Command().exitOverride();
+          registerConfigCli(program);
+          await program.parseAsync(
+            [
+              "config",
+              "set",
+              `models.providers.${updatedProvider}.apiKey`,
+              JSON.stringify(replacement),
+              "--strict-json",
+            ],
+            { from: "user" },
+          );
+          const committed = await readConfigFileSnapshot();
+          expect(committed.parsed).toMatchObject({
+            models: { providers: { [updatedProvider]: { apiKey: replacement } } },
           });
-          const withConfigWriteLock = configLock.withConfigWriteLock;
-          writer = withConfigWriteLock(state.configPath, async () => {
-            acquired.resolve();
-            await save.promise;
-            if (!performSave) {
-              return;
-            }
-            const program = new Command().exitOverride();
-            registerConfigCli(program);
-            await program.parseAsync(
-              [
-                "config",
-                "set",
-                `models.providers.${updatedProvider}.apiKey`,
-                JSON.stringify(replacement),
-                "--strict-json",
-              ],
-              { from: "user" },
-            );
-            const committed = await readConfigFileSnapshot();
-            expect(committed.parsed).toMatchObject({
-              models: { providers: { [updatedProvider]: { apiKey: replacement } } },
+        });
+        await withTimeout(acquired.promise, 10_000, "fixture config lock");
+        const observation = vi
+          .spyOn(configLock, "withConfigWriteLock")
+          .mockImplementation(
+            async <T>(...args: Parameters<typeof withConfigWriteLock<T>>): Promise<T> => {
+              if (args[0] === state.configPath) {
+                attempted.resolve();
+              }
+              return await withConfigWriteLock<T>(...args);
+            },
+          );
+        // Observe scheduling only; both registered commands retain the real write owners.
+        logout = settleModelsWork(
+          client.request("models.authLogout", {
+            provider: "fixture",
+            agentId: "main",
+            credentialType: "api_key",
+          }),
+        );
+        await withTimeout(attempted.promise, 10_000, "pending removal config lock");
+        observation.mockRestore();
+        performSave = true;
+        save.resolve();
+        await writer;
+        const outcome = await logout;
+        expect(outcome).toMatchObject(
+          conflict
+            ? {
+                error: {
+                  message: expect.stringContaining(
+                    "Nothing was removed. Reload Models and retry removal.",
+                  ),
+                },
+              }
+            : { error: undefined, result: { removedProfiles: [] } },
+        );
+        const settled = await readConfigFileSnapshot();
+        if (!conflict) {
+          if (reloadMode === "off") {
+            expect(outcome).toMatchObject({
+              result: { warning: expect.stringContaining("gateway restart") },
             });
-          });
-          await withTimeout(acquired.promise, 10_000, "fixture config lock");
-          const observation = vi
-            .spyOn(configLock, "withConfigWriteLock")
-            .mockImplementation(
-              async <T>(...args: Parameters<typeof withConfigWriteLock<T>>): Promise<T> => {
-                if (args[0] === state.configPath) {
-                  attempted.resolve();
-                }
-                return await withConfigWriteLock<T>(...args);
+          } else {
+            expect(outcome, JSON.stringify(outcome)).not.toMatchObject({
+              result: { warning: expect.any(String) },
+            });
+            await expect(
+              client.request("models.authStatus", { agentId: "main" }),
+            ).resolves.toMatchObject({
+              providers: expect.not.arrayContaining([
+                expect.objectContaining({
+                  provider: "fixture",
+                  apiKey: expect.objectContaining({ source: "config" }),
+                }),
+              ]),
+            });
+          }
+        }
+        expect(settled.parsed).toMatchObject({
+          models: {
+            providers: {
+              FIXTURE: { apiKey: "${INLINE_REMOVAL_TEST_KEY}" },
+              ...(conflict ? { fixture: { apiKey: replacement } } : {}),
+            },
+          },
+        });
+        expect(settled.sourceConfig.models?.providers?.fixture?.apiKey).toEqual(
+          conflict ? selectedKey : undefined,
+        );
+        expect(settled.sourceConfig.models?.providers?.["other-fixture"]?.apiKey).toBe(
+          conflict ? "synthetic-unrelated-A" : "synthetic-unrelated-B",
+        );
+        expect(hotReloadRecovery).not.toHaveBeenCalled();
+        if (reloadMode === "hybrid") {
+          const turns = new Map(
+            ["fixture", "other-fixture", "writer", "external"].map((runId) => [
+              runId,
+              {
+                entered: createDeferredCore(),
+                release: createDeferredCore(),
+                cancelled: createDeferredCore(),
+                signal: undefined as AbortSignal | undefined,
               },
-            );
-          // Observe scheduling only; both registered commands retain the real write owners.
-          logout = client
-            .request("models.authLogout", {
-              provider: "fixture",
-              agentId: "main",
-              credentialType: "api_key",
-            })
-            .then(
-              (value) => ({ ok: true, value }),
-              (error: unknown) => ({ ok: false, error }),
-            );
-          await withTimeout(attempted.promise, 10_000, "pending removal config lock");
-          observation.mockRestore();
-          performSave = true;
-          save.resolve();
-          await writer;
-          const outcome = await logout;
-          expect(outcome, inspect(outcome, { depth: 5 })).toMatchObject(
-            conflict
-              ? {
-                  ok: false,
-                  error: expect.objectContaining({
-                    message: expect.stringContaining(
-                      "Nothing was removed. Reload Models and retry removal.",
-                    ),
-                  }),
-                }
-              : { ok: true, value: { removedProfiles: [] } },
+            ]),
           );
-          const settled = await readConfigFileSnapshot();
-          if (!conflict) {
-            if (reloadMode === "off") {
-              expect(outcome).toMatchObject({
-                value: { warning: expect.stringContaining("gateway restart") },
-              });
-            } else {
-              expect(outcome, JSON.stringify(outcome)).not.toMatchObject({
-                value: { warning: expect.any(String) },
-              });
-              await expect(
-                client.request("models.authStatus", { agentId: "main" }),
-              ).resolves.toMatchObject({
-                providers: expect.not.arrayContaining([
-                  expect.objectContaining({
-                    provider: "fixture",
-                    apiKey: expect.objectContaining({ source: "config" }),
-                  }),
-                ]),
-              });
+          inference.run.mockImplementation(async (options) => {
+            const command = options as AgentCommandGatewayIngressOpts;
+            const turn = turns.get(command.runId!);
+            if (!turn) {
+              throw new Error("Unexpected auth boundary inference");
             }
-          }
-          if (conflict) {
-            expect(settled.parsed).toMatchObject({
-              models: { providers: { fixture: { apiKey: replacement } } },
+            turn.signal = command.abortSignal;
+            command.abortSignal?.addEventListener("abort", () => turn.cancelled.resolve(), {
+              once: true,
             });
-          }
-          expect(settled.parsed).toMatchObject({
-            models: { providers: { FIXTURE: { apiKey: "${INLINE_REMOVAL_TEST_KEY}" } } },
+            turn.entered.resolve();
+            await turn.release.promise;
           });
-          expect(settled.sourceConfig.models?.providers?.fixture?.apiKey).toEqual(selectedKey);
-          expect(settled.sourceConfig.models?.providers?.["other-fixture"]?.apiKey).toBe(
-            conflict ? "synthetic-unrelated-A" : "synthetic-unrelated-B",
-          );
-          expect(hotReloadRecovery).not.toHaveBeenCalled();
-        } finally {
-          save.resolve();
-          await writer?.catch(() => undefined);
-          await logout?.catch(() => undefined);
-          vi.restoreAllMocks();
-          await disconnectGatewayClient(client);
-          await server.close();
+          try {
+            for (const runId of ["fixture", "other-fixture", "writer"]) {
+              const agentId = runId === "writer" ? "writer" : "main";
+              await client.request("agent", {
+                agentId,
+                sessionKey: `agent:${agentId}:dashboard:auth-${runId}`,
+                message: "Hold inference through credential removal",
+                provider: runId === "other-fixture" ? runId : "fixture",
+                model: "fixture-model",
+                idempotencyKey: runId,
+              });
+              await turns.get(runId)!.entered.promise;
+            }
+            const saved = await client.request<{ profileId: string }>("models.authSetApiKey", {
+              provider: "fixture",
+              apiKey: "synthetic-held-run-key",
+              agentId: "main",
+            });
+            await expect(
+              client.request("models.authLogout", {
+                provider: "fixture",
+                agentId: "main",
+                profileIds: ["fixture:unavailable"],
+              }),
+            ).rejects.toThrow("unavailable auth profiles");
+            expect(turns.get("fixture")!.signal?.aborted).toBe(false);
+            await expect(
+              client.request("models.authLogout", {
+                provider: "fixture",
+                agentId: "main",
+                profileIds: [saved.profileId],
+              }),
+            ).resolves.toMatchObject({ removedProfiles: [saved.profileId], abortedRunIds: [] });
+            expect(turns.get("fixture")!.signal?.aborted).toBe(false);
+            await client.request("models.authSetApiKey", {
+              provider: "fixture",
+              apiKey: "synthetic-held-run-key",
+              agentId: "main",
+            });
+            const agentDir = resolveAgentDir({ agents: cfg.agents }, "main");
+            for (const [profileId, credential] of [
+              [
+                "fixture:ref",
+                {
+                  type: "api_key",
+                  provider: "fixture",
+                  keyRef: { source: "env", provider: "default", id: "INLINE_REMOVAL_TEST_KEY" },
+                },
+              ],
+              ["fixture:token", { type: "token", provider: "fixture", token: "synthetic-token" }],
+              [
+                "fixture:oauth",
+                {
+                  type: "oauth",
+                  provider: "fixture",
+                  access: "synthetic-access",
+                  refresh: "synthetic-refresh",
+                  expires: Date.now() + 60_000,
+                },
+              ],
+            ] as const) {
+              upsertAuthProfile({ agentDir, profileId, credential });
+            }
+            await expect(
+              client.request("models.authLogout", {
+                provider: "fixture",
+                agentId: "main",
+                credentialType: "api_key",
+              }),
+            ).resolves.toMatchObject({ removedProfiles: [saved.profileId], abortedRunIds: [] });
+            expect(turns.get("fixture")!.signal?.aborted).toBe(false);
+            const status = await client.request<{
+              providers: Array<{ provider: string; profiles: Array<{ profileId: string }> }>;
+            }>("models.authStatus", { agentId: "main" });
+            expect(
+              status.providers
+                .find((provider) => provider.provider === "fixture")
+                ?.profiles.map((profile) => profile.profileId)
+                .toSorted(),
+            ).toEqual(["fixture:oauth", "fixture:ref", "fixture:token"]);
+            await expect(
+              client.request("models.authLogout", {
+                provider: "fixture",
+                agentId: "main",
+                profileIds: [" fixture:token ", "fixture:oauth", "fixture:token"],
+              }),
+            ).resolves.toMatchObject({
+              removedProfiles: ["fixture:token", "fixture:oauth"],
+              abortedRunIds: [],
+            });
+            expect(turns.get("fixture")!.signal?.aborted).toBe(false);
+            await client.request("models.authSetApiKey", {
+              provider: "fixture",
+              apiKey: "synthetic-held-run-key",
+              agentId: "main",
+            });
+            await expect(
+              client.request("models.authLogout", {
+                provider: "fixture",
+                agentId: "main",
+              }),
+            ).resolves.toMatchObject({
+              removedProfiles: expect.arrayContaining([saved.profileId, "fixture:ref"]),
+              abortedRunIds: ["fixture"],
+            });
+            await turns.get("fixture")!.cancelled.promise;
+            expect(turns.get("other-fixture")!.signal?.aborted).toBe(false);
+            expect(turns.get("writer")!.signal?.aborted).toBe(false);
+            // The remaining config-owned reference is enough for admission;
+            // full logout must revoke inference even with no saved profiles.
+            await client.request("agent", {
+              agentId: "main",
+              sessionKey: "agent:main:dashboard:auth-external",
+              message: "Hold inference with externally configured auth",
+              provider: "fixture",
+              model: "fixture-model",
+              idempotencyKey: "external",
+            });
+            await turns.get("external")!.entered.promise;
+            await expect(
+              client.request("models.authLogout", {
+                provider: "fixture",
+                agentId: "main",
+              }),
+            ).resolves.toMatchObject({ removedProfiles: [], abortedRunIds: ["external"] });
+            await turns.get("external")!.cancelled.promise;
+            expect(turns.get("writer")!.signal?.aborted).toBe(false);
+          } finally {
+            for (const turn of turns.values()) {
+              turn.release.resolve();
+            }
+            inference.run.mockReset();
+          }
         }
       } finally {
-        await state.cleanup();
+        save.resolve();
+        await writer?.catch(() => undefined);
+        await logout?.catch(() => undefined);
+        vi.restoreAllMocks();
       }
     },
   );

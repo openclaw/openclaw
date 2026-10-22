@@ -28,7 +28,7 @@ import type {
 type EmbeddedAgentActiveSessionSteerTarget = {
   agent?: Partial<Pick<AgentSession["agent"], "cancelSteeringMessage">>;
   steer: AgentSession["steer"];
-  subscribe(listener: (event: unknown) => void): () => void;
+  subscribe: AgentSession["subscribe"];
 };
 
 const DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS = 120_000;
@@ -190,19 +190,15 @@ async function steerWithTranscriptLifecycle(
     );
     timer.unref?.();
     const unsubscribe: (() => void) | undefined = activeSession.subscribe((event) => {
-      if (!event || typeof event !== "object") {
-        return;
-      }
-      const record = event as { message?: unknown; type?: unknown };
       if (
-        record.type === "message_end" &&
-        getSteeringMessageIdentity(record.message) === queueIdentity
+        event.type === "message_end" &&
+        getSteeringMessageIdentity(event.message) === queueIdentity
       ) {
         accepted = true;
         finish();
         return;
       }
-      const type = record.type;
+      const type = event.type;
       if (type === "agent_settled" || type === "agent_handoff") {
         const handedOff = type === "agent_handoff";
         const message = `active session ${handedOff ? "handed off" : "ended"} before queued steering message was committed to the transcript`;
@@ -326,8 +322,9 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
   prepareInjection?: () => Promise<void>,
 ): Promise<void | EmbeddedAgentQueueMessageResult> {
   const isInboundUserMessage = options?.isInboundUserMessage === true;
+  const mayAnswerPendingQuestion = options?.allowPendingUserInputAnswer !== false;
   const isPlainTextAnswer = !hasPromptImageInput(options);
-  if (isInboundUserMessage && !isPlainTextAnswer) {
+  if (isInboundUserMessage && mayAnswerPendingQuestion && !isPlainTextAnswer) {
     try {
       await cancelPendingAgentQuestionForSession({
         sessionKey,
@@ -348,6 +345,7 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
   // unnecessary await here lets callers emit before subscribe() runs.
   if (
     isInboundUserMessage &&
+    mayAnswerPendingQuestion &&
     isPlainTextAnswer &&
     (await claimEmbeddedPendingUserInputAnswer(text, options, sessionKey, canInject, authority))
   ) {
@@ -395,7 +393,11 @@ export async function claimEmbeddedPendingUserInputAnswer(
   canInject?: () => boolean,
   authority?: Parameters<typeof claimPendingAgentQuestionAnswer>[0]["authority"],
 ): Promise<boolean> {
-  if (options?.isInboundUserMessage !== true || hasPromptImageInput(options)) {
+  if (
+    options?.isInboundUserMessage !== true ||
+    options.allowPendingUserInputAnswer === false ||
+    hasPromptImageInput(options)
+  ) {
     return false;
   }
   return await claimPendingAgentQuestionAnswer({

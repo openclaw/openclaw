@@ -57,12 +57,13 @@ import {
   type GatewayProtocolSocket,
   type GatewayProtocolSocketHandlers,
 } from "./protocol-client.js";
-import {
-  GatewayProtocolRequestError,
-  GatewayProtocolRequestTimeoutError,
-} from "./protocol-request.js";
+import { GatewayProtocolRequestError } from "./protocol-request.js";
 import { shouldPauseGatewayReconnect } from "./reconnect-policy.js";
-import { GatewayClientRequestError, markGatewayConnectAssemblyError } from "./request-error.js";
+import {
+  GatewayClientRequestError,
+  GatewayClientRequestTimeoutError,
+  markGatewayConnectAssemblyError,
+} from "./request-error.js";
 import {
   DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
   resolveConnectChallengeTimeoutMs,
@@ -148,15 +149,12 @@ export type GatewayReconnectPausedInfo = {
   detailCode: string | null;
 };
 
-export { GatewayClientRequestError, isGatewayConnectAssemblyError } from "./request-error.js";
+export {
+  GatewayClientRequestError,
+  GatewayClientRequestTimeoutError,
+  isGatewayConnectAssemblyError,
+} from "./request-error.js";
 export { isGatewayProtocolResponseError } from "./protocol-request.js";
-
-export class GatewayClientRequestTimeoutError extends GatewayProtocolRequestTimeoutError {
-  constructor(params: { method: string; timeoutMs: number; requestSent: boolean }) {
-    super(params, `gateway request timeout for ${params.method}`);
-    this.name = "GatewayClientRequestTimeoutError";
-  }
-}
 
 class GatewayClientTransportPolicyError extends GatewayWebSocketTransportConfigurationError {}
 
@@ -340,10 +338,8 @@ export class GatewayClient {
       onConnectFailure: (error, context) => this.handleConnectRequestFailure(error, context.plan),
       resolveClose: (context) => this.resolveClose(context),
       onClose: (context, decision) => {
-        if (this.tickTimer) {
-          clearInterval(this.tickTimer);
-          this.tickTimer = null;
-        }
+        clearInterval(this.tickTimer ?? undefined);
+        this.tickTimer = null;
         if (decision.notify) {
           this.opts.onClose?.(context.code, context.reason, this.closeInfo(context));
         }
@@ -478,8 +474,6 @@ export class GatewayClient {
     try {
       ws = new WebSocket(url, transport.options);
       ws.binaryType = "nodebuffer";
-    } catch (error) {
-      throw error instanceof Error ? error : new Error(String(error));
     } finally {
       unregisterGatewayLoopbackBypass?.();
     }
@@ -589,10 +583,8 @@ export class GatewayClient {
     this.stopped = true;
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
-    if (this.tickTimer) {
-      clearInterval(this.tickTimer);
-      this.tickTimer = null;
-    }
+    clearInterval(this.tickTimer ?? undefined);
+    this.tickTimer = null;
     if (this.pendingStop) {
       return this.pendingStop.promise;
     }
@@ -1224,9 +1216,7 @@ export class GatewayClient {
   }
 
   private startTickWatch() {
-    if (this.tickTimer) {
-      clearInterval(this.tickTimer);
-    }
+    clearInterval(this.tickTimer ?? undefined);
     const rawMinInterval = this.opts.tickWatchMinIntervalMs;
     const minInterval =
       typeof rawMinInterval === "number" && Number.isFinite(rawMinInterval)
@@ -1276,11 +1266,9 @@ export class GatewayClient {
             ? null
             : this.requestTimeoutMs;
     return this.protocol.request<T>(method, params, {
+      ...opts,
       expectFinal,
       timeoutMs,
-      signal: opts?.signal,
-      onSent: opts?.onSent,
-      onAccepted: opts?.onAccepted,
     });
   }
 }

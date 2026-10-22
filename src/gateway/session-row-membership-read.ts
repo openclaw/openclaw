@@ -405,6 +405,7 @@ export function createSessionRowEntryReadAccess(
                 cfg,
                 preparedStore,
                 readEntries,
+                discovery,
               );
               return consume(
                 () =>

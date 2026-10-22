@@ -74,23 +74,20 @@ export type SlackMessageDispatchReplayGuard = ReturnType<
 export async function claimSlackMessageDispatchReplay(params: {
   guard: SlackMessageDispatchReplayGuard;
   key: string;
-  onWaiting?: () => void;
+  onWaiting: () => void;
 }): Promise<SlackMessageDispatchClaimResult> {
   const claim = await runClaimableDedupeClaimLoop(
     async () => {
       const next = await params.guard.claim({ keys: [params.key] });
       if (next.kind === "inflight") {
-        params.onWaiting?.();
+        params.onWaiting();
       }
       return next;
     },
-    (error, rejectionCount) => {
-      if (params.onWaiting) {
-        // Admission was released for the wait. Re-enter through the retry owner
-        // to regain ordering and the adoption watchdog before claiming again.
-        throw new SlackMessageDispatchRetryError(error);
-      }
-      return rejectionCount <= 1;
+    (error) => {
+      // Admission was released for the wait. Re-enter through the retry owner
+      // to regain ordering and the adoption watchdog before claiming again.
+      throw new SlackMessageDispatchRetryError(error);
     },
   );
   return claim.kind === "claimed"

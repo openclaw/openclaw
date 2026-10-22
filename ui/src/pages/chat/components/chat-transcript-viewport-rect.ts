@@ -2,19 +2,19 @@ import { observeElementRect, type Rect, type Virtualizer } from "@tanstack/virtu
 import {
   resolveTranscriptScrollMargin,
   syncScrollMargin,
-  type PositionRailGutterController,
+  type createPositionRailGutter,
 } from "./chat-transcript-geometry.ts";
 import { unscaledBorderBox } from "./chat-transcript-layout-owner.ts";
 
 type ViewportRectOwner = {
   getScrollElement(): HTMLDivElement | null;
   getHeaderHeight(): number;
-  positionRail: Pick<PositionRailGutterController, "read" | "sync">;
+  positionRail: Pick<ReturnType<typeof createPositionRailGutter>, "read" | "sync">;
   commitComposerResize(): void;
   measureConnectedRows(): boolean;
   queueRowMeasure(): void;
   onViewportResize(): void;
-  requestUpdate(): void;
+  invalidate(): void;
 };
 
 function sameDimension(previous: number | null | undefined, next: number): boolean {
@@ -92,7 +92,7 @@ export class TranscriptViewportRect {
       this.owner.positionRail.sync(railGeometry);
       if (widthChanged || heightChanged) {
         this.owner.onViewportResize();
-        this.owner.requestUpdate();
+        this.owner.invalidate();
       }
     };
     const syncRect = () => {

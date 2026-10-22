@@ -3,7 +3,6 @@ import { hasIrcControlChars, stripIrcControlChars } from "./control-chars.js";
 const IRC_TARGET_PATTERN = /^[^\s:]+$/u;
 
 type ParsedIrcLine = {
-  raw: string;
   prefix?: string;
   command: string;
   params: string[];
@@ -63,7 +62,6 @@ export function parseIrcLine(line: string): ParsedIrcLine | null {
   }
 
   return {
-    raw,
     prefix,
     command: command.toUpperCase(),
     params,

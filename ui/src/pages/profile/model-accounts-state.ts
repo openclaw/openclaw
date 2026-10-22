@@ -14,9 +14,19 @@ import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operat
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 
+type ModelAccountsSnapshot = {
+  gateway: ApplicationGatewaySnapshot;
+  identityId: string | null;
+  profileId: string | null;
+};
+
+export type ModelAccountsTargetSource = {
+  read: () => ModelAccountsSnapshot;
+  subscribe: (listener: () => void) => () => void;
+};
+
 export type ModelAccountsProps = {
-  identityId?: string | null;
-  profileId?: string | null;
+  target: ModelAccountsTargetSource;
   personLabel?: string | null;
 };
 
@@ -47,12 +57,15 @@ export class ModelAccountsState {
   connectFlow: (UsersAuthConnectStartResult & { step?: WizardStep }) | null = null;
   stepValue: unknown;
   statusUnavailable = false;
+  catalogReceipt = { result: Promise.resolve<string | null>(null) };
+  statusReceipt = { result: Promise.resolve<string | null>(null) };
 
   target: AccountTarget | null = null;
   generation = 0;
   inventoryRequest = 0;
   pollTimer: ReturnType<typeof setTimeout> | null = null;
   connected = true;
+  hello: ApplicationGatewaySnapshot["hello"] | undefined;
   constructor(
     readonly context: ApplicationContext,
     readonly props: ModelAccountsProps,
@@ -65,44 +78,64 @@ export class ModelAccountsState {
     this.stopPoll();
   }
 
-  applySnapshot(snapshot: ApplicationGatewaySnapshot) {
-    const canWrite =
-      snapshot.phase === "connected" && hasOperatorWriteAccess(snapshot.hello?.auth ?? null);
+  applySnapshot({
+    gateway: snapshot,
+    identityId: profileIdentityId,
+    profileId: canonicalProfileId,
+  }: ModelAccountsSnapshot) {
+    const transportConnected = snapshot.phase === "connected";
+    const connected = transportConnected && snapshot.selfUser !== undefined;
+    const connectionChanged =
+      connected !== this.connected || (connected && this.hello !== snapshot.hello);
+    const canWrite = transportConnected
+      ? hasOperatorWriteAccess(snapshot.hello?.auth ?? null)
+      : this.target !== null;
     const client = canWrite ? snapshot.client : null;
-    const identityId = snapshot.selfUser?.id ?? null;
+    const identityId = connected
+      ? (snapshot.selfUser?.id ?? null)
+      : (this.target?.identityId ?? null);
     // users.self returns canonical IDs while presence may still name a merged alias.
     // Bind the parent's canonical result to its exact authenticated connection identity.
-    const profileId = client && identityId === this.props.identityId ? this.props.profileId : null;
-    const canAdmin = canWrite && hasOperatorAdminAccess(snapshot.hello?.auth ?? null);
-    if (
+    const profileId = client && identityId === profileIdentityId ? canonicalProfileId : null;
+    const canAdmin = transportConnected
+      ? canWrite && hasOperatorAdminAccess(snapshot.hello?.auth ?? null)
+      : (this.target?.canAdmin ?? false);
+    const sameTarget =
       this.target?.client === client &&
       this.target?.identityId === identityId &&
       this.target?.profileId === profileId &&
-      this.target?.canAdmin === canAdmin
-    ) {
+      this.target?.canAdmin === canAdmin;
+    this.connected = connected;
+    this.hello = snapshot.hello;
+    if (sameTarget && !connectionChanged) {
       return;
     }
     this.generation += 1;
     this.stopPoll();
-    this.target =
-      client && identityId && profileId ? { client, identityId, profileId, canAdmin } : null;
-    this.links = [];
-    this.accounts = [];
-    this.nextCursor = undefined;
     this.inventoryRequest += 1;
     this.inventoryLoading = false;
     this.inventoryError = null;
+    this.catalogReceipt = { result: Promise.resolve(null) };
+    this.statusReceipt = { result: Promise.resolve(null) };
     this.action = null;
     this.error = null;
     this.notice = null;
-    this.linkDraft = "";
-    this.signIn = null;
-    this.connectFlow = null;
-    this.stepValue = undefined;
-    this.statusUnavailable = false;
+    if (!sameTarget) {
+      this.target =
+        client && identityId && profileId ? { client, identityId, profileId, canAdmin } : null;
+      this.links = [];
+      this.accounts = [];
+      this.nextCursor = undefined;
+      this.linkDraft = "";
+      this.signIn = null;
+      this.connectFlow = null;
+      this.stepValue = undefined;
+      this.statusUnavailable = false;
+    }
     this.publish();
-    if (this.target) {
+    if (this.target && connected) {
       void this.loadAccounts();
+      this.schedulePoll();
     }
   }
 
@@ -116,7 +149,7 @@ export class ModelAccountsState {
 
   async loadAccounts(cursor?: string) {
     const target = this.target;
-    if (!target) {
+    if (!target || !this.connected) {
       return;
     }
     const request = ++this.inventoryRequest;
@@ -157,7 +190,11 @@ export class ModelAccountsState {
     apply: (result: T) => void,
   ) {
     const target = this.target;
-    if (!target || (this.action && !(action === "cancel" && this.action === "answer"))) {
+    if (
+      !target ||
+      !this.connected ||
+      (this.action && !(action === "cancel" && this.action === "answer"))
+    ) {
       return;
     }
     const generation = ++this.generation;
@@ -214,7 +251,7 @@ export class ModelAccountsState {
 
   openSignIn() {
     this.signIn = { providers: [], provider: "", method: "" };
-    void this.runAction(
+    const pending = this.runAction(
       "request",
       (target) =>
         target.client.request<UsersAuthConnectCatalogResult>("users.authConnect.catalog", {
@@ -224,6 +261,11 @@ export class ModelAccountsState {
         this.signIn = { providers: result.providers, provider: "", method: "" };
       },
     );
+    const generation = this.generation;
+    this.catalogReceipt = {
+      result: pending.then(() => (this.generation === generation ? this.error : null)),
+    };
+    this.publish();
   }
 
   selectProvider(provider: string) {
@@ -300,7 +342,7 @@ export class ModelAccountsState {
     if (!flow) {
       return;
     }
-    void this.runAction(
+    const pending = this.runAction(
       action === "status" ? "request" : action,
       (target) =>
         target.client.request<UsersAuthConnectStatusResult>(`users.authConnect.${action}`, {
@@ -309,12 +351,28 @@ export class ModelAccountsState {
         }),
       (result) => this.applyConnectStatus(result),
     );
+    if (action === "status") {
+      const generation = this.generation;
+      this.statusReceipt = {
+        result: pending.then(() => {
+          if (this.generation !== generation) {
+            return null;
+          }
+          if (this.error && this.connectFlow) {
+            this.statusUnavailable = true;
+            this.publish();
+          }
+          return this.error;
+        }),
+      };
+      this.publish();
+    }
   }
 
   answerStep(stepId: string, value: unknown) {
     const flow = this.connectFlow;
     const step = flow?.step;
-    if (!flow || !step || step.id !== stepId || step.type === "progress") {
+    if (!this.connected || !flow || !step || step.id !== stepId || step.type === "progress") {
       return;
     }
     // Do not retain submitted secrets while the Gateway runs the provider-owned step.
@@ -344,7 +402,7 @@ export class ModelAccountsState {
   schedulePoll(interval = 2000) {
     this.stopPoll();
     const flow = this.connectFlow;
-    if (!flow || !this.target || this.action) {
+    if (!this.connected || !flow || !this.target || this.action) {
       return;
     }
     const delay = Math.max(0, Math.min(interval, flow.expiresAtMs - Date.now()));
@@ -358,7 +416,7 @@ export class ModelAccountsState {
     const target = this.target;
     const flow = this.connectFlow;
     const generation = this.generation;
-    if (!target || !flow || this.action) {
+    if (!this.connected || !target || !flow || this.action) {
       return;
     }
     try {
@@ -395,10 +453,10 @@ export class ModelAccountsState {
   }
 
   get busy() {
-    return this.inventoryLoading || this.action !== null;
+    return !this.connected || this.inventoryLoading || this.action !== null;
   }
   get cancelBusy() {
-    return this.action !== null && this.action !== "answer";
+    return !this.connected || (this.action !== null && this.action !== "answer");
   }
 
   setLinkDraft(value: string) {

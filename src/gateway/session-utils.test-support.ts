@@ -63,26 +63,15 @@ export function appendTranscriptMessages(params: {
   messages: unknown[];
   agentId?: string;
 }) {
-  for (const message of params.messages) {
-    appendTranscriptMessageSync(
-      {
-        agentId: params.agentId ?? "main",
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
-      },
-      { message },
-    );
+  const { messages, agentId, ...target } = params;
+  for (const message of messages) {
+    appendTranscriptMessageSync({ ...target, agentId: agentId ?? "main" }, { message });
   }
 }
 
 export function createSingleAgentAvatarConfig(workspace: string): OpenClawConfig {
-  return {
-    session: { mainKey: "main" },
-    agents: {
-      entries: { main: { workspace, identity: { avatar: "avatar-link.png" } } },
-    },
-  } as OpenClawConfig;
+  const main = { workspace, identity: { avatar: "avatar-link.png" } };
+  return { session: { mainKey: "main" }, agents: { entries: { main } } };
 }
 
 export function createModelDefaultsConfig(params: {
@@ -90,17 +79,7 @@ export function createModelDefaultsConfig(params: {
   models?: Record<string, { agentRuntime?: { id: string } }>;
   agentRuntime?: { id: string };
 }): OpenClawConfig {
-  return {
-    agents: {
-      defaults: {
-        model: { primary: params.primary },
-        models: {
-          ...params.models,
-          ...(params.agentRuntime
-            ? { [params.primary]: { agentRuntime: params.agentRuntime } }
-            : {}),
-        },
-      },
-    },
-  } as OpenClawConfig;
+  const { primary, models, agentRuntime } = params;
+  const overrides = agentRuntime ? { [primary]: { agentRuntime } } : {};
+  return { agents: { defaults: { model: { primary }, models: { ...models, ...overrides } } } };
 }

@@ -23,7 +23,7 @@ export type SecretEgressCertificateStatus = {
   failedCertificates: number;
   message?: string;
 };
-export type SecretEgressTlsEndpoint = {
+type SecretEgressTlsEndpoint = {
   acceptConnection: (socket: Duplex) => void;
   close: () => void;
   setSecureContext: (options: SecureContextOptions) => void;

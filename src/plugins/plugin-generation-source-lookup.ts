@@ -20,6 +20,17 @@ import {
 } from "./plugin-package-metadata-capture.js";
 import type { PluginNativeArtifactFact } from "./plugin-source-admission.types.js";
 import type { PluginCapturedSourceFact } from "./plugin-source-verification.js";
+// These owner-defined operations copy captured source trees; their cost scales with
+// package size and filesystem latency rather than the ordinary method deadline.
+const sourceCaptureOperations = new WeakSet<object>();
+export function markPluginSourceCaptureOperation<T extends () => unknown>(operation: T): T {
+  sourceCaptureOperations.add(operation);
+  return operation;
+}
+export function isPluginSourceCaptureOperation(operation: object): boolean {
+  return sourceCaptureOperations.has(operation);
+}
+
 type SourceCustody = {
   source: PluginRecoverySource;
   files: ReadonlyMap<string, PluginCapturedSourceFact>;
@@ -42,9 +53,18 @@ export async function withPluginGenerationSourceCustody<T>(run: () => Promise<T>
   if (sourceCustody.getStore()) {
     return await run();
   }
-  await using scope = {
+  const scope = createPluginGenerationSourceCustody();
+  try {
+    return await scope.run(run);
+  } finally {
+    await scope.disposeAsync();
+  }
+}
+
+function createPluginGenerationSourceCustody() {
+  const scope = {
     sources: new Map<string, SourceCustody>(),
-    async [Symbol.asyncDispose]() {
+    async disposeAsync() {
       const results = await Promise.allSettled(
         [...this.sources.values()].map(({ source }) => source.disposeAsync()),
       );
@@ -54,9 +74,13 @@ export async function withPluginGenerationSourceCustody<T>(run: () => Promise<T>
       if (errors.length) {
         throw new AggregateError(errors, "Plugin source custody cleanup failed");
       }
+      this.sources.clear();
     },
   };
-  return await sourceCustody.run(scope, run);
+  return {
+    run: <T>(run: () => T): T => sourceCustody.run(scope, run),
+    disposeAsync: () => scope.disposeAsync(),
+  };
 }
 
 /** Bind scoped file custody around an instance's independently constructed module graph. */
@@ -133,7 +157,7 @@ export function createPluginSourceFacts(
     resolveDependency: createPluginDependencyResolver(dependencyLookupBoundary),
     captureCustody: (capture: () => PluginRecoverySource): SourceCustody => ({
       source: capture(),
-      files: structuredClone(files),
+      files,
     }),
   };
 }
@@ -154,6 +178,27 @@ function getCapturedSource(
   return sources.get(lexical) ?? sources.get(canonicalSource(rootDir, sourceRoot, lexical));
 }
 
+export type PluginRecoverySourceResolverSnapshot = {
+  rootDir: string;
+  sourceRoot: string;
+  sources: ReadonlyMap<string, string>;
+};
+const recoverySourceResolvers = new WeakMap<object, PluginRecoverySourceResolverSnapshot>();
+
+/** Transfer only immutable lookup facts, never a call back into a retired source owner. */
+export function snapshotPluginRecoverySourceResolver(
+  resolve: object,
+): PluginRecoverySourceResolverSnapshot | undefined {
+  const snapshot = recoverySourceResolvers.get(resolve);
+  return snapshot && { ...snapshot, sources: new Map(snapshot.sources) };
+}
+
+export function restorePluginRecoverySourceResolver(
+  snapshot: PluginRecoverySourceResolverSnapshot,
+) {
+  return createRecoverySourceResolver(snapshot.rootDir, snapshot.sourceRoot, snapshot.sources);
+}
+
 // A recovery resolver outlives its producer. Its closure contains copied path
 // facts, never the producer's availability callback or live captured graph.
 function createRecoverySourceResolver(
@@ -161,13 +206,16 @@ function createRecoverySourceResolver(
   sourceRoot: string,
   sources: ReadonlyMap<string, string>,
 ) {
-  return (source: string) => {
-    const captured = getCapturedSource(sources, rootDir, sourceRoot, source);
+  const snapshot = { rootDir, sourceRoot, sources: new Map(sources) };
+  const resolve = (source: string) => {
+    const captured = getCapturedSource(snapshot.sources, rootDir, sourceRoot, source);
     if (!captured) {
       throw new Error("Plugin recovery entry is outside its captured source package");
     }
     return captured;
   };
+  recoverySourceResolvers.set(resolve, snapshot);
+  return resolve;
 }
 
 export type PluginRecoverySource = {
@@ -199,14 +247,34 @@ function copyRecoverySource({
   let recovery: ReturnType<typeof createPluginSourceCapture> | undefined;
   try {
     recovery = createPluginSourceCapture();
+    const directory = recovery.directory;
+    const relocate = (filename: string) =>
+      path.join(directory, path.relative(boundaryRoot, filename));
     const hardlinkedTargets = new Map<string, PluginNativeArtifactFact>();
-    // Preserve relative dependency links without reopening an updated package.
+    // Keep dependency links within the new capture without reopening installed packages.
     fs.cpSync(boundaryRoot, recovery.directory, {
       recursive: true,
       verbatimSymlinks: true,
       filter: (from, to) => {
         const fact = native?.references.get(from);
         if (!fact) {
+          if (fs.lstatSync(from).isSymbolicLink()) {
+            const target = fs.readlinkSync(from);
+            const relative = path.isAbsolute(target)
+              ? relativePluginPathInsideRootSync(boundaryRoot, target)
+              : undefined;
+            if (relative !== undefined) {
+              // Windows junctions store absolute targets. A verbatim copy would
+              // point at the seed after custody disposes it, then fail on fork.
+              fs.mkdirSync(path.dirname(to), { recursive: true, mode: 0o700 });
+              fs.symlinkSync(
+                path.relative(path.dirname(to), path.join(directory, relative)),
+                to,
+                fs.statSync(from).isDirectory() ? "junction" : "file",
+              );
+              return false;
+            }
+          }
           return true;
         }
         const retained = { ...fact, sourceIdentity: fact.capturedIdentity };
@@ -221,9 +289,6 @@ function copyRecoverySource({
     for (const [target, fact] of hardlinkedTargets) {
       assertReference(target, fact, native!.namespaces.get(fact.namespace)!);
     }
-    const directory = recovery.directory;
-    const relocate = (filename: string) =>
-      path.join(directory, path.relative(boundaryRoot, filename));
     const copiedSources = new Map(
       Array.from(sources, ([source, captured]) => [source, relocate(captured)]),
     );
@@ -238,7 +303,7 @@ function copyRecoverySource({
       sourceCapture,
       resolve: createRecoverySourceResolver(rootDir, sourceRoot, copiedSources),
       native,
-      fork() {
+      fork: markPluginSourceCaptureOperation(() => {
         if (disposed) {
           throw new Error("Plugin source recovery has been disposed");
         }
@@ -250,7 +315,7 @@ function copyRecoverySource({
           sources: copiedSources,
           native: native?.fork(),
         });
-      },
+      }),
       dispose() {
         if (!disposed) {
           disposed = true;
@@ -320,7 +385,7 @@ export function createPluginGenerationSourceLookup({
       assertModuleAvailable(captured);
       return captured;
     },
-    captureRecoverySource: () => {
+    captureRecoverySource: markPluginSourceCaptureOperation(() => {
       for (const captured of new Set(capturedPaths.values())) {
         assertModuleAvailable(captured);
       }
@@ -332,7 +397,7 @@ export function createPluginGenerationSourceLookup({
         sources: new Map(capturedPaths),
         native: captureNativeRecovery?.(),
       });
-    },
+    }),
   };
 }
 

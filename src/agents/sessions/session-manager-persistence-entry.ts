@@ -4,7 +4,9 @@ import type {
   TranscriptMessageAppendResult,
   TranscriptWriteSnapshot,
 } from "../../config/sessions/session-accessor.sqlite-contract.js";
+import type { SessionActorAppendCommitted } from "../../config/sessions/session-actor-contract.js";
 import { normalizeTranscriptJsonValue } from "../../config/sessions/transcript-json.js";
+import { persistCodeModeCheckpoint } from "../code-mode-checkpoint.js";
 import { isIndexedSessionEntry } from "./session-manager-codec.js";
 import type {
   AppendPersistenceOptions,
@@ -12,6 +14,7 @@ import type {
   SessionMessageEntry,
 } from "./session-manager-types.js";
 import type { PreparedSessionTranscriptReload } from "./session-manager-view-types.js";
+import { shareSessionSystemPrompt } from "./system-prompt-pool.js";
 
 export type PersistRecordResult =
   | undefined
@@ -29,6 +32,9 @@ export type PersistWorkerRecordResult = {
   reload?: PreparedSessionTranscriptReload;
   committedVersion: SessionTranscriptContextVersion;
   viewFailure?: Error;
+  modelPromptProjection?: NonNullable<
+    SessionActorAppendCommitted["modelPromptProjection"]
+  >["result"];
 };
 
 export type PersistRecordOptions = AppendPersistenceOptions & {
@@ -74,12 +80,16 @@ export function adoptCommittedMessagePayload(
 }
 
 export function canonicalizeSessionEntry<T extends SessionEntry>(entry: T): T {
+  const sourceMessage = entry.type === "message" ? entry.message : undefined;
   const canonicalEntry = normalizeTranscriptJsonValue(entry, "");
   if (!isIndexedSessionEntry(canonicalEntry) || canonicalEntry.type !== entry.type) {
     throw new Error(`Invalid session transcript entry: ${entry.type}`);
   }
+  if (canonicalEntry.type === "message" && sourceMessage) {
+    canonicalEntry.message = persistCodeModeCheckpoint(canonicalEntry.message, sourceMessage);
+  }
   // SAFETY: Manager-built envelopes retain T's checked discriminant; the codec validates their JSON storage shape.
-  return canonicalEntry as T;
+  return shareSessionSystemPrompt(canonicalEntry) as T;
 }
 
 export function adoptPersistedMessage(

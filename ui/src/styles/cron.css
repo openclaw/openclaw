@@ -620,18 +620,6 @@
   margin-left: 3px;
 }
 
-.cron-required-sr {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
 .cron-editor input[aria-invalid="true"],
 .cron-editor textarea[aria-invalid="true"] {
   border-color: var(--danger);
@@ -751,7 +739,6 @@
   border-top: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg) 88%, transparent);
   backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
 }
 
 .cron-submit-reason {
@@ -989,7 +976,6 @@
 .cron-run-entry__body pre,
 .cron-run-entry__body table {
   overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
 }
 
 /* Cron markdown overrides out-specify the base .chat-text rules in chat/text.css. */
@@ -1064,7 +1050,6 @@
   .cron-run-entry__body table {
     display: block;
     overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
   }
 }
 
@@ -1158,9 +1143,7 @@
 /* Owned surfaces keep positioning and dismissal with the overlay lifecycle. */
 .cron-job-menu > .oc-menu,
 .cron-filter-dropdown__details > .oc-menu {
-  padding: var(--menu-padding);
   border: 1px solid var(--overlay-border);
-  border-radius: var(--menu-radius);
   background: var(--bg-elevated);
   box-shadow: var(--overlay-shadow);
 }

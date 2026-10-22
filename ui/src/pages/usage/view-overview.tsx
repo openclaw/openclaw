@@ -1,9 +1,9 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { For, Show, createMemo } from "solid-js";
+import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
-import "../../components/agent-row-chip.tsx";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import "../../components/tooltip.ts";
@@ -23,7 +23,54 @@ import type {
   UsageTotals,
   CostDailyEntry,
 } from "./types.ts";
-import { SummaryStat } from "./view-summary-stat.tsx";
+
+function SummaryStat(props: {
+  hintId: string;
+  metric: string;
+  hint?: string;
+  value: string | number;
+  sub: string;
+  tone?: "good" | "warn" | "bad";
+  class?: string;
+  compactValue?: boolean;
+}) {
+  return (
+    <div
+      class={[
+        "stat usage-summary-card",
+        props.class,
+        props.tone ? `usage-summary-card--${props.tone}` : undefined,
+      ]}
+    >
+      <div class="usage-summary-title">
+        {t(`usage.overview.${props.metric}`)}
+        <openclaw-tooltip open-on-click>
+          <button
+            id={`usage-summary-hint-${props.hintId}`}
+            type="button"
+            class="usage-summary-hint"
+            aria-label={t(`usage.overview.${props.metric}`)}
+            onClick={(event) => event.currentTarget.focus()}
+          >
+            ?
+          </button>
+          {/* Summary hints intentionally remain open on pointer activation. */}
+          <span slot="content">{props.hint ?? t(`usage.overview.${props.metric}Hint`)}</span>
+        </openclaw-tooltip>
+      </div>
+      <div
+        class={[
+          "stat-value usage-summary-value",
+          props.tone,
+          { "usage-summary-value--compact": props.compactValue },
+        ]}
+      >
+        {props.value}
+      </div>
+      <div class="usage-summary-sub">{props.sub}</div>
+    </div>
+  );
+}
 
 function renderFilterChips(
   sessions: UsageSessionEntry[],
@@ -153,10 +200,10 @@ function renderCostWindowComparison(
               <div class={["cost-window-card", { "cost-window-card--range": isRange }]}>
                 <div class="cost-window-card__label">{label()}</div>
                 <div class="cost-window-card__value">
-                  {formatAnalysisCost(summary.totals.totalCost)}
+                  {formatAnalysisCost(summary.totals.totalCost, summary.totals.usageReport)}
                 </div>
                 <div class="cost-window-card__meta">
-                  {`${formatUsageTokens(summary.totals.totalTokens)} ${t("usage.metrics.tokens")} · ${formatAnalysisCost(averageDailyCost)} ${t("usage.costWindows.perDay")}`}
+                  {`${formatUsageTokens(summary.totals.totalTokens, summary.totals.usageReport)} ${t("usage.metrics.tokens")} · ${formatAnalysisCost(averageDailyCost, summary.totals.usageReport)} ${t("usage.costWindows.perDay")}`}
                 </div>
               </div>
             );
@@ -177,17 +224,13 @@ function renderInsightList(
     error?: boolean;
   },
 ) {
-  const cardClass = ["usage-insight-card", options?.className].filter(Boolean).join(" ");
-  const listClass = [options?.error ? "usage-error-list" : "usage-list", options?.listClassName]
-    .filter(Boolean)
-    .join(" ");
   return (
-    <div class={cardClass}>
+    <div class={["usage-insight-card", options?.className]}>
       <div class="usage-insight-title">{title}</div>
       {items.length === 0 ? (
         <div class="muted">{emptyLabel}</div>
       ) : (
-        <div class={listClass}>
+        <div class={[options?.error ? "usage-error-list" : "usage-list", options?.listClassName]}>
           <For each={items}>
             {(item) =>
               options?.error ? (
@@ -198,13 +241,7 @@ function renderInsightList(
                 </div>
               ) : (
                 <div class="usage-list-item">
-                  <span>
-                    {item.agentId ? (
-                      <openclaw-agent-row-chip prop:agentId={item.agentId} />
-                    ) : (
-                      item.label
-                    )}
-                  </span>
+                  <span>{item.agentId ? <AgentRowChip agentId={item.agentId} /> : item.label}</span>
                   <span class="usage-list-value">
                     <span>{item.value}</span>
                     {item.sub ? (
@@ -243,21 +280,24 @@ export function UsageInsights(props: {
       return undefined;
     }
 
+    // A ratio of partial counters is neither exact nor a lower bound: show it only when complete.
+    const report = totals.usageReport;
+    const partial = report?.state === "unavailable";
+    const empty = t("usage.common.emptyValue");
     const avgTokens = aggregates.messages.total
       ? Math.round(totals.totalTokens / aggregates.messages.total)
       : 0;
     const avgCost = aggregates.messages.total ? totals.totalCost / aggregates.messages.total : 0;
     const cacheBase = totals.input + totals.cacheRead + totals.cacheWrite;
     const cacheHitRate = cacheBase > 0 ? totals.cacheRead / cacheBase : 0;
-    const cacheHitLabel =
-      cacheBase > 0 ? `${(cacheHitRate * 100).toFixed(1)}%` : t("usage.common.emptyValue");
+    const cacheHitLabel = cacheBase > 0 && !partial ? `${(cacheHitRate * 100).toFixed(1)}%` : empty;
     const errorRatePct = stats.errorRate * 100;
     const throughputLabel =
-      stats.throughputTokensPerMin !== undefined
+      stats.throughputTokensPerMin !== undefined && !partial
         ? `${formatUsageTokens(Math.round(stats.throughputTokensPerMin))} ${t("usage.overview.tokensPerMinute")}`
         : t("usage.common.emptyValue");
     const throughputCostLabel =
-      stats.throughputCostPerMin !== undefined
+      stats.throughputCostPerMin !== undefined && !partial
         ? `${formatAnalysisCost(stats.throughputCostPerMin)} ${t("usage.overview.perMinute")}`
         : t("usage.common.emptyValue");
     const avgDurationLabel =
@@ -281,9 +321,18 @@ export function UsageInsights(props: {
     ) => ({
       label,
       ...(agent ? { agentId: label } : {}),
-      value: formatAnalysisCost(entryTotals.totalCost, entryTotals.usageReport),
+      // Usage with no known price is unpriced, never free.
+      value:
+        entryTotals.totalCost === 0 && entryTotals.missingCostEntries > 0
+          ? t("usage.overview.unpriced")
+          : formatAnalysisCost(entryTotals.totalCost, entryTotals.usageReport),
       sub: [
-        showCostShares && entryTotals.usageReport?.state !== "unavailable" && totals.totalCost > 0
+        // A share needs a complete entry and a complete denominator.
+        showCostShares &&
+        !partial &&
+        entryTotals.usageReport?.state !== "unavailable" &&
+        entryTotals.totalCost > 0 &&
+        totals.totalCost > 0
           ? t("usage.overview.costShare", {
               percent: ((entryTotals.totalCost / totals.totalCost) * 100).toFixed(1),
             })
@@ -324,14 +373,16 @@ export function UsageInsights(props: {
       aggregates,
       throughputLabel,
       throughputCostLabel,
-      avgTokens,
+      avgTokensLabel: partial ? empty : formatUsageTokens(avgTokens),
+      avgCostLabel: partial ? empty : formatAnalysisCost(avgCost),
+      partial,
+      report,
       cacheHitLabel,
       totals,
       cacheBase,
       cacheHitRate,
       errorRatePct,
       avgDurationLabel,
-      avgCost,
       insightLists,
       errorDays,
     };
@@ -368,7 +419,7 @@ export function UsageInsights(props: {
                 <SummaryStat
                   hintId="average-tokens"
                   metric="avgTokens"
-                  value={formatUsageTokens(insights().avgTokens)}
+                  value={insights().avgTokensLabel}
                   sub={t("usage.overview.acrossMessages", {
                     count: String(insights().aggregates.messages.total || 0),
                   })}
@@ -379,13 +430,15 @@ export function UsageInsights(props: {
                   metric="cacheHitRate"
                   hint={t("usage.overview.cacheHint")}
                   value={insights().cacheHitLabel}
-                  sub={`${formatUsageTokens(insights().totals.cacheRead)} ${t("usage.overview.cached")} · ${formatUsageTokens(insights().cacheBase)} ${t("usage.overview.prompt")}`}
+                  sub={`${formatUsageTokens(insights().totals.cacheRead, insights().report)} ${t("usage.overview.cached")} · ${formatUsageTokens(insights().cacheBase, insights().report)} ${t("usage.overview.prompt")}`}
                   tone={
-                    insights().cacheHitRate > 0.6
-                      ? "good"
-                      : insights().cacheHitRate > 0.3
-                        ? "warn"
-                        : "bad"
+                    insights().partial
+                      ? undefined
+                      : insights().cacheHitRate > 0.6
+                        ? "good"
+                        : insights().cacheHitRate > 0.3
+                          ? "warn"
+                          : "bad"
                   }
                   class="usage-summary-card--medium"
                 />
@@ -412,8 +465,8 @@ export function UsageInsights(props: {
                       ? "usage.overview.avgCostHintMissing"
                       : "usage.overview.avgCostHint",
                   )}
-                  value={formatAnalysisCost(insights().avgCost)}
-                  sub={`${formatAnalysisCost(insights().totals.totalCost)} ${normalizeLowercaseStringOrEmpty(t("usage.breakdown.total"))}`}
+                  value={insights().avgCostLabel}
+                  sub={`${formatAnalysisCost(insights().totals.totalCost, insights().report)} ${normalizeLowercaseStringOrEmpty(t("usage.breakdown.total"))}`}
                   class="usage-summary-card--compact"
                 />
                 <SummaryStat

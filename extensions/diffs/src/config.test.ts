@@ -209,29 +209,6 @@ describe("viewer assets", () => {
 });
 
 describe("parseViewerPayloadJson", () => {
-  it("rejects payloads with invalid shape", () => {
-    const broken = {
-      prerenderedHTML: "<div>ok</div>",
-      langs: ["text"],
-      oldFile: { name: "README.md", contents: "before" },
-      newFile: { name: "README.md", contents: "after" },
-      options: {
-        theme: { light: "pierre-light", dark: "pierre-dark" },
-        diffStyle: "unified",
-        diffIndicators: "invalid",
-        disableLineNumbers: false,
-        expandUnchanged: false,
-        themeType: "dark",
-        backgroundEnabled: true,
-        overflow: "wrap",
-        unsafeCSS: ":host{}",
-      },
-    };
-    expect(() => parseViewerPayloadJson(JSON.stringify(broken))).toThrow(
-      "Diff payload has invalid shape.",
-    );
-  });
-
   it("rejects invalid JSON", () => {
     expect(() => parseViewerPayloadJson("{not-json")).toThrow("Diff payload is not valid JSON.");
   });

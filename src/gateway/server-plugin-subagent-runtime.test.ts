@@ -23,7 +23,6 @@ import {
   withPluginRuntimePluginScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
-import { createBackgroundWorkOwner } from "../process/background-work.js";
 import * as commandQueue from "../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../process/command-queue.test-support.js";
 import { CommandLane } from "../process/lanes.js";
@@ -167,12 +166,17 @@ describe("plugin background completions", () => {
     commandQueue.setCommandLaneConcurrency(CommandLane.Subagent, 1);
     const slot = createDeferred();
     const active = commandQueue.enqueueCommandInLane(CommandLane.Subagent, () => slot.promise);
-    const background = createBackgroundWorkOwner({
-      owner: "core:completion-test",
-      maxConcurrent: 3,
+    const background = "background:core:completion-test";
+    commandQueue.publishLaneConfiguration({
+      lanes: { [background]: 3 },
+      groups: { "background-work": { budget: 3, members: [background] } },
     });
     const backgroundWork = Promise.all(
-      Array.from({ length: 3 }, () => background.enqueue(() => slot.promise)),
+      Array.from({ length: 3 }, () =>
+        commandQueue.enqueueCommandInLane(background, () => slot.promise, {
+          priority: "background",
+        }),
+      ),
     );
     const enqueued = createDeferred();
     const diagnosticsEnabled = areDiagnosticsEnabledForProcess();

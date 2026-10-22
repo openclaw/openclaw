@@ -19,7 +19,7 @@ import {
   ALL_GATEWAY_SECRET_INPUT_PATHS,
   readGatewaySecretInputValue,
 } from "../../gateway/secret-input-paths.js";
-import { readGatewayLastShutdown } from "../../infra/gateway-boot-lifecycle.js";
+import { readGatewayLastShutdownAsync } from "../../infra/gateway-boot-lifecycle.js";
 import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.js";
 import { formatPortDiagnostics } from "../../infra/ports-format.js";
 import { inspectPortConnections } from "../../infra/ports-inspect.js";
@@ -111,11 +111,10 @@ function hasActiveGatewayExecProbeCredential(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   explicitAuth: { token?: string; password?: string };
-  mode: "local" | "remote";
 }): boolean {
   const cfg = resolveGatewayProbeCredentialConfig({
     cfg: params.cfg,
-    mode: params.mode,
+    mode: "local",
   });
   return ALL_GATEWAY_SECRET_INPUT_PATHS.some((path) => {
     if (
@@ -123,7 +122,7 @@ function hasActiveGatewayExecProbeCredential(params: {
         config: cfg,
         env: params.env,
         explicitAuth: params.explicitAuth,
-        modeOverride: params.mode,
+        modeOverride: "local",
         path,
         // Remote probe config suppresses ambient credentials across auth types.
         // Mirror that owner here so env auth cannot hide a winning exec ref.
@@ -230,7 +229,9 @@ async function gatherDaemonStatusImpl(
   const serviceTargetsProbe = useNativeServiceTargetContext && !hasUrlOverride;
   const shouldInspectLocalGateway = !hasUrlOverride;
   const lastShutdown =
-    opts.deep && shouldInspectLocalGateway ? readGatewayLastShutdown(mergedDaemonEnv) : undefined;
+    opts.deep && shouldInspectLocalGateway
+      ? await readGatewayLastShutdownAsync(mergedDaemonEnv).catch(() => undefined)
+      : undefined;
   let duelingScopesWarning: string | null = null;
   if (opts.deep && serviceTargetsProbe && process.platform === "linux") {
     const { findSystemdGatewayInstallation, formatDuelingScopesWarning } =
@@ -244,9 +245,7 @@ async function gatherDaemonStatusImpl(
     opts.deep === true && shouldInspectLocalGateway
       ? await inspectWindowsGatewayFirewall({
           bind: gateway.bindMode,
-          mode: "quick",
           port: daemonPort,
-          platform: process.platform,
         })
       : undefined;
   const { portStatus, portCliStatus } = await inspectDaemonPortStatuses({
@@ -307,7 +306,6 @@ async function gatherDaemonStatusImpl(
         cfg: daemonCfg,
         env: mergedDaemonEnv,
         explicitAuth,
-        mode: "local",
       });
     if (probeUrlOverride || explicitAuth.token || explicitAuth.password) {
       daemonProbeAuth = explicitAuth;
@@ -506,7 +504,6 @@ async function gatherDaemonStatusImpl(
         ? {
             gatewayHeap: inspectGatewayHeapLimit(
               command.environment?.NODE_OPTIONS,
-              {},
               command.programArguments,
             ),
           }

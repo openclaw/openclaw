@@ -2,28 +2,20 @@ import { beforeAll, vi } from "vitest";
 import type { DispatchReplyFromConfig } from "../../auto-reply/reply/dispatch-from-config.types.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { createPluginRuntimeMock } from "../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import type { PluginCommandNativeCandidate } from "../../plugins/plugin-command-runtime.js";
-import {
-  captureActivePluginRegistrySnapshot,
-  rollbackStagedPluginRegistry,
-  stageActivePluginRegistry,
-} from "../../plugins/runtime.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import { linkUserChannelIdentity } from "../../state/user-channel-identities.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import { buildChannelInboundEventContext } from "../inbound-event/context.js";
-import { createHostChannelInboundEventContextBuilder } from "../inbound-event/host-context-builder.js";
 import type { ChannelPlugin } from "../plugins/types.public.js";
-import { createHostChannelIngressRuntime } from "./runtime.js";
+import { createHostIngressFixture, withTestChannelRegistry } from "./host-ingress.test-support.js";
+import { createCommandOwnerTestRoles } from "./operator-authority.test-support.js";
 
 beforeAll(async () => {
   // Finish cold plugin imports before any case changes process-global state.
@@ -75,19 +67,7 @@ async function createFixture(state: OpenClawTestState) {
         },
       },
     },
-    gateway: {
-      roles: {
-        default: "member",
-        definitions: {
-          admin: { scopes: ["operator.admin"], agents: "*", sessions: { others: "write" } },
-          member: {
-            scopes: ["operator.read", "operator.write"],
-            agents: "*",
-            sessions: { others: "view" },
-          },
-        },
-      },
-    },
+    gateway: { roles: createCommandOwnerTestRoles() },
   };
   const profile = ensureProfileForEmail("ada@example.test");
   setUserProfileRole(profile.id, "admin");
@@ -96,30 +76,24 @@ async function createFixture(state: OpenClawTestState) {
     accountId: "default",
     senderId: "123456789012345678",
   });
-  // SAFETY: This synthetic Gateway provides the only context operation consumed by ingress authority.
-  const gateway = { getRuntimeConfig: () => cfg } as GatewayRequestContext;
-  let live = true;
-  const host = {
-    channelId: "discord",
-    isLive: () => live,
-    resolveGatewayContext: () => gateway,
-  };
+  const host = createHostIngressFixture("discord", cfg);
   const dispatch = vi.fn<DispatchReplyFromConfig>(async ({ dispatcher }) => ({
     queuedFinal: dispatcher.sendFinalReply({ text: "accepted" }),
     counts: dispatcher.getQueuedCounts(),
   }));
-  const createCommandOptions = (threadBindings: object) => ({
-    command: { name: "ping", description: "Ping", acceptsArgs: false },
+  const createCommandOptions = (
+    threadBindings: object,
+    name: string,
+    pluginCommand?: PluginCommandNativeCandidate,
+  ) => ({
+    command: pluginCommand ?? { name, description: "Test command", acceptsArgs: true },
     cfg,
     discordConfig: cfg.channels?.discord ?? {},
     accountId: "default",
     sessionPrefix: "discord:slash",
     ephemeralDefault: true,
     threadBindings,
-    buildContext: createHostChannelInboundEventContextBuilder(
-      buildChannelInboundEventContext,
-      host,
-    ),
+    buildContext: host.buildContext,
     dispatchReplyFromConfig: dispatch,
   });
   const { createDiscordNativeCommand, createNoopThreadBindingManager, setDiscordRuntime } =
@@ -138,13 +112,13 @@ async function createFixture(state: OpenClawTestState) {
     }>({ pluginId: "discord", artifactBasename: "runtime-api.js" });
   setDiscordRuntime(
     createPluginRuntimeMock({
-      channel: {
-        inbound: {
-          ingress: createHostChannelIngressRuntime(host),
-        },
-      },
+      channel: { inbound: { ingress: host.ingress } },
     }),
   );
+  const createCommand = (name: string, candidate?: PluginCommandNativeCandidate) =>
+    createDiscordNativeCommand(
+      createCommandOptions(createNoopThreadBindingManager("default"), name, candidate),
+    );
   const run = async (
     options: {
       senderId?: string;
@@ -154,16 +128,8 @@ async function createFixture(state: OpenClawTestState) {
     } = {},
   ) => {
     dispatch.mockClear();
-    const command = createDiscordNativeCommand({
-      ...createCommandOptions(createNoopThreadBindingManager("default")),
-      command: options.pluginCommand ?? {
-        name: options.commandName ?? "ping",
-        description: "Test command",
-        acceptsArgs: true,
-      },
-    });
     const interaction = createInteraction(options);
-    await command.run(interaction);
+    await createCommand(options.commandName ?? "ping", options.pluginCommand).run(interaction);
     return interaction;
   };
   return {
@@ -174,10 +140,7 @@ async function createFixture(state: OpenClawTestState) {
     run,
     dispatch,
     autocomplete: async () => {
-      const command = createDiscordNativeCommand({
-        ...createCommandOptions(createNoopThreadBindingManager("default")),
-        command: { name: "think", description: "Thinking level", acceptsArgs: true },
-      });
+      const command = createCommand("think");
       const complete = command.options?.find((option) => option.name === "level")?.autocomplete;
       if (!complete) {
         throw new Error("Expected the registered /think level autocomplete handler");
@@ -186,9 +149,7 @@ async function createFixture(state: OpenClawTestState) {
       await complete(interaction);
       return interaction;
     },
-    close: () => {
-      live = false;
-    },
+    close: host.retire,
   };
 }
 
@@ -200,21 +161,13 @@ export async function withDiscordNativeAdminFixture(
       pluginId: "discord",
       artifactBasename: "api.js",
     });
-    const previousRegistry = captureActivePluginRegistrySnapshot();
-    stageActivePluginRegistry(
-      createTestRegistry([{ pluginId: "discord", plugin: discordPlugin, source: "test" }]),
-      null,
-      "default",
-    );
-    try {
+    await withTestChannelRegistry(discordPlugin, async () => {
       const fixture = await createFixture(state);
       try {
         await test(fixture);
       } finally {
         fixture.close();
       }
-    } finally {
-      rollbackStagedPluginRegistry(previousRegistry);
-    }
+    });
   });
 }

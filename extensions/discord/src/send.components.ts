@@ -7,20 +7,17 @@ import { hasNonEmptyString, uniqueStrings } from "openclaw/plugin-sdk/string-coe
 import { registerDiscordComponentEntries } from "./components-registry.js";
 import {
   buildDiscordComponentMessage,
-  buildDiscordComponentMessageFlags,
   resolveDiscordComponentAttachmentName,
   type DiscordComponentBuildResult,
   type DiscordComponentMessageSpec,
 } from "./components.js";
+import { createChannelMessage, editChannelMessage } from "./internal/api.messages.js";
 import {
-  createChannelMessage,
-  editChannelMessage,
   serializePayload,
   type MessagePayloadFile,
   type MessagePayloadObject,
-} from "./internal/discord.js";
+} from "./internal/payload.js";
 import { withDiscordRequestAuthority } from "./internal/request-authority.js";
-import { parseAndResolveChannelRecipient } from "./recipient-resolution.js";
 import { sendMessageDiscord } from "./send.outbound.js";
 import { createDiscordSendResult } from "./send.receipt.js";
 import {
@@ -32,6 +29,7 @@ import {
   SUPPRESS_NOTIFICATIONS_FLAG,
 } from "./send.shared.js";
 import type { DiscordSendResult } from "./send.types.js";
+import { parseAndResolveDiscordTarget } from "./target-resolver.js";
 
 const DISCORD_FORUM_LIKE_TYPES = new Set<number>([ChannelType.GuildForum, ChannelType.GuildMedia]);
 
@@ -93,15 +91,6 @@ export function registerBuiltDiscordComponentMessage(params: {
     messageId: params.messageId,
     ttlMs: params.ttlMs,
   });
-}
-
-function resolveDiscordComponentRegistryTtlMs(
-  accountConfig: { agentComponents?: { ttlMs?: number } } | undefined,
-): number | undefined {
-  const ttlMs = accountConfig?.agentComponents?.ttlMs;
-  return typeof ttlMs === "number" && Number.isFinite(ttlMs) && ttlMs > 0
-    ? Math.floor(ttlMs)
-    : undefined;
 }
 
 async function buildDiscordComponentPayload(params: {
@@ -166,15 +155,10 @@ async function buildDiscordComponentPayload(params: {
     agentId: params.opts.agentId,
     accountId: params.accountId,
   });
-  const flags = buildDiscordComponentMessageFlags(buildResult.components);
-  const finalFlags = params.opts.silent
-    ? (flags ?? 0) | SUPPRESS_NOTIFICATIONS_FLAG
-    : (flags ?? undefined);
-
   const payload: MessagePayloadObject = {
     components: buildResult.components,
     allowed_mentions: params.opts.allowedMentions,
-    ...(finalFlags ? { flags: finalFlags } : {}),
+    ...(params.opts.silent ? { flags: SUPPRESS_NOTIFICATIONS_FLAG } : {}),
     ...(files ? { files } : {}),
   };
   const body = {
@@ -223,7 +207,11 @@ async function writeDiscordComponentMessage(
     creating ? "Discord component send" : "Discord component edit",
   );
   const { token, rest, request, account: accountInfo } = createDiscordClient({ ...opts, cfg });
-  const recipient = await parseAndResolveChannelRecipient(to, cfg, accountInfo.accountId);
+  const recipient = await parseAndResolveDiscordTarget(
+    to,
+    { cfg, accountId: accountInfo.accountId },
+    { defaultKind: "channel" },
+  );
   const { channelId } = await resolveChannelId(rest, recipient, request);
   if (creating) {
     const channel = await resolveDiscordChannel(rest, channelId);
@@ -278,7 +266,7 @@ async function writeDiscordComponentMessage(
   await registerBuiltDiscordComponentMessage({
     buildResult,
     messageId: result.id ?? messageId,
-    ttlMs: resolveDiscordComponentRegistryTtlMs(accountInfo.config),
+    ttlMs: accountInfo.config.agentComponents?.ttlMs,
   });
   recordChannelActivity({
     channel: "discord",

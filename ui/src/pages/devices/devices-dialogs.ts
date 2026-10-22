@@ -1,11 +1,13 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { showConfirmDialog, type ConfirmDialogOptions } from "../../components/confirm-dialog.ts";
+import { showSecretRevealDialog } from "../../components/secret-reveal-dialog.tsx";
 import { t } from "../../i18n/index.ts";
 import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type {
   DevicesPageDataState,
   InventoryRemovalRequest,
+  RotatedDeviceTokenOutcome,
 } from "../../lib/nodes/page-operations.ts";
 import {
   rejectDevicePairing,
@@ -31,30 +33,28 @@ type InventoryRemovalPrompt =
 export type DevicesDialogHost = {
   canManagePairing: () => boolean;
   gatewayConnected: () => boolean;
-  requestGeneration: () => number;
   gatewayClient: () => GatewayBrowserClient | null;
   gatewayUrl: () => string;
   runPageTask: <T>(task: (pageState: DevicesPageDataState) => T | Promise<T>) => Promise<T>;
+  runInventoryTask: (task: (pageState: DevicesPageDataState) => unknown) => Promise<void>;
   setDevicesError: (message: string) => void;
 };
 
-export class DevicesDialogController {
-  private pending: AbortController | null = null;
+export function createDevicesDialogs(host: DevicesDialogHost) {
+  let pending: AbortController | null = null;
 
-  constructor(private readonly host: DevicesDialogHost) {}
-
-  cancel() {
-    this.pending?.abort();
-    this.pending = null;
+  function cancel() {
+    pending?.abort();
+    pending = null;
   }
 
-  // Alias edits and destructive confirmations share one slot, retired on reconnect.
-  async editAlias(device: DeviceAliasTarget): Promise<void> {
-    if (!this.host.canManagePairing() || this.pending) {
+  // Alias edits and destructive confirmations share one identity-scoped slot.
+  async function editAlias(device: DeviceAliasTarget): Promise<void> {
+    if (!host.canManagePairing() || pending) {
       return;
     }
     const controller = new AbortController();
-    this.pending = controller;
+    pending = controller;
     try {
       const { showInputDialog } = await import("../../components/input-dialog.ts");
       await showInputDialog({
@@ -64,26 +64,27 @@ export class DevicesDialogController {
         defaultValue: device.operatorLabel ?? "",
         requireValue: true,
         requireChange: true,
+        canSubmit: host.canManagePairing,
         submit: (label) => {
-          if (!this.host.canManagePairing()) {
+          if (!host.canManagePairing()) {
             return Promise.resolve(t("devices.readOnly.pairingRequired"));
           }
-          return this.host.runPageTask((pageState) =>
+          return host.runPageTask((pageState) =>
             renameDevice(pageState, { deviceId: device.id, label }),
           );
         },
       });
     } catch (error) {
-      this.host.setDevicesError(formatUiError(error));
+      host.setDevicesError(formatUiError(error));
     } finally {
-      if (this.pending === controller) {
-        this.pending = null;
+      if (pending === controller) {
+        pending = null;
       }
     }
   }
 
-  confirmInventoryRemoval(prompt: InventoryRemovalPrompt): Promise<void> {
-    return this.confirmDestructiveAction(
+  function confirmInventoryRemoval(prompt: InventoryRemovalPrompt): Promise<void> {
+    return confirmDestructiveAction(
       {
         confirmLabel: t("devices.inventory.remove"),
         ...(prompt.kind === "entry"
@@ -108,8 +109,8 @@ export class DevicesDialogController {
     );
   }
 
-  confirmPairingReject(target: "device" | "node", requestId: string): Promise<void> {
-    return this.confirmDestructiveAction(
+  function confirmPairingReject(target: "device" | "node", requestId: string): Promise<void> {
+    return confirmDestructiveAction(
       {
         title: t(
           target === "device"
@@ -126,8 +127,8 @@ export class DevicesDialogController {
     );
   }
 
-  confirmTokenRevoke(deviceId: string, role: string): Promise<void> {
-    return this.confirmDestructiveAction(
+  function confirmTokenRevoke(deviceId: string, role: string): Promise<void> {
+    return confirmDestructiveAction(
       {
         title: t("devices.inventory.revokePromptTitle", { role }),
         message: t("devices.inventory.revokePromptBody"),
@@ -137,7 +138,7 @@ export class DevicesDialogController {
       (pageState) =>
         revokeDeviceToken(pageState, {
           deviceId,
-          gatewayUrl: this.host.gatewayUrl(),
+          gatewayUrl: host.gatewayUrl(),
           role,
         }),
     );
@@ -146,16 +147,16 @@ export class DevicesDialogController {
   /**
    * Switching the exec approvals target throws away an unsaved policy draft, so
    * it confirms through the same single-dialog slot as the destructive actions:
-   * a reconnect aborts it and it cannot stack on another prompt. There is no
+   * an identity change aborts it and it cannot stack on another prompt. There is no
    * request to place, so the post-await revalidation is only that this dialog is
    * still the page's current one — a false result must leave every field alone.
    */
-  async confirmExecApprovalsDiscard(): Promise<boolean> {
-    if (this.pending) {
+  async function confirmExecApprovalsDiscard(): Promise<boolean> {
+    if (pending) {
       return false;
     }
     const controller = new AbortController();
-    this.pending = controller;
+    pending = controller;
     const confirmed = await showConfirmDialog({
       title: t("devices.execApprovals.discardPromptTitle"),
       message: t("devices.execApprovals.discardPromptBody"),
@@ -163,44 +164,75 @@ export class DevicesDialogController {
       danger: true,
       signal: controller.signal,
     });
-    if (this.pending === controller) {
-      this.pending = null;
+    if (pending === controller) {
+      pending = null;
     }
     return confirmed && !controller.signal.aborted;
   }
 
   // Every destructive Devices action confirms here, never through window.confirm: the
   // awaited dialog lets the gateway reconnect or swap clients mid-prompt, so the captured
-  // scope and current authority are revalidated before the operation runs.
-  private async confirmDestructiveAction(
+  // identity and current authority are revalidated before the operation runs.
+  async function confirmDestructiveAction(
     prompt: Omit<ConfirmDialogOptions, "danger" | "signal">,
     run: (pageState: DevicesPageDataState) => unknown,
   ) {
-    if (!this.host.canManagePairing() || this.pending) {
+    if (!host.canManagePairing() || pending) {
       return;
     }
     const controller = new AbortController();
-    this.pending = controller;
-    const generation = this.host.requestGeneration();
-    const client = this.host.gatewayClient();
+    pending = controller;
+    const client = host.gatewayClient();
     const confirmed = await showConfirmDialog({
       ...prompt,
       danger: true,
       signal: controller.signal,
+      canConfirm: host.canManagePairing,
     });
-    if (this.pending === controller) {
-      this.pending = null;
+    if (pending === controller) {
+      pending = null;
     }
     if (
       !confirmed ||
       controller.signal.aborted ||
-      generation !== this.host.requestGeneration() ||
-      client !== this.host.gatewayClient() ||
-      !this.host.gatewayConnected() ||
-      !this.host.canManagePairing()
+      client !== host.gatewayClient() ||
+      !host.gatewayConnected() ||
+      !host.canManagePairing()
     ) {
       return;
     }
-    await this.host.runPageTask(run);
+    await host.runInventoryTask(run);
   }
+  return {
+    cancel,
+    editAlias,
+    confirmInventoryRemoval,
+    confirmPairingReject,
+    confirmTokenRevoke,
+    confirmExecApprovalsDiscard,
+  };
+}
+
+export async function showDeviceRotationOutcome(
+  deviceName: string,
+  role: string,
+  outcome: RotatedDeviceTokenOutcome,
+) {
+  await (outcome.delivery === "in-band"
+    ? showSecretRevealDialog({
+        title: t("devices.inventory.rotatePromptTitle", { role }),
+        message: t("devices.inventory.rotatePromptBody"),
+        secret: outcome.token,
+        acknowledgeLabel: t("devices.inventory.rotateAcknowledge"),
+        dismissHint: t("devices.inventory.rotateDismissHint"),
+      })
+    : showSecretRevealDialog({
+        // The title names the device; the body reassures about the outcome.
+        title: t("devices.inventory.rotateWithheldTitle", { device: deviceName }),
+        status: "success",
+        message: t("devices.inventory.rotateWithheldNext"),
+        callout: t("devices.inventory.rotateWithheldException"),
+        acknowledgeLabel: t("common.close"),
+        note: t("devices.inventory.rotateWithheldNote"),
+      }));
 }

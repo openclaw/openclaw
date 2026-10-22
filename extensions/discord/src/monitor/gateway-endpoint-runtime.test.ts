@@ -33,7 +33,6 @@ describe("Discord Gateway endpoint environment", () => {
     const plugin = createDiscordGatewayPlugin({
       discordConfig: {},
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      testing: { webSocketCtor: WebSocket },
     });
     const createWebSocket = Reflect.get(plugin, "createWebSocket");
     if (typeof createWebSocket !== "function") {

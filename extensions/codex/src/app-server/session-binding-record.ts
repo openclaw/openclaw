@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-registration";
 import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { NativeSessionBindingStateStoreV2 } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
@@ -45,6 +46,18 @@ export {
   type CodexAppServerThreadBinding,
   type StoredCodexAppServerBinding,
 } from "./session-binding-record-codec.js";
+
+export type CodexBindingStateStore = Omit<
+  NativeSessionBindingStateStoreV2<StoredCodexAppServerBinding>,
+  "lookup" | "assertLeaseCurrent"
+> &
+  Pick<PluginStateSyncKeyedStore<StoredCodexAppServerBinding>, "lookup"> & {
+    prepareRead: Parameters<typeof prepareCurrentCodexAppServerBindingRead>[0]["prepareRead"];
+    asyncReads: Pick<
+      PluginStateKeyedStore<StoredCodexAppServerBinding, 2>,
+      "lookup" | "lookupMany" | "entries"
+    >;
+  };
 
 /** Stable owner of one Codex thread binding. */
 export type CodexAppServerBindingIdentity =
@@ -103,7 +116,7 @@ export function ownsStoredSessionGeneration(
   );
 }
 
-/** Final effect guards retain the live row until raw SDK binding writers retire. */
+/** Legacy effect guards; prepared readers also observe raw SDK binding writes. */
 export function readCurrentCodexAppServerBinding(
   state: Pick<PluginStateSyncKeyedStore<StoredCodexAppServerBinding>, "lookup">,
   identity: CodexAppServerBindingIdentity,
@@ -118,6 +131,33 @@ export async function readCurrentCodexAppServerBindingAsync(
 ): Promise<CodexAppServerThreadBinding | undefined> {
   const key = bindingStoreKey(identity);
   return decodeCurrentCodexAppServerBinding(key, await state.lookup(key), identity);
+}
+
+export async function prepareCurrentCodexAppServerBindingRead(
+  state: {
+    prepareRead(key: string): Promise<
+      | {
+          read(): StoredCodexAppServerBinding | undefined;
+          release(): void;
+        }
+      | undefined
+    >;
+  },
+  identity: CodexAppServerBindingIdentity,
+) {
+  const key = bindingStoreKey(identity);
+  const current = await state.prepareRead(key);
+  let released = false;
+  return current
+    ? {
+        read: () =>
+          released ? undefined : decodeCurrentCodexAppServerBinding(key, current.read(), identity),
+        release: () => {
+          released = true;
+          current.release();
+        },
+      }
+    : undefined;
 }
 
 function decodeCurrentCodexAppServerBinding(
@@ -136,29 +176,14 @@ function decodeCurrentCodexAppServerBinding(
 
 /** Acquire fresh rows off-thread; decode lazily to preserve caller failure ordering. */
 export async function* readCurrentCodexAppServerBindings(
-  state: Pick<PluginStateKeyedStore<StoredCodexAppServerBinding>, "lookup" | "lookupMany">,
+  state: Pick<PluginStateKeyedStore<StoredCodexAppServerBinding, 2>, "lookupMany">,
   identities: readonly CodexAppServerBindingIdentity[],
 ): AsyncGenerator<CodexAppServerThreadBinding | undefined, undefined, void> {
-  const lookupMany = state.lookupMany?.bind(state);
   for (let offset = 0; offset < identities.length; offset += 10_000) {
     const batch = identities.slice(offset, offset + 10_000);
-    let keys: string[] | undefined;
-    if (lookupMany) {
-      try {
-        keys = batch.map(bindingStoreKey);
-      } catch {
-        // A later invalid identity must not precede an earlier row's validation.
-      }
-    }
-    if (!keys || !lookupMany) {
-      for (const identity of batch) {
-        const key = bindingStoreKey(identity);
-        yield decodeCurrentCodexAppServerBinding(key, await state.lookup(key), identity);
-      }
-      continue;
-    }
+    const keys = batch.map(bindingStoreKey);
     // Query failures retain the storage owner's terminal handling; never retry the read.
-    const values = await lookupMany(keys);
+    const values = await state.lookupMany(keys);
     for (let index = 0; index < batch.length; index++) {
       const value = values[index]!;
       if (!value.ok) {
@@ -307,6 +332,7 @@ export function readPluginAppPolicyContext(value: unknown): PluginAppPolicyConte
     const { destructiveApprovalMode } = validated;
     const policy = {
       allowDestructiveActions: validated.allowDestructiveActions,
+      ...(validated.readOnlyTools !== undefined ? { readOnlyTools: validated.readOnlyTools } : {}),
       ...(validated.allowOpenWorld !== undefined
         ? { allowOpenWorld: validated.allowOpenWorld }
         : {}),

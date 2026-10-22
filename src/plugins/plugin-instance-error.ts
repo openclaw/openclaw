@@ -1,5 +1,10 @@
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
+/** A failed dependency link never constitutes a prepared plugin capture. */
+export class PluginDependencyLinkError extends Error {
+  override name = "PluginDependencyLinkError";
+}
+
 /** A retired instance cannot admit a fresh invocation. */
 export class PluginInstanceUnavailableError extends Error {
   constructor(pluginId?: string) {
@@ -11,6 +16,18 @@ export class PluginInstanceUnavailableError extends Error {
     this.name = "PluginInstanceUnavailableError";
   }
 }
+
+/** A retired plugin inventory cannot admit new work; callers start a fresh plugin operation. */
+export const PluginInventoryRetiredError = resolveGlobalSingleton(
+  Symbol.for("openclaw.pluginInventoryRetiredError"),
+  () =>
+    class InventoryRetiredError extends Error {
+      constructor() {
+        super("Plugin inventory has retired; begin a new plugin operation.");
+        this.name = "PluginInventoryRetiredError";
+      }
+    },
+);
 
 export const PluginSourceRecoveryUnavailableError = resolveGlobalSingleton(
   Symbol.for("openclaw.pluginSourceRecoveryUnavailableError"),

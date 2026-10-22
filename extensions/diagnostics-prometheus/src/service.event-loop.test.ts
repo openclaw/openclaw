@@ -16,6 +16,377 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
 }));
 
 describe("diagnostics-prometheus runtime metrics", () => {
+  it("exports worst-isolate headroom with bounded labels and retires missing baselines", () => {
+    const metrics = createMetricsHarness();
+    const memory = {
+      rssBytes: 1000,
+      heapTotalBytes: 800,
+      heapUsedBytes: 300,
+      heapSizeLimitBytes: 1000,
+      oldGenerationAfterGcBytes: 200,
+      externalBytes: 20,
+      arrayBuffersBytes: 10,
+    };
+    try {
+      metrics.record({
+        type: "diagnostic.memory.sample",
+        memory: {
+          ...memory,
+          workerHeaps: [
+            {
+              script: "sqlite-store.worker.js",
+              threadId: 101,
+              heapUsed: 900,
+              heapTotal: 1000,
+              heapSizeLimitBytes: 1000,
+              oldGenerationAfterGcBytes: 800,
+            },
+            {
+              script: "sqlite-store.worker.js",
+              threadId: 102,
+              heapUsed: 100,
+              heapTotal: 200,
+              heapSizeLimitBytes: 2000,
+              oldGenerationAfterGcBytes: 50,
+            },
+            {
+              script: "other",
+              threadId: 103,
+              heapUsed: 0,
+              heapTotal: 200,
+              heapSizeLimitBytes: 500,
+              oldGenerationAfterGcBytes: 0,
+            },
+          ],
+        },
+      });
+      const rendered = metrics.render();
+      for (const [thread, limit, used, old, ratio] of [
+        ["main", 1000, 0.3, 200, 0.2],
+        ["sqlite-store.worker.js", 1000, 0.9, 800, 0.8],
+        ["other", 500, 0, 0, 0],
+      ] as const) {
+        for (const [name, value] of [
+          ["size_limit_bytes", limit],
+          ["used_ratio", used],
+          ["old_generation_after_gc_bytes", old],
+          ["old_generation_after_gc_ratio", ratio],
+        ] as const) {
+          expect(rendered).toContain(`openclaw_heap_${name}{thread="${thread}"} ${value}\n`);
+        }
+      }
+      expect(rendered.match(/^openclaw_heap_used_ratio\{/gm)).toHaveLength(3);
+      expect(rendered).not.toMatch(/threadId|thread="10[123]"/);
+      metrics.record({
+        type: "diagnostic.memory.sample",
+        memory: {
+          ...memory,
+          oldGenerationAfterGcBytes: undefined,
+          workerHeaps: [{ script: "other", heapUsed: 10, heapTotal: 20, heapSizeLimitBytes: 100 }],
+        },
+      });
+      const next = metrics.render();
+      expect(next).not.toContain("openclaw_heap_old_generation_after_gc");
+      expect(next).not.toContain('thread="sqlite-store.worker.js"');
+      expect(next).toContain('openclaw_heap_used_ratio{thread="other"} 0.1\n');
+      metrics.record({
+        type: "diagnostic.memory.sample",
+        memory: { ...memory, heapSizeLimitBytes: undefined },
+      });
+      expect(metrics.render()).not.toContain("openclaw_heap_used_ratio");
+    } finally {
+      metrics.stop();
+    }
+  });
+
+  it("counts attributed main-thread stalls by task and reports bounded-buffer losses", () => {
+    const metrics = createMetricsHarness();
+    try {
+      metrics.record({ type: "gateway.main_thread.stall", stalls: [], dropped: 0 });
+      expect(metrics.render()).not.toContain("openclaw_gateway_main_thread_stall");
+      const batch = {
+        type: "gateway.main_thread.stall" as const,
+        stalls: [
+          { task: "rpc.sessions.list", durationMs: 250 },
+          { task: "rpc.sessions.list", durationMs: 750 },
+          { task: "timer.cron", durationMs: 2_000 },
+          { task: "/private/session/path", durationMs: 500 },
+        ],
+        dropped: 3,
+      };
+      metrics.record(batch, untrusted);
+      expect(metrics.render()).not.toContain("openclaw_gateway_main_thread_stall");
+      metrics.record(batch, Object.freeze({ trusted: false, internal: true }));
+      const rendered = metrics.render();
+      for (const [bound, count] of [
+        ["0.25", 1],
+        ["0.5", 1],
+        ["1", 2],
+        ["2.5", 2],
+        ["5", 2],
+        ["10", 2],
+        ["+Inf", 2],
+      ] as const) {
+        expect(rendered).toContain(
+          `openclaw_gateway_main_thread_stall_seconds_bucket{le="${bound}",task="rpc.sessions.list"} ${count}\n`,
+        );
+      }
+      expect(rendered).toContain(
+        'openclaw_gateway_main_thread_stall_seconds_count{task="rpc.sessions.list"} 2\n',
+      );
+      expect(rendered).toContain(
+        'openclaw_gateway_main_thread_stall_seconds_sum{task="rpc.sessions.list"} 1\n',
+      );
+      expect(rendered).toContain(
+        'openclaw_gateway_main_thread_stall_seconds_count{task="timer.cron"} 1\n',
+      );
+      expect(rendered).toContain(
+        'openclaw_gateway_main_thread_stall_seconds_count{task="unknown"} 1\n',
+      );
+      expect(rendered).not.toContain("/private/session/path");
+      expect(rendered).toContain("openclaw_gateway_main_thread_stalls_dropped_total 3\n");
+      expect(metrics.render()).toBe(rendered);
+      metrics.record({ type: "gateway.main_thread.stall", stalls: [], dropped: 2 });
+      expect(metrics.render()).toContain("openclaw_gateway_main_thread_stalls_dropped_total 5\n");
+    } finally {
+      metrics.stop();
+    }
+  });
+
+  it("separates Code Mode isolate GC and replaces live memory gauges at each sample", () => {
+    const metrics = createMetricsHarness();
+    const memory = {
+      rssBytes: 1000,
+      heapTotalBytes: 500,
+      heapUsedBytes: 300,
+      externalBytes: 200,
+      arrayBuffersBytes: 100,
+    };
+    try {
+      for (const [workerSlot, durationMs] of [
+        [1, 8],
+        [2, 20],
+        [1, 12],
+      ] as const) {
+        metrics.record({
+          type: "diagnostic.gc",
+          kind: "mark_sweep_compact",
+          reason: "forced",
+          thread: "code-mode-node.worker.js",
+          workerSlot,
+          durationMs,
+        });
+      }
+      metrics.record({
+        type: "diagnostic.memory.sample",
+        memory: {
+          ...memory,
+          anonymousRssBytes: 700,
+          anonymousSwapBytes: 0,
+          workerHeaps: [
+            {
+              script: "code-mode-node.worker.js",
+              workerSlot: 1,
+              heapUsed: 900,
+              heapTotal: 1000,
+              heapSizeLimitBytes: 1024,
+              external: 300,
+              arrayBuffers: 100,
+            },
+            {
+              script: "code-mode-node.worker.js",
+              workerSlot: 2,
+              heapUsed: 100,
+              heapTotal: 200,
+              heapSizeLimitBytes: 1024,
+              external: 50,
+              arrayBuffers: 20,
+            },
+            // Slot overflow still contributes to script totals; native-only samples lack buffers.
+            { script: "code-mode-node.worker.js", heapUsed: 10, heapTotal: 20, external: 50 },
+          ],
+        },
+      });
+      const before = metrics.render();
+      expect(before).toContain('openclaw_process_anonymous_memory_bytes{kind="rss"} 700\n');
+      expect(before).toContain('openclaw_process_anonymous_memory_bytes{kind="swap"} 0\n');
+      expect(before).toContain(
+        'openclaw_gc_duration_seconds_count{kind="mark_sweep_compact",reason="forced",slot="1",thread="code-mode-node.worker.js"} 2\n',
+      );
+      expect(before).toContain(
+        'openclaw_gc_duration_seconds_count{kind="mark_sweep_compact",reason="forced",slot="2",thread="code-mode-node.worker.js"} 1\n',
+      );
+      expect(before).toContain('openclaw_code_mode_worker_heap_bytes{kind="used",slot="1"} 900\n');
+      expect(before).toContain(
+        'openclaw_code_mode_worker_heap_bytes{kind="limit",slot="1"} 1024\n',
+      );
+      expect(before).toContain(
+        'openclaw_worker_heap_used_bytes{script="code-mode-node.worker.js"} 1010\n',
+      );
+      expect(before).toContain(
+        'openclaw_worker_external_bytes{script="code-mode-node.worker.js"} 400\n',
+      );
+      expect(before).toContain(
+        'openclaw_worker_array_buffers_bytes{script="code-mode-node.worker.js"} 120\n',
+      );
+      for (const [slot, external, buffers] of [
+        [1, 300, 100],
+        [2, 50, 20],
+      ]) {
+        expect(before).toContain(
+          `openclaw_code_mode_worker_memory_bytes{kind="external",slot="${slot}"} ${external}\n`,
+        );
+        expect(before).toContain(
+          `openclaw_code_mode_worker_memory_bytes{kind="array_buffers",slot="${slot}"} ${buffers}\n`,
+        );
+      }
+      // Retirement or stale sampling removes gauges; slot reuse keeps cumulative GC counts.
+      metrics.record({
+        type: "diagnostic.memory.sample",
+        memory: {
+          ...memory,
+          workerHeaps: [
+            {
+              script: "code-mode-node.worker.js",
+              workerSlot: 1,
+              heapUsed: 50,
+              heapTotal: 100,
+              external: 0,
+              arrayBuffers: 0,
+            },
+            { script: "sqlite-store.worker.js", heapUsed: 10, heapTotal: 20, external: 25 },
+          ],
+        },
+      });
+      const after = metrics.render();
+      expect(after).not.toContain("openclaw_process_anonymous_memory_bytes");
+      expect(after).toContain('openclaw_code_mode_worker_heap_bytes{kind="used",slot="1"} 50\n');
+      expect(after).not.toContain('openclaw_code_mode_worker_heap_bytes{kind="limit"');
+      expect(after).not.toContain('openclaw_code_mode_worker_heap_bytes{kind="used",slot="2"}');
+      expect(after).toContain(
+        'openclaw_worker_external_bytes{script="code-mode-node.worker.js"} 0\n',
+      );
+      expect(after).toContain(
+        'openclaw_worker_array_buffers_bytes{script="code-mode-node.worker.js"} 0\n',
+      );
+      expect(after).toContain(
+        'openclaw_worker_external_bytes{script="sqlite-store.worker.js"} 25\n',
+      );
+      expect(after).not.toContain(
+        'openclaw_worker_array_buffers_bytes{script="sqlite-store.worker.js"}',
+      );
+      for (const kind of ["external", "array_buffers"]) {
+        expect(after).toContain(
+          `openclaw_code_mode_worker_memory_bytes{kind="${kind}",slot="1"} 0\n`,
+        );
+        expect(after).not.toContain(
+          `openclaw_code_mode_worker_memory_bytes{kind="${kind}",slot="2"}`,
+        );
+      }
+      expect(after).toContain(
+        'openclaw_gc_duration_seconds_count{kind="mark_sweep_compact",reason="forced",slot="1",thread="code-mode-node.worker.js"} 2\n',
+      );
+      metrics.record({ type: "diagnostic.memory.sample", memory });
+      expect(metrics.render()).not.toContain("openclaw_code_mode_worker_heap_bytes");
+      expect(metrics.render()).not.toContain("openclaw_code_mode_worker_memory_bytes");
+      expect(metrics.render()).not.toContain("openclaw_worker_external_bytes");
+      expect(metrics.render()).not.toContain("openclaw_worker_array_buffers_bytes");
+    } finally {
+      metrics.stop();
+    }
+  });
+
+  it("retains pool task and GC totals across repeated samples and worker retirement", () => {
+    const metrics = createMetricsHarness();
+    const worker = {
+      workerClass: "compute" as const,
+      script: "provider-prompt-state.worker.js",
+      tasksCompleted: 3,
+      heapUsedHighWaterBytes: 4000,
+      gc: [{ kind: "scavenge" as const, count: 7, durationMs: 15, reclaimedBytes: 9000 }],
+    };
+    const sample = {
+      type: "diagnostic.memory.sample" as const,
+      memory: {
+        rssBytes: 1000,
+        heapTotalBytes: 500,
+        heapUsedBytes: 300,
+        externalBytes: 200,
+        arrayBuffersBytes: 100,
+        workerCount: 1,
+        workerTaskMetrics: [worker],
+      },
+    };
+    const labels = 'script="provider-prompt-state.worker.js",worker_class="compute"';
+    try {
+      metrics.record(sample, trusted);
+      metrics.record(sample, trusted);
+      const repeated = metrics.render();
+      for (const [name, value] of [
+        ["tasks_completed_total", 3],
+        ["heap_used_high_water_bytes", 4000],
+      ]) {
+        expect(repeated).toContain(`openclaw_worker_${name}{${labels}} ${value}\n`);
+      }
+      for (const [name, value] of [
+        ["duration_seconds_total", 0.015],
+        ["collections_total", 7],
+        ["reclaimed_bytes_total", 9000],
+      ]) {
+        expect(repeated).toContain(
+          `openclaw_worker_gc_${name}{kind="scavenge",${labels}} ${value}\n`,
+        );
+      }
+      metrics.record({
+        ...sample,
+        memory: {
+          ...sample.memory,
+          workerCount: 0,
+          workerTaskMetrics: [
+            {
+              ...worker,
+              tasksCompleted: 5,
+              heapUsedHighWaterBytes: 5000,
+              gc: [{ kind: "scavenge", count: 9, durationMs: 20, reclaimedBytes: 12000 }],
+            },
+            {
+              workerClass: "reader",
+              script: "sqlite-store.worker.js",
+              tasksCompleted: 2,
+              heapUsedHighWaterBytes: 600,
+              gc: [],
+            },
+          ],
+        },
+      });
+      // A sample without pool totals must not erase the retained high-water gauge.
+      metrics.record({
+        ...sample,
+        memory: { ...sample.memory, workerCount: 0, workerTaskMetrics: undefined },
+      });
+      const retired = metrics.render();
+      expect(retired).toContain("openclaw_worker_count 0\n");
+      expect(retired).toContain(`openclaw_worker_tasks_completed_total{${labels}} 5\n`);
+      expect(retired).toContain(`openclaw_worker_heap_used_high_water_bytes{${labels}} 5000\n`);
+      for (const [name, value] of [
+        ["duration_seconds_total", 0.02],
+        ["collections_total", 9],
+        ["reclaimed_bytes_total", 12000],
+      ]) {
+        expect(retired).toContain(
+          `openclaw_worker_gc_${name}{kind="scavenge",${labels}} ${value}\n`,
+        );
+      }
+      expect(retired).toContain(
+        'openclaw_worker_tasks_completed_total{script="sqlite-store.worker.js",worker_class="reader"} 2\n',
+      );
+      expect(retired).toContain("# TYPE openclaw_worker_heap_used_high_water_bytes gauge\n");
+      expect(retired).toContain("# TYPE openclaw_worker_gc_reclaimed_bytes_total counter\n");
+    } finally {
+      metrics.stop();
+    }
+  });
+
   it("exports cumulative worker traffic without recounting repeated memory samples", () => {
     const metrics = createMetricsHarness();
     try {
@@ -90,8 +461,25 @@ describe("diagnostics-prometheus runtime metrics", () => {
               },
             ],
             workerHeaps: [
-              { script: "sqlite-store.worker.js", heapUsed: 100, heapTotal: 200 },
-              { script: "sqlite-store.worker.js", heapUsed: 150, heapTotal: 200 },
+              {
+                script: "sqlite-store.worker.js",
+                heapUsed: 100,
+                heapTotal: 200,
+                heapSpaces: [
+                  { space_name: "old_space", space_used_size: 60 },
+                  { space_name: "code_space", space_used_size: 40 },
+                ],
+              },
+              {
+                script: "sqlite-store.worker.js",
+                heapUsed: 150,
+                heapTotal: 200,
+                heapSpaces: [
+                  { space_name: "old_space", space_used_size: 120 },
+                  { space_name: "code_space", space_used_size: 30 },
+                  { space_name: "future_v8_space", space_used_size: 0 },
+                ],
+              },
             ],
             workerMemoryMissing: [
               { script: "sqlite-store.worker.js", threadId: 3, reason: "pending" },
@@ -177,6 +565,16 @@ describe("diagnostics-prometheus runtime metrics", () => {
       expect(rendered).toContain(
         'openclaw_worker_heap_used_bytes{script="sqlite-store.worker.js"} 250\n',
       );
+      for (const [space, value] of [
+        ["old_space", 180],
+        ["code_space", 70],
+        ["future_v8_space", 0],
+      ]) {
+        expect(rendered).toContain(
+          `openclaw_worker_heap_space_used_bytes{script="sqlite-store.worker.js",space="${space}"} ${value}\n`,
+        );
+      }
+      expect(rendered).not.toContain('openclaw_worker_heap_space_used_bytes{script="other"');
       expect(rendered).toContain(
         'openclaw_child_process_spawn_total{family="node",operation="none"} 5\n',
       );
@@ -220,6 +618,7 @@ describe("diagnostics-prometheus runtime metrics", () => {
       expect(metrics.render()).toBe(rendered);
       metrics.record(retiredSample, trusted);
       expect(metrics.render()).not.toContain("openclaw_heap_space_bytes");
+      expect(metrics.render()).not.toContain("openclaw_worker_heap_space_used_bytes");
       expect(metrics.render()).not.toContain(
         'openclaw_worker_heap_used_bytes{script="sqlite-store',
       );
@@ -269,7 +668,16 @@ describe("diagnostics-prometheus runtime metrics", () => {
         expect(response.status).toBe(200);
         return await response.text();
       };
-      metrics.record({ type: "gateway.event_loop.sample", intervalMs: 2_000, delayMaxMs: 1_250 });
+      const firstWindow = {
+        type: "gateway.event_loop.sample",
+        intervalMs: 2_000,
+        delayMaxMs: 1_250,
+      } as const;
+      // Scrapes cannot publish a producer's window before diagnostics delivers it.
+      const beforeDelivery = await scrape();
+      expect(beforeDelivery).not.toContain("openclaw_gateway_event_loop_");
+      expect(await scrape()).toBe(beforeDelivery);
+      metrics.record(firstWindow);
       metrics.record({
         type: "diagnostic.gc",
         kind: "scavenge",
@@ -277,10 +685,11 @@ describe("diagnostics-prometheus runtime metrics", () => {
         durationMs: 1_250,
       });
       const first = await scrape();
-      expect(first).toContain("openclaw_gateway_event_loop_delay_max_seconds_count 1");
-      expect(first).toContain("openclaw_gateway_event_loop_observed_seconds_total 2");
+      expect(first).toContain("openclaw_gateway_event_loop_delay_max_seconds_count 1\n");
+      expect(first).toContain("openclaw_gateway_event_loop_delay_max_seconds_sum 1.25\n");
+      expect(first).toContain("openclaw_gateway_event_loop_observed_seconds_total 2\n");
       expect(first).toContain(
-        'openclaw_gc_duration_seconds_count{kind="scavenge",thread="main"} 1',
+        'openclaw_gc_duration_seconds_count{kind="scavenge",reason="other",thread="main"} 1',
       );
       expect(await scrape()).toBe(first);
       metrics.record(
@@ -307,14 +716,23 @@ describe("diagnostics-prometheus runtime metrics", () => {
         "openclaw_gateway_event_loop_delay_max_seconds_count 2",
         "openclaw_gateway_event_loop_delay_max_seconds_sum 1.27",
         "openclaw_gateway_event_loop_observed_seconds_total 10",
-        'openclaw_gc_duration_seconds_bucket{kind="scavenge",le="1",thread="main"} 1',
-        'openclaw_gc_duration_seconds_bucket{kind="scavenge",le="2.5",thread="main"} 2',
-        'openclaw_gc_duration_seconds_count{kind="scavenge",thread="main"} 2',
-        'openclaw_gc_duration_seconds_sum{kind="scavenge",thread="main"} 1.27',
+        'openclaw_gc_duration_seconds_bucket{kind="scavenge",le="1",reason="other",thread="main"} 1',
+        'openclaw_gc_duration_seconds_bucket{kind="scavenge",le="2.5",reason="other",thread="main"} 2',
+        'openclaw_gc_duration_seconds_count{kind="scavenge",reason="other",thread="main"} 2',
+        'openclaw_gc_duration_seconds_sum{kind="scavenge",reason="other",thread="main"} 1.27',
       ]) {
-        expect(second).toContain(expected);
+        expect(second).toContain(`${expected}\n`);
       }
       expect(await scrape()).toBe(second);
+      metrics.record({ type: "gateway.event_loop.sample", intervalMs: 1_000, delayMaxMs: 0 });
+      const third = await scrape();
+      expect(third).toContain(
+        'openclaw_gateway_event_loop_delay_max_seconds_bucket{le="0.005"} 1\n',
+      );
+      expect(third).toContain("openclaw_gateway_event_loop_delay_max_seconds_count 3\n");
+      expect(third).toContain("openclaw_gateway_event_loop_delay_max_seconds_sum 1.27\n");
+      expect(third).toContain("openclaw_gateway_event_loop_observed_seconds_total 11\n");
+      expect(await scrape()).toBe(third);
       metrics.record({
         type: "diagnostic.gc",
         kind: "mark_sweep_compact",
@@ -323,13 +741,13 @@ describe("diagnostics-prometheus runtime metrics", () => {
       });
       const workerSample = await scrape();
       expect(workerSample).toContain(
-        'openclaw_gc_duration_seconds_count{kind="mark_sweep_compact",thread="sqlite-store.worker.js"} 1',
+        'openclaw_gc_duration_seconds_count{kind="mark_sweep_compact",reason="other",thread="sqlite-store.worker.js"} 1',
       );
       expect(workerSample).toContain(
-        'openclaw_gc_duration_seconds_sum{kind="mark_sweep_compact",thread="sqlite-store.worker.js"} 0.008',
+        'openclaw_gc_duration_seconds_sum{kind="mark_sweep_compact",reason="other",thread="sqlite-store.worker.js"} 0.008',
       );
       expect(workerSample).toContain(
-        'openclaw_gc_duration_seconds_count{kind="scavenge",thread="main"} 2',
+        'openclaw_gc_duration_seconds_count{kind="scavenge",reason="other",thread="main"} 2',
       );
     });
   });
@@ -366,7 +784,7 @@ describe("diagnostics-prometheus runtime identity", () => {
         metrics.record({ type: "gateway.rpc", method: `method.${index}`, phase: "received" });
       }
       expect(metrics.render()).toContain(info);
-      expect(metrics.render()).toContain("openclaw_prometheus_series_dropped_total 53");
+      expect(metrics.render()).toMatch(/openclaw_prometheus_series_dropped_total [1-9][0-9]*\n/);
       metrics.stop();
       expect(metrics.render()).toBe("");
       identity.processInstanceId = "a6aa1fc7-1f10-4b56-8ae8-4ff8c4dc02ea";

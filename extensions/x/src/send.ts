@@ -2,6 +2,8 @@ import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-i
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
+import type { OutboundMediaLoadOptions } from "openclaw/plugin-sdk/outbound-media";
+import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { resolveXAccount } from "./accounts.js";
 import { XAllowlistChangedError } from "./allowlist.js";
@@ -9,12 +11,134 @@ import type { XApiClient, XPost } from "./api.js";
 import { getXApi } from "./client.js";
 import type { XSenderTier } from "./guest-policy.js";
 import { resolveXIngress } from "./ingress.js";
+import { loadXMedia } from "./media.js";
 import { resolveXRecipient } from "./recipient.js";
-import { sendXReply, XPartialReplyError, type XVisibleWorkSession } from "./reply.js";
 import { getXRuntime } from "./runtime.js";
 import { XBudgetExceededError } from "./spend.js";
 import { normalizeXReplyTarget } from "./target.js";
-import { openXWorkOrigins } from "./work-origin.js";
+import { findXUrls } from "./urls.js";
+import { resolveXWorkOrigin } from "./work-origin.js";
+
+const DEFAULT_X_REPLY_SIGNATURE = "🤖 automated reply";
+export type XVisibleWorkSession = Parameters<
+  NonNullable<GetReplyOptions["onVisibleWorkSessions"]>
+>[0][number];
+const graphemes = new Intl.Segmenter("en", { granularity: "grapheme" });
+const emojiSequence = new RegExp("^\\p{RGI_Emoji}$", "v");
+
+function characterWeight(value: string): number {
+  // Arbitrary ZWJ runs are graphemes too, but only standardized emoji collapse to weight two.
+  if (emojiSequence.test(value) || /^\p{Extended_Pictographic}$/u.test(value)) {
+    return 2;
+  }
+  return Array.from(value).reduce((total, char) => {
+    const code = char.codePointAt(0)!;
+    return (
+      total +
+      (code <= 0x10ff ||
+      (code >= 0x2000 && code <= 0x200d) ||
+      (code >= 0x2010 && code <= 0x201f) ||
+      (code >= 0x2032 && code <= 0x2037)
+        ? 1
+        : 2)
+    );
+  }, 0);
+}
+
+function weightedTokens(text: string): { text: string; weight: number }[] {
+  const tokens: { text: string; weight: number }[] = [];
+  let offset = 0;
+  const appendText = (value: string) => {
+    tokens.push(
+      ...Array.from(graphemes.segment(value), ({ segment }) => ({
+        text: segment,
+        weight: characterWeight(segment),
+      })),
+    );
+  };
+  for (const match of findXUrls(text)) {
+    appendText(text.slice(offset, match.index));
+    tokens.push({ text: match.raw, weight: 23 });
+    offset = match.lastIndex;
+  }
+  appendText(text.slice(offset));
+  return tokens;
+}
+
+function xWeightedLength(text: string): number {
+  return weightedTokens(text.normalize("NFC")).reduce((sum, token) => sum + token.weight, 0);
+}
+
+function appendVisibleWorkSession(text: string, sessions: XVisibleWorkSession[] = []): string {
+  const session = sessions[0];
+  const url = session?.url;
+  const prefix = session?.publicRead === true ? "" : "Work session (sign-in required): ";
+  return url && !text.includes(url) ? `${text.trimEnd()}\n${prefix}${url}` : text;
+}
+
+function chunkXReply(
+  text: string,
+  signature = DEFAULT_X_REPLY_SIGNATURE,
+  hasMedia = false,
+): string[] {
+  const normalized = text.normalize("NFC").trim();
+  const suffix = signature.normalize("NFC").trim();
+  if (!normalized && !hasMedia) {
+    throw new Error("X replies require text or an attachment");
+  }
+  if (xWeightedLength(suffix) > 280) {
+    throw new Error("X replySignature exceeds 280 weighted characters");
+  }
+  if (!normalized) {
+    return [suffix];
+  }
+  const tokens = weightedTokens(normalized);
+  const chunks: string[] = [];
+  let offset = 0;
+  while (offset < tokens.length) {
+    let end = offset;
+    let weight = 0;
+    let boundary = -1;
+    while (end < tokens.length) {
+      const token = tokens[end];
+      if (!token || weight + token.weight > 280) {
+        break;
+      }
+      weight += token.weight;
+      if (/\s/u.test(token.text)) {
+        boundary = end;
+      }
+      end++;
+    }
+    if (end === offset) {
+      throw new Error("X reply contains a character sequence longer than one post");
+    }
+    if (end < tokens.length && boundary > offset) {
+      end = boundary;
+    }
+    const chunk = tokens
+      .slice(offset, end)
+      .map((token) => token.text)
+      .join("")
+      .trim();
+    if (chunk) {
+      chunks.push(chunk);
+    }
+    offset = end;
+    while (offset < tokens.length && /^\s+$/u.test(tokens[offset]?.text ?? "")) {
+      offset++;
+    }
+  }
+  if (suffix) {
+    const last = chunks.at(-1)!;
+    if (xWeightedLength(`${last}\n${suffix}`) <= 280) {
+      chunks[chunks.length - 1] = `${last}\n${suffix}`;
+    } else {
+      chunks.push(suffix);
+    }
+  }
+  return chunks;
+}
 
 function rethrowReplyAuthorizationError(cause: unknown): never {
   if (cause instanceof XAllowlistChangedError) {
@@ -26,37 +150,37 @@ function rethrowReplyAuthorizationError(cause: unknown): never {
   throw cause;
 }
 
-export function xReceipt(postIds: string[], replyToId: string) {
-  return createMessageReceiptFromOutboundResults({
+function xReceipt(postIds: string[], replyToId: string, hasMedia = false) {
+  const receipt = createMessageReceiptFromOutboundResults({
     results: postIds.map((messageId) => ({ channel: "x", messageId, conversationId: replyToId })),
     kind: "text",
     replyToId,
   });
+  if (hasMedia && receipt.parts[0]) {
+    receipt.parts[0].kind = "media";
+  }
+  return receipt;
 }
 
-export async function sendXDelivery(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  to: string;
-  text: string;
-  mediaUrl?: string;
-  mediaUrls?: readonly string[];
-  signal?: AbortSignal;
-  mention?: XPost;
-  senderTier?: XSenderTier;
-  visibleWorkSessions?: XVisibleWorkSession[];
-  assertDirectAdapterHandoff?: () => void;
-  sessionKey?: string | null;
-}) {
-  if (params.mediaUrl || params.mediaUrls?.length) {
-    throw new PlatformMessageNotDispatchedError(
-      "X supports text replies only; media is not supported.",
-      {
-        cause: undefined,
-        retryable: false,
-      },
-    );
-  }
+export async function sendXDelivery(
+  params: Pick<OutboundMediaLoadOptions, "mediaAccess" | "mediaLocalRoots" | "mediaReadFile"> & {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    to: string;
+    text: string;
+    mediaUrl?: string;
+    mediaUrls?: readonly string[];
+    signal?: AbortSignal;
+    mention?: XPost;
+    senderTier?: XSenderTier;
+    visibleWorkSessions?: XVisibleWorkSession[];
+    assertDirectAdapterHandoff?: () => void;
+    sessionKey?: string | null;
+  },
+) {
+  const mediaUrls = [
+    ...new Set([...(params.mediaUrl ? [params.mediaUrl] : []), ...(params.mediaUrls ?? [])]),
+  ];
   const replyToId = normalizeXReplyTarget(params.to);
   if (!replyToId) {
     throw new PlatformMessageNotDispatchedError(
@@ -67,7 +191,7 @@ export async function sendXDelivery(params: {
   const readConfig = createRuntimeConfigReader(params.cfg);
   const runtime = getXRuntime();
   const origin = params.sessionKey
-    ? await openXWorkOrigins(runtime).lookup(params.sessionKey)
+    ? await resolveXWorkOrigin(runtime, params.sessionKey, params.cfg)
     : undefined;
   const assertHandoff = () => {
     try {
@@ -159,6 +283,15 @@ export async function sendXDelivery(params: {
         retryable: false,
       });
     }
+    if (mediaUrls.length && authorization.tier !== "maintainer") {
+      throw new PlatformMessageNotDispatchedError(
+        "X media replies require an allowlisted maintainer.",
+        {
+          cause: undefined,
+          retryable: false,
+        },
+      );
+    }
     const assertCurrent = () => {
       assertHandoff();
       try {
@@ -176,33 +309,74 @@ export async function sendXDelivery(params: {
     assertCurrent();
     return assertCurrent;
   };
-  const logger = runtime.logging.getChildLogger({ channel: "x", accountId: account.accountId });
-  try {
-    const result = await sendXReply({
-      api,
-      text: params.text,
-      replyToId,
-      signature: account.config.replySignature,
-      visibleWorkSessions: params.senderTier === "guest" ? undefined : params.visibleWorkSessions,
-      signal: params.signal,
-      assertActive,
-    });
-    logger.info(`reply posts=${result.postIds.join(",")}`);
-    return {
-      channel: "x" as const,
-      messageId: result.postIds.at(-1) ?? "",
-      receipt: xReceipt(result.postIds, replyToId),
-      content: result.text,
-    };
-  } catch (error) {
-    if (error instanceof XPartialReplyError) {
-      logger.warn(`partial reply posts=${error.postIds.join(",")}`);
-      throw createChannelPartialDeliveryError(error, {
-        visibleReplySent: true,
-        content: error.text,
-        receipt: xReceipt(error.postIds, replyToId),
-      });
-    }
-    throw error;
+  // Authorize before reading local files or fetching remote attachments; the API rechecks
+  // this same authority immediately before every upload and reply request.
+  if (mediaUrls.length) {
+    await assertActive();
   }
+  const media = await loadXMedia(mediaUrls, params, params.signal);
+  const logger = runtime.logging.getChildLogger({ channel: "x", accountId: account.accountId });
+  const replyText = params.text;
+  const signature = account.config.replySignature;
+  const visibleWorkSessions =
+    params.senderTier === "guest" ? undefined : params.visibleWorkSessions;
+  const signal = params.signal;
+  let chunks: string[];
+  try {
+    chunks = chunkXReply(
+      appendVisibleWorkSession(replyText, visibleWorkSessions),
+      signature,
+      Boolean(media.length),
+    );
+  } catch (cause) {
+    throw new PlatformMessageNotDispatchedError(
+      cause instanceof Error ? cause.message : "X reply text could not be prepared",
+      { cause, retryable: false },
+    );
+  }
+  const postIds: string[] = [];
+  const mediaIds: string[] = [];
+  // Failed uploads must never degrade to a caption-only post. Unattached uploads
+  // expire at X; retrying preparation cannot duplicate a visible reply.
+  for (const attachment of media) {
+    mediaIds.push(await api.uploadMedia({ ...attachment, signal, assertActive }));
+  }
+  try {
+    for (const text of chunks) {
+      if (signal?.aborted) {
+        throw new PlatformMessageNotDispatchedError("X reply was aborted before dispatch", {
+          cause: signal.reason,
+          retryable: false,
+        });
+      }
+      const id = await api.reply({
+        text,
+        ...(postIds.length === 0 && mediaIds.length ? { mediaIds } : {}),
+        inReplyToId: postIds.at(-1) ?? replyToId,
+        signal,
+        assertActive,
+      });
+      postIds.push(id);
+    }
+  } catch (cause) {
+    if (postIds.length) {
+      logger.warn(`partial reply posts=${postIds.join(",")}`);
+      throw createChannelPartialDeliveryError(
+        new Error("X reply chain failed after one or more posts were sent", { cause }),
+        {
+          visibleReplySent: true,
+          content: chunks.slice(0, postIds.length).join("\n"),
+          receipt: xReceipt(postIds, replyToId, media.length > 0),
+        },
+      );
+    }
+    throw cause;
+  }
+  logger.info(`reply posts=${postIds.join(",")}`);
+  return {
+    channel: "x" as const,
+    messageId: postIds.at(-1) ?? "",
+    receipt: xReceipt(postIds, replyToId, media.length > 0),
+    content: chunks.join("\n"),
+  };
 }

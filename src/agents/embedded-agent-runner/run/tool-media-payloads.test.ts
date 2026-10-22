@@ -1,5 +1,3 @@
-// Tool media payload tests cover how generated media from tools is attached to
-// visible embedded-run replies without disturbing source-reply metadata.
 import { describe, expect, it } from "vitest";
 import {
   getReplyPayloadMetadata,
@@ -11,45 +9,74 @@ import {
   mergeAttemptToolMediaPayloads,
 } from "./tool-media-payloads.js";
 
+const imageUrl = "https://example.test/image.png";
+const voiceBatch = {
+  toolMediaUrls: ["/tmp/voice.opus"],
+  toolAudioAsVoice: true,
+  toolTrustedLocalMedia: true,
+};
+type Payload = NonNullable<ReturnType<typeof mergeAttemptToolMediaPayloads>>[number];
+function media(url: string | string[], fields: Partial<Payload> = {}): Payload {
+  const urls = typeof url === "string" ? [url] : url;
+  return { mediaUrls: urls, mediaUrl: urls[0], ...fields };
+}
+const voicePayload = media("/tmp/voice.opus", {
+  audioAsVoice: true,
+  trustedLocalMedia: true,
+});
+const generatedPayload = media("/tmp/generated.png", {
+  audioAsVoice: undefined,
+  trustedLocalMedia: undefined,
+});
+function carryVoice() {
+  const carry = createPendingToolMediaCarry();
+  carry.capture(voiceBatch);
+  return carry;
+}
+function mergeForMessageTool(params: Parameters<typeof mergeAttemptToolMediaPayloads>[0]) {
+  return (
+    mergeAttemptToolMediaPayloads({ ...params, sourceReplyDeliveryMode: "message_tool_only" }) ?? []
+  );
+}
+function expectSuppressionDelivery(payload: Parameters<typeof getReplyPayloadMetadata>[0] = {}) {
+  expect(getReplyPayloadMetadata(payload)).toMatchObject({
+    deliverDespiteSourceReplySuppression: true,
+  });
+}
+function expectOwned(payload: Payload | undefined) {
+  expect(payload).toEqual(generatedPayload);
+  expectSuppressionDelivery(payload);
+}
+function expectUnmarked(payload: Payload | undefined, expected: Payload) {
+  expect(payload).toEqual(expected);
+  expect(getReplyPayloadMetadata(payload ?? {})).toBeUndefined();
+}
+function merge(
+  toolMediaUrls: string[],
+  payloads?: Payload[],
+  options: Omit<
+    Parameters<typeof mergeAttemptToolMediaPayloads>[0],
+    "toolMediaUrls" | "payloads"
+  > = {},
+) {
+  return mergeAttemptToolMediaPayloads({ toolMediaUrls, payloads, ...options }) ?? [];
+}
+
 describe("mergeAttemptToolMediaPayloads", () => {
   it("attaches tool media to the first visible reply", () => {
-    // Reasoning payloads are not user-visible replies, so media attaches to the
-    // first final/visible payload instead.
-    expect(
-      mergeAttemptToolMediaPayloads({
-        payloads: [
-          { text: "thinking", isReasoning: true },
-          { text: "done", mediaUrls: ["/tmp/a.png"] },
-        ],
-        toolMediaUrls: ["/tmp/a.png", "/tmp/b.opus"],
-        toolAudioAsVoice: true,
-      }),
-    ).toEqual([
-      { text: "thinking", isReasoning: true },
-      {
-        text: "done",
-        mediaUrls: ["/tmp/a.png", "/tmp/b.opus"],
-        mediaUrl: "/tmp/a.png",
-        audioAsVoice: true,
-      },
+    const reasoning = { text: "thinking", isReasoning: true };
+    const urls: [string, string] = ["/tmp/a.png", "/tmp/b.opus"];
+    const metadata = { assistantMessageIndex: 7, deliverDespiteSourceReplySuppression: true };
+    const reply = setReplyPayloadMetadata({ text: "done", mediaUrls: [urls[0]] }, metadata);
+    const output = merge(urls, [reasoning, reply], {
+      toolAudioAsVoice: true,
+      toolTrustedLocalMedia: true,
+    });
+    expect(output).toEqual([
+      reasoning,
+      media(urls, { text: "done", audioAsVoice: true, trustedLocalMedia: true }),
     ]);
-  });
-
-  it("creates a media-only reply when no visible reply exists", () => {
-    expect(
-      mergeAttemptToolMediaPayloads({
-        payloads: [{ text: "thinking", isReasoning: true }],
-        toolMediaUrls: ["/tmp/reply.opus"],
-        toolAudioAsVoice: true,
-      }),
-    ).toEqual([
-      { text: "thinking", isReasoning: true },
-      {
-        mediaUrls: ["/tmp/reply.opus"],
-        mediaUrl: "/tmp/reply.opus",
-        audioAsVoice: true,
-      },
-    ]);
+    expect(getReplyPayloadMetadata(output[1]!)).toEqual(metadata);
   });
 
   it.each([
@@ -57,215 +84,60 @@ describe("mergeAttemptToolMediaPayloads", () => {
     { kind: "reasoning", flags: { isReasoning: true } },
   ])("keeps all generated media separate from a $kind payload", ({ flags }) => {
     const payload = { text: "Referenced ![image](/tmp/generated.png)", ...flags };
-    expect(
-      mergeAttemptToolMediaPayloads({
-        payloads: [payload],
-        toolMediaUrls: ["/tmp/generated.png", "/tmp/alternate.png"],
-      }),
-    ).toEqual([
+    const urls = ["/tmp/generated.png", "/tmp/alternate.png"];
+    expect(merge(urls, [payload], { toolAudioAsVoice: true })).toEqual([
       payload,
-      {
-        mediaUrls: ["/tmp/generated.png", "/tmp/alternate.png"],
-        mediaUrl: "/tmp/generated.png",
-        audioAsVoice: undefined,
-        trustedLocalMedia: undefined,
-      },
+      media(urls, { audioAsVoice: true }),
     ]);
   });
 
-  it("marks harness-owned media when source replies require the message tool", () => {
-    const [mediaReply] =
-      mergeAttemptToolMediaPayloads({
-        toolMediaUrls: ["/tmp/generated.png"],
-        hostOwnedToolMediaUrls: ["/tmp/generated.png"],
-        sourceReplyDeliveryMode: "message_tool_only",
-      }) ?? [];
-
-    expect(mediaReply).toEqual({
-      mediaUrls: ["/tmp/generated.png"],
-      mediaUrl: "/tmp/generated.png",
-      audioAsVoice: undefined,
-      trustedLocalMedia: undefined,
-    });
-    expect(getReplyPayloadMetadata(mediaReply ?? {})).toMatchObject({
-      deliverDespiteSourceReplySuppression: true,
-    });
-  });
-
-  it("does not mark generic tool media as host-owned", () => {
-    const [mediaReply] =
-      mergeAttemptToolMediaPayloads({
-        toolMediaUrls: ["/tmp/reply.opus"],
-        toolAudioAsVoice: true,
-        sourceReplyDeliveryMode: "message_tool_only",
-      }) ?? [];
-
-    expect(mediaReply).toEqual({
-      mediaUrls: ["/tmp/reply.opus"],
-      mediaUrl: "/tmp/reply.opus",
-      audioAsVoice: true,
-      trustedLocalMedia: undefined,
-    });
-    expect(getReplyPayloadMetadata(mediaReply ?? {})).toBeUndefined();
-  });
-
   it("delivers contract-owned tool media without private source text", () => {
-    const [privateReply, mediaReply] =
-      mergeAttemptToolMediaPayloads({
-        payloads: [{ text: "PRIVATE_FINAL_83636_MUST_NOT_APPEAR" }],
-        toolMediaUrls: ["/tmp/reply.opus"],
-        toolAutoDeliveryMediaUrls: ["/tmp/reply.opus"],
-        toolAudioAsVoice: true,
-        toolTrustedLocalMedia: true,
-        sourceReplyDeliveryMode: "message_tool_only",
-      }) ?? [];
-
-    expect(privateReply).toEqual({ text: "PRIVATE_FINAL_83636_MUST_NOT_APPEAR" });
-    expect(getReplyPayloadMetadata(privateReply ?? {})).toBeUndefined();
-    expect(mediaReply).toEqual({
-      mediaUrls: ["/tmp/reply.opus"],
-      mediaUrl: "/tmp/reply.opus",
-      audioAsVoice: true,
-      trustedLocalMedia: true,
+    const [privateReply, mediaReply] = mergeForMessageTool({
+      payloads: [{ text: "PRIVATE_FINAL_83636_MUST_NOT_APPEAR" }],
+      toolMediaUrls: ["/tmp/reply.opus"],
+      toolAutoDeliveryMediaUrls: ["/tmp/reply.opus"],
+      toolAudioAsVoice: true,
+      toolTrustedLocalMedia: true,
     });
-    expect(getReplyPayloadMetadata(mediaReply ?? {})).toMatchObject({
-      deliverDespiteSourceReplySuppression: true,
-    });
-  });
 
-  it("ignores host-owned provenance outside the delivered tool media set", () => {
-    const [mediaReply] =
-      mergeAttemptToolMediaPayloads({
-        toolMediaUrls: ["/tmp/tool.png"],
-        hostOwnedToolMediaUrls: ["/tmp/forged.png"],
-        sourceReplyDeliveryMode: "message_tool_only",
-      }) ?? [];
-
-    expect(mediaReply).toMatchObject({
-      mediaUrls: ["/tmp/tool.png"],
-      mediaUrl: "/tmp/tool.png",
-    });
-    expect(getReplyPayloadMetadata(mediaReply ?? {})).toBeUndefined();
-  });
-
-  it("keeps generic and host-owned media in separate delivery payloads", () => {
-    const [genericReply, hostOwnedReply] =
-      mergeAttemptToolMediaPayloads({
-        toolMediaUrls: ["/tmp/reply.opus", "/tmp/generated.png"],
-        hostOwnedToolMediaUrls: ["/tmp/generated.png"],
-        toolAudioAsVoice: true,
-        sourceReplyDeliveryMode: "message_tool_only",
-      }) ?? [];
-
-    expect(genericReply).toEqual({
-      mediaUrls: ["/tmp/reply.opus"],
-      mediaUrl: "/tmp/reply.opus",
-      audioAsVoice: true,
-      trustedLocalMedia: undefined,
-    });
-    expect(getReplyPayloadMetadata(genericReply ?? {})).toBeUndefined();
-    expect(hostOwnedReply).toEqual({
-      mediaUrls: ["/tmp/generated.png"],
-      mediaUrl: "/tmp/generated.png",
-      audioAsVoice: undefined,
-      trustedLocalMedia: undefined,
-    });
-    expect(getReplyPayloadMetadata(hostOwnedReply ?? {})).toMatchObject({
-      deliverDespiteSourceReplySuppression: true,
-    });
-  });
-
-  it("does not mark text-bearing source replies as host-owned", () => {
-    const [reply] =
-      mergeAttemptToolMediaPayloads({
-        payloads: [{ text: "hidden final" }],
-        toolMediaUrls: ["/tmp/generated.png"],
-        sourceReplyDeliveryMode: "message_tool_only",
-      }) ?? [];
-
-    expect(reply).toEqual({
-      text: "hidden final",
-      mediaUrls: ["/tmp/generated.png"],
-      mediaUrl: "/tmp/generated.png",
-    });
-    expect(getReplyPayloadMetadata(reply ?? {})).toBeUndefined();
-  });
-
-  it("keeps host-owned media deliverable beside suppressed assistant text", () => {
-    const [textReply, mediaReply] =
-      mergeAttemptToolMediaPayloads({
-        payloads: [{ text: "Done" }],
-        toolMediaUrls: ["/tmp/generated.png"],
-        hostOwnedToolMediaUrls: ["/tmp/generated.png"],
-        sourceReplyDeliveryMode: "message_tool_only",
-      }) ?? [];
-
-    expect(textReply).toEqual({ text: "Done" });
-    expect(getReplyPayloadMetadata(textReply ?? {})).toBeUndefined();
-    expect(mediaReply).toEqual({
-      mediaUrls: ["/tmp/generated.png"],
-      mediaUrl: "/tmp/generated.png",
-      audioAsVoice: undefined,
-      trustedLocalMedia: undefined,
-    });
-    expect(getReplyPayloadMetadata(mediaReply ?? {})).toMatchObject({
-      deliverDespiteSourceReplySuppression: true,
-    });
-  });
-
-  it("merges generic media with assistant text while splitting host-owned media", () => {
-    const [textReply, mediaReply] =
-      mergeAttemptToolMediaPayloads({
-        payloads: [{ text: "Done" }],
-        toolMediaUrls: ["/tmp/reply.opus", "/tmp/generated.png"],
-        hostOwnedToolMediaUrls: ["/tmp/generated.png"],
-        toolAudioAsVoice: true,
-        sourceReplyDeliveryMode: "message_tool_only",
-      }) ?? [];
-
-    expect(textReply).toEqual({
-      text: "Done",
-      mediaUrls: ["/tmp/reply.opus"],
-      mediaUrl: "/tmp/reply.opus",
-      audioAsVoice: true,
-    });
-    expect(getReplyPayloadMetadata(textReply ?? {})).toBeUndefined();
-    expect(mediaReply).toEqual({
-      mediaUrls: ["/tmp/generated.png"],
-      mediaUrl: "/tmp/generated.png",
-      audioAsVoice: undefined,
-      trustedLocalMedia: undefined,
-    });
-    expect(getReplyPayloadMetadata(mediaReply ?? {})).toMatchObject({
-      deliverDespiteSourceReplySuppression: true,
-    });
-  });
-
-  it("preserves reply metadata when attaching tool media to a visible reply", () => {
-    const visibleReply = setReplyPayloadMetadata(
-      { text: "done" },
-      {
-        assistantMessageIndex: 7,
-        deliverDespiteSourceReplySuppression: true,
-      },
+    expectUnmarked(privateReply, { text: "PRIVATE_FINAL_83636_MUST_NOT_APPEAR" });
+    expect(mediaReply).toEqual(
+      media("/tmp/reply.opus", { audioAsVoice: true, trustedLocalMedia: true }),
     );
+    expectSuppressionDelivery(mediaReply);
+  });
 
-    const [reasoningReply, mergedReply] =
-      mergeAttemptToolMediaPayloads({
-        payloads: [{ text: "thinking", isReasoning: true }, visibleReply],
-        toolMediaUrls: ["/tmp/reply.png"],
-      }) ?? [];
+  it.each([
+    { name: "unmatched host provenance", text: undefined, host: ["/tmp/forged.png"] },
+    { name: "text without host provenance", text: "hidden final", host: undefined },
+  ])("does not grant suppression delivery to $name", ({ text, host }) => {
+    const [reply] = mergeForMessageTool({
+      payloads: text ? [{ text }] : undefined,
+      toolMediaUrls: ["/tmp/generated.png"],
+      hostOwnedToolMediaUrls: host,
+    });
+    expectUnmarked(reply, media("/tmp/generated.png", text ? { text } : {}));
+  });
 
-    expect(reasoningReply).toEqual({ text: "thinking", isReasoning: true });
-    expect(mergedReply).toEqual({
-      text: "done",
-      mediaUrls: ["/tmp/reply.png"],
-      mediaUrl: "/tmp/reply.png",
+  it.each([
+    { name: "generic media", text: undefined, generic: true },
+    { name: "suppressed text", text: "Done", generic: false },
+    { name: "generic media and text", text: "Done", generic: true },
+  ])("splits host-owned media from $name", ({ text, generic }) => {
+    const payloads = text ? [{ text }] : undefined;
+    const [reply, owned] = mergeForMessageTool({
+      payloads,
+      toolMediaUrls: generic ? ["/tmp/reply.opus", "/tmp/generated.png"] : ["/tmp/generated.png"],
+      hostOwnedToolMediaUrls: ["/tmp/generated.png"],
+      toolAudioAsVoice: generic || undefined,
     });
-    expect(getReplyPayloadMetadata(mergedReply ?? {})).toEqual({
-      assistantMessageIndex: 7,
-      deliverDespiteSourceReplySuppression: true,
-    });
+    expectUnmarked(
+      reply,
+      generic
+        ? media("/tmp/reply.opus", { ...(text ? { text } : {}), audioAsVoice: true })
+        : { text },
+    );
+    expectOwned(owned);
   });
 
   it("uses exact structured Markdown references to select tool media", () => {
@@ -276,88 +148,17 @@ describe("mergeAttemptToolMediaPayloads", () => {
       { assistantMessageIndex: 7 },
     );
 
-    const [reply] =
-      mergeAttemptToolMediaPayloads({
-        payloads: [visibleReply],
-        toolMediaUrls: [selected, unselected],
-        toolTrustedLocalMedia: true,
-      }) ?? [];
-
-    expect(reply).toEqual({
-      text: "Our agent.",
-      mediaUrls: [selected],
-      mediaUrl: selected,
-      audioAsVoice: undefined,
-      trustedLocalMedia: true,
-    });
+    const [reply] = merge([selected, unselected], [visibleReply], { toolTrustedLocalMedia: true });
+    expect(reply).toEqual(media(selected, { text: "Our agent.", trustedLocalMedia: true }));
     expect(getReplyPayloadMetadata(reply ?? {})).toEqual({ assistantMessageIndex: 7 });
   });
 
   it("keeps unmatched local Markdown visible without selecting it", () => {
     const input = "Caption\n\n![not tool media](/tmp/unrelated.png)";
 
-    expect(
-      mergeAttemptToolMediaPayloads({
-        payloads: [{ text: input }],
-        toolMediaUrls: ["/tmp/pending.png"],
-      }),
-    ).toEqual([
-      {
-        text: input,
-        mediaUrls: ["/tmp/pending.png"],
-        mediaUrl: "/tmp/pending.png",
-      },
+    expect(merge(["/tmp/pending.png"], [{ text: input }])).toEqual([
+      media("/tmp/pending.png", { text: input }),
     ]);
-  });
-
-  it("preserves trusted local media provenance when merging tool media", () => {
-    expect(
-      mergeAttemptToolMediaPayloads({
-        payloads: [{ text: "done" }],
-        toolMediaUrls: ["/tmp/reply.opus"],
-        toolAudioAsVoice: true,
-        toolTrustedLocalMedia: true,
-      }),
-    ).toEqual([
-      {
-        text: "done",
-        mediaUrls: ["/tmp/reply.opus"],
-        mediaUrl: "/tmp/reply.opus",
-        audioAsVoice: true,
-        trustedLocalMedia: true,
-      },
-    ]);
-  });
-
-  it("does not attach tool media to message-tool-only source reply mirrors", () => {
-    // Source reply mirrors already represent delivered message-tool output;
-    // adding separate tool media would duplicate or mutate the transcript mirror.
-    const sourceReply = setReplyPayloadMetadata(
-      { text: "sent through message tool" },
-      {
-        deliverDespiteSourceReplySuppression: true,
-        sourceReplyTranscriptMirror: {
-          sessionKey: "agent:main",
-          text: "sent through message tool",
-        },
-      },
-    );
-
-    const [mergedReply] =
-      mergeAttemptToolMediaPayloads({
-        payloads: [sourceReply],
-        toolMediaUrls: ["/tmp/generated.png"],
-        sourceReplyDeliveryMode: "message_tool_only",
-      }) ?? [];
-
-    expect(mergedReply).toEqual({ text: "sent through message tool" });
-    expect(getReplyPayloadMetadata(mergedReply ?? {})).toMatchObject({
-      deliverDespiteSourceReplySuppression: true,
-      sourceReplyTranscriptMirror: {
-        sessionKey: "agent:main",
-        text: "sent through message tool",
-      },
-    });
   });
 });
 
@@ -371,12 +172,7 @@ describe("pending tool media carry", () => {
     });
     carry.capture({ toolMediaUrls: ["/tmp/shared.opus"] });
     expect(carry.merge({ toolMediaUrls: ["/tmp/shared.opus"] })).toEqual([
-      {
-        mediaUrls: ["/tmp/shared.opus"],
-        mediaUrl: "/tmp/shared.opus",
-        audioAsVoice: true,
-        trustedLocalMedia: true,
-      },
+      media("/tmp/shared.opus", { audioAsVoice: true, trustedLocalMedia: true }),
     ]);
   });
 
@@ -384,19 +180,23 @@ describe("pending tool media carry", () => {
     const carry = createPendingToolMediaCarry();
     carry.capture({ toolMediaUrls: ["/tmp/first.png"] });
     carry.capture({ toolMediaUrls: ["/tmp/second.png"] });
-    const mirror = setReplyPayloadMetadata(
+    const sourceReply = setReplyPayloadMetadata(
       { text: "already sent" },
       {
         sourceReplyTranscriptMirror: { sessionKey: "agent:main", text: "already sent" },
+        deliverDespiteSourceReplySuppression: true,
       },
     );
-    expect(
-      carry.merge({
-        payloads: [mirror],
-        toolMediaUrls: ["/tmp/third.png"],
-        sourceReplyDeliveryMode: "message_tool_only",
-      }),
-    ).toEqual([mirror]);
+    const output = carry.merge({
+      payloads: [sourceReply],
+      toolMediaUrls: ["/tmp/third.png"],
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+    expect(output).toEqual([sourceReply]);
+    expect(getReplyPayloadMetadata(output?.[0] ?? {})).toMatchObject({
+      deliverDespiteSourceReplySuppression: true,
+      sourceReplyTranscriptMirror: { sessionKey: "agent:main", text: "already sent" },
+    });
   });
 
   it("keeps media-only assistant provenance on the surviving normalized payload", async () => {
@@ -432,90 +232,37 @@ describe("pending tool media carry", () => {
   });
 
   it("keeps a shared assistant artifact only in its proven source batch", () => {
-    const carry = createPendingToolMediaCarry();
-    carry.capture({
-      toolMediaUrls: ["/tmp/voice.opus"],
-      toolAudioAsVoice: true,
-      toolTrustedLocalMedia: true,
-    });
+    const carry = carryVoice();
     const final = setReplyPayloadMetadata(
       {
         text: "Done",
         mediaUrl: "/tmp/voice.opus",
-        mediaUrls: ["/tmp/voice.opus", "https://example.test/image.png"],
+        mediaUrls: ["/tmp/voice.opus", imageUrl],
       },
       { assistantMessageIndex: 7 },
     );
     const output = carry.merge({ payloads: [final] });
-    expect(output).toEqual([
-      { text: "Done", mediaUrls: ["https://example.test/image.png"] },
-      {
-        mediaUrls: ["/tmp/voice.opus"],
-        mediaUrl: "/tmp/voice.opus",
-        audioAsVoice: true,
-        trustedLocalMedia: true,
-      },
-    ]);
+    expect(output).toEqual([{ text: "Done", mediaUrls: [imageUrl] }, voicePayload]);
     expect(getReplyPayloadMetadata(output?.[0] ?? {})).toEqual({ assistantMessageIndex: 7 });
   });
 
   it("does not promote final assistant media with a carried batch's trust or voice flags", () => {
-    const carry = createPendingToolMediaCarry();
-    carry.capture({
-      toolMediaUrls: ["/tmp/voice.opus"],
-      toolAudioAsVoice: true,
-      toolTrustedLocalMedia: true,
-    });
-    const final = { text: "Done", mediaUrls: ["https://example.test/image.png"] };
-    expect(carry.merge({ payloads: [final] })).toEqual([
-      final,
-      {
-        mediaUrls: ["/tmp/voice.opus"],
-        mediaUrl: "/tmp/voice.opus",
-        audioAsVoice: true,
-        trustedLocalMedia: true,
-      },
-    ]);
+    const carry = carryVoice();
+    const final = { text: "Done", mediaUrls: [imageUrl] };
+    expect(carry.merge({ payloads: [final] })).toEqual([final, voicePayload]);
   });
 
   it.each([false, true])(
     "preserves origin trust and voice with final selection %s",
     (selectImage) => {
-      const carry = createPendingToolMediaCarry();
-      const voice = {
-        toolMediaUrls: ["/tmp/voice.opus"],
-        toolAudioAsVoice: true,
-        toolTrustedLocalMedia: true,
-      };
-      carry.capture(voice);
-      carry.capture({ toolMediaUrls: ["https://example.test/image.png"] });
-      voice.toolMediaUrls.push("/tmp/later.opus");
+      const carry = carryVoice();
+      carry.capture({ toolMediaUrls: [imageUrl] });
       const params = {
-        payloads: [
-          { text: selectImage ? "Selected ![image](https://example.test/image.png)" : "Done" },
-        ],
+        payloads: [{ text: selectImage ? `Selected ![image](${imageUrl})` : "Done" }],
       };
       const expected = selectImage
-        ? [
-            {
-              text: "Selected",
-              mediaUrls: ["https://example.test/image.png"],
-              mediaUrl: "https://example.test/image.png",
-            },
-          ]
-        : [
-            {
-              text: "Done",
-              mediaUrls: ["/tmp/voice.opus"],
-              mediaUrl: "/tmp/voice.opus",
-              audioAsVoice: true,
-              trustedLocalMedia: true,
-            },
-            {
-              mediaUrls: ["https://example.test/image.png"],
-              mediaUrl: "https://example.test/image.png",
-            },
-          ];
+        ? [media(imageUrl, { text: "Selected" })]
+        : [{ text: "Done", ...voicePayload }, media(imageUrl)];
       expect(carry.merge(params)).toEqual(expected);
       expect(carry.merge(params)).toEqual(expected);
       carry.clear();

@@ -17,26 +17,39 @@ export function createConfigWriteHomeFixture(makeHome: (prefix: string) => Promi
   };
 }
 
-export const defaultedDemoPluginRegistry = {
-  diagnostics: [],
-  plugins: [
-    {
-      id: "demo",
-      origin: "bundled",
-      enabledByDefault: true,
-      channels: [],
-      providers: [],
-      cliBackends: [],
-      skills: [],
-      hooks: [],
-      rootDir: "/tmp/openclaw-test-demo",
-      source: "/tmp/openclaw-test-demo/index.ts",
-      manifestPath: "/tmp/openclaw-test-demo/openclaw.plugin.json",
-      configSchema: {
-        type: "object",
-        properties: { mode: { type: "string", default: "auto" } },
-        additionalProperties: true,
+export function createConfigWritePluginRegistry(
+  id: string,
+  configSchema: NonNullable<PluginManifestRegistry["plugins"][number]["configSchema"]>,
+  enabledByDefault?: boolean,
+): PluginManifestRegistry {
+  const rootDir = `/tmp/openclaw-test-${id}`;
+  return {
+    diagnostics: [],
+    plugins: [
+      {
+        id,
+        rootDir,
+        source: `${rootDir}/index.ts`,
+        manifestPath: `${rootDir}/openclaw.plugin.json`,
+        origin: "bundled",
+        channels: [],
+        providers: [],
+        cliBackends: [],
+        skills: [],
+        hooks: [],
+        configSchema,
+        ...(enabledByDefault === undefined ? {} : { enabledByDefault }),
       },
-    },
-  ],
-} satisfies PluginManifestRegistry;
+    ],
+  };
+}
+
+export const defaultedDemoPluginRegistry = createConfigWritePluginRegistry(
+  "demo",
+  {
+    type: "object",
+    properties: { mode: { type: "string", default: "auto" } },
+    additionalProperties: true,
+  },
+  true,
+);

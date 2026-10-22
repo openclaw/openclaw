@@ -95,7 +95,11 @@ export function startSessionCostUsageProjectionLifetime(params: {
       ) {
         refreshAll();
       }
-    } else if (change.facts?.kind === "removed" && !isIncognitoSessionKey(change.sessionKey)) {
+    } else if (
+      change.facts?.kind === "removed" &&
+      !change.facts.transcriptInventoryUnchanged &&
+      !isIncognitoSessionKey(change.sessionKey)
+    ) {
       if (change.agentId) {
         refreshAgent(change.agentId, change.storePath);
       } else {

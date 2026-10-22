@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { sanitizeServerName } from "./agent-bundle-mcp-names.js";
 import type { SessionMcpRequesterScope } from "./agent-bundle-mcp-types.js";
 
@@ -12,7 +12,7 @@ export type McpOAuthIdentity = {
 
 export function operatorMcpOAuthIdentity(serverName: string, serverUrl: string): McpOAuthIdentity {
   const safeServerName = sanitizeServerName(serverName, new Set<string>());
-  const hash = createHash("sha256").update(serverName).update("\0").update(serverUrl).digest("hex");
+  const hash = sha256Hex(`${serverName}\0${serverUrl}`);
   return {
     storeKey: `${safeServerName}-${hash.slice(0, 16)}`,
     principal: "operator",
@@ -29,13 +29,9 @@ export function requesterMcpOAuthIdentity(
   const operator = operatorMcpOAuthIdentity(serverName, serverUrl);
   // The requester tuple intentionally excludes session identity. Changing this
   // grammar would either leak credentials across principals or strand stored rows.
-  const requesterHash = createHash("sha256")
-    .update(scope.messageChannel ?? "")
-    .update("\0")
-    .update(scope.agentAccountId ?? "")
-    .update("\0")
-    .update(scope.requesterSenderId)
-    .digest("hex");
+  const requesterHash = sha256Hex(
+    `${scope.messageChannel ?? ""}\0${scope.agentAccountId ?? ""}\0${scope.requesterSenderId}`,
+  );
   return {
     ...operator,
     storeKey: `${operator.storeKey}-r-${requesterHash.slice(0, 16)}`,

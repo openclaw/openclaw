@@ -1,6 +1,6 @@
-// Codex tests cover rate limits plugin behavior.
 import { describe, expect, it } from "vitest";
 import { formatCodexStatus } from "../command-formatters.js";
+import type { JsonObject } from "./protocol.js";
 import {
   buildCodexAppServerUsageSnapshot,
   formatCodexUsageLimitErrorMessage,
@@ -10,6 +10,37 @@ import {
   summarizeCodexAccountUsage,
   summarizeCodexRateLimits,
 } from "./rate-limits.js";
+
+const nowMs = 1_700_000_000_000;
+const nowSeconds = nowMs / 1000;
+const window = (
+  usedPercent: number,
+  resetsAt: number | null,
+  windowDurationMins: number | null = 300,
+) => ({ usedPercent, windowDurationMins, resetsAt });
+const bucket = (overrides: JsonObject = {}) => ({
+  limitId: "codex",
+  primary: null,
+  secondary: null,
+  ...overrides,
+});
+const namedBucket = (overrides: JsonObject = {}) => bucket({ limitName: "Codex", ...overrides });
+const emptyBucket = (overrides: JsonObject = {}) =>
+  namedBucket({
+    credits: null,
+    planType: "pro",
+    rateLimitReachedType: null,
+    ...overrides,
+  });
+const byLimitId = (codex: JsonObject, extras: JsonObject = {}) => ({
+  rateLimitsByLimitId: { codex, ...extras },
+});
+const usageError = (params: Parameters<typeof formatCodexUsageLimitErrorMessage>[0]) =>
+  formatCodexUsageLimitErrorMessage({
+    message: "You've reached your usage limit.",
+    codexErrorInfo: "usageLimitExceeded",
+    ...params,
+  });
 
 describe("formatCodexUsageLimitErrorMessage", () => {
   it("does not infer a Codex usage limit from unrelated prose", () => {
@@ -24,17 +55,9 @@ describe("formatCodexUsageLimitErrorMessage", () => {
   });
 
   it("preserves Codex retry hints when structured reset windows are absent", () => {
-    const message = formatCodexUsageLimitErrorMessage({
-      message:
-        "You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at May 11th, 2026 9:00 AM.",
-      codexErrorInfo: "usageLimitExceeded",
-      rateLimits: {
-        rateLimits: {
-          limitId: "codex",
-          primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: null },
-          secondary: null,
-        },
-      },
+    const message = usageError({
+      message: "You've hit your usage limit; try again at May 11th, 2026 9:00 AM.",
+      rateLimits: { rateLimits: bucket({ primary: window(100, null) }) },
       nowMs: Date.UTC(2026, 4, 10, 23, 0, 0),
     });
 
@@ -45,27 +68,14 @@ describe("formatCodexUsageLimitErrorMessage", () => {
   });
 
   it("does not use sibling bucket resets when the blocked Codex bucket omits a reset", () => {
-    const nowMs = 1_700_000_000_000;
-    const nowSeconds = nowMs / 1000;
-    const message = formatCodexUsageLimitErrorMessage({
-      message: "You've reached your usage limit.",
-      codexErrorInfo: "usageLimitExceeded",
-      rateLimits: {
-        rateLimitsByLimitId: {
-          codex: {
-            limitId: "codex",
-            limitName: "Codex",
-            primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: null },
-            secondary: null,
-          },
-          "gpt-5.3-codex-spark": {
-            limitId: "gpt-5.3-codex-spark",
-            limitName: "GPT 5.3 Codex Spark",
-            primary: { usedPercent: 0, windowDurationMins: 300, resetsAt: nowSeconds + 3600 },
-            secondary: null,
-          },
-        },
-      },
+    const message = usageError({
+      rateLimits: byLimitId(namedBucket({ primary: window(100, null) }), {
+        "gpt-5.3-codex-spark": bucket({
+          limitId: "gpt-5.3-codex-spark",
+          limitName: "GPT 5.3 Codex Spark",
+          primary: window(0, nowSeconds + 3600),
+        }),
+      }),
       nowMs,
     });
 
@@ -76,16 +86,9 @@ describe("formatCodexUsageLimitErrorMessage", () => {
   });
 
   it("does not report exhaustion when an authoritative snapshot has no active limit", () => {
-    const message = formatCodexUsageLimitErrorMessage({
-      message: "You've reached your usage limit.",
-      codexErrorInfo: "usageLimitExceeded",
+    const message = usageError({
       rateLimits: {
-        rateLimits: {
-          limitId: "codex",
-          primary: { usedPercent: 0, windowDurationMins: null, resetsAt: null },
-          secondary: null,
-          rateLimitReachedType: null,
-        },
+        rateLimits: bucket({ primary: window(0, null, null), rateLimitReachedType: null }),
       },
       rateLimitsAuthoritative: true,
     });
@@ -96,17 +99,8 @@ describe("formatCodexUsageLimitErrorMessage", () => {
   });
 
   it("does not infer availability from an empty authoritative snapshot", () => {
-    const message = formatCodexUsageLimitErrorMessage({
-      message: "You've reached your usage limit.",
-      codexErrorInfo: "usageLimitExceeded",
-      rateLimits: {
-        rateLimits: {
-          limitId: "codex",
-          primary: null,
-          secondary: null,
-          rateLimitReachedType: null,
-        },
-      },
+    const message = usageError({
+      rateLimits: { rateLimits: bucket({ rateLimitReachedType: null }) },
       rateLimitsAuthoritative: true,
     });
 
@@ -117,55 +111,50 @@ describe("formatCodexUsageLimitErrorMessage", () => {
 });
 
 describe("buildCodexAppServerUsageSnapshot", () => {
-  it.each(["gpt-reserve"])("discloses only the distinct reserve route (%s)", (limitName) => {
-    const value = {
-      rateLimitsByLimitId: {
-        codex: { limitId: "codex", primary: { usedPercent: 100 } },
+  it("discloses only the distinct reserve route (gpt-reserve)", () => {
+    const value = byLimitId(
+      { limitId: "codex", primary: { usedPercent: 100 } },
+      {
         alias: {
           limitId: "base_model_inference",
-          limitName,
+          limitName: "gpt-reserve",
           normalModelSlug: "gpt-5.6-luna",
           secondary: { usedPercent: 0 },
         },
       },
-    };
+    );
     const snapshot = buildCodexAppServerUsageSnapshot(value);
     const status = summarizeCodexRateLimits(value);
     expect(snapshot.windows).toHaveLength(1);
-    if (limitName === "gpt-reserve") {
-      expect(snapshot.summary).toContain("Ordinary Luna does not use this reserve");
-      expect(status).toContain("Luna Reserve (separate route)");
-      expect(status).toContain("does not establish eligibility or per-request billing");
-      const command = formatCodexStatus({
-        models: { ok: true, value: { models: [] } },
-        account: { ok: true, value: { requiresOpenaiAuth: false } },
-        limits: { ok: true, value },
-        mcps: { ok: true, value: { data: [] } },
-        skills: { ok: true, value: { data: [] } },
-      });
-      expect(command).toContain(". Luna Reserve is a separate");
-    } else {
-      expect(snapshot.summary).toBeUndefined();
-      expect(status).not.toContain("Luna Reserve");
-    }
+    expect(snapshot.summary).toContain("Ordinary Luna does not use this reserve");
+    expect(status).toContain("Luna Reserve (separate route)");
+    expect(status).toContain("does not establish eligibility or per-request billing");
+    const command = formatCodexStatus({
+      models: { ok: true, value: { models: [] } },
+      account: { ok: true, value: { requiresOpenaiAuth: false } },
+      limits: { ok: true, value },
+      mcps: { ok: true, value: { data: [] } },
+      skills: { ok: true, value: { data: [] } },
+    });
+    expect(command).toContain(". Luna Reserve is a separate");
   });
 
   it("includes additional quota groups and precise balances for account rows", () => {
-    const payload = {
-      rateLimitsByLimitId: {
-        codex: {
-          limitId: "codex",
-          planType: "pro",
-          primary: { usedPercent: 10, windowDurationMins: 300, resetsAt: 1_900_000_000 },
-          credits: { hasCredits: true, balance: "12.75" },
-        },
+    const payload = byLimitId(
+      {
+        limitId: "codex",
+        planType: "pro",
+        primary: window(10, 1_900_000_000),
+        credits: { hasCredits: true, balance: "12.75" },
+      },
+      {
         extra: {
           limitId: "extra",
           limitName: "Extra quota",
-          primary: { usedPercent: 75, windowDurationMins: 300, resetsAt: 1_900_000_000 },
+          primary: window(75, 1_900_000_000),
         },
       },
-    };
+    );
     const result = buildCodexAppServerUsageSnapshot(payload, { accountDetails: true });
     expect(result).toMatchObject({
       plan: "pro",
@@ -179,27 +168,14 @@ describe("buildCodexAppServerUsageSnapshot", () => {
   });
 
   it("uses reset cadence when Codex reports a 24h weekly secondary window", () => {
-    const nowMs = 1_700_000_000_000;
     const primaryReset = Math.ceil(nowMs / 1000) + 60 * 60;
     const weeklyReset = primaryReset + 7 * 24 * 60 * 60;
-    const payload = {
-      rateLimitsByLimitId: {
-        codex: {
-          limitId: "codex",
-          planType: "plus",
-          primary: {
-            usedPercent: 9,
-            windowDurationMins: 300,
-            resetsAt: primaryReset,
-          },
-          secondary: {
-            usedPercent: 30,
-            windowDurationMins: 24 * 60,
-            resetsAt: weeklyReset,
-          },
-        },
-      },
-    };
+    const payload = byLimitId({
+      limitId: "codex",
+      planType: "plus",
+      primary: window(9, primaryReset),
+      secondary: window(30, weeklyReset, 24 * 60),
+    });
 
     expect(buildCodexAppServerUsageSnapshot(payload).windows).toEqual([
       { label: "5h", usedPercent: 9, resetAt: primaryReset * 1000 },
@@ -212,64 +188,45 @@ describe("buildCodexAppServerUsageSnapshot", () => {
 
   it("formats unlimited Codex credits without currency wording", () => {
     const result = buildCodexAppServerUsageSnapshot({
-      rateLimits: {
-        limitId: "codex",
+      rateLimits: bucket({
         planType: "plus",
         credits: { hasCredits: true, unlimited: true, balance: null },
-        primary: null,
-        secondary: null,
-      },
+      }),
     });
 
     expect(result.plan).toBe("plus (Unlimited credits)");
   });
 });
 
-describe("Codex rate limit blocking resets", () => {
-  it("keeps subscriptions blocked until all exhausted windows reset", () => {
-    const nowMs = 1_700_000_000_000;
-    const shortTermReset = Math.ceil(nowMs / 1000) + 60 * 60;
-    const weeklyReset = Math.ceil(nowMs / 1000) + 24 * 60 * 60;
-    const payload = {
-      rateLimitsByLimitId: {
-        codex: {
-          limitId: "codex",
-          primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: shortTermReset },
-          secondary: { usedPercent: 100, windowDurationMins: 10_080, resetsAt: weeklyReset },
-        },
-      },
-    };
-
-    expect(resolveCodexUsageLimitResetAtMs(payload, nowMs)).toBe(weeklyReset * 1000);
-    expect(summarizeCodexAccountUsage(payload, nowMs)?.blockedUntilMs).toBe(weeklyReset * 1000);
+it("keeps subscriptions blocked until all exhausted windows reset", () => {
+  const shortTermReset = Math.ceil(nowMs / 1000) + 60 * 60;
+  const weeklyReset = Math.ceil(nowMs / 1000) + 24 * 60 * 60;
+  const payload = byLimitId({
+    limitId: "codex",
+    primary: window(100, shortTermReset),
+    secondary: window(100, weeklyReset, 10_080),
   });
-});
 
+  expect(resolveCodexUsageLimitResetAtMs(payload, nowMs)).toBe(weeklyReset * 1000);
+  expect(summarizeCodexAccountUsage(payload, nowMs)?.blockedResetRelative).toBe("in 1 day");
+});
 describe("summarizeCodexRateLimits", () => {
   it.each([true, false, null])(
     "preserves feature quota guidance separately from account permission %s",
     (ordinaryUsageAllowed) => {
-      const nowMs = 1_700_000_000_000;
       const resetsAt = nowMs / 1000 + 3600;
-      const codex = {
-        limitId: "codex",
-        primary: { usedPercent: 10, windowDurationMins: 300, resetsAt },
-        secondary: null,
-        rateLimitReachedType: null,
-      };
+      const codex = bucket({ primary: window(10, resetsAt), rateLimitReachedType: null });
       const payload = {
         ordinaryUsageAllowed,
         rateLimits: codex,
-        rateLimitsByLimitId: {
-          codex,
-          extra: {
+        ...byLimitId(codex, {
+          extra: bucket({
             limitId: "extra",
             limitName: "Extra quota",
-            primary: { usedPercent: 100, windowDurationMins: 300, resetsAt },
-            secondary: null,
+            primary: window(100, resetsAt),
             rateLimitReachedType: null,
-          },
-        },
+          }),
+        }),
       };
 
       const accountAvailability = summarizeCodexAccountRateLimits(payload, nowMs);
@@ -284,9 +241,7 @@ describe("summarizeCodexRateLimits", () => {
       expect(summarizeCodexRateLimits(payload, nowMs)).toContain(
         "Extra quota: primary 0% left ⏱1h",
       );
-      const errorMessage = formatCodexUsageLimitErrorMessage({
-        message: "You've hit your usage limit for Extra quota. Switch to another model now.",
-        codexErrorInfo: "usageLimitExceeded",
+      const errorMessage = usageError({
         rateLimits: payload,
         rateLimitsAuthoritative: true,
         nowMs,
@@ -299,60 +254,19 @@ describe("summarizeCodexRateLimits", () => {
   );
 
   it("formats status limits like provider usage summaries", () => {
-    const nowMs = 1_700_000_000_000;
-    const nowSeconds = nowMs / 1000;
-
-    expect(
-      summarizeCodexRateLimits(
-        {
-          rateLimits: {
-            limitId: "codex",
-            limitName: "Codex",
-            primary: {
-              usedPercent: 26,
-              windowDurationMins: 300,
-              resetsAt: nowSeconds + 3 * 60 * 60,
-            },
-            secondary: {
-              usedPercent: 4,
-              windowDurationMins: 7 * 24 * 60,
-              resetsAt: nowSeconds + 7 * 24 * 60 * 60,
-            },
-          },
-        },
-        nowMs,
-      ),
-    ).toBe("Codex: primary 74% left ⏱3h · secondary 96% left ⏱7d");
+    const rateLimits = namedBucket({
+      primary: window(26, nowSeconds + 3 * 60 * 60),
+      secondary: window(4, nowSeconds + 7 * 24 * 60 * 60, 7 * 24 * 60),
+    });
+    expect(summarizeCodexRateLimits({ rateLimits }, nowMs)).toBe(
+      "Codex: primary 74% left ⏱3h · secondary 96% left ⏱7d",
+    );
   });
 
   it("ignores empty named buckets instead of showing them as available limits", () => {
-    const nowMs = 1_700_000_000_000;
-    const payload = {
-      rateLimitsByLimitId: {
-        premium: {
-          limitId: "premium",
-          limitName: "premium",
-          primary: null,
-          secondary: null,
-          credits: null,
-          planType: "pro",
-          rateLimitReachedType: null,
-        },
-        codex: {
-          limitId: "codex",
-          limitName: "Codex",
-          primary: {
-            usedPercent: 5,
-            windowDurationMins: 300,
-            resetsAt: Math.ceil(nowMs / 1000) + 3600,
-          },
-          secondary: null,
-          credits: null,
-          planType: "pro",
-          rateLimitReachedType: null,
-        },
-      },
-    };
+    const payload = byLimitId(emptyBucket({ primary: window(5, Math.ceil(nowSeconds) + 3600) }), {
+      premium: emptyBucket({ limitId: "premium", limitName: "premium" }),
+    });
 
     expect(summarizeCodexRateLimits(payload, nowMs)).toContain("Codex: primary 95% left ⏱1h");
     expect(summarizeCodexRateLimits(payload, nowMs)).not.toContain("premium");
@@ -361,38 +275,20 @@ describe("summarizeCodexRateLimits", () => {
 
   it("does not render a server-reported usage-limit block as available", () => {
     const payload = {
-      rateLimits: {
-        limitId: "codex",
-        limitName: "Codex",
-        primary: null,
-        secondary: null,
+      rateLimits: namedBucket({
         credits: null,
         rateLimitReachedType: "rate_limit_reached",
-      },
+      }),
     };
 
-    expect(summarizeCodexRateLimits(payload, 1_700_000_000_000)).toBe("Codex: rate limit reached");
-    expect(summarizeCodexAccountUsage(payload, 1_700_000_000_000)).toMatchObject({
+    expect(summarizeCodexRateLimits(payload, nowMs)).toBe("Codex: rate limit reached");
+    expect(summarizeCodexAccountUsage(payload, nowMs)).toMatchObject({
       blocked: true,
       blockingReason: "Codex usage limit is reached",
     });
   });
 
   it("ignores metadata-only Codex buckets", () => {
-    expect(
-      summarizeCodexRateLimits({
-        rateLimitsByLimitId: {
-          codex: {
-            limitId: "codex",
-            limitName: "Codex",
-            primary: null,
-            secondary: null,
-            credits: null,
-            planType: "plus",
-            rateLimitReachedType: null,
-          },
-        },
-      }),
-    ).toBeUndefined();
+    expect(summarizeCodexRateLimits(byLimitId(emptyBucket({ planType: "plus" })))).toBeUndefined();
   });
 });

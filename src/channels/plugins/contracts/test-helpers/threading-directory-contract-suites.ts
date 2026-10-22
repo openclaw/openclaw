@@ -1,24 +1,9 @@
-/**
- * Threading and directory channel contract assertions.
- *
- * Verifies optional directory/threading hooks return normalized public shapes.
- */
 import { expect } from "vitest";
 import type { OpenClawConfig } from "../../../../config/config.js";
 import type { RuntimeEnv } from "../../../../runtime.js";
-import type {
-  ChannelDirectoryEntry,
-  ChannelThreadingAdapter,
-  ChannelThreadingToolContext,
-} from "../../types.core.js";
-import type { ChannelPlugin } from "../../types.plugin.js";
-
-type ChannelReplyTransport = NonNullable<
-  ReturnType<NonNullable<ChannelThreadingAdapter["resolveReplyTransport"]>>
->;
-type ChannelFocusedBindingContext = NonNullable<
-  ReturnType<NonNullable<ChannelThreadingAdapter["resolveFocusedBinding"]>>
->;
+import type { ChannelDirectoryEntry } from "../../types.core.js";
+import type { AnyChannelPlugin, ChannelPlugin } from "../../types.plugin.js";
+import type { channelPluginSurfaceKeys } from "./manifest.js";
 
 const contractRuntime = new Proxy(Object.create(null), {
   get(_target, property) {
@@ -26,92 +11,34 @@ const contractRuntime = new Proxy(Object.create(null), {
   },
 }) as RuntimeEnv;
 
+function expectOptionalType(type: string | string[], ...values: unknown[]) {
+  for (const value of values) {
+    if (value !== undefined) {
+      expect(typeof type === "string" ? [type] : type).toContain(typeof value);
+    }
+  }
+}
+
+function expectNonemptyString(value: string) {
+  expect(typeof value).toBe("string");
+  expect(value.trim()).not.toBe("");
+}
+
 function expectDirectoryEntryShape(entry: ChannelDirectoryEntry) {
   expect(["user", "group", "channel"]).toContain(entry.kind);
-  expect(typeof entry.id).toBe("string");
-  expect(entry.id.trim()).not.toBe("");
-  if (entry.name !== undefined) {
-    expect(typeof entry.name).toBe("string");
-  }
-  if (entry.handle !== undefined) {
-    expect(typeof entry.handle).toBe("string");
-  }
-  if (entry.avatarUrl !== undefined) {
-    expect(typeof entry.avatarUrl).toBe("string");
-  }
-  if (entry.rank !== undefined) {
-    expect(typeof entry.rank).toBe("number");
-  }
+  expectNonemptyString(entry.id);
+  expectOptionalType("string", entry.name, entry.handle, entry.avatarUrl);
+  expectOptionalType("number", entry.rank);
 }
 
-function expectThreadingToolContextShape(context: ChannelThreadingToolContext) {
-  if (context.currentChannelId !== undefined) {
-    expect(typeof context.currentChannelId).toBe("string");
-  }
-  if (context.currentChannelProvider !== undefined) {
-    expect(typeof context.currentChannelProvider).toBe("string");
-  }
-  if (context.currentThreadTs !== undefined) {
-    expect(typeof context.currentThreadTs).toBe("string");
-  }
-  if (context.currentMessageId !== undefined) {
-    expect(["string", "number"]).toContain(typeof context.currentMessageId);
-  }
-  if (context.replyToMode !== undefined) {
-    expect(["off", "first", "all"]).toContain(context.replyToMode);
-  }
-  if (context.hasRepliedRef !== undefined) {
-    expect(typeof context.hasRepliedRef).toBe("object");
-  }
-  if (context.skipCrossContextDecoration !== undefined) {
-    expect(typeof context.skipCrossContextDecoration).toBe("boolean");
-  }
-}
-
-function expectReplyTransportShape(transport: ChannelReplyTransport) {
-  if (transport.replyToId !== undefined && transport.replyToId !== null) {
-    expect(typeof transport.replyToId).toBe("string");
-  }
-  if (transport.threadId !== undefined && transport.threadId !== null) {
-    expect(["string", "number"]).toContain(typeof transport.threadId);
-  }
-}
-
-function expectFocusedBindingShape(binding: ChannelFocusedBindingContext) {
-  expect(typeof binding.conversationId).toBe("string");
-  expect(binding.conversationId.trim()).not.toBe("");
-  if (binding.parentConversationId !== undefined) {
-    expect(typeof binding.parentConversationId).toBe("string");
-  }
-  expect(["current", "child"]).toContain(binding.placement);
-  expect(typeof binding.labelNoun).toBe("string");
-  expect(binding.labelNoun.trim()).not.toBe("");
-}
-
-/** Exercises optional threading hooks and checks normalized return shapes. */
 export function expectChannelThreadingReturnValuesNormalized(
   plugin: Pick<ChannelPlugin, "id" | "threading">,
 ) {
   const threading = plugin.threading;
   expect(threading).toBeDefined();
-
-  if (threading?.resolveReplyToMode) {
-    expect(
-      ["off", "first", "all"].includes(
-        threading.resolveReplyToMode({
-          cfg: {} as OpenClawConfig,
-          accountId: "default",
-          chatType: "group",
-        }),
-      ),
-    ).toBe(true);
-  }
-
-  const repliedRef = { value: false };
-  const toolContext = threading?.buildToolContext?.({
-    cfg: {} as OpenClawConfig,
-    accountId: "default",
-    context: {
+  const account = <const T>(extra: T) => ({ cfg: {}, accountId: "default", ...extra });
+  const context = () =>
+    ({
       Channel: "group:test",
       From: "user:test",
       To: "group:test",
@@ -121,60 +48,61 @@ export function expectChannelThreadingReturnValuesNormalized(
       ReplyToIdFull: "thread-0",
       MessageThreadId: "thread-0",
       NativeChannelId: "native:test",
-    },
-    hasRepliedRef: repliedRef,
-  });
+    }) as const;
+
+  if (threading?.resolveReplyToMode) {
+    expect(["off", "first", "all"]).toContain(
+      threading.resolveReplyToMode(account({ chatType: "group" })),
+    );
+  }
+
+  const repliedRef = { value: false };
+  const toolContext = threading?.buildToolContext?.(
+    account({ context: context(), hasRepliedRef: repliedRef }),
+  );
 
   if (toolContext) {
-    expectThreadingToolContextShape(toolContext);
+    expectOptionalType(
+      "string",
+      toolContext.currentChannelId,
+      toolContext.currentChannelProvider,
+      toolContext.currentThreadTs,
+    );
+    expectOptionalType(["string", "number"], toolContext.currentMessageId);
+    if (toolContext.replyToMode !== undefined) {
+      expect(["off", "first", "all"]).toContain(toolContext.replyToMode);
+    }
+    expectOptionalType("object", toolContext.hasRepliedRef);
+    expectOptionalType("boolean", toolContext.skipCrossContextDecoration);
     if (toolContext.hasRepliedRef) {
       expect(toolContext.hasRepliedRef).toBe(repliedRef);
     }
   }
 
-  const autoThreadId = threading?.resolveAutoThreadId?.({
-    cfg: {} as OpenClawConfig,
-    accountId: "default",
-    to: "group:test",
-    toolContext,
-    replyToId: null,
-  });
+  const autoThreadId = threading?.resolveAutoThreadId?.(
+    account({ to: "group:test", toolContext, replyToId: null }),
+  );
   if (autoThreadId !== undefined) {
-    expect(typeof autoThreadId).toBe("string");
-    expect(autoThreadId.trim()).not.toBe("");
+    expectNonemptyString(autoThreadId);
   }
 
-  const replyTransport = threading?.resolveReplyTransport?.({
-    cfg: {} as OpenClawConfig,
-    accountId: "default",
-    threadId: "thread-0",
-    replyToId: "msg-0",
-  });
+  const replyTransport = threading?.resolveReplyTransport?.(
+    account({ threadId: "thread-0", replyToId: "msg-0" }),
+  );
   if (replyTransport) {
-    expectReplyTransportShape(replyTransport);
+    expectOptionalType("string", replyTransport.replyToId ?? undefined);
+    expectOptionalType(["string", "number"], replyTransport.threadId ?? undefined);
   }
 
-  const focusedBinding = threading?.resolveFocusedBinding?.({
-    cfg: {} as OpenClawConfig,
-    accountId: "default",
-    context: {
-      Channel: "group:test",
-      From: "user:test",
-      To: "group:test",
-      ChatType: "group",
-      CurrentMessageId: "msg-1",
-      ReplyToId: "msg-0",
-      ReplyToIdFull: "thread-0",
-      MessageThreadId: "thread-0",
-      NativeChannelId: "native:test",
-    },
-  });
+  const focusedBinding = threading?.resolveFocusedBinding?.(account({ context: context() }));
   if (focusedBinding) {
-    expectFocusedBindingShape(focusedBinding);
+    expectNonemptyString(focusedBinding.conversationId);
+    expectOptionalType("string", focusedBinding.parentConversationId);
+    expect(["current", "child"]).toContain(focusedBinding.placement);
+    expectNonemptyString(focusedBinding.labelNoun);
   }
 }
 
-/** Exercises directory lookups and checks normalized entry shapes when possible. */
 export async function expectChannelDirectoryBaseContract(params: {
   plugin: Pick<ChannelPlugin, "id" | "directory">;
   coverage?: "lookups" | "presence";
@@ -191,58 +119,109 @@ export async function expectChannelDirectoryBaseContract(params: {
       },
     } as unknown as OpenClawConfig);
   const accountId = params.accountId ?? "default";
+  const lookup = { cfg, accountId, runtime: contractRuntime };
 
   if (params.coverage === "presence") {
     // Presence-only channels advertise a directory surface but cannot perform
     // deterministic offline lookup calls in shared contract fixtures.
     return;
   }
-  const self = await directory?.self?.({
-    cfg,
-    accountId,
-    runtime: contractRuntime,
-  });
+  const self = await directory?.self?.({ ...lookup });
   if (self) {
     expectDirectoryEntryShape(self);
   }
 
-  const peers =
-    (await directory?.listPeers?.({
-      cfg,
-      accountId,
-      query: "",
-      limit: 5,
-      runtime: contractRuntime,
-    })) ?? [];
-  expect(Array.isArray(peers)).toBe(true);
-  for (const peer of peers) {
-    expectDirectoryEntryShape(peer);
-  }
-
-  const groups =
-    (await directory?.listGroups?.({
-      cfg,
-      accountId,
-      query: "",
-      limit: 5,
-      runtime: contractRuntime,
-    })) ?? [];
-  expect(Array.isArray(groups)).toBe(true);
-  for (const group of groups) {
-    expectDirectoryEntryShape(group);
-  }
+  const checkEntries = (entries: ChannelDirectoryEntry[]) => {
+    expect(Array.isArray(entries)).toBe(true);
+    for (const entry of entries) {
+      expectDirectoryEntryShape(entry);
+    }
+  };
+  checkEntries((await directory?.listPeers?.({ ...lookup, query: "", limit: 5 })) ?? []);
+  const groups = (await directory?.listGroups?.({ ...lookup, query: "", limit: 5 })) ?? [];
+  checkEntries(groups);
 
   if (directory?.listGroupMembers && groups[0]?.id) {
     const members = await directory.listGroupMembers({
-      cfg,
-      accountId,
+      ...lookup,
       groupId: groups[0].id,
       limit: 5,
-      runtime: contractRuntime,
     });
-    expect(Array.isArray(members)).toBe(true);
-    for (const member of members) {
-      expectDirectoryEntryShape(member);
+    checkEntries(members);
+  }
+}
+
+type Surface = (typeof channelPluginSurfaceKeys)[number];
+const hooks = {
+  actions: ["describeMessageTool"],
+  setup: ["applyAccountConfig"],
+  status: ["buildAccountSnapshot"],
+  outbound: [
+    "sendPayload",
+    "sendFormattedText",
+    "sendFormattedMedia",
+    "sendText",
+    "sendMedia",
+    "sendPoll",
+  ],
+  messaging: [
+    "normalizeTarget",
+    "inferTargetChatType",
+    "buildCrossContextPresentation",
+    "hasStructuredReplyPayload",
+    "formatTargetDisplay",
+    "resolveOutboundSessionRoute",
+  ],
+  // Target matching also supports source-reply mirroring without reply-shaping hooks.
+  threading: [
+    "resolveReplyToMode",
+    "buildToolContext",
+    "resolveAutoThreadId",
+    "resolveReplyTransport",
+    "resolveFocusedBinding",
+    "matchesToolContextTarget",
+  ],
+  directory: [
+    "self",
+    "listPeers",
+    "listPeersLive",
+    "listGroups",
+    "listGroupsLive",
+    "listGroupMembers",
+  ],
+  gateway: ["startAccount", "stopAccount", "loginWithQrStart", "loginWithQrWait", "logoutAccount"],
+} satisfies { [S in Surface]: (keyof NonNullable<AnyChannelPlugin[S]>)[] };
+
+export function expectChannelSurfaceContract({
+  plugin,
+  surface,
+}: {
+  plugin: Pick<AnyChannelPlugin, "id" | "setupContract" | Surface>;
+  surface: Surface;
+}) {
+  const adapter = surface === "setup" ? (plugin.setupContract ?? plugin.setup) : plugin[surface];
+  expect(
+    hooks[surface].some((key) => adapter && typeof Reflect.get(adapter, key) === "function"),
+  ).toBe(true);
+  if (surface === "outbound") {
+    expect(["direct", "gateway", "hybrid"]).toContain(plugin.outbound?.deliveryMode);
+  }
+  const resolver = surface === "messaging" ? plugin.messaging?.targetResolver : undefined;
+  if (!resolver) {
+    return;
+  }
+  for (const hook of [resolver.looksLikeId, resolver.resolveTarget]) {
+    if (hook) {
+      expect(typeof hook).toBe("function");
     }
+  }
+  if (resolver.hint !== undefined) {
+    expectNonemptyString(resolver.hint);
+  }
+  if (resolver.reservedLiterals !== undefined) {
+    expect(Array.isArray(resolver.reservedLiterals)).toBe(true);
+    expect(
+      resolver.reservedLiterals.every((value) => typeof value === "string" && value.trim()),
+    ).toBe(true);
   }
 }

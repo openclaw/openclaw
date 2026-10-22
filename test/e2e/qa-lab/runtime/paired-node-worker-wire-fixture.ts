@@ -61,11 +61,17 @@ export type WireGateway = QaGatewayChild;
 type WireGatewayEvent = { event: string; payload?: unknown };
 
 export function createWireWorkspaceSettlementWaiter() {
-  const waiting = new Map<string, { resolve: () => void; refresh: () => Promise<void> }>();
-  const settled = (placement: unknown) =>
+  const waiting = new Map<
+    string,
+    { accept: (placement: unknown) => void; refresh: () => Promise<void> }
+  >();
+  const settled = (placement: unknown, previousManifestRef?: string) =>
     isRecord(placement) &&
     placement.state === "active" &&
-    placement.workspaceResultReconciling !== true;
+    placement.workspaceResultReconciling !== true &&
+    (previousManifestRef === undefined ||
+      (typeof placement.workspaceBaseManifestRef === "string" &&
+        placement.workspaceBaseManifestRef !== previousManifestRef));
   return {
     onEvent: (event: WireGatewayEvent) => {
       if (event.event !== "sessions.changed" || !isRecord(event.payload)) {
@@ -74,8 +80,8 @@ export function createWireWorkspaceSettlementWaiter() {
       const session = event.payload.session;
       const key = event.payload.sessionKey ?? (isRecord(session) ? session.key : undefined);
       if (isRecord(session)) {
-        if (settled(session.placement) && typeof key === "string") {
-          waiting.get(key)?.resolve();
+        if (typeof key === "string") {
+          waiting.get(key)?.accept(session.placement);
         }
       } else {
         // Preparation failures publish a refresh notice instead of a session snapshot.
@@ -89,23 +95,27 @@ export function createWireWorkspaceSettlementWaiter() {
       client: { request<T>(method: string, params: unknown): Promise<T> },
       key: string,
       signal: AbortSignal,
+      previousManifestRef?: string,
     ) {
       const changed = createDeferred();
+      const accept = (placement: unknown) => {
+        if (settled(placement, previousManifestRef)) {
+          changed.resolve();
+        }
+      };
       const refresh = async () => {
         try {
           const current = await client.request<{ session: { placement?: unknown } }>(
             "sessions.describe",
             { key },
           );
-          if (settled(current.session.placement)) {
-            changed.resolve();
-          }
+          accept(current.session.placement);
         } catch (error) {
           changed.reject(error);
         }
       };
       // Register before the current read so fast reconciliation needs no later event.
-      waiting.set(key, { resolve: changed.resolve, refresh });
+      waiting.set(key, { accept, refresh });
       try {
         void refresh();
         await withinTest(changed.promise, signal);
@@ -117,6 +127,7 @@ export function createWireWorkspaceSettlementWaiter() {
 }
 export type WireNodeRead = {
   nodeId: string;
+  commands?: string[];
   approvalState?: string;
   connected?: boolean;
   paired?: boolean;
@@ -214,10 +225,7 @@ export async function connectWireClient(params: {
   timeoutMs?: number;
   nodeManifest?: { caps: string[]; commands: string[] };
 }): Promise<GatewayClient> {
-  const [{ prepareGatewayClientDeviceAuth }, { acquireGatewayTestClient }] = await Promise.all([
-    import("../../../../src/gateway/client.js"),
-    import("../../../helpers/gateway-client.js"),
-  ]);
+  const { acquireGatewayTestClient } = await import("../../../helpers/gateway-client.js");
   const node = params.role === "node";
   const connectionOptions = {
     url: params.gateway.wsUrl,
@@ -225,8 +233,6 @@ export async function connectWireClient(params: {
     env: params.gateway.runtimeEnv,
     deviceIdentity: params.identity,
   };
-  // Source QA must prepare the auth worker before starting the handshake budget.
-  await prepareGatewayClientDeviceAuth(connectionOptions);
   return await acquireGatewayTestClient(
     {
       ...connectionOptions,
@@ -311,6 +317,7 @@ async function ensureNodeApproved(operator: GatewayClient, nodeId: string): Prom
 async function waitForApprovedWireNode(
   operator: GatewayClient,
   nodeId: string,
+  requiredCommands: readonly string[],
 ): Promise<WireNodeRead> {
   return await waitUntil(async () => {
     const result = await operator.request<{ nodes?: WireNodeRead[] }>("node.list", {});
@@ -318,7 +325,8 @@ async function waitForApprovedWireNode(
     return approved?.approvalState === "approved" &&
       approved.connected === true &&
       approved.paired === true &&
-      approved.sessionHost === true
+      approved.sessionHost === true &&
+      requiredCommands.every((command) => approved.commands?.includes(command))
       ? approved
       : undefined;
   });
@@ -330,7 +338,6 @@ type WireWorkerHostOptions = {
   root: string;
   label?: string;
   capacity?: number;
-  capacityWaitMs?: number;
   containerEngine?: NodeWorkerContainerEngine;
   containerImage?: string;
   workerGatewayUrl?: string;
@@ -421,9 +428,7 @@ export async function createPairedNodeWorkerHost(
   const invokeErrors: unknown[] = [];
   const commands: string[] = [];
   const frames: NodeInvokeRequestPayload[] = [];
-  const identity = loadOrCreateDeviceIdentity({
-    path: path.join(options.root, `${label}-identity.sqlite`),
-  });
+  const identity = loadOrCreateDeviceIdentity({ env: nodeEnv });
 
   const inventory = () => ({
     protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
@@ -446,7 +451,6 @@ export async function createPairedNodeWorkerHost(
     env: nodeEnv,
     workspace,
     capacity: options.capacity,
-    capacityWaitMs: options.capacityWaitMs,
     nativeInferenceSnapshot,
     ...(options.containerEngine ? { containerEngine: options.containerEngine } : {}),
     ...(options.containerImage ? { containerImage: options.containerImage } : {}),
@@ -680,7 +684,11 @@ export async function createPairedNodeWorkerHost(
 
   await supervisor.initialize();
   await connect();
-  await waitForApprovedWireNode(options.operator, identity.deviceId);
+  await waitForApprovedWireNode(
+    options.operator,
+    identity.deviceId,
+    options.pluginRuntime?.manifest.commands ?? [],
+  );
   return host;
 }
 

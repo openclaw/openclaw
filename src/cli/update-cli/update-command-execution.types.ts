@@ -29,6 +29,7 @@ export type UpdateCommandExecutionGuards = {
   onStateHandoff: () => void;
   admitExecutor: (acquired: UpdateRecoveryFence) => void;
   assertCurrent: (phase?: "restore") => void;
+  waitForCurrent: () => Promise<void>;
   assertBoundChildCurrent: () => void;
 };
 

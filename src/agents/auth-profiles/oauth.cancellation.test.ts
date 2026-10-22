@@ -9,10 +9,10 @@ const authMocks = vi.hoisted(() => ({
   loadAuthProfileStoreForRuntimeAsync: vi.fn(),
 }));
 
-vi.mock("./oauth-manager.js", () => ({
+vi.mock("./oauth-manager.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./oauth-manager.js")>()),
   createOAuthManager: () => ({
     resolveOAuthAccess: authMocks.resolveOAuthAccess,
-    resetRefreshQueuesForTest: () => {},
   }),
 }));
 

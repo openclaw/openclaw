@@ -1,6 +1,9 @@
+import { Portal, render } from "@solidjs/web";
+import { registerModalSurface } from "../../../components/overlay-registry.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
 
 registerEnglishCatalog(registerChatMessageMetadataEnglish);
@@ -45,8 +48,8 @@ function resolveViewportBounds() {
   const viewport = window.visualViewport;
   const left = viewport?.offsetLeft ?? 0;
   const top = viewport?.offsetTop ?? 0;
-  const width = viewport?.width ?? window.innerWidth ?? document.documentElement.clientWidth;
-  const height = viewport?.height ?? window.innerHeight ?? document.documentElement.clientHeight;
+  const width = viewport?.width ?? window.innerWidth;
+  const height = viewport?.height ?? window.innerHeight;
 
   return {
     bottom: top + height,
@@ -57,10 +60,7 @@ function resolveViewportBounds() {
 }
 
 function clampConfirmedActionPosition(value: number, min: number, max: number) {
-  if (max < min) {
-    return min;
-  }
-  return Math.min(Math.max(value, min), max);
+  return Math.max(min, Math.min(value, max));
 }
 
 function placeConfirmedActionPopover(trigger: HTMLElement, popover: HTMLElement) {
@@ -131,51 +131,95 @@ export function openChatRewindConfirmation(btn: HTMLElement, action: () => void)
     existing.dismiss({ restoreFocus: true });
     return;
   }
-  const popover = document.createElement("div");
-  popover.className = "chat-confirm-popover";
-  popover.setAttribute("role", "dialog");
-  popover.setAttribute("aria-modal", "true");
-  popover.setAttribute("aria-label", confirmText);
-  popover.innerHTML = `
-    <p class="chat-confirm-popover__text"></p>
-    <label class="chat-confirm-popover__remember">
-      <input type="checkbox" class="chat-confirm-popover__check" />
-      <span></span>
-    </label>
-    <div class="chat-confirm-popover__actions">
-      <button class="chat-confirm-popover__cancel" type="button"></button>
-      <button class="chat-confirm-popover__yes" type="button"></button>
-    </div>
-  `;
-  const cancel = popover.querySelector<HTMLButtonElement>(".chat-confirm-popover__cancel")!;
-  const yes = popover.querySelector<HTMLButtonElement>(".chat-confirm-popover__yes")!;
-  const check = popover.querySelector<HTMLInputElement>(".chat-confirm-popover__check")!;
-  popover.querySelector(".chat-confirm-popover__text")!.textContent = confirmText;
-  yes.textContent = confirmLabel;
-  popover.querySelector(".chat-confirm-popover__remember span")!.textContent = t(
-    "chat.messages.dontAskAgain",
+  let popover!: HTMLDivElement;
+  let cancel!: HTMLButtonElement;
+  let yes!: HTMLButtonElement;
+  let check!: HTMLInputElement;
+  // Virtual rows use transforms, so portal the dialog to keep its fixed
+  // coordinates relative to the viewport in web and native hosts.
+  const disposePopover = render(
+    () => (
+      <Portal mount={owner.ownerDocument.body}>
+        <div
+          ref={(element) => {
+            popover = element;
+          }}
+          class="chat-confirm-popover"
+          role="dialog"
+          aria-modal="true"
+          aria-label={confirmText}
+          onClick={(event) => event.stopPropagation()}
+          onKeyDown={containKeyboardFocus}
+        >
+          <p class="chat-confirm-popover__text">{confirmText}</p>
+          <label class="chat-confirm-popover__remember">
+            <input
+              ref={(element) => {
+                check = element;
+              }}
+              type="checkbox"
+              class="chat-confirm-popover__check"
+            />
+            <span>{t("chat.messages.dontAskAgain")}</span>
+          </label>
+          <div class="chat-confirm-popover__actions">
+            <button
+              ref={(element) => {
+                cancel = element;
+              }}
+              class="chat-confirm-popover__cancel"
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                dismissPopover({ restoreFocus: true });
+              }}
+            >
+              {t("common.cancel")}
+            </button>
+            <button
+              ref={(element) => {
+                yes = element;
+              }}
+              class="chat-confirm-popover__yes"
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                if (check.checked) {
+                  try {
+                    getSafeLocalStorage()?.setItem(SKIP_REWIND_CONFIRM_PREFERENCE, "1");
+                  } catch {}
+                }
+                dismissPopover();
+                action();
+              }}
+            >
+              {confirmLabel}
+            </button>
+          </div>
+        </div>
+      </Portal>
+    ),
+    owner.ownerDocument.createDocumentFragment(),
   );
-  cancel.textContent = t("common.cancel");
-  // Virtual transcript rows use transforms for positioning, which makes fixed
-  // descendants relative to the row instead of the viewport. Portal the dialog
-  // so the viewport-clamped coordinates stay correct in web and native hosts.
-  owner.ownerDocument.body.appendChild(popover);
+  const releaseModalSurface = registerModalSurface(popover);
   confirmedActions.set(owner, { popover, dismiss: dismissPopover });
   placeConfirmedActionPopover(btn, popover);
 
   let dismissed = false;
   let ownerObserver: MutationObserver | null = null;
+  let stopOutsideClick: (() => void) | undefined;
   function dismissPopover(options?: ConfirmedActionDismissOptions) {
     if (dismissed) {
       return;
     }
     dismissed = true;
+    releaseModalSurface();
     ownerObserver?.disconnect();
-    document.removeEventListener("click", closeOnOutside, true);
-    document.removeEventListener("contextmenu", closeOnOutside, true);
-    window.removeEventListener("keydown", closeOnEscape, true);
+    stopOutsideClick?.();
+    stopContextMenu();
+    stopEscape();
     confirmedActions.delete(owner);
-    popover.remove();
+    disposePopover();
     if (options?.restoreFocus && btn.isConnected) {
       btn.focus({ preventScroll: true });
     }
@@ -209,21 +253,8 @@ export function openChatRewindConfirmation(btn: HTMLElement, action: () => void)
       to.focus();
     }
   }
-  cancel.addEventListener("click", () => dismissPopover({ restoreFocus: true }));
-  yes.addEventListener("click", () => {
-    if (check.checked) {
-      try {
-        getSafeLocalStorage()?.setItem(SKIP_REWIND_CONFIRM_PREFERENCE, "1");
-      } catch {}
-    }
-    dismissPopover();
-    action();
-  });
-  // Keep this portaled dialog's clicks from dismissing its owning context menu.
-  popover.addEventListener("click", (event) => event.stopPropagation());
-  popover.addEventListener("keydown", containKeyboardFocus);
-  document.addEventListener("contextmenu", closeOnOutside, true);
-  window.addEventListener("keydown", closeOnEscape, true);
+  const stopContextMenu = listen(document, "contextmenu", closeOnOutside, true);
+  const stopEscape = listen(window, "keydown", closeOnEscape, true);
   ownerObserver = new MutationObserver(() => {
     if (!owner.isConnected || !btn.isConnected) {
       dismissPopover();
@@ -234,7 +265,7 @@ export function openChatRewindConfirmation(btn: HTMLElement, action: () => void)
   requestAnimationFrame(() => {
     if (!dismissed && popover.isConnected) {
       placeConfirmedActionPopover(btn, popover);
-      document.addEventListener("click", closeOnOutside, true);
+      stopOutsideClick = listen(document, "click", closeOnOutside, true);
     }
   });
 }

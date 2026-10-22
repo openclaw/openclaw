@@ -22,7 +22,6 @@ import {
 import {
   prepareSqliteSessionParticipantProjection,
   projectSqliteSessionParticipants,
-  projectSqliteSessionParticipantsBatch,
 } from "./session-accessor.sqlite-participant-projection.js";
 import { parseSessionEntryJson as parseSessionEntryRow } from "./session-accessor.sqlite-status.js";
 import type { SessionEntryReadScope } from "./session-accessor.types.js";
@@ -58,15 +57,12 @@ export function parseReadableSessionEntryData(
     projection === "delivery"
       ? parseSqliteSessionEntryRecord(row)
       : parseSessionEntryRow(row, projection);
-  if (parsed) {
-    validateDeliveryCanonicalSessionEntry(row.session_key, parsed);
-  }
   if (row.retained_window_id !== undefined) {
     // The guard and decoded entry share one statement snapshot, including cold handles.
-    validateCanonicalSessionRowEntry(row, parsed, "read");
-    return parsed;
+    return validateCanonicalSessionRowEntry(row, parsed, "read") ?? null;
   }
   if (parsed) {
+    validateDeliveryCanonicalSessionEntry(row.session_key, parsed);
     if (projection === "delivery") {
       const { sessionId, updatedAt, delivery, groupId } = parsed;
       return { sessionId, updatedAt, delivery, groupId };
@@ -112,7 +108,14 @@ export function parseReadableSqliteSessionEntryRow(
   projection: SessionEntryProjection = "full",
 ): SessionEntry | null {
   const parsed = parseReadableSessionEntryData(database, row, projection);
-  return parsed ? projectSqliteSessionParticipants(database.db, row.session_key, parsed) : null;
+  return parsed
+    ? projectSqliteSessionParticipants(
+        database.db,
+        row.session_key,
+        parsed,
+        row.participant_identities_json,
+      )
+    : null;
 }
 
 /** Decode supplied rows in caller order while sharing their lazy participant acquisition. */
@@ -123,7 +126,7 @@ export function prepareSqliteSessionEntryRowDecoder(
   projectParticipants = true,
   onParticipantProjectionError?: (sessionKey: string) => void,
 ): (row: ReadableSessionEntryRow) => SessionEntry | null {
-  const project =
+  const project: ReturnType<typeof prepareSqliteSessionParticipantProjection> =
     projection === "delivery" || !projectParticipants
       ? (_key: string, entry: SessionEntry) => entry
       : prepareSqliteSessionParticipantProjection(
@@ -136,7 +139,7 @@ export function prepareSqliteSessionEntryRowDecoder(
       return null;
     }
     try {
-      return project(row.session_key, parsed);
+      return project(row.session_key, parsed, row.participant_identities_json);
     } catch (error) {
       if (!onParticipantProjectionError) {
         throw error;
@@ -145,30 +148,6 @@ export function prepareSqliteSessionEntryRowDecoder(
       return parsed;
     }
   };
-}
-
-/** Projects one selected row set without repeating participant reads for each entry. */
-function parseReadableSqliteSessionEntryRows(
-  database: Pick<OpenClawAgentDatabase, "db">,
-  rows: readonly ResolvedSessionEntryRow["row"][],
-  projection: SessionEntryProjection = "full",
-): SessionEntrySummary[] {
-  const parsedEntries = new Map<string, SessionEntry>();
-  for (const row of rows) {
-    const entry = parseReadableSessionEntryData(database, row, projection);
-    if (entry) {
-      parsedEntries.set(row.session_key, entry);
-    }
-  }
-  if (parsedEntries.size === 0) {
-    return [];
-  }
-  return [...projectSqliteSessionParticipantsBatch(database.db, parsedEntries)].map(
-    ([sessionKey, entry]) => ({
-      sessionKey,
-      entry,
-    }),
-  );
 }
 
 /** Reuse the caller's admitted connection without reopening its read scope. */
@@ -195,6 +174,22 @@ export function readSessionEntryRow(
   includeWindowFacts?: true,
 ): ResolvedSessionEntryRow | undefined {
   return scanSessionEntryRows(database, sessionKey, projection, true, includeWindowFacts)?.selected;
+}
+
+/** Select the same canonical row for ordinary accessors and admitted runtime targets. */
+export function readSessionEntrySelectionInDatabase(
+  database: OpenClawAgentDatabaseReader,
+  agentId: string,
+  sessionKey: string,
+  options: {
+    keyFormat?: "agent-qualified";
+    allowCanonicalMove?: boolean;
+    projection?: SessionEntryProjection;
+  } = {},
+) {
+  return options.keyFormat === "agent-qualified"
+    ? readQualifiedSessionEntryRow(database, agentId, sessionKey, options)
+    : readSessionEntryRow(database, sessionKey, options.projection);
 }
 
 /** Identity preparation retains normal alias validation without loading participant display data. */
@@ -305,12 +300,12 @@ export function readSessionChildEntriesInDatabase(
       .where("session_key", "in", childKeys)
       .where("session_key", "not in", parents)
       .orderBy("session_key", "asc"),
-  ).rows;
-  return parseReadableSqliteSessionEntryRows(
-    database,
-    childRows.filter((row) => !isInternalSessionEffectsKey(row.session_key)),
-    projection,
-  );
+  ).rows.filter((row) => !isInternalSessionEffectsKey(row.session_key));
+  const decode = prepareSqliteSessionEntryRowDecoder(database, childRows, projection);
+  return childRows.flatMap((row) => {
+    const entry = decode(row);
+    return entry ? [{ sessionKey: row.session_key, entry }] : [];
+  });
 }
 
 /** Final generation guards reuse an admitted native handle without freshness or schema queries. */
@@ -362,16 +357,15 @@ export function readExactSessionEntryRow(
     );
   }
   return runSqliteReadOperationSync(database.db, () => {
-    const queries = getExactSessionEntryQueries(database.db);
-    const row = includeWindowFacts
-      ? readSelectedSessionEntryRows(database, sessionKey, projection, validation, {
-          includeWindowFacts,
-          includeBoardPresence: true,
-          includeMembership: true,
-        })[0]
-      : validation === "canonical"
-        ? queries.canonical(sessionKey, projection)
-        : queries.row(sessionKey, projection);
+    const row = readSelectedSessionEntryRows(
+      database,
+      sessionKey,
+      projection,
+      validation,
+      includeWindowFacts
+        ? { includeWindowFacts, includeBoardPresence: true, includeMembership: true }
+        : undefined,
+    )[0];
     if (!row) {
       return undefined;
     }
@@ -514,21 +508,16 @@ export function readSessionEntryTargetRow(
 ): { entry: SessionEntry | null; row: ResolvedSessionEntryRow["row"] } | undefined {
   return runSqliteReadOperationSync(database.db, () => {
     assertCanonicalSqliteSessionKeysCurrent(database);
-    const queries = getExactSessionEntryQueries(database.db);
     const rows = target.storeKeys.flatMap((key) => {
-      const row = options.includeWindowFacts
-        ? readSelectedSessionEntryRows(
-            database,
-            key.trim(),
-            options.projection ?? "full",
-            undefined,
-            {
-              includeWindowFacts: true,
-              includeMembership: true,
-              includeBoardPresence: true,
-            },
-          )[0]
-        : queries.row(key.trim(), options.projection);
+      const row = readSelectedSessionEntryRows(
+        database,
+        key.trim(),
+        options.projection ?? "full",
+        undefined,
+        options.includeWindowFacts
+          ? { includeWindowFacts: true, includeMembership: true, includeBoardPresence: true }
+          : undefined,
+      )[0];
       if (!row) {
         return [];
       }

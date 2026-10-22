@@ -1,3 +1,4 @@
+import { listen } from "../lib/reactive/listener.ts";
 import { linkReaderHovercardBootstrap as bootstrap } from "./link-reader-hovercard-registration.ts";
 import {
   prefetchLinkReader,
@@ -19,6 +20,8 @@ export class LinkReaderPrefetchOwner {
   constructor(private readonly connected: () => boolean) {}
   private root: HTMLElement | undefined;
   private provider: Element | null = null;
+  private stopProvider?: () => void;
+  private stopVisibility?: () => void;
   private readonly handleCapabilities = () => {
     this.release();
     this.attempted.clear();
@@ -68,13 +71,12 @@ export class LinkReaderPrefetchOwner {
     this.root = root;
     const provider = this.root?.closest(LINK_READER_HOVERCARD_PROVIDER_TAG) ?? null;
     if (provider !== this.provider) {
-      this.provider?.removeEventListener(
-        "link-reader-capabilities-changed",
-        this.handleCapabilities,
-      );
+      this.stopProvider?.();
+      this.stopProvider = undefined;
       this.provider = provider;
-      if (this.connected()) {
-        this.provider?.addEventListener(
+      if (this.connected() && provider) {
+        this.stopProvider = listen(
+          provider,
           "link-reader-capabilities-changed",
           this.handleCapabilities,
         );
@@ -83,13 +85,15 @@ export class LinkReaderPrefetchOwner {
       this.attempted.clear();
     }
     this.active = connected && presented;
-    document.addEventListener("visibilitychange", this.handleVisibilityChange);
+    this.stopVisibility ??= listen(document, "visibilitychange", this.handleVisibilityChange);
     this.handleVisibilityChange();
   }
 
   disconnect(): void {
-    this.provider?.removeEventListener("link-reader-capabilities-changed", this.handleCapabilities);
-    document.removeEventListener("visibilitychange", this.handleVisibilityChange);
+    this.stopProvider?.();
+    this.stopProvider = undefined;
+    this.stopVisibility?.();
+    this.stopVisibility = undefined;
     this.release();
   }
 

@@ -26,112 +26,112 @@ vi.mock("../state/user-profile-list.js", async (importOriginal) => ({
 
 afterEach(() => vi.restoreAllMocks());
 
+const adaId = "profile-ada";
+const bobId = "profile-bob";
+const mergedAdaId = "profile-merged-ada";
+const now = Date.UTC(2026, 8, 27);
 const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
 const storePath = "/tmp/openclaw-session-inventory-filters";
+const activityOpts = { includePeople: true, sortBy: "activity" as const, limit: 1 };
 
-function entry(overrides: Partial<SessionEntry> = {}): SessionEntry {
-  return { sessionId: "inventory-session", updatedAt: 1, ...overrides };
+const baseEntry: SessionEntry = { sessionId: "inventory-session", updatedAt: 1 };
+const entry = (overrides: Partial<SessionEntry> = {}) => ({ ...baseEntry, ...overrides });
+const actor = (id: string) => ({ type: "human" as const, source: "profile" as const, id });
+type Actor = NonNullable<SessionEntry["createdActor"]>;
+const owned = (createdActor: Actor, owner: Actor) => ({ createdActor, owner: { actor: owner } });
+const people = (...ids: string[]) =>
+  ids.map((id) => ({ identity: { type: "profile" as const, id } }));
+const sessionKey = (name: string) => `agent:main:${name}`;
+function rows(fieldsByName: Record<string, Partial<SessionEntry>>) {
+  return Object.fromEntries(
+    Object.entries(fieldsByName).map(([name, fields], index, entries) => [
+      sessionKey(name),
+      entry({ sessionId: name, updatedAt: entries.length - index, ...fields }),
+    ]),
+  );
+}
+function list(store: Record<string, SessionEntry>, opts: SessionsListParams = {}, config = cfg) {
+  return listSessionFixture({ cfg: config, storePath, store, opts });
+}
+function projectionFixture(
+  params: Omit<Parameters<typeof createSessionRowProjectionFixture>[0], "cfg" | "storePath">,
+) {
+  const projection = createSessionRowProjectionFixture({ cfg, storePath, ...params });
+  onTestFinished(() => projection.dispose());
+  return projection;
+}
+function filteredKeys(params: Parameters<typeof filterSessionEntries>[0]) {
+  return runSynchronousWork(filterSessionEntries(params)).entries.map(([key]) => key);
 }
 
-it.each([true, false])(
-  "keeps full-roster facets and owner rows while paging ordered=%s",
-  (ordered) => {
-    const store = Object.fromEntries(
+it.each([true, false])("pages owner-first rows with full-roster facets (ordered=%s)", (ordered) => {
+  const store = rows(
+    Object.fromEntries(
       [1, 4, 3, 5, 2].map((updatedAt) => [
-        `agent:main:page-${updatedAt}`,
-        entry({
-          sessionId: `page-${updatedAt}`,
+        `page-${updatedAt}`,
+        {
           updatedAt,
-          createdActor: {
-            type: "human",
-            source: "profile",
-            id: updatedAt === 4 || updatedAt === 2 ? "profile-ada" : "profile-bob",
-          },
-        }),
+          createdActor: actor(updatedAt === 4 || updatedAt === 2 ? adaId : bobId),
+        },
       ]),
+    ),
+  );
+  const projection = projectionFixture({ store });
+  for (const [offset, keys, ownerCount, nextOffset] of [
+    [0, [4, 2, 5], 2, 2],
+    [2, [3, 2], 0, 4],
+    [4, [1], 0, null],
+    [7, [], 0, null],
+  ] as const) {
+    const opts = { limit: 2, offset, includePeople: true };
+    const prepared = prepareSessionRowSelection(projection, opts, { ordered });
+    const selected = runSynchronousWork(
+      selectSessionEntries({ ...prepared, entriesSorted: ordered, ownerFirstActorId: adaId }),
     );
-    const projection = createSessionRowProjectionFixture({ cfg, storePath, store });
-    onTestFinished(() => projection.dispose());
-    for (const [offset, keys, ownerCount, nextOffset] of [
-      [0, [4, 2, 5], 2, 2],
-      [2, [3, 2], 0, 4],
-      [4, [1], 0, null],
-      [7, [], 0, null],
-    ] as const) {
-      const selected = runSynchronousWork(
-        selectSessionEntries({
-          ...prepareSessionRowSelection(
-            projection,
-            { limit: 2, offset, includePeople: true },
-            { ordered },
-          ),
-          entriesSorted: ordered,
-          ownerFirstActorId: "profile-ada",
-        }),
-      );
-      expect(selected.entries.map(([key]) => key)).toEqual(
-        keys.map((id) => `agent:main:page-${id}`),
-      );
-      expect(selected).toMatchObject({
-        totalCount: 5,
-        peopleSessionCount: 5,
-        ownerCount,
-        nextOffset,
-        hasMore: nextOffset !== null,
-      });
-      expect(selected.ownerFacet.map(({ id }) => id)).toEqual(["profile-ada", "profile-bob"]);
-      expect(
-        selected.people?.map(({ identity, sessionCount }) => [identity.id, sessionCount]),
-      ).toEqual([
-        ["profile-bob", 3],
-        ["profile-ada", 2],
-      ]);
-    }
-  },
-);
+    expect({
+      ...selected,
+      entries: selected.entries.map(([key]) => key),
+      owners: selected.ownerFacet.map(({ id }) => id),
+      people: selected.people?.map(({ identity, sessionCount }) => [identity.id, sessionCount]),
+    }).toMatchObject({
+      entries: keys.map((id) => `agent:main:page-${id}`),
+      totalCount: 5,
+      peopleSessionCount: 5,
+      ownerCount,
+      nextOffset,
+      hasMore: nextOffset !== null,
+      owners: [adaId, bobId],
+      people: [
+        [bobId, 3],
+        [adaId, 2],
+      ],
+    });
+  }
+});
 
 it("reports the age boundary of people outside the selected profile and returned page", async () => {
-  const now = Date.UTC(2026, 8, 27);
   const clock = vi.spyOn(Date, "now").mockReturnValue(now);
-  const store = {
-    "agent:main:selected": entry({
-      lastActivityAt: now,
-      createdActor: { type: "human", source: "profile", id: "profile-ada" },
-    }),
-    "agent:main:other-person": entry({
-      lastActivityAt: now - 3_600_000 + 100,
-      createdActor: { type: "human", source: "profile", id: "profile-bob" },
-    }),
-    "agent:main:excluded-dock": entry({
-      lastActivityAt: now - 3_600_000 + 10,
-      createdSurface: "plugin-dock",
-    }),
-    "agent:main:already-expired": entry({ lastActivityAt: now - 3_600_001 }),
-  };
-  const opts: SessionsListParams = {
-    activeMinutes: 60,
-    sortBy: "activity",
-    excludeDock: true,
-    includePeople: true,
-    limit: 1,
-  };
-  const read = (query = opts) => listSessionFixture({ cfg, storePath, store, opts: query });
+  const store = rows({
+    selected: entry({ lastActivityAt: now, createdActor: actor(adaId) }),
+    "other-person": entry({ lastActivityAt: now - 3_600_000 + 100, createdActor: actor(bobId) }),
+    "excluded-dock": entry({ lastActivityAt: now - 3_600_000 + 10, createdSurface: "plugin-dock" }),
+    "already-expired": entry({ lastActivityAt: now - 3_600_001 }),
+  });
+  const opts = { ...activityOpts, activeMinutes: 60, excludeDock: true };
+  const read = (query: SessionsListParams = opts) => list(store, query);
   const first = await read();
   expect(first.sessions.map((row) => row.key)).toEqual(["agent:main:selected"]);
   expect(first.activityExpiresAt).toBe(now + 100);
-  const selected = { ...opts, involvingProfileId: "profile-ada" };
+  const selected = { ...opts, involvingProfileId: adaId };
   const person = await read(selected);
   expect(person.activityExpiresAt).toBe(now + 100);
-  expect(person.people?.map(({ identity }) => identity.id).toSorted()).toEqual([
-    "profile-ada",
-    "profile-bob",
-  ]);
+  expect(person.people?.map(({ identity }) => identity.id).toSorted()).toEqual([adaId, bobId]);
   clock.mockReturnValue(now + 100);
   expect((await read(selected)).activityExpiresAt).toBe(now + 100);
   clock.mockReturnValue(now + 101);
   const expired = await read(selected);
   expect(expired.activityExpiresAt).toBe(now + 3_600_000);
-  expect(expired.people?.map(({ identity }) => identity.id)).toEqual(["profile-ada"]);
+  expect(expired.people?.map(({ identity }) => identity.id)).toEqual([adaId]);
   clock.mockReturnValue(now + 3_600_001);
   expect((await read(selected)).activityExpiresAt).toBeUndefined();
   expect((await read({ ...opts, activeMinutes: undefined })).activityExpiresAt).toBeUndefined();
@@ -142,67 +142,46 @@ it("reuses involvement facts until session replacement or profile publication", 
   const rowContext = { ...buildSessionListRowMetadataContext({ now: 1 }), identityProjection };
   const profiles = rowContext.userProfileIdentityById;
   const key = "agent:main:involved";
-  const state = { profiles: { "profile-merged-ada": { hidden: false, updatedAt: 1 } } };
+  const state = { profiles: { [mergedAdaId]: { hidden: false, updatedAt: 1 } } };
   const readInvolvement = vi.fn(() => state);
   const original = entry();
   Object.defineProperty(original, "profileInvolvement", { get: readInvolvement, enumerable: true });
-  const projection = createSessionRowProjectionFixture({
-    cfg,
-    storePath,
-    store: { [key]: original },
-    rowContext,
-  });
-  onTestFinished(() => projection.dispose());
-  const select = (id = "profile-ada") =>
-    runSynchronousWork(
-      filterSessionEntries({
-        ...prepareSessionRowSelection(projection, {}, { ordered: true }),
-        involvingActorId: id,
-      }),
-    ).entries.map(([sessionKey]) => sessionKey);
+  const projection = projectionFixture({ store: { [key]: original }, rowContext });
+  const select = (id = adaId) =>
+    filteredKeys({
+      ...prepareSessionRowSelection(projection, {}, { ordered: true }),
+      involvingActorId: id,
+    });
   expect(select()).toEqual([key]);
   readInvolvement.mockClear();
   for (let i = 0; i < 3; i++) {
     expect(select()).toEqual([key]);
-    expect(select("profile-bob")).toEqual([]);
+    expect(select(bobId)).toEqual([]);
   }
   expect(readInvolvement).not.toHaveBeenCalled();
 
-  // Profile publications can move an alias without replacing session metadata.
-  profiles.set("profile-merged-ada", undefined);
+  profiles.set(mergedAdaId, undefined);
   identityProjection.invalidate();
   expect(select()).toEqual([]);
-  expect(select("profile-merged-ada")).toEqual([key]);
+  expect(select(mergedAdaId)).toEqual([key]);
   projection.setEntry(key, {
     ...entry(),
     profileInvolvement: {
       key: "inventory-session",
-      profiles: {
-        "profile-merged-ada": { hidden: true, updatedAt: 2 },
-      },
+      profiles: { [mergedAdaId]: { hidden: true, updatedAt: 2 } },
     },
   });
-  expect(select("profile-merged-ada")).toEqual([]);
+  expect(select(mergedAdaId)).toEqual([]);
 });
 
 it("expires cached child owners without a session or registry publication", () => {
-  const now = Date.UTC(2026, 8, 27);
   const key = "agent:main:subagent:child";
   const parent = "agent:main:dashboard:parent";
-  const projection = createSessionRowProjectionFixture({
-    cfg,
-    storePath,
-    store: {
-      [key]: entry({ updatedAt: now, spawnedBy: parent }),
-    },
+  const projection = projectionFixture({
+    store: { [key]: entry({ updatedAt: now, spawnedBy: parent }) },
   });
-  onTestFinished(() => projection.dispose());
   const select = (clock: number) =>
-    runSynchronousWork(
-      filterSessionEntries({
-        ...prepareSessionRowSelection(projection, { spawnedBy: parent }, { now: clock }),
-      }),
-    ).entries.map(([sessionKey]) => sessionKey);
+    filteredKeys(prepareSessionRowSelection(projection, { spawnedBy: parent }, { now: clock }));
   expect(select(now)).toEqual([key]);
   expect(select(now + 3_600_000)).toEqual([key]);
   expect(select(now + 3_600_001)).toEqual([]);
@@ -212,82 +191,61 @@ it("expires cached child owners without a session or registry publication", () =
 it.each([
   [0, 0],
   [0, 2, 1],
-])(
-  "rejects non-ascending activity boundaries before reading session rows: %j",
-  async (...activityPulseBoundaries) => {
-    const respond = vi.fn();
-    await sessionReadHandlers["sessions.list"]!({
-      req: { type: "req", id: "pulse-boundaries", method: "sessions.list" },
-      params: { activityPulseBoundaries },
-      context: requestContext(cfg),
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
-    });
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: expect.stringContaining("activityPulseBoundaries: must be strictly ascending"),
-      }),
-    );
-  },
-);
+])("rejects non-ascending activity boundaries: %j", async (...activityPulseBoundaries) => {
+  const respond = vi.fn();
+  await sessionReadHandlers["sessions.list"]!({
+    req: { type: "req", id: "pulse-boundaries", method: "sessions.list" },
+    params: { activityPulseBoundaries },
+    context: requestContext(cfg),
+    client: null,
+    isWebchatConnect: () => false,
+    respond,
+  });
+  expect(respond).toHaveBeenCalledWith(
+    false,
+    undefined,
+    expect.objectContaining({
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("activityPulseBoundaries: must be strictly ascending"),
+    }),
+  );
+});
 
 it("aggregates the selected time window after person filtering and before pagination", async () => {
-  const since = Date.UTC(2026, 8, 27);
-  const now = since + 12 * 3_600_000;
+  const since = now;
+  const activeNow = since + 12 * 3_600_000;
   const activeMinutes = 7 * 24 * 60;
-  vi.spyOn(Date, "now").mockReturnValue(now);
-  const person = (id: string) => ({ identity: { type: "profile" as const, id } });
-  const result = await listSessionFixture({
-    cfg,
-    storePath,
-    store: {
-      "agent:main:midnight": entry({
-        lastActivityAt: since,
-        createdAt: now - activeMinutes * 60_000 - 1,
-        participants: [person("profile-ada")],
+  vi.spyOn(Date, "now").mockReturnValue(activeNow);
+  const activity = (
+    lastActivityAt: number,
+    createdAt: number | undefined,
+    ids: string[],
+    overrides: Partial<SessionEntry> = {},
+  ) => entry({ lastActivityAt, createdAt, participants: people(...ids), ...overrides });
+  const ada = [adaId];
+  const cutoff = activeNow - activeMinutes * 60_000;
+  const hour = 3_600_000;
+  const result = await list(
+    rows({
+      midnight: activity(since, cutoff - 1, ada),
+      morning: activity(since + hour, since, [mergedAdaId, bobId], {
+        lastInteractionAt: since + 2 * hour,
       }),
-      "agent:main:morning": entry({
-        lastActivityAt: since + 3_600_000,
-        lastInteractionAt: since + 2 * 3_600_000,
-        createdAt: since,
-        participants: [person("profile-merged-ada"), person("profile-bob")],
+      "clock-skew": activity(since + 25 * hour, since + 24 * hour, ada),
+      "three-days-ago": activity(since - 3 * 86_400_000, cutoff, [...ada, "profile-earlier"], {
+        updatedAt: since + 30 * hour,
       }),
-      "agent:main:clock-skew": entry({
-        lastActivityAt: since + 25 * 3_600_000,
-        createdAt: since + 24 * 3_600_000,
-        participants: [person("profile-ada")],
-      }),
-      "agent:main:three-days-ago": entry({
-        lastActivityAt: since - 3 * 86_400_000,
-        updatedAt: since + 30 * 3_600_000,
-        createdAt: now - activeMinutes * 60_000,
-        participants: [person("profile-ada"), person("profile-earlier")],
-      }),
-      "agent:main:outside-window": entry({
-        lastActivityAt: now - activeMinutes * 60_000 - 1,
-        participants: [person("profile-ada"), person("profile-excluded")],
-      }),
-      "agent:main:other-person": entry({
-        lastActivityAt: since + 5 * 3_600_000,
-        createdAt: since,
-        participants: [person("profile-carol")],
-      }),
-    },
-    opts: {
+      "outside-window": activity(cutoff - 1, undefined, [...ada, "profile-excluded"]),
+      "other-person": activity(since + 5 * hour, since, ["profile-carol"]),
+    }),
+    {
+      ...activityOpts,
       activityPulseBoundaries: Array.from({ length: 25 }, (_, index) => since + index * 3_600_000),
       activeMinutes,
-      includePeople: true,
-      involvingProfileId: "profile-ada",
-      sortBy: "activity",
-      limit: 1,
+      involvingProfileId: adaId,
     },
-  });
-  expect(result.sessions).toHaveLength(1);
-  expect(result.totalCount).toBe(4);
+  );
+  expect(result).toMatchObject({ sessions: [expect.any(Object)], totalCount: 4 });
   expect(result.activityPulse).toEqual({
     since,
     until: since + 24 * 3_600_000,
@@ -301,45 +259,29 @@ it("aggregates the selected time window after person filtering and before pagina
 
 it("keeps system provenance and named conversations distinct in projected lists", async () => {
   const cases: [key: string, fields: Partial<SessionEntry>, visible: boolean][] = [
-    ["agent:main:system", { createdActor: { type: "system" }, label: "Named probe" }, false],
+    ["system", { createdActor: { type: "system" }, label: "Named probe" }, false],
+    ["human", { createdVia: "run", createdActor: { type: "human", source: "unknown" } }, true],
+    ["label", { createdVia: "run", label: "Operator label" }, true],
+    ["display-name", { createdVia: "internal", displayName: "Operator title" }, true],
+    ["subject", { createdVia: "run", subject: "Conversation subject" }, true],
+    ["whitespace", { createdVia: "internal", label: " ", displayName: "\t", subject: "\n" }, false],
+    ["legacy", {}, true],
+    ["main", {}, true],
+    ["main:heartbeat", { heartbeatIsolatedBaseSessionKey: sessionKey("main") }, false],
     [
-      "agent:main:human",
-      { createdVia: "run", createdActor: { type: "human", source: "unknown" } },
+      "ops:heartbeat",
+      { heartbeatIsolatedBaseSessionKey: sessionKey("ops"), label: "Named lane" },
       true,
     ],
-    ["agent:main:label", { createdVia: "run", label: "Operator label" }, true],
-    ["agent:main:display-name", { createdVia: "internal", displayName: "Operator title" }, true],
-    ["agent:main:subject", { createdVia: "run", subject: "Conversation subject" }, true],
-    [
-      "agent:main:whitespace",
-      { createdVia: "internal", label: " ", displayName: "\t", subject: "\n" },
-      false,
-    ],
-    ["agent:main:legacy", {}, true],
-    ["agent:main:main", {}, true],
-    ["agent:main:main:heartbeat", { heartbeatIsolatedBaseSessionKey: "agent:main:main" }, false],
-    [
-      "agent:main:ops:heartbeat",
-      { heartbeatIsolatedBaseSessionKey: "agent:main:ops", label: "Named lane" },
-      true,
-    ],
-    ["agent:main:alerts:heartbeat", { label: "My heartbeat" }, true],
-    ["agent:main:cron:nightly", { createdVia: "internal", createdActor: { type: "system" } }, true],
+    ["alerts:heartbeat", { label: "My heartbeat" }, true],
+    ["cron:nightly", { createdVia: "internal", createdActor: { type: "system" } }, true],
   ];
-  const store = Object.fromEntries(
-    cases.map(([key, fields], index) => [
-      key,
-      entry({ sessionId: key, updatedAt: cases.length - index, ...fields }),
-    ]),
-  );
+  const store = rows(Object.fromEntries(cases.map(([name, fields]) => [name, fields])));
   for (const excludeSystem of [true, false, undefined]) {
-    const result = await listSessionFixture({
-      cfg,
-      storePath,
-      store,
-      opts: { excludeSystem },
-    });
-    const expected = cases.filter((row) => excludeSystem !== true || row[2]).map(([key]) => key);
+    const result = await list(store, { excludeSystem });
+    const expected = cases
+      .filter((row) => excludeSystem !== true || row[2])
+      .map(([name]) => sessionKey(name));
     expect(result.sessions.map((row) => row.key)).toEqual(expected);
     expect(result.totalCount).toBe(expected.length);
   }
@@ -355,64 +297,42 @@ it.each([
 ] satisfies { opts: SessionsListParams; matches: string[] }[])(
   "matches only persisted exact associations: $opts",
   async ({ opts, matches }) => {
-    const store: Record<string, SessionEntry> = {
-      "agent:main:selected": entry({
-        sessionId: "selected",
-        updatedAt: 4,
-        projectId: "project-one",
-        spawnedCwd: "/workspace/task",
-        spawnedWorkspaceDir: "/workspace",
-        category: "Review",
-      }),
-      "agent:main:workspace-root": entry({
-        sessionId: "workspace-root",
-        updatedAt: 3,
-        projectId: "project-one",
-        spawnedWorkspaceDir: "/workspace",
-        category: "Review",
-      }),
-      "agent:main:repository-only": entry({
-        sessionId: "repository-only",
-        updatedAt: 2,
-        repositoryWorkspaceId: "project-one",
-        category: "review",
-      }),
-      "agent:main:unassociated": entry({ sessionId: "unassociated" }),
+    const associated = {
+      projectId: "project-one",
+      spawnedWorkspaceDir: "/workspace",
+      category: "Review",
     };
-    const result = await listSessionFixture({
-      cfg: { agents: { entries: { main: { workspace: "/configured" } } } },
-      storePath,
-      store,
-      opts,
+    const store = rows({
+      selected: { ...associated, spawnedCwd: "/workspace/task" },
+      "workspace-root": associated,
+      "repository-only": { repositoryWorkspaceId: "project-one", category: "review" },
+      unassociated: {},
     });
-    expect(result.sessions.map((row) => row.sessionId)).toEqual(matches);
+    const result = await list(store, opts, {
+      agents: { entries: { main: { workspace: "/configured" } } },
+    });
+    const associations: Record<string, (string | undefined)[]> = {
+      selected: ["project-one", "/workspace/task"],
+      "workspace-root": ["project-one", "/workspace"],
+    };
+    expect(result.sessions.map((row) => [row.sessionId, row.projectId, row.workspaceDir])).toEqual(
+      matches.map((name) => [name, ...(associations[name] ?? [undefined, undefined])]),
+    );
     expect(result.totalCount).toBe(matches.length);
-    for (const row of result.sessions) {
-      if (row.sessionId === "selected") {
-        expect(row).toMatchObject({ projectId: "project-one", workspaceDir: "/workspace/task" });
-      } else if (row.sessionId === "workspace-root") {
-        expect(row).toMatchObject({ projectId: "project-one", workspaceDir: "/workspace" });
-      } else {
-        expect(row.projectId).toBeUndefined();
-        expect(row.workspaceDir).toBeUndefined();
-      }
-    }
   },
 );
 
 it.each([true, false])("filters canonical pin state before pagination: %s", async (pinned) => {
-  const result = await listSessionFixture({
-    cfg,
-    storePath,
-    store: {
-      "agent:main:subagent:stale-pin": entry({ updatedAt: 5, pinnedAt: 1 }),
-      "agent:main:child": entry({ updatedAt: 4, pinnedAt: 1, parentSessionKey: "agent:main:root" }),
-      "agent:main:spawned": entry({ updatedAt: 3, pinnedAt: 1, spawnedBy: "agent:main:root" }),
-      "agent:main:root": entry({ updatedAt: 2, pinnedAt: 1 }),
-      "agent:main:unpinned": entry(),
-    },
-    opts: { pinned, limit: 1 },
-  });
+  const result = await list(
+    rows({
+      "subagent:stale-pin": { pinnedAt: 1 },
+      child: { pinnedAt: 1, parentSessionKey: sessionKey("root") },
+      spawned: { pinnedAt: 1, spawnedBy: sessionKey("root") },
+      root: { pinnedAt: 1 },
+      unpinned: {},
+    }),
+    { pinned, limit: 1 },
+  );
   expect(result.sessions.map((row) => row.key)).toEqual([
     pinned ? "agent:main:root" : "agent:main:subagent:stale-pin",
   ]);
@@ -421,99 +341,45 @@ it.each([true, false])("filters canonical pin state before pagination: %s", asyn
 });
 
 it("keeps profile selectors, authenticated involvement, and their owner facets distinct", async () => {
-  const ada: SessionEntry["createdActor"] = { type: "human", source: "profile", id: "profile-ada" };
-  const bob: SessionEntry["createdActor"] = { type: "human", source: "profile", id: "profile-bob" };
-  const store: Record<string, SessionEntry> = {
-    "agent:main:agent-owner": entry({
-      updatedAt: 8,
-      createdActor: { type: "agent", id: "profile-ada" },
-      owner: { actor: { type: "agent", id: "profile-ada" } },
-      participants: [{ identity: { type: "profile", id: "profile-ada" } }],
-    }),
-    "agent:main:created-only": entry({ updatedAt: 7, createdActor: ada, owner: { actor: bob } }),
-    "agent:main:owned": entry({ updatedAt: 6, createdActor: bob, owner: { actor: ada } }),
-    "agent:main:default-owner": entry({ updatedAt: 5, createdActor: ada }),
-    "agent:main:participating": entry({
-      updatedAt: 4,
+  const ada = actor(adaId);
+  const bob = actor(bobId);
+  const agent = { type: "agent" as const, id: adaId };
+  const store = rows({
+    "agent-owner": { ...owned(agent, agent), participants: people(adaId) },
+    "created-only": owned(ada, bob),
+    owned: owned(bob, ada),
+    "default-owner": { createdActor: ada },
+    participating: {
       createdActor: bob,
-      participants: [
-        ...Array.from({ length: 5 }, (_, index) => ({
-          identity: { type: "profile" as const, id: `profile-other-${index}` },
-        })),
-        { identity: { type: "profile", id: "profile-ada" } },
-      ],
-    }),
-    "agent:main:legacy-collision": entry({
-      updatedAt: 3,
+      participants: people(...Array.from({ length: 5 }, (_, i) => `profile-other-${i}`), adaId),
+    },
+    "legacy-collision": {
       createdActor: bob,
-      participants: [
-        { identity: { type: "legacy", id: "profile-ada", actorType: "human", source: null } },
-      ],
-    }),
-    "agent:main:agent-collision": entry({
-      updatedAt: 2,
-      createdActor: bob,
-      participants: [{ identity: { type: "agent", id: "profile-ada" } }],
-    }),
-    "agent:main:unrelated": entry({
-      createdActor: { type: "human", source: "profile", id: "profile-carol" },
-    }),
-  };
-  const query = { cfg: { agents: { entries: { main: {}, "profile-ada": {} } } }, storePath, store };
+      participants: [{ identity: { type: "legacy", id: adaId, actorType: "human", source: null } }],
+    },
+    "agent-collision": { createdActor: bob, participants: [{ identity: agent }] },
+    unrelated: { createdActor: actor("profile-carol") },
+  });
+  const query = { cfg: { agents: { entries: { main: {}, [adaId]: {} } } }, storePath, store };
   const all = await listSessionFixture({ ...query, opts: {} });
   const allOwners = ["agent:profile-ada", "human:profile-bob", "human:profile-carol"];
   const involvingOwners = allOwners.slice(0, 2);
   const involvedKeys = ["agent-owner", "owned", "default-owner", "participating"];
-  const involving: SessionsListParams = {
-    profileRelation: { profileId: "profile-ada", relationship: "involving" },
-  };
-  const cases: {
-    name: string;
-    opts: SessionsListParams;
-    involvingActorId?: string;
-    keys: string[];
-    owners: string[];
-  }[] = [
-    {
-      name: "owned",
-      opts: { profileRelation: { profileId: "profile-ada", relationship: "owned" } },
-      keys: ["owned", "default-owner"],
-      owners: ["human:profile-ada"],
-    },
-    {
-      name: "created",
-      opts: { profileRelation: { profileId: "profile-ada", relationship: "created" } },
-      keys: ["created-only", "default-owner"],
-      owners: ["human:profile-ada", "human:profile-bob"],
-    },
-    {
-      name: "involving",
-      opts: { ...involving, includePeople: true },
-      keys: involvedKeys,
-      owners: involvingOwners,
-    },
-    {
-      name: "associated",
-      opts: { involvingProfileId: "profile-ada" },
-      keys: ["agent-owner", "created-only", "owned", "default-owner", "participating"],
-      owners: allOwners,
-    },
-    {
-      name: "involvingMe",
-      opts: {},
-      involvingActorId: "profile-ada",
-      keys: involvedKeys,
-      owners: allOwners,
-    },
-    {
-      name: "authenticated intersection",
-      opts: involving,
-      involvingActorId: "profile-bob",
-      keys: ["participating"],
-      owners: involvingOwners,
-    },
+  const associatedKeys = ["agent-owner", "created-only", "owned", "default-owner", "participating"];
+  const createdOwners = ["human:profile-ada", "human:profile-bob"];
+  const relation = (relationship: "owned" | "created" | "involving"): SessionsListParams => ({
+    profileRelation: { profileId: adaId, relationship },
+  });
+  const involving = relation("involving");
+  const cases: [string, SessionsListParams, string[], string[], string?][] = [
+    ["owned", relation("owned"), ["owned", "default-owner"], ["human:profile-ada"]],
+    ["created", relation("created"), ["created-only", "default-owner"], createdOwners],
+    ["involving", { ...involving, includePeople: true }, involvedKeys, involvingOwners],
+    ["associated", { involvingProfileId: adaId }, associatedKeys, allOwners],
+    ["involvingMe", {}, involvedKeys, allOwners, adaId],
+    ["authenticated intersection", involving, ["participating"], involvingOwners, bobId],
   ];
-  for (const { name, opts, involvingActorId, keys, owners } of cases) {
+  for (const [name, opts, keys, owners, involvingActorId] of cases) {
     const result = await listSessionFixture({ ...query, opts, involvingActorId });
     expect(
       result.sessions.map((row) => row.key),
@@ -529,11 +395,10 @@ it("keeps profile selectors, authenticated involvement, and their owner facets d
       expect(result.peopleSessionCount).toBe(4);
       const participating = result.sessions.find((row) => row.key === "agent:main:participating");
       expect(
-        participating?.participants?.some((person) => person.identity.id === "profile-ada"),
-      ).toBe(false);
-      expect(
-        participating?.expandedParticipants?.some((person) => person.identity.id === "profile-ada"),
-      ).toBe(true);
+        [participating?.participants, participating?.expandedParticipants].map((members) =>
+          members?.some(({ identity }) => identity.id === adaId),
+        ),
+      ).toEqual([false, true]);
     }
   }
 });

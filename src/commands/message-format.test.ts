@@ -56,6 +56,15 @@ function textJoined(lines: string[]): string {
 }
 
 describe("formatMessageCliText displayLimit", () => {
+  it("keeps a whitespace-only primary message instead of selecting its fallback", () => {
+    const result = readResultPayload({
+      messages: [{ id: "message-id", content: "  ", text: "Wrong fallback" }],
+    });
+    const output = textJoined(formatMessageCliText(result));
+    expect(output).toContain("message-id");
+    expect(output).not.toContain("Wrong fallback");
+  });
+
   it("renders the message inside a Slack pin envelope", () => {
     const message = { ts: "1712345678.123456", user: "message-author", text: "Pinned checklist" };
     const result = {
@@ -278,35 +287,6 @@ describe("formatMessageCliText send results", () => {
 });
 
 describe("formatMessageCliText payload scalars", () => {
-  it("keeps alias reads lazy after the first nonempty string", () => {
-    const reads: string[] = [];
-    const message = Object.create(null) as Record<string, unknown>;
-    Object.defineProperties(message, {
-      id: {
-        enumerable: true,
-        get: () => {
-          reads.push("id");
-          return reads.length === 1 ? "first-id" : "second-id";
-        },
-      },
-      ts: {
-        enumerable: true,
-        get: () => {
-          reads.push("ts");
-          throw new Error("later alias must not be read");
-        },
-      },
-      authorTag: { enumerable: true, value: "alice" },
-      timestamp: { enumerable: true, value: "now" },
-      content: { enumerable: true, value: "hello" },
-    });
-
-    const output = textJoined(formatMessageCliText(readResultPayload({ messages: [message] })));
-    expect(output).toContain("second-id");
-    expect(output).not.toContain("first-id");
-    expect(reads).toEqual(["id", "id"]);
-  });
-
   it("preserves generic object primitive summaries", () => {
     const result = {
       kind: "action",

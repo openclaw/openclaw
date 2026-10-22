@@ -2,9 +2,10 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, it } from "vitest";
-import { createContextEngineLogicalTurnLease } from "../agents/harness/context-engine-logical-turn.js";
+import { afterEach, expect, it, vi } from "vitest";
+import { createContextEngineLogicalTurnLease as createLease } from "../agents/harness/context-engine-logical-turn.js";
 import { acquireAgentRuntimePluginRegistry } from "../agents/runtime-plugins.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { getSpeechProvider } from "../plugin-sdk/speech.js";
@@ -20,7 +21,7 @@ import { retireInspectionInstances } from "../plugins/registry-inspection.test-s
 import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
 import { createPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeRegistryScope as withRegistry } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -28,7 +29,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { LegacyContextEngine } from "./legacy.js";
 import {
   adoptRuntimeContextEngineRegistrations,
-  registerContextEngineInRegistry,
+  registerContextEngineInRegistry as registerEngine,
   type ContextEngineFactory,
 } from "./registry.js";
 
@@ -71,24 +72,20 @@ it.each(["retired-donor", "raw-donor"] as const)(
           engineDisposals: 0,
         };
         Object.defineProperty(globalThis, key, { configurable: true, value: bridge });
-        fs.writeFileSync(
-          path.join(pluginRoot, "package.json"),
-          JSON.stringify({
-            name: id,
-            version: "1.0.0",
-            type: "commonjs",
-            openclaw: { extensions: ["./index.cjs"] },
-          }),
-        );
-        fs.writeFileSync(
-          path.join(pluginRoot, "openclaw.plugin.json"),
-          JSON.stringify({
-            id,
-            kind: "context-engine",
-            contracts: { speechProviders: [providerId] },
-            configSchema: { type: "object" },
-          }),
-        );
+        const writeJson = (file: string, value: unknown) =>
+          fs.writeFileSync(path.join(pluginRoot, file), JSON.stringify(value));
+        writeJson("package.json", {
+          name: id,
+          version: "1.0.0",
+          type: "commonjs",
+          openclaw: { extensions: ["./index.cjs"] },
+        });
+        writeJson("openclaw.plugin.json", {
+          id,
+          kind: "context-engine",
+          contracts: { speechProviders: [providerId] },
+          configSchema: { type: "object" },
+        });
         fs.writeFileSync(
           entry,
           `
@@ -164,18 +161,20 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         if (!isRecord(plugin) || typeof plugin.register !== "function") {
           throw new Error("Invalid native plugin fixture");
         }
-        const register = plugin.register;
+        const registerPlugin = plugin.register;
+        const register = () => registerPlugin(api);
         if (donorSource) {
-          donorSource.runRegistration(id, () => register(api));
+          donorSource.runRegistration(id, register);
         } else {
-          register(api);
+          register();
         }
         setActivePluginRegistry(donor.registry);
         const donorCurrent = capturePluginLifecycleAuthority(donor.registry);
         const sdkHost = new LegacyPluginSdkResourceHost();
         let acquired: Awaited<ReturnType<typeof acquireAgentRuntimePluginRegistry>> | undefined;
-        let lease: Awaited<ReturnType<typeof createContextEngineLogicalTurnLease>> | undefined;
+        let lease: Awaited<ReturnType<typeof createLease>> | undefined;
         let disposal: Promise<void> | undefined;
+        using warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
         try {
           await sdkHost.run(async () => {
             acquired = await acquireAgentRuntimePluginRegistry({
@@ -187,58 +186,50 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
               throw new Error("Fixture did not acquire a primary inspection");
             }
             const copied = acquired.registry;
-            expect(copied === acquired.primaryRegistry).toBe(false);
-            expect(copied.contextEngines.get(id) === donor.registry.contextEngines.get(id)).toBe(
-              true,
-            );
-            expect(connections.length).toBe(2);
-            expect(connections[0]?.mode).toBe("full");
-            expect(connections[1]?.mode).toBe("discovery");
+            expect(copied).not.toBe(acquired.primaryRegistry);
+            expect(copied.contextEngines.get(id)).toBe(donor.registry.contextEngines.get(id));
+            expect(connections).toMatchObject([{ mode: "full" }, { mode: "discovery" }]);
             expect(donor.registry.contextEngines.get(id)?.lifecycle).toBe("runtime");
             if (mode === "retired-donor") {
               await donorSource?.release();
               expect(donorCurrent?.()).toBe(false);
             }
             expect(connections.every((connection) => connection.database.isOpen)).toBe(true);
-            const warnings: string[] = [];
-            const createLease = () =>
-              createContextEngineLogicalTurnLease({
+            const openLease = () =>
+              createLease({
                 identity: { runId: "copied-source-run", sessionId: "copied-source-session" },
                 config,
                 workspaceDir: state.workspaceDir,
-                warn: (message) => warnings.push(message),
               });
-            lease = await withPluginRuntimeRegistryScope(copied, createLease);
-            expect(lease.effectiveEngineId, warnings.join("\n")).toBe(id);
+            lease = await withRegistry(copied, openLease);
+            expect(
+              lease.effectiveEngineId,
+              warnings.mock.calls.map(([message]) => message).join("\n"),
+            ).toBe(id);
             expect(lease.degraded).toBe(false);
             expect(bridge.factoryCalls).toBe(1);
             expect(connections.length).toBe(2);
             const engine = lease.begin().engine;
             await engine.assemble({ messages: [], sessionId: "copied-source-session" });
             await acquired.releaseRegistry();
-            await expect(
-              withPluginRuntimeRegistryScope(copied, createLease).then(() => undefined),
-            ).rejects.toThrow(/released/);
+            await expect(withRegistry(copied, openLease).then(() => undefined)).rejects.toThrow(
+              /released/,
+            );
             expect(bridge.factoryCalls).toBe(1);
             disposal = lease.dispose();
             await disposalStarted.promise;
             // The fast fallback has time to release its own primary claim independently.
-            await new Promise<void>((resolve) => {
-              setImmediate(resolve);
-            });
+            await nextEventLoopTurn();
             expect(connections.every((connection) => connection.database.isOpen)).toBe(true);
             disposalResume.resolve();
             await disposal;
             expect(bridge.engineDisposals).toBe(1);
             const primary = connections.find((connection) => connection.mode !== "full");
-            expect(primary?.database.isOpen).toBe(false);
-            expect(primary?.disposals).toBe(1);
-            expect(reads.includes(42)).toBe(true);
-            expect(reads.includes(84)).toBe(true);
+            expect(primary).toMatchObject({ database: { isOpen: false }, disposals: 1 });
+            expect(reads).toEqual(expect.arrayContaining([42, 84]));
             if (mode === "retired-donor") {
               expect(donorCurrent?.()).toBe(false);
-              expect(connections[0]?.database.isOpen).toBe(false);
-              expect(connections[0]?.disposals).toBe(1);
+              expect(connections[0]).toMatchObject({ database: { isOpen: false }, disposals: 1 });
             } else {
               expect(connections[0]?.database.isOpen).toBe(true);
             }
@@ -294,7 +285,7 @@ it("does not treat an uncovered view as a retired donor's owner after a failed d
       primaryDisposals++;
     },
   });
-  registerContextEngineInRegistry(
+  registerEngine(
     donor,
     record.id,
     () => {
@@ -307,13 +298,12 @@ it("does not treat an uncovered view as a retired donor's owner after a failed d
   primarySource.attach(copied);
   await donorSource.release();
   expect(() => primarySource.retainDependency(donorSource)).toThrow(/released/);
-  let lease: Awaited<ReturnType<typeof createContextEngineLogicalTurnLease>> | undefined;
+  let lease: Awaited<ReturnType<typeof createLease>> | undefined;
   try {
-    lease = await withPluginRuntimeRegistryScope(copied, () =>
-      createContextEngineLogicalTurnLease({
+    lease = await withRegistry(copied, () =>
+      createLease({
         identity: { runId: "uncovered-run", sessionId: "uncovered-session" },
         config: { plugins: { slots: { contextEngine: record.id } } },
-        warn: () => {},
       }),
     );
     expect(lease.degraded).toBe(true);
@@ -331,118 +321,61 @@ const unusedFactory: ContextEngineFactory = async () => {
   throw new Error("context engine factory should not run");
 };
 
-function registryWithPluginEngine(params: {
-  pluginId: string;
-  engineId: string;
-  lifecycle: "runtime" | "readOnlyDiscovery";
-  source?: string;
-  status?: "loaded" | "disabled" | "error";
-  owner?: string;
-  factory?: ContextEngineFactory;
-}) {
+function registryWithPluginEngine(
+  params: {
+    lifecycle?: "runtime" | "readOnlyDiscovery" | null;
+    source?: string;
+    status?: "loaded" | "disabled" | "error";
+    factory?: ContextEngineFactory;
+  } = {},
+) {
   const registry = createEmptyPluginRegistry();
   registry.plugins.push(
     createPluginRecord({
-      id: params.pluginId,
-      source: params.source ?? `/tmp/${params.pluginId}`,
+      id: "ce-probe",
+      source: params.source ?? "/tmp/ce-probe",
       status: params.status ?? "loaded",
     }),
   );
-  registry.contextEngines.set(params.engineId, {
-    factory: params.factory ?? unusedFactory,
-    owner: params.owner ?? `plugin:${params.pluginId}`,
-    lifecycle: params.lifecycle,
-  });
+  if (params.lifecycle !== null) {
+    registry.contextEngines.set("ce-probe", {
+      factory: params.factory ?? unusedFactory,
+      owner: "plugin:ce-probe",
+      lifecycle: params.lifecycle ?? "runtime",
+    });
+  }
   return registry;
 }
 
-describe("adoptRuntimeContextEngineRegistrations", () => {
-  it("upgrades a matching read-only discovery entry to the root runtime factory", () => {
-    const discoveryFactory: ContextEngineFactory = async () => {
-      throw new Error("discovery factory should not run");
-    };
-    const runtimeFactory: ContextEngineFactory = async () => {
-      throw new Error("runtime factory should not run");
-    };
-    const scoped = registryWithPluginEngine({
-      pluginId: "ce-probe",
-      engineId: "ce-probe",
-      lifecycle: "readOnlyDiscovery",
-      factory: discoveryFactory,
-    });
-    const root = registryWithPluginEngine({
-      pluginId: "ce-probe",
-      engineId: "ce-probe",
-      lifecycle: "runtime",
-      factory: runtimeFactory,
-    });
-
+it.each([
+  ["readOnlyDiscovery", "/tmp/ce-probe", "loaded", false],
+  ["runtime", "/tmp/ce-probe", "loaded", false],
+  [null, "/tmp/shadow-ce-probe", "loaded", false],
+  [null, "/tmp/ce-probe", "disabled", true],
+] as const)(
+  "adopts only matching discovery entries (%s, %s, %s)",
+  (lifecycle, source, status, core) => {
+    const scopedFactory = vi.fn(unusedFactory);
+    const rootFactory = vi.fn(unusedFactory);
+    const scoped = registryWithPluginEngine({ lifecycle, source, status, factory: scopedFactory });
+    const root = registryWithPluginEngine({ factory: rootFactory });
+    if (core) {
+      root.contextEngines.set("legacy", {
+        factory: unusedFactory,
+        owner: "core",
+        lifecycle: "runtime",
+      });
+    }
     const adopted = adoptRuntimeContextEngineRegistrations(scoped, root);
-
-    expect(scoped.contextEngines.get("ce-probe")?.factory).toBe(discoveryFactory);
-    expect(adopted.contextEngines.get("ce-probe")?.factory).toBe(runtimeFactory);
-    expect(adopted.contextEngines.get("ce-probe")?.lifecycle).toBe("runtime");
-  });
-
-  it("does not copy engines from a different plugin source", () => {
-    const root = registryWithPluginEngine({
-      pluginId: "ce-probe",
-      engineId: "ce-probe",
-      lifecycle: "runtime",
-      source: "/tmp/root-ce-probe",
-    });
-    const scoped = createEmptyPluginRegistry();
-    scoped.plugins.push(createPluginRecord({ id: "ce-probe", source: "/tmp/shadow-ce-probe" }));
-
-    expect(adoptRuntimeContextEngineRegistrations(scoped, root)).toBe(scoped);
-  });
-
-  it("does not replace an existing runtime registration", () => {
-    const scopedFactory: ContextEngineFactory = async () => {
-      throw new Error("scoped factory should not run");
-    };
-    const rootFactory: ContextEngineFactory = async () => {
-      throw new Error("root factory should not run");
-    };
-    const scoped = registryWithPluginEngine({
-      pluginId: "ce-probe",
-      engineId: "ce-probe",
-      lifecycle: "runtime",
-      factory: scopedFactory,
-    });
-    const root = registryWithPluginEngine({
-      pluginId: "ce-probe",
-      engineId: "ce-probe",
-      lifecycle: "runtime",
-      factory: rootFactory,
-    });
-
-    const adopted = adoptRuntimeContextEngineRegistrations(scoped, root);
-
-    expect(adopted).toBe(scoped);
-    expect(adopted.contextEngines.get("ce-probe")?.factory).toBe(scopedFactory);
-  });
-
-  it("does not copy core-owned engines or disabled plugin engines", () => {
-    const root = createEmptyPluginRegistry();
-    root.contextEngines.set("legacy", {
-      factory: unusedFactory,
-      owner: "core",
-      lifecycle: "runtime",
-    });
-    root.plugins.push(
-      createPluginRecord({ id: "ce-probe", source: "/tmp/ce-probe", status: "loaded" }),
-    );
-    root.contextEngines.set("ce-probe", {
-      factory: unusedFactory,
-      owner: "plugin:ce-probe",
-      lifecycle: "runtime",
-    });
-    const scoped = createEmptyPluginRegistry();
-    scoped.plugins.push(
-      createPluginRecord({ id: "ce-probe", source: "/tmp/ce-probe", status: "disabled" }),
-    );
-
-    expect(adoptRuntimeContextEngineRegistrations(scoped, root)).toBe(scoped);
-  });
-});
+    const original = lifecycle === null ? undefined : scopedFactory;
+    const expected = lifecycle === "readOnlyDiscovery" ? rootFactory : original;
+    expect(scoped.contextEngines.get("ce-probe")?.factory).toBe(original);
+    expect(adopted.contextEngines.get("ce-probe")?.factory).toBe(expected);
+    if (lifecycle !== null) {
+      expect(adopted.contextEngines.get("ce-probe")?.lifecycle).toBe("runtime");
+    }
+    if (lifecycle !== "readOnlyDiscovery") {
+      expect(adopted).toBe(scoped);
+    }
+  },
+);

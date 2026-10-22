@@ -4,11 +4,15 @@ import {
   missingScopeErrorShape,
   type ErrorShape,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
 import {
   resolveSessionMethodScope,
   type SessionOperatorScope,
 } from "../../shared/session-method-scopes-base.js";
-import { holdsCronManagementGrant } from "../cron-creator-authority-grant.js";
+import {
+  holdsCronManagementGrant,
+  isCronModelManagementAllowed,
+} from "../cron-creator-authority-grant.js";
 import { isInProcessSessionRun } from "../in-process-session-run.js";
 import {
   ADMIN_SCOPE,
@@ -21,7 +25,7 @@ import {
   authorizeCurrentOperatorRoleScopes,
   resolveGatewayOperatorRoleActor,
 } from "../operator-role-policy.js";
-import { isOperatorScope } from "../operator-scopes.js";
+import { APPROVALS_SCOPE, WRITE_SCOPE, isOperatorScope } from "../operator-scopes.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "../role-policy.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./shared-types.js";
 
@@ -70,6 +74,15 @@ export function authorizeGatewayMethod(
     return { error: null };
   }
   const registeredScope = methodRegistry.getScope(method);
+  if (
+    method === "plugin.approval.request" &&
+    registeredScope === APPROVALS_SCOPE &&
+    client.internal?.syntheticClient === true &&
+    client.internal.pluginApprovalRequestOwnerId?.trim() &&
+    roleScopesAllow({ role: "operator", requestedScopes: [WRITE_SCOPE], allowedScopes: scopes })
+  ) {
+    return { error: null };
+  }
   let scopeAuth = isOperatorScope(registeredScope)
     ? authorizeOperatorScopesForRequiredScope(
         registeredScope,
@@ -95,6 +108,18 @@ export function authorizeGatewayMethod(
     if (
       runtimeIdentity?.cronManagementGrant &&
       holdsCronManagementGrant(runtimeIdentity.cronManagementGrant, runtimeIdentity, method)
+    ) {
+      return { error: null };
+    }
+    // Managed model calls lose global management grants. Let their write-scoped
+    // runtime identity reach the cron owner's job and live-authority checks.
+    if (
+      runtimeIdentity &&
+      (method === "cron.update" || method === "cron.remove" || method === "cron.run") &&
+      !isCronModelManagementAllowed(
+        (context.getCommittedRuntimeConfig ?? context.getRuntimeConfig)(),
+      ) &&
+      roleScopesAllow({ role: "operator", requestedScopes: [WRITE_SCOPE], allowedScopes: scopes })
     ) {
       return { error: null };
     }

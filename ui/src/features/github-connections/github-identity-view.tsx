@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
-import { Match, Show, Switch } from "solid-js";
+import { createMemo, Errored, isPending, latest, Loading, Match, Show, Switch } from "solid-js";
 import type { GitHubIdentityFacts } from "../../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
-import { handleCopyButton } from "../../components/copy-button.ts";
+import { handleCopyButton } from "../../components/copy-button-state.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
   SettingsRow,
@@ -10,12 +10,12 @@ import {
   SettingsStatus,
   SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
-import { registerGitHubEnglish } from "../../i18n/locales/en-github.ts";
+import { registerGitHubConnectionsEnglish } from "../../i18n/locales/en-github-connections.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
-import { formatUiExternalText } from "../../lib/format-error.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatDateTimeMs } from "../../lib/format.ts";
+import type { GitHubIdentityView as GitHubIdentityModel } from "../../lib/reactive/domain-github-identity.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import type { GitHubIdentityController } from "./github-identity-controller.ts";
 
 const GITHUB_CREDENTIAL_STATUS = {
   available: { kind: "ok", label: "agentTools.githubStateVerified" },
@@ -28,6 +28,7 @@ const GITHUB_CREDENTIAL_KIND = {
   native: "agentTools.githubKindNative",
   "managed-pat": "agentTools.githubKindPat",
   "managed-oauth": "agentTools.githubKindOAuth",
+  "app-installation": "agentTools.githubKindAppInstallation",
 } as const;
 const GITHUB_REFRESH_STATE = {
   available: "agentTools.githubRefreshAvailable",
@@ -46,21 +47,33 @@ const GITHUB_AUTHORIZATION_LABEL = {
   network_error: "agentTools.githubNetworkRetry",
 } as const;
 
-type RequestStatus = Pick<GitHubIdentityController, "loading" | "error">;
-type ControllerProps = { controller: GitHubIdentityController };
+type RequestStatus = Pick<ReturnType<GitHubIdentityModel["read"]>, "statusCompletion">;
+type IdentityProps = { identity: GitHubIdentityModel };
 
 export function GitHubUnloadedStatus(props: { request: RequestStatus }) {
+  const completed = createMemo(() => props.request.statusCompletion);
   return (
-    <SettingsStatus
-      kind={props.request.error ? "warn" : "muted"}
-      label={
-        props.request.loading
-          ? t("githubConnections.checking")
-          : props.request.error
-            ? t("githubConnections.statusUnavailable")
-            : t("githubConnections.notLoaded")
-      }
-    />
+    <Errored
+      fallback={(_error) => (
+        <SettingsStatus
+          kind={isPending(() => completed()) ? "muted" : "warn"}
+          label={
+            isPending(() => completed())
+              ? t("githubConnections.checking")
+              : t("githubConnections.statusUnavailable")
+          }
+        />
+      )}
+    >
+      <Loading
+        on={props.request.statusCompletion}
+        fallback={<SettingsStatus kind="muted" label={t("githubConnections.checking")} />}
+      >
+        <Show when={completed() === undefined}>
+          <SettingsStatus kind="muted" label={t("githubConnections.notLoaded")} />
+        </Show>
+      </Loading>
+    </Errored>
   );
 }
 
@@ -136,8 +149,9 @@ export function GitHubDetails(props: { identity: GitHubIdentityFacts | null }) {
   );
 }
 
-function GitHubAuthorization(props: ControllerProps) {
-  const authorization = () => props.controller.authorization;
+function GitHubAuthorization(props: IdentityProps) {
+  const view = () => props.identity.read();
+  const authorization = () => view().authorization;
   const code = () => {
     const state = authorization();
     return "userCode" in state ? state : undefined;
@@ -160,33 +174,28 @@ function GitHubAuthorization(props: ControllerProps) {
               : t("agentTools.githubAuthorizationFailed"),
     );
   };
-  const authorizeButton = () => (
-    <button class="btn" onClick={() => void props.controller.startAuthorization()}>
-      {t("githubConnections.continue")}
-    </button>
-  );
   const patButton = () => (
-    <Show when={props.controller.scope !== "personal"}>
-      <button class="btn" onClick={() => props.controller.showPatFallback()}>
+    <Show when={view().scope !== "personal"}>
+      <button class="btn" onClick={() => props.identity.showPatFallback()}>
         {t("agentTools.githubUsePat")}
       </button>
     </Show>
   );
   return (
     <Switch>
-      <Match when={!props.controller.connectionReady}>
+      <Match when={!view().connectionReady}>
         <SettingsRow
           title={t("agentTools.githubConnection")}
           control={<SettingsStatus kind="muted" label={t("agentTools.githubDisconnected")} />}
         />
       </Match>
-      <Match when={!props.controller.statusReadable}>
+      <Match when={!view().statusReadable}>
         <SettingsRow
           title={<SettingsStatus kind="danger" label={t("agentTools.githubAccessRequired")} />}
           description={t("agentTools.githubReadRequired")}
         />
       </Match>
-      <Match when={!props.controller.authorizable}>
+      <Match when={!view().authorizable}>
         <SettingsRow
           title={<SettingsStatus kind="warn" label={t("agentTools.githubAccessRequired")} />}
           description={t("agentTools.githubAdminRequired")}
@@ -208,7 +217,7 @@ function GitHubAuthorization(props: ControllerProps) {
               <Show when={authorization().phase === "starting"}>
                 <button
                   class="btn btn--sm"
-                  onClick={() => void props.controller.cancelAuthorization()}
+                  onClick={() => void props.identity.cancelAuthorization()}
                 >
                   {t("common.cancel")}
                 </button>
@@ -218,11 +227,9 @@ function GitHubAuthorization(props: ControllerProps) {
         />
       </Match>
       <Match when={code()}>
-        {(state) => (
-          <GitHubAuthorizationCode controller={props.controller} authorization={state()} />
-        )}
+        {(state) => <GitHubAuthorizationCode identity={props.identity} authorization={state()} />}
       </Match>
-      <Match when={!props.controller.patVisible}>
+      <Match when={!view().patVisible}>
         <SettingsRow
           title={
             failed() ? (
@@ -234,12 +241,14 @@ function GitHubAuthorization(props: ControllerProps) {
           description={failed() ? failureDescription() : t("agentTools.githubConnectHint")}
           control={
             <>
-              {authorizeButton()}
+              <button class="btn" onClick={() => void props.identity.startAuthorization()}>
+                {t("githubConnections.continue")}
+              </button>
               <Show when={failed()}>{patButton()}</Show>
             </>
           }
         />
-        <Show when={!failed() && props.controller.scope !== "personal"}>
+        <Show when={!failed() && view().scope !== "personal"}>
           <SettingsRow
             title={t("agentTools.githubPatFallback")}
             description={t("agentTools.githubPatFallbackHint")}
@@ -252,8 +261,11 @@ function GitHubAuthorization(props: ControllerProps) {
 }
 
 function GitHubAuthorizationCode(
-  props: ControllerProps & {
-    authorization: Extract<GitHubIdentityController["authorization"], { userCode: string }>;
+  props: IdentityProps & {
+    authorization: Extract<
+      ReturnType<GitHubIdentityModel["read"]>["authorization"],
+      { userCode: string }
+    >;
   },
 ) {
   return (
@@ -300,18 +312,25 @@ function GitHubAuthorizationCode(
               {props.authorization.userCode}
             </code>
             <Show when={props.authorization.userCode} keyed>
-              {(userCode) => (
-                <button
-                  type="button"
-                  class="btn btn--sm"
-                  onClick={(event) =>
-                    void handleCopyButton(event, userCode, t("agentTools.githubCopyCode"))
-                  }
-                >
-                  <Icon name="copy" />
-                  <span data-copy-label>{t("agentTools.githubCopyCode")}</span>
-                </button>
-              )}
+              {(userCode) => {
+                let label!: HTMLSpanElement;
+                return (
+                  <button
+                    type="button"
+                    class="btn btn--sm"
+                    onClick={(event) =>
+                      void handleCopyButton(event, userCode, t("agentTools.githubCopyCode"), {
+                        label,
+                      })
+                    }
+                  >
+                    <Icon name="copy" />
+                    <span ref={(element) => (label = element)} data-copy-label>
+                      {t("agentTools.githubCopyCode")}
+                    </span>
+                  </button>
+                );
+              }}
             </Show>
           </>
         }
@@ -338,7 +357,7 @@ function GitHubAuthorizationCode(
             <button
               type="button"
               class="btn"
-              onClick={() => void props.controller.cancelAuthorization()}
+              onClick={() => void props.identity.cancelAuthorization()}
             >
               {props.authorization.phase === "cancel_error"
                 ? t("agentTools.githubRetryCancel")
@@ -351,7 +370,7 @@ function GitHubAuthorizationCode(
   );
 }
 
-export function GitHubConnectionError(props: { error: string | null; control?: JSX.Element }) {
+function ConnectionErrorRow(props: { error: string | null; control?: JSX.Element }) {
   return (
     <Show when={props.error}>
       <SettingsRow
@@ -363,9 +382,44 @@ export function GitHubConnectionError(props: { error: string | null; control?: J
   );
 }
 
-export function GitHubConnectionSetup(props: ControllerProps) {
+export function GitHubConnectionError(props: {
+  error: string | null;
+  completion?: Promise<void>;
+  secondaryCompletion?: Promise<void>;
+  control?: JSX.Element;
+}) {
+  const completed = createMemo(() =>
+    props.secondaryCompletion
+      ? Promise.all([props.completion, props.secondaryCompletion]).then(() => undefined)
+      : props.completion,
+  );
+  return (
+    <Show
+      when={props.error}
+      fallback={
+        <Errored
+          fallback={(error) => (
+            <ConnectionErrorRow error={formatUiError(error())} control={props.control} />
+          )}
+        >
+          <Loading on={latest(() => [props.completion, props.secondaryCompletion])} fallback={null}>
+            <Show when={completed() === undefined}>{null}</Show>
+          </Loading>
+        </Errored>
+      }
+    >
+      <ConnectionErrorRow error={props.error} control={props.control} />
+    </Show>
+  );
+}
+
+export function GitHubConnectionSetup(props: IdentityProps) {
+  const view = () => props.identity.read();
   const disabled = () =>
-    props.controller.busy || !props.controller.configurable || props.controller.authorizationActive;
+    props.identity.saving() ||
+    !view().connectionReady ||
+    !view().configurable ||
+    view().authorizationActive;
   const authorRow = (field: "name" | "email", label: string) => (
     <SettingsRow
       title={label}
@@ -374,17 +428,17 @@ export function GitHubConnectionSetup(props: ControllerProps) {
           class="settings-input"
           aria-label={label}
           autocomplete="off"
-          value={props.controller.draft[field]}
+          value={view().draft[field]}
           disabled={disabled()}
-          onInput={(event) => props.controller.setDraft(field, event.currentTarget.value)}
+          onInput={(event) => props.identity.setDraft(field, event.currentTarget.value)}
         />
       }
     />
   );
   return (
     <>
-      <GitHubAuthorization controller={props.controller} />
-      <Show when={props.controller.patVisible}>
+      <GitHubAuthorization identity={props.identity} />
+      <Show when={view().patVisible}>
         <div class="settings-subrows">
           <SettingsRow
             title={t("agentTools.githubToken")}
@@ -392,14 +446,14 @@ export function GitHubConnectionSetup(props: ControllerProps) {
             control={
               <SettingsSecretInput
                 ariaLabel={t("agentTools.githubToken")}
-                value={props.controller.draft.token}
-                visible={props.controller.tokenRevealed}
+                value={view().draft.token}
+                visible={view().tokenRevealed}
                 disabled={disabled()}
                 showLabel={t("configForm.revealValue")}
                 hideLabel={t("configForm.hideValue")}
                 toggleLabel={t("agentTools.githubTokenToggle")}
-                onInput={(value) => props.controller.setDraft("token", value)}
-                onToggle={() => props.controller.toggleTokenVisibility()}
+                onInput={(value) => props.identity.setDraft("token", value)}
+                onToggle={() => props.identity.toggleTokenVisibility()}
               />
             }
           />
@@ -409,17 +463,17 @@ export function GitHubConnectionSetup(props: ControllerProps) {
             <div class="settings-row__control">
               <button
                 class="btn"
-                disabled={props.controller.busy}
-                onClick={() => props.controller.hidePatFallback()}
+                disabled={props.identity.saving()}
+                onClick={() => props.identity.hidePatFallback()}
               >
                 {t("common.cancel")}
               </button>
               <button
                 class="btn primary"
                 disabled={disabled()}
-                onClick={() => void props.controller.configure()}
+                onClick={() => void props.identity.configure()}
               >
-                {props.controller.busy ? t("common.saving") : t("agentTools.githubConfigure")}
+                {props.identity.saving() ? t("common.saving") : t("agentTools.githubConfigure")}
               </button>
             </div>
           </div>
@@ -429,23 +483,20 @@ export function GitHubConnectionSetup(props: ControllerProps) {
   );
 }
 
-export function GitHubIdentity(props: ControllerProps & { onOpenConnections: () => void }) {
-  const identity = () => props.controller.status?.effective ?? null;
+export function GitHubIdentity(props: IdentityProps & { onOpenConnections: () => void }) {
+  const view = () => props.identity.read();
+  const identity = () => view().status?.effective ?? null;
   return (
     <openclaw-github-identity style={{ display: "contents" }}>
       <SettingsSection
         title={t("githubConnections.agentTitle")}
         description={t("githubConnections.agentDescription")}
         actions={
-          <Show when={props.controller.statusReadable}>
+          <Show when={view().statusReadable}>
             <button
               class="btn btn--sm"
-              disabled={
-                props.controller.loading ||
-                props.controller.busy ||
-                props.controller.authorizationActive
-              }
-              onClick={() => void props.controller.verify()}
+              disabled={view().loading || view().busy || view().authorizationActive}
+              onClick={() => void props.identity.verify()}
             >
               {t("agentTools.githubVerify")}
             </button>
@@ -463,36 +514,36 @@ export function GitHubIdentity(props: ControllerProps & { onOpenConnections: () 
           }
           control={
             <>
-              <GitHubHealth identity={identity()} request={props.controller} />
+              <GitHubHealth identity={identity()} request={view()} />
               <button class="btn btn--sm" onClick={() => props.onOpenConnections()}>
                 {t("githubConnections.manageCommon")}
               </button>
             </>
           }
         />
-        <GitHubConnectionError error={props.controller.error} />
-        <Show when={props.controller.configurable}>
+        <GitHubConnectionError error={view().error} completion={view().completion} />
+        <Show when={view().configurable}>
           <details class="settings-row settings-row--stacked">
             <summary class="settings-row__title">{t("githubConnections.advancedOverride")}</summary>
             <div class="settings-subrows">
               <SettingsRow
                 title={t("githubConnections.agentOverride")}
                 description={
-                  props.controller.status?.selected.configured
+                  view().status?.selected.configured
                     ? t("agentTools.githubConfiguredHere")
                     : t("agentTools.githubInheritedHere")
                 }
               />
-              <GitHubConnectionSetup controller={props.controller} />
-              <Show when={props.controller.status?.selected.configured}>
+              <GitHubConnectionSetup identity={props.identity} />
+              <Show when={view().status?.selected.configured}>
                 <SettingsRow
                   title={t("agentTools.githubUseSystemNewRuns")}
                   description={t("agentTools.githubAgentMutationHint")}
                   control={
                     <button
                       class="btn"
-                      disabled={props.controller.busy || props.controller.authorizationActive}
-                      onClick={() => void props.controller.inherit()}
+                      disabled={view().busy || view().authorizationActive}
+                      onClick={() => void props.identity.inherit()}
                     >
                       {t("agentTools.githubUseSystemNewRuns")}
                     </button>
@@ -508,4 +559,4 @@ export function GitHubIdentity(props: ControllerProps & { onOpenConnections: () 
   );
 }
 
-registerEnglishCatalog(registerGitHubEnglish);
+registerEnglishCatalog(registerGitHubConnectionsEnglish);

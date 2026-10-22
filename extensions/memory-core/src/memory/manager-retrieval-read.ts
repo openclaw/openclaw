@@ -1,6 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
   readMemoryRecallMetadata,
+  isPostgresSqlConnection,
   type MemorySource,
   MEMORY_INDEX_FTS_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
@@ -31,11 +33,19 @@ export type MemoryDatabaseFacts = {
   vectorState: ReturnType<typeof resolveMemoryVectorIndexState>;
 };
 
+const corpusFacts = new WeakMap<
+  EngineConnection,
+  { revision: number; memory: boolean; sessions: boolean; hasSemanticChunks: boolean }
+>();
+
 /** One bounded snapshot; retained text and embeddings never cross this boundary. */
 export function readMemoryDatabaseFacts(
-  db: DatabaseSync,
+  db: EngineConnection,
   hasVectorTable = tableExists(db, MEMORY_INDEX_VECTOR_TABLE),
 ): MemoryDatabaseFacts {
+  // A rolled-back revision can be reused. Only retain committed snapshots.
+  const committed = !db.isTransaction;
+  const retained = committed ? corpusFacts.get(db) : undefined;
   const query = getNodeSqliteKysely<{
     memory_index_meta: { key: string; value: string };
     memory_index_state: { id: number; revision: number };
@@ -58,28 +68,56 @@ export function readMemoryDatabaseFacts(
           .select("value")
           .where("key", "=", VECTOR_REBUILD_META_KEY)
           .as("vectorMarker"),
-        ...(["memory", "sessions"] as const).map((source) =>
-          eb
-            .exists(
-              eb
-                .selectFrom("memory_index_sources")
-                .select("source")
-                .where("source", "=", source)
-                .where("hash", "=", ""),
-            )
-            .as(source),
-        ),
         eb.exists(eb.selectFrom("memory_index_chunks").select("model")).as("hasIndexedChunks"),
-        eb
-          .exists(
-            eb.selectFrom("memory_index_chunks").select("model").where("model", "!=", "fts-only"),
-          )
-          .as("hasSemanticChunks"),
+        ...(
+          [
+            ...(["memory", "sessions"] as const).map(
+              (source) =>
+                [
+                  source,
+                  eb.exists(
+                    eb
+                      .selectFrom("memory_index_sources")
+                      .select("source")
+                      .where("source", "=", source)
+                      .where("hash", "=", ""),
+                  ),
+                ] as const,
+            ),
+            [
+              "hasSemanticChunks",
+              eb.exists(
+                eb
+                  .selectFrom("memory_index_chunks")
+                  .select("model")
+                  .where("model", "!=", "fts-only"),
+              ),
+            ],
+          ] as const
+        ).map(([name, probe]) =>
+          (retained
+            ? eb
+                .case()
+                .when("revision", "=", retained.revision)
+                .then(eb.lit(retained[name]))
+                .else(probe)
+                .end()
+            : probe
+          ).as(name),
+        ),
       ])
       .where("id", "=", 1),
   );
   if (!row || !Number.isSafeInteger(row.revision)) {
     throw new Error("Memory index revision is missing or invalid");
+  }
+  if (committed) {
+    corpusFacts.set(db, {
+      revision: row.revision,
+      memory: Boolean(row.memory),
+      sessions: Boolean(row.sessions),
+      hasSemanticChunks: Boolean(row.hasSemanticChunks),
+    });
   }
   const metadata = parseMemoryIndexMetadata(row.serialized);
   return {
@@ -119,7 +157,16 @@ function parseMemoryIndexMetadata(value: unknown) {
 
 export type MemoryRetrievalIndexState = ReturnType<typeof readMemoryRetrievalIndexState>;
 
-export function readMemoryRetrievalIndexState(db: DatabaseSync) {
+export function readMemoryRetrievalIndexState(db: EngineConnection) {
+  if (isPostgresSqlConnection(db)) {
+    const facts = readMemoryDatabaseFacts(db);
+    return {
+      meta: facts.meta,
+      hasIndexedChunks: facts.hasIndexedChunks,
+      hasFtsContent: false,
+      vectorState: facts.vectorState,
+    };
+  }
   const { meta } = readMemoryIndexMetadata(db);
   const hasIndexedChunks =
     db.prepare("SELECT 1 FROM memory_index_chunks LIMIT 1").get() !== undefined;
@@ -147,7 +194,7 @@ export type MemoryRecallQuery = {
   includeMemoryMtimes: boolean;
 };
 
-export function readMemoryRecallData(db: DatabaseSync, request: MemoryRecallQuery) {
+export function readMemoryRecallData(db: EngineConnection, request: MemoryRecallQuery) {
   const rows = readMemoryRecallMetadata(
     db,
     request.candidates.map((entry) => entry.id),

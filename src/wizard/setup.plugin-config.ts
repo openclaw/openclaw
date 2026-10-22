@@ -211,6 +211,10 @@ async function promptPluginFields(params: {
       }
     } else {
       const isArray = schemaProp?.type === "array";
+      const numberType =
+        schemaProp?.type === "number" || schemaProp?.type === "integer"
+          ? schemaProp.type
+          : undefined;
       const currentStr = isArray
         ? Array.isArray(currentValue)
           ? currentValue.join(", ")
@@ -221,6 +225,22 @@ async function promptPluginFields(params: {
         initialValue: currentStr,
         placeholder:
           hint.placeholder ?? (isArray ? t("wizard.plugins.arrayPlaceholder") : undefined),
+        validate: numberType
+          ? (value) => {
+              const trimmed = value.trim();
+              if (!trimmed) {
+                return undefined;
+              }
+              const parsed = parseJsonNumberInput(trimmed);
+              return parsed !== undefined && (numberType === "number" || Number.isInteger(parsed))
+                ? undefined
+                : t(
+                    numberType === "integer"
+                      ? "wizard.plugins.invalidInteger"
+                      : "wizard.plugins.invalidNumber",
+                  );
+            }
+          : undefined,
       });
       const trimmed = input.trim();
       if (trimmed === currentStr) {
@@ -231,12 +251,8 @@ async function promptPluginFields(params: {
           ? normalizeStringEntries(trimmed.split(","))
           : trimmed
         : undefined;
-      if (trimmed && (schemaProp?.type === "number" || schemaProp?.type === "integer")) {
-        const parsed = parseJsonNumberInput(trimmed);
-        if (parsed === undefined || (schemaProp.type === "integer" && !Number.isInteger(parsed))) {
-          continue;
-        }
-        nextValue = parsed;
+      if (trimmed && numberType) {
+        nextValue = JSON.parse(trimmed);
       }
     }
     setPathCreateStrict(updatedConfig, pathSegments, nextValue);

@@ -19,6 +19,7 @@ function PrivateComposerRecoveryDialog(
   props: PrivateComposerDraft & { finish: (discard: boolean) => void },
 ) {
   const [copied, setCopied] = createSignal(false);
+  let keepButton!: HTMLButtonElement;
   const [error, setError] = createSignal<"copyFailed" | "attachmentUnavailable">();
   const current = () => !props.signal.aborted && props.isCurrent();
   const copyText = async () => {
@@ -34,6 +35,7 @@ function PrivateComposerRecoveryDialog(
   };
   return (
     <openclaw-modal-dialog
+      prop:initialFocus={() => keepButton}
       label={t("chat.privateDraftReload.title")}
       description={t("chat.privateDraftReload.description")}
       onModal-cancel={() => props.finish(false)}
@@ -86,14 +88,22 @@ function PrivateComposerRecoveryDialog(
           )}
         </For>
         {error() && <p role="alert">{t(`chat.privateDraftReload.${error()}`)}</p>}
-        <div class="exec-approval-actions">
+        <openclaw-modal-actions class="exec-approval-actions">
+          <button
+            ref={(element) => {
+              keepButton = element;
+            }}
+            type="button"
+            class="btn"
+            autofocus
+            onClick={() => props.finish(false)}
+          >
+            {t("chat.privateDraftReload.keep")}
+          </button>
           <button type="button" class="btn danger" onClick={() => props.finish(current())}>
             {t("chat.privateDraftReload.discard")}
           </button>
-          <button type="button" class="btn" autofocus onClick={() => props.finish(false)}>
-            {t("chat.privateDraftReload.keep")}
-          </button>
-        </div>
+        </openclaw-modal-actions>
       </section>
     </openclaw-modal-dialog>
   );

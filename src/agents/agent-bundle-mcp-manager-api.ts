@@ -96,6 +96,14 @@ export function peekSessionMcpRuntime(params: {
   });
 }
 
+/** Captures only currently registered MCP runtimes; invoking it never selects a successor. */
+export function captureSessionMcpRuntimeRetirement(params: {
+  sessionId?: string;
+  sessionKey?: string;
+}): ReturnType<SessionMcpRuntimeManager["captureSessionRetirement"]> {
+  return peekSessionMcpRuntimeManager()?.captureSessionRetirement(params);
+}
+
 export async function retireSessionMcpRuntime(params: {
   sessionId?: string | null;
   reason: string;
@@ -163,8 +171,4 @@ export async function disposeAllSessionMcpRuntimes(): Promise<void> {
   } else {
     resetMcpStartupBackoff();
   }
-}
-
-export function getSessionMcpRuntimeManagerForTesting(): SessionMcpRuntimeManager {
-  return getSessionMcpRuntimeManager();
 }

@@ -1,4 +1,3 @@
-// Github Copilot plugin module implements model metadata behavior.
 import { supportsClaudeAdaptiveThinking } from "openclaw/plugin-sdk/claude-model-runtime";
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-model-metadata";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";

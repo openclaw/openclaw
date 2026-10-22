@@ -1,6 +1,5 @@
-// Slack tests cover accounts plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   listEnabledSlackAccounts,
   listSlackAccountIds,
@@ -10,22 +9,21 @@ import {
   resolveSlackAccountDmPolicy,
 } from "./accounts.js";
 
-function slackConfig(slack: NonNullable<OpenClawConfig["channels"]>["slack"]): OpenClawConfig {
-  return { channels: { slack } };
+type SlackConfig = NonNullable<OpenClawConfig["channels"]>["slack"];
+const slackConfig = (slack: SlackConfig): OpenClawConfig => ({ channels: { slack } });
+
+function resolveAccount(slack: Parameters<typeof slackConfig>[0], accountId = "default") {
+  return resolveSlackAccount({ cfg: slackConfig(slack), accountId });
 }
+
+afterEach(() => vi.unstubAllEnvs());
 
 describe("resolveSlackAccount allowFrom precedence", () => {
   it("keeps the implicit default account when named accounts are added to top-level credentials", () => {
     const cfg = slackConfig({
       botToken: "xoxb-default",
       appToken: "xapp-default",
-      accounts: {
-        work: {
-          enabled: false,
-          botToken: "xoxb-work",
-          appToken: "xapp-work",
-        },
-      },
+      accounts: { work: { enabled: false, botToken: "xoxb-work", appToken: "xapp-work" } },
     });
 
     expect(listSlackAccountIds(cfg)).toEqual(["default", "work"]);
@@ -34,8 +32,8 @@ describe("resolveSlackAccount allowFrom precedence", () => {
   });
 
   it("merges canonical account streaming over top-level defaults field-by-field", () => {
-    const resolved = resolveSlackAccount({
-      cfg: slackConfig({
+    const resolved = resolveAccount(
+      {
         streaming: {
           mode: "progress",
           nativeTransport: true,
@@ -53,9 +51,9 @@ describe("resolveSlackAccount allowFrom precedence", () => {
             },
           },
         },
-      }),
-      accountId: "work",
-    });
+      },
+      "work",
+    );
 
     expect(resolved.config.streaming).toEqual({
       mode: "progress",
@@ -67,8 +65,8 @@ describe("resolveSlackAccount allowFrom precedence", () => {
   });
 
   it("does not inherit default account allowFrom for named account when top-level is absent", () => {
-    const resolved = resolveSlackAccount({
-      cfg: slackConfig({
+    const resolved = resolveAccount(
+      {
         accounts: {
           default: {
             botToken: "xoxb-default",
@@ -77,9 +75,9 @@ describe("resolveSlackAccount allowFrom precedence", () => {
           },
           work: { botToken: "xoxb-work", appToken: "xapp-work" },
         },
-      }),
-      accountId: "work",
-    });
+      },
+      "work",
+    );
 
     expect(resolved.config.allowFrom).toBeUndefined();
   });
@@ -106,104 +104,53 @@ describe("resolveSlackAccount allowFrom precedence", () => {
 describe("resolveSlackAccount active secret surfaces", () => {
   const secretRef = { source: "exec", provider: "default", id: "slack_token" } as const;
   it("does not read credentials for disabled accounts", () => {
-    const resolved = resolveSlackAccount({
-      cfg: {
-        channels: {
-          slack: {
-            accounts: {
-              default: {
-                enabled: false,
-                botToken: secretRef,
-                appToken: secretRef,
-                userToken: secretRef,
-                allowFrom: ["U999"],
-              },
-            },
-          },
+    const resolved = resolveAccount({
+      accounts: {
+        default: {
+          enabled: false,
+          botToken: secretRef,
+          appToken: secretRef,
+          userToken: secretRef,
+          allowFrom: ["U999"],
         },
-      } as unknown as OpenClawConfig,
-      accountId: "default",
+      },
     });
 
-    expect(resolved.botToken).toBeUndefined();
-    expect(resolved.botTokenSource).toBe("none");
-    expect(resolved.appToken).toBeUndefined();
-    expect(resolved.appTokenSource).toBe("none");
-    expect(resolved.userToken).toBeUndefined();
-    expect(resolved.userTokenSource).toBe("none");
-    expect(resolved.accountId).toBe("default");
-    expect(resolved.config.allowFrom).toEqual(["U999"]);
+    expect(resolved).toMatchObject({
+      botToken: undefined,
+      botTokenSource: "none",
+      appToken: undefined,
+      appTokenSource: "none",
+      userToken: undefined,
+      userTokenSource: "none",
+      accountId: "default",
+      config: { allowFrom: ["U999"] },
+    });
   });
 
   it("preserves env fallback when no active config token is set", () => {
-    const previousBotToken = process.env.SLACK_BOT_TOKEN;
-    const previousAppToken = process.env.SLACK_APP_TOKEN;
-    process.env.SLACK_BOT_TOKEN = "xoxb-env-only";
-    process.env.SLACK_APP_TOKEN = "xapp-env-only";
-    try {
-      // No SecretRef and no string token configured for the default account:
-      // env fallback must still fire so env-only deployments (relying solely
-      // on SLACK_BOT_TOKEN / SLACK_APP_TOKEN) keep working when callers like
-      // `channel.ts` invoke sendMessageSlack without an explicit override.
-      const resolved = resolveSlackAccount({
-        cfg: slackConfig({
-          accounts: {
-            default: { allowFrom: ["U001"] },
-          },
-        }),
-        accountId: "default",
-      });
+    vi.stubEnv("SLACK_BOT_TOKEN", "xoxb-env-only");
+    vi.stubEnv("SLACK_APP_TOKEN", "xapp-env-only");
+    const resolved = resolveAccount({ accounts: { default: { allowFrom: ["U001"] } } });
 
-      expect(resolved.botToken).toBe("xoxb-env-only");
-      expect(resolved.botTokenSource).toBe("env");
-      expect(resolved.appToken).toBe("xapp-env-only");
-      expect(resolved.appTokenSource).toBe("env");
-    } finally {
-      if (previousBotToken === undefined) {
-        delete process.env.SLACK_BOT_TOKEN;
-      } else {
-        process.env.SLACK_BOT_TOKEN = previousBotToken;
-      }
-      if (previousAppToken === undefined) {
-        delete process.env.SLACK_APP_TOKEN;
-      } else {
-        process.env.SLACK_APP_TOKEN = previousAppToken;
-      }
-    }
+    expect(resolved).toMatchObject({
+      botToken: "xoxb-env-only",
+      botTokenSource: "env",
+      appToken: "xapp-env-only",
+      appTokenSource: "env",
+    });
   });
 
   it("does not use env fallback for inactive credentials", () => {
-    const previousBotToken = process.env.SLACK_BOT_TOKEN;
-    const previousAppToken = process.env.SLACK_APP_TOKEN;
-    process.env.SLACK_BOT_TOKEN = "xoxb-env-bot";
-    process.env.SLACK_APP_TOKEN = "xapp-env-app";
-    try {
-      const resolved = resolveSlackAccount({
-        cfg: slackConfig({
-          accounts: {
-            default: {
-              enabled: false,
-            },
-          },
-        }),
-        accountId: "default",
-      });
+    vi.stubEnv("SLACK_BOT_TOKEN", "xoxb-env-bot");
+    vi.stubEnv("SLACK_APP_TOKEN", "xapp-env-app");
+    const resolved = resolveAccount({ accounts: { default: { enabled: false } } });
 
-      expect(resolved.botToken).toBeUndefined();
-      expect(resolved.botTokenSource).toBe("none");
-      expect(resolved.appToken).toBeUndefined();
-      expect(resolved.appTokenSource).toBe("none");
-    } finally {
-      if (previousBotToken === undefined) {
-        delete process.env.SLACK_BOT_TOKEN;
-      } else {
-        process.env.SLACK_BOT_TOKEN = previousBotToken;
-      }
-      if (previousAppToken === undefined) {
-        delete process.env.SLACK_APP_TOKEN;
-      } else {
-        process.env.SLACK_APP_TOKEN = previousAppToken;
-      }
-    }
+    expect(resolved).toMatchObject({
+      botToken: undefined,
+      botTokenSource: "none",
+      appToken: undefined,
+      appTokenSource: "none",
+    });
   });
 });

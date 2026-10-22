@@ -1,6 +1,6 @@
+import assert from "node:assert/strict";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, onTestFinished, vi } from "vitest";
-import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -12,13 +12,40 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import * as pendingInputReads from "../../config/sessions/session-accessor.pending-inputs.js";
 import { prepareSessionPendingInputDedupeRecovery } from "../../config/sessions/session-accessor.pending-inputs.js";
+import { withHostDataSql } from "../../config/sessions/session-native-binding.execution.test-support.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import type { UserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.types.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { dispatchReplyFromConfig } from "./dispatch-from-config.js";
 import { claimInboundDedupe, resetInboundDedupe } from "./inbound-dedupe.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
+
+type Recorder = ReturnType<typeof createUserTurnTranscriptRecorder>;
+async function interrupt(...recorders: (Recorder | undefined)[]) {
+  for (const recorder of recorders) {
+    recorder?.finishPendingInput?.("interrupted");
+  }
+  for (const recorder of recorders) {
+    await recorder?.waitForPendingInputSettlement?.();
+  }
+}
+async function seedSource(
+  target: Omit<UserTurnTranscriptTarget, "sessionEntry">,
+  runId: string,
+  text: string,
+  timestamp?: number,
+) {
+  const sessionEntry = { sessionId: target.sessionId, updatedAt: Date.now() };
+  await replaceSessionEntry(target, sessionEntry);
+  return () =>
+    createUserTurnTranscriptRecorder({
+      target: { ...target, sessionEntry },
+      pendingInputRequestFingerprint: `${runId}-request`,
+      input: { text, timestamp, idempotencyKey: `${runId}:user` },
+    });
+}
 
 it("dispatches freshly reclaimed pending input despite its pre-restart inbound dedupe receipt", async () => {
   await withOpenClawTestState({ label: "pending-input-in-process-restart" }, async (state) => {
@@ -37,15 +64,8 @@ it("dispatches freshly reclaimed pending input despite its pre-restart inbound d
     const sessionId = "pending-restart-session";
     const runId = "pending-restart-input";
     const target = { agentId: "main", sessionKey, sessionId, config: cfg };
-    const sessionEntry = { sessionId, updatedAt: Date.now() };
-    await replaceSessionEntry(target, sessionEntry);
     const message = "Deliver this exact source after the update";
-    const createRecorder = () =>
-      createUserTurnTranscriptRecorder({
-        target: { ...target, sessionEntry },
-        pendingInputRequestFingerprint: "pending-restart-request",
-        input: { text: message, timestamp: 100, idempotencyKey: `${runId}:user` },
-      });
+    const createRecorder = await seedSource(target, runId, message, 100);
     const source = createRecorder();
     const ctx = buildTestCtx({
       AgentId: "main",
@@ -70,15 +90,10 @@ it("dispatches freshly reclaimed pending input despite its pre-restart inbound d
       expect(await source.stageApproved?.({ runId, assertCurrent: () => {} })).toBe(true);
       const original = (await listSessionPendingInputs(target)).items[0];
       expect(original).toBeDefined();
-      // Finishing the original queue-admission request commits inbound dedupe,
-      // although its source remains pending for the still-starting native run.
       const claim = claimInboundDedupe(ctx);
-      if (claim.status !== "claimed") {
-        throw new Error("Original input did not acquire inbound dedupe");
-      }
+      assert(claim.status === "claimed", "Original input did not acquire inbound dedupe");
       claim.commit();
-      source.finishPendingInput?.("interrupted");
-      await source.waitForPendingInputSettlement?.();
+      await interrupt(source);
       rotateAgentEventLifecycleGeneration();
       resumed = createRecorder();
       expect(await resumed.stageApproved?.({ runId, assertCurrent: () => {} })).toBe(true);
@@ -97,15 +112,12 @@ it("dispatches freshly reclaimed pending input despite its pre-restart inbound d
       const observed: string[] = [];
       const read = vi
         .spyOn(pendingInputReads, "prepareSessionPendingInputDedupeRecovery")
-        .mockImplementation(async (...args) => {
-          const sql = observeHostDataSql();
-          try {
-            return await prepareRecovery(...args);
-          } finally {
-            observed.push(...sql.queries);
-            sql.restore();
-          }
-        });
+        .mockImplementation((...args) =>
+          withHostDataSql(
+            () => prepareRecovery(...args),
+            (query) => observed.push(query),
+          ),
+        );
       try {
         await recorder.withPendingInput?.(() =>
           dispatchReplyFromConfig({
@@ -136,12 +148,7 @@ it("dispatches freshly reclaimed pending input despite its pre-restart inbound d
         }),
       ]);
     } finally {
-      resumed?.finishPendingInput?.("interrupted");
-      source.finishPendingInput?.("interrupted");
-      await Promise.all([
-        source.waitForPendingInputSettlement?.(),
-        resumed?.waitForPendingInputSettlement?.(),
-      ]);
+      await interrupt(resumed, source);
       dispatcher.markComplete();
       await dispatcher.waitForIdle();
       resetInboundDedupe();
@@ -170,15 +177,8 @@ it.each([
         sessionId: "dedupe-session",
       };
       const runId = "dedupe-source";
-      const sessionEntry = { sessionId: target.sessionId, updatedAt: Date.now() };
-      await replaceSessionEntry(target, sessionEntry);
       let current = true;
-      const createRecorder = () =>
-        createUserTurnTranscriptRecorder({
-          target: { ...target, sessionEntry },
-          pendingInputRequestFingerprint: "dedupe-source-request",
-          input: { text: "Keep this exact input", idempotencyKey: `${runId}:user` },
-        });
+      const createRecorder = await seedSource(target, runId, "Keep this exact input");
       const assertCurrent = () => {
         if (!current) {
           throw new Error("source revoked");
@@ -196,13 +196,10 @@ it.each([
       try {
         expect(await original.stageApproved?.({ runId, assertCurrent })).toBe(true);
         const first = claimInboundDedupe(ctx);
-        if (first.status !== "claimed") {
-          throw new Error("Original input did not acquire inbound dedupe");
-        }
+        assert(first.status === "claimed", "Original input did not acquire inbound dedupe");
         first.commit();
         if (control !== "initial") {
-          original.finishPendingInput?.("interrupted");
-          await original.waitForPendingInputSettlement?.();
+          await interrupt(original);
           rotateAgentEventLifecycleGeneration();
           recorder = createRecorder();
           expect(await recorder.stageApproved?.({ runId, assertCurrent })).toBe(true);
@@ -265,9 +262,7 @@ it.each([
         activeClaim?.release?.();
         const recovered =
           control === "cache-miss" ? result : await recorder.withPendingInput?.(() => claim());
-        if (recovered?.status !== "claimed") {
-          throw new Error("Recovered input did not acquire inbound dedupe");
-        }
+        assert(recovered?.status === "claimed", "Recovered input did not acquire inbound dedupe");
         recovered.commit();
         // Old finalizers cannot erase or recommit the replacement's receipt.
         first.release();
@@ -277,12 +272,7 @@ it.each([
         restoreClock?.();
         resetInboundDedupe();
         current = true;
-        recorder.finishPendingInput?.("interrupted");
-        original.finishPendingInput?.("interrupted");
-        await Promise.all([
-          recorder.waitForPendingInputSettlement?.(),
-          original.waitForPendingInputSettlement?.(),
-        ]);
+        await interrupt(recorder, original);
       }
     });
   },

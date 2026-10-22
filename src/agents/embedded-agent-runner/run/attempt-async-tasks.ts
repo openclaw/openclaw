@@ -8,7 +8,6 @@ import {
   listMediaGenerationOperations,
   type MediaGenerationOperation,
 } from "../../media-generation-activity.js";
-import { withAbortListener } from "./abortable.js";
 
 export type AsyncStartedToolMeta = {
   toolName?: string;
@@ -18,9 +17,7 @@ export type AsyncStartedToolMeta = {
 };
 
 export type CompletionRequiredAsyncTaskWaitResult = {
-  waitedRunIds: string[];
   timedOutRunIds: string[];
-  terminalTasks: MediaGenerationOperation[];
 };
 
 const DEFAULT_ASYNC_TASK_POLL_INTERVAL_MS = 500;
@@ -42,22 +39,10 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
   }
 }
 
-async function sleepWithAbort(
-  ms: number,
-  signal: AbortSignal | undefined,
-  sleepFn: (ms: number) => Promise<void>,
-): Promise<void> {
-  if (!signal) {
-    await sleepFn(ms);
-    return;
-  }
-  throwIfAborted(signal);
-  await withAbortListener(signal, () => sleepFn(ms), createAbortError);
-}
-
 function isPendingCompletionTask(task: MediaGenerationOperation): boolean {
   return (
     COMPLETION_REQUIRED_TASK_KINDS.has(task.taskKind) &&
+    task.completionDelivery !== "queued" &&
     !isTerminalMediaGenerationStatus(task.status)
   );
 }
@@ -68,7 +53,7 @@ function* iterateAsyncTaskRunIds(
 ): Generator<string> {
   for (const meta of toolMetas) {
     const runId = meta.asyncStarted === true ? meta.asyncTaskRunId?.trim() : undefined;
-    if (runId) {
+    if (runId && findMediaGenerationOperation(runId)?.completionDelivery !== "queued") {
       yield runId;
     }
   }
@@ -119,18 +104,13 @@ export async function waitForCompletionRequiredAsyncTasks(params: {
   getToolMetas: () => readonly AsyncStartedToolMeta[];
   sessionKey?: string;
   getDeadlineAtMs: () => number | undefined;
-  now?: () => number;
   pollIntervalMs?: number;
-  sleep?: (ms: number) => Promise<void>;
   abortSignal?: AbortSignal;
 }): Promise<CompletionRequiredAsyncTaskWaitResult> {
-  const now = params.now ?? Date.now;
-  const sleepFn = params.sleep ?? sleep;
   const pollIntervalMs =
     params.pollIntervalMs ?? (isFastTestRuntimeEnv() ? 10 : DEFAULT_ASYNC_TASK_POLL_INTERVAL_MS);
   const waitedRunIds = new Set<string>();
   const timedOutRunIds = new Set<string>();
-  const terminalTasksByRunId = new Map<string, MediaGenerationOperation>();
 
   waitForTasks: while (true) {
     throwIfAborted(params.abortSignal);
@@ -152,14 +132,11 @@ export async function waitForCompletionRequiredAsyncTasks(params: {
       throwIfAborted(params.abortSignal);
       pendingRunIds = pendingRunIds.filter((runId) => {
         const task = findMediaGenerationOperation(runId);
-        if (!task || !isTerminalMediaGenerationStatus(task.status)) {
-          return true;
+        // Queued delivery needs this same session; waiting would hold its lane.
+        if (task?.completionDelivery === "queued") {
+          return false;
         }
-        const taskRunId = task.runId?.trim();
-        if (taskRunId) {
-          terminalTasksByRunId.set(taskRunId, task);
-        }
-        return false;
+        return !task || !isTerminalMediaGenerationStatus(task.status);
       });
       if (pendingRunIds.length === 0) {
         break;
@@ -167,19 +144,17 @@ export async function waitForCompletionRequiredAsyncTasks(params: {
       // Approval pauses and resumed grace windows replace the owner's deadline.
       // Unlimited waits still use finite sleeps and remain abort-responsive.
       const deadlineAtMs = params.getDeadlineAtMs();
-      const remainingMs = deadlineAtMs === undefined ? pollIntervalMs : deadlineAtMs - now();
+      const remainingMs = deadlineAtMs === undefined ? pollIntervalMs : deadlineAtMs - Date.now();
       if (remainingMs <= 0) {
         for (const runId of pendingRunIds) {
           timedOutRunIds.add(runId);
         }
         break waitForTasks;
       }
-      await sleepWithAbort(Math.min(pollIntervalMs, remainingMs), params.abortSignal, sleepFn);
+      await sleep(Math.min(pollIntervalMs, remainingMs), params.abortSignal);
     }
   }
   return {
-    waitedRunIds: [...waitedRunIds],
     timedOutRunIds: [...timedOutRunIds],
-    terminalTasks: [...terminalTasksByRunId.values()],
   };
 }

@@ -3,7 +3,7 @@ import { z } from "zod";
 import { EnvironmentRecipeSchema } from "./environment-recipe.js";
 
 const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
-export const WorkerPreparationArtifactsSchema = z
+const WorkerPreparationArtifactsSchema = z
   .object({
     nodeBootstrapSha256: Digest,
     enabledPluginIds: z.array(z.string().min(1).max(256)).max(256),
@@ -48,6 +48,7 @@ const EmptyPreparation = Preparation.omit({
 
 export type WorkerPreparationArtifacts = z.infer<typeof WorkerPreparationArtifactsSchema>;
 export type WorkerProjectPreparationIdentity = z.infer<typeof Preparation>;
+export type WorkerEmptyPreparationIdentity = z.infer<typeof EmptyPreparation>;
 
 /** Immutable artifact facts are separate from the reserve's demand/expiry/consumption tuple. */
 export function readWorkerProjectPreparation(

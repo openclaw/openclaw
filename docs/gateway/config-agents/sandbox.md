@@ -26,7 +26,7 @@ Optional sandboxing for the embedded agent. See [Sandboxing](/gateway/sandboxing
         workspaceAccess: "none", // none (default) | ro | rw
         workspaceRoot: "~/.openclaw/sandboxes",
         docker: {
-          image: "openclaw-sandbox:bookworm-slim",
+          image: "openclaw-sandbox:trixie-slim",
           containerPrefix: "openclaw-sbx-",
           workdir: "/workspace",
           readOnlyRoot: true,
@@ -67,7 +67,7 @@ Optional sandboxing for the embedded agent. See [Sandboxing](/gateway/sandboxing
         },
         browser: {
           enabled: false,
-          image: "openclaw-sandbox-browser:bookworm-slim",
+          image: "openclaw-sandbox-browser:trixie-slim",
           network: "openclaw-sandbox-browser",
           cdpPort: 9222,
           cdpSourceRange: "172.21.0.1/32",
@@ -109,7 +109,7 @@ Optional sandboxing for the embedded agent. See [Sandboxing](/gateway/sandboxing
 }
 ```
 
-Defaults shown above (`off`/`docker`/`agent`/`none`/`bookworm-slim` image/`none` network/etc.) are the actual OpenClaw defaults, not just illustrative values.
+Defaults shown above (`off`/`docker`/`agent`/`none`/`trixie-slim` image/`none` network/etc.) are the actual OpenClaw defaults, not just illustrative values.
 
 <Accordion title="Sandbox details">
 
@@ -206,6 +206,10 @@ Transport is SSH into the OpenShell sandbox, but the plugin owns sandbox lifecyc
 Codex app-server turns in an active OpenClaw sandbox use this same egress setting for their native code-mode network access.
 
 **Inbound attachments** are staged into `media/inbound/*` in the active workspace.
+The per-file staging limit is at least 50 MiB. Explicitly raising
+`agents.defaults.mediaMaxMb` or the incoming channel/account's `mediaMaxMb` also
+raises this limit; account settings override channel settings. Local workspace
+copies stream from disk. SSH and remote workspace transfers still buffer each file.
 
 **`docker.binds`** mounts additional host directories; global and per-agent binds are merged.
 

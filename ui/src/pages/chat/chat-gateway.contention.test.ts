@@ -17,8 +17,11 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
     chatSending: false,
     chatStream: null,
     chatStreamStartedAt: null,
+    chatStreamSegments: [],
+    chatToolMessages: [],
+    toolStreamById: new Map(),
+    toolStreamOrder: [],
     chatRunStartup: null,
-    chatThinkingLevel: null,
     chatVerboseLevel: null,
     client: null,
     connected: true,
@@ -76,8 +79,8 @@ describe("chat gateway state contention", () => {
       sessionKey: "main",
       runId: "run-1",
       state: "delta",
-      deltaText: "Resumed",
+      message: { role: "assistant", content: "Resumed" },
     });
-    expect(state.chatRunStartup?.state).toBe("activity");
+    expect(state.chatRunStartup).toMatchObject({ state: "status", phase: "answer" });
   });
 });

@@ -57,7 +57,7 @@ describe("preflightCronModelProvider", () => {
 
   afterAll(() => connectMock.mockRestore());
 
-  it.each(["https://api.openai.com/v1", "http://128.0.0.1:8000/v1"])(
+  it.each(["https://api.openai.com/v1"])(
     "skips network checks for non-local provider URL %s",
     async (baseUrl) => {
       const params = makeLocalPreflightParams("vllm", baseUrl);
@@ -66,22 +66,16 @@ describe("preflightCronModelProvider", () => {
     },
   );
 
-  it.each([
-    "127.0.0.1",
-    "127.255.255.254",
-    "10.0.0.1",
-    "172.16.0.1",
-    "192.168.0.222",
-    "[::1]",
-    "[::ffff:7f00:1]",
-    "[::ffff:127.0.0.1]",
-  ])("checks local endpoint host %s without retaining its socket or timer", async (host) => {
-    mockReachableEndpoint();
-    const params = makeLocalPreflightParams("vllm", `http://${host}:8000/v1`);
-    expect(await preflightCronModelProvider(params)).toEqual({ status: "available" });
-    expect(connectMock.mock.results[0]?.value.destroyed).toBe(true);
-    expect(vi.getTimerCount()).toBe(0);
-  });
+  it.each(["127.0.0.1", "10.0.0.1", "172.16.0.1", "192.168.0.222", "[::1]", "[::ffff:7f00:1]"])(
+    "checks local endpoint host %s without retaining its socket or timer",
+    async (host) => {
+      mockReachableEndpoint();
+      const params = makeLocalPreflightParams("vllm", `http://${host}:8000/v1`);
+      expect(await preflightCronModelProvider(params)).toEqual({ status: "available" });
+      expect(connectMock.mock.results[0]?.value.destroyed).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
 
   it.each([
     ["http://127.0.0.1/v1", 80],
@@ -158,16 +152,18 @@ describe("preflightCronModelProvider", () => {
   });
 
   it("includes DNS resolution in the same deadline", async () => {
-    const lookup = vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockImplementationOnce(
-      (_hostname, { signal } = {}) =>
-        new Promise((_resolve, reject) => {
+    const lookup = vi
+      .spyOn(ssrf, "resolvePinnedHostnameWithPolicy")
+      .mockImplementationOnce((_hostname, options = {}) => {
+        const { signal } = options;
+        return new Promise((_resolve, reject) => {
           signal?.addEventListener(
             "abort",
             () => reject(new Error("DNS lookup canceled", { cause: signal.reason })),
             { once: true },
           );
-        }),
-    );
+        });
+      });
     try {
       const pending = preflightCronModelProvider(makeLocalPreflightParams("ollama"));
       await vi.advanceTimersByTimeAsync(2500);

@@ -80,7 +80,6 @@ export class DefaultResourceLoader implements ResourceLoader {
         cwd: this.cwd,
         agentDir: this.agentDir,
         skillPaths,
-        includeDefaults: false,
       });
       return { resources: skills, diagnostics };
     },

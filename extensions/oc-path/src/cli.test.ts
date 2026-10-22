@@ -15,198 +15,43 @@ import {
   writeSync,
 } from "node:fs";
 import { join } from "node:path";
-import { Command, CommanderError } from "commander";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { registerOcPathCli } from "../cli-registration.js";
-import { registerPathCli } from "./cli.js";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import plugin from "../index.js";
+import {
+  createTestRuntime,
+  pathEmitCommand,
+  pathFindCommand,
+  pathResolveCommand,
+  pathSetCommand,
+  pathValidateCommand,
+  stderrText,
+  stdoutText,
+  type TestRuntime,
+} from "./cli.test-support.js";
 
 const JSONC_INPUT_LIMIT_BYTES = 16 * 1024 * 1024;
-type RegisterCli = Parameters<typeof registerOcPathCli>[0]["registerCli"];
-type CliRegistrar = Parameters<RegisterCli>[0];
-type CliRegistrationOptions = Parameters<RegisterCli>[1];
 
-function resolvePathMachineOutput() {
+const isPathMachineOutput = (() => {
   let resolver:
     | ((params: { argv: readonly string[]; stdoutIsTTY: boolean }) => boolean)
     | undefined;
-  registerOcPathCli({
-    registerCli(_registrar: CliRegistrar, options?: CliRegistrationOptions) {
-      const descriptor = options?.descriptors?.[0];
-      resolver = descriptor && "machineOutput" in descriptor ? descriptor.machineOutput : undefined;
-    },
-  } as unknown as Parameters<typeof registerOcPathCli>[0]);
+  plugin.register(
+    createTestPluginApi({
+      registerCli(_registrar, options) {
+        const descriptor = options?.descriptors?.[0];
+        resolver =
+          descriptor && "machineOutput" in descriptor ? descriptor.machineOutput : undefined;
+      },
+    }),
+  );
   if (!resolver) {
     throw new Error("oc-path CLI descriptor is missing its machine-output resolver");
   }
   return resolver;
-}
-
-const isPathMachineOutput = resolvePathMachineOutput();
-
-type PathCommandOptions = {
-  readonly json?: boolean;
-  readonly human?: boolean;
-  readonly valueJson?: boolean;
-  readonly cwd?: string;
-  readonly file?: string;
-  readonly dryRun?: boolean;
-  readonly diff?: boolean;
-};
-
-interface TestRuntime {
-  readonly stdout: string[];
-  readonly stderr: string[];
-  exitCode: number;
-  error(value: string): void;
-  writeStdout(value: string): void;
-  exit(code: number): void;
-}
-
-function createTestRuntime(): TestRuntime {
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  const runtime: TestRuntime = {
-    stdout,
-    stderr,
-    exitCode: 0,
-    error: (value) => {
-      stderr.push(value);
-    },
-    writeStdout: (value) => {
-      stdout.push(value);
-    },
-    exit: (code) => {
-      runtime.exitCode = code;
-    },
-  };
-  return runtime;
-}
-
-const stdoutText = (rt: TestRuntime): string => rt.stdout.join("");
-const stderrText = (rt: TestRuntime): string => rt.stderr.join("");
-
-function optionArgs(options: PathCommandOptions): string[] {
-  const args: string[] = [];
-  if (options.json === true) {
-    args.push("--json");
-  }
-  if (options.human === true) {
-    args.push("--human");
-  }
-  if (options.valueJson === true) {
-    args.push("--value-json");
-  }
-  if (options.cwd !== undefined) {
-    args.push("--cwd", options.cwd);
-  }
-  if (options.file !== undefined) {
-    args.push("--file", options.file);
-  }
-  if (options.dryRun === true) {
-    args.push("--dry-run");
-  }
-  if (options.diff === true) {
-    args.push("--diff");
-  }
-  return args;
-}
-
-async function invokePathCli(args: string[], runtime: TestRuntime): Promise<void> {
-  const previousExitCode = process.exitCode;
-  process.exitCode = 0;
-  const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
-    runtime.writeStdout(String(chunk));
-    return true;
-  }) as typeof process.stdout.write);
-  const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(((chunk: unknown) => {
-    runtime.error(String(chunk));
-    return true;
-  }) as typeof process.stderr.write);
-  try {
-    const program = new Command();
-    program.exitOverride();
-    program.configureOutput({
-      writeOut: (value) => runtime.writeStdout(value),
-      writeErr: (value) => runtime.error(value),
-    });
-    registerPathCli(program);
-    await program.parseAsync(["node", "openclaw", "path", ...args]);
-    runtime.exitCode = process.exitCode ?? 0;
-  } catch (error) {
-    if (!(error instanceof CommanderError)) {
-      throw error;
-    }
-    runtime.exitCode = error.exitCode;
-  } finally {
-    stdoutWrite.mockRestore();
-    stderrWrite.mockRestore();
-    // oxlint-disable-next-line no-warning-comments -- replace the pending link after Bun ships the fix.
-    // TODO(bun#42607): Assign undefined once Bun clears a nonzero process.exitCode.
-    process.exitCode = previousExitCode ?? 0;
-  }
-}
-
-async function pathResolveCommand(
-  path: string | undefined,
-  options: PathCommandOptions,
-  runtime: TestRuntime,
-): Promise<void> {
-  await invokePathCli(
-    ["resolve", ...(path === undefined ? [] : [path]), ...optionArgs(options)],
-    runtime,
-  );
-}
-
-async function pathSetCommand(
-  path: string | undefined,
-  value: string | undefined,
-  options: PathCommandOptions,
-  runtime: TestRuntime,
-): Promise<void> {
-  await invokePathCli(
-    [
-      "set",
-      ...(path === undefined ? [] : [path]),
-      ...(value === undefined ? [] : [value]),
-      ...optionArgs(options),
-    ],
-    runtime,
-  );
-}
-
-async function pathFindCommand(
-  path: string | undefined,
-  options: PathCommandOptions,
-  runtime: TestRuntime,
-): Promise<void> {
-  await invokePathCli(
-    ["find", ...(path === undefined ? [] : [path]), ...optionArgs(options)],
-    runtime,
-  );
-}
-
-async function pathValidateCommand(
-  path: string | undefined,
-  options: PathCommandOptions,
-  runtime: TestRuntime,
-): Promise<void> {
-  await invokePathCli(
-    ["validate", ...(path === undefined ? [] : [path]), ...optionArgs(options)],
-    runtime,
-  );
-}
-
-async function pathEmitCommand(
-  file: string | undefined,
-  options: PathCommandOptions,
-  runtime: TestRuntime,
-): Promise<void> {
-  await invokePathCli(
-    ["emit", ...(file === undefined ? [] : [file]), ...optionArgs(options)],
-    runtime,
-  );
-}
+})();
 
 describe("openclaw path CLI", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -228,6 +73,117 @@ describe("openclaw path CLI", () => {
       expect(out.valid).toBe(false);
     });
   });
+
+  it.each(["jsonc", "jsonl", "yaml"])(
+    "keeps quoted special and escaped keys literal in %s CLI reads, writes, and find",
+    async (kind) => {
+      const workspaceDir = tempDirs.make("oc-path-cli-");
+      const filename = `config.${kind}`;
+      const filePath = join(workspaceDir, filename);
+      const literals = [
+        ["$first", '"$first"', 7],
+        ["$last", '"$last"', 9],
+        ["*", '"*"', 11],
+        ["**", '"**"', 12],
+        ["#0", '"#0"', 13],
+        ["+", '"+"', 14],
+        ["+key", '"+key"', 15],
+        ["+1", '"+1"', 16],
+        ["{a,b}", '"{a,b}"', 17],
+        ["[k=v]", '"[k=v]"', 18],
+        ['a"b\\c/d.e?f', String.raw`"a\"b\\c/d.e?f"`, 19],
+        ['"$first"', String.raw`"\"$first\""`, 20],
+      ] as const;
+      const expected: { items: Record<string, string | number> } = {
+        items: {
+          head: "keep-first",
+          ...Object.fromEntries(literals.map(([key, , value]) => [key, value])),
+          tail: "keep-last",
+        },
+      };
+      writeFileSync(
+        filePath,
+        kind === "yaml" ? stringifyYaml(expected) : JSON.stringify(expected),
+        "utf-8",
+      );
+      const options = { cwd: workspaceDir, json: true };
+      const prefix = `oc://${filename}/${kind === "jsonl" ? "L1/" : ""}items`;
+      const readSaved = (raw: string) => (kind === "yaml" ? parseYaml(raw) : JSON.parse(raw));
+
+      for (const [token, value] of [
+        ["$first", "keep-first"],
+        ["$last", "keep-last"],
+      ]) {
+        const rt = createTestRuntime();
+        await pathResolveCommand(`${prefix}/${token}`, options, rt);
+        expect(rt.exitCode).toBe(0);
+        expect(JSON.parse(stdoutText(rt)).match).toMatchObject({ valueText: value });
+      }
+      for (const [key, quoted, value] of literals) {
+        const path = `${prefix}.${quoted}`;
+        const rt = createTestRuntime();
+        await pathResolveCommand(path, options, rt);
+        expect(rt.exitCode).toBe(0);
+        expect(JSON.parse(stdoutText(rt)).match).toMatchObject({
+          kind: "leaf",
+          valueText: String(value),
+          leafType: "number",
+        });
+        const nestedFind = createTestRuntime();
+        await pathFindCommand(
+          `oc://${filename}/${kind === "jsonl" ? "L1/" : ""}*/${quoted}`,
+          options,
+          nestedFind,
+        );
+        expect(nestedFind.exitCode).toBe(0);
+        expect(JSON.parse(stdoutText(nestedFind)).matches).toMatchObject([
+          { path: `${prefix}/${quoted}`, match: { valueText: String(value), leafType: "number" } },
+        ]);
+        const before = readFileSync(filePath, "utf-8");
+        expected.items[key] = 42;
+        const preview = createTestRuntime();
+        await pathSetCommand(path, "42", { ...options, dryRun: true }, preview);
+        expect(preview.exitCode).toBe(0);
+        expect(readSaved(JSON.parse(stdoutText(preview)).bytes)).toEqual(expected);
+        expect(readFileSync(filePath, "utf-8")).toBe(before);
+        const written = createTestRuntime();
+        await pathSetCommand(path, "42", options, written);
+        expect(written.exitCode).toBe(0);
+        expect(readSaved(readFileSync(filePath, "utf-8"))).toEqual(expected);
+      }
+
+      const found = createTestRuntime();
+      await pathFindCommand(`${prefix}/*`, options, found);
+      expect(found.exitCode).toBe(0);
+      expect(JSON.parse(stdoutText(found)).matches).toMatchObject([
+        { path: `${prefix}/head`, match: { valueText: "keep-first" } },
+        ...literals.map(([, quoted]) => ({
+          path: `${prefix}/${quoted}`,
+          match: { valueText: "42", leafType: "number" },
+        })),
+        { path: `${prefix}/tail`, match: { valueText: "keep-last" } },
+      ]);
+
+      writeFileSync(filePath, JSON.stringify({ items: { $last: 10, '"$first"': 20 } }), "utf-8");
+      for (const [selector, quoted, value] of [
+        ["$first", '"$last"', 10],
+        ["$last", String.raw`"\"$first\""`, 20],
+      ] as const) {
+        const positional = createTestRuntime();
+        await pathFindCommand(`${prefix}/${selector}`, options, positional);
+        expect(positional.exitCode).toBe(0);
+        expect(JSON.parse(stdoutText(positional)).matches).toMatchObject([
+          { path: `${prefix}/${quoted}`, match: { valueText: String(value), leafType: "number" } },
+        ]);
+        const written = createTestRuntime();
+        await pathSetCommand(`${prefix}/${selector}`, "42", options, written);
+        expect(written.exitCode).toBe(0);
+      }
+      expect(readSaved(readFileSync(filePath, "utf-8"))).toEqual({
+        items: { $last: 42, '"$first"': 42 },
+      });
+    },
+  );
 
   describe("resolve", () => {
     it("CLI-R04 finds a leaf in yaml and prints it", async () => {
@@ -285,6 +241,23 @@ describe("openclaw path CLI", () => {
       const unboundedRead = vi
         .spyOn(fs, "readFile")
         .mockRejectedValue(new Error("unbounded file read"));
+      // The loader reads through a descriptor stream; count the bytes it pulls.
+      const open = fs.open.bind(fs);
+      let opens = 0;
+      let bytesRead = 0;
+      const observedOpen = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const handle = await open(...args);
+        if (args[0] === filePath) {
+          opens += 1;
+          const read = handle.read.bind(handle);
+          vi.spyOn(handle, "read").mockImplementation(async (...readArgs) => {
+            const result = await read(...readArgs);
+            bytesRead += result.bytesRead;
+            return result;
+          });
+        }
+        return handle;
+      });
       const cases: ReadonlyArray<{
         code: string;
         run: (runtime: TestRuntime) => Promise<void>;
@@ -326,6 +299,8 @@ describe("openclaw path CLI", () => {
 
       try {
         for (const testCase of cases) {
+          opens = 0;
+          bytesRead = 0;
           const rt = createTestRuntime();
           await testCase.run(rt);
           expect(rt.exitCode).toBe(2);
@@ -333,9 +308,12 @@ describe("openclaw path CLI", () => {
           expect(JSON.parse(stderrText(rt))).toMatchObject({
             error: { code: testCase.code },
           });
+          expect(opens).toBeGreaterThan(0);
+          expect(bytesRead).toBeLessThanOrEqual(JSONC_INPUT_LIMIT_BYTES + 1);
         }
         expect(unboundedRead).not.toHaveBeenCalled();
       } finally {
+        observedOpen.mockRestore();
         unboundedRead.mockRestore();
       }
     });
@@ -368,6 +346,387 @@ describe("openclaw path CLI", () => {
   });
 
   describe("set", () => {
+    it("preserves an existing quoted frontmatter value when editing another field", async () => {
+      const workspaceDir = tempDirs.make("oc-path-cli-");
+      const filePath = join(workspaceDir, "AGENTS.md");
+      const value = String.raw`C:\Tools\bin`;
+      writeFileSync(filePath, `---\nname: old\nnote: ${JSON.stringify(value)}\n---\n`);
+      const rt = createTestRuntime();
+      await pathSetCommand(
+        "oc://AGENTS.md/[frontmatter]/name",
+        "new",
+        { cwd: workspaceDir, json: true },
+        rt,
+      );
+      expect(rt.exitCode, stderrText(rt)).toBe(0);
+      const frontmatter = readFileSync(filePath, "utf8").split("---")[1];
+      expect(parseYaml(frontmatter ?? "")).toEqual({ name: "new", note: value });
+    });
+
+    it.each([
+      { label: "quote delimiters", value: '"hello"' },
+      { label: "surrounding whitespace", value: "  hello\t" },
+    ])("preserves a frontmatter $label across separate CLI reads and edits", async ({ value }) => {
+      const workspaceDir = tempDirs.make("oc-path-cli-");
+      const filePath = join(workspaceDir, "AGENTS.md");
+      writeFileSync(
+        filePath,
+        "---\nnote: old\nother: original\n---\n\n## Tasks\n- Keep this item\n",
+      );
+      const options = { cwd: workspaceDir, json: true };
+      const target = "oc://AGENTS.md/[frontmatter]/note";
+      const set = createTestRuntime();
+      await pathSetCommand(target, value, options, set);
+      expect(set.exitCode, stderrText(set)).toBe(0);
+
+      const read = createTestRuntime();
+      await pathResolveCommand(target, options, read);
+      expect(read.exitCode, stderrText(read)).toBe(0);
+      expect(JSON.parse(stdoutText(read)).match.valueText).toBe(value);
+
+      const other = createTestRuntime();
+      await pathSetCommand("oc://AGENTS.md/[frontmatter]/other", "updated", options, other);
+      expect(other.exitCode, stderrText(other)).toBe(0);
+      const reread = createTestRuntime();
+      await pathResolveCommand(target, options, reread);
+      expect(reread.exitCode, stderrText(reread)).toBe(0);
+      expect(JSON.parse(stdoutText(reread)).match.valueText).toBe(value);
+      expect(readFileSync(filePath, "utf8")).toContain("## Tasks\n- Keep this item");
+    });
+
+    it.each([
+      ["1e-7", "1e-7"],
+      ["2.5E+3", "2500"],
+      ["1e21", "1e+21"],
+    ])("writes YAML numeric value %s without changing its type", async (value, expected) => {
+      const workspaceDir = tempDirs.make("oc-path-cli-");
+      const filePath = join(workspaceDir, "workflow.yaml");
+      const before = "# settings\nrate: 1e-7\nlabel: keep\n";
+      writeFileSync(filePath, before);
+      const options = { file: filePath, json: true };
+      const address = "oc://workflow.yaml/rate";
+      const preview = createTestRuntime();
+      await pathSetCommand(address, value, { ...options, dryRun: true }, preview);
+      expect(preview.exitCode).toBe(0);
+      expect(readFileSync(filePath, "utf8")).toBe(before);
+
+      const write = createTestRuntime();
+      await pathSetCommand(address, value, options, write);
+      expect(write.exitCode).toBe(0);
+      const read = createTestRuntime();
+      await pathResolveCommand(address, options, read);
+      expect(read.exitCode).toBe(0);
+      expect(JSON.parse(stdoutText(read)).match).toMatchObject({
+        leafType: "number",
+        valueText: expected,
+      });
+      const after = readFileSync(filePath, "utf8");
+      expect(after).toContain("# settings\n");
+      expect(after).toContain("label: keep\n");
+    });
+
+    it.each(["1e", "1e999", "0x10", "1,5"])(
+      "refuses invalid YAML numeric value %s without writing",
+      async (value) => {
+        const workspaceDir = tempDirs.make("oc-path-cli-");
+        const filePath = join(workspaceDir, "workflow.yaml");
+        const before = "rate: 1e-7\n";
+        writeFileSync(filePath, before);
+        const runtime = createTestRuntime();
+        await pathSetCommand(
+          "oc://workflow.yaml/rate",
+          value,
+          { file: filePath, json: true },
+          runtime,
+        );
+        expect(runtime.exitCode).toBe(1);
+        expect(JSON.parse(stdoutText(runtime))).toMatchObject({ ok: false, reason: "parse-error" });
+        expect(readFileSync(filePath, "utf8")).toBe(before);
+      },
+    );
+
+    it.each([
+      {
+        eol: "\n",
+        value: " first line\n  second line",
+        text: "first line\nsecond line",
+        prefix: " ",
+      },
+      { eol: "\r\n", value: "\n  first line", text: "first line", prefix: "\n  " },
+    ])(
+      "reads and edits wrapped Markdown item values: $value with $eol",
+      async ({ eol, value, text, prefix }) => {
+        const workspaceDir = tempDirs.make("oc-path-cli-");
+        const filePath = join(workspaceDir, "notes.md");
+        const before = [
+          "## Notes",
+          `- description:${value}`,
+          "  - child: preserved",
+          "- keep: unchanged",
+          "",
+        ]
+          .join("\n")
+          .replaceAll("\n", eol);
+        writeFileSync(filePath, before, "utf-8");
+        const path = "oc://notes.md/notes/description/description";
+        const options = { cwd: workspaceDir, json: true };
+        const resolved = createTestRuntime();
+        await pathResolveCommand(path, options, resolved);
+        expect(resolved.exitCode).toBe(0);
+        expect(JSON.parse(stdoutText(resolved)).match).toMatchObject({
+          kind: "leaf",
+          valueText: text,
+          leafType: "string",
+        });
+
+        const expected = [
+          "## Notes",
+          `- description:${prefix}updated`,
+          "  - child: preserved",
+          "- keep: unchanged",
+          "",
+        ]
+          .join("\n")
+          .replaceAll("\n", eol);
+        const preview = createTestRuntime();
+        await pathSetCommand(path, "updated", { ...options, dryRun: true }, preview);
+        expect(preview.exitCode).toBe(0);
+        expect(JSON.parse(stdoutText(preview)).bytes).toBe(expected);
+        expect(readFileSync(filePath, "utf-8")).toBe(before);
+
+        const written = createTestRuntime();
+        await pathSetCommand(path, "updated", options, written);
+        expect(written.exitCode).toBe(0);
+        expect(readFileSync(filePath, "utf-8")).toBe(expected);
+        const reread = createTestRuntime();
+        await pathResolveCommand(path, options, reread);
+        expect(reread.exitCode).toBe(0);
+        expect(JSON.parse(stdoutText(reread)).match).toMatchObject({ valueText: "updated" });
+      },
+    );
+
+    it.each([
+      {
+        label: "unresolved JSONC leaf",
+        file: "config.jsonc",
+        before: '{ "count": 1 }\n',
+        path: "oc://config.jsonc/missing",
+        value: "next",
+        expected: { ok: false, reason: "unresolved" },
+      },
+      {
+        label: "non-writable root with human detail",
+        file: "config.jsonc",
+        before: '{ "count": 1 }\n',
+        path: "oc://config.jsonc",
+        value: "next",
+        expected: "set failed: not-writable — root replacement is not supported via setOcPath",
+      },
+      {
+        label: "numeric coercion refusal",
+        file: "config.jsonc",
+        before: '{ "count": 1 }\n',
+        path: "oc://config.jsonc/count",
+        value: "oops",
+        expected: { ok: false, reason: "parse-error", detail: 'cannot coerce "oops" to number' },
+      },
+      {
+        label: "keyed insertion into an array",
+        file: "config.jsonc",
+        before: '{ "items": [1] }\n',
+        path: "oc://config.jsonc/items/+key",
+        value: "2",
+        expected: {
+          ok: false,
+          reason: "type-mismatch",
+          detail: "cannot insert by key into array",
+        },
+      },
+      {
+        label: "wildcard write refusal",
+        file: "config.jsonc",
+        before: '{ "items": [1] }\n',
+        path: "oc://config.jsonc/items/*",
+        value: "2",
+        expected: {
+          ok: false,
+          reason: "wildcard-not-allowed",
+          detail: "setOcPath requires a concrete path; use findOcPaths to enumerate matches first",
+        },
+      },
+      {
+        label: "non-keyed Markdown item with human output",
+        file: "AGENTS.md",
+        before: "## Tools\n- plain bullet\n",
+        path: "oc://AGENTS.md/tools/plain-bullet/plain-bullet",
+        value: "next",
+        expected: "set failed: no-item-kv",
+      },
+      {
+        label: "malformed JSONL record",
+        file: "events.jsonl",
+        before: '{"event":"keep"}\nbroken\n',
+        path: "oc://events.jsonl/L2",
+        value: '"next"',
+        expected: { ok: false, reason: "not-a-value-line" },
+      },
+    ])("preserves CLI rejection output and source bytes for $label", async (testCase) => {
+      const workspaceDir = tempDirs.make("oc-path-cli-");
+      const filePath = join(workspaceDir, testCase.file);
+      const before = Buffer.from(testCase.before, "utf8");
+      writeFileSync(filePath, before);
+      const rt = createTestRuntime();
+      const human = typeof testCase.expected === "string";
+
+      await pathSetCommand(
+        testCase.path,
+        testCase.value,
+        { cwd: workspaceDir, human, json: !human },
+        rt,
+      );
+
+      expect(rt.exitCode).toBe(1);
+      expect(stderrText(rt)).toBe("");
+      if (human) {
+        expect(stdoutText(rt)).toBe(testCase.expected);
+      } else {
+        expect(JSON.parse(stdoutText(rt))).toEqual(testCase.expected);
+      }
+      expect(readFileSync(filePath)).toEqual(before);
+    });
+
+    describe.each(["\n", "\r\n"])("Markdown source preservation with %j", (ending) => {
+      const frontmatter =
+        '\uFEFF---\n# Keep the authored metadata.\nname: &shared "example"\ncopy: *shared\nempty: &empty\nempty_copy: *empty\n\ndescription: |\n  First line.\n  Second line.\nmetadata:\n  openclaw:\n    requires:\n      bins: [gh]\n---\n';
+      const body = '\n# Title\n\n## Tools ##\n- command: old\n\n## Other\n* untouched: "quoted"';
+      const before = frontmatter + body;
+      it.each([
+        [
+          "body field edit",
+          "tools/command/command",
+          "new",
+          before.replace("command: old", "command: new"),
+        ],
+        [
+          "item insertion",
+          "tools/+",
+          "added: value",
+          before.replace("## Other", "- added: value\n## Other"),
+        ],
+        ["section insertion", "+", "Added", before + "\n\n## Added"],
+        [
+          "frontmatter edit",
+          "[frontmatter]/name",
+          "updated",
+          before.replace('name: &shared "example"', "name: &shared updated"),
+        ],
+        [
+          "frontmatter insertion",
+          "[frontmatter]/+added",
+          "value",
+          before.replace("bins: [gh]\n---", "bins: [gh]\nadded: value\n---"),
+        ],
+        [
+          "empty anchored value",
+          "[frontmatter]/empty",
+          "filled",
+          before.replace("empty: &empty\n", "empty: &empty filled\n"),
+        ],
+        [
+          "block scalar replacement",
+          "[frontmatter]/description",
+          "plain",
+          before.replace("|\n  First line.\n  Second line.", "plain"),
+        ],
+        [
+          "nested metadata replacement",
+          "[frontmatter]/metadata",
+          "plain",
+          before.replace(
+            "metadata:\n  openclaw:\n    requires:\n      bins: [gh]",
+            "metadata: plain",
+          ),
+        ],
+      ])(
+        "preserves unrelated Markdown bytes during %s",
+        async (_label, target, value, expected) => {
+          const workspaceDir = tempDirs.make("oc-path-cli-");
+          const filePath = join(workspaceDir, "SKILL.md");
+          const finalNewline = ending === "\n" ? ending : "";
+          writeFileSync(filePath, before.replace(/\n/g, ending) + finalNewline);
+          const rt = createTestRuntime();
+          await pathSetCommand(
+            `oc://SKILL.md/${target}`,
+            value,
+            { cwd: workspaceDir, json: true },
+            rt,
+          );
+
+          expect(rt.exitCode, stderrText(rt)).toBe(0);
+          expect(readFileSync(filePath, "utf8")).toBe(
+            expected.replace(/\n/g, ending) + finalNewline,
+          );
+          if (target === "[frontmatter]/metadata") {
+            const readback = createTestRuntime();
+            await pathResolveCommand(
+              `oc://SKILL.md/${target}`,
+              { cwd: workspaceDir, json: true },
+              readback,
+            );
+            expect(readback.exitCode, stderrText(readback)).toBe(0);
+            expect(JSON.parse(stdoutText(readback)).match.valueText).toBe(value);
+          }
+        },
+      );
+    });
+    it.each(["\n", "\r\n", "mixed"])(
+      "preserves JSONL bytes outside a leaf and across append with %j separators",
+      async (ending) => {
+        const workspaceDir = tempDirs.make("oc-path-cli-");
+        const filePath = join(workspaceDir, "events.jsonl");
+        const firstEnding = ending === "mixed" ? "\r\n" : ending;
+        const lastEnding = ending === "mixed" ? "\n" : ending;
+        const before =
+          '\uFEFF{ "id": 9007199254740993, "ratio": 1.0000000000000001 } // note' +
+          firstEnding +
+          '{ "items": [{"event":"old", "id":9007199254740993, "ratio":1.0000000000000001}], "literal":"\\u0041" }' +
+          lastEnding +
+          lastEnding +
+          "// keep this comment" +
+          lastEnding +
+          "broken record" +
+          lastEnding;
+        const expected = before.replace('"event":"old"', '"event":"updated"');
+        writeFileSync(filePath, before, "utf8");
+        const address = "oc://events.jsonl/L2/items.$last/event";
+        const preview = createTestRuntime();
+        await pathSetCommand(
+          address,
+          "updated",
+          { file: filePath, json: true, dryRun: true },
+          preview,
+        );
+        expect(preview.exitCode).toBe(0);
+        expect(JSON.parse(stdoutText(preview)).bytes).toBe(expected);
+        expect(readFileSync(filePath, "utf8")).toBe(before);
+
+        const write = createTestRuntime();
+        await pathSetCommand(address, "updated", { file: filePath, json: true }, write);
+        expect(write.exitCode).toBe(0);
+        expect(readFileSync(filePath, "utf8")).toBe(expected);
+
+        const append = createTestRuntime();
+        await pathSetCommand(
+          "oc://events.jsonl/+",
+          '{"event":"next"}',
+          { file: filePath, json: true, valueJson: true },
+          append,
+        );
+        expect(append.exitCode).toBe(0);
+        expect(readFileSync(filePath, "utf8")).toBe(`${expected}{"event":"next"}${lastEnding}`);
+      },
+    );
+
     it("CLI-S09 refuses an undecodable file instead of rewriting untouchable bytes", async () => {
       const workspaceDir = tempDirs.make("oc-path-cli-");
       const filePath = join(workspaceDir, "gateway.jsonc");
@@ -476,7 +835,7 @@ describe("openclaw path CLI", () => {
       expect(readFileSync(filePath, "utf-8")).toBe(after);
     });
 
-    it("CLI-S05c --dry-run --diff shows line-ending-only byte changes", async () => {
+    it("CLI-S05c --dry-run --diff preserves CRLF during a Markdown value change", async () => {
       const workspaceDir = tempDirs.make("oc-path-cli-");
       const filePath = join(workspaceDir, "AGENTS.md");
       const before = "---\r\nname: x\r\n---\r\n";
@@ -484,14 +843,15 @@ describe("openclaw path CLI", () => {
       const rt = createTestRuntime();
       await pathSetCommand(
         "oc://AGENTS.md/[frontmatter]/name",
-        "x",
+        "y",
         { cwd: workspaceDir, json: true, dryRun: true, diff: true },
         rt,
       );
       expect(rt.exitCode).toBe(0);
       const out = JSON.parse(stdoutText(rt));
+      expect(out.bytes).toBe("---\r\nname: y\r\n---\r\n");
       expect(out.diff).toContain("-name: x\r");
-      expect(out.diff).toContain("+name: x");
+      expect(out.diff).toContain("+name: y\r");
       expect(readFileSync(filePath, "utf-8")).toBe(before);
     });
 

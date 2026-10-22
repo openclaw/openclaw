@@ -8,17 +8,13 @@ import {
   errorShape,
   validateSessionsUsageParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { sessionCreatorProfileId } from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveUsageCostWorkerDayBucket } from "../../infra/session-cost-usage-worker-runtime.js";
 import { loadSessionLogs, loadSessionUsageTimeSeries } from "../../infra/session-cost-usage.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { readSessionRowChangeRevision } from "../../sessions/session-row-changes.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
-import {
-  createUsageAggregateAccumulator,
-  UNKNOWN_USAGE_CREATOR_KEY,
-} from "../../shared/usage-aggregates.js";
+import { createUsageAggregateAccumulator } from "../../shared/usage-aggregates.js";
 import { buildUsageOverview, selectUsageOverviewPage } from "../../shared/usage-overview.js";
 import { extractQueryTerms } from "../../shared/usage-query.js";
 import type {
@@ -34,9 +30,12 @@ import {
 } from "../../utils/delivery-context.read.js";
 import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import { operatorSessionCap } from "../operator-role-policy.js";
-import { projectSessionActor } from "../session-identity-projection.js";
+import type { projectSessionActor } from "../session-identity-projection.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { getSessionRowProjection } from "../session-row-projection-access.js";
+import {
+  getSessionRowProjection,
+  requireSessionRowProjection,
+} from "../session-row-projection-access.js";
 import {
   prepareSessionMutationFacts,
   SessionMutationFactsUnavailableError,
@@ -64,6 +63,7 @@ import {
 import { loadUsageSessionSummaries, withUsageRequestBudget } from "./usage-session-loading.js";
 import {
   loadUsageSessionContext,
+  projectUsageCreator,
   resolveSessionUsageTarget,
   selectUsageSessions,
   UsageSessionInvalidRequestError,
@@ -133,49 +133,6 @@ function resolveUsageDateRangeOrRespond(
 }
 
 export type { SessionUsageEntry, SessionsUsageAggregates, SessionsUsageResult };
-
-function projectUsageCreator(
-  session: UsageSessionSelection,
-  profiles: Parameters<typeof projectSessionActor>[1],
-  config: OpenClawConfig,
-): SessionUsageCreator {
-  const entry = session.storeEntry ?? session.creatorEntry;
-  const actor = entry?.createdActor;
-  if (!actor) {
-    return { key: UNKNOWN_USAGE_CREATOR_KEY };
-  }
-  const projected = projectSessionActor(
-    actor,
-    profiles,
-    config,
-    Boolean(sessionCreatorProfileId(actor)),
-  );
-  if (!projected?.id && actor.type !== "system") {
-    return { key: UNKNOWN_USAGE_CREATOR_KEY };
-  }
-  const identity = projected?.identity;
-  const origin = sessionDeliveryOrigin(entry);
-  const channel = sessionDeliveryChannel(entry);
-  if (actor.type === "human" && actor.source !== "profile" && !channel) {
-    return { key: UNKNOWN_USAGE_CREATOR_KEY };
-  }
-  const key =
-    identity?.type === "profile"
-      ? JSON.stringify(["profile", identity.id])
-      : actor.type === "human"
-        ? JSON.stringify([
-            "human",
-            actor.source,
-            session.agentId,
-            channel ?? null,
-            origin?.accountId ?? null,
-            projected?.id,
-          ])
-        : actor.type === "agent"
-          ? JSON.stringify([identity?.type ?? "agent", identity?.id ?? projected?.id])
-          : JSON.stringify(["system", projected?.id ?? null]);
-  return { key, ...(projected ? { actor: projected } : {}) };
-}
 
 export const usageHandlers: GatewayRequestHandlers = {
   "usage.status": async ({ respond, context, client }) => {
@@ -290,6 +247,9 @@ export const usageHandlers: GatewayRequestHandlers = {
         }
       : undefined;
     const includeContextWeight = p.includeContextWeight ?? false;
+    const includeAllContext = extractQueryTerms(overviewOptions?.query ?? "").some(
+      (term) => term.key?.toLowerCase() === "has" && term.value.toLowerCase() === "context",
+    );
     const creatorKey = normalizeOptionalString(p.creatorKey);
     const specificKey = normalizeOptionalString(p.key) ?? null;
     const requestedAgentId = normalizeOptionalString(p.agentId);
@@ -337,14 +297,14 @@ export const usageHandlers: GatewayRequestHandlers = {
         endMs,
         includeUntimestamped,
         dayBucket,
-        limit,
         groupingMode,
         specificKey,
         includeContextWeight,
         creatorKey,
-        ...(overviewOptions
-          ? { overviewKey: JSON.stringify([p.projection, overviewOptions]) }
-          : {}),
+        // Paging, sorting, and usage filters derive from the same source snapshot.
+        overview: overviewOptions !== undefined,
+        committedOnly: p.projection === "overview",
+        includeAllContext,
         ...(visibilityIdentity ? { visibilityIdentity } : {}),
         load: async () => {
           const now = Date.now();
@@ -354,6 +314,7 @@ export const usageHandlers: GatewayRequestHandlers = {
             () =>
               selectUsageSessions({
                 config,
+                projection: requireSessionRowProjection(context),
                 agentId: effectiveAgentId,
                 specificKey,
                 groupingMode,
@@ -378,11 +339,7 @@ export const usageHandlers: GatewayRequestHandlers = {
           }
 
           // Context queries need the saved report for every candidate; ordinary reads hydrate the page.
-          if (
-            extractQueryTerms(overviewOptions?.query ?? "").some(
-              (term) => term.key?.toLowerCase() === "has" && term.value.toLowerCase() === "context",
-            )
-          ) {
+          if (includeAllContext) {
             await budget.read(
               () => loadUsageSessionContext(mergedEntries, visibilityFilter),
               () => undefined,
@@ -391,6 +348,7 @@ export const usageHandlers: GatewayRequestHandlers = {
           const sessions: SessionUsageEntry[] = [];
           const { summaries, computing, cacheStatus } = await loadUsageSessionSummaries({
             entries: mergedEntries,
+            committedOnly: p.projection === "overview",
             read: budget.read,
             config,
             startMs,
@@ -449,6 +407,9 @@ export const usageHandlers: GatewayRequestHandlers = {
                   status: "partial" as const,
                 }
               : cacheStatus,
+            ...(budget.exhausted()
+              ? { partial: { reason: "time-budget" as const, message: budget.hint } }
+              : {}),
             sources: visibleEntries,
             accessRevision: loadedAccessRevision,
             sessionRevision: loadedSessionRevision,
@@ -646,7 +607,7 @@ export const usageHandlers: GatewayRequestHandlers = {
           };
       const partial = budget.exhausted()
         ? { reason: "time-budget" as const, message: budget.hint }
-        : undefined;
+        : (result.partial ?? result.cacheStatus?.partial);
       if (partial && "overview" in slice) {
         slice.overview.queryWarnings.push(partial.message);
       }

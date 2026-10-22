@@ -3,7 +3,7 @@ import type {
   OpenClawPluginServiceContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { CodexAppServerClient } from "./client.js";
-import type { CodexAppServerRuntimeOptions } from "./config-contracts.js";
+import type { CodexAppServerRuntimeOptions, CodexPluginConfig } from "./config-contracts.js";
 
 const INITIAL_RECONNECT_DELAY_MS = 1_000;
 const MAX_RECONNECT_DELAY_MS = 30_000;
@@ -20,13 +20,14 @@ export function createCodexAppServerConnectionHealthService(
   let monitor: Promise<void> | undefined;
   const run = async (ctx: OpenClawPluginServiceContext, signal: AbortSignal) => {
     const { resolveCodexAppServerRuntimeOptions } = await import("./config-runtime.js");
+    const { readCodexPluginConfig } = await import("./config-parsing.js");
     let consecutiveFailures = 0;
 
     while (!signal.aborted) {
-      let pluginConfig: unknown;
+      let pluginConfig: CodexPluginConfig;
       let runtime: CodexAppServerRuntimeOptions;
       try {
-        pluginConfig = options.getPluginConfig();
+        pluginConfig = readCodexPluginConfig(options.getPluginConfig());
         runtime = resolveCodexAppServerRuntimeOptions({ pluginConfig });
       } catch (error) {
         if (!signal.aborted) {

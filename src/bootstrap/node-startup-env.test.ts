@@ -1,10 +1,12 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveNodeStartupTlsEnvironment } from "./node-startup-env.js";
 
 const FEDORA_CA_BUNDLE_PATH = "/etc/pki/tls/certs/ca-bundle.crt";
+afterEach(() => vi.restoreAllMocks());
 
 function allowOnly(path: string) {
-  return (candidate: string) => {
+  return (candidate: Parameters<typeof fs.accessSync>[0]) => {
     if (candidate !== path) {
       throw new Error("ENOENT");
     }
@@ -31,11 +33,11 @@ describe("resolveNodeStartupTlsEnvironment", () => {
     ["empty Linux value", "", "linux", FEDORA_CA_BUNDLE_PATH, undefined],
     ["whitespace macOS value", " \t ", "darwin", "/etc/ssl/cert.pem", "1"],
   ] as const)("treats %s as unset", (_label, value, platform, expected, systemCa) => {
+    vi.spyOn(fs, "accessSync").mockImplementation(allowOnly(FEDORA_CA_BUNDLE_PATH));
     const startupEnv = resolveNodeStartupTlsEnvironment({
       env: { NODE_EXTRA_CA_CERTS: value, NVM_DIR: "/home/test/.nvm" },
       platform,
       execPath: "/usr/bin/node",
-      accessSync: allowOnly(FEDORA_CA_BUNDLE_PATH),
     });
 
     expect(startupEnv).toEqual({
@@ -50,7 +52,6 @@ describe("resolveNodeStartupTlsEnvironment", () => {
         env: { NVM_DIR: "/home/test/.nvm" },
         platform: "darwin",
         includeDarwinDefaults: false,
-        accessSync: allowOnly(FEDORA_CA_BUNDLE_PATH),
       }),
     ).toEqual({
       NODE_EXTRA_CA_CERTS: undefined,

@@ -1,8 +1,5 @@
 import { resolvePositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { readResponseBodySnippet } from "../infra/http-error-body.js";
-/**
- * Adapts MiniMax VLM image-understanding requests for agent image inputs.
- */
 import {
   postJsonRequest,
   resolveProviderHttpRequestConfigWithOriginTrust,
@@ -41,19 +38,9 @@ function resolveDefaultApiHost(provider: string | undefined): string {
     : "https://api.minimax.io";
 }
 
-function coerceApiHost(params: {
-  apiHost?: string;
-  modelBaseUrl?: string;
-  provider?: string;
-  env?: NodeJS.ProcessEnv;
-}): string {
-  const env = params.env ?? process.env;
+function coerceApiHost(params: { modelBaseUrl?: string; provider?: string }): string {
   const defaultHost = resolveDefaultApiHost(params.provider);
-  const raw =
-    params.apiHost?.trim() ||
-    env.MINIMAX_API_HOST?.trim() ||
-    params.modelBaseUrl?.trim() ||
-    defaultHost;
+  const raw = process.env.MINIMAX_API_HOST?.trim() || params.modelBaseUrl?.trim() || defaultHost;
 
   const url = URL.parse(raw);
   if (url) {
@@ -71,7 +58,6 @@ export async function minimaxUnderstandImage(params: {
   apiKey: string;
   prompt: string;
   imageDataUrl: string;
-  apiHost?: string;
   modelBaseUrl?: string;
   provider?: string;
   timeoutMs?: number;
@@ -98,7 +84,6 @@ export async function minimaxUnderstandImage(params: {
   }
 
   const configuredHost = coerceApiHost({
-    apiHost: params.apiHost,
     modelBaseUrl: params.modelBaseUrl,
     provider: params.provider,
   });

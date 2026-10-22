@@ -29,6 +29,14 @@ export function createDiagnosticsMetrics(
     createHistogram(name, description, "ms", AGENT_DURATION_MS_BUCKETS);
 
   return {
+    sessionsListBaselineRetirementsCounter: createCounter(
+      "sessions.list.baseline_retirements",
+      "Session list baseline retirement events by cause, not rows or views retired",
+    ),
+    sessionsListBaseMissesCounter: createCounter(
+      "sessions.list.base_misses",
+      "Successful full sidebar responses with a supplied base, by miss reason",
+    ),
     gcDurationHistogram: createDurationHistogram(
       "gc.duration_ms",
       "Elapsed garbage collection duration for the hosting JavaScript isolate",
@@ -45,6 +53,76 @@ export function createDiagnosticsMetrics(
     gatewayRpcRequestsCounter: createCounter(
       "gateway.rpc.requests",
       "Authenticated Gateway WebSocket requests received",
+    ),
+    gatewayWsSessionEventFramesCounter: createCounter(
+      "gateway.ws.session_event_frames",
+      "Outbound session event frames by reason and exact message subscription per socket",
+    ),
+    gatewayWsSessionEventBytesCounter: createCounter(
+      "gateway.ws.session_event_bytes",
+      "Encoded outbound session event bytes by reason and exact message subscription per socket",
+      "By",
+    ),
+    gatewayWsPresenceFramesCounter: createCounter(
+      "gateway.ws.presence_frames",
+      "Outbound presence frames accepted by the sender per socket, by delivery mode",
+    ),
+    gatewayWsPresenceBytesCounter: createCounter(
+      "gateway.ws.presence_bytes",
+      "Encoded outbound presence bytes before framing or compression per socket, by delivery mode",
+      "By",
+    ),
+    gatewayWsEventsCounter: createCounter(
+      "gateway.ws.events",
+      "Outbound Gateway WebSocket event frames accepted by the sender per socket",
+    ),
+    gatewayWsEventBytesCounter: createCounter(
+      "gateway.ws.event_bytes",
+      "Encoded outbound Gateway WebSocket event bytes before framing or compression per socket",
+      "By",
+    ),
+    gatewayWsEventWireBytesCounter: createCounter(
+      "gateway.ws.event_wire_bytes",
+      "Outbound Gateway WebSocket payload bytes after compression per socket, excluding framing",
+      "By",
+    ),
+    gatewayWsEventFrameBytesCounter: createCounter(
+      "gateway.ws.event_frame_bytes",
+      "Cumulative counts of accepted raw Gateway event frames by byte-size upper bound",
+    ),
+    gatewayWsOperatorConnectionsGauge: meter.createGauge(
+      `${metricNamePrefix}gateway.ws.operator_connections`,
+      { unit: "1", description: "Connected authenticated Gateway operator WebSockets" },
+    ),
+    sessionsListRetainedViewsGauge: meter.createGauge(
+      `${metricNamePrefix}sessions.list.retained_views`,
+      { unit: "1", description: "Retained session-list views across all publications" },
+    ),
+    sessionsListRetainedRefsGauge: meter.createGauge(
+      `${metricNamePrefix}sessions.list.retained_refs`,
+      {
+        unit: "1",
+        description: "Row references and selection entries retained by session-list views",
+      },
+    ),
+    sessionsListRetainedBytesGauge: meter.createGauge(
+      `${metricNamePrefix}sessions.list.retained_bytes`,
+      { unit: "By", description: "Estimated memory retained by session-list views" },
+    ),
+    sessionEventRowsRetainedEntriesGauge: meter.createGauge(
+      `${metricNamePrefix}session_event_rows_retained_entries`,
+      {
+        unit: "1",
+        description: "Session-event field-hash vectors retained across all connections",
+      },
+    ),
+    sessionEventRowsResetCounter: createCounter(
+      "session_event_rows_reset",
+      "Retained session-event wire baselines retired by cause",
+    ),
+    sessionEventRowsRetainedBytesGauge: meter.createGauge(
+      `${metricNamePrefix}session_event_rows_retained_bytes`,
+      { unit: "By", description: "Estimated memory retained by session-event field-hash vectors" },
     ),
     gatewayRpcOutcomesCounter: createCounter(
       "gateway.rpc.outcomes",

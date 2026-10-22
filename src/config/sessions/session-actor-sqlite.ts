@@ -1,13 +1,20 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SqliteWorkerStore } from "../../infra/sqlite-worker-contract.js";
-import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
+import {
+  hasSqliteWorkerOutcomeUnknown,
+  wrapSqliteWorkerError,
+} from "../../infra/sqlite-worker-contract.js";
 import type {
   SqliteWorkerAdmissionRequest,
   SqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import { createSqliteWorkerTransferCollector } from "../../infra/sqlite-worker-transfer.js";
+import {
+  parseConversationPublications,
+  retainConversationWorkerPublication,
+} from "./session-accessor.sqlite-conversation-publication.js";
 import { publishRetainedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import { projectSessionSharingEntry } from "./session-accessor.sqlite-entry-cache.types.js";
 import {
@@ -49,6 +56,7 @@ export type SessionActorTransport = {
       native: NativeAdmission,
       grant: () => boolean,
     ) => void,
+    concurrentBoardReads?: "transcript-only",
   ): Promise<T>;
   /** Read-only committed evidence; follow-up work runs after releasing the command FIFO. */
   afterCommitted?<Value extends SessionActorPhaseResults[SessionActorPhase]>(
@@ -97,7 +105,7 @@ export function createSqliteSessionActorExecutor(
   } & SessionActorExecutorGuards,
 ): SessionActorExecutor {
   const { target } = params;
-  let fenced = false;
+  let fenced: Extract<SessionActorOutcome<never>, { kind: "unknown" }>["error"] | undefined;
   const authorize = (
     authority: SessionActorAuthority,
     observe?: (
@@ -106,6 +114,7 @@ export function createSqliteSessionActorExecutor(
       stage: "transaction" | "commit",
       snapshot: SessionActorAuthorityFacts,
     ) => void,
+    beforeFinalGrant?: (conversationPublication: unknown) => void,
   ) => {
     let actorAdmissionSeen = false;
     return (
@@ -149,6 +158,14 @@ export function createSqliteSessionActorExecutor(
       }
       authority.assertCurrent();
       params.assertAccepted();
+      if (
+        request.stage === "commit" &&
+        isRecord(facts) &&
+        facts.kind === "session-actor-admission" &&
+        facts.final === true
+      ) {
+        beforeFinalGrant?.(facts.conversationPublication);
+      }
       if (!grant()) {
         throw new Error("Session actor authority expired");
       }
@@ -162,20 +179,16 @@ export function createSqliteSessionActorExecutor(
           authority.assertCurrent();
           let snapshot = params.replica.read();
           if (!snapshot) {
-            const pending = params.replica.beginRead();
-            try {
-              snapshot = await scope.execute({ type: "session.actor.read", input: { target } });
-              pending.install(snapshot);
-              // Disclose the immutable installed revision, including a superseding receipt.
-              snapshot = params.replica.read();
-            } finally {
-              pending.cancel();
-            }
+            const install = params.replica.beginRead();
+            snapshot = await scope.execute({ type: "session.actor.read", input: { target } });
+            install(snapshot);
+            // Disclose the immutable installed revision, including a superseding receipt.
+            snapshot = params.replica.read();
           }
           if (!snapshot) {
             throw new SessionActorReadInvalidatedError();
           }
-          fenced = false;
+          fenced = undefined;
           params.assertReadable();
           authority.assertCurrent();
           authority.authorize("commit", snapshot);
@@ -208,6 +221,13 @@ export function createSqliteSessionActorExecutor(
     let running: Promise<Outcome> | undefined;
     let committed: Extract<Outcome, { kind: "committed" }> | undefined;
     let candidate: unknown;
+    const conversation =
+      target.database.kind === "file"
+        ? retainConversationWorkerPublication(
+            target.database.physicalIdentity,
+            target.database.nativeLocation,
+          )
+        : undefined;
     const transfer = createSqliteWorkerTransferCollector("outcome", (value) => {
       if (candidate !== undefined) {
         throw new Error("Session actor transferred more than one outcome");
@@ -228,7 +248,7 @@ export function createSqliteSessionActorExecutor(
         kind: "unknown",
         target,
         commandId: captured.commandId,
-        error: errorFacts(error),
+        error: { ...errorFacts(error), cause: error },
       };
     };
     const preserveFailure = (error: unknown, origin?: "response"): Outcome => {
@@ -254,7 +274,9 @@ export function createSqliteSessionActorExecutor(
           running = (async (): Promise<Outcome> => {
             if (fenced) {
               return unknown(
-                new Error("Session actor requires reconciliation before another command"),
+                new Error("Session actor requires reconciliation before another command", {
+                  cause: fenced.cause,
+                }),
               );
             }
             const pending = params.replica.beginCommand();
@@ -262,6 +284,24 @@ export function createSqliteSessionActorExecutor(
               (value) => ({ ok: true as const, value }),
               (error: unknown) => ({ ok: false as const, error }),
             );
+            const unconfirmed = (message: string, settlementFailure?: unknown) => {
+              const facts = reply.ok ? { message } : errorFacts(reply.error);
+              return unknown(
+                Object.assign(
+                  wrapSqliteWorkerError(
+                    facts.message,
+                    undefined,
+                    reply.ok
+                      ? reply.value.kind !== "committed"
+                        ? reply.value.error
+                        : undefined
+                      : reply.error,
+                    settlementFailure,
+                  ),
+                  facts,
+                ),
+              );
+            };
             let result: Outcome;
             if (native) {
               const settled = await native.retained.settled;
@@ -291,6 +331,7 @@ export function createSqliteSessionActorExecutor(
                 }
                 result = committed;
                 try {
+                  conversation?.settle(committed.receipt.conversationPublication);
                   // Retained effect predicates must observe this commit before its callbacks.
                   if (target.database.kind === "file") {
                     const entry = committed.receipt.postimage.entry;
@@ -300,6 +341,7 @@ export function createSqliteSessionActorExecutor(
                       entry ? projectSessionSharingEntry(entry) : undefined,
                       previousEntry,
                       true,
+                      entry,
                       entry,
                     );
                     if (entry) {
@@ -340,20 +382,26 @@ export function createSqliteSessionActorExecutor(
                       ? reply.value
                       : { kind: "rolled-back", error: errorFacts(failure) };
               } else {
-                result = unknown(
-                  reply.ok ? new Error("Unconfirmed actor settlement") : reply.error,
+                result = unconfirmed(
+                  "Unconfirmed actor settlement",
+                  settled.kind !== "completed" ? settled.error : undefined,
                 );
               }
-            } else if (reply.ok && reply.value.kind === "rolled-back") {
+            } else if (!reply.ok) {
+              // Actor mutations require host admission after hydration. A worker
+              // lost before that grant cannot have applied this command.
+              result = { kind: "rolled-back", error: errorFacts(reply.error) };
+            } else if (reply.value.kind === "rolled-back") {
               result = reply.value;
             } else {
-              result = unknown(
-                reply.ok ? new Error("Actor command omitted native settlement") : reply.error,
-              );
+              result = unconfirmed("Actor command omitted native settlement");
+            }
+            if (result.kind !== "committed") {
+              conversation?.settle(undefined, result.kind === "unknown");
             }
             if (result.kind === "unknown") {
-              // Fence before returning the physical FIFO permit to a queued command.
-              fenced = true;
+              // Fence the FIFO with the initiating failure, not a later reconciliation refusal.
+              fenced ??= result.error;
             }
             if (result.kind === "stale-version") {
               try {
@@ -382,17 +430,34 @@ export function createSqliteSessionActorExecutor(
           })();
           return running;
         },
-        authorize(authority, (admission, publication, stage, snapshot) => {
-          native = admission;
-          // Compound phases and transfer frames carry later snapshots of the same transaction.
-          if (stage === "transaction" && !capturedPreviousEntry) {
-            previousEntry = snapshot.entry;
-            capturedPreviousEntry = true;
-          }
-          if (isRecord(publication) && publication.kind === "session-actor-outcome") {
-            transfer.accept(publication.transfer);
-          }
-        }),
+        authorize(
+          authority,
+          (admission, publication, stage, snapshot) => {
+            native = admission;
+            // Compound phases and transfer frames carry later snapshots of the same transaction.
+            if (stage === "transaction" && !capturedPreviousEntry) {
+              previousEntry = snapshot.entry;
+              capturedPreviousEntry = true;
+            }
+            if (isRecord(publication) && publication.kind === "session-actor-outcome") {
+              transfer.accept(publication.transfer);
+            }
+          },
+          (publication) => {
+            const receipts = parseConversationPublications(publication);
+            if (!receipts) {
+              throw new Error("Session actor commit omitted its conversation publication");
+            }
+            conversation?.begin(receipts);
+          },
+        ),
+        (name === "appendTranscriptEvent" || name === "appendToolResult") &&
+          "append" in captured &&
+          captured.append !== undefined &&
+          captured.append.initialization === undefined &&
+          !captured.reducers?.length
+          ? "transcript-only"
+          : undefined,
       );
     } catch (error) {
       // A transport timeout is not native settlement. The accepted callback keeps
@@ -417,6 +482,9 @@ export function createSqliteSessionActorExecutor(
               error: errorFacts(error),
             };
       }
+      if (outcome.kind !== "committed") {
+        conversation?.settle(undefined, outcome.kind === "unknown");
+      }
       params.replica.invalidate();
     }
     if (outcome.kind === "committed" && params.transport.afterCommitted) {
@@ -431,7 +499,7 @@ export function createSqliteSessionActorExecutor(
       }
     }
     if (outcome.kind === "unknown") {
-      fenced = true;
+      fenced ??= outcome.error;
       params.replica.invalidate();
     }
     return outcome;

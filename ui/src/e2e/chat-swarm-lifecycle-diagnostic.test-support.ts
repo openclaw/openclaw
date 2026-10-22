@@ -6,7 +6,7 @@ import type { MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
 
 export type SwarmDiagnosticPane = HTMLElement & {
   state?: { sessionKey: string; connectionEpoch: number; lastError: string | null };
-  swarmHydrator?: SwarmRosterHydrator;
+  swarm?: { hydrator: SwarmRosterHydrator | null };
 };
 export type SwarmDiagnosticWindow = Window & {
   openclawSwarmDiagnostic?: {
@@ -28,7 +28,7 @@ export async function logSwarmDiagnostic(
       );
       const applicationGateway = context.gateway;
       const snapshot = applicationGateway?.snapshot;
-      const parent = pane?.swarmHydrator?.rows.find((row) => row.key === key);
+      const parent = pane?.swarm?.hydrator?.rows.find((row) => row.key === key);
       const widget = document.querySelector('[data-test-id="chat-swarm"]');
       const details = widget?.querySelector("details");
       const diagnostic = (window as SwarmDiagnosticWindow).openclawSwarmDiagnostic;

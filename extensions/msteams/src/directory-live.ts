@@ -5,9 +5,8 @@ import {
 import type { ChannelDirectoryEntry } from "../runtime-api.js";
 import { searchGraphUsers } from "./graph-users.js";
 import {
-  listChannelsForTeam,
-  listTeamsByName,
-  normalizeQuery,
+  listChannelsForTeamWithPageInfo,
+  listTeamsByNameWithPageInfo,
   resolveGraphToken,
 } from "./graph.js";
 
@@ -17,14 +16,14 @@ export async function listMSTeamsDirectoryPeersLive(params: {
   query?: string | null;
   limit?: number | null;
 }): Promise<ChannelDirectoryEntry[]> {
-  const query = normalizeQuery(params.query);
+  const query = params.query?.trim() ?? "";
   if (!query) {
     return [];
   }
   const token = await resolveGraphToken(params.cfg, {
     accountId: params.accountId,
   });
-  const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : 20;
+  const limit = params.limit != null && params.limit > 0 ? params.limit : 20;
 
   const users = await searchGraphUsers({ token, query, top: limit });
 
@@ -53,20 +52,20 @@ export async function listMSTeamsDirectoryGroupsLive(params: {
   query?: string | null;
   limit?: number | null;
 }): Promise<ChannelDirectoryEntry[]> {
-  const rawQuery = normalizeQuery(params.query);
+  const rawQuery = params.query?.trim() ?? "";
   if (!rawQuery) {
     return [];
   }
   const token = await resolveGraphToken(params.cfg, {
     accountId: params.accountId,
   });
-  const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : 20;
+  const limit = params.limit != null && params.limit > 0 ? params.limit : 20;
   const [teamQuery, channelQuery] = rawQuery.includes("/")
     ? normalizeStringEntries(rawQuery.split("/", 2))
     : [rawQuery, null];
 
   const normalizedChannelQuery = normalizeLowercaseStringOrEmpty(channelQuery);
-  const teams = await listTeamsByName(token, teamQuery);
+  const { items: teams } = await listTeamsByNameWithPageInfo(token, teamQuery);
   const results: ChannelDirectoryEntry[] = [];
 
   for (const team of teams) {
@@ -88,7 +87,7 @@ export async function listMSTeamsDirectoryGroupsLive(params: {
       }
       continue;
     }
-    const channels = await listChannelsForTeam(token, teamId);
+    const { items: channels } = await listChannelsForTeamWithPageInfo(token, teamId);
     for (const channel of channels) {
       const name = channel.displayName?.trim();
       if (!name) {

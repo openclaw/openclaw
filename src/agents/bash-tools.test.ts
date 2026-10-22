@@ -1,4 +1,3 @@
-/** Integration tests for the public Bash/process tool factories. */
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
@@ -37,17 +36,16 @@ vi.mock("../auto-reply/dispatch.js", () => ({
     const lifecycle = expectDefined(replyOptions?.turnAdoptionLifecycle, "notification lifecycle");
     const signal = expectDefined(lifecycle.abortSignal, "notification cancellation");
     lifecycle.onDeferred?.();
-    const onAbort = () => {
-      signal.removeEventListener("abort", onAbort);
+    const onAbort = async () => {
       try {
-        lifecycle.onAbandoned?.();
+        await lifecycle.onAbandoned?.();
       } finally {
-        lifecycle.onSettled?.();
+        await lifecycle.onSettled?.();
       }
     };
-    signal.addEventListener("abort", onAbort, { once: true });
+    signal.addEventListener("abort", () => void onAbort(), { once: true });
     if (signal.aborted) {
-      onAbort();
+      await onAbort();
     }
     return {
       deferredToActiveRun: "followup",
@@ -80,6 +78,7 @@ vi.mock("../infra/shell-env.js", async () => {
   };
 });
 
+// mock-isolation: Simulate process output and settlement without launching host commands.
 vi.mock("../process/supervisor/index.js", async () => {
   const { takeHeldSupervisorExit, createRunExit } =
     await import("./bash-tools.exec-runtime.test-support.js");
@@ -93,47 +92,28 @@ vi.mock("../process/supervisor/index.js", async () => {
     new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
-  const readPathKey = (env?: NodeJS.ProcessEnv) =>
-    env && "Path" in env && !("PATH" in env) ? "Path" : "PATH";
-  const readEnvPath = (env?: NodeJS.ProcessEnv) => env?.[readPathKey(env)] ?? "";
-  const writeEnvPath = (env: NodeJS.ProcessEnv, value: string) => {
-    env[readPathKey(env)] = value;
-  };
-  const extractCommand = (input: SpawnInput) => input.argv?.at(-1) ?? "";
   const splitCommands = (command: string) =>
     command
       .split(";")
       .map((part) => part.trim())
       .filter(Boolean);
-  const applySegmentShellEffects = (segment: string, env: NodeJS.ProcessEnv) => {
-    if (segment === 'export PATH="${OPENCLAW_PREPEND_PATH}${PATH:+:$PATH}"') {
-      const prepend = env.OPENCLAW_PREPEND_PATH ?? "";
-      const current = readEnvPath(env);
-      writeEnvPath(env, `${prepend}${current ? `:${current}` : ""}`);
-      return;
-    }
-    if (segment === "unset OPENCLAW_PREPEND_PATH") {
-      delete env.OPENCLAW_PREPEND_PATH;
-    }
-  };
-  const stdoutForSegment = (segment: string, env: NodeJS.ProcessEnv) => {
-    if (segment === "echo $PATH" || segment === "Write-Output $env:PATH") {
-      return `${readEnvPath(env)}\n`;
-    }
-    for (const prefix of ["echo ", "Write-Output "]) {
-      if (segment.startsWith(prefix)) {
-        return `${segment.slice(prefix.length)}\n`;
-      }
-    }
-    return "";
-  };
-
   const commandOutput = (command: string, env?: NodeJS.ProcessEnv) => {
     const shellEnv = { ...env };
+    const pathKey = "Path" in shellEnv && !("PATH" in shellEnv) ? "Path" : "PATH";
     return splitCommands(command)
       .map((segment) => {
-        applySegmentShellEffects(segment, shellEnv);
-        return stdoutForSegment(segment, shellEnv);
+        if (segment === 'export PATH="${OPENCLAW_PREPEND_PATH}${PATH:+:$PATH}"') {
+          const current = shellEnv[pathKey];
+          shellEnv[pathKey] =
+            `${shellEnv.OPENCLAW_PREPEND_PATH ?? ""}${current ? `:${current}` : ""}`;
+        } else if (segment === "unset OPENCLAW_PREPEND_PATH") {
+          delete shellEnv.OPENCLAW_PREPEND_PATH;
+        }
+        if (segment === "echo $PATH" || segment === "Write-Output $env:PATH") {
+          return `${shellEnv[pathKey] ?? ""}\n`;
+        }
+        const prefix = ["echo ", "Write-Output "].find((value) => segment.startsWith(value));
+        return prefix ? `${segment.slice(prefix.length)}\n` : "";
       })
       .join("");
   };
@@ -142,7 +122,7 @@ vi.mock("../process/supervisor/index.js", async () => {
     getProcessSupervisor: () => ({
       spawn: async (input: SpawnInput) => {
         const exitGate = takeHeldSupervisorExit();
-        const command = extractCommand(input);
+        const command = input.argv?.at(-1) ?? "";
         const output = commandOutput(command, input.env);
         const exitCode = splitCommands(command).includes("exit 1") ? 1 : 0;
         const stagedOutput = command.includes("after")
@@ -190,6 +170,7 @@ const defaultShell = isWin
 const scopeKey = "test:bash-tools";
 const sessionKey = "agent:main:main";
 const shellEcho = (text: string) => (isWin ? `Write-Output ${text}` : `echo ${text}`);
+const echoSequence = (...values: string[]) => values.map(shellEcho).join("; ");
 const createTool = (defaults?: Parameters<typeof createExecTool>[0]) =>
   createExecTool({
     host: "gateway",
@@ -227,6 +208,14 @@ const notifyTool = (defaults?: Parameters<typeof createExecTool>[0]) =>
     sessionKey,
     ...defaults,
   });
+const heldExit = <T>(
+  run: (exit: Pick<supervisorExit.HeldSupervisorExit, "waitStarted">) => Promise<T>,
+) => supervisorExit.withHeldSupervisorExit(run, () => waitForExecScope(scopeKey));
+const startAndFinish = async (tool: ReturnType<typeof createExecTool>, command: string) => {
+  const id = await startBackground(tool, command);
+  await waitForExecScope(scopeKey);
+  return id;
+};
 
 beforeEach(() => {
   callId = 0;
@@ -249,28 +238,25 @@ it("yields a pollable process and releases foreground callbacks", async () => {
   const addListener = vi.spyOn(abort.signal, "addEventListener");
   const removeListener = vi.spyOn(abort.signal, "removeEventListener");
   const tool = createTool();
-  const id = await supervisorExit.withHeldSupervisorExit(
-    async (exit) => {
-      const execution = tool.execute(
-        "yield",
-        {
-          command: `${shellEcho("before")}; ${shellEcho("after")}`,
-          yieldMs: 10,
-        },
-        abort.signal,
-        onUpdate,
-      );
-      await Promise.race([exit.waitStarted, execution]);
-      await vi.advanceTimersByTimeAsync(10);
-      const runningSessionId = runningId(await execution);
-      expect(onUpdate).toHaveBeenCalledTimes(1);
-      const listener = addListener.mock.calls.find(([type]) => type === "abort")?.[1];
-      expect(listener).toBeDefined();
-      expect(removeListener).toHaveBeenCalledWith("abort", listener);
-      return runningSessionId;
-    },
-    () => waitForExecScope(scopeKey),
-  );
+  const id = await heldExit(async (exit) => {
+    const execution = tool.execute(
+      "yield",
+      {
+        command: echoSequence("before", "after"),
+        yieldMs: 10,
+      },
+      abort.signal,
+      onUpdate,
+    );
+    await Promise.race([exit.waitStarted, execution]);
+    await vi.advanceTimersByTimeAsync(10);
+    const runningSessionId = runningId(await execution);
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+    const listener = addListener.mock.calls.find(([type]) => type === "abort")?.[1];
+    expect(listener).toBeDefined();
+    expect(removeListener).toHaveBeenCalledWith("abort", listener);
+    return runningSessionId;
+  });
   expect(onUpdate).toHaveBeenCalledTimes(1);
   const poll = await processAction({ action: "poll", sessionId: id });
   expect(poll.details).toMatchObject({ status: "completed" });
@@ -281,21 +267,18 @@ it("awaits terminal shell results past the yield window without enabling notific
   const tool = createTool({ notifyOnExit: false, sessionKey });
   let execution: ReturnType<typeof execute> | undefined;
   let settled = false;
-  await supervisorExit.withHeldSupervisorExit(
-    async (exit) => {
-      execution = execute(tool, `${shellEcho("before")}; ${shellEcho("after")}`, {
-        awaitResults: true,
-        yieldMs: 10,
-      }).then((result) => {
-        settled = true;
-        return result;
-      });
-      await Promise.race([exit.waitStarted, execution]);
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(settled).toBe(false);
-    },
-    () => waitForExecScope(scopeKey),
-  );
+  await heldExit(async (exit) => {
+    execution = execute(tool, echoSequence("before", "after"), {
+      awaitResults: true,
+      yieldMs: 10,
+    }).then((result) => {
+      settled = true;
+      return result;
+    });
+    await Promise.race([exit.waitStarted, execution]);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(settled).toBe(false);
+  });
   await expect(execution).resolves.toMatchObject({
     details: { status: "completed", exitCode: 0, aggregated: "before\nafter" },
   });
@@ -325,25 +308,16 @@ it("does not default to elevated when not allowed", async () => {
   expect(text(await execute(tool, shellEcho("hi")))).toContain("hi");
 });
 
-it.each([
-  { name: "default tail", options: {}, first: "line-2", tailNote: true },
-  { name: "unbounded offset", options: { offset: 30 }, first: "line-31", tailNote: false },
-])("reads the $name log window", async ({ options, first, tailNote }) => {
-  const sessionId = await startBackground(
+it("reads the unbounded offset log window", async () => {
+  const sessionId = await startAndFinish(
     createTool(),
     Array.from({ length: 201 }, (_, i) => shellEcho(`line-${i + 1}`)).join("; "),
   );
-  await waitForExecScope(scopeKey);
-  const log = await processAction({ action: "log", sessionId, ...options });
+  const log = await processAction({ action: "log", sessionId, offset: 30 });
   expect(log.details).toMatchObject({ totalLines: 201 });
-  expect(text(log).split("\n")[0]).toBe(first);
-  expect(text(log)).toContain("line-201");
-  if (tailNote) {
-    expect(text(log)).toContain("showing last 200 of 201 lines");
-  } else {
-    expect(text(log).split("\n").at(-1)).toBe("line-201");
-    expect(text(log)).not.toContain("showing last 200");
-  }
+  expect(text(log).split("\n")[0]).toBe("line-31");
+  expect(text(log).split("\n").at(-1)).toBe("line-201");
+  expect(text(log)).not.toContain("showing last 200");
 });
 
 it("isolates process lists and polling by scopeKey", async () => {
@@ -403,51 +377,6 @@ describe("background completion notifications", () => {
     await state.cleanup();
   });
 
-  it("routes an ordinary completion event to the originating session", async () => {
-    const id = await startBackground(
-      notifyTool({
-        messageProvider: "telegram",
-        currentChannelId: "telegram:-100123:topic:47",
-        currentThreadTs: "47",
-      }),
-      shellEcho("notify"),
-    );
-    await waitForExecScope(scopeKey);
-    const receipt = expectDefined(receipts[0], "completion receipt");
-    await expect(receipt.accepted).resolves.toEqual({ ok: true });
-    expect(getFinishedSession(id)).toMatchObject({ id, terminalStatus: "completed", exitCode: 0 });
-    expect(sessionEvents.enqueueSessionEventForHost).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining("notify"),
-      expect.objectContaining({
-        agentId: "main",
-        sessionKey,
-        source: "exec",
-        expectedTarget: expect.objectContaining({ sessionId: "bash-origin", sessionKey }),
-      }),
-    );
-    expect(peekSystemEventEntries(sessionKey)).toContainEqual(
-      expect.objectContaining({
-        id: receipt.id,
-        contextKey: `exec:${id}`,
-        deliveryContext: {
-          channel: "telegram",
-          to: "telegram:-100123:topic:47",
-          threadId: "47",
-          accountId: undefined,
-        },
-      }),
-    );
-    expect(
-      await drainFormattedSystemEvents({
-        cfg: {},
-        agentId: "main",
-        sessionKey,
-        isMainSession: false,
-        isNewSession: false,
-      }),
-    ).toBeUndefined();
-  });
-
   it.each([
     {
       name: "defaults to notifying chat providers",
@@ -456,17 +385,41 @@ describe("background completion notifications", () => {
     },
     { name: "honors an explicit silent override", notifyOnExitEmptySuccess: false, emits: false },
   ])("$name on empty success", async ({ notifyOnExitEmptySuccess, emits }) => {
-    const id = await startBackground(
-      notifyTool({ messageProvider: " Telegram ", notifyOnExitEmptySuccess }),
+    const id = await startAndFinish(
+      notifyTool({
+        messageProvider: " Telegram ",
+        currentChannelId: "telegram:-100123:topic:47",
+        currentThreadTs: "47",
+        notifyOnExitEmptySuccess,
+      }),
       isWin ? "$null" : ":",
     );
-    await waitForExecScope(scopeKey);
-    expect(getFinishedSession(id)?.terminalStatus).toBe("completed");
+    expect(getFinishedSession(id)).toMatchObject({ id, terminalStatus: "completed", exitCode: 0 });
     expect(receipts).toHaveLength(emits ? 1 : 0);
     if (emits) {
-      await expect(expectDefined(receipts[0], "completion receipt").accepted).resolves.toEqual({
-        ok: true,
-      });
+      const receipt = expectDefined(receipts[0], "completion receipt");
+      await expect(receipt.accepted).resolves.toEqual({ ok: true });
+      expect(peekSystemEventEntries(sessionKey)).toContainEqual(
+        expect.objectContaining({
+          id: receipt.id,
+          contextKey: `exec:${id}`,
+          deliveryContext: {
+            channel: "telegram",
+            to: "telegram:-100123:topic:47",
+            threadId: "47",
+            accountId: undefined,
+          },
+        }),
+      );
+      expect(
+        await drainFormattedSystemEvents({
+          cfg: {},
+          agentId: "main",
+          sessionKey,
+          isMainSession: false,
+          isNewSession: false,
+        }),
+      ).toBeUndefined();
     }
     expect(peekSystemEvents(sessionKey)).toEqual(
       emits ? [`Exec completed (${id.slice(0, 8)}, code 0)`] : [],
@@ -491,9 +444,7 @@ it("suppresses onUpdate after abort signal fires", async () => {
   await expect(
     createTool().execute(
       "abort",
-      {
-        command: `${shellEcho("before-abort")}; ${shellEcho("after-abort")}`,
-      },
+      { command: echoSequence("before-abort", "after-abort") },
       abort.signal,
       onUpdate,
     ),

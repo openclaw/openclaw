@@ -15,14 +15,6 @@ const VOYAGE_MAX_INPUT_TOKENS: Record<string, number> = {
   "voyage-code-3": 32000,
 };
 
-function normalizeVoyageModel(model: string): string {
-  return normalizeEmbeddingModelWithPrefixes({
-    model,
-    defaultModel: DEFAULT_VOYAGE_EMBEDDING_MODEL,
-    prefixes: ["voyage/"],
-  });
-}
-
 export async function createVoyageEmbeddingProvider(
   options: MemoryEmbeddingProviderCreateOptions,
 ): Promise<{ provider: MemoryEmbeddingProvider; client: RemoteEmbeddingClient }> {
@@ -30,7 +22,12 @@ export async function createVoyageEmbeddingProvider(
     provider: "voyage",
     options,
     defaultBaseUrl: DEFAULT_VOYAGE_BASE_URL,
-    normalizeModel: normalizeVoyageModel,
+    normalizeModel: (model) =>
+      normalizeEmbeddingModelWithPrefixes({
+        model,
+        defaultModel: DEFAULT_VOYAGE_EMBEDDING_MODEL,
+        prefixes: ["voyage/"],
+      }),
   });
   const provider = createRemoteEmbeddingProvider({
     id: "voyage",

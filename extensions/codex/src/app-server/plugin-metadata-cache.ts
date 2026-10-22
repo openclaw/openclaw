@@ -51,8 +51,6 @@ export class CodexPluginMetadataCache {
   private readonly entries = new Map<string, CachedCodexPluginMetadataEntry>();
   private readonly inFlight = new Map<string, InFlightCodexPluginMetadataLoad>();
 
-  constructor(private readonly nowMs: () => number = Date.now) {}
-
   read<QueryKind extends CodexPluginMetadataQueryKind>(
     appCacheKey: string,
     queryKind: QueryKind,
@@ -69,7 +67,7 @@ export class CodexPluginMetadataCache {
     if (!entry) {
       return undefined;
     }
-    if (entry.expiresAtMs <= this.nowMs()) {
+    if (entry.expiresAtMs <= Date.now()) {
       this.entries.delete(entryKey);
       return undefined;
     }
@@ -112,7 +110,7 @@ export class CodexPluginMetadataCache {
         this.entries.set(entryKey, {
           appCacheKey: params.appCacheKey,
           response,
-          expiresAtMs: this.nowMs() + CODEX_PLUGIN_METADATA_CACHE_TTL_MS,
+          expiresAtMs: Date.now() + CODEX_PLUGIN_METADATA_CACHE_TTL_MS,
         });
       }
       return response;
@@ -121,9 +119,7 @@ export class CodexPluginMetadataCache {
     try {
       return await promise;
     } finally {
-      if (this.inFlight.get(entryKey)?.promise === promise) {
-        this.inFlight.delete(entryKey);
-      }
+      this.inFlight.delete(entryKey);
     }
   }
 

@@ -2,8 +2,8 @@ import { renderTable } from "./table.js";
 
 const shape = process.argv[2];
 const output = renderTable({
-  border: "ascii",
-  columns: [{ key: "Key", header: "Key", maxWidth: 5 }],
+  width: 7,
+  columns: [{ key: "Key", header: "Key" }],
   rows:
     shape === "rows"
       ? Array.from({ length: 150_000 }, () => ({ Key: "row" }))
@@ -17,14 +17,16 @@ const output = renderTable({
         ],
 });
 const lines = output.trimEnd().split("\n");
+const delimiter = lines[1]?.[0];
 console.log(
   JSON.stringify({
     lineCount: lines.length,
-    rows: lines.filter((line) => line === "| row |").length,
+    rows: lines.filter((line) => line === `${delimiter} row ${delimiter}`).length,
     header: lines[1],
     firstLine: lines[0],
     lastLine: lines.at(-1),
     softWrapRowsMatch:
-      lines[3] === "| a   |" && lines[4] === "| " + "\u200b".repeat(150_000) + "b   |",
+      lines[3] === `${delimiter} a   ${delimiter}` &&
+      lines[4] === `${delimiter} ` + "\u200b".repeat(150_000) + `b   ${delimiter}`,
   }),
 );

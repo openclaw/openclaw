@@ -12,7 +12,7 @@ import { sessionDeliveryOrigin } from "../utils/delivery-context.read.js";
 import { matchesChannelAvatarSender } from "./channel-avatar-reference.js";
 import { parseControlUiResourcePath } from "./control-ui-contract.js";
 import { respondNotFound } from "./control-ui-http-utils.js";
-import { sendMethodNotAllowed } from "./http-common.js";
+import { sendMethodNotAllowed, sendSessionReadForbidden } from "./http-common.js";
 import {
   HTTP_IMAGE_MAX_BYTES,
   resolveHttpImageRepresentation,
@@ -30,13 +30,7 @@ type ChannelAvatarCacheEntry = {
 };
 
 const channelAvatarCache = new LruCache<ChannelAvatarCacheEntry>(CHANNEL_AVATAR_CACHE_MAX_ENTRIES);
-const channelAvatarLoads = new Map<
-  string,
-  {
-    reference: string;
-    pending: Map<string, Promise<HttpImageRepresentation | undefined>>;
-  }
->();
+const channelAvatarLoads = new Map<string, Promise<HttpImageRepresentation | undefined>>();
 
 const getSessionStoreModule = createLazyRuntimeModule(
   () => import("./session-utils-store-worker.js"),
@@ -46,22 +40,13 @@ async function loadChannelAvatar(
   sessionKey: string,
   reference: string,
 ): Promise<HttpImageRepresentation | undefined> {
-  let loads = channelAvatarLoads.get(sessionKey);
-  if (loads) {
-    loads.reference = reference;
-  }
-  const cached = channelAvatarCache.peek(sessionKey);
+  const cached = channelAvatarCache.get(sessionKey);
   if (cached?.reference === reference) {
-    channelAvatarCache.get(sessionKey);
     return cached.image;
   }
-  if (!loads) {
-    loads = { reference, pending: new Map() };
-    channelAvatarLoads.set(sessionKey, loads);
-  }
-  let pending = loads.pending.get(reference);
+  const loadKey = JSON.stringify([sessionKey, reference]);
+  let pending = channelAvatarLoads.get(loadKey);
   if (!pending) {
-    const sessionLoads = loads;
     pending = (async () => {
       const resolved = await resolveInboundMediaReference(reference);
       if (!resolved) {
@@ -69,18 +54,15 @@ async function loadChannelAvatar(
       }
       const stored = await readMediaBuffer(resolved.id, "inbound", HTTP_IMAGE_MAX_BYTES);
       const image = await resolveHttpImageRepresentation(resolved.id, stored.buffer);
-      // A superseded load may reply to its callers but must not replace the current avatar.
-      if (image && sessionLoads.reference === reference) {
+      // A late older load can cause one cache miss, never return bytes for a different reference.
+      if (image) {
         channelAvatarCache.set(sessionKey, { reference, image });
       }
       return image;
     })().finally(() => {
-      sessionLoads.pending.delete(reference);
-      if (sessionLoads.pending.size === 0) {
-        channelAvatarLoads.delete(sessionKey);
-      }
+      channelAvatarLoads.delete(loadKey);
     });
-    loads.pending.set(reference, pending);
+    channelAvatarLoads.set(loadKey, pending);
   }
   return pending;
 }
@@ -159,6 +141,12 @@ export async function handleChannelAvatarHttpRequest(
   };
   if (source) {
     const entry = source.readCurrent();
+    // Visibility is settled once per request; a share revoked during the byte
+    // read is an accepted brief overlap, like the icon route.
+    if (entry && !requestAuth.canReadSession(sessionKey, entry)) {
+      sendSessionReadForbidden(res);
+      return true;
+    }
     const origin = sessionDeliveryOrigin(entry);
     const reference = origin?.avatar;
     const assertCurrent = () => {
@@ -186,6 +174,10 @@ export async function handleChannelAvatarHttpRequest(
       key: requestedKey,
       assertActive: requestAuth.assertCurrent,
     });
+    if (entry && !requestAuth.canReadSession(requestedKey, entry)) {
+      sendSessionReadForbidden(res);
+      return true;
+    }
     const origin = sessionDeliveryOrigin(entry);
     reference = matchesChannelAvatarSender(requestUrl.searchParams, origin)
       ? origin?.avatar

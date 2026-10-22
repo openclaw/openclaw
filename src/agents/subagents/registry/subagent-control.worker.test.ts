@@ -2,57 +2,158 @@
 // oxfmt-ignore
 import { runSubagentStateWorkerOperation, useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { existsSync } from "node:fs";
-import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
-  emptySqliteCounts,
-  observeParentSqlite,
-} from "../../../../test/helpers/sqlite-parent-observer.js";
+  afterEach,
+  assert,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+  type Mock,
+} from "vitest";
+import * as sync from "../../../../test/helpers/promise.js";
+import * as sqlite from "../../../../test/helpers/sqlite-parent-observer.js";
 import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../../config/config.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
-import {
-  loadExactSessionEntryReadOnly,
-  replaceSessionEntrySync,
-} from "../../../config/sessions/session-accessor.js";
+import * as sessions from "../../../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../../../config/sessions/types.js";
+import { abortControlledSubagents } from "../../../gateway/server-methods/chat-abort-descendants.js";
 import { emitAgentEvent } from "../../../infra/agent-events.js";
-import {
-  initializeGlobalHookRunner,
-  resetGlobalHookRunner,
-} from "../../../plugins/hook-runner-global.js";
+import { resetSystemEventsForTest } from "../../../infra/system-events.js";
+import * as pluginHooks from "../../../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../../../plugins/hooks.test-helpers.js";
-import {
-  beginSessionWorkAdmission,
-  type SessionWorkAdmissionLease,
-} from "../../../sessions/session-lifecycle-admission.js";
+import { withSessionTurn } from "../../../sessions/session-controller.admission.js";
+import * as lifecycle from "../../../sessions/session-controller.lifecycle.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
-import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../../embedded-agent-runner/runs.js";
-import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
+import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
+import * as embedded from "../../embedded-agent-runner/runs.js";
+import {
+  clearTestEmbeddedRun as detachRun,
+  registerTestEmbeddedRun as attachRun,
+  createEmbeddedRunHandle,
+} from "../../embedded-agent-runner/runs.test-support.js";
 import { createOpenClawToolsAsync } from "../../openclaw-tools.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
+import * as records from "../../subagent-test-fixtures.test-helpers.js";
 import {
-  createSubagentRunRecord,
-  isSubagentRegistryWriteCommand,
-} from "../../subagent-test-fixtures.test-helpers.js";
+  setSubagentAnnounceDeliveryDepsForTest,
+  type SubagentAnnounceDeliveryTestDeps,
+} from "../announce/subagent-announce-overrides.test-support.js";
 import { resolveStoredSubagentCapabilities } from "../spawn/subagent-capabilities.js";
 import { withPreparedSessionCapabilityRead } from "../spawn/subagent-session-store.js";
 import { holdQueuedSwarmRun, releaseSwarmRun, reserveSwarmRun } from "../swarm/swarm-scheduler.js";
-import { subagentRuns } from "./subagent-registry-memory.js";
+import { killSessionSubagentRuns } from "./subagent-control-kill.js";
+import { adoptSubagentProgressDraft } from "./subagent-progress-draft.js";
 import {
-  mutateSubagentRuns,
-  restoreSubagentRunsFromDisk,
-} from "./subagent-registry-persistence.js";
+  childKey,
+  requesterKey,
+  useSubagentProgressCohort,
+} from "./subagent-progress-draft.test-support.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
+import * as persistence from "./subagent-registry-persistence.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import * as registryState from "./subagent-registry-state.js";
-import { registerSubagentRun } from "./subagent-registry.js";
+import { adoptPausedSubagentRunForFollowUp, registerSubagentRun } from "./subagent-registry.js";
 import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
+import { testing as registryTesting } from "./subagent-registry.test-helpers.js";
 
 const fixture = useSubagentControlFixture();
+beforeEach(() => captureRuntimeConfigAsyncReader()());
+function seedSession(sessionKey: string, entry: Partial<SessionEntry> = {}, agentId = "main") {
+  sessions.replaceSessionEntrySync(
+    { agentId, sessionKey },
+    { sessionId: `${sessionKey.split(":").at(-1)}-session`, updatedAt: Date.now(), ...entry },
+  );
+}
 
-beforeEach(async () => {
-  await captureRuntimeConfigAsyncReader()();
-});
+type WriteHook = (row: ReturnType<typeof rowToSubagentRunRecord>) => void | Promise<void>;
+type Hooks = { before?: WriteHook; after?: (row: Parameters<WriteHook>[0]) => void };
+function observeWrites(runId: string, hooks: Hooks) {
+  fixture.worker.mockImplementation((context, operation, options) =>
+    runSubagentStateWorkerOperation(
+      context,
+      (scope) =>
+        operation({
+          execute: async (command, commandOptions) => {
+            const value = records.isSubagentRegistryWriteCommand(command)
+              ? command.input.values.find((candidate) => candidate.run_id === runId)
+              : undefined;
+            const row = value ? rowToSubagentRunRecord(value) : null;
+            const gate = hooks.before?.(row);
+            if (gate) {
+              await gate;
+            }
+            const receipt = await scope.execute(command, commandOptions);
+            hooks.after?.(row);
+            return receipt;
+          },
+        }),
+      options,
+    ),
+  );
+}
+function registration(runId: string, sessionKey: string, task = "original") {
+  return records.createSubagentRunParams({
+    runId,
+    childSessionKey: sessionKey,
+    sessionEntry: sessions.loadExactSessionEntryReadOnly({ agentId: "main", sessionKey })?.entry,
+    requesterAgentId: "main",
+    task,
+    expectsCompletionMessage: false,
+  });
+}
+async function subagentsTool(config = getRuntimeConfig(), agentSessionKey = "agent:main:main") {
+  const tools = await createOpenClawToolsAsync({
+    config,
+    agentSessionKey,
+    workspaceDir: fixture.stateDir,
+    disableMessageTool: true,
+  });
+  const tool = tools.find((candidate) => candidate.name === "subagents");
+  assert(tool, "Missing registered subagents tool");
+  return tool;
+}
+
+// Native fixture handles must remain attached to their admitted controller turn until cleanup.
+async function admitNativeRun(runId: string, sessionKey: string, detachOnAbort = true) {
+  const sessionId = `${runId}-session`;
+  const admitted = sync.createDeferred();
+  const release = sync.createDeferred();
+  const abort = vi.fn(() => {
+    if (detachOnAbort) {
+      embedded.detachActiveEmbeddedRun(sessionId, handle, sessionKey);
+    }
+  });
+  const handle = createEmbeddedRunHandle({ runId, abort });
+  const originalAbort = handle.abort;
+  handle.abort = (...args) => {
+    try {
+      originalAbort(...args);
+    } finally {
+      release.resolve();
+    }
+  };
+  const settlement = withSessionTurn(
+    { sessionKey, sessionId, agentId: "main" },
+    async (operation) => {
+      assert(operation, "Native fixture did not receive controller turn admission");
+      embedded.attachActiveEmbeddedRun(sessionId, handle, sessionKey, undefined, "main", operation);
+      admitted.resolve();
+      await release.promise;
+    },
+  );
+  await Promise.race([admitted.promise, settlement]);
+  const finish = async () => {
+    embedded.detachActiveEmbeddedRun(sessionId, handle, sessionKey);
+    release.resolve();
+    await settlement;
+  };
+  return { id: runId, abort, finish };
+}
 
 it.each(["caller admission", "session generation"] as const)(
   "releases an acknowledged native claim when %s retires before publication",
@@ -60,76 +161,30 @@ it.each(["caller admission", "session generation"] as const)(
     const runId = "retired-after-claim-ack";
     const sessionKey = `agent:main:subagent:${runId}`;
     const sessionId = `${runId}-session`;
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey },
-      { sessionId, updatedAt: Date.now(), lifecycleRevision: "original" },
-    );
-    await registerSubagentRun({
-      runId,
-      childSessionKey: sessionKey,
-      childAgentId: "main",
-      sessionEntry: loadExactSessionEntryReadOnly({ agentId: "main", sessionKey })?.entry,
-      requesterSessionKey: "agent:main:main",
-      requesterAgentId: "main",
-      requesterDisplayKey: "main",
-      task: "Stop admitted work",
-      cleanup: "keep",
-      expectsCompletionMessage: false,
-    });
+    seedSession(sessionKey, { lifecycleRevision: "original" });
+    await registerSubagentRun(registration(runId, sessionKey, "Stop admitted work"));
     const caller = new AbortController();
-    const abort = vi.fn();
-    const handle = createEmbeddedRunHandle({ runId, abort });
-    setActiveEmbeddedRun(sessionId, handle, sessionKey);
+    const nativeRun = await admitNativeRun(runId, sessionKey, false);
     let retiredAfterAck = false;
-    fixture.worker.mockImplementation((context, operation, options) =>
-      runSubagentStateWorkerOperation(
-        context,
-        (scope) =>
-          operation({
-            execute: async (command, commandOptions) => {
-              const row = isSubagentRegistryWriteCommand(command)
-                ? command.input.values.find((candidate) => candidate.run_id === runId)
-                : undefined;
-              const claim = row && rowToSubagentRunRecord(row)?.killIntent;
-              const receipt = await scope.execute(command, commandOptions);
-              if (claim && !retiredAfterAck) {
-                retiredAfterAck = true;
-                if (retirement === "caller admission") {
-                  caller.abort(new Error("Caller retired after commit"));
-                } else {
-                  replaceSessionEntrySync(
-                    { agentId: "main", sessionKey },
-                    { sessionId, updatedAt: Date.now(), lifecycleRevision: "replacement" },
-                  );
-                }
-              }
-              return receipt;
-            },
-          }),
-        options,
-      ),
-    );
-    const tool = (
-      await createOpenClawToolsAsync({
-        config: getRuntimeConfig(),
-        agentSessionKey: "agent:main:main",
-        workspaceDir: fixture.stateDir,
-        disableMessageTool: true,
-      })
-    ).find((candidate) => candidate.name === "subagents");
-    if (!tool) {
-      throw new Error("Missing registered subagents tool");
-    }
+    observeWrites(runId, {
+      after: (row) => {
+        if (row?.killIntent && !retiredAfterAck) {
+          retiredAfterAck = true;
+          if (retirement === "caller admission") {
+            caller.abort(new Error("Caller retired after commit"));
+          } else {
+            seedSession(sessionKey, { lifecycleRevision: "replacement" });
+          }
+        }
+      },
+    });
+    const tool = await subagentsTool();
     // The session-rotation cell deliberately writes through the native fixture owner.
     const sql = retirement === "caller admission" ? observeMainThreadSql() : undefined;
     sql?.calibrate();
     let counts: number[] | undefined;
     try {
-      const cancellation = tool.execute(
-        "retired-caller-stop",
-        { action: "cancel", runId },
-        caller.signal,
-      );
+      const cancellation = tool.execute("stop", { action: "cancel", runId }, caller.signal);
       if (retirement === "caller admission") {
         await expect(cancellation).rejects.toThrow("Caller retired after commit");
       } else {
@@ -139,72 +194,39 @@ it.each(["caller admission", "session generation"] as const)(
     } finally {
       counts = sql?.calls.map((probe) => probe.mock.calls.length);
       sql?.restore();
-      clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+      await nativeRun.finish();
     }
     expect(retiredAfterAck).toBe(true);
-    expect(abort).not.toHaveBeenCalled();
+    expect(nativeRun.abort).not.toHaveBeenCalled();
     const persisted = loadSubagentRegistryFromSqlite().get(runId);
-    expect(
-      persisted?.killIntent,
-      "a committed claim remains owned until it is released",
-    ).toBeUndefined();
-    expect(persisted?.execution.endedAt).toBeUndefined();
+    expect([persisted?.killIntent, persisted?.execution.endedAt]).toEqual([undefined, undefined]);
     if (counts) {
       expect(counts).toEqual(counts.map(() => 0));
     } else {
-      expect(loadExactSessionEntryReadOnly({ agentId: "main", sessionKey })?.entry).toMatchObject({
-        sessionId,
-        lifecycleRevision: "replacement",
-      });
-      expect(
-        loadExactSessionEntryReadOnly({ agentId: "main", sessionKey })?.entry.abortedLastRun,
-      ).not.toBe(true);
+      const entry = sessions.loadExactSessionEntryReadOnly({ agentId: "main", sessionKey })?.entry;
+      expect(entry).toMatchObject({ sessionId, lifecycleRevision: "replacement" });
+      expect(entry?.abortedLastRun).not.toBe(true);
     }
   },
 );
 
 it.each(["same-ID replacement", "cold hydration"] as const)(
   "preserves registered Stop selection across %s",
-  async (kind) => {
-    await withEnvAsync({ OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" }, async () => {
+  async (kind) =>
+    withEnvAsync({ OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" }, async () => {
       const runId = "replace-during-control-preparation";
       const sessionKey = `agent:main:subagent:${runId}`;
-      const sessionId = `${runId}-session`;
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey },
-        { sessionId, updatedAt: Date.now(), lifecycleRevision: "same-session" },
-      );
-      const registration = {
-        runId,
-        childSessionKey: sessionKey,
-        childAgentId: "main",
-        sessionEntry: loadExactSessionEntryReadOnly({ agentId: "main", sessionKey })?.entry,
-        requesterSessionKey: "agent:main:main",
-        requesterAgentId: "main",
-        requesterDisplayKey: "main",
-        task: "original",
-        cleanup: "keep" as const,
-        expectsCompletionMessage: false,
-      };
-      await registerSubagentRun(registration);
+      seedSession(sessionKey, { lifecycleRevision: "same-session" });
+      const params = registration(runId, sessionKey);
+      await registerSubagentRun(params);
       const original = subagentRuns.get(runId)!;
       if (kind === "cold hydration") {
         subagentRuns.clear();
       }
-      const tool = (
-        await createOpenClawToolsAsync({
-          config: getRuntimeConfig(),
-          agentSessionKey: "agent:main:main",
-          workspaceDir: fixture.stateDir,
-          disableMessageTool: true,
-        })
-      ).find((candidate) => candidate.name === "subagents");
-      if (!tool) {
-        throw new Error("Missing registered subagents tool");
-      }
+      const tool = await subagentsTool();
       registryState.clearSubagentRunsReadCacheForTest();
-      const entered = createDeferred();
-      const release = createDeferred();
+      const entered = sync.createDeferred();
+      const release = sync.createDeferred();
       const prepareReadCache = registryState.prepareSubagentSessionListReadCache;
       vi.spyOn(registryState, "prepareSubagentSessionListReadCache").mockImplementationOnce(
         async () => {
@@ -213,23 +235,19 @@ it.each(["same-ID replacement", "cold hydration"] as const)(
           await prepareReadCache();
         },
       );
-      const abort = vi.fn(() => clearActiveEmbeddedRun(sessionId, handle, sessionKey));
-      const handle = createEmbeddedRunHandle({ runId, abort });
       const pending = tool
-        .execute("prepared-stop", { action: "cancel", runId })
+        .execute("stop", { action: "cancel", runId })
         .catch((error: unknown) => error);
+      let nativeRun: Awaited<ReturnType<typeof admitNativeRun>> | undefined;
       try {
-        await Promise.race([
-          entered.promise,
-          pending.then(() => {
-            throw new Error("Stop skipped control preparation");
-          }),
-        ]);
+        await sync.awaitGateBeforeSettlement(entered.promise, pending, "Stop skipped preparation");
         if (kind === "same-ID replacement") {
-          await registerSubagentRun({ ...registration, task: "successor" });
+          await registerSubagentRun({ ...params, task: "successor" });
         } else {
           // The existing startup owner hydrates the persisted row; this is not an absence witness.
-          expect(await restoreSubagentRunsFromDisk({ runs: subagentRuns })).toBeGreaterThan(0);
+          expect(
+            await persistence.restoreSubagentRunsFromDisk({ runs: subagentRuns }),
+          ).toBeGreaterThan(0);
         }
         const successor = subagentRuns.get(runId)!;
         expect(successor).not.toBe(original);
@@ -238,26 +256,25 @@ it.each(["same-ID replacement", "cold hydration"] as const)(
         } else {
           expect(successor.generation).toBe(original.generation);
         }
-        setActiveEmbeddedRun(sessionId, handle, sessionKey);
+        nativeRun = await admitNativeRun(runId, sessionKey);
         release.resolve();
         const outcome = await pending;
         await fixture.settle();
         if (kind === "same-ID replacement") {
-          expect(abort, "Stop must not transfer to newly registered work").not.toHaveBeenCalled();
+          expect(nativeRun.abort).not.toHaveBeenCalled();
           expect(outcome).toBeInstanceOf(Error);
           expect(subagentRuns.get(runId)?.execution.endedAt).toBeUndefined();
         } else {
           expect(outcome).toMatchObject({ details: { found: true, killed: true } });
-          expect(abort).toHaveBeenCalledOnce();
+          expect(nativeRun.abort).toHaveBeenCalledOnce();
           expect(loadSubagentRegistryFromSqlite().get(runId)?.endedReason).toBe("subagent-killed");
         }
       } finally {
         release.resolve();
         await pending;
-        clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+        await nativeRun?.finish();
       }
-    });
-  },
+    }),
 );
 
 it.each([
@@ -283,23 +300,19 @@ it.each([
     const opaqueParentId = kind === "subagent caller with opaque id";
     const keyedParent = kind === "subagent caller with cross-agent key";
     const earlierSuccess = kind === "earlier success";
-    const completesDuringStop = kind === "completion" || earlierSuccess;
-    const fixtureStartedAt = Date.now();
-    const clock = earlierSuccess
-      ? vi.spyOn(Date, "now").mockReturnValue(fixtureStartedAt)
-      : undefined;
-    if (clock) {
-      onTestFinished(() => clock.mockRestore());
-    }
+    const terminalRace = kind === "completion" || earlierSuccess;
+    const startedAt = Date.now();
+    const clock = earlierSuccess ? vi.spyOn(Date, "now").mockReturnValue(startedAt) : undefined;
+    onTestFinished(() => clock?.mockRestore());
     const endedHook = vi.fn(async () => {});
+    const reply = { disposition: "visible", text: "Completed before Stop" };
     if (earlierSuccess) {
-      const registry = createMockPluginRegistry([
-        { hookName: "subagent_ended", handler: endedHook },
-      ]);
+      const hook = { hookName: "subagent_ended", handler: endedHook };
+      const registry = createMockPluginRegistry([hook]);
       vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReturnValue(registry);
-      initializeGlobalHookRunner(registry);
-      onTestFinished(resetGlobalHookRunner);
-      fixture.capture.mockResolvedValue("Completed before Stop");
+      pluginHooks.initializeGlobalHookRunner(registry);
+      onTestFinished(pluginHooks.resetGlobalHookRunner);
+      fixture.capture.mockResolvedValue(reply.text);
     }
     const requester = subagentCaller ? "agent:main:subagent:controller" : "agent:main:main";
     const config = structuredClone(getRuntimeConfig());
@@ -307,35 +320,19 @@ it.each([
       const parentId = `agent:${opaqueParentId ? "other" : "main"}:subagent:parent-by-session-id`;
       const parentAgentId = keyedParent ? "other" : "main";
       const parentKey = `agent:${parentAgentId}:controller-parent`;
-      config.agents = {
-        ...config.agents,
-        defaults: {
-          ...config.agents?.defaults,
-          subagents: { ...config.agents?.defaults?.subagents, maxSpawnDepth: 2 },
-        },
-      };
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: requester },
-        {
-          sessionId: "controller-session",
-          updatedAt: Date.now(),
-          lifecycleRevision: "controller-original",
-          spawnedBy: keyedParent ? parentKey : parentId,
-        },
-      );
-      replaceSessionEntrySync(
-        { agentId: parentAgentId, sessionKey: parentKey },
-        {
-          sessionId: keyedParent ? "controller-parent-session" : parentId,
-          updatedAt: Date.now(),
-          spawnDepth: 0,
-        },
-      );
+      config.agents ??= {};
+      config.agents.defaults ??= {};
+      config.agents.defaults.subagents = { ...config.agents.defaults.subagents, maxSpawnDepth: 2 };
+      seedSession(requester, {
+        sessionId: "controller-session",
+        lifecycleRevision: "controller-original",
+        spawnedBy: keyedParent ? parentKey : parentId,
+      });
+      const parent = { sessionId: keyedParent ? "parent-session" : parentId, spawnDepth: 0 };
+      seedSession(parentKey, parent, parentAgentId);
       if (opaqueParentId) {
-        replaceSessionEntrySync(
-          { agentId: "other", sessionKey: "agent:other:controller-decoy" },
-          { sessionId: parentId, updatedAt: Date.now(), spawnDepth: 7 },
-        );
+        const decoy = { sessionId: parentId, spawnDepth: 7 };
+        seedSession("agent:other:controller-decoy", decoy, "other");
       }
       expect(
         await withPreparedSessionCapabilityRead(() =>
@@ -343,50 +340,30 @@ it.each([
         ),
       ).toMatchObject({ controlScope: "children" });
     }
-    const terminalEntered = createDeferred();
-    const terminalRelease = createDeferred();
+    const entered = sync.createDeferred();
+    const release = sync.createDeferred();
     let heldTerminal = false;
-    let admission: SessionWorkAdmissionLease | undefined;
+    let admission: lifecycle.SessionEffectRef | undefined;
     let runnerSettlement: Promise<void> | undefined;
-    if (completesDuringStop) {
-      fixture.worker.mockImplementation((context, operation, options) =>
-        runSubagentStateWorkerOperation(
-          context,
-          (scope) =>
-            operation({
-              execute: async (command, commandOptions) => {
-                const row = isSubagentRegistryWriteCommand(command)
-                  ? command.input.values.find((candidate) => candidate.run_id === runId)
-                  : undefined;
-                if (
-                  !heldTerminal &&
-                  row &&
-                  rowToSubagentRunRecord(row)?.execution.status === "terminal"
-                ) {
-                  heldTerminal = true;
-                  terminalEntered.resolve();
-                  await terminalRelease.promise;
-                }
-                return scope.execute(command, commandOptions);
-              },
-            }),
-          options,
-        ),
-      );
+    if (terminalRace) {
+      observeWrites(runId, {
+        before: (row) => {
+          if (!heldTerminal && row?.execution.status === "terminal") {
+            heldTerminal = true;
+            entered.resolve();
+            return release.promise;
+          }
+          return undefined;
+        },
+      });
     }
     if (queued) {
-      expect(
-        reserveSwarmRun({
-          runId,
-          groupId: runId,
-          maxConcurrent: 1,
-          activeRunIds: [capacityOwner],
-        }),
-      ).toBe(true);
+      const capacity = { runId, groupId: runId, maxConcurrent: 1, activeRunIds: [capacityOwner] };
+      expect(reserveSwarmRun(capacity)).toBe(true);
     }
     for (const id of [runId, siblingId]) {
       if (missingStore && id === runId) {
-        const retained = createSubagentRunRecord({
+        const retained = records.createSubagentRunRecord({
           runId: id,
           childSessionKey: key(id),
           childAgentId: "missing",
@@ -397,97 +374,57 @@ it.each([
           collect: true,
           expectsCompletionMessage: false,
         });
-        await mutateSubagentRuns([id], () => ({
+        await persistence.mutateSubagentRuns([id], () => ({
           value: undefined,
           postimages: new Map([[id, retained]]),
         }));
         continue;
       }
-      // Fixture seeding ends before the observed Stop, without scheduling maintenance tails.
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: key(id) },
-        {
-          sessionId: `${id}-session`,
-          updatedAt: Date.now(),
-          lifecycleRevision: `${id}-revision`,
-          inputTokens: 11,
-          outputTokens: 7,
-          totalTokens: 18,
-        },
-      );
+      const usage = { inputTokens: 11, outputTokens: 7, totalTokens: 18 };
+      seedSession(key(id), { lifecycleRevision: `${id}-revision`, ...usage });
       await registerSubagentRun({
-        runId: id,
-        childSessionKey: key(id),
-        childAgentId: "main",
-        sessionEntry: loadExactSessionEntryReadOnly({ agentId: "main", sessionKey: key(id) })
-          ?.entry,
+        ...registration(id, key(id), id),
         requesterSessionKey: requester,
-        requesterAgentId: "main",
-        requesterDisplayKey: "main",
-        task: id,
-        cleanup: "keep",
         collect: queued && id === runId,
         queued: queued && id === runId,
-        expectsCompletionMessage: false,
       });
     }
     if (missingStore) {
       expect(existsSync(missingPath)).toBe(false);
     }
-    const handles = [runId, siblingId]
-      .filter((id) => !queued || id !== runId)
-      .map((id) => {
-        const sessionId = `${id}-session`;
-        const abort = vi.fn(() => clearActiveEmbeddedRun(sessionId, handle, key(id)));
-        const handle = createEmbeddedRunHandle({ abort, runId: id });
-        setActiveEmbeddedRun(sessionId, handle, key(id));
-        return { id, sessionId, handle, abort };
-      });
-    const tool = (
-      await createOpenClawToolsAsync({
-        config,
-        agentSessionKey: requester,
-        workspaceDir: fixture.stateDir,
-        disableMessageTool: true,
-      })
-    ).find((candidate) => candidate.name === "subagents");
-    expect(tool, "core must register the native subagents tool").toBeDefined();
-    if (!tool) {
-      throw new Error("Missing registered subagents tool");
+    const handles: Awaited<ReturnType<typeof admitNativeRun>>[] = [];
+    for (const id of [runId, siblingId].filter((candidate) => !queued || candidate !== runId)) {
+      handles.push(await admitNativeRun(id, key(id)));
     }
-    const completedAtBeforeStop = earlierSuccess ? fixtureStartedAt + 1 : Date.now();
-    clock?.mockReturnValue(fixtureStartedAt + 2);
-    if (completesDuringStop) {
-      admission = await beginSessionWorkAdmission({
-        scope: resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
-          agentId: "main",
-        }),
+    const tool = await subagentsTool(config, requester);
+    const completedAt = earlierSuccess ? startedAt + 1 : Date.now();
+    const completed = { status: "ok", endedAt: completedAt, terminalReply: reply };
+    clock?.mockReturnValue(startedAt + 2);
+    if (terminalRace) {
+      admission = await lifecycle.beginSessionEffect({
+        scope: resolveSessionStorePathCore(config.session?.store, { agentId: "main" }),
         identities: [key(runId), `${runId}-session`],
+        run: { runId, sessionKey: key(runId), sessionId: `${runId}-session`, agentId: "main" },
         assertAllowed: () => {},
         onInterrupt: () => {
           handles.find(({ id }) => id === runId)!.abort();
           if (earlierSuccess) {
-            expect(subagentRuns.get(runId)?.killIntent?.requestedAt).toBeGreaterThan(
-              completedAtBeforeStop,
-            );
+            expect(subagentRuns.get(runId)?.killIntent?.requestedAt).toBeGreaterThan(completedAt);
           }
-          emitAgentEvent({
-            runId,
-            stream: "lifecycle",
-            data: earlierSuccess
-              ? { phase: "end", status: "ok", endedAt: completedAtBeforeStop }
-              : { phase: "end", status: "error", aborted: true, endedAt: Date.now() },
-          });
+          const terminal = earlierSuccess
+            ? completed
+            : { status: "error", aborted: true, endedAt: Date.now() };
+          emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end", ...terminal } });
           runnerSettlement = fixture.settle().finally(() => admission?.release());
+          return { runId };
         },
       });
     }
     await fixture.settle();
     registryState.clearSubagentRunsReadCacheForTest();
-    // Warm initialization ends here. Count all eight host APIs through Stop and
-    // its owned settlement; independent durable readbacks begin after restore.
-    const sql = observeParentSqlite();
-    let counts: ReturnType<typeof emptySqliteCounts>;
+    // Observe host APIs through Stop settlement; restore before independent durable readbacks.
+    const sql = sqlite.observeParentSqlite();
+    let counts: ReturnType<typeof sqlite.emptySqliteCounts>;
     let unexpectedHold: ReturnType<typeof holdQueuedSwarmRun>;
     let cancellation: ReturnType<typeof tool.execute> | undefined;
     try {
@@ -498,76 +435,57 @@ it.each([
           settled = true;
           return result;
         });
-      if (completesDuringStop) {
-        await Promise.race([
-          terminalEntered.promise,
-          cancellation.then(() => {
-            throw new Error("Stop settled before its terminal writer was admitted");
-          }),
-        ]);
+      if (terminalRace) {
+        await sync.awaitGateBeforeSettlement(
+          entered.promise,
+          cancellation,
+          "Stop skipped terminal write",
+        );
         expect(settled, "Stop joins the runner's held terminal publication").toBe(false);
-        terminalRelease.resolve();
+        release.resolve();
       }
       const result = await cancellation;
-      expect(result.details, JSON.stringify(result.details)).toMatchObject({
-        found: true,
-        killed: !earlierSuccess,
-        runId,
-        ...(earlierSuccess ? { targetState: { task: { status: "succeeded" } } } : {}),
-      });
-      // Include required native finalization work, including tails the baseline fails to await.
+      expect(result.details).toMatchObject({ found: true, killed: !earlierSuccess, runId });
+      if (earlierSuccess) {
+        expect(result.details).toMatchObject({ targetState: { task: { status: "succeeded" } } });
+      }
       await fixture.settle();
       await runnerSettlement;
     } finally {
-      terminalRelease.resolve();
+      release.resolve();
       admission?.release();
       await Promise.allSettled([runnerSettlement, cancellation]);
       counts = { ...sql.counts };
       sql.restore();
       if (earlierSuccess) {
-        resetGlobalHookRunner();
+        pluginHooks.resetGlobalHookRunner();
       }
-      for (const { id, sessionId, handle } of handles) {
-        clearActiveEmbeddedRun(sessionId, handle, key(id));
-      }
+      await Promise.all(handles.map((nativeRun) => nativeRun.finish()));
       releaseSwarmRun(capacityOwner);
       if (missingStore) {
-        expect
-          .soft(existsSync(missingPath), "Stop must not provision the missing child store")
-          .toBe(false);
+        const provisioned = existsSync(missingPath);
+        expect.soft(provisioned, "Stop created the missing child store").toBe(false);
       }
     }
     try {
       const persisted = loadSubagentRegistryFromSqlite();
+      const target = persisted.get(runId);
       if (missingStore) {
-        expect(persisted.get(runId)?.childSessionIdentity).toBeUndefined();
-        expect(persisted.get(runId)).toMatchObject({
-          execution: { suppressSessionEffects: true },
-        });
+        expect(target?.childSessionIdentity).toBeUndefined();
+        expect(target).toMatchObject({ execution: { suppressSessionEffects: true } });
       }
-      expect(persisted.get(runId)).toMatchObject({
-        execution: {
-          status: "terminal",
-          ...(earlierSuccess ? { outcome: { status: "ok" } } : {}),
-        },
+      expect(target).toMatchObject({
+        execution: { status: "terminal" },
         endedReason: earlierSuccess ? "subagent-complete" : "subagent-killed",
-        ...(earlierSuccess
-          ? {
-              endedHookEmittedAt: expect.any(Number),
-              completion: { resultText: "Completed before Stop" },
-            }
-          : {}),
       });
       expect(persisted.get(siblingId)?.execution.endedAt).toBeUndefined();
+      const entry = !missingStore
+        ? sessions.loadExactSessionEntryReadOnly({ agentId: "main", sessionKey: key(runId) })?.entry
+        : undefined;
       if (!missingStore) {
-        expect(
-          loadExactSessionEntryReadOnly({ agentId: "main", sessionKey: key(runId) })?.entry,
-        ).toMatchObject({
-          ...(earlierSuccess
-            ? { status: "done" }
-            : kind === "completion"
-              ? { status: "killed" }
-              : { abortedLastRun: true }),
+        const status = earlierSuccess ? "done" : kind === "completion" ? "killed" : undefined;
+        expect(entry).toMatchObject({
+          ...(status ? { status } : { abortedLastRun: true }),
           endedAt: expect.any(Number),
         });
       }
@@ -578,22 +496,319 @@ it.each([
         unexpectedHold = holdQueuedSwarmRun(runId);
         expect(unexpectedHold).toBeUndefined();
         if (!missingStore) {
-          expect(persisted.get(runId)?.collectorCompletion?.usage).toMatchObject({
+          expect(target?.collectorCompletion?.usage).toMatchObject({
             inputTokens: 11,
             outputTokens: 7,
           });
         }
       }
       if (earlierSuccess) {
+        expect(target).toMatchObject({
+          execution: { outcome: { status: "ok" } },
+          endedHookEmittedAt: expect.any(Number),
+          completion: { resultText: reply.text },
+        });
         expect(endedHook).toHaveBeenCalledOnce();
-        expect(
-          loadExactSessionEntryReadOnly({ agentId: "main", sessionKey: key(runId) })?.entry
-            .abortedLastRun,
-        ).not.toBe(true);
+        expect(entry?.abortedLastRun).not.toBe(true);
       }
-      expect(counts).toEqual(emptySqliteCounts());
+      expect(counts).toEqual(sqlite.emptySqliteCounts());
     } finally {
       await unexpectedHold?.release();
     }
   }),
 );
+
+describe("subagent progress drafts", () => {
+  const yieldCohort = useSubagentProgressCohort(fixture);
+
+  const CHILD_RESULT = "Private child result marker.";
+  const DONE = "Done.";
+  const stops = { killSessionSubagentRuns, abortControlledSubagents };
+
+  type Dispatch = SubagentAnnounceDeliveryTestDeps["dispatchGatewayMethodInProcess"];
+  type DispatchParams = Parameters<Dispatch>[1];
+
+  afterEach(() => {
+    setSubagentAnnounceDeliveryDepsForTest();
+    resetSystemEventsForTest();
+  });
+
+  async function endRun(runId: string, data: Record<string, unknown> = {}) {
+    fixture.capture.mockResolvedValue(CHILD_RESULT);
+    emitAgentEvent({
+      runId,
+      sessionKey: subagentRuns.get(runId)!.childSessionKey,
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        endedAt: Date.now(),
+        terminalReply: { disposition: "visible", text: CHILD_RESULT },
+        ...data,
+      },
+    });
+    await fixture.settle();
+  }
+
+  /** Each requester wake turn answers with the next reply; `onWake` runs inside that turn. */
+  function answerWakes(
+    draft: TestDraft,
+    replies: readonly string[],
+    onWake?: (params: DispatchParams) => Promise<void>,
+  ) {
+    const wakes: Array<{ runId: string; retiredBefore: number }> = [];
+    const dispatch: Dispatch = async <T>(...args: Parameters<Dispatch>): Promise<T> => {
+      const [, params, options] = args;
+      wakes.push({
+        runId: String(params?.idempotencyKey),
+        retiredBefore: draft.retire.mock.calls.length,
+      });
+      options?.onExecutionStarted?.();
+      if (wakes.length === 1) {
+        await onWake?.(params);
+      }
+      const terminal = prepareAgentRunTerminalReply({ rawText: replies[wakes.length - 1] ?? "" });
+      return {
+        status: "ok",
+        inputProcessingCompleted: true,
+        result: {
+          payloads: terminal.text ? [{ text: terminal.text }] : [],
+          meta: { terminalReply: terminal.terminalReply },
+          ...(terminal.terminalReply.disposition === "silent" && {
+            deliveryStatus: {
+              status: "suppressed",
+              succeeded: true,
+              reason: "no_visible_payload",
+              resultCount: 0,
+            },
+          }),
+        },
+      } as T;
+    };
+    setSubagentAnnounceDeliveryDepsForTest({ dispatchGatewayMethodInProcess: dispatch });
+    return wakes;
+  }
+
+  type TestDraft = { push: Mock; retire: Mock };
+  const newDraft = (): TestDraft => ({ push: vi.fn(), retire: vi.fn() });
+
+  async function adoptCohort(children = ["a", "b"], origin?: Parameters<typeof yieldCohort>[2]) {
+    const spawns = await yieldCohort("parent-turn", children, origin);
+    const draft = newDraft();
+    expect(adoptSubagentProgressDraft(spawns, draft)).toBe(true);
+    return draft;
+  }
+
+  const stopParams = () => ({ cfg: getRuntimeConfig(), sessionKey: requesterKey, agentId: "main" });
+  const storePath = () =>
+    resolveSessionStorePathCore(getRuntimeConfig().session?.store, { agentId: "main" });
+
+  function expectCard(draft: TestDraft, retireCount = 1) {
+    expect(draft.retire).toHaveBeenCalledTimes(retireCount);
+    expect(JSON.stringify(draft.push.mock.calls)).not.toContain(CHILD_RESULT);
+  }
+
+  it.each([
+    ["a visible answer", [DONE], true],
+    ["intentional external silence", ["NO_REPLY"], true],
+    ["required internal result", ["NO_REPLY"], false],
+  ] as const)("settles the progress card according to %s", async (name, replies, retired) => {
+    const requesterOrigin =
+      name === "intentional external silence"
+        ? { channel: "telegram", to: "12345", accountId: "default" }
+        : undefined;
+    if (requesterOrigin) {
+      const { channel, to, accountId } = requesterOrigin;
+      await sessions.upsertSessionEntryCore(
+        { storePath: storePath(), sessionKey: requesterKey },
+        {
+          delivery: {
+            kind: "external",
+            route: { channel, accountId, target: { to } },
+            context: requesterOrigin,
+            origin: { provider: channel, to, accountId },
+          },
+        },
+      );
+    }
+    const draft = await adoptCohort(["a", "b"], requesterOrigin);
+    const wakes = answerWakes(draft, replies);
+
+    await endRun("a");
+    expect(wakes).toEqual([]);
+    expect(draft.retire).not.toHaveBeenCalled();
+
+    await endRun("b");
+    expect(wakes.map(({ retiredBefore }) => retiredBefore)).toEqual(replies.map(() => 0));
+    expectCard(draft, retired ? 1 : 0);
+    expect(draft.push).toHaveBeenCalledWith(
+      expect.objectContaining({ itemId: "b", kind: "subagent", status: "completed" }),
+    );
+  });
+
+  it("rejects a delivered cohort without any prior card", async () => {
+    const spawns = await yieldCohort("parent-turn", ["a", "b"]);
+    answerWakes(newDraft(), [DONE]);
+    await endRun("a");
+    await endRun("b");
+    expect(subagentRuns.get("b")?.requesterSettleWake).toBeUndefined();
+    const stale = newDraft();
+    expect(adoptSubagentProgressDraft(spawns, stale)).toBe(false);
+    expect(stale.push).not.toHaveBeenCalled();
+  });
+
+  it.each(["visible result", "exhausted"] as const)(
+    "recovers a known missing required result through periodic admission: %s",
+    async (outcome) => {
+      const draft = await adoptCohort(["a"]);
+      const wakes = answerWakes(draft, [
+        "NO_REPLY",
+        outcome === "visible result" ? DONE : "NO_REPLY",
+        "NO_REPLY",
+      ]);
+      await endRun("a");
+      expect(wakes).toHaveLength(1);
+      expect(draft.retire).not.toHaveBeenCalled();
+      expect(subagentRuns.get("a")?.requesterSettleWake).toMatchObject({
+        status: "pending",
+        attemptCount: 1,
+      });
+      await registryTesting.sweepOnceForTests();
+      await fixture.settle();
+      expect(wakes).toHaveLength(1);
+
+      using clock = vi.spyOn(Date, "now");
+      for (let attempt = 1; attempt < (outcome === "visible result" ? 2 : 3); attempt++) {
+        const due = subagentRuns.get("a")?.requesterSettleWake?.nextAttemptAt;
+        expect(due).toBeTypeOf("number");
+        clock.mockReturnValue(due!);
+        await registryTesting.sweepOnceForTests();
+        await fixture.settle();
+        expect(wakes).toHaveLength(attempt + 1);
+        expect(wakes[attempt]?.runId).toBe(`${wakes[0]!.runId}:retry-${attempt}`);
+      }
+      expect(draft.retire).toHaveBeenCalledOnce();
+      expect(subagentRuns.get("a")?.requesterSettleWake).toBeUndefined();
+      await registryTesting.sweepOnceForTests();
+      await fixture.settle();
+      expect(wakes).toHaveLength(outcome === "visible result" ? 2 : 3);
+    },
+  );
+
+  it.each([
+    ["killSessionSubagentRuns", "running", "committed"],
+    ["abortControlledSubagents", "completed", "committed"],
+    ["killSessionSubagentRuns", "running", "rejected"],
+    ["abortControlledSubagents", "completed", "rejected"],
+  ] as const)(
+    "retires the card only when %s commits stop of a completed and a %s child (%s)",
+    async (stop, sibling, write) => {
+      const draft = await adoptCohort();
+      // Completed children still owe their pending requester wake when Stop arrives.
+      fixture.wake.mockResolvedValue(false);
+      await endRun("a");
+      if (sibling === "completed") {
+        await endRun("b");
+      }
+      expect(subagentRuns.get("a")?.requesterSettleWake?.status).toBe("pending");
+      if (write === "rejected") {
+        fixture.rejectRegistryWrites(
+          (row) => Boolean(row.killIntent) || row.suppressCompletionDelivery === true,
+          "stop write rejected",
+        );
+      }
+
+      const result = await stops[stop](stopParams());
+      await fixture.settle();
+
+      expect(result?.status).toBe(write === "rejected" ? "error" : "ok");
+      expectCard(draft, write === "rejected" ? 0 : 1);
+    },
+  );
+
+  it("keeps the card until an uninterruptible child finishes", async () => {
+    const draft = await adoptCohort(["a"]);
+    const handle = createEmbeddedRunHandle({ runId: "a", isAbortable: false });
+    attachRun("a-session", handle, childKey("a"), undefined, "main", undefined, undefined, {
+      storeScope: storePath(),
+    });
+    try {
+      await killSessionSubagentRuns(stopParams());
+      await fixture.settle();
+
+      const child = subagentRuns.get("a");
+      expect(child).toMatchObject({ killIntent: undefined, execution: { status: "running" } });
+      expect(child?.requesterSettleWake).toBeDefined();
+      expect(draft.retire).not.toHaveBeenCalled();
+    } finally {
+      detachRun("a-session", handle, childKey("a"));
+    }
+    answerWakes(draft, [DONE]);
+    await endRun("a");
+    expect(draft.retire).toHaveBeenCalledOnce();
+  });
+
+  it("follows replacement execution until it settles", async () => {
+    const draft = await adoptCohort();
+    const wakes = answerWakes(draft, [DONE]);
+
+    await endRun("a", { yielded: true, terminalReply: undefined });
+    expect(
+      await adoptPausedSubagentRunForFollowUp({
+        childSessionKey: childKey("a"),
+        runId: "a-resumed",
+        task: "Continue delegated a",
+      }),
+    ).toBe(true);
+    await fixture.settle();
+    expect(subagentRuns.get("a-resumed")?.taskRunId).toBe("a");
+    expect(draft.retire).not.toHaveBeenCalled();
+
+    for (const [runId, name] of [
+      ["a", "replaced_exec"],
+      ["a-resumed", "exec"],
+    ] as const) {
+      emitAgentEvent({ runId, stream: "item", data: { kind: "tool", name, status: "running" } });
+    }
+    expect(draft.push).toHaveBeenCalledWith({
+      itemId: "a:tool",
+      kind: "tool",
+      name: "exec",
+      phase: "update",
+      status: "running",
+    });
+    expect(JSON.stringify(draft.push.mock.calls)).not.toContain("replaced_exec");
+
+    await endRun("a-resumed");
+    await endRun("b");
+    expect(wakes).toEqual([{ runId: expect.any(String), retiredBefore: 0 }]);
+    expectCard(draft);
+  });
+
+  it("keeps the card through requester re-yield", async () => {
+    const draft = await adoptCohort();
+    const wakes = answerWakes(
+      draft,
+      ["Waiting for the follow-up checks.", "Everything is verified."],
+      async (params) => {
+        await yieldCohort(String(params?.idempotencyKey), ["c", "d"]);
+      },
+    );
+
+    await endRun("a");
+    await endRun("b");
+    expect(wakes).toHaveLength(1);
+    expect(draft.retire).not.toHaveBeenCalled();
+    for (const itemId of ["c", "d"]) {
+      expect(draft.push).toHaveBeenCalledWith(
+        expect.objectContaining({ itemId, kind: "subagent", status: "running" }),
+      );
+    }
+
+    await endRun("c");
+    await endRun("d");
+    expect(wakes).toHaveLength(2);
+    expect(wakes[1]).toEqual({ runId: expect.any(String), retiredBefore: 0 });
+    expect(wakes[1]!.runId).not.toBe(wakes[0]!.runId);
+    expectCard(draft);
+  });
+});

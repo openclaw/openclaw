@@ -15,3 +15,17 @@
   content: "";
   height: 1lh;
 }
+
+.shortcut-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5em;
+}
+
+.shortcut-hint__keys {
+  padding-inline: 0.4em;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+  color: color-mix(in srgb, var(--text) 82%, transparent);
+  font-family: var(--font-shortcut);
+}

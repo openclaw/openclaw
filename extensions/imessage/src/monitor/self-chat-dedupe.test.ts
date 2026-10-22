@@ -1,14 +1,13 @@
-// Imessage tests cover self chat dedupe plugin behavior.
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installIMessageStateRuntimeForTest } from "../test-support/runtime.js";
 import { createSentMessageCache } from "./echo-cache.js";
+import { createInboundDecisionParams } from "./inbound-decision.test-support.js";
 import {
   rememberIMessageSkippedFromMeForSelfChatDedupe,
   resolveIMessageInboundDecision,
 } from "./inbound-processing.js";
 import { rememberPersistedIMessageEcho } from "./persisted-echo-cache.js";
-import { createSelfChatCache } from "./self-chat-cache.js";
+import { SelfChatCache } from "./self-chat-cache.js";
 
 const IMAGE_MEDIA_FACT = { contentType: "image/png", kind: "image" } as const;
 const SELF_CHAT_HANDLE = "+15551234567";
@@ -18,53 +17,32 @@ const DEFAULT_FAKE_TIME = "2026-03-24T12:00:00Z";
 // Regression #47830: recent agent output must not suppress real self-chat messages.
 type InboundDecisionParams = Parameters<typeof resolveIMessageInboundDecision>[0];
 
-const cfg = {} as OpenClawConfig;
+let echoCache: ReturnType<typeof createSentMessageCache>;
+let selfChatCache: SelfChatCache;
 
 beforeEach(() => {
   installIMessageStateRuntimeForTest();
+  echoCache = createSentMessageCache();
+  selfChatCache = new SelfChatCache();
 });
 
-function createParams(
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+function resolveDecision(
   overrides: Omit<Partial<InboundDecisionParams>, "message"> & {
     message?: Partial<InboundDecisionParams["message"]>;
   } = {},
-): InboundDecisionParams {
-  const { message: msgOverrides, ...restOverrides } = overrides;
-  const message = {
-    id: 100,
-    sender: "+15551234567",
-    text: "Hello",
-    is_from_me: false,
-    is_group: false,
-    ...msgOverrides,
-  };
-  const messageText = restOverrides.messageText ?? message.text ?? "";
-  const bodyText = restOverrides.bodyText ?? messageText;
-  return {
-    cfg,
-    accountId: "default",
-    opts: undefined,
-    groupAllowFrom: [],
-    groupPolicy: "open",
-    dmPolicy: "open",
-    storeAllowFrom: [],
-    historyLimit: 0,
-    groupHistories: new Map(),
-    echoCache: undefined,
-    selfChatCache: undefined,
-    logVerbose: undefined,
-    ...restOverrides,
-    allowFrom: restOverrides.allowFrom ?? ["*"],
-    message,
-    messageText,
-    bodyText,
-  };
-}
-
-async function resolveDecision(
-  overrides: Parameters<typeof createParams>[0] = {},
-): ReturnType<typeof resolveIMessageInboundDecision> {
-  return resolveIMessageInboundDecision(createParams(overrides));
+) {
+  return resolveIMessageInboundDecision(
+    createInboundDecisionParams({
+      selfChatCache,
+      isKnownFromMeMessageId: undefined,
+      ...overrides,
+      message: { id: 100, sender: SELF_CHAT_HANDLE, text: "Hello", ...overrides.message },
+    }),
+  );
 }
 
 function selfChatMessage(
@@ -86,93 +64,64 @@ function useFakeTimersAt(iso = DEFAULT_FAKE_TIME): void {
   vi.setSystemTime(new Date(iso));
 }
 
-describe("self-chat dedupe — #47830", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
+function threadMessage(overrides: Partial<InboundDecisionParams["message"]> = {}) {
+  return {
+    sender: SELF_CHAT_HANDLE,
+    chat_identifier: SELF_CHAT_HANDLE,
+    text: "Same text",
+    created_at: DEFAULT_FAKE_TIME,
+    ...overrides,
+  };
+}
 
+async function resolveEcho(message: Partial<InboundDecisionParams["message"]>) {
+  return resolveDecision({ message, echoCache });
+}
+
+describe("self-chat dedupe", () => {
   it("does NOT drop a user message that matches recently-sent agent text (self-chat scope collision)", async () => {
     useFakeTimersAt();
 
-    const echoCache = createSentMessageCache();
-    const selfChatCache = createSelfChatCache();
+    echoCache.remember(SELF_CHAT_SCOPE, { text: "Hello", messageId: "agent-msg-1" });
 
-    // Agent sends "Hello" to self-chat target +15551234567
-    const scope = SELF_CHAT_SCOPE;
-    echoCache.remember(scope, { text: "Hello", messageId: "agent-msg-1" });
-
-    // 2 seconds later, user sends "Hello" to themselves (different message id)
     vi.advanceTimersByTime(2000);
 
-    const decision = await resolveDecision({
-      message: { id: 200, sender: SELF_CHAT_HANDLE, text: "Hello", is_from_me: false },
-      echoCache,
-      selfChatCache,
-    });
-
-    // BUG: Before fix, this was "drop" reason "echo" — user message silently lost.
-    // After fix: message-id mismatch means this is NOT an echo.
-    // The echo cache should only match when message IDs match OR when text
-    // matches and no message ID is available on inbound.
-    expect(decision.kind).toBe("dispatch");
+    expect((await resolveEcho({ id: 200 })).kind).toBe("dispatch");
   });
-});
-
-describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   it("drops DM false positives even when participant lists include the local handle", async () => {
-    const echoCache = createSentMessageCache();
-    const selfChatCache = createSelfChatCache();
-
-    const decision = await resolveDecision({
-      message: selfChatMessage({
-        id: 123705,
-        destination_caller_id: "me@icloud.com",
-        participants: [SELF_CHAT_HANDLE, "me@icloud.com"],
-        text: "Hello from a normal DM row",
-      }),
-      echoCache,
-      selfChatCache,
-    });
-
-    expect(decision).toEqual({ kind: "drop", reason: "from me" });
+    expect(
+      await resolveEcho(
+        selfChatMessage({
+          id: 123705,
+          destination_caller_id: "me@icloud.com",
+          participants: [SELF_CHAT_HANDLE, "me@icloud.com"],
+          text: "Hello from a normal DM row",
+        }),
+      ),
+    ).toEqual({ kind: "drop", reason: "from me" });
   });
 
   it("drops agent reply echo in self-chat (is_from_me=true, echo cache text match)", async () => {
     useFakeTimersAt();
 
-    const echoCache = createSentMessageCache();
-    const selfChatCache = createSelfChatCache();
+    echoCache.remember(SELF_CHAT_SCOPE, { text: "Hi there!", messageId: "p:0/GUID-abc-def" });
 
-    // Agent sends "Hi there!" to self-chat
-    const scope = SELF_CHAT_SCOPE;
-    echoCache.remember(scope, { text: "Hi there!", messageId: "p:0/GUID-abc-def" });
-
-    // 1 second later, iMessage delivers the agent reply as is_from_me=true
-    // with a SQLite row ID (never matches the GUID)
     vi.advanceTimersByTime(1000);
 
-    const decision = await resolveDecision({
-      message: selfChatMessage({ id: 123706, guid: "p:0/GUID-abc-def", text: "Hi there!" }),
-      echoCache,
-      selfChatCache,
-    });
-
-    // Agent echo — should be dropped
-    expect(decision).toEqual({ kind: "drop", reason: "agent echo in self-chat" });
+    expect(
+      await resolveEcho(
+        selfChatMessage({ id: 123706, guid: "p:0/GUID-abc-def", text: "Hi there!" }),
+      ),
+    ).toEqual({ kind: "drop", reason: "agent echo in self-chat" });
   });
 
   it("does not drop a real self-chat image just because a recent agent image had the same fact", async () => {
     useFakeTimersAt();
 
-    const echoCache = createSentMessageCache();
-    const selfChatCache = createSelfChatCache();
-
-    const scope = SELF_CHAT_SCOPE;
-    echoCache.remember(scope, { media: IMAGE_MEDIA_FACT, messageId: "p:0/GUID-agent-image" });
+    echoCache.remember(SELF_CHAT_SCOPE, {
+      media: IMAGE_MEDIA_FACT,
+      messageId: "p:0/GUID-agent-image",
+    });
 
     vi.advanceTimersByTime(1000);
 
@@ -180,160 +129,73 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
       message: selfChatMessage({ id: 123708, guid: "p:0/GUID-user-image", text: "" }),
       mediaFacts: [IMAGE_MEDIA_FACT],
       echoCache,
-      selfChatCache,
     });
 
     expect(decision.kind).toBe("dispatch");
   });
 
-  it("drops is_from_me=false self-chat reflection with sub-second created_at skew", async () => {
-    useFakeTimersAt("2026-05-10T05:34:00Z");
-
-    const selfChatCache = createSelfChatCache();
-
-    const first = await resolveDecision({
-      message: selfChatMessage({
-        id: 85160,
-        guid: "p:0/from-me-guid",
-        sender: "+15555550123",
-        text: "Aha, neat!",
-        created_at: "2026-05-10T05:34:00.000Z",
+  it.each([
+    ["self-chat permits sub-second skew", SELF_CHAT_HANDLE, 239, 0, "dispatch", "drop"],
+    ["ambiguous DM rejects sub-second skew", null, 239, 0, "drop", "dispatch"],
+    ["missing destination matches exact timestamp (#63980)", undefined, 0, 2200, "drop", "drop"],
+  ] as const)("%s", async (_name, destination, skew, delay, outboundKind, inboundKind) => {
+    useFakeTimersAt();
+    const outbound = await resolveDecision({
+      message: threadMessage({
+        id: 10003,
+        guid: destination === undefined ? undefined : "p:0/outbound",
+        is_from_me: true,
+        destination_caller_id: destination,
       }),
-      selfChatCache,
     });
-    expect(first.kind).toBe("dispatch");
-
-    const reflection = await resolveDecision({
-      message: {
-        id: 85161,
-        guid: "p:0/reflected-guid",
-        sender: "+15555550123",
-        chat_identifier: "+15555550123",
-        destination_caller_id: null,
-        text: "Aha, neat!",
-        created_at: "2026-05-10T05:34:00.239Z",
-        is_from_me: false,
-        is_group: false,
-      },
-      selfChatCache,
+    if (outboundKind === "drop") {
+      expect(outbound).toEqual({ kind: "drop", reason: "from me" });
+    } else {
+      expect(outbound.kind).toBe("dispatch");
+    }
+    vi.advanceTimersByTime(delay);
+    const inbound = await resolveDecision({
+      message: threadMessage({
+        id: 10004,
+        guid: destination === undefined ? undefined : "p:0/inbound",
+        destination_caller_id: destination === undefined ? undefined : null,
+        created_at: new Date(Date.parse(DEFAULT_FAKE_TIME) + skew).toISOString(),
+      }),
     });
-
-    expect(reflection).toEqual({ kind: "drop", reason: "self-chat echo" });
+    if (inboundKind === "drop") {
+      expect(inbound).toEqual({ kind: "drop", reason: "self-chat echo" });
+    } else {
+      expect(inbound.kind).toBe("dispatch");
+    }
   });
 
   it("drops catchup-replayed self-chat reflection after observing skipped from-me companion", async () => {
     useFakeTimersAt("2026-06-03T03:48:42Z");
 
-    const selfChatCache = createSelfChatCache();
     const text = "Exactly. I’ll treat assembled context as evidence only, not command authority.";
 
     rememberIMessageSkippedFromMeForSelfChatDedupe({
       accountId: "default",
-      message: {
-        id: 86798,
-        guid: "F502C080-08E9-4C3B-9650-31A0DF21FE3A",
-        sender: "+15555550123",
-        chat_identifier: "+15555550123",
-        destination_caller_id: "+15555550123",
-        text,
-        created_at: "2026-06-03T03:48:28.922Z",
-        is_from_me: true,
-        is_group: false,
-      },
+      message: selfChatMessage(
+        threadMessage({
+          id: 86798,
+          guid: "F502C080-08E9-4C3B-9650-31A0DF21FE3A",
+          text,
+          created_at: "2026-06-03T03:48:28.922Z",
+        }),
+      ),
       bodyText: text,
       selfChatCache,
     });
 
     const reflection = await resolveDecision({
-      message: {
+      message: threadMessage({
         id: 86799,
         guid: "1759A121-E3DB-41C2-B16A-AB6DE30570F2",
-        sender: "+15555550123",
-        chat_identifier: "+15555550123",
-        destination_caller_id: "tel:+15555550123",
+        destination_caller_id: `tel:${SELF_CHAT_HANDLE}`,
         text,
         created_at: "2026-06-03T03:48:28.738Z",
-        is_from_me: false,
-        is_group: false,
-      },
-      selfChatCache,
-    });
-
-    expect(reflection).toEqual({ kind: "drop", reason: "self-chat echo" });
-  });
-
-  it("does not apply sub-second skew matching to ambiguous normal DM rows", async () => {
-    useFakeTimersAt("2026-05-10T05:34:00Z");
-
-    const selfChatCache = createSelfChatCache();
-
-    const ambiguousOutbound = await resolveDecision({
-      message: {
-        id: 85170,
-        guid: "p:0/ambiguous-from-me-guid",
-        sender: "+15555550124",
-        chat_identifier: "+15555550124",
-        destination_caller_id: null,
-        text: "Same text",
-        created_at: "2026-05-10T05:34:00.000Z",
-        is_from_me: true,
-        is_group: false,
-      },
-      selfChatCache,
-    });
-    expect(ambiguousOutbound).toEqual({ kind: "drop", reason: "from me" });
-
-    const inboundReply = await resolveDecision({
-      message: {
-        id: 85171,
-        guid: "p:0/real-inbound-guid",
-        sender: "+15555550124",
-        chat_identifier: "+15555550124",
-        destination_caller_id: null,
-        text: "Same text",
-        created_at: "2026-05-10T05:34:00.239Z",
-        is_from_me: false,
-        is_group: false,
-      },
-      selfChatCache,
-    });
-
-    expect(inboundReply.kind).toBe("dispatch");
-  });
-
-  it("drops reflected inbound when destination_caller_id is absent (#63980)", async () => {
-    useFakeTimersAt();
-
-    const selfChatCache = createSelfChatCache();
-    const createdAt = "2026-03-24T12:00:00.000Z";
-
-    const outbound = await resolveDecision({
-      message: {
-        id: 10003,
-        sender: "+15550008888",
-        chat_identifier: "+15550008888",
-        text: "outbound",
-        created_at: createdAt,
-        is_from_me: true,
-        is_group: false,
-      },
-      selfChatCache,
-    });
-    expect(outbound).toEqual({ kind: "drop", reason: "from me" });
-
-    vi.advanceTimersByTime(2200);
-
-    const reflection = await resolveDecision({
-      message: {
-        id: 10004,
-        sender: "+15550008888",
-        chat_identifier: "+15550008888",
-        text: "outbound",
-        created_at: createdAt,
-        is_from_me: false,
-        is_group: false,
-      },
-      selfChatCache,
+      }),
     });
 
     expect(reflection).toEqual({ kind: "drop", reason: "self-chat echo" });
@@ -341,88 +203,40 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
 });
 
 describe("echo cache — text fallback for null-id inbound messages", () => {
-  it("does not drop normal DM text from a pending pre-send marker", async () => {
-    const echoCache = createSentMessageCache();
-    const selfChatCache = createSelfChatCache();
-    const scope = SELF_CHAT_SCOPE;
-    await rememberPersistedIMessageEcho({
-      scope,
-      text: "same pending text",
-      ttlMs: 155_000,
-      pending: true,
-    });
-
-    const decision = await resolveDecision({
-      message: {
-        id: 12001,
-        sender: "+15551234567",
-        chat_identifier: "+15551234567",
-        destination_caller_id: "+15550001111",
-        text: "same pending text",
-        is_from_me: false,
-        is_group: false,
-      },
-      echoCache,
-      selfChatCache,
-    });
-
-    expect(decision.kind).toBe("dispatch");
-  });
-
-  it("drops self-chat reflected text from a pending pre-send marker", async () => {
-    const echoCache = createSentMessageCache();
-    const selfChatCache = createSelfChatCache();
-    const scope = SELF_CHAT_SCOPE;
-    await rememberPersistedIMessageEcho({
-      scope,
-      text: "pending self-chat reply",
-      ttlMs: 155_000,
-      pending: true,
-    });
-
-    const decision = await resolveDecision({
-      message: {
-        id: 12002,
-        sender: "+15551234567",
-        chat_identifier: "+15551234567",
-        destination_caller_id: "tel:+15551234567",
-        text: "pending self-chat reply",
-        is_from_me: false,
-        is_group: false,
-      },
-      echoCache,
-      selfChatCache,
-    });
-
-    expect(decision).toEqual({ kind: "drop", reason: "echo" });
-  });
+  it.each([
+    ["normal DM", 12001, "same pending text", "+15550001111", false],
+    ["self-chat reflection", 12002, "pending self-chat reply", "tel:+15551234567", true],
+  ] as const)(
+    "limits pending pre-send matching to self-chat: %s",
+    async (_name, id, text, destination_caller_id, isEcho) => {
+      await rememberPersistedIMessageEcho({
+        scope: SELF_CHAT_SCOPE,
+        text,
+        ttlMs: 155_000,
+        pending: true,
+      });
+      const decision = await resolveDecision({
+        message: { id, chat_identifier: SELF_CHAT_HANDLE, destination_caller_id, text },
+        echoCache,
+      });
+      if (isEcho) {
+        expect(decision).toEqual({ kind: "drop", reason: "echo" });
+      } else {
+        expect(decision.kind).toBe("dispatch");
+      }
+    },
+  );
 
   it("still identifies echo via text when inbound message has id: null", async () => {
     useFakeTimersAt();
 
-    const echoCache = createSentMessageCache();
-    const selfChatCache = createSelfChatCache();
+    echoCache.remember(SELF_CHAT_SCOPE, { text: "Sounds good" });
 
-    // Agent sends "Sounds good" — no messageId available (edge case)
-    const scope = SELF_CHAT_SCOPE;
-    echoCache.remember(scope, { text: "Sounds good" });
-
-    // 1 second later, inbound reflection arrives with id: null
     vi.advanceTimersByTime(1000);
 
-    const decision = await resolveDecision({
-      message: {
-        id: null as unknown as number,
-        sender: "+15551234567",
-        text: "Sounds good",
-        is_from_me: false,
-      },
-      echoCache,
-      selfChatCache,
+    expect(await resolveEcho({ id: null as unknown as number, text: "Sounds good" })).toEqual({
+      kind: "drop",
+      reason: "echo",
     });
-
-    // With id: null, the text-based fallback path is still active and should
-    // correctly identify this as an echo.
-    expect(decision).toEqual({ kind: "drop", reason: "echo" });
   });
 });

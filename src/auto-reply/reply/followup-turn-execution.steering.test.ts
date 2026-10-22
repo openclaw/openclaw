@@ -14,12 +14,19 @@ import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/ses
 import { loadSessionTranscriptEvents } from "../../config/sessions/session-transcript-events.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { createChatSendMessageInjectionStarter } from "../../gateway/server-methods/chat-send-message-injection.js";
+import { createRpcSourceForTest } from "../../gateway/test-helpers.rpc-source.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { ReplyToolAuthorityOverlay } from "../../sessions/session-controller.contracts.js";
+import { getSessionControllerEntryForOperation } from "../../sessions/session-controller.identity.js";
+import {
+  beginReplyMessageInjectionTarget,
+  createReplyOperation,
+} from "../../sessions/session-controller.js";
+import { captureCurrentReplyMessageInjectionTarget } from "../../sessions/session-controller.message-injection.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { ReplyPayload } from "../types.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
-import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
 import {
   createFollowupTurnTestTypingController as createTypingController,
   createFollowupTurnTestTurn as createTurn,
@@ -27,18 +34,16 @@ import {
   getFollowupTurnTestState,
   resetFollowupTurnTestState,
 } from "./followup-turn-execution.test-support.js";
-import { enqueueFollowupRun, isFollowupRunAborted, scheduleFollowupDrain } from "./queue.js";
-import { clearFollowupQueueForTest, createQueueTestRun } from "./queue.test-helpers.js";
+import { enqueueFollowupRun, scheduleFollowupDrain, type FollowupRun } from "./queue.js";
+import { createQueueTestRun, rejectQueuePreparation } from "./queue.test-helpers.js";
 import {
   collectRuntimeMetadata,
   createOverflowSummaryRetrySource,
 } from "./queue/delivery-context.js";
-import {
-  beginReplyMessageInjectionTarget,
-  createReplyOperation,
-  replyRunRegistry,
-} from "./reply-run-registry.js";
-import { retainReplyOperationUntilComplete } from "./reply-run-registry.state.js";
+import { completeFollowupRunLifecycle } from "./queue/lifecycle.js";
+import { clearFollowupQueue } from "./queue/state.js";
+import { isFollowupRunAborted } from "./queue/types.js";
+import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
 import { createReplyRecoveryActorFixture } from "./restart-recovery-claim.test-support.js";
 import { readChannelSourceTurnId } from "./source-turn-id.js";
 
@@ -46,49 +51,62 @@ const state = getFollowupTurnTestState();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(resetFollowupTurnTestState);
 
+function executeTurn(turn: AdmittedFollowupTurn, defaultModel = "claude") {
+  return executeFollowupTurn({
+    turn,
+    defaults: { typing: createTypingController(), typingMode: "never", defaultModel },
+    onToolResult: vi.fn(async () => {}),
+    onCompactionNoticePayload: vi.fn(async () => {}),
+  });
+}
+
+function sessionState(key: string, storePath: string, initial: SessionEntry) {
+  let entry = initial;
+  return {
+    kind: "session" as const,
+    key,
+    storePath,
+    current: () => entry,
+    publish: (next: SessionEntry | undefined) => {
+      if (next) {
+        entry = next;
+      }
+    },
+  };
+}
+
 describe("queued turn steering", () => {
   it.each(["gateway", "collected", "overflow"] as const)(
     "accepts successive Gateway steers into a %s followup after an older source completed",
     async (source) => {
       const root = tempDirs.make("openclaw-followup-steering-");
-      const storePath = path.join(root, "sessions.json");
-      const sessionKey = "agent:main:queued-steering";
-      let entry: SessionEntry = {
+      const target = {
+        agentId: "main",
+        sessionKey: "agent:main:queued-steering",
         sessionId: "session",
+        storePath: path.join(root, "sessions.json"),
+      };
+      const { storePath, sessionKey } = target;
+      const entry: SessionEntry = {
+        sessionId: target.sessionId,
         updatedAt: 1,
         restartRecoveryTerminalRunIds: ["previous-input"],
       };
-      await replaceSessionEntry({ storePath, sessionKey }, entry);
+      await replaceSessionEntry(target, entry);
       const operation = createReplyOperation({
-        sessionKey,
-        sessionId: entry.sessionId,
+        ...target,
         turnKind: "queued_followup",
         resetTriggered: false,
       });
       await using actor = createReplyRecoveryActorFixture({
-        agentId: "main",
-        sessionKey,
-        storePath,
+        ...target,
         operation,
         getSessionId: () => operation.sessionId,
       });
       await actor.bind();
       const turn = createTurn({
         operation,
-        session: {
-          kind: "session",
-          key: sessionKey,
-          storePath,
-          current: () => entry,
-          publish: (next) => {
-            if (next) {
-              entry = next;
-            }
-          },
-          adopt: (next) => {
-            entry = next;
-          },
-        },
+        session: sessionState(sessionKey, storePath, entry),
       });
       turn.queued.messageId = "queued-human-input";
       turn.queued.originatingChannel = "webchat";
@@ -111,13 +129,7 @@ describe("queued turn steering", () => {
       const sourceTurnId = source === "gateway" ? "queued-human-input" : "original-queued-input";
       turn.queued.userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
         input: { text: turn.queued.prompt, idempotencyKey: sourceTurnId },
-        target: {
-          agentId: "main",
-          sessionId: entry.sessionId,
-          sessionKey,
-          storePath,
-          sessionEntry: entry,
-        },
+        target: { ...target, sessionEntry: entry },
       });
       if (source !== "gateway") {
         turn.queued.sourceTurnId = sourceTurnId;
@@ -138,13 +150,15 @@ describe("queued turn steering", () => {
         "Keep the new scope",
         "Finish this first",
       ];
+      const runId = "followup-execution";
       const queueMessage = vi.fn(async (_text: string) => {});
       state.execute.mockImplementation(async (params: AgentTurnParams) => {
         expect(readChannelSourceTurnId(params.sessionCtx)).toBe(sourceTurnId);
         operation.bindToolAuthorityRoute({ provider: "anthropic", model: "claude" });
         operation.attachBackend({
           kind: "embedded",
-          runId: "followup-execution",
+          supportsTranscriptCommitWait: true,
+          runId,
           cancel: vi.fn(),
           messageInjectionV2: {
             version: 2,
@@ -158,7 +172,17 @@ describe("queued turn steering", () => {
         for (const [index, message] of steeringMessages.entries()) {
           const clientRunId = `new-human-input-${index}`;
           const attempt = await createChatSendMessageInjectionStarter({
-            target: replyRunRegistry.resolveCurrentMessageInjectionTarget(sessionKey),
+            sourceRef: createRpcSourceForTest(
+              {},
+              {
+                runId: clientRunId,
+                storeScope: storePath,
+                sessionKey,
+                sessionId: entry.sessionId,
+                agentId: "main",
+              },
+            ),
+            target: captureCurrentReplyMessageInjectionTarget(sessionKey),
             abortSignal: new AbortController().signal,
             request: {
               p: {
@@ -170,11 +194,10 @@ describe("queued turn steering", () => {
               supportsTaskSuggestions: false,
             },
             session: {
-              agentId: "main",
+              ...target,
+              resolvedSessionModel: { provider: "anthropic", model: "claude" },
               cfg: {},
-              entry,
-              sessionKey,
-              storePath,
+              entry: turn.session.current(),
               clientRunId,
             },
             turn: {
@@ -205,25 +228,17 @@ describe("queued turn steering", () => {
           ).toBeDefined();
           await expect(attempt!.outcome).resolves.toMatchObject({ status: "accepted" });
         }
-        return {
-          runId: "followup-execution",
-          outcome: { kind: "rejected", payload: { text: "done" } },
-        };
+        return { runId, outcome: { kind: "rejected", payload: { text: "done" } } };
       });
       try {
-        await executeFollowupTurn({
-          turn,
-          defaults: {
-            typing: createTypingController(),
-            typingMode: "never",
-            defaultModel: "claude",
-          },
-          onToolResult: vi.fn(async () => {}),
-          onCompactionNoticePayload: vi.fn(async () => {}),
-        });
+        await executeTurn(turn);
         expect(queueMessage.mock.calls.map(([text]) => text)).toEqual(steeringMessages);
-        expect(replyRunRegistry.getSourceTurnId(sessionKey)).toBe(sourceTurnId);
+        expect(getSessionControllerEntryForOperation(operation).sourceTurnId).toBe(sourceTurnId);
       } finally {
+        if (turn.queued.controllerInput) {
+          completeFollowupRunLifecycle(turn.queued);
+          await Promise.allSettled([turn.queued.controllerInput.settlement.promise]);
+        }
         await turn.restartRecovery?.clear();
       }
     },
@@ -249,9 +264,14 @@ describe("queued turn steering", () => {
     const queueMessage = vi.fn(async () => {});
     state.execute.mockImplementation(async () => {
       operation.bindToolAuthorityRoute({ provider: "anthropic", model: "claude" });
-      operation.attachBackend({ kind: "embedded", cancel: vi.fn(), queueMessage });
+      operation.attachBackend({
+        kind: "embedded",
+        supportsTranscriptCommitWait: true,
+        cancel: vi.fn(),
+        queueMessage,
+      });
       expect(operation.phase).toBe("running");
-      const target = replyRunRegistry.resolveCurrentMessageInjectionTarget("main");
+      const target = captureCurrentReplyMessageInjectionTarget("main");
       expect(target).toBeDefined();
       const overlay = {
         operatorAuthority: createAdmittedRunOperatorAuthority({
@@ -267,64 +287,52 @@ describe("queued turn steering", () => {
         disableTools: false,
         traceAuthorized: false,
       };
-      await expect(
+      const inject = async (
+        text: string,
+        toolAuthorityOverlay: ReplyToolAuthorityOverlay = overlay,
+      ) =>
         (
-          await beginReplyMessageInjectionTarget(target!, "Use the revised request", {
+          await beginReplyMessageInjectionTarget(target!, text, {
             isInboundUserMessage: true,
-            toolAuthorityOverlay: overlay,
+            toolAuthorityOverlay,
           })
-        ).outcome,
-      ).resolves.toMatchObject({ status: "accepted" });
+        ).outcome;
+      await expect(inject("Use the revised request")).resolves.toMatchObject({
+        status: "accepted",
+      });
       await expect(
-        (
-          await beginReplyMessageInjectionTarget(target!, "Same permissions from another profile", {
-            isInboundUserMessage: true,
-            toolAuthorityOverlay: {
-              ...overlay,
-              operatorAuthority: createAdmittedRunOperatorAuthority({
-                ...overlay.operatorAuthority,
-                profileId: "maintainer",
-              }),
-            },
-          })
-        ).outcome,
-      ).resolves.toMatchObject({ status: "accepted" });
+        inject("Same permissions from another profile", {
+          ...overlay,
+          operatorAuthority: createAdmittedRunOperatorAuthority({
+            ...overlay.operatorAuthority,
+            profileId: "maintainer",
+          }),
+        }),
+      ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
       await expect(
-        (
-          await beginReplyMessageInjectionTarget(target!, "Change tool permissions", {
-            isInboundUserMessage: true,
-            toolAuthorityOverlay: { ...overlay, disableTools: true },
-          })
-        ).outcome,
+        inject("Change tool permissions", { ...overlay, disableTools: true }),
       ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
       for (const incomingOperator of [
         undefined,
         createAdmittedRunOperatorAuthority({ ...operatorAuthority, scopes: ["operator.admin"] }),
       ]) {
         await expect(
-          (
-            await beginReplyMessageInjectionTarget(
-              target!,
-              "Different original operator authority",
-              {
-                isInboundUserMessage: true,
-                toolAuthorityOverlay: { ...overlay, operatorAuthority: incomingOperator },
-              },
-            )
-          ).outcome,
+          inject("Different original operator authority", {
+            ...overlay,
+            operatorAuthority: incomingOperator,
+          }),
         ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
       }
-      expect(queueMessage).toHaveBeenCalledTimes(2);
+      expect(queueMessage).toHaveBeenCalledOnce();
       return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
     });
     try {
-      await executeFollowupTurn({
-        turn,
-        defaults: { typing: createTypingController(), typingMode: "never", defaultModel: "claude" },
-        onToolResult: vi.fn(async () => {}),
-        onCompactionNoticePayload: vi.fn(async () => {}),
-      });
+      await executeTurn(turn);
     } finally {
+      if (turn.queued.controllerInput) {
+        completeFollowupRunLifecycle(turn.queued);
+        await Promise.allSettled([turn.queued.controllerInput.settlement.promise]);
+      }
       operation.complete();
     }
   });
@@ -341,94 +349,62 @@ describe("queued ingress acceptance", () => {
     vi.unstubAllEnvs();
   });
 
-  it("lets ingress bound delivery-group preparation failures before queued execution", async () => {
-    await withOpenClawTestState({ label: "queued-ingress-group-retry" }, async (testState) => {
-      const preparation = vi
-        .spyOn(sandboxRuntime, "withSandboxRuntimeStatusesInWorker")
-        .mockRejectedValue(new Error("ENOSPC: sandbox status read failed"));
-      const queue = createTestIngressQueue(testState.stateDir);
-      const failed = observeChannelIngressQueueWrite(queue, "fail", "second-input");
-      const key = "agent:main:ingress-group-retry";
-      const ingressSignals: AbortSignal[] = [];
-      const runFollowup = vi.fn(async () => {});
-      const drain = createChannelIngressDrain({
-        queue,
-        adoptionStallTimeoutMs: 90,
-        retryPolicy: { maxAttempts: 1, deadLetterMinAgeMs: 0 },
-        dispatchClaimedEvent: (event, lifecycle) => {
-          ingressSignals.push(lifecycle.abortSignal);
-          const run = createQueueTestRun({
-            prompt: event.payload.text,
-            messageId: event.id,
-            originatingChannel: "discord",
-            originatingTo: "channel:synthetic-group",
-          });
-          run.run.agentId = "main";
-          run.run.sessionKey = key;
-          run.run.gatewayUiCommandTarget = { connId: "synthetic-browser", profileId: "viewer" };
-          run.turnAdoptionLifecycle =
-            bindIngressLifecycleToReplyOptions(lifecycle).turnAdoptionLifecycle;
-          enqueueFollowupRun(
-            key,
-            run,
-            { mode: "collect", debounceMs: 10, cap: 2, dropPolicy: "summarize" },
-            "message-id",
-            runFollowup,
-            false,
-          );
-          return { kind: "deferred" };
-        },
-      });
-      try {
-        await queue.enqueue("first-input", { text: "First request" }, { laneKey: "first" });
-        await queue.enqueue("second-input", { text: "Second request" }, { laneKey: "second" });
-        expect(await drain.drainOnce()).toEqual({ started: 2 });
-        await drain.waitForIdle();
-        scheduleFollowupDrain(key, runFollowup);
-        await vi.advanceTimersByTimeAsync(50);
-        expect(preparation).toHaveBeenCalled();
-        expect(preparation.mock.calls[0]?.[0]).toHaveLength(2);
-        expect(runFollowup).not.toHaveBeenCalled();
-        expect(ingressSignals.map((signal) => signal.aborted)).toEqual([false, false]);
-        await vi.advanceTimersByTimeAsync(60);
-        expect(ingressSignals.map((signal) => signal.aborted)).toEqual([true, true]);
-        await expect(failed).resolves.toBe(true);
-        expect(await queue.listFailed?.()).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({ id: "first-input", reason: "retry-limit-exceeded" }),
-            expect.objectContaining({ id: "second-input", reason: "retry-limit-exceeded" }),
-          ]),
-        );
-      } finally {
-        drain.dispose();
-        clearFollowupQueueForTest(key);
-        preparation.mockRestore();
-      }
-    });
-  });
-
-  it.each(["followup", "collect"] as const)(
-    "lets ingress bound repeated preparation failures in %s mode",
-    async (mode) => {
+  it.each([
+    ["collect", true],
+    ["followup", false],
+    ["collect", false],
+  ] as const)(
+    "bounds %s preparation failures while preserving exclusive ingress (multiple inputs: %s)",
+    async (mode, multipleInputs) => {
       await withOpenClawTestState({ label: "queued-ingress-retry" }, async (testState) => {
+        const preparation = multipleInputs
+          ? vi
+              .spyOn(sandboxRuntime, "withSandboxRuntimeStatusesInWorker")
+              .mockRejectedValue(new Error("ENOSPC: sandbox status read failed"))
+          : undefined;
         const queue = createTestIngressQueue(testState.stateDir);
-        const failed = observeChannelIngressQueueWrite(queue, "fail");
-        const key = `agent:main:ingress-retry-${mode}`;
-        let ingressSignal: AbortSignal | undefined;
-        const runFollowup = vi.fn(async (run: Parameters<typeof isFollowupRunAborted>[0]) => {
-          if (!isFollowupRunAborted(run)) {
-            throw new Error("ENOSPC: queued preparation failed");
+        const failed = observeChannelIngressQueueWrite(
+          queue,
+          "fail",
+          multipleInputs ? "second-input" : undefined,
+        );
+        const key = multipleInputs
+          ? "agent:main:ingress-group-retry"
+          : `agent:main:ingress-retry-${mode}`;
+        const signals: AbortSignal[] = [];
+        const selectedGroups: string[][] = [];
+        const runFollowup = vi.fn(async (run: FollowupRun) => {
+          if (isFollowupRunAborted(run)) {
+            return;
           }
+          if (multipleInputs) {
+            const claim = run.controllerClaim ?? run.controllerInput?.claim;
+            selectedGroups.push(claim?.sources.map((source) => source.prompt) ?? []);
+            rejectQueuePreparation(run, new Error("ENOSPC: queued preparation failed"));
+          }
+          throw new Error("ENOSPC: queued preparation failed");
         });
         const drain = createChannelIngressDrain({
           queue,
           adoptionStallTimeoutMs: 90,
           retryPolicy: { maxAttempts: 1, deadLetterMinAgeMs: 0 },
-          dispatchClaimedEvent: (_event, lifecycle) => {
-            ingressSignal = lifecycle.abortSignal;
-            const run = createQueueTestRun({ prompt: "Please answer", messageId: "failed-input" });
+          dispatchClaimedEvent: (event, lifecycle) => {
+            signals.push(lifecycle.abortSignal);
+            const run = createQueueTestRun({
+              prompt: multipleInputs ? event.payload.text : "Please answer",
+              messageId: multipleInputs ? event.id : "failed-input",
+              ...(multipleInputs
+                ? { originatingChannel: "discord", originatingTo: "channel:synthetic-group" }
+                : {}),
+            });
+            if (multipleInputs) {
+              run.run.agentId = "main";
+              run.run.sessionKey = key;
+              run.run.gatewayUiCommandTarget = { connId: "synthetic-browser", profileId: "viewer" };
+            }
             run.turnAdoptionLifecycle =
               bindIngressLifecycleToReplyOptions(lifecycle).turnAdoptionLifecycle;
+            run.abortSignal = lifecycle.abortSignal;
             enqueueFollowupRun(
               key,
               run,
@@ -437,24 +413,59 @@ describe("queued ingress acceptance", () => {
               runFollowup,
               false,
             );
-            scheduleFollowupDrain(key, runFollowup);
+            if (!multipleInputs) {
+              scheduleFollowupDrain(key, runFollowup);
+            }
             return { kind: "deferred" };
           },
         });
         try {
-          await queue.enqueue("failed-input", { text: "Please answer" });
-          await drain.drainOnce();
+          if (multipleInputs) {
+            await queue.enqueue("first-input", { text: "First request" }, { laneKey: "first" });
+            await queue.enqueue("second-input", { text: "Second request" }, { laneKey: "second" });
+          } else {
+            await queue.enqueue("failed-input", { text: "Please answer" });
+          }
+          expect(await drain.drainOnce()).toEqual({ started: multipleInputs ? 2 : 1 });
           await drain.waitForIdle();
-          await vi.advanceTimersByTimeAsync(110);
-          expect(runFollowup).toHaveBeenCalled();
-          expect(ingressSignal?.aborted).toBe(true);
+          if (multipleInputs) {
+            scheduleFollowupDrain(key, runFollowup);
+            await vi.advanceTimersByTimeAsync(50);
+            expect(preparation).not.toHaveBeenCalled();
+            expect(selectedGroups.length).toBeGreaterThan(0);
+            for (const sources of selectedGroups) {
+              expect(sources).toEqual(["First request"]);
+            }
+            expect(await queue.listClaims()).toHaveLength(2);
+            expect(signals.map((signal) => signal.aborted)).toEqual([false, false]);
+            await vi.advanceTimersByTimeAsync(60);
+            expect(signals.map((signal) => signal.aborted)).toEqual([true, false]);
+            expect(selectedGroups).toContainEqual(["Second request"]);
+            // The waiting input keeps its heartbeat until its own preparation fails.
+            await vi.advanceTimersByTimeAsync(90);
+            expect(signals.map((signal) => signal.aborted)).toEqual([true, true]);
+          } else {
+            await vi.advanceTimersByTimeAsync(110);
+            expect(runFollowup).toHaveBeenCalled();
+            expect(signals[0]?.aborted).toBe(true);
+          }
           await expect(failed).resolves.toBe(true);
-          expect(await queue.listFailed?.()).toMatchObject([
-            { id: "failed-input", reason: "retry-limit-exceeded" },
-          ]);
+          const failures = await queue.listFailed?.();
+          if (multipleInputs) {
+            for (const id of ["first-input", "second-input"]) {
+              expect(failures).toContainEqual(
+                expect.objectContaining({ id, reason: "retry-limit-exceeded" }),
+              );
+            }
+          } else {
+            expect(failures).toMatchObject([
+              { id: "failed-input", reason: "retry-limit-exceeded" },
+            ]);
+          }
         } finally {
           drain.dispose();
-          clearFollowupQueueForTest(key);
+          clearFollowupQueue(key);
+          preparation?.mockRestore();
         }
       });
     },
@@ -478,7 +489,7 @@ describe("queued ingress acceptance", () => {
           sessionId: "queued-session",
           storePath: path.join(testState.agentDir("main"), "openclaw-agent.sqlite"),
         };
-        let entry: SessionEntry = { sessionId: target.sessionId, updatedAt: 1 };
+        const entry: SessionEntry = { sessionId: target.sessionId, updatedAt: 1 };
         await replaceSessionEntry(target, entry);
         const upstreamAbort = new AbortController();
         const operation = createReplyOperation({
@@ -486,7 +497,6 @@ describe("queued ingress acceptance", () => {
           resetTriggered: false,
           upstreamAbortSignal: upstreamAbort.signal,
         });
-        retainReplyOperationUntilComplete(operation);
         await using actor = createReplyRecoveryActorFixture({
           ...target,
           operation,
@@ -500,20 +510,7 @@ describe("queued ingress acceptance", () => {
         });
         const turn: AdmittedFollowupTurn = createTurn({
           operation,
-          session: {
-            kind: "session",
-            key: target.sessionKey,
-            storePath: target.storePath,
-            current: () => entry,
-            publish: (next) => {
-              if (next) {
-                entry = next;
-              }
-            },
-            adopt: (next) => {
-              entry = next;
-            },
-          },
+          session: sessionState(target.sessionKey, target.storePath, entry),
         });
         turn.queued.run = {
           ...turn.queued.run,
@@ -541,17 +538,15 @@ describe("queued ingress acceptance", () => {
             restartRecoveryDeliveryRunId: "message-1",
             restartRecoveryDeliverySourceRunId: sourceId,
           });
-          expect(await loadSessionTranscriptEvents(target)).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({
-                type: "message",
-                message: expect.objectContaining({
-                  role: "user",
-                  content: "queued user message",
-                  idempotencyKey: sourceId,
-                }),
+          expect(await loadSessionTranscriptEvents(target)).toContainEqual(
+            expect.objectContaining({
+              type: "message",
+              message: expect.objectContaining({
+                role: "user",
+                content: "queued user message",
+                idempotencyKey: sourceId,
               }),
-            ]),
+            }),
           );
           expect(await queue.listClaims()).toHaveLength(1);
         });
@@ -583,16 +578,7 @@ describe("queued ingress acceptance", () => {
                 await lifecycle.onAdopted();
               },
             }).turnAdoptionLifecycle;
-            const result = await executeFollowupTurn({
-              turn,
-              defaults: {
-                typing: createTypingController(),
-                typingMode: "never",
-                defaultModel: "test-model",
-              },
-              onToolResult: async () => {},
-              onCompactionNoticePayload: async () => {},
-            });
+            const result = await executeTurn(turn, "test-model");
             if (result.execution.outcome.kind === "rejected") {
               replies.push(result.execution.outcome.payload);
             }
@@ -621,6 +607,10 @@ describe("queued ingress acceptance", () => {
           expect(replies).toHaveLength(failure === "user-abort" ? 0 : 1);
         } finally {
           drain.dispose();
+          if (turn.queued.controllerInput) {
+            completeFollowupRunLifecycle(turn.queued);
+            await Promise.allSettled([turn.queued.controllerInput.settlement.promise]);
+          }
           await turn.restartRecovery?.clear();
         }
       });

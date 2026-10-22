@@ -14,6 +14,8 @@ import {
   type GatewayServiceCommandConfig,
   type GatewayServiceInstallArgs,
 } from "../daemon/service-types.js";
+import type { HealthFinding } from "../flows/health-checks.js";
+import type { RuntimeEnv } from "../runtime.js";
 
 export function formatServiceConfigIssues(issues: ServiceConfigIssue[]): string[] {
   return issues.map(({ message, detail }) => `- ${message}${detail ? ` (${detail})` : ""}`);
@@ -60,18 +62,34 @@ export function formatGatewayServiceRepairPreview(params: {
   currentLayout: GatewayServiceLayoutSummary | undefined;
   plannedLayout: GatewayServiceLayoutSummary | undefined;
   missingSystemNode: boolean;
+  runtimeIssues: readonly ServiceConfigIssue[];
   definitionDrift: ServiceConfigAudit["definitionDrift"];
-}): { preview: string; unresolvedFindings: string[] } {
-  const unresolvedFindings: string[] = [];
+}): { preview: string; unresolvedFindings: HealthFinding[] } {
+  const unresolvedFindings: HealthFinding[] = [];
   if (params.missingSystemNode) {
-    unresolvedFindings.push(
-      `No supported system Node is available; this repair retains ${params.plan.programArguments[0]}. Install system Node ${SUPPORTED_NODE_VERSIONS} and rerun Doctor to resolve the runtime finding.`,
+    const runtimeFailed = params.runtimeIssues.some(
+      (issue) =>
+        issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeNode ||
+        issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeBun,
     );
+    unresolvedFindings.push({
+      checkId: "core/doctor/gateway-service",
+      severity: runtimeFailed ? "error" : "warning",
+      category: runtimeFailed ? "fix-now" : "recommended",
+      message: `No supported system Node is available; this repair retains ${params.plan.programArguments[0]}.`,
+      fixHint: `Install system Node ${SUPPORTED_NODE_VERSIONS} and rerun Doctor to resolve the runtime finding.`,
+      docsUrl: "https://docs.openclaw.ai/cli/doctor/checks#gateway-and-service-repairs",
+    });
   }
   if (params.plannedLayout?.entrypointSourceCheckout) {
-    unresolvedFindings.push(
-      `This repair retains a source-checkout entrypoint. Run \`${formatCliCommand("openclaw gateway install --force")}\` from the intended package install to replace it.`,
-    );
+    unresolvedFindings.push({
+      checkId: "core/doctor/gateway-service",
+      severity: "warning",
+      category: "recommended",
+      message: "This repair retains a source-checkout entrypoint.",
+      fixHint: `Run \`${formatCliCommand("openclaw gateway install --force")}\` from the intended package install to replace it.`,
+      docsUrl: "https://docs.openclaw.ai/cli/doctor/checks#gateway-and-service-repairs",
+    });
   }
   const preview = [
     `Runtime: ${params.managedDefinition.programArguments[0]} -> ${params.plan.programArguments[0]}`,
@@ -85,7 +103,7 @@ export function formatGatewayServiceRepairPreview(params: {
           ]
         : [],
     ),
-    ...unresolvedFindings.map((finding) => `Will remain: ${finding}`),
+    ...unresolvedFindings.map((finding) => `Will remain: ${finding.message} ${finding.fixHint}`),
   ].join("\n");
   return { preview, unresolvedFindings };
 }
@@ -129,6 +147,7 @@ export function isPreservedLaunchdTimeoutWarning(audit: ServiceConfigAudit): boo
 /** Native policy repair must not auto-approve unrelated command or credential changes. */
 export function isServiceDefinitionOnlyRepair(audit: ServiceConfigAudit): boolean {
   const policyCodes: ReadonlySet<string> = new Set([
+    SERVICE_AUDIT_CODES.gatewayEgressProxyEnvEmbedded,
     SERVICE_AUDIT_CODES.systemdAfterNetworkOnline,
     SERVICE_AUDIT_CODES.systemdWantsNetworkOnline,
     SERVICE_AUDIT_CODES.systemdRestartSec,
@@ -166,6 +185,8 @@ export function isOperatorOwnedEnvironmentIssue(
         environmentValueSources,
         normalizeKey: normalizeServiceEnvKey,
       });
+    case SERVICE_AUDIT_CODES.gatewayEgressProxyEnvEmbedded:
+      return hasOverride(issue.environmentKeys ?? []);
     case SERVICE_AUDIT_CODES.gatewayProxyEnvEmbedded:
       return hasGatewayServiceEnvironmentOverride(
         command,
@@ -176,5 +197,59 @@ export function isOperatorOwnedEnvironmentIssue(
       );
     default:
       return false;
+  }
+}
+
+export function reportGatewayServiceFailure(
+  message: string,
+  runtime: RuntimeEnv,
+  onFinding?: (finding: HealthFinding) => void,
+): void {
+  if (onFinding) {
+    onFinding({
+      checkId: "core/doctor/gateway-service",
+      severity: "error",
+      category: "fix-now",
+      message,
+      fixHint:
+        "Run openclaw gateway status --deep from the intended install/profile. Resolve the reported permission or configuration error, then rerun openclaw doctor --fix in an interactive terminal.",
+      docsUrl: "https://docs.openclaw.ai/cli/doctor/checks#gateway-and-service-repairs",
+    });
+  } else {
+    runtime.error(message);
+  }
+}
+
+export function reportUnresolvedGatewayServiceFindings(
+  findings: readonly HealthFinding[],
+  onFinding?: (finding: HealthFinding) => void,
+): void {
+  if (!onFinding) {
+    note(
+      findings.map((finding) => `${finding.message} ${finding.fixHint}`).join("\n"),
+      "Gateway service findings still unresolved",
+    );
+    return;
+  }
+  for (const finding of findings) {
+    onFinding(finding);
+  }
+}
+
+export function noteDeclinedGatewayServiceRepair(
+  needsConfigWrite: boolean,
+  sourceCheckoutWarningToShow: string | null,
+): void {
+  if (needsConfigWrite) {
+    note(
+      "Skipped Gateway token preservation and service repair. Rerun `openclaw doctor --fix` in an interactive terminal to approve saving a store SecretRef in gateway.auth.token.",
+      "Gateway service config",
+    );
+  }
+  if (sourceCheckoutWarningToShow === null) {
+    note(
+      `Run \`${formatCliCommand("openclaw gateway install --force")}\` when you want to replace the gateway service definition.`,
+      "Gateway service config",
+    );
   }
 }

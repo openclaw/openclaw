@@ -4,6 +4,7 @@ import {
   isGatewayResponseFrame,
 } from "@openclaw/gateway-protocol/frame-guards";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveSleepDelayMs, RetrySupervisor, sleepWithAbort } from "@openclaw/retry";
 import { GatewayEventListeners } from "./event-listeners.js";
 import { GatewayPendingRequests, type GatewayProtocolRequestTiming } from "./pending-request.js";
@@ -93,6 +94,11 @@ export class GatewayProtocolClient<TPlan> {
 
   get connecting(): boolean {
     return this.connectSent && !this.helloReceived;
+  }
+
+  /** A transport upgrade is in flight; the socket adapter bounds how long it may stay open. */
+  get opening(): boolean {
+    return this.socket !== null && !this.socketOpened;
   }
 
   get hasUnboundedPendingRequests(): boolean {
@@ -448,9 +454,7 @@ export class GatewayProtocolClient<TPlan> {
           return;
         }
         this.connectNonce = nonce;
-        this.serverCapabilities = Array.isArray(payload?.capabilities)
-          ? payload.capabilities.filter((value): value is string => typeof value === "string")
-          : [];
+        this.serverCapabilities = filterStringEntries(payload?.capabilities);
         const challengeTs = payload?.ts;
         this.connectChallengeTs =
           typeof challengeTs === "number" && Number.isSafeInteger(challengeTs) && challengeTs >= 0

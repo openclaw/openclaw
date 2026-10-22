@@ -4,6 +4,7 @@ import {
   asPositiveFiniteNumber,
 } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { createZeroUsage } from "../../packages/ai/src/utils/usage.js";
 import type { Usage } from "../llm/types.js";
 
 export type ContextUsage = NonNullable<Usage["contextUsage"]>;
@@ -16,7 +17,7 @@ type PromptTokenDetails = {
   cache_creation_input_tokens?: number;
 };
 
-export type UsageLike = {
+type UsageTokenFields = {
   input?: number;
   output?: number;
   cacheRead?: number;
@@ -25,7 +26,11 @@ export type UsageLike = {
   cacheTelemetry?: Usage["cacheTelemetry"];
   contextUsage?: ContextUsage;
   usageReport?: Usage["usageReport"];
+  reasoningTokens?: number;
   total?: number;
+};
+
+export type UsageLike = UsageTokenFields & {
   // Common alternates across providers/SDKs.
   inputTokens?: number;
   outputTokens?: number;
@@ -37,7 +42,8 @@ export type UsageLike = {
   completion_tokens?: number;
   cache_read_input_tokens?: number;
   cache_creation_input_tokens?: number;
-  reasoningTokens?: number;
+  // Anthropic splits cache writes by TTL; the 1h subset is billed at a higher rate.
+  cache_creation?: { ephemeral_1h_input_tokens?: number };
   reasoning_tokens?: number;
   completion_tokens_details?: { reasoning_tokens?: number };
   output_tokens_details?: { reasoning_tokens?: number; thinking_tokens?: number };
@@ -66,19 +72,11 @@ export type UsageLike = {
   cost?: Partial<Usage["cost"]>;
 };
 
-export type NormalizedUsage = {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  cacheWrite1h?: number;
-  cacheTelemetry?: Usage["cacheTelemetry"];
-  contextUsage?: ContextUsage;
-  usageReport?: Usage["usageReport"];
-  reasoningTokens?: number;
-  total?: number;
+export type NormalizedUsage = UsageTokenFields & {
   cost?: Pick<Usage["cost"], "total" | "totalOrigin"> &
     Partial<Pick<Usage["cost"], "input" | "output" | "cacheRead" | "cacheWrite">>;
+  /** Aggregated candidate prices are authoritative, including zero and unavailable totals. */
+  costStatus?: "complete" | "unavailable";
 };
 
 export type OpenAiChatCompletionsUsage = ReturnType<typeof toOpenAiChatCompletionsUsage>;
@@ -86,20 +84,7 @@ export type OpenAiChatCompletionsUsage = ReturnType<typeof toOpenAiChatCompletio
 export type AssistantUsageSnapshot = Usage;
 
 export function makeZeroUsageSnapshot(): AssistantUsageSnapshot {
-  return {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 0,
-    cost: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      total: 0,
-    },
-  };
+  return createZeroUsage();
 }
 
 export function hasNonzeroUsage(usage?: NormalizedUsage | null): usage is NormalizedUsage {
@@ -158,7 +143,8 @@ const normalizeTokenCount = (value: unknown): number | undefined => {
     : Math.min(Math.max(0, Math.trunc(numeric)), Number.MAX_SAFE_INTEGER);
 };
 
-function normalizeContextUsage(raw?: ContextUsage): ContextUsage | undefined {
+export function normalizeContextUsage(value: unknown): ContextUsage | undefined {
+  const raw = asOptionalRecord(value);
   if (raw?.state !== "available") {
     return raw?.state === "unavailable" ? { state: "unavailable" } : undefined;
   }
@@ -197,7 +183,9 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
       raw.prompt_tokens_details?.cache_write_tokens ??
       raw.prompt_tokens_details?.cache_creation_input_tokens,
   );
-  const cacheWrite1h = normalizeTokenCount(raw.cacheWrite1h);
+  const cacheWrite1h = normalizeTokenCount(
+    raw.cacheWrite1h ?? raw.cache_creation?.ephemeral_1h_input_tokens,
+  );
 
   const directInput = asFiniteNumber(raw.input);
   const rawInputValue =
@@ -388,11 +376,9 @@ export function toOpenAiResponsesUsage(usage: NormalizedUsage | undefined) {
   };
 }
 
-export function derivePromptTokens(usage?: {
-  input?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-}): number | undefined {
+export function derivePromptTokens(
+  usage?: Pick<UsageTokenFields, "input" | "cacheRead" | "cacheWrite">,
+): number | undefined {
   if (!usage) {
     return undefined;
   }

@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import {
   deferSqlitePostCommitPublication,
@@ -15,6 +15,12 @@ import {
   type ResolvedSessionMaintenanceConfig,
 } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
+
+export type SessionMaintenanceAgeContinuation = {
+  at: number;
+  after?: { updatedAt: number; sessionKey: string };
+  modelRunPrune: boolean;
+};
 
 export type SessionEntryMaintenanceAgeFact = {
   maintenance: ResolvedSessionMaintenanceConfig;
@@ -38,6 +44,23 @@ export type SessionEntryMaintenanceAgeChange = {
   entry: MaintenanceActivity;
   previousEntry?: MaintenanceActivity;
 };
+
+export function restartSessionMaintenanceAgeScan(
+  continuation: SessionMaintenanceAgeContinuation | undefined,
+  changes: ReadonlyMap<string, SessionEntryMaintenanceAgeChange>,
+): SessionMaintenanceAgeContinuation | undefined {
+  const after = continuation?.after;
+  if (
+    after &&
+    [...changes.values()].some(
+      ({ entry }) => entry.archivedAt === undefined && entry.updatedAt <= after.updatedAt,
+    )
+  ) {
+    // A late historical write can sort behind the cursor. Keep the initial age policy.
+    return { at: continuation.at, modelRunPrune: continuation.modelRunPrune };
+  }
+  return undefined;
+}
 const changeObservers = new Map<
   string | symbol,
   Set<(change: SessionEntryMaintenanceAgeChange) => void>
@@ -109,10 +132,10 @@ type Activity = Parameters<typeof getSessionMaintenanceActivityAt>[0];
 export const SESSION_ENTRY_MAINTENANCE_INTERVAL_MS = 30 * 60 * 1_000;
 
 // Ordinary updates retain this age lower bound across entry-cache revision churn.
-const ageFacts = new WeakMap<DatabaseSync, SessionEntryMaintenanceAgeCapture>();
+const ageFacts = new WeakMap<EngineConnection, SessionEntryMaintenanceAgeCapture>();
 
 export function stageSessionEntryMaintenanceAgeFact(
-  db: DatabaseSync,
+  db: EngineConnection,
   fact: SessionEntryMaintenanceAgeFact | undefined,
 ): void {
   if (
@@ -129,12 +152,12 @@ export function stageSessionEntryMaintenanceAgeFact(
   }
 }
 
-export function invalidateSessionEntryMaintenanceAgeFact(db: DatabaseSync): void {
+export function invalidateSessionEntryMaintenanceAgeFact(db: EngineConnection): void {
   ageFacts.delete(db);
 }
 
 export function readSessionEntryMaintenanceAgeFact(
-  db: DatabaseSync,
+  db: EngineConnection,
   maintenance: ResolvedSessionMaintenanceConfig,
 ): SessionEntryMaintenanceAgeFact | undefined {
   const fact = ageFacts.get(db)?.fact;
@@ -159,7 +182,7 @@ function isDashboardKey(key: string): boolean {
 
 /** Tracked writes can only bring the conservative age boundary forward. */
 export function advanceSessionEntryMaintenanceAgeFact(
-  db: DatabaseSync,
+  db: EngineConnection,
   update: SessionEntryMaintenanceAgeChange,
 ): void {
   if (changeObservers.size) {
@@ -179,7 +202,7 @@ export function advanceSessionEntryMaintenanceAgeFact(
 }
 
 export function applySessionEntryMaintenanceAgeChange(
-  db: DatabaseSync,
+  db: EngineConnection,
   update: SessionEntryMaintenanceAgeChange,
 ): void {
   const fact = updateSessionEntryMaintenanceAgeFact(ageFacts.get(db)?.fact, update);
@@ -210,27 +233,29 @@ export function updateSessionEntryMaintenanceAgeFact(
     previousEntry &&
     (!isMonotoneSessionEntryMaintenanceAgeChange(update) ||
       previousEntry.sessionId !== entry.sessionId ||
-      previousEntry.parentSessionKey !== entry.parentSessionKey ||
-      ((previousEntry.preserved ??
-        shouldPreserveMaintenanceEntry({
-          key: update.sessionKey,
-          entry: previousEntry,
-          preserveRecentMs: null,
-        })) &&
-        !(
-          entry.preserved ??
-          shouldPreserveMaintenanceEntry({ key: update.sessionKey, entry, preserveRecentMs: null })
-        )))
+      previousEntry.parentSessionKey !== entry.parentSessionKey)
   ) {
     // Exact replacement/lifecycle writers also own backdates and archive restores.
     return undefined;
   }
-  // A newly inserted historical entry must retain already-due transitions too.
+  const protectionReleased =
+    previousEntry &&
+    (previousEntry.preserved ??
+      shouldPreserveMaintenanceEntry({
+        key: update.sessionKey,
+        entry: previousEntry,
+        preserveRecentMs: null,
+      })) &&
+    !(
+      entry.preserved ??
+      shouldPreserveMaintenanceEntry({ key: update.sessionKey, entry, preserveRecentMs: null })
+    );
+  // Newly eligible historical entries must retain already-due transitions too.
   const at = nextEntryAgeAt(
     update.sessionKey,
     entry,
     fact.maintenance,
-    previousEntry ? Date.now() : -Infinity,
+    previousEntry && !protectionReleased ? Date.now() : -Infinity,
   );
   return {
     ...fact,
@@ -329,21 +354,19 @@ export function recordSessionEntryMaintenanceAgeFact(
   // Certified keys support indexed namespaces; pending aliases retain the canonical decoder.
   // Older maintenance readers have no pending projection and keep their full row path.
   const dashboardRows = hasCanonicalSessionValidationProjection(database)
-    ? [queries.dashboards(undefined), queries.uncertified(undefined)]
-    : [queries.activity(undefined)];
-  for (const rows of dashboardRows) {
-    for (const row of rows) {
-      if (
-        !isDashboardKey(row.session_key) ||
-        shouldPreserveMaintenanceEntry({ key: row.session_key, entry: undefined })
-      ) {
-        continue;
-      }
-      next.at = Math.min(
-        next.at,
-        nextAgeAt(readActivityAt(row), maintenance.archiveDashboardAfterMs, plannedAt),
-      );
+    ? queries.dashboards(undefined)
+    : queries.activity(undefined);
+  for (const row of dashboardRows) {
+    if (
+      !isDashboardKey(row.session_key) ||
+      shouldPreserveMaintenanceEntry({ key: row.session_key, entry: undefined })
+    ) {
+      continue;
     }
+    next.at = Math.min(
+      next.at,
+      nextAgeAt(readActivityAt(row), maintenance.archiveDashboardAfterMs, plannedAt),
+    );
   }
   const recentAge = maintenance.preserveRecentMs;
   if (recentAge != null && recentAge > 0) {
@@ -379,12 +402,6 @@ export function capturePendingSessionMaintenanceAgeChanges(
   const changes = [...pending.values()];
   return {
     changes,
-    isCurrent() {
-      return (
-        pending.size === changes.length &&
-        changes.every((change) => pending.get(change.sessionKey) === change)
-      );
-    },
     acknowledge() {
       for (const change of changes) {
         if (pending.get(change.sessionKey) === change) {

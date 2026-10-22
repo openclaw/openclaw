@@ -27,14 +27,12 @@ import {
 import {
   collectMatrixInboundDedupeSources,
   hasCompletedMatrixInboundDedupeMigration,
-  importNewestInboundDedupeMarkers,
+  importInboundDedupeMarkersToIngress,
+  matrixReplayGuardIngressMigration,
   readLegacyInboundDedupeSqliteSource,
   recordMatrixInboundDedupeMigrationCompletion,
-  reserveMatrixInboundDedupeMigrationCompletion,
   retireLegacyInboundDedupeSqliteRows,
-  verifyMatrixInboundDedupeSourcesRetired,
   type LegacyInboundDedupeMarker,
-  type MatrixInboundDedupeMigrationIo,
 } from "./src/matrix/monitor/inbound-dedupe-migration.js";
 import { walkMatrixStateFiles } from "./src/matrix/state-layout-walk.js";
 import { resolveMatrixCredentialsDir } from "./src/storage-paths.js";
@@ -258,23 +256,15 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         }
         if (!existing) {
           try {
-            await store.registerIfAbsent(key, credentials);
+            if (!(await store.registerIfAbsent(key, credentials))) {
+              throw new Error("Canonical state appeared during offline import.");
+            }
           } catch (error) {
             warnings.push(
               `Failed importing Matrix credentials for account ${source.accountId}: ${String(error)}; left legacy source in place`,
             );
             continue;
           }
-        }
-        const persisted = normalizeMatrixStoredCredentials(
-          await store.lookup(key),
-          source.accountId,
-        );
-        if (!persisted || JSON.stringify(persisted) !== JSON.stringify(credentials)) {
-          warnings.push(
-            `Failed verifying Matrix credentials for account ${source.accountId}; left legacy source in place`,
-          );
-          continue;
         }
         changes.push(`Migrated Matrix credentials for account ${source.accountId} to SQLite`);
         await archiveSource();
@@ -285,48 +275,42 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "matrix-inbound-dedupe-to-claimable-dedupe",
     label: "Matrix inbound dedupe markers",
+    sqliteOnly: { family: "state" },
     async detectLegacyState(params) {
       const sources = await collectMatrixInboundDedupeSources(params.stateDir);
-      if (
-        params.config.channels?.matrix === undefined &&
-        sources.status === "complete" &&
-        sources.sqliteRoots.length === 0
-      ) {
+      if (sources.status === "complete" && sources.sqliteRoots.length === 0) {
         return null;
       }
-      return (await hasCompletedMatrixInboundDedupeMigration(params.context, params.env))
-        ? null
-        : { preview: ["Matrix inbound dedupe legacy sources need a one-time migration scan"] };
+      if (await hasCompletedMatrixInboundDedupeMigration(params.context, params.env)) {
+        return null;
+      }
+      const pending = {
+        preview: ["Matrix inbound dedupe legacy sources need a one-time migration scan"],
+      };
+      if (sources.status === "incomplete") {
+        return pending;
+      }
+      for (const storageRootDir of sources.sqliteRoots) {
+        if ((await readLegacyInboundDedupeSqliteSource(storageRootDir)).legacyRowCount > 0) {
+          return pending;
+        }
+      }
+      return null;
     },
     async migrateLegacyState(params) {
       const sources = await collectMatrixInboundDedupeSources(params.stateDir);
-      const io: MatrixInboundDedupeMigrationIo = { context: params.context, env: params.env };
       const changes: string[] = [];
       const warnings: string[] = [];
       if (await hasCompletedMatrixInboundDedupeMigration(params.context, params.env)) {
-        return { changes, warnings };
-      }
-      try {
-        await reserveMatrixInboundDedupeMigrationCompletion(params.context, params.env);
-      } catch (err) {
-        warnings.push(
-          `Failed reserving Matrix inbound dedupe migration completion: ${String(err)}; left legacy sources in place`,
-        );
         return { changes, warnings };
       }
       if (sources.status === "incomplete") {
         warnings.push(...sources.warnings);
       }
 
-      const recordCompletionIfClean = async (verifyRetirement = false) => {
+      const recordCompletionIfClean = async () => {
         if (warnings.length > 0) {
           return;
-        }
-        if (verifyRetirement) {
-          warnings.push(...(await verifyMatrixInboundDedupeSourcesRetired(params.stateDir)));
-          if (warnings.length > 0) {
-            return;
-          }
         }
         try {
           await recordMatrixInboundDedupeMigrationCompletion(params.context, params.env);
@@ -344,8 +328,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         }
       };
 
-      // Gather every marker first so the capacity-aware import keeps the
-      // globally newest ones instead of whichever storage root imports last.
+      // Gather markers together so the ingress owner keeps the newest duplicate identity.
       const gathered: LegacyInboundDedupeMarker[] = [];
       const sqliteRootsToRetire: string[] = [];
       for (const storageRootDir of sources.sqliteRoots) {
@@ -368,9 +351,12 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       }
 
       try {
-        const result = await importNewestInboundDedupeMarkers({ io, markers: gathered });
+        const result = await importInboundDedupeMarkersToIngress({
+          context: params.context,
+          markers: gathered,
+        });
         changes.push(
-          `Migrated Matrix inbound dedupe markers to the claimable dedupe store (${result.imported} of ${result.total} entries)`,
+          `Migrated Matrix inbound dedupe markers to the durable ingress spool (${result.imported} of ${result.total} entries)`,
         );
       } catch (err) {
         warnings.push(
@@ -391,9 +377,10 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           );
         }
       }
-      await recordCompletionIfClean(true);
+      await recordCompletionIfClean();
       return { changes, warnings };
     },
   },
+  matrixReplayGuardIngressMigration,
   matrixSyncCacheMigration,
 ];

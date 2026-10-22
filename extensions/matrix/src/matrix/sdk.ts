@@ -52,6 +52,15 @@ export type {
 } from "./sdk/types.js";
 
 export class MatrixClient extends MatrixClientVerification {
+  private async resolveCryptoControlPlane(): Promise<MatrixCryptoBootstrapApi | string> {
+    if (!this.encryptionEnabled) {
+      return "Matrix encryption is disabled for this client";
+    }
+    await this.ensureStartedForCryptoControlPlane();
+    const crypto = this.client.getCrypto() as MatrixCryptoBootstrapApi | undefined;
+    return crypto || "Matrix crypto is not available (start client with encryption enabled)";
+  }
+
   async verifyWithRecoveryKey(
     rawRecoveryKey: string,
   ): Promise<MatrixRecoveryKeyVerificationResult> {
@@ -67,15 +76,9 @@ export class MatrixClient extends MatrixClientVerification {
       };
     };
 
-    if (!this.encryptionEnabled) {
-      return await fail("Matrix encryption is disabled for this client");
-    }
-
-    await this.ensureStartedForCryptoControlPlane();
-    await this.ensureCryptoSupportInitialized();
-    const crypto = this.client.getCrypto() as MatrixCryptoBootstrapApi | undefined;
-    if (!crypto) {
-      return await fail("Matrix crypto is not available (start client with encryption enabled)");
+    const crypto = await this.resolveCryptoControlPlane();
+    if (typeof crypto === "string") {
+      return await fail(crypto);
     }
 
     const backupUsableBeforeStagedRecovery =
@@ -200,14 +203,9 @@ export class MatrixClient extends MatrixClientVerification {
       };
     };
 
-    if (!this.encryptionEnabled) {
-      return await fail("Matrix encryption is disabled for this client");
-    }
-
-    await this.ensureStartedForCryptoControlPlane();
-    const crypto = this.client.getCrypto() as MatrixCryptoBootstrapApi | undefined;
-    if (!crypto) {
-      return await fail("Matrix crypto is not available (start client with encryption enabled)");
+    const crypto = await this.resolveCryptoControlPlane();
+    if (typeof crypto === "string") {
+      return await fail(crypto);
     }
 
     try {
@@ -268,14 +266,9 @@ export class MatrixClient extends MatrixClientVerification {
       };
     };
 
-    if (!this.encryptionEnabled) {
-      return await fail("Matrix encryption is disabled for this client");
-    }
-
-    await this.ensureStartedForCryptoControlPlane();
-    const crypto = this.client.getCrypto() as MatrixCryptoBootstrapApi | undefined;
-    if (!crypto) {
-      return await fail("Matrix crypto is not available (start client with encryption enabled)");
+    const crypto = await this.resolveCryptoControlPlane();
+    if (typeof crypto === "string") {
+      return await fail(crypto);
     }
 
     await this.recoveryKeyStore.drainPendingPersistence();
@@ -393,7 +386,6 @@ export class MatrixClient extends MatrixClientVerification {
     let rawRecoveryKey: string | undefined;
     try {
       await this.ensureStartedForCryptoControlPlane();
-      await this.ensureCryptoSupportInitialized();
       const crypto = this.client.getCrypto() as MatrixCryptoBootstrapApi | undefined;
       if (!crypto) {
         throw new Error("Matrix crypto is not available (start client with encryption enabled)");

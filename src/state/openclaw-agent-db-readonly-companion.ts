@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import { registerNodeSqliteDisposeCallback } from "../infra/kysely-sync-cache-state.js";
+import { sqlPublicationAnchor, type EngineConnection } from "../infra/sql-connection.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type {
   OpenClawAgentDatabase,
@@ -13,7 +13,7 @@ import { OpenClawAgentDatabaseReadOnlyScope } from "./openclaw-agent-db-readonly
 
 const companions = resolveGlobalSingleton(
   Symbol.for("openclaw.agentDatabaseReadOnlyCompanions"),
-  () => new WeakMap<DatabaseSync, OpenClawAgentDatabaseReadOnlyScope>(),
+  () => new WeakMap<EngineConnection, OpenClawAgentDatabaseReadOnlyScope>(),
 );
 
 /** Keep committed reads separate from the writer using the ordinary reader lifecycle. */
@@ -27,7 +27,7 @@ export function withCommittedOpenClawAgentDatabaseReadOnly<T>(
   if (!scope) {
     scope = new OpenClawAgentDatabaseReadOnlyScope(true);
     const owned = scope;
-    registerNodeSqliteDisposeCallback(writer.db, () => owned.close());
+    registerNodeSqliteDisposeCallback(sqlPublicationAnchor(writer.db), () => owned.close());
     companions.set(writer.db, scope);
   }
   const owned = scope;

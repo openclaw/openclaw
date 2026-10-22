@@ -18,16 +18,22 @@ export type UpdatePostCoreInput = {
   root: string;
   requester?: UpdateRequester;
   originalRecoveryCapture?: UpdateRecoveryBaselineRef;
-  opts: Pick<UpdateCommandOptions, "json" | "restart" | "yes" | "acceptCapabilities" | "timeout">;
+  busyTimeoutMs?: number;
+  opts: Pick<
+    UpdateCommandOptions,
+    "json" | "restart" | "yes" | "acceptCapabilities" | "fullIntegrityCheck" | "timeout"
+  >;
 };
 
 export type UpdateDoctorInput = Omit<UpdatePostCoreInput, "opts"> & {
   configInputHash: string;
   repair: boolean;
+  fullIntegrityCheck?: boolean;
   yes?: boolean;
   workspaceSuggestions?: boolean;
   postCoreSchemaRepair?: true;
   databaseGenerations?: UpdateDatabaseGenerations;
+  databasePluginOwners?: import("../../infra/database-engine/port-descriptor.js").DatabasePortPluginOwners;
 };
 
 export type MigratedUpdateFinalizationInput = Partial<UpdateTimeoutHandoff> & {

@@ -65,6 +65,10 @@ describe("personal bootstrap", () => {
     await fs.writeFile(path.join(workspaceDir, "USER.md"), "Shared defaults");
     await writePersonal(alice.id, "Alice preferences");
     await writePersonal(bob.id, "Bob preferences");
+    expect((await loadPersonalUserBootstrapFile(workspaceDir, alice.id))?.origin).toEqual({
+      kind: "personal",
+      rootPath: path.join(workspaceDir, "users", alice.id),
+    });
     const load = async (bootstrapUserProfileId?: string) => {
       const context = await resolveBootstrapContextForRun({
         workspaceDir,

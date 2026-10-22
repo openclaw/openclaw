@@ -1,7 +1,8 @@
-// Gateway Protocol schema module defines ephemeral follow-up task suggestions.
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
+// Gateway Protocol schema module defines ephemeral follow-up task suggestions.
+import { stringLiteralUnion } from "./string-literal-union.js";
 
 const TaskIdSchema = Type.String({ minLength: 1, maxLength: 128 });
 const TaskTitleSchema = Type.String({ minLength: 1, maxLength: 60, pattern: "\\S" });
@@ -57,10 +58,10 @@ export const TaskSuggestionsCreateResultSchema = closedObject({
   suggestion: TaskSuggestionSchema,
 });
 
-export const TaskSuggestionResolutionSchema = Type.Union([
-  Type.Literal("dismissed"),
-  Type.Literal("accepted"),
-  Type.Literal("expired"),
+export const TaskSuggestionResolutionSchema = stringLiteralUnion([
+  "dismissed",
+  "accepted",
+  "expired",
 ]);
 
 /** Atomically claims a pending suggestion and starts it in the requested execution mode. */

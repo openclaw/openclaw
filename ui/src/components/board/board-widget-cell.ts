@@ -1,4 +1,4 @@
-export { BoardWidgetCell } from "./board-widget-cell.solid.tsx";
+export { BoardWidgetCell, boardWidgetPresentationReady } from "./board-widget-cell.solid.tsx";
 export type {
   BoardWidgetCellCallbacks,
   BoardWidgetCellProps,

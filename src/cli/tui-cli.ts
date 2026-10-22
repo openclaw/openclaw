@@ -4,21 +4,13 @@ import type { Command } from "commander";
 import { CHAT_HISTORY_MAX_ENTRIES } from "../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
+import type { TuiOptions } from "../tui/tui-types.js";
 import { formatDocsHelp } from "./help-format.js";
 import { parseTimeoutMs } from "./parse-timeout.js";
 import { resolveSessionTarget } from "./session-target.js";
 import { addTuiOptions } from "./tui-cli-options.js";
 
-type TuiCliOptions = {
-  local?: boolean;
-  url?: string;
-  token?: string;
-  password?: string;
-  tlsFingerprint?: string;
-  session?: string;
-  deliver?: boolean;
-  thinking?: string;
-  message?: string;
+type TuiCliOptions = Omit<TuiOptions, "timeoutMs" | "historyLimit" | "initialMessageTimeoutMs"> & {
   timeoutMs?: string;
   historyLimit?: string;
 };

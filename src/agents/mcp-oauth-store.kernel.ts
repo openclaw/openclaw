@@ -5,7 +5,7 @@ import {
   OAuthProtectedResourceMetadataSchema,
   OAuthTokensSchema,
   OpenIdProviderDiscoveryMetadataSchema,
-} from "@modelcontextprotocol/sdk/shared/auth.js";
+} from "@modelcontextprotocol/core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   executeSqliteQuerySync,
@@ -35,7 +35,12 @@ const UNINITIALIZED_STORE_FIELDS = new Set(["credentialState", "pendingAuthoriza
 function assertOptionalString(
   storeKey: string,
   store: Record<string, unknown>,
-  field: "codeVerifier" | "lastAuthorizationUrl" | "redirectUrl",
+  field:
+    | "codeVerifier"
+    | "lastAuthorizationUrl"
+    | "redirectUrl"
+    | "authorizationId"
+    | "refreshClaim",
 ): void {
   const value = store[field];
   if (value !== undefined && (typeof value !== "string" || value.length === 0)) {
@@ -177,6 +182,14 @@ export function parseMcpOAuthStoreJson(storeKey: string, raw: string): McpOAuthS
   assertOptionalString(storeKey, value, "codeVerifier");
   assertOptionalString(storeKey, value, "lastAuthorizationUrl");
   assertOptionalString(storeKey, value, "redirectUrl");
+  assertOptionalString(storeKey, value, "authorizationId");
+  assertOptionalString(storeKey, value, "refreshClaim");
+  if (
+    value.refreshClaim !== undefined &&
+    (!isRecord(value.tokens) || !value.tokens.refresh_token)
+  ) {
+    throw new McpOAuthStoreCorruptionError(storeKey, "refreshClaim requires a refresh grant");
+  }
   assertDiscoveryState(storeKey, value.discoveryState);
   assertAuthorizationChallenge(storeKey, value.pendingAuthorizationChallenge);
   // SAFETY: SDK schemas and the field guards above validate known fields; preserve extension fields.

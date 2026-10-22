@@ -149,10 +149,10 @@ function buildReplyCacheEntry(
     messageId,
     shortId,
     timestamp: entry.timestamp,
-    ...(typeof entry.chatGuid === "string" ? { chatGuid: entry.chatGuid } : {}),
-    ...(typeof entry.chatIdentifier === "string" ? { chatIdentifier: entry.chatIdentifier } : {}),
-    ...(typeof entry.chatId === "number" ? { chatId: entry.chatId } : {}),
-    ...(typeof entry.isFromMe === "boolean" ? { isFromMe: entry.isFromMe } : {}),
+    ...(entry.chatGuid !== undefined ? { chatGuid: entry.chatGuid } : {}),
+    ...(entry.chatIdentifier !== undefined ? { chatIdentifier: entry.chatIdentifier } : {}),
+    ...(entry.chatId !== undefined ? { chatId: entry.chatId } : {}),
+    ...(entry.isFromMe !== undefined ? { isFromMe: entry.isFromMe } : {}),
   };
 }
 
@@ -262,7 +262,6 @@ function buildCrossChatError(
 export async function resolveIMessageMessageId(
   shortOrUuid: string,
   opts?: {
-    requireKnownShortId?: boolean;
     chatContext?: IMessageChatContext;
     /** Reject inbound, uncached, or provenance-free records for edit/unsend. */
     requireFromMe?: boolean;
@@ -276,17 +275,14 @@ export async function resolveIMessageMessageId(
   const inputKind = /^\d+$/.test(trimmed) ? "short" : "uuid";
   const messageId = inputKind === "short" ? imessageShortIdToUuid.get(trimmed) : trimmed;
   if (!messageId) {
-    if (opts?.requireKnownShortId) {
-      if (!hasChatScope(opts.chatContext)) {
-        throw new Error(
-          `iMessage short message id ${describeMessageIdForError(trimmed, "short")} requires a chat scope (chatGuid / chatIdentifier / chatId or a target).`,
-        );
-      }
+    if (!hasChatScope(opts?.chatContext)) {
       throw new Error(
-        `iMessage short message id ${describeMessageIdForError(trimmed, "short")} is no longer available. Use MessageSidFull.`,
+        `iMessage short message id ${describeMessageIdForError(trimmed, "short")} requires a chat scope (chatGuid / chatIdentifier / chatId or a target).`,
       );
     }
-    return trimmed;
+    throw new Error(
+      `iMessage short message id ${describeMessageIdForError(trimmed, "short")} is no longer available. Use MessageSidFull.`,
+    );
   }
 
   const cached = imessageReplyCacheByMessageId.get(messageId);

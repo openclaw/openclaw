@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
 import type { ChannelInboundEventRunnerParams } from "openclaw/plugin-sdk/channel-inbound";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
@@ -8,10 +9,10 @@ import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-test
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { TwitchConfigSchema } from "./config-schema.js";
 import { BASE_TWITCH_TEST_ACCOUNT } from "./test-fixtures.js";
+import type { createTwitchIngress } from "./twitch-ingress.js";
 import type { TwitchChatMessage } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
-  checkAccess: vi.fn(async () => ({ allowed: true })),
   createIngress: vi.fn(),
   getClient: vi.fn(async () => ({})),
   getRuntime: vi.fn(),
@@ -24,10 +25,6 @@ const mocks = vi.hoisted(() => ({
   unregister: vi.fn(),
 }));
 
-vi.mock("./access-control.js", () => ({
-  checkTwitchAccessControl: mocks.checkAccess,
-}));
-
 vi.mock("./client-manager-registry.js", () => ({
   getOrCreateClientManager: () => ({
     getClient: mocks.getClient,
@@ -36,55 +33,68 @@ vi.mock("./client-manager-registry.js", () => ({
   }),
 }));
 
-vi.mock("./runtime.js", () => ({
-  getTwitchRuntime: mocks.getRuntime,
-}));
+// mock-isolation: Supply the monitor's host runtime without loading the live Gateway.
+vi.mock("./runtime.js", () => ({ getTwitchRuntime: mocks.getRuntime }));
 
-vi.mock("./twitch-ingress.js", () => ({
-  createTwitchIngress: mocks.createIngress,
-}));
+// mock-isolation: Observe monitor lifecycle wiring without starting a second ingress owner.
+vi.mock("./twitch-ingress.js", () => ({ createTwitchIngress: mocks.createIngress }));
 
 import { monitorTwitchProvider } from "./monitor.js";
 
-type InboundRunInput = {
-  raw: TwitchChatMessage;
-  adapter: {
-    ingest: (message: TwitchChatMessage) => unknown;
-    resolveTurn: (input: unknown) => Promise<{
-      delivery: {
-        deliver: (payload: ReplyPayload) => Promise<{ visibleReplySent: boolean }>;
-        onDelivered: (
-          payload: ReplyPayload,
-          info: { kind: "final" },
-          result: { visibleReplySent: boolean },
-        ) => void;
-      };
-    }>;
-  };
-};
+type DeliveryCase = [string, ReplyPayload, string | undefined, boolean, string?, string?];
 
 describe("monitorTwitchProvider", () => {
   const sessionDirs = useSessionStoreTempDirs(afterAll, "twitch-prefix-");
+  const account = { ...BASE_TWITCH_TEST_ACCOUNT, accessToken: "oauth:test-token" };
+  const image = "https://example.com/a";
+  const files = [image, "https://example.com/b"];
+  const sendError = "Failed to send reply: Error: unavailable";
+  function makeConfig(extra: OpenClawConfig = {}): OpenClawConfig {
+    return { session: { store: join(sessionDirs.make(), "sessions.json") }, ...extra };
+  }
+  function expectSend(text: string, config: OpenClawConfig) {
+    expect(mocks.sendMessage).toHaveBeenCalledWith(account, "testchannel", text, config, "default");
+  }
+
+  async function startMonitor(
+    config: OpenClawConfig,
+    statusSink?: Parameters<typeof monitorTwitchProvider>[0]["statusSink"],
+  ) {
+    const runtimeError = vi.fn();
+    mocks.onMessage.mockReturnValue(mocks.unregister);
+    const monitor = await monitorTwitchProvider({
+      account,
+      accountId: "default",
+      config,
+      channelRuntime: mocks.getRuntime().channel,
+      runtime: { error: runtimeError },
+      abortSignal: new AbortController().signal,
+      statusSink,
+    });
+    return { monitor, runtimeError };
+  }
+
+  async function dispatchMessage(id: string) {
+    mocks.onMessage.mock.calls[0]?.[0]({
+      id,
+      username: "viewer",
+      userId: "viewer-1",
+      message: "@testbot hello bot",
+      channel: "testchannel",
+    });
+    expect(mocks.ingressAccept).toHaveBeenCalledOnce();
+    // Join native delivery, including cold dispatcher startup.
+    await mocks.ingressAccept.mock.results[0]?.value;
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.getClient.mockResolvedValue({});
     mocks.sendMessage.mockResolvedValue({ ok: true, messageId: "message-id" });
     mocks.ingressStop.mockImplementation(async () => {
       await Promise.allSettled(mocks.ingressAccept.mock.results.map((result) => result.value));
     });
     mocks.createIngress.mockImplementation(
-      (options: {
-        deliver: (
-          message: TwitchChatMessage,
-          lifecycle: {
-            admission: "exclusive";
-            abortSignal: AbortSignal;
-            onAdopted: () => Promise<void>;
-            onDeferred: () => void;
-            onAbandoned: () => Promise<void>;
-          },
-        ) => Promise<void>;
-      }) => ({
+      (options: Parameters<typeof createTwitchIngress>[0]) => ({
         accept: mocks.ingressAccept.mockImplementation(async (message: TwitchChatMessage) => {
           await options.deliver(message, {
             admission: "exclusive",
@@ -100,16 +110,12 @@ describe("monitorTwitchProvider", () => {
     );
     mocks.getRuntime.mockReturnValue({
       logging: {
-        getChildLogger: () => ({
-          info: vi.fn(),
-          warn: vi.fn(),
-          error: vi.fn(),
-          debug: vi.fn(),
-        }),
+        getChildLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
         shouldLogVerbose: () => false,
       },
       channel: {
         inbound: {
+          ingress: createPluginRuntimeMock().channel.inbound.ingress,
           run: mocks.runInbound,
           buildContext: vi.fn(() => ({})),
         },
@@ -119,15 +125,6 @@ describe("monitorTwitchProvider", () => {
             accountId: "default",
             sessionKey: "agent:main:twitch:group:testchannel",
           })),
-        },
-        reply: {
-          formatAgentEnvelope: vi.fn(({ body }: { body: string }) => body),
-          resolveEnvelopeFormatOptions: vi.fn(() => ({})),
-          dispatchReplyWithBufferedBlockDispatcher: vi.fn(),
-        },
-        session: {
-          resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
-          recordInboundSession: vi.fn(),
         },
       },
     });
@@ -141,7 +138,6 @@ describe("monitorTwitchProvider", () => {
   ])(
     "delivers $name prefixes through the shared dispatcher",
     async ({ name, multi, override, expected }) => {
-      const account = { ...BASE_TWITCH_TEST_ACCOUNT, accessToken: "oauth:test-token" };
       const channelConfig = multi
         ? {
             responsePrefix: "[root]",
@@ -155,11 +151,10 @@ describe("monitorTwitchProvider", () => {
           value: channelConfig,
         }),
       ).toMatchObject({ ok: true });
-      const config: OpenClawConfig = {
-        session: { store: join(sessionDirs.make(), "sessions.json") },
+      const config = makeConfig({
         messages: { responsePrefix: "[global]" },
         channels: { twitch: channelConfig },
-      };
+      });
       const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
         "openclaw/plugin-sdk/channel-inbound",
       );
@@ -186,36 +181,11 @@ describe("monitorTwitchProvider", () => {
             },
           }),
       );
-      mocks.onMessage.mockReturnValue(mocks.unregister);
-      const runtimeError = vi.fn();
-      const monitor = await monitorTwitchProvider({
-        account,
-        accountId: "default",
-        config,
-        channelRuntime: mocks.getRuntime().channel,
-        runtime: { error: runtimeError },
-        abortSignal: new AbortController().signal,
-      });
+      const { monitor, runtimeError } = await startMonitor(config);
       try {
-        const onMessage = mocks.onMessage.mock.calls[0]?.[1];
-        onMessage({
-          id: `prefix-${name}`,
-          username: "viewer",
-          userId: "viewer-1",
-          message: "hello bot",
-          channel: "testchannel",
-        });
-        expect(mocks.ingressAccept).toHaveBeenCalledOnce();
-        // Await the owning delivery task, including cold shared-dispatcher startup.
-        await mocks.ingressAccept.mock.results[0]?.value;
+        await dispatchMessage(`prefix-${name}`);
         expect(mocks.sendMessage).toHaveBeenCalledOnce();
-        expect(mocks.sendMessage).toHaveBeenCalledWith(
-          account,
-          "testchannel",
-          expected,
-          config,
-          "default",
-        );
+        expectSend(expected, config);
         expect(runtimeError).not.toHaveBeenCalled();
       } finally {
         await monitor.stop();
@@ -223,126 +193,54 @@ describe("monitorTwitchProvider", () => {
     },
   );
 
-  it.each<{
-    name: string;
-    payload: ReplyPayload;
-    expectedText?: string;
-    expectedVisible: boolean;
-    providerError?: string;
-    expectedError?: string;
-  }>([
-    {
-      name: "plain Markdown text",
-      payload: { text: "**Hello** Twitch" },
-      expectedText: "Hello Twitch",
-      expectedVisible: true,
-    },
-    {
-      name: "caption with a legacy media URL",
-      payload: { text: "Check this:", mediaUrl: "https://example.com/image.png" },
-      expectedText: "Check this: https://example.com/image.png",
-      expectedVisible: true,
-    },
-    {
-      name: "caption with every attachment URL",
-      payload: {
-        text: "Files attached:",
-        mediaUrls: ["https://example.com/one.png", "https://example.com/two.png"],
-      },
-      expectedText: "Files attached: https://example.com/one.png https://example.com/two.png",
-      expectedVisible: true,
-    },
-    {
-      name: "media-only reply",
-      payload: { mediaUrl: "https://example.com/image.png" },
-      expectedText: "https://example.com/image.png",
-      expectedVisible: true,
-    },
-    {
-      name: "empty reply",
-      payload: { text: "" },
-      expectedVisible: false,
-      expectedError: "No text to send in reply payload",
-    },
-    {
-      name: "provider send failure",
-      payload: { text: "Hello Twitch" },
-      expectedText: "Hello Twitch",
-      expectedVisible: false,
-      providerError: "provider unavailable",
-      expectedError: "Failed to send reply: Error: provider unavailable",
-    },
+  it.each<DeliveryCase>([
+    ["Markdown", { text: "**Hello** Twitch" }, "Hello Twitch", true],
+    ["legacy media caption", { text: "See:", mediaUrl: image }, `See: ${image}`, true],
+    ["all attachments", { text: "Files:", mediaUrls: files }, `Files: ${files.join(" ")}`, true],
+    ["media only", { mediaUrl: image }, image, true],
+    ["empty", { text: "" }, undefined, false, undefined, "No text to send in reply payload"],
+    ["send failure", { text: "Hi" }, "Hi", false, "unavailable", sendError],
   ])(
-    "handles $name through the public monitor boundary",
-    async ({ payload, expectedText, expectedVisible, providerError, expectedError }) => {
+    "handles %s through the public monitor boundary",
+    async (_name, payload, expectedText, expectedVisible, providerError, expectedError) => {
       const settled = vi.fn();
       const statusSink = vi.fn();
-      const runtimeError = vi.fn();
       if (providerError) {
         mocks.sendMessage.mockResolvedValueOnce({ ok: false, error: providerError });
       }
-      mocks.runInbound.mockImplementation(async (input: InboundRunInput) => {
-        const turn = await input.adapter.resolveTurn(input.adapter.ingest(input.raw));
-        const result = await turn.delivery.deliver(payload);
-        settled(result);
-        turn.delivery.onDelivered(payload, { kind: "final" }, result);
-      });
-      let onMessage: ((message: TwitchChatMessage) => void) | undefined;
-      mocks.onMessage.mockImplementation(
-        (_account: unknown, handler: (message: TwitchChatMessage) => void) => {
-          onMessage = handler;
-          return mocks.unregister;
+      mocks.runInbound.mockImplementation(
+        async (input: ChannelInboundEventRunnerParams<TwitchChatMessage>) => {
+          const normalized = await input.adapter.ingest(input.raw);
+          if (!normalized) {
+            throw new Error("Expected a normalized message");
+          }
+          const turn = await input.adapter.resolveTurn(
+            normalized,
+            { kind: "message", canStartAgentTurn: true },
+            {},
+          );
+          if (!("delivery" in turn)) {
+            throw new Error("Expected a reply delivery turn");
+          }
+          const result = await turn.delivery.deliver(payload, { kind: "final" });
+          settled(result);
+          expect(turn.delivery.onDelivered).toBeTypeOf("function");
+          await turn.delivery.onDelivered?.(payload, { kind: "final" }, result);
         },
       );
-      const account = { ...BASE_TWITCH_TEST_ACCOUNT, accessToken: "oauth:test-token" };
-      const config: OpenClawConfig = {
-        session: { store: join(sessionDirs.make(), "sessions.json") },
-      };
-      const monitor = await monitorTwitchProvider({
-        account,
-        accountId: "default",
-        config,
-        channelRuntime: mocks.getRuntime().channel,
-        runtime: { error: runtimeError },
-        abortSignal: new AbortController().signal,
-        statusSink,
-      });
-
-      onMessage?.({
-        id: "message-1",
-        username: "viewer",
-        userId: "viewer-1",
-        message: "hello bot",
-        channel: "testchannel",
-      });
-
-      expect(mocks.ingressAccept).toHaveBeenCalledOnce();
-      await mocks.ingressAccept.mock.results[0]?.value;
-      expect(settled).toHaveBeenCalledOnce();
-      expect(settled).toHaveBeenCalledWith({ visibleReplySent: expectedVisible });
+      const config = makeConfig();
+      const { monitor, runtimeError } = await startMonitor(config, statusSink);
+      await dispatchMessage("message-1");
+      expect(settled.mock.calls).toEqual([[{ visibleReplySent: expectedVisible }]]);
       if (expectedText) {
-        expect(mocks.sendMessage).toHaveBeenCalledWith(
-          account,
-          "testchannel",
-          expectedText,
-          config,
-          "default",
-        );
+        expectSend(expectedText, config);
       } else {
         expect(mocks.sendMessage).not.toHaveBeenCalled();
       }
-      if (expectedError) {
-        expect(runtimeError).toHaveBeenCalledWith(expectedError);
-      } else {
-        expect(runtimeError).not.toHaveBeenCalled();
-      }
-      const outboundStatus = expect.objectContaining({ lastOutboundAt: expect.any(Number) });
-      if (expectedVisible) {
-        expect(statusSink).toHaveBeenCalledWith(outboundStatus);
-      } else {
-        expect(statusSink).not.toHaveBeenCalledWith(outboundStatus);
-      }
-
+      expect(runtimeError.mock.calls).toEqual(expectedError ? [[expectedError]] : []);
+      expect(statusSink.mock.calls.filter(([patch]) => "lastOutboundAt" in patch)).toEqual(
+        expectedVisible ? [[{ lastOutboundAt: expect.any(Number) }]] : [],
+      );
       await monitor.stop();
       expect(mocks.unregister).toHaveBeenCalledOnce();
       expect(mocks.ingressStop).toHaveBeenCalledOnce();

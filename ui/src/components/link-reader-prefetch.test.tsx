@@ -2,10 +2,7 @@
 import { createSignal, For } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import {
-  PRESENTATION_CHANGED_EVENT,
-  type PresentationBinding,
-} from "../lit/presentation-binding.ts";
+import { PRESENTATION_CHANGED_EVENT, type PresentationBinding } from "../lib/presentation.ts";
 import { installTestLinkReader, TEST_LINK_READER } from "../test-helpers/link-reader.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
@@ -246,6 +243,7 @@ describe("GitHub preview warming", () => {
     ["data-session-href", "session"],
     ["class", "markdown-session-link"],
     ["data-link-reader-external", ""],
+    ["data-link-reader-preview", "off"],
   ])("never observes a claimed link excluded by %s", async (attribute, value) => {
     await show([]);
     const link = document.createElement("a");

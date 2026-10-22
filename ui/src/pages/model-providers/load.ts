@@ -92,8 +92,7 @@ export async function loadModelProvidersData(
     catalogRefresh ?? Promise.resolve(undefined),
   ]);
   return {
-    authStatus:
-      authStatus.ok && Array.isArray(authStatus.result?.providers) ? authStatus.result : null,
+    authStatus: authStatus.ok ? authStatus.result : null,
     providerOutcomes: catalog.ok ? (catalog.result.providerOutcomes ?? []) : [],
     catalogError:
       refreshResult && !refreshResult.ok

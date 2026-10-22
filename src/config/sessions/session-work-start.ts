@@ -6,6 +6,7 @@ import {
   resolveIncognitoSessionExpiresAt,
   isIncognitoSessionKey,
 } from "../../shared/incognito-session-key.js";
+import type { SessionRestartResume } from "./restart-resume.js";
 import type { InternalSessionEntry } from "./types.js";
 
 type SessionWorkStartEntry = Pick<
@@ -28,6 +29,7 @@ type SessionWorkStartOptions = {
   /** Already-accepted transcript/delivery results settle without dispatching new model work. */
   purpose?: "accepted-result-settlement";
   allowRestartTombstoneReplacement?: boolean;
+  restartResume?: SessionRestartResume;
   expectedSessionId?: string;
   /** Only workspace preparers and lifecycle cancellation may enter pending sessions. */
   allowPendingWorkspace?: true;
@@ -124,16 +126,29 @@ export function resolveSessionWorkStartBlock(
   }
   const restartRecoveryTombstone = isRestartRecoveryTombstone(entry);
   if (restartRecoveryTombstone) {
+    const resume = options?.restartResume;
+    const canResume = Boolean(
+      resume &&
+      !entry?.providerReview &&
+      entry?.archivedAt === undefined &&
+      entry?.sessionId === resume.sessionId &&
+      entry.lifecycleRevision === resume.lifecycleRevision &&
+      entry.mainRestartRecovery?.cycleId === resume.expectedState.mainRestartRecoveryCycleId &&
+      entry.mainRestartRecovery?.revision === resume.expectedState.mainRestartRecoveryRevision &&
+      !entry.mainRestartRecovery?.tombstone?.recoveredSessionKey,
+    );
     // Acknowledgment owns continuation of the reviewed conversation, never its replacement.
     if (options?.allowRestartTombstoneReplacement === true && !entry?.providerReview) {
       return undefined;
     }
-    return new SessionWorkStartError(
-      "restart_tombstone",
-      entry?.modelSelectionLocked === true
-        ? `Session "${sessionKey}" ended during restart recovery and cannot be replaced while model selection is locked. Open it in WebChat and use Resume in new session.`
-        : `Session "${sessionKey}" ended during restart recovery. Use /new or /reset to start a replacement session.`,
-    );
+    if (!canResume) {
+      return new SessionWorkStartError(
+        "restart_tombstone",
+        entry?.modelSelectionLocked === true
+          ? `Session "${sessionKey}" ended during restart recovery and cannot be replaced while model selection is locked. Open it in WebChat and use Resume.`
+          : `Session "${sessionKey}" ended during restart recovery. Use Resume in WebChat, or /new or /reset to start a replacement session.`,
+      );
+    }
   }
   if (entry?.archivedAt !== undefined) {
     return new SessionWorkStartError(

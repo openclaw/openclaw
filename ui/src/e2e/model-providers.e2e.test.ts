@@ -18,11 +18,18 @@ import {
   selectPickerValue as selectModelPicker,
 } from "../test-helpers/select-picker-e2e.ts";
 import {
+  catalogModel,
+  emptyUsage,
+  keyCapabilities,
+  providerPageOptions,
+} from "./model-catalog-fixtures.test-support.ts";
+import {
   requestRaw,
   resolveConfigMutation,
   providerConfig,
   createProviderProofCapture,
 } from "./model-providers.test-support.ts";
+import { configSnapshot } from "./model-setup-fixtures.test-support.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
@@ -46,6 +53,14 @@ const googleInputValue = ["e2e", "google", "key"].join("-");
 
 let browser: Browser;
 let server: ControlUiE2eServer;
+const recordedContext = (height: number) =>
+  browser.newContext(
+    providerPageOptions(
+      1280,
+      height,
+      recordVisuals ? { recordVideo: { dir: artifactDir, size: { height, width: 1280 } } } : {},
+    ),
+  );
 
 describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
   beforeAll(async () => {
@@ -62,12 +77,9 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
   });
 
   it("defers live provider discovery until refresh while preserving model setup", async () => {
-    const context = await browser.newContext({
-      colorScheme: "dark",
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 1000, width: 1440 },
-    });
+    const context = await browser.newContext(
+      providerPageOptions(1440, 1000, { colorScheme: "dark" }),
+    );
     const page = await context.newPage();
     const config = { auth: { profiles: { "openai:chatgpt": { provider: "openai" } } } };
     const gateway = await installMockGateway(page, {
@@ -80,14 +92,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         "openclaw.setup.detect",
       ],
       methodResponses: {
-        "config.get": {
-          config,
-          sourceConfig: config,
-          hash: "credential-only-model-provider",
-          issues: [],
-          raw: JSON.stringify(config),
-          valid: true,
-        },
+        "config.get": configSnapshot(config, "credential-only-model-provider"),
         "models.list": {
           cases: [
             {
@@ -121,8 +126,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
           workspace: "/tmp/openclaw-e2e",
           setupComplete: false,
         },
-        "usage.status": { updatedAt: NOW, providers: [] },
-        "sessions.usage": { aggregates: { byProvider: [] } },
+        ...emptyUsage(NOW),
       },
     });
 
@@ -206,32 +210,21 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
   });
 
   it("keeps defaults read-only without an admin warning when config patches are unavailable", async () => {
-    const context = await browser.newContext({
-      colorScheme: "dark",
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 877 },
-    });
+    const context = await browser.newContext(
+      providerPageOptions(877, 900, { colorScheme: "dark" }),
+    );
     const page = await context.newPage();
     const config = { agents: { defaults: { model: "openai/gpt-5.5" } } };
     const gateway = await installMockGateway(page, {
       featureMethods: defaultControlUiFeatureMethods.filter((method) => method !== "config.patch"),
       models: [
-        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true },
-        { id: "gpt-4.1", name: "GPT-4.1", provider: "openai", available: true },
+        catalogModel("openai", "gpt-5.5", "GPT-5.5"),
+        catalogModel("openai", "gpt-4.1", "GPT-4.1"),
       ],
       methodResponses: {
-        "config.get": {
-          config,
-          sourceConfig: config,
-          hash: "read-only-model-providers",
-          issues: [],
-          raw: JSON.stringify(config),
-          valid: true,
-        },
+        "config.get": configSnapshot(config, "read-only-model-providers"),
         "models.authStatus": { ts: NOW, providers: [] },
-        "usage.status": { updatedAt: NOW, providers: [] },
-        "sessions.usage": { aggregates: { byProvider: [] } },
+        ...emptyUsage(NOW),
       },
     });
 
@@ -259,30 +252,19 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
   });
 
   it("lists configured providers with auth state, quota, billing, and local spend", async () => {
-    const context = await browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 1200, width: 1280 },
-      ...(recordVisuals
-        ? { recordVideo: { dir: artifactDir, size: { height: 1200, width: 1280 } } }
-        : {}),
-    });
+    const context = await recordedContext(1200);
     const page = await context.newPage();
     await installMockGateway(page, {
       models: [
-        { id: "claude-opus-4-8", name: "Claude Opus 4.8", provider: "anthropic", available: true },
-        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true },
-        { id: "gemini-3-pro", name: "Gemini 3 Pro", provider: "google", available: false },
-        { id: "test-model", name: "Test Model", provider: "ß-provider", available: true },
+        catalogModel("anthropic", "claude-opus-4-8", "Claude Opus 4.8"),
+        catalogModel("openai", "gpt-5.5", "GPT-5.5"),
+        catalogModel("google", "gemini-3-pro", "Gemini 3 Pro", false),
+        catalogModel("ß-provider", "test-model", "Test Model"),
       ],
       methodResponses: {
         "models.authStatus": {
           ts: NOW,
-          providerCapabilities: [
-            { provider: "openai", apiKeySupported: true, quickApiKeySetup: true },
-            { provider: "anthropic", apiKeySupported: true, quickApiKeySetup: true },
-            { provider: "google", apiKeySupported: true, quickApiKeySetup: true },
-          ],
+          providerCapabilities: keyCapabilities("openai", "anthropic", "google"),
           providers: [
             {
               provider: "claude-cli",
@@ -469,14 +451,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
   });
 
   it("configures credentials, probes a provider, and changes default models", async () => {
-    const context = await browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 1200, width: 1280 },
-      ...(recordVisuals
-        ? { recordVideo: { dir: artifactDir, size: { height: 1200, width: 1280 } } }
-        : {}),
-    });
+    const context = await recordedContext(1200);
     const page = await context.newPage();
     const config = {
       agents: {
@@ -488,14 +463,9 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       models: { providers: { openai: providerConfig(redactedConfigValue) } },
     };
     const configuredModels = [
-      { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true },
-      { id: "gpt-5.5-mini", name: "GPT-5.5 Mini", provider: "openai", available: true },
-      {
-        id: "claude-sonnet-4-5",
-        name: "Claude Sonnet 4.5",
-        provider: "anthropic",
-        available: true,
-      },
+      catalogModel("openai", "gpt-5.5", "GPT-5.5"),
+      catalogModel("openai", "gpt-5.5-mini", "GPT-5.5 Mini"),
+      catalogModel("anthropic", "claude-sonnet-4-5", "Claude Sonnet 4.5"),
     ];
     const gateway = await installMockGateway(page, {
       featureMethods: [
@@ -505,19 +475,9 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         "models.probe",
         "models.authSetApiKey",
       ],
-      models: [
-        ...configuredModels,
-        { id: "gemini-3-pro", name: "Gemini 3 Pro", provider: "google", available: true },
-      ],
+      models: [...configuredModels, catalogModel("google", "gemini-3-pro", "Gemini 3 Pro")],
       methodResponses: {
-        "config.get": {
-          config,
-          sourceConfig: config,
-          hash: "model-providers-hash",
-          issues: [],
-          raw: JSON.stringify(config),
-          valid: true,
-        },
+        "config.get": configSnapshot(config, "model-providers-hash"),
         "models.list": {
           cases: [
             {
@@ -528,25 +488,13 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
               match: { view: "all", agentId: "main", refresh: true },
               response: {
                 models: [
+                  { ...catalogModel("openai", "gpt-5.5", "GPT-5.5"), apiKeySupported: true },
                   {
-                    id: "gpt-5.5",
-                    name: "GPT-5.5",
-                    provider: "openai",
-                    available: true,
+                    ...catalogModel("anthropic", "claude-sonnet-4-5", "Claude Sonnet 4.5"),
                     apiKeySupported: true,
                   },
                   {
-                    id: "claude-sonnet-4-5",
-                    name: "Claude Sonnet 4.5",
-                    provider: "anthropic",
-                    available: true,
-                    apiKeySupported: true,
-                  },
-                  {
-                    id: "gemini-3-pro",
-                    name: "Gemini 3 Pro",
-                    provider: "google",
-                    available: true,
+                    ...catalogModel("google", "gemini-3-pro", "Gemini 3 Pro"),
                     apiKeySupported: true,
                   },
                 ],
@@ -556,11 +504,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         },
         "models.authStatus": {
           ts: NOW,
-          providerCapabilities: [
-            { provider: "openai", apiKeySupported: true, quickApiKeySetup: true },
-            { provider: "anthropic", apiKeySupported: true, quickApiKeySetup: true },
-            { provider: "google", apiKeySupported: true, quickApiKeySetup: true },
-          ],
+          providerCapabilities: keyCapabilities("openai", "anthropic", "google"),
           providers: [
             {
               provider: "openai",
@@ -583,8 +527,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
           latencyMs: 9_087,
           results: [{ label: "Config API key", status: "ok", latencyMs: 87 }],
         },
-        "usage.status": { updatedAt: NOW, providers: [] },
-        "sessions.usage": { aggregates: { byProvider: [] } },
+        ...emptyUsage(NOW),
       },
     });
 
@@ -686,11 +629,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       };
       await gateway.setMethodResponse("models.authStatus", {
         ts: NOW,
-        providerCapabilities: [
-          { provider: "openai", apiKeySupported: true, quickApiKeySetup: true },
-          { provider: "anthropic", apiKeySupported: true, quickApiKeySetup: true },
-          { provider: "google", apiKeySupported: true, quickApiKeySetup: true },
-        ],
+        providerCapabilities: keyCapabilities("openai", "anthropic", "google"),
         providers: [
           {
             provider: "openai",
@@ -742,14 +681,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
   });
 
   it("autosaves utility choices without a primary model and retains them after reload", async () => {
-    const context = await browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 1000, width: 1280 },
-      ...(recordVisuals
-        ? { recordVideo: { dir: artifactDir, size: { height: 1000, width: 1280 } } }
-        : {}),
-    });
+    const context = await recordedContext(1000);
     const page = await context.newPage();
     let config: unknown = { agents: { defaults: {} } };
     let hash = "utility-defaults";
@@ -762,12 +694,11 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       issues: [],
     });
     const gateway = await installMockGateway(page, {
-      models: [{ id: "gpt-5-mini", name: "GPT-5 Mini", provider: "openai", available: true }],
+      models: [catalogModel("openai", "gpt-5-mini", "GPT-5 Mini")],
       methodResponses: {
         "config.get": snapshot(),
         "models.authStatus": { ts: NOW, providers: [] },
-        "usage.status": { updatedAt: NOW, providers: [] },
-        "sessions.usage": { aggregates: { byProvider: [] } },
+        ...emptyUsage(NOW),
       },
     });
     const observations: unknown[] = [];
@@ -840,15 +771,8 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
     }
   });
 
-  it("reloads the selected agent and clears a failed model draft after reconnect", async () => {
-    const context = await browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 1000, width: 1280 },
-      ...(recordVisuals
-        ? { recordVideo: { dir: artifactDir, size: { height: 1000, width: 1280 } } }
-        : {}),
-    });
+  it("refreshes saved models while retaining rejection feedback until access changes", async () => {
+    const context = await recordedContext(1000);
     const page = await context.newPage();
     const initialConfig = {
       agents: { defaults: { model: "openai/initial-model" } },
@@ -866,19 +790,12 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
           mainKey: "main",
           scope: "agent",
         },
-        "config.get": {
-          config: initialConfig,
-          sourceConfig: initialConfig,
-          hash: "model-providers-reconnect-1",
-          issues: [],
-          raw: JSON.stringify(initialConfig),
-          valid: true,
-        },
+        "config.get": configSnapshot(initialConfig, "model-providers-reconnect-1"),
         "models.list": {
           models: [
-            { id: "initial-model", name: "Initial Model", provider: "openai", available: true },
-            { id: "saved-model", name: "Saved Model", provider: "openai", available: true },
-            { id: "failed-draft", name: "Failed Draft", provider: "openai", available: true },
+            catalogModel("openai", "initial-model", "Initial Model"),
+            catalogModel("openai", "saved-model", "Saved Model"),
+            catalogModel("openai", "failed-draft", "Failed Draft"),
           ],
         },
         "models.authStatus": {
@@ -892,8 +809,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
             },
           ],
         },
-        "usage.status": { updatedAt: NOW, providers: [] },
-        "sessions.usage": { aggregates: { byProvider: [] } },
+        ...emptyUsage(NOW),
       },
     });
 
@@ -945,23 +861,12 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       const reconnectedConfig = {
         agents: { defaults: { model: "openai/reconnected-model" } },
       };
-      await gateway.setMethodResponse("config.get", {
-        config: reconnectedConfig,
-        sourceConfig: reconnectedConfig,
-        hash: "model-providers-reconnect-2",
-        issues: [],
-        raw: JSON.stringify(reconnectedConfig),
-        valid: true,
-      });
+      await gateway.setMethodResponse(
+        "config.get",
+        configSnapshot(reconnectedConfig, "model-providers-reconnect-2"),
+      );
       await gateway.setMethodResponse("models.list", {
-        models: [
-          {
-            id: "reconnected-model",
-            name: "Reconnected Model",
-            provider: "openai",
-            available: true,
-          },
-        ],
+        models: [catalogModel("openai", "reconnected-model", "Reconnected Model")],
       });
       const authRequestCount = (await gateway.getRequests("models.authStatus")).length;
       await gateway.closeLatest(1012, "model provider reconnect proof");
@@ -975,7 +880,10 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
           ),
         )
         .toBe("openai/reconnected-model");
-      await expect.poll(() => page.getByRole("alert").count()).toBe(0);
+      expect(await page.getByRole("alert").textContent()).toContain(
+        "synthetic model save rejected",
+      );
+      expect(await gateway.getRequests("config.patch")).toHaveLength(failedPatchCount + 1);
       await expect
         .poll(async () => (await agentPicker.locator(".agent-select__label").textContent())?.trim())
         .toBe("Writer");
@@ -987,6 +895,21 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       if (recordVisuals) {
         await captureProviderProof("06-reconnected-model.png", primary);
       }
+
+      const accessChangeAuthCount = (await gateway.getRequests("models.authStatus")).length;
+      await gateway.setOperatorScopes(["operator.read"]);
+      await gateway.closeLatest(1012, "model provider access-change proof");
+      await expect
+        .poll(async () => (await gateway.getRequests("models.authStatus")).length)
+        .toBeGreaterThan(accessChangeAuthCount);
+      await expect.poll(() => page.getByRole("alert").count()).toBe(0);
+      await primary.locator(".picker-select__trigger").click();
+      const readOnlyModel = primary.locator(
+        '[role="option"][data-value="openai/reconnected-model"]',
+      );
+      expect(await readOnlyModel.getAttribute("aria-disabled")).toBe("true");
+      await readOnlyModel.click({ force: true });
+      expect(await gateway.getRequests("config.patch")).toHaveLength(failedPatchCount + 1);
     } finally {
       await context.close();
     }

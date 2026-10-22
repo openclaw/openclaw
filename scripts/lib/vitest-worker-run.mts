@@ -202,7 +202,8 @@ export function createVitestWorkerRun(
       void ownedCompletion.catch(() => {});
       return joined;
     },
-    dispose(): Promise<void> {
+    /** `interrupted`: the invocation is exiting by signal, so its outcome cannot change. */
+    dispose({ interrupted = false }: { interrupted?: boolean } = {}): Promise<void> {
       return (disposal ??= (async () => {
         compilerAbort.abort();
         const settled = await Promise.allSettled(borrowers);
@@ -218,6 +219,11 @@ export function createVitestWorkerRun(
               }
               if (channelError) {
                 throw channelError;
+              }
+              // An interrupted run already exits by signal: verification cannot change
+              // that outcome, and a full scan can outlast the caller's kill escalation.
+              if (interrupted) {
+                return;
               }
               if (fs.existsSync(path.join(directory, "manifest.json"))) {
                 console.error("[vitest-workers] verifying completed generation before cleanup");

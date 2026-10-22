@@ -1,5 +1,6 @@
 /** Stable feature names advertised in Gateway hello responses. */
 export const GATEWAY_SERVER_CAPS = {
+  AGENT_SESSION_ID_CREATE: "agent-session-id-create-v1",
   BOARD_WIDGET_PUT_CANVAS_DOC: "board-widget-put-canvas-doc",
   CHAT_SEND_ROUTING_CONTRACT: "chat-send-routing-contract",
   CONTROL_UI_BROWSER_FOCUS: "control-ui-browser-focus",
@@ -11,6 +12,7 @@ export const GATEWAY_SERVER_CAPS = {
   CHANNELS_PAIRING_APPROVE_OWNER: "channels-pairing-approve-owner-v1",
   EXEC_APPROVALS_GET_OWNER: "exec-approvals-get-owner-v1",
   EXEC_APPROVALS_SET_OWNER: "exec-approvals-set-owner-v1",
+  EXEC_APPROVALS_NATIVE_COMMIT: "exec-approvals-native-commit-v1",
   WORKTREES_REMOVE_OWNER: "worktrees-remove-owner-v1",
   WORKTREES_RESTORE_OWNER: "worktrees-restore-owner-v1",
   WORKTREES_GC_OWNER: "worktrees-gc-owner-v1",

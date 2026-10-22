@@ -1,8 +1,7 @@
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../src/config/config.js";
 import { clearSessionStoreCacheForTest } from "../src/config/sessions/store-writer-state.js";
 import {
@@ -10,72 +9,44 @@ import {
   startGatewayWithClient,
 } from "../src/gateway/test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
-import { captureEnv, setTestEnvValue } from "../src/test-utils/env.js";
+import { withEnvAsync } from "../src/test-utils/env.js";
+import { listenLoopback } from "./helpers/gateway-integration-fixtures.js";
+import { writeOpenAiResponsesSse } from "./helpers/openai-responses-sse.js";
+import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
-const envKeys = [
-  "HOME",
-  "OPENCLAW_STATE_DIR",
-  "OPENCLAW_CONFIG_PATH",
-  "OPENCLAW_GATEWAY_TOKEN",
-  "OPENCLAW_SKIP_CHANNELS",
-  "OPENCLAW_SKIP_GMAIL_WATCHER",
-  "OPENCLAW_SKIP_CRON",
-  "OPENCLAW_SKIP_CANVAS_HOST",
-  "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
-  "OPENCLAW_SKIP_PROVIDERS",
-  "OPENCLAW_BUNDLED_PLUGINS_DIR",
-  "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
-] as const;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const skippedServices = "CHANNELS GMAIL_WATCHER CRON CANVAS_HOST BROWSER_CONTROL_SERVER PROVIDERS";
 
-describe("PR #119473 real gateway proof", () => {
-  let tempHome: string | undefined;
+it(
+  "persists the first turn of a fresh SQLite-backed session across gateway restart",
+  { timeout: 90_000 },
+  async () => {
+    let providerServer: ReturnType<typeof createServer> | undefined;
+    let first: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
+    let second: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
 
-  afterEach(async () => {
-    if (tempHome) {
-      await fs.rm(tempHome, { recursive: true, force: true });
-      tempHome = undefined;
-    }
-  });
-
-  it(
-    "persists the first turn of a fresh SQLite-backed session across gateway restart",
-    { timeout: 90_000 },
-    async () => {
-      const envSnapshot = captureEnv([...envKeys]);
-      let providerServer: ReturnType<typeof createServer> | undefined;
-      let first: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
-      let second: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
-
+    const tempHome = tempDirs.make("openclaw-pr119473-proof-");
+    const stateDir = path.join(tempHome, ".openclaw");
+    const workspaceDir = path.join(tempHome, "workspace");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const bundledPluginsDir = path.join(tempHome, "bundled-plugins");
+    await Promise.all(
+      [workspaceDir, bundledPluginsDir, stateDir].map((dir) => fs.mkdir(dir, { recursive: true })),
+    );
+    const env = {
+      HOME: tempHome,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_GATEWAY_TOKEN: "pr119473-proof-token",
+      ...Object.fromEntries<string>(
+        skippedServices.split(" ").map((name) => [`OPENCLAW_SKIP_${name}`, "1"]),
+      ),
+      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    };
+    await withEnvAsync(env, async () => {
       try {
-        tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pr119473-proof-"));
-        const stateDir = path.join(tempHome, ".openclaw");
-        const workspaceDir = path.join(tempHome, "workspace");
-        const configPath = path.join(stateDir, "openclaw.json");
-        const bundledPluginsDir = path.join(tempHome, "bundled-plugins");
-        await Promise.all([
-          fs.mkdir(workspaceDir, { recursive: true }),
-          fs.mkdir(bundledPluginsDir, { recursive: true }),
-          fs.mkdir(path.dirname(configPath), { recursive: true }),
-        ]);
-        for (const [key, value] of Object.entries({
-          HOME: tempHome,
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_CONFIG_PATH: configPath,
-          OPENCLAW_GATEWAY_TOKEN: "pr119473-proof-token",
-          OPENCLAW_SKIP_CHANNELS: "1",
-          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-          OPENCLAW_SKIP_CRON: "1",
-          OPENCLAW_SKIP_CANVAS_HOST: "1",
-          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-          OPENCLAW_SKIP_PROVIDERS: "1",
-          OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        })) {
-          setTestEnvValue(key, value);
-        }
-
         providerServer = createServer((_request, response) => {
-          response.writeHead(200, { "content-type": "text/event-stream" });
           const message = {
             type: "message",
             id: "pr119473-proof-message",
@@ -83,38 +54,24 @@ describe("PR #119473 real gateway proof", () => {
             status: "completed",
             content: [{ type: "output_text", text: "PR119473_RUNTIME_OK", annotations: [] }],
           };
-          response.end(
-            [
-              {
-                type: "response.output_item.added",
-                output_index: 0,
-                item: { ...message, status: "in_progress", content: [] },
+          writeOpenAiResponsesSse(response, [
+            {
+              type: "response.output_item.added",
+              output_index: 0,
+              item: { ...message, status: "in_progress", content: [] },
+            },
+            { type: "response.output_item.done", output_index: 0, item: message },
+            {
+              type: "response.completed",
+              response: {
+                status: "completed",
+                usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
               },
-              { type: "response.output_item.done", output_index: 0, item: message },
-              {
-                type: "response.completed",
-                response: {
-                  status: "completed",
-                  usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
-                },
-              },
-            ]
-              .map((event) => `data: ${JSON.stringify(event)}\n\n`)
-              .concat("data: [DONE]\n\n")
-              .join(""),
-          );
+            },
+          ]);
         });
-        await new Promise<void>((resolve, reject) => {
-          providerServer?.once("error", reject);
-          providerServer?.listen(0, "127.0.0.1", resolve);
-        });
-        const providerAddress = providerServer.address();
-        if (!providerAddress || typeof providerAddress === "string") {
-          throw new Error("proof provider did not bind a loopback port");
-        }
-        const provider = buildMockOpenAiResponsesProvider(
-          `http://127.0.0.1:${providerAddress.port}/v1`,
-        );
+        const baseUrl = await listenLoopback(providerServer);
+        const provider = buildMockOpenAiResponsesProvider(`${baseUrl}/v1`);
         const cfg = {
           agents: {
             defaults: {
@@ -132,12 +89,14 @@ describe("PR #119473 real gateway proof", () => {
         };
         const sessionKey = "agent:main:pr119473-fresh-runtime";
         const marker = "PR119473_FIRST_USER_MESSAGE";
-        first = await startGatewayWithClient({
-          cfg,
-          configPath,
-          token: "pr119473-proof-token",
-          clientDisplayName: "pr119473-proof-first-start",
-        });
+        const start = (clientDisplayName: string) =>
+          startGatewayWithClient({
+            cfg,
+            configPath,
+            token: "pr119473-proof-token",
+            clientDisplayName,
+          });
+        first = await start("pr119473-proof-first-start");
         const started = await first.client.request<{ runId?: string; status?: string }>(
           "chat.send",
           {
@@ -147,8 +106,7 @@ describe("PR #119473 real gateway proof", () => {
             idempotencyKey: "pr119473-proof-first-turn",
           },
         );
-        expect(started.status).toBe("started");
-        expect(started.runId).toEqual(expect.any(String));
+        expect(started).toMatchObject({ status: "started", runId: expect.any(String) });
         await expect(
           first.client.request(
             "agent.wait",
@@ -162,36 +120,28 @@ describe("PR #119473 real gateway proof", () => {
 
         clearRuntimeConfigSnapshot();
         clearConfigCache();
-        second = await startGatewayWithClient({
-          cfg,
-          configPath,
-          token: "pr119473-proof-token",
-          clientDisplayName: "pr119473-proof-after-restart",
-        });
+        second = await start("pr119473-proof-after-restart");
         const history = await second.client.request<{ messages?: unknown[] }>("chat.history", {
           sessionKey,
           limit: 20,
         });
         expect(JSON.stringify(history.messages ?? [])).toContain(marker);
       } finally {
-        if (first) {
-          await disconnectGatewayClient(first.client).catch(() => undefined);
-          await first.server.close().catch(() => undefined);
-        }
-        if (second) {
-          await disconnectGatewayClient(second.client).catch(() => undefined);
-          await second.server.close().catch(() => undefined);
+        for (const gateway of [first, second]) {
+          if (gateway) {
+            await disconnectGatewayClient(gateway.client).catch(() => undefined);
+            await gateway.server.close().catch(() => undefined);
+          }
         }
         if (providerServer?.listening) {
           await new Promise<void>((resolve) => {
             providerServer?.close(() => resolve());
           });
         }
-        envSnapshot.restore();
         clearRuntimeConfigSnapshot();
         clearConfigCache();
         clearSessionStoreCacheForTest();
       }
-    },
-  );
-});
+    });
+  },
+);

@@ -14,8 +14,8 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
-  recordProviderCatalogModels,
   withProviderCatalogExpiry,
+  withProviderCatalogDiscoveryBudget,
 } from "../plugins/provider-catalog-expiry.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
 import { isProviderCatalogSourceAllowed } from "../plugins/provider-config-owner.js";
@@ -79,6 +79,8 @@ type ImplicitProviderParams = {
   providerDiscoveryEntriesOnly?: boolean;
   onProviderCatalogOutcome?: (outcome: ProviderCatalogOutcome) => void;
   sourceModelFields?: SourceModelFields;
+  /** Filled with the plugin whose discovery produced each provider id, hook aliases included. */
+  discoveredProviderPluginIds?: Map<string, string>;
 };
 
 type ImplicitProviderContext = ImplicitProviderParams & {
@@ -228,7 +230,6 @@ async function resolvePluginImplicitProviders(
           `${provider.pluginId ?? ""}\0${normalizeProviderId(provider.id)}`,
         );
         const outcomes: ProviderCatalogOutcome[] = [];
-        let acceptedRuntimeCatalog = false;
         const normalizedResult = await withProviderCatalogExpiry(
           async () => {
             let result;
@@ -249,7 +250,6 @@ async function resolvePluginImplicitProviders(
                 timeoutMs:
                   ctx.providerDiscoveryTimeoutMs ?? resolveLiveProviderCatalogTimeoutMs(ctx.env),
               });
-              acceptedRuntimeCatalog = Boolean(result);
             }
             if (useStaticCatalog || (!result && provider.staticCatalog)) {
               if (preparedStatic) {
@@ -261,7 +261,7 @@ async function resolvePluginImplicitProviders(
           },
           (acceptedProviders) => Object.keys(acceptedProviders ?? {}),
         );
-        return { provider, normalizedResult, acceptedRuntimeCatalog, includeProvider, outcomes };
+        return { provider, normalizedResult, includeProvider, outcomes };
       }),
     });
     // Settle admitted hooks before propagating failure; completion order must not change
@@ -273,8 +273,7 @@ async function resolvePluginImplicitProviders(
       if (!result) {
         continue;
       }
-      const { provider, normalizedResult, acceptedRuntimeCatalog, includeProvider, outcomes } =
-        result;
+      const { provider, normalizedResult, includeProvider, outcomes } = result;
       for (const outcome of outcomes) {
         ctx.onProviderCatalogOutcome?.(outcome);
       }
@@ -287,12 +286,6 @@ async function resolvePluginImplicitProviders(
           (selectedProviderIds && !selectedProviderIds.has(normalizeProviderId(providerId)))
         ) {
           continue;
-        }
-        if (acceptedRuntimeCatalog) {
-          recordProviderCatalogModels(
-            providerId,
-            implicitProvider.models.map(({ id }) => id),
-          );
         }
         const existing =
           discovered[providerId] ??
@@ -318,6 +311,9 @@ async function resolvePluginImplicitProviders(
           env: ctx.env,
           profileApiKey: undefined,
         });
+        if (provider.pluginId) {
+          ctx.discoveredProviderPluginIds?.set(normalizeProviderId(providerId), provider.pluginId);
+        }
       }
     }
     Object.assign(merged, discovered);
@@ -332,7 +328,7 @@ export async function runProviderCatalogWithTimeout(
     timeoutMs: number | null;
   },
 ): Promise<Awaited<ReturnType<typeof runProviderCatalog>> | undefined> {
-  const timeoutMs = params.timeoutMs ?? undefined;
+  const timeoutMs = params.timeoutMs;
   let active = true;
   const catalogParams = {
     ...params,
@@ -358,7 +354,7 @@ export async function runProviderCatalogWithTimeout(
     if (!timeoutMs) {
       return await runCatalog();
     }
-    const catalogRun = runCatalog();
+    const catalogRun = withProviderCatalogDiscoveryBudget(timeoutMs, runCatalog);
     // Live discovery should not hang startup; a timeout skips this provider while
     // preserving the rest of the prepared catalog.
     return await raceWithTimeout(

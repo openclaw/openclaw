@@ -13,7 +13,7 @@ import {
 import type { CodexAppServerAuthRequirement, CodexAppServerPreparedAuth } from "./auth-types.js";
 import { assertCodexPrivateHookIsolation } from "./bounded-hook-policy.js";
 import type { CodexAppServerClient } from "./client.js";
-import { resolveCodexAppServerRuntimeOptions } from "./config.js";
+import { resolveCodexAppServerRuntimeOptions, type CodexPluginConfig } from "./config.js";
 import { createCodexElicitationResponse } from "./elicitation-response.js";
 import { CodexEphemeralTurn } from "./ephemeral-turn.js";
 import type { CodexUsageProjection } from "./event-projector-usage.js";
@@ -35,7 +35,6 @@ import type {
 } from "./protocol.js";
 import { resolveCodexAppServerReasoningEffort } from "./reasoning-effort.js";
 import { codexPrewriteRejectionCause } from "./rpc-error.js";
-import type { createIsolatedCodexAppServerClient } from "./shared-client.js";
 import {
   assertCodexManagedRequirementsDoNotOverrideToolPolicy,
   attestCodexRestrictedToolSurfaceMcpServersDisabled,
@@ -67,8 +66,7 @@ const CODEX_SETTLED_FINALIZER_THREAD_CONFIG: JsonObject = {
 };
 
 export type CodexBoundedTurnOptions = {
-  pluginConfig?: unknown;
-  clientFactory?: typeof createIsolatedCodexAppServerClient;
+  pluginConfig?: CodexPluginConfig;
 };
 
 type CodexBoundedTurnResult = {
@@ -158,13 +156,9 @@ async function runBoundedCodexAppServerTurnInWorkspace(
   appServer: ReturnType<typeof resolveCodexAppServerRuntimeOptions>,
   workspace: { codexHome?: string; cwd: string },
 ): Promise<CodexBoundedTurnResult> {
-  const totalTimeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 100, 100);
-  const timeoutError = new CodexBoundedTurnTimeoutError(params.taskLabel, totalTimeoutMs);
-  const deadline = performance.now() + totalTimeoutMs;
-  const timeoutMs = deadline - performance.now();
-  if (timeoutMs <= 0) {
-    throw timeoutError;
-  }
+  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 100, 100);
+  const timeoutError = new CodexBoundedTurnTimeoutError(params.taskLabel, timeoutMs);
+  const deadline = performance.now() + timeoutMs;
   params.assertCurrent?.();
   const agentDir = params.agentDir?.trim() || undefined;
   // Hosted search needs a private Codex home and cwd so inherited native tools
@@ -178,7 +172,6 @@ async function runBoundedCodexAppServerTurnInWorkspace(
         params.requireNoExternalCapabilities === true,
       )
     : appServer.start;
-  const ownsClient = !params.options.clientFactory;
   const authSelection = params.preparedAuth
     ? { preparedAuth: params.preparedAuth }
     : { authProfileId: params.profile };
@@ -192,14 +185,12 @@ async function runBoundedCodexAppServerTurnInWorkspace(
     assertCurrent: params.assertCurrent,
     ...(params.signal ? { abandonSignal: params.signal } : {}),
   };
-  const client = params.options.clientFactory
-    ? await params.options.clientFactory(clientOptions)
-    : await import("./shared-client.js").then(({ createIsolatedCodexAppServerClient }) =>
-        createIsolatedCodexAppServerClient({
-          ...clientOptions,
-          authProfileStore: params.authProfileStore,
-        }),
-      );
+  const client = await import("./shared-client.js").then(({ createIsolatedCodexAppServerClient }) =>
+    createIsolatedCodexAppServerClient({
+      ...clientOptions,
+      authProfileStore: params.authProfileStore,
+    }),
+  );
   const abortController = new AbortController();
   let activeThreadId: string | undefined;
   let activeTurnId = "";
@@ -412,9 +403,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
     clearTimeout(timeout);
     params.signal?.removeEventListener("abort", abortFromCaller);
     await interruptPromise;
-    if (ownsClient) {
-      await closeCodexStartupClientBestEffort(client);
-    }
+    await closeCodexStartupClientBestEffort(client);
   }
 }
 

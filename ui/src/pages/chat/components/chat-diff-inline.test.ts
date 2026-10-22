@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { renderToolFixture, renderToolCard } from "./chat-tool-render.test-support.ts";
+import { mountCard } from "./chat-tool-cards.test-support.tsx";
 
 // Covers the tool-result adapter and syntax overlay; pairing is owned by the
 // line-presentation tests, and the Review panel owns browser navigation proof.
@@ -10,15 +10,13 @@ describe("tool-card inline diff", () => {
       const before = 'const message = "<img src=x>"; const count = 2;';
       const after = 'const message = "<img src=x>"; const count = 3;';
       const container = document.createElement("div");
-      await renderToolFixture(
-        renderToolCard(
-          { id: "inline", name: "edit", args: { path, oldText: before, newText: after } },
-          {
-            messageKey: "inline-message",
-            expanded: true,
-            onToggleExpanded: vi.fn(),
-          },
-        ),
+      await mountCard(
+        { id: "inline", name: "edit", args: { path, oldText: before, newText: after } },
+        {
+          messageKey: "inline-message",
+          expanded: true,
+          onToggleExpanded: vi.fn(),
+        },
         container,
       );
       await vi.dynamicImportSettled();

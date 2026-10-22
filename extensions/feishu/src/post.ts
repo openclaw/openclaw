@@ -43,10 +43,6 @@ function wrapInlineCode(text: string): string {
   return `${fence}${body}${fence}`;
 }
 
-function sanitizeFenceLanguage(language: string): string {
-  return language.trim().replace(/[^A-Za-z0-9_+#.-]/g, "");
-}
-
 function applyInlineStyles(text: string, style: unknown): string {
   // Keep boundary whitespace outside Markdown emphasis delimiters.
   const content = text.trim();
@@ -102,9 +98,9 @@ function renderEmotionElement(element: Record<string, unknown>): string {
 }
 
 function renderCodeBlockElement(element: Record<string, unknown>): string {
-  const language = sanitizeFenceLanguage(
-    toStringOrEmpty(element.language) || toStringOrEmpty(element.lang),
-  );
+  const language = (toStringOrEmpty(element.language) || toStringOrEmpty(element.lang))
+    .trim()
+    .replace(/[^A-Za-z0-9_+#.-]/g, "");
   const code = (toStringOrEmpty(element.text) || toStringOrEmpty(element.content)).replace(
     /\r\n/g,
     "\n",
@@ -239,13 +235,6 @@ function resolveLocalePayload(candidate: unknown): PostPayload | null {
   return null;
 }
 
-function resolvePostPayload(parsed: unknown): PostPayload | null {
-  return (
-    toPostPayload(parsed) ??
-    (isRecord(parsed) ? (resolveLocalePayload(parsed.post) ?? resolveLocalePayload(parsed)) : null)
-  );
-}
-
 type PostParseOptions = {
   renderMediaPlaceholders?: boolean;
   emptyTextFallback?: string;
@@ -266,7 +255,11 @@ export function renderPostContent(
   options: PostParseOptions = {},
 ): PostParseResult {
   try {
-    const payload = resolvePostPayload(parsed);
+    const payload =
+      toPostPayload(parsed) ??
+      (isRecord(parsed)
+        ? (resolveLocalePayload(parsed.post) ?? resolveLocalePayload(parsed))
+        : null);
     if (!payload) {
       return {
         textContent: FALLBACK_POST_TEXT,

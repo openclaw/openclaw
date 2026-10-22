@@ -4,6 +4,7 @@ import {
   type NodePermissionRequest,
 } from "../../../packages/gateway-protocol/src/node-permissions.js";
 import { registerListener } from "../../../src/shared/listeners.js";
+import { listen } from "../lib/reactive/listener.ts";
 import {
   nativeChromeExtensionSetupActionSchema,
   nativeChromeExtensionSetupResultSchema,
@@ -254,6 +255,8 @@ const legacyChromeStatusResultSchema = legacyChromeInstallResultSchema.required(
 
 export type NativeDeviceSettingsCapability = {
   readonly snapshot: NativeDeviceSettingsSnapshot | null;
+  /** First accepted snapshot, or null when this capability retires before one arrives. */
+  readonly initialSnapshot: Promise<NativeDeviceSettingsSnapshot | null>;
   subscribe(listener: (snapshot: NativeDeviceSettingsSnapshot) => void): () => void;
   set(
     key: SettingKey,
@@ -304,6 +307,10 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
     nativeWindow["__OPENCLAW_NATIVE_DEVICE_SETTINGS__"],
   );
   let snapshot = initial.success ? initial.data : null;
+  const initialSnapshot = Promise.withResolvers<NativeDeviceSettingsSnapshot | null>();
+  if (snapshot) {
+    initialSnapshot.resolve(snapshot);
+  }
   let disposed = false;
   const isCurrent = () =>
     !disposed &&
@@ -312,12 +319,14 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
   const listeners = new Set<(snapshot: NativeDeviceSettingsSnapshot) => void>();
   const acceptSnapshot = (next: NativeDeviceSettingsSnapshot) => {
     if (
-      snapshot?.revision !== undefined &&
-      (next.revision === undefined || next.revision <= snapshot.revision)
+      disposed ||
+      (snapshot?.revision !== undefined &&
+        (next.revision === undefined || next.revision <= snapshot.revision))
     ) {
       return false;
     }
     snapshot = next;
+    initialSnapshot.resolve(next);
     return true;
   };
   const onChange = (event: Event) => {
@@ -362,8 +371,7 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
   };
   // System Settings can change permissions while the app is backgrounded.
   const refresh = () => void send({ type: "status" });
-  window.addEventListener(CHANGE_EVENT, onChange);
-  window.addEventListener("focus", refresh);
+  const stops = [listen(window, CHANGE_EVENT, onChange), listen(window, "focus", refresh)];
   refresh();
   const legacyChromeRequest = async (
     type: "chrome-extension-status" | "install-chrome-extension",
@@ -396,6 +404,7 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
     }
   };
   return {
+    initialSnapshot: initialSnapshot.promise,
     get snapshot() {
       return snapshot;
     },
@@ -442,8 +451,8 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
     refresh,
     dispose() {
       disposed = true;
-      window.removeEventListener(CHANGE_EVENT, onChange);
-      window.removeEventListener("focus", refresh);
+      initialSnapshot.resolve(null);
+      stops.forEach((stop) => stop());
       listeners.clear();
     },
   };

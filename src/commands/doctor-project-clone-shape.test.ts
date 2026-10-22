@@ -101,7 +101,13 @@ describe("doctor project clone shape", () => {
         }
         expect(findings).toHaveLength(1);
         const finding = findings[0]!;
-        expect(finding).toMatchObject({ checkId, severity: "warning", path: clone });
+        expect(finding).toMatchObject({
+          checkId,
+          severity: "warning",
+          category: shape === "missing" ? "fix-now" : "recommended",
+          docsUrl: "https://docs.openclaw.ai/cli/doctor/checks",
+          path: clone,
+        });
         expect(finding.message).toContain("Stored project");
         if (shape === "missing") {
           expect(finding.message).toContain("Skipped");

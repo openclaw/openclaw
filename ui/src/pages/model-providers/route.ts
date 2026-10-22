@@ -1,7 +1,5 @@
-import { definePage, type RouteLoaderOptions } from "@openclaw/uirouter";
-import { createComponent } from "solid-js";
-import { routePageSpec } from "../../app-route-paths.ts";
-import type { SolidRouteProps } from "../../app-route-types.ts";
+import type { RouteLoaderOptions } from "@openclaw/uirouter";
+import { defineSolidPage } from "../../app-route-types.tsx";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ModelProvidersData } from "./load.ts";
 
@@ -72,21 +70,15 @@ async function loadModelProvidersRouteData(
   };
 }
 
-export const page = definePage({
-  ...routePageSpec("model-providers"),
-  loaderDeps: (_context, location) => location.search,
-  loader: loadModelProvidersRouteData,
-  component: () =>
-    import("./model-providers-page.tsx").then((module) => ({
-      header: true,
-      renderSolid: (props: SolidRouteProps<ModelProvidersRouteData>) =>
-        createComponent(module.ModelProvidersPage, {
-          get routeData() {
-            return props.data;
-          },
-          get loaderPending() {
-            return props.loaderPending;
-          },
-        }),
-    })),
-});
+export const page = defineSolidPage<
+  "model-providers",
+  Parameters<typeof loadModelProvidersRouteData>[0],
+  ModelProvidersRouteData
+>(
+  "model-providers",
+  () => import("./model-providers-page.tsx").then((module) => module.ModelProvidersPage),
+  {
+    loaderDeps: (_context, location) => location.search,
+    loader: loadModelProvidersRouteData,
+  },
+);

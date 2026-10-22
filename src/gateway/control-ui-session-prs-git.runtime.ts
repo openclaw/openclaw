@@ -1,11 +1,13 @@
 import fs from "node:fs";
 import nodePath from "node:path";
 import { readRegularFile } from "@openclaw/fs-safe/advanced";
+import { unavailableDiffRevision, type DiffReadTiming } from "../infra/diff-read-timing.js";
 import { GitCommandTimeoutError, requireGitCommandOutput } from "../infra/git-exec.js";
 import type { GitReadOperations } from "../infra/git-read-operations.js";
 import { readGitHead, readGitMetadataPrefix, readGitRefs } from "../infra/git-root.js";
 import { canReadGitFilesystemRefs } from "../infra/git-worker-context.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { GitWorkerOperations } from "../infra/git-worker-contract.js";
+import { readCheckoutDiffRevision } from "./control-ui-session-diff-revision.js";
 import {
   gitOutput,
   isAncestor,
@@ -16,19 +18,25 @@ import {
 } from "./control-ui-session-prs-landing.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 
-const log = createSubsystemLogger("git/branch-facts");
-
 /** Observe only this checkout's refs; snapshot publication does not change PR facts. */
-export async function readCheckoutGitRevision({
-  root,
-  includeIndex,
-  branch,
-  defaultBranch,
-}: GitReadOperations["checkout.revision"]["input"]): Promise<string | null> {
+export async function readCheckoutGitRevision(
+  {
+    root,
+    scope,
+    branch,
+    defaultBranch,
+    summaryOnly = false,
+    paths: diffPaths,
+  }: GitReadOperations["checkout.revision"]["input"],
+  timing?: DiffReadTiming,
+): Promise<string | null> {
   if (!canReadGitFilesystemRefs()) {
-    return null;
+    return unavailableDiffRevision(timing, "no-revision-environment");
   }
   try {
+    if (scope === "diff") {
+      return await readCheckoutDiffRevision(root, diffPaths, summaryOnly, timing);
+    }
     const head = readGitHead(root, { maxDepth: 1 });
     const checkout = readCheckoutHead(root);
     const defaultRef = readDefaultRef(checkout);
@@ -36,7 +44,7 @@ export async function readCheckoutGitRevision({
       !head ||
       !checkout ||
       checkout.branch === undefined ||
-      (!includeIndex && defaultRef === undefined)
+      (scope === "context" && defaultRef === undefined)
     ) {
       return null;
     }
@@ -46,11 +54,13 @@ export async function readCheckoutGitRevision({
       nodePath.join(checkout.refsBase, "config"),
       nodePath.join(gitDir, "config.worktree"),
     ];
+    if (scope === "worktree") {
+      paths.push(nodePath.join(gitDir, "index"));
+    }
     const replacements = nodePath.join(checkout.refsBase, "refs/replace");
     let packedReplacements: string[] = [];
-    if (includeIndex) {
+    if (scope !== "context") {
       paths.push(
-        nodePath.join(gitDir, "index"),
         nodePath.join(checkout.refsBase, "shallow"),
         nodePath.join(checkout.refsBase, "info/grafts"),
       );
@@ -72,16 +82,20 @@ export async function readCheckoutGitRevision({
     }
     const selectedBranch = branch ?? checkout.branch;
     const selectedDefault = defaultBranch ? `origin/${defaultBranch}` : defaultRef;
-    const tips = await readRemoteRevisions(
-      root,
-      [
-        ...(selectedBranch ? [`refs/remotes/origin/${selectedBranch}`] : []),
-        ...(selectedDefault ? [`refs/remotes/${selectedDefault}`] : []),
-      ],
-      checkout,
-    );
+    const tips =
+      scope !== "context"
+        ? await readRemoteRevisions(
+            root,
+            [
+              ...(selectedBranch ? [`refs/remotes/origin/${selectedBranch}`] : []),
+              ...(selectedDefault ? [`refs/remotes/${selectedDefault}`] : []),
+            ],
+            checkout,
+          )
+        : [];
     return JSON.stringify([
-      checkout,
+      // Context exposes branch names and remote configuration, not commit IDs.
+      scope !== "context" ? checkout : { branch: checkout.branch, refsBase: checkout.refsBase },
       defaultRef,
       [...tips],
       packedReplacements,
@@ -100,8 +114,8 @@ export async function readCheckoutGitRevision({
           : [file, stat?.ino, stat?.size, stat?.mtimeMs, stat?.ctimeMs];
       }),
     ]);
-  } catch {
-    return null;
+  } catch (error) {
+    return unavailableDiffRevision(timing, undefined, error);
   }
 }
 
@@ -314,33 +328,36 @@ async function diffStatsAgainst(
   }
 }
 
-export async function readPullRequestBranchFacts(
-  input: GitReadOperations["pull-request.branch-facts"]["input"],
-): Promise<GitReadOperations["pull-request.branch-facts"]["output"]> {
-  try {
-    const landing = await resolveBranchLanding(input.root, input);
-    const stats = landing.statsBase
-      ? await diffStatsAgainst(input.root, landing.statsBase, input.refreshIndex === true)
-      : null;
-    // The diff validates equal recorded tips without a separate ancestry probe.
-    // Missing objects must still retain the unknown-comparison fallback.
-    const noPushedChanges =
-      stats !== null &&
+export async function readPullRequestBranchComparison(
+  input: GitWorkerOperations["pull-request.branch-comparison"]["input"],
+): Promise<GitWorkerOperations["pull-request.branch-comparison"]["output"]> {
+  const landing = await resolveBranchLanding(input.root, input);
+  const creatable =
+    (!landing.hasLandedPullRequest || landing.provenNewPushedWork) &&
+    Boolean(input.defaultBranch) &&
+    landing.pushedSha !== null &&
+    (!landing.defaultSha ||
+      !(await isAncestor(input.root, landing.pushedSha, landing.defaultSha, () => {
+        landing.complete = false;
+      })));
+  return {
+    complete: landing.complete,
+    statsBase: landing.statsBase,
+    equalPushedTips:
       landing.defaultSha !== null &&
       landing.defaultSha === landing.pushedSha &&
-      landing.statsBase === landing.defaultSha;
-    const creatable =
-      (!landing.hasLandedPullRequest || landing.provenNewPushedWork) &&
-      !noPushedChanges &&
-      Boolean(input.defaultBranch) &&
-      landing.pushedSha !== null &&
-      (!landing.defaultSha ||
-        !(await isAncestor(input.root, landing.pushedSha, landing.defaultSha)));
-    return !creatable && !(stats && stats.changedFiles > 0) ? undefined : { creatable, stats };
-  } catch {
-    log.warn(
-      "PR comparison unavailable; fetch repository history and retry. Dependent comparisons skipped.",
-    );
-    return { creatable: false, stats: null };
-  }
+      landing.statsBase === landing.defaultSha,
+    creatable,
+  };
+}
+
+export async function readPullRequestBranchFacts(
+  input: GitWorkerOperations["pull-request.branch-facts"]["input"],
+): Promise<GitReadOperations["pull-request.branch-facts"]["output"]> {
+  const { comparison } = input;
+  const stats = comparison.statsBase
+    ? await diffStatsAgainst(input.root, comparison.statsBase, input.refreshIndex === true)
+    : null;
+  const creatable = comparison.creatable && !(stats !== null && comparison.equalPushedTips);
+  return !creatable && !(stats && stats.changedFiles > 0) ? undefined : { creatable, stats };
 }

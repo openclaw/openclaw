@@ -243,8 +243,9 @@ export const agentDeletionOperations = {
             database,
             agentId,
             operationId,
-            input.paths.kind === "database" ? "database_paths_json" : "cleanup_paths_json",
-            input.paths.paths,
+            ...(input.paths.kind === "database"
+              ? (["database_paths_json", input.paths.paths] as const)
+              : (["cleanup_paths_json", input.paths.paths] as const)),
           )
         ) {
           throw new Error(`Failed to fence cleanup paths for agent ${agentId}.`);

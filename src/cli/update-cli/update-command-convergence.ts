@@ -5,6 +5,7 @@ import {
   UPDATE_POST_ACTIVATION_INSPECTIONS_REPORT_MODE,
 } from "../../commands/doctor/shared/update-phase.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
+import { retainCurrentDeferredPluginMigrationWarnings } from "../../infra/deferred-plugin-migration-warnings.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import { compareSemverStrings } from "../../infra/update-check.js";
 import { hasDeferredUpdateModelRetirement } from "../../infra/update-deferred-model-retirement.js";
@@ -138,7 +139,7 @@ export async function convergeUpdatePlugins(params: {
         status: "in_progress",
         startedAtMs: Date.now(),
       },
-      { env: params.opts.run.env },
+      params.opts.run,
     );
   }
 
@@ -160,7 +161,7 @@ export async function convergeUpdatePlugins(params: {
   return await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, () =>
     withUpdateEnv(convergenceEnv, async () => {
       let postCorePluginUpdate;
-      const doctorWarnings: string[] = [];
+      let doctorWarnings: string[] = [];
       let targetRuntimeConverged = false;
       let maintenanceDeferred = false;
       if (shouldResumePostCoreInFreshProcess) {
@@ -294,6 +295,14 @@ export async function convergeUpdatePlugins(params: {
         if (completedPluginUpdate) {
           postCorePluginUpdate = completedPluginUpdate.pluginUpdate;
           postUpdateConfigSnapshot = completedPluginUpdate.configSnapshot;
+          doctorWarnings = await retainCurrentDeferredPluginMigrationWarnings(
+            doctorWarnings,
+            new Set(
+              (postCorePluginUpdate.warnings ?? []).flatMap((warning) =>
+                warning.reason === "doctor-advisory" && warning.pluginId ? [warning.pluginId] : [],
+              ),
+            ),
+          );
         }
       } else if (params.candidateRuntime) {
         postUpdateConfigSnapshot = await readConfigFileSnapshot({ observe: false });
@@ -399,7 +408,7 @@ export async function convergeUpdatePlugins(params: {
       if (params.opts.run) {
         for (const step of resultWithPostUpdate.steps.flatMap(updateRunStepsFromResultStep)) {
           if (step.step.startsWith("warning:")) {
-            recordUpdateRunStep(params.opts.run.runId, step, { env: params.opts.run.env });
+            recordUpdateRunStep(params.opts.run.runId, step, params.opts.run);
           }
         }
         recordUpdateRunStep(
@@ -410,7 +419,7 @@ export async function convergeUpdatePlugins(params: {
             endedAtMs: Date.now(),
             ...(failureFacts.length ? { failureFacts } : {}),
           },
-          { env: params.opts.run.env },
+          params.opts.run,
         );
       }
 

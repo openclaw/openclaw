@@ -141,10 +141,9 @@ export class ReviewApprovalStore {
   }
 
   async request(review: ReviewRequest): Promise<ReviewApproval | undefined> {
-    const captured = structuredClone(review);
     const operation = this.#operation();
     const receipt = await operation.execute(
-      { type: "review.request", input: { review: captured, maxEntries: this.#maxEntries } },
+      { type: "review.request", input: { review, maxEntries: this.#maxEntries } },
       { writeStores: [0] },
     );
     return receipt.value;

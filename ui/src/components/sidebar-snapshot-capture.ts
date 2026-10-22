@@ -4,11 +4,12 @@ import type { ApplicationContext } from "../app/context.ts";
 import { loadSettings } from "../app/settings.ts";
 import type { AuthenticatedUser } from "../app/user-profile.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
-import { presenceViewerLastActivity } from "../lib/presence-users.ts";
+import { presenceViewerLastActivity, profilePresenceViewer } from "../lib/presence-users.ts";
 import { resolveSidebarOnline, sidebarOnlineOrder } from "./app-sidebar-online.tsx";
 import { readSidebarBrandPresentation, type AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
+import { hasSidebarListFilter } from "./session-data-events.ts";
 import { resolveSidebarSessionRowSubtitle } from "./session-row-subtitle.ts";
 import {
   parseSidebarSnapshot,
@@ -50,6 +51,11 @@ export function isSidebarSnapshotSettled(host: AppSidebarRenderHost): boolean {
       !roster.loading &&
       roster.involvingMe === host.sidebarSessionOwnerFilter().involvingMe
     );
+  }
+  if (hasSidebarListFilter(host)) {
+    const query = host.sessionData.sessionListQuery(host.expandedAgentId());
+    const selected = context.sessions.listSnapshot(query);
+    return !selected.loading && (selected.readSucceeded === true || selected.error !== null);
   }
   return (
     !host.sessionData.sessionsLoading &&
@@ -95,7 +101,7 @@ export function captureSidebarSnapshotModel(
     plugins.push({ key, pluginId, id: value.page.id, label: value.label, icon: value.icon });
   }
   const presentation = (row: SidebarRecentSession) => ({
-    childrenDisplayMode: host.sessionProjection.captureChildrenDisplay(row.key),
+    childrenDisplayMode: host.sessionProjection.children.capture(row.key),
     snapshotSubtitle: resolveSidebarSessionRowSubtitle(host, row),
   });
   const sessions = snapshotSessions(rows, presentation);
@@ -137,13 +143,16 @@ export function captureSidebarSnapshotModel(
       return {
         ...displayUser(user),
         watchedSessions: [],
-        entries: lastActivityAt === undefined ? [] : [{ ts: 0, lastActivityAt }],
+        entries: [{ ts: 0, lastActivityAt }],
       };
     }),
     onlineCounts: [...(online.counts ?? [])],
     peopleSortMode: host.people.sortMode,
     peopleStatusFilter: host.people.statusFilter,
-    onlineExpanded: host.teamOnlineExpanded,
+    peoplePresenceFilter: host.people.presenceFilter,
+    offlineUsers: (host.peopleView?.directory()?.result?.profiles ?? [])
+      .filter((profile) => !profile.mergedInto)
+      .map(profilePresenceViewer),
     ownerId: host.sessionOwnerFilterId,
     involvingMe: host.sessionInvolvingMeFilterActive,
     footer: displayUser(context.gateway.snapshot.selfUser),

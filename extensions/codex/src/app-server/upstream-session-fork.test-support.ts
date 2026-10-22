@@ -87,20 +87,6 @@ export function forkParams() {
 
 type ForkThreadStub = (params: CodexThreadForkParams) => Promise<unknown>;
 
-function factoryForControl(control: CodexSessionCatalogControl): CodexSessionCatalogControlFactory {
-  return {
-    hasActiveWork: () => false,
-    disconnect: async () => {},
-    forRequest: () => control,
-    forNode: async () => {
-      throw new Error("Node source is outside this local fork fixture");
-    },
-    homesForAgent: async () => [],
-    forUpstream: async (_agentId, fingerprint) =>
-      fingerprint === control.connectionFingerprint ? control : undefined,
-  };
-}
-
 export function forkControl(
   forkThread: ForkThreadStub = vi.fn(async () => forkResponse()),
   connectionFingerprint = "fingerprint",
@@ -115,13 +101,18 @@ export function forkControl(
     forkThread,
   } as unknown as CodexSessionCatalogControl;
   control.withPinnedConnection = async (run) => await run(control);
-  return {
-    archiveThread,
-    control,
-    controlFactory: factoryForControl(control),
-    forkThread,
-    retireConnection,
+  const controlFactory: CodexSessionCatalogControlFactory = {
+    hasActiveWork: () => false,
+    disconnect: async () => {},
+    forRequest: () => control,
+    forNode: async () => {
+      throw new Error("Node source is outside this local fork fixture");
+    },
+    homesForAgent: async () => [],
+    forUpstream: async (_agentId, fingerprint) =>
+      fingerprint === control.connectionFingerprint ? control : undefined,
   };
+  return { archiveThread, control, controlFactory, forkThread, retireConnection };
 }
 
 export function createForkTestRuntime(

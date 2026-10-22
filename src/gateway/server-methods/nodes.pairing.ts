@@ -159,19 +159,17 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
       ) {
         return;
       }
-      const pendingApproval = await getPendingNodePairing(requestId);
-      const sessionBeforeApproval = pendingApproval
-        ? context.nodeRegistry.get(pendingApproval.nodeId)
-        : undefined;
       const promotion: { node: NodeSession | null } = { node: null };
       const approved = await approveNodePairing(requestId, {
         callerScopes,
         onApproved: (committed) => {
           // Publish the live surface with its committed binding, before background
           // readers can mistake this approval for a replacement of the device.
-          promotion.node = sessionBeforeApproval
+          // A node may finish connecting while the approval write is in flight.
+          const session = context.nodeRegistry.get(committed.nodeId);
+          promotion.node = session
             ? context.nodeRegistry.updateSurface(committed.nodeId, committed.surface, {
-                expectedConnId: sessionBeforeApproval.connId,
+                expectedConnId: session.connId,
                 expectedPairingIdentity: committed.pairingIdentity,
                 ...(committed.previousPairingGeneration
                   ? { expectedPairingGeneration: committed.previousPairingGeneration }

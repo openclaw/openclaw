@@ -170,7 +170,7 @@ export async function buildMediaGenerateToolExecutionResult(params: {
     .filter(Boolean)
     .join("\n");
   return {
-    ...identity,
+    count: identity.count,
     attachments,
     contentText,
     wakeResult: contentText,
@@ -211,7 +211,7 @@ export function buildMediaGenerationDurationDetails(
     asFiniteNumber(result.metadata?.normalizedDurationSeconds) ??
     (kind === "video"
       ? requested
-      : !ignoredOverrides.has("durationSeconds") && typeof requestedDuration === "number"
+      : !ignoredOverrides.has("durationSeconds")
         ? requestedDuration
         : undefined);
   const changed =

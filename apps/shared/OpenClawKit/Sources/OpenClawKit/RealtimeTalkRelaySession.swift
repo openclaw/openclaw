@@ -141,28 +141,6 @@ private enum RealtimeAudioSendOutcome {
     case sent, inactive, saturated, failed(String)
 }
 
-private struct RealtimeAudioLogWindow {
-    private var frames = 0
-    private var bytes = 0
-    private var maxRms: Float = 0
-    private var lastLoggedAtMs: Double = 0
-
-    mutating func record(byteCount: Int, rms: Float, timestampMs: Double)
-        -> (frames: Int, bytes: Int, maxRms: String)?
-    {
-        self.frames += 1
-        self.bytes += byteCount
-        self.maxRms = max(self.maxRms, rms)
-        guard timestampMs - self.lastLoggedAtMs >= 1000 else { return nil }
-        self.lastLoggedAtMs = timestampMs
-        let stats = (self.frames, self.bytes, String(format: "%.4f", Double(self.maxRms)))
-        self.frames = 0
-        self.bytes = 0
-        self.maxRms = 0
-        return stats
-    }
-}
-
 private actor RealtimeAudioSender {
     private let request: @Sendable (String, [String: AnyCodable]?, Double) async throws -> Data
     private var relaySessionId: String?
@@ -317,8 +295,6 @@ public final class RealtimeTalkRelaySession {
     private var outputCancellationGeneration: UInt64 = 0
     private var outputCancellationTask: Task<Void, Never>?
     private var lastBargeInAtMs: Double = 0
-    private var microphoneLog = RealtimeAudioLogWindow()
-    private var suppressedEchoLog = RealtimeAudioLogWindow()
 
     public var voiceSessionId: String? {
         self.relaySessionId
@@ -422,7 +398,7 @@ public final class RealtimeTalkRelaySession {
             self.relaySessionId = relaySessionId
             // Acknowledgments need identity during startup; routing stays gated until replay finishes.
             self.output.withLock { $0.relaySessionId = relaySessionId }
-            let supportsBargeIn = await resolveSupportsBargeIn(result)
+            let supportsBargeIn = await resolveSupportsBargeIn(result, lifecycleGeneration: lifecycleGeneration)
             switch await lifecycleStatus(lifecycleGeneration) {
             case .current: break
             case .cancelledLocally: return
@@ -610,7 +586,10 @@ public final class RealtimeTalkRelaySession {
         }
     }
 
-    private func resolveSupportsBargeIn(_ session: TalkSessionCreateResult) async -> Bool? {
+    private func resolveSupportsBargeIn(
+        _ session: TalkSessionCreateResult,
+        lifecycleGeneration: UInt64) async -> Bool?
+    {
         var payload: [String: AnyCodable] = [:]
         if let provider = (session.provider ?? self.options.provider)?.trimmedNonEmpty {
             payload["provider"] = AnyCodable(provider)
@@ -620,7 +599,7 @@ public final class RealtimeTalkRelaySession {
         }
         // A talk-only client may create sessions without permission to read the catalog.
         // Unknown capability leaves interruption ownership with the provider.
-        guard let response = try? await self.transport.request("talk.catalog", payload, 8000),
+        guard let response = try? await self.requestTalkCatalog(payload, lifecycleGeneration: lifecycleGeneration),
               let catalog = try? JSONDecoder().decode(TalkCatalogResult.self, from: response)
         else { return nil }
         let provider = (payload["provider"]?.stringValue
@@ -631,6 +610,30 @@ public final class RealtimeTalkRelaySession {
                 entry["aliases"]?.arrayValue?.contains { $0.stringValue?.lowercased() == provider } == true
         }?.dictionaryValue
         return entry?["supportsBargeIn"]?.boolValue ?? true
+    }
+
+    private func requestTalkCatalog(
+        _ payload: [String: AnyCodable],
+        lifecycleGeneration: UInt64) async throws -> Data
+    {
+        let deadline = ProcessInfo.processInfo.systemUptime + 10
+        var timeoutMs: Double = 8000
+        while true {
+            try Task.checkCancellation()
+            guard await self.lifecycleStatus(lifecycleGeneration) == .current else { throw CancellationError() }
+            do {
+                return try await self.transport.request("talk.catalog", payload, timeoutMs)
+            } catch let error as GatewayResponseError {
+                guard error.method == "talk.catalog", error.code == "UNAVAILABLE",
+                      error.detailsReason == "talk-catalog-warming", error.details["retryable"]?.boolValue == true
+                else { throw error }
+                let delayMs = max(250, error.details["retryAfterMs"]?.intValue ?? 250)
+                guard ProcessInfo.processInfo.systemUptime + Double(delayMs) / 1000 < deadline else { throw error }
+                try await Task.sleep(for: .milliseconds(delayMs))
+                timeoutMs = (deadline - ProcessInfo.processInfo.systemUptime) * 1000
+                guard timeoutMs > 0 else { throw error }
+            }
+        }
     }
 
     private func drainOutputEffects() {
@@ -872,9 +875,6 @@ extension RealtimeTalkRelaySession {
         let isFinal = payload["final"]?.boolValue == true
         let role = payload["role"]?.stringValue ?? ""
         let text = payload["text"]?.stringValue ?? ""
-        let charCount = text.count
-        self.logger.debug(
-            "talk realtime transcript: role=\(role.isEmpty ? "unknown" : role) final=\(isFinal) chars=\(charCount)")
         self.onTranscript(RealtimeTalkTranscript(role: role, text: text, isFinal: isFinal))
         guard isFinal else { return }
         if role == "user" {
@@ -1258,22 +1258,9 @@ extension RealtimeTalkRelaySession {
               let audioSender
         else { return nil }
         self.onInputLevel(TalkAudioLevel.normalized(rms: Double(rms)))
-        if let stats = self.microphoneLog.record(byteCount: encoded.count, rms: rms, timestampMs: timestampMs) {
-            self.logger.debug(
-                "talk realtime mic: buffers=\(stats.frames) bytes=\(stats.bytes) maxRms=\(stats.maxRms)")
-        }
         // Continuous providers own interruptions and need input throughout playback.
         if self.output.withLock({ $0.isOutputPlaying }), self.supportsBargeIn == true {
             if self.audioCapture.suppressesInputDuringOutput {
-                if let stats = self.suppressedEchoLog.record(
-                    byteCount: encoded.count,
-                    rms: rms,
-                    timestampMs: timestampMs)
-                {
-                    let (frames, bytes, maxRms) = stats
-                    self.logger.debug(
-                        "talk realtime mic suppressed during output: buffers=\(frames) bytes=\(bytes) maxRms=\(maxRms)")
-                }
                 return nil
             }
             self.handleInputLevelDuringOutput(rms, timestampMs: timestampMs)

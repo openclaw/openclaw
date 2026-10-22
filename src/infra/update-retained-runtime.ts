@@ -3,8 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
-import { hasErrnoCode } from "./errno.js";
+import { hasErrnoCode, ignoreMissingPath as ignoreMissingUpdateCandidateFile } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { withUserPathBaseDirectory } from "./home-dir.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
@@ -18,12 +19,17 @@ import {
   reportRetainedUpdateRuntime,
   resolveRetainedUpdateRuntimeParents,
 } from "./temp-artifact-cleanup.js";
-import { ignoreMissingUpdateCandidateFile } from "./update-candidate-files.js";
-import { withUpdateCandidateIoBudget } from "./update-candidate-io.js";
-import { prepareUpdateCandidatePluginTrees } from "./update-candidate-plugin-tree.js";
+import {
+  parseUpdateStateInspectionWorker,
+  runUpdateStateInspectionWorker,
+} from "./update-candidate-state.inspection.js";
 import type { ResolvedGlobalInstallTarget } from "./update-global.js";
 import { resolveNativePackageProjectRoot } from "./update-native-package-owner.js";
-import { linkUpdateCandidatePluginTrees } from "./update-retained-runtime-tree.js";
+import {
+  projectRetainedRuntimePath,
+  RetainedRuntimeFilesSchema,
+} from "./update-retained-runtime-files.js";
+import { retainUpdateRuntimeImports } from "./update-retained-runtime-imports.js";
 import { prepareRuntimeRelocations, relocateRuntimePath } from "./update-runtime-relocation.js";
 
 const log = createSubsystemLogger("update/retained-runtime");
@@ -43,6 +49,7 @@ export type RetainUpdateRuntime = (params: {
   installTarget?: ResolvedGlobalInstallTarget;
   env?: NodeJS.ProcessEnv;
   timeoutMs: number;
+  signal?: AbortSignal;
   assertCurrent: () => void;
 }) => Promise<RetainedUpdateRuntimeMetrics | void>;
 
@@ -62,6 +69,7 @@ async function runWithRetainedUpdateRuntime<T>(
 ): Promise<T> {
   let directory: string | undefined;
   let prepared = false;
+  let unusable = false;
   let closing = false;
   let preparation: ReturnType<RetainUpdateRuntime> | undefined;
   let unregister: (() => void) | undefined;
@@ -71,14 +79,17 @@ async function runWithRetainedUpdateRuntime<T>(
       await operation((params) => {
         preparation = (async () => {
           const { mutationRoots, installTarget, env, timeoutMs } = params;
+          const temporaryRoot = (env ?? process.env).TMPDIR?.trim();
+          const signal = resolveCommandProcessSignal(params.signal);
           const assertCurrent = () => {
+            signal?.throwIfAborted();
             if (closing) {
               throw new Error("The updater's retained runtime is closing");
             }
             params.assertCurrent();
           };
           assertCurrent();
-          if (prepared) {
+          if (prepared || unusable) {
             return undefined;
           }
           const root = await resolveOpenClawPackageRoot({ moduleUrl });
@@ -122,12 +133,13 @@ async function runWithRetainedUpdateRuntime<T>(
           }
           await maintainRetainedUpdateRuntimes({
             packageRoots: [sourceRoot],
+            temporaryDirectories: temporaryRoot ? [temporaryRoot] : undefined,
             repair: true,
             assertCurrent,
           });
           assertCurrent();
           // Package inventories include their module owner, and native activation
-          // replaces its whole project. Scratch must be a sibling of both boundaries.
+          // replaces its whole project. Scratch must stay outside both boundaries.
           const boundaries = [sourceRoot, ...mutationBoundaries];
           const parent = resolveRetainedUpdateRuntimeParents(sourceRoot, mutationBoundaries).at(
             -1,
@@ -135,6 +147,7 @@ async function runWithRetainedUpdateRuntime<T>(
           const outsideMutation = (candidate: string) =>
             !boundaries.some((entry) => isPathInside(entry, candidate));
           if (
+            !temporaryRoot &&
             (installTarget || !sourceRoot.split(path.sep).includes("node_modules")) &&
             outsideMutation(parent)
           ) {
@@ -157,7 +170,9 @@ async function runWithRetainedUpdateRuntime<T>(
             }
           }
           if (!directory) {
-            const temporary = resolveIdentityPathViaExistingAncestorSync(path.resolve(os.tmpdir()));
+            const temporary = resolveIdentityPathViaExistingAncestorSync(
+              path.resolve(temporaryRoot || os.tmpdir()),
+            );
             if (!outsideMutation(temporary)) {
               throw new Error(
                 "Updater temporary directory is inside an installation being replaced",
@@ -172,62 +187,56 @@ async function runWithRetainedUpdateRuntime<T>(
           if (!outsideMutation(privateRoot)) {
             throw new Error("Retained updater directory overlaps an installation being replaced");
           }
-          const project = (source: string) => {
-            const base = path.parse(source).root;
-            return path.join(
-              privateRoot,
-              "tree",
-              Buffer.from(base).toString("hex"),
-              path.relative(base, source),
-            );
-          };
-          const candidateRoot = project(sourceRoot);
-          const roots = new Map<string, string>();
+          const candidateRoot = projectRetainedRuntimePath(privateRoot, sourceRoot);
+          const roots: string[] = [];
           for (const name of ["package.json", "dist", "node_modules"]) {
             const entry = path.join(sourceRoot, name);
             const present = await fs.lstat(entry).catch(ignoreMissingUpdateCandidateFile);
             assertCurrent();
             if (present) {
-              roots.set(entry, project(entry));
+              roots.push(entry);
             }
           }
-          const inventoryStartedAt = performance.now();
-          const plan = await prepareUpdateCandidatePluginTrees({
-            roots,
-            project,
-            targetStateDir: privateRoot,
-            candidateRoot,
-            retainedHostRoot: sourceRoot,
-            // Missing optional peers must not pull unrelated ancestor installations
-            // into a retained runtime. Explicit linked dependency owners still travel.
-            retainedDependencyRoot: packageOwner
-              ? resolveIdentityPathViaExistingAncestorSync(path.resolve(packageOwner))
-              : sourceRoot,
-            onProgress: assertCurrent,
+          log.info("Runtime retention attempt 1/1: preparing the running updater");
+          const retainedFiles = await runUpdateStateInspectionWorker({
+            input: {
+              mode: "runtime-retention",
+              stateDir: privateRoot,
+              config: {},
+              privateRoot,
+              sourceRoot,
+              roots,
+              // Missing optional peers stay within the package manager's owning project.
+              retainedDependencyRoot: packageOwner
+                ? resolveIdentityPathViaExistingAncestorSync(path.resolve(packageOwner))
+                : sourceRoot,
+            },
+            nodeRunner: process.execPath,
+            sourceEnv: env ?? process.env,
+            stagingRoot: privateRoot,
+            databases: [],
+            timeoutMs,
+            signal,
+            ioBudget: "deadline",
+            maxOutputBytes: 64 * 1024 * 1024,
+            onProgress: ({ phase }) => log.info(phase),
           });
-          const inventoryMs = Math.round(performance.now() - inventoryStartedAt);
-          const materializationStartedAt = performance.now();
-          const counts = await withUpdateCandidateIoBudget(
-            { directory: privateRoot, bytes: plan.bytes, timeoutMs, progress: "reported" },
-            async (signal, reportProgress) =>
-              await linkUpdateCandidatePluginTrees(plan, {
-                targetStateDir: privateRoot,
-                candidateRoot,
-                onMaterialized: reportProgress,
-                onProgress: () => {
-                  signal.throwIfAborted();
-                },
-                assertCurrent: () => {
-                  signal.throwIfAborted();
-                  assertCurrent();
-                },
-              }),
-          );
-          const materializationMs = Math.round(performance.now() - materializationStartedAt);
           assertCurrent();
+          const retained = parseUpdateStateInspectionWorker(
+            retainedFiles,
+            RetainedRuntimeFilesSchema,
+          );
+          if ("unusableReason" in retained) {
+            unusable = true;
+            log.warn(
+              `${retained.unusableReason}; continuing update without a verified retained rollback runtime`,
+            );
+            return undefined;
+          }
+          const { relocations: retainedRelocations, files, ...metrics } = retained;
           const relocations = prepareRuntimeRelocations(
             [
-              ...plan.relocations,
+              ...retainedRelocations,
               ...(root === sourceRoot
                 ? []
                 : [{ sourceRoot: root, destinationRoot: candidateRoot }]),
@@ -236,14 +245,11 @@ async function runWithRetainedUpdateRuntime<T>(
           const resolve = (url: URL) =>
             pathToFileURL(relocateRuntimePath(fileURLToPath(url), relocations));
           bind(resolve);
+          // Workers and the parent must use the same generation after activation
+          // replaces dist; preserving URLs also preserves already-loaded singletons.
+          retainUpdateRuntimeImports(relocations.rules, files);
           prepared = true;
-          return {
-            inventoryMs,
-            materializationMs,
-            entries: plan.entries.length,
-            estimatedBytes: plan.bytes,
-            ...counts,
-          };
+          return metrics;
         })();
         return preparation;
       }),

@@ -5,10 +5,12 @@
  * prompt so callers do not duplicate owner, TTS, alias, memory, or FS policy.
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { classifyAgentToolSource } from "../plugins/tool-metadata.js";
 import type { PreparedTtsPreferences } from "../tts/tts-preferences.js";
 import { buildTtsSystemPromptHint } from "../tts/tts-settings.js";
 import { resolveMainSessionDelegationMode } from "./delegation-guidance.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
+import type { McpServerInstruction } from "./system-prompt-tool-list.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "./tool-fs-policy.js";
 
@@ -19,6 +21,27 @@ type ConfiguredAgentSystemPromptParams = Parameters<typeof buildAgentSystemPromp
   tools?: { name: string; parameters: unknown }[];
   preparedModelRuntime?: Pick<PreparedModelRuntimeSnapshot, "configuredModelAliases" | "isCurrent">;
 };
+
+/**
+ * Server-level MCP guidance for the servers that still back at least one tool in this
+ * prompt. Deriving it from the effective tool set keeps servers whose tools were all
+ * filtered out, denied, or catalog-hidden from contributing guidance.
+ */
+function collectMcpServerInstructions(
+  tools: readonly { name: string; parameters: unknown }[],
+): McpServerInstruction[] {
+  const byServer = new Map<string, string>();
+  for (const tool of tools) {
+    const mcp = classifyAgentToolSource(tool).mcp;
+    const server = mcp?.serverName?.trim();
+    const instructions = mcp?.instructions?.trim();
+    if (!server || !instructions || byServer.has(server)) {
+      continue;
+    }
+    byServer.set(server, instructions);
+  }
+  return [...byServer].map(([server, instructions]) => ({ server, instructions }));
+}
 
 function buildModelAliasLines(owner: ConfiguredAgentSystemPromptParams["preparedModelRuntime"]) {
   if (!owner?.isCurrent()) {
@@ -43,6 +66,7 @@ export function buildConfiguredAgentSystemPrompt(params: ConfiguredAgentSystemPr
   if (tools) {
     renderParams.toolNames = tools.map((tool) => tool.name);
     renderParams.messageTool = tools.find((tool) => tool.name.trim().toLowerCase() === "message");
+    renderParams.mcpServerInstructions = collectMcpServerInstructions(tools);
   }
   if (!config) {
     return buildAgentSystemPrompt(renderParams);

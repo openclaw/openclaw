@@ -1,9 +1,9 @@
 import {
   beginReplyMessageInjectionTarget,
   createReplyOperation,
-  replyRunRegistry,
   resolveActiveReplyOperationForSessionId,
-} from "./reply-run-registry.js";
+  captureReplyMessageInjectionTarget,
+} from "../../sessions/session-controller.js";
 
 export function createTestReplyOperation(
   overrides: Partial<Parameters<typeof createReplyOperation>[0]> = {},
@@ -22,9 +22,7 @@ export async function queueCurrentReplyRunMessage(
   options?: Parameters<typeof beginReplyMessageInjectionTarget>[2],
 ) {
   const operation = resolveActiveReplyOperationForSessionId(sessionId);
-  const target = operation
-    ? replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)
-    : undefined;
+  const target = captureReplyMessageInjectionTarget(operation);
   return target
     ? await queueReplyMessageInjectionTarget(target, text, options)
     : { status: "rejected" as const, reason: "injection_unavailable" as const };

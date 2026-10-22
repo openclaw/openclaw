@@ -19,7 +19,7 @@ export function normalizeSlackApproverTarget(value: string | number): string | u
     return undefined;
   }
   try {
-    const target = parseSlackTarget(trimmed, { defaultKind: "user" });
+    const target = parseSlackTarget(trimmed.replace(/^slack:/i, ""), { defaultKind: "user" });
     const id = target?.kind === "user" ? normalizeSlackUserLikeId(target.id) : undefined;
     return target?.teamId && id
       ? formatSlackTarget({ kind: "user", id, teamId: target.teamId.toUpperCase() })

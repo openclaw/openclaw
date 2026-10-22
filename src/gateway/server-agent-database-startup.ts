@@ -1,5 +1,6 @@
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope-config.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
+import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
 import { getRuntimeConfigSourceSnapshot } from "../config/runtime-snapshot.js";
 import {
   isConfiguredAgentDatabaseTarget,
@@ -10,6 +11,7 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
+import { assertionSucceeds } from "../shared/assertion.js";
 import {
   AgentDatabaseStartupSupersededError,
   type getAgentDatabaseStartupAdmission,
@@ -22,7 +24,7 @@ function assertAgentDatabaseConfiguration(
   paths: readonly string[],
   env: NodeJS.ProcessEnv,
 ) {
-  const targets = resolveConfiguredAgentDatabaseTargets(cfg, { env });
+  const targets = resolveConfiguredAgentDatabaseTargets(cfg, { env, agentId });
   if (paths.some((pathname) => !isConfiguredAgentDatabaseTarget(targets, agentId, pathname))) {
     throw new Error(`Agent ${agentId} database configuration changed during startup inspection`);
   }
@@ -124,7 +126,11 @@ export function activateGatewayAgentDatabaseStartup(params: {
       runWithSpawnBroker(broker, async () => {
         phase("secrets");
         const [
-          { refreshPreparedModelRuntimeSnapshots, getPreparedModelRuntimeSnapshot },
+          {
+            refreshPreparedModelRuntimeSnapshots,
+            getPreparedModelRuntimeSnapshot,
+            getPendingPreparedModelRuntimeReplacement,
+          },
           { listConfiguredOwnerInputs },
           {
             getActiveSecretsRuntimeSnapshot,
@@ -139,7 +145,7 @@ export function activateGatewayAgentDatabaseStartup(params: {
         assertCurrent();
         const beforeConfig = params.getConfig();
         assertAgentDatabaseConfiguration(beforeConfig, agentId, paths, env);
-        // ACP-only stores need database/session preparation, not native auth/model publication.
+        // Non-roster stores (ACP-only or reserved) need no native auth/model publication.
         if (!listAgentIds(beforeConfig).includes(agentId)) {
           return;
         }
@@ -178,8 +184,6 @@ export function activateGatewayAgentDatabaseStartup(params: {
         ) {
           throw new Error(`Agent ${agentId} secrets preparation has not published its auth store`);
         }
-        let preparedInput: ReturnType<typeof listConfiguredOwnerInputs>[number] | undefined =
-          undefined;
         const assertPreparationCurrent = () => {
           signal.throwIfAborted();
           assertCurrent();
@@ -190,37 +194,41 @@ export function activateGatewayAgentDatabaseStartup(params: {
           ) {
             throw new AgentDatabaseStartupSupersededError(agentId, "startup");
           }
-          if (preparedInput && !getPreparedModelRuntimeSnapshot(preparedInput)) {
-            throw new Error(`Agent ${agentId} model preparation has not published`);
-          }
         };
-        const agentIds = new Set([agentId]);
         assertPreparationCurrent();
         phase("models");
         const pluginMetadataSnapshot = params.getPluginMetadataSnapshot();
         await withPluginRuntimeRegistryScope(params.getPluginRegistry(), () =>
           refreshPreparedModelRuntimeSnapshots(cfg, {
-            agentIds,
+            agentIds: new Set([agentId]),
             catalogMode: "static",
             allowGatewaySubagentBinding: true,
             ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
-            isPublicationCurrent: () => {
-              try {
-                assertPreparationCurrent();
-                return true;
-              } catch {
-                return false;
-              }
-            },
+            isPublicationCurrent: () => assertionSucceeds(assertPreparationCurrent),
           }),
-        );
-        preparedInput = listConfiguredOwnerInputs(cfg, undefined, true).find(
+        ).catch(async (error: unknown) => {
+          if (!(error instanceof PreparedModelRuntimePublicationSupersededError)) {
+            throw error;
+          }
+          // Let the current publication settle before the admission owner's bounded retry.
+          await getPendingPreparedModelRuntimeReplacement();
+          throw new AgentDatabaseStartupSupersededError(agentId, "startup");
+        });
+        assertPreparationCurrent();
+        const preparedInput = listConfiguredOwnerInputs(cfg, undefined, true).find(
           (input) => input.agentId === agentId,
         );
         if (!preparedInput) {
           throw new Error(`Agent ${agentId} model preparation is no longer configured`);
         }
-        assertPreparationCurrent();
+        if (!getPreparedModelRuntimeSnapshot(preparedInput)) {
+          const replacement = getPendingPreparedModelRuntimeReplacement();
+          if (replacement) {
+            await replacement;
+            throw new AgentDatabaseStartupSupersededError(agentId, "startup");
+          }
+          throw new Error(`Agent ${agentId} model preparation has not published`);
+        }
       }),
   });
 }

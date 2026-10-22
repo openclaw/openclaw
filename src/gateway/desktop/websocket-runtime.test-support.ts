@@ -6,6 +6,7 @@ import { Duplex } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { WebSocket } from "../../../packages/gateway-client/src/websocket.js";
 import { setLoggerOverride } from "../../logging/logger.js";
+import { gatewayTestTextTransport } from "../server/connection-transport.test-support.js";
 import { createNodeDesktopStreamBroker } from "./node-stream-broker.js";
 import { handleDesktopObserveUpgrade, mintDesktopObserverToken } from "./observe-bridge.js";
 
@@ -29,7 +30,7 @@ async function observe(mode: string) {
   const received: Buffer[] = [];
   let releaseWrite: (() => void) | undefined;
   let released = 0;
-  let gatewaySocket: WebSocket | undefined;
+  const pausedSockets: WebSocket[] = [];
   let closeObserver: ((code: number, reason: string) => void) | undefined;
   const stream = new Duplex({
     writableHighWaterMark: 1,
@@ -49,10 +50,6 @@ async function observe(mode: string) {
           return { release: () => released++ };
         },
       },
-      getBufferedAmount: (ws) => {
-        gatewaySocket = ws;
-        return ws.bufferedAmount;
-      },
     });
   });
   const url = await listen(server);
@@ -63,6 +60,13 @@ async function observe(mode: string) {
     attachment: { kind: "stream", streamId: "runtime-proof" },
   });
   const client = new WebSocket(`${url}/desktop/observe?token=${token}`);
+  const { pause } = Object.getOwnPropertyDescriptors(WebSocket.prototype);
+  const pauseSocket = pause.value;
+  assert.ok(pauseSocket);
+  WebSocket.prototype.pause = function (this: WebSocket) {
+    pausedSockets.push(this);
+    pauseSocket.call(this);
+  };
   try {
     await once(client, "open");
     const banner = once(client, "message");
@@ -72,7 +76,7 @@ async function observe(mode: string) {
     if (mode === "observer-backpressure") {
       client.send(Buffer.from("first"));
       await until(() => Boolean(releaseWrite));
-      assert.equal(gatewaySocket?.isPaused, true);
+      assert.equal(pausedSockets.at(-1)?.isPaused, true);
       client.send(Buffer.from("second"));
       await delay(25);
       assert.equal(stream.writableLength, 5);
@@ -82,7 +86,7 @@ async function observe(mode: string) {
       firstWrite?.();
       await until(() => Boolean(releaseWrite));
       assert.equal(Buffer.concat(received).toString(), "firstsecond");
-      assert.equal(gatewaySocket?.isPaused, true);
+      assert.equal(pausedSockets.at(-1)?.isPaused, true);
       const closed = once(client, "close");
       closeObserver?.(1012, "desktop stopped");
       assert.equal((await closed)[0], 1012);
@@ -98,6 +102,7 @@ async function observe(mode: string) {
     }
     await until(() => stream.destroyed && released === 1);
   } finally {
+    Object.defineProperty(WebSocket.prototype, "pause", pause);
     client.terminate();
     stream.destroy();
     await new Promise<void>((resolve) => {
@@ -117,7 +122,7 @@ async function nodeStream(kind: "desktop" | "portal") {
         ...binding,
         client: {
           connId: binding.connId,
-          socket: client,
+          socket: gatewayTestTextTransport(client),
           usesSharedGatewayAuth: false,
           connect: {
             minProtocol: 1,

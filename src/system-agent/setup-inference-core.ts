@@ -5,28 +5,17 @@ import type {
   SetupInferenceFailureStatus,
 } from "../../packages/gateway-protocol/src/schema/setup-inference.js";
 import type { AgentRunResultView } from "../agents/agent-run-result.js";
-import type { loadAuthProfileStoreForRuntimeAsync } from "../agents/auth-profiles/store-runtime.js";
-import type { readCodexCliActiveApiKey } from "../agents/cli-credentials.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import { describeFailoverError } from "../agents/failover-error.js";
 import { FAILOVER_PROBE_STATUS as SETUP_STATUS_BY_FAILOVER_REASON } from "../agents/failover/probe-status.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../agents/workspace-default.js";
-import type {
-  detectInferenceBackends,
-  InferenceBackendKind,
-} from "../commands/onboard-inference.js";
+import type { InferenceBackendKind } from "../commands/onboard-inference.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { enablePluginInConfig } from "../plugins/enable.js";
-import type {
-  ProviderAuthChoiceMetadata,
-  resolveManifestProviderAuthChoice,
-  resolveManifestProviderAuthChoices,
-} from "../plugins/provider-auth-choices.js";
-import type { resolvePluginProvidersCore } from "../plugins/providers.runtime.js";
+import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
 import type { SetupRecommendedInstall } from "../plugins/recommended-tool-installs.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -39,12 +28,7 @@ import type {
   SetupInferencePrepareOption,
 } from "./setup-inference-auth-options.js";
 import type { SetupNativeSessionCatalogOption } from "./setup-native-session-catalogs.js";
-import type {
-  captureSystemAgentOwnerPluginArtifacts,
-  createSystemAgentVerifiedInferenceBinding,
-  SystemAgentVerifiedInferenceBinding,
-  SystemAgentVerifiedInferenceDeps,
-} from "./verified-inference.js";
+import type { SystemAgentVerifiedInferenceBinding } from "./verified-inference.js";
 
 export const setupInferenceLog = createSubsystemLogger("system-agent/setup-inference");
 
@@ -133,6 +117,7 @@ export type SetupInferenceStatus = "ok" | SetupInferenceFailureStatus;
 export type ActivateSetupInferenceResult =
   | (Extract<VerifySetupInferenceResult, { ok: true }> & {
       lines: string[];
+      modelName?: string;
       gatewayRestartRequired?: true;
     })
   | (Extract<VerifySetupInferenceResult, { ok: false }> & {
@@ -174,7 +159,9 @@ export type VerifySetupInferenceResult =
     };
 
 export type CompleteSetupInferenceResult =
-  | (Omit<Extract<VerifySetupInferenceResult, { ok: true }>, "modelTarget"> & { text: string })
+  | (Omit<Extract<VerifySetupInferenceResult, { ok: true }>, "modelTarget"> & {
+      text: string;
+    })
   | Extract<VerifySetupInferenceResult, { ok: false }>;
 
 export type BoundVerifySetupInferenceResult =
@@ -222,11 +209,12 @@ export type ActivateSetupInferenceParams = {
   beforePersistentEffect?: () => void | Promise<void>;
   /** Preparation effects are complete; the selected route is ready for its live test. */
   onPreparationComplete?: () => void;
+  /** Present installation and activation separately from the live connection test. */
+  onActivationStarted?: () => void;
   /** Observe the authored config held by the inference writer before it commits. */
   onCommitStarted?: (sourceConfig: OpenClawConfig) => void;
   /** Finish application or recovery only after releasing the Gateway setup queue. */
   onActivationCompletion?: (complete: () => Promise<boolean>) => void;
-  deps?: ActivateSetupInferenceDeps;
 };
 
 export class SetupInferenceCancelledError extends Error {
@@ -254,42 +242,6 @@ export async function waitForProviderAuth<T>(
     () => new SetupInferenceCancelledError(),
   );
 }
-
-export type ActivateSetupInferenceDeps = {
-  readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
-  runEmbeddedAgent?: typeof import("../agents/embedded-agent.js").runEmbeddedAgent;
-  runCliAgent?: typeof import("../agents/cli-runner.js").runCliAgent;
-  ensureCodexRuntimePlugin?: typeof import("../commands/codex-runtime-plugin-install.js").ensureCodexRuntimePluginForModelSelection;
-  transformConfigWithPendingPluginInstalls?: typeof import("../plugins/install-record-commit.js").transformConfigWithPendingPluginInstalls;
-  resolvePluginProviders?: typeof resolvePluginProvidersCore;
-  resolveManifestProviderAuthChoice?: typeof resolveManifestProviderAuthChoice;
-  resolveManifestProviderAuthChoices?: typeof resolveManifestProviderAuthChoices;
-  enablePluginInConfig?: typeof enablePluginInConfig;
-  loadAuthProfileStoreForRuntimeAsync?: typeof loadAuthProfileStoreForRuntimeAsync;
-  resolveCliAuthBindingFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliAuthBindingFingerprint;
-  resolveCliRuntimeArtifactFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeArtifactFingerprint;
-  resolveCliRuntimeOwnerFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeOwnerFingerprint;
-  resolveApiKeyForProvider?: typeof import("../agents/model-auth.js").resolveApiKeyForProviderCore;
-  resolvePluginMetadataSnapshot?: typeof import("../plugins/plugin-metadata-snapshot.js").resolvePluginMetadataSnapshot;
-  readCodexCliActiveApiKey?: typeof readCodexCliActiveApiKey;
-  loadPluginRegistrySnapshot?: SystemAgentVerifiedInferenceDeps["loadPluginRegistrySnapshot"];
-  fingerprintPluginRuntimeArtifact?: SystemAgentVerifiedInferenceDeps["fingerprintPluginRuntimeArtifact"];
-  captureSystemAgentOwnerPluginArtifacts?: typeof captureSystemAgentOwnerPluginArtifacts;
-  createSystemAgentVerifiedInferenceBinding?: typeof createSystemAgentVerifiedInferenceBinding;
-  markRetainedManagedNpmInstall?: typeof import("../plugins/managed-npm-retention.js").markRetainedManagedNpmInstall;
-  createTempDir?: () => Promise<string>;
-  removeTempDir?: (dir: string) => Promise<void>;
-  timeoutMs?: number;
-};
-
-export type DetectSetupInferenceDeps = {
-  /** Supplies prepared setup choices before native or provider discovery starts. */
-  onPartial?: (detection: SetupInferenceDetection) => void;
-  detectInferenceBackends?: typeof detectInferenceBackends;
-  resolveManifestProviderAuthChoices?: typeof resolveManifestProviderAuthChoices;
-  resolvePluginProviders?: typeof resolvePluginProvidersCore;
-  enablePluginInConfig?: typeof enablePluginInConfig;
-};
 
 export function toProviderAutoSetupKind(choiceId: string): ProviderAutoSetupInferenceKind {
   return `${PROVIDER_AUTO_SETUP_KIND_PREFIX}${encodeURIComponent(choiceId)}`;
@@ -550,7 +502,6 @@ export function validateSetupModelTarget(
 }
 export type StageContext = {
   params: ActivateSetupInferenceParams;
-  deps: ActivateSetupInferenceDeps;
   snapshot: ConfigFileSnapshot;
   cfg: OpenClawConfig;
   routeAgentId: string;

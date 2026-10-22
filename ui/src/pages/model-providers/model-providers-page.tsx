@@ -1,9 +1,8 @@
-import { createEffect, createMemo, createSignal, onCleanup, onSettled, untrack } from "solid-js";
+import { createMemo } from "solid-js";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import { ModelProviderAccountRecovery, ModelProviderLoginView } from "./login-view.tsx";
-import { ModelProvidersController } from "./model-providers-controller.ts";
+import { createModelProviders, type ModelProvidersOwner } from "./model-providers-controller.ts";
 import type { ModelProvidersRouteData } from "./route.ts";
 import {
   ModelProviders,
@@ -11,32 +10,37 @@ import {
   renderModelProvidersPageShell as ModelProvidersPageShell,
 } from "./view.tsx";
 
-export function ModelProvidersContent(props: {
-  controller: ModelProvidersController;
-  revision: () => unknown;
-}) {
-  // A mounted content subtree belongs to one controller lifetime.
-  const controller = untrack(() => props.controller);
-  const revision = () => props.revision();
-  const current = createMemo(() => {
-    revision();
-    return controller.viewProps();
+export function ModelProvidersContent(props: { controller: ModelProvidersOwner }) {
+  const current = createMemo(() => props.controller.viewProps());
+  let initialLoadComplete = false;
+  const showProviderDetails = createMemo(() => {
+    const snapshot = current();
+    if (
+      snapshot.props.connected &&
+      !snapshot.props.loading &&
+      props.controller.installedAgents.initialized
+    ) {
+      initialLoadComplete = true;
+    }
+    return initialLoadComplete || !snapshot.props.connected;
   });
-  const Recovery = () => (
-    <ModelProviderAccountRecovery controller={controller.login} revision={revision} />
-  );
-  const Login = () => <ModelProviderLoginView controller={controller.login} revision={revision} />;
+  const Recovery = () => <ModelProviderAccountRecovery controller={props.controller.login} />;
+  const Login = () => <ModelProviderLoginView controller={props.controller.login} />;
   const cards = createMemo(() => current().cards);
   const discoveryData = createMemo(() => current().discovery);
   const InstalledAgents = () =>
-    controller.installedAgents.render(cards, () => controller.retryCatalog(), revision);
-  const Discovery = () => controller.discovery.render(discoveryData, revision);
+    props.controller.installedAgents.render(cards, props.controller.retryCatalog);
+  const Discovery = () => props.controller.discovery.render(discoveryData);
   const installedAgents = <InstalledAgents />;
   return (
     <ModelProvidersPageShell
       body={
         <ModelProviders
           {...current().props}
+          apiKeySaving={props.controller.mutations.apiKeySaving()}
+          defaultsSaving={props.controller.mutations.defaultsSaving()}
+          logoutSaving={props.controller.logoutSaving()}
+          providerDetailsReady={showProviderDetails()}
           accountRecovery={<Recovery />}
           installedAgents={current().installedAgentsAvailable ? installedAgents : undefined}
           providerScope={<ModelProviderScope {...current().scope} />}
@@ -58,54 +62,16 @@ export type ModelProvidersPageProps = {
   loaderPending?: boolean;
 };
 
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-model-providers-page": HTMLAttributes<HTMLElement> & {
-        [Key in keyof ModelProvidersPageProps as `prop:${Key}`]?: ModelProvidersPageProps[Key];
-      };
-    }
-  }
-}
-
-declare global {
-  interface HTMLElementTagNameMap {
-    "openclaw-model-providers-page": SolidBridgeElement<ModelProvidersPageProps>;
-  }
-}
-
-export function ModelProvidersPageBody(props: ModelProvidersPageProps & { host: HTMLElement }) {
+export function ModelProvidersPageBody(props: ModelProvidersPageProps) {
   const context: ApplicationContext = useApplication();
-  const [revision, setRevision] = createSignal(0);
-  const controller = new ModelProvidersController(
-    untrack(() => props.host),
-    context,
-    () => setRevision((value) => value + 1),
-  );
-  createEffect(
-    () => ({ routeData: props.routeData, loaderPending: props.loaderPending ?? false }),
-    (value) => {
-      controller.routeData = value.routeData;
-      controller.loaderPending = value.loaderPending;
-      controller.beforeUpdate();
-    },
-  );
-  createEffect(revision, () => {
-    controller.beforeUpdate();
-    controller.afterUpdate();
-  });
-  onSettled(() => controller.connect());
-  onCleanup(() => controller.disconnect());
-  return <ModelProvidersContent controller={controller} revision={revision} />;
+  const controller = createModelProviders(context, props);
+  return <ModelProvidersContent controller={controller} />;
 }
 
-export const ModelProvidersPage = defineSolidBridge<ModelProvidersPageProps>(
-  "openclaw-model-providers-page",
-  (props, host) => <ModelProvidersPageBody {...props} host={host} />,
-  {
-    properties: {
-      routeData: { default: undefined, attribute: false },
-      loaderPending: { default: false, attribute: false },
-    },
-  },
-);
+export function ModelProvidersPage(props: ModelProvidersPageProps) {
+  return (
+    <openclaw-model-providers-page>
+      <ModelProvidersPageBody {...props} />
+    </openclaw-model-providers-page>
+  );
+}

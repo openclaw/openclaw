@@ -1,8 +1,7 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { For, Match, Show, Switch, createMemo } from "solid-js";
+import { For, Match, Show, Switch, createMemo, onCleanup, refresh } from "solid-js";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { LitContent, solidContent } from "../../../lit/solid-content.tsx";
-import { renderCompactAttachmentCard } from "./chat-attachment-card.ts";
+import { CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
 import "./chat-audio-player.tsx";
 import "./chat-svg-attachment.tsx";
 import "./chat-video-player.tsx";
@@ -18,20 +17,25 @@ import {
 } from "./chat-message-attachment-admission-model.ts";
 import { ChatAttachmentAdmission } from "./chat-message-attachment-admission-solid.tsx";
 import { isManagedOutgoingMediaSource } from "./chat-message-attachment-availability.ts";
-import { resolveAttachmentSource } from "./chat-message-attachment-source.ts";
+import { resolveAttachmentSource, readAttachmentSource } from "./chat-message-attachment-source.ts";
 import { AssistantAttachmentStatusCard } from "./chat-message-attachment-status-solid.tsx";
 import { attachmentFailureReason } from "./chat-message-attachment-status.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
 import { isLocalAssistantAttachmentSource } from "./chat-message-local-media.ts";
 import {
   resolveAttachmentImageKind,
+  observeChatMediaResourceSubscriber,
+  releaseChatMediaResourceOwner,
   type AttachmentItem,
   type AssistantAttachmentItem,
   type ImageRenderOptions,
+  type MessageMediaAction,
 } from "./chat-message-media.ts";
 import { MessageVideoPreview } from "./chat-message-video-preview-solid.tsx";
 import { isSentPastedTextAttachment } from "./chat-pasted-text.ts";
-import { isSentCommentAttachment, renderSentCommentAttachments } from "./chat-sent-comments.ts";
+import { ChatPastedText } from "./chat-pasted-text.tsx";
+import { isSentCommentAttachment } from "./chat-sent-comments.ts";
+import { SentCommentAttachments } from "./chat-sent-comments.tsx";
 import type { AttachmentSidebarState, SidebarContent } from "./chat-sidebar-content-types.ts";
 import { videoLightboxItem } from "./chat-video-lightbox-source.ts";
 
@@ -65,7 +69,11 @@ export type MessageAttachmentProps = AttachmentProps & {
 };
 
 export function AssistantAttachments(
-  props: AttachmentProps & { attachments: AssistantAttachmentItem[]; inlinePlayback?: boolean },
+  props: AttachmentProps & {
+    attachments: AssistantAttachmentItem[];
+    inlinePlayback?: boolean;
+    inlineComments?: boolean;
+  },
 ): SolidJSX.Element {
   const comments = () =>
     props.inlinePlayback !== false ? [] : props.attachments.filter(isSentCommentAttachment);
@@ -73,8 +81,13 @@ export function AssistantAttachments(
     props.attachments.filter(
       (item) => props.inlinePlayback !== false || !isSentCommentAttachment(item),
     );
+  const refreshComments = () => void refresh(commentSources);
   const resolveComment = (item: AttachmentItem) => {
-    const resolved = resolveAttachmentSource(item.attachment, props.options);
+    observeChatMediaResourceSubscriber(props.options.mediaOwner, refreshComments);
+    const resolved = resolveAttachmentSource(item.attachment, {
+      ...props.options,
+      onMediaChange: refreshComments,
+    });
     return {
       identity: item.attachment.url,
       ...(resolved.status === "available"
@@ -88,15 +101,22 @@ export function AssistantAttachments(
             sizeBytes: resolved.source.sizeBytes,
           }
         : { pending: resolved.status === "checking" }),
-      fallback: solidContent(MessageAttachment, {
-        item,
-        options: props.options,
-        onOpenSidebar: props.onOpenSidebar,
-        onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
-        presentation: "card",
-      }),
+      fallback: () => (
+        <MessageAttachment
+          item={item}
+          options={props.options}
+          onOpenSidebar={props.onOpenSidebar}
+          onAssistantAttachmentLoaded={props.onAssistantAttachmentLoaded}
+          presentation="card"
+        />
+      ),
     };
   };
+  const commentSources = createMemo(
+    () => new Map(comments().map((item) => [item, resolveComment(item)])),
+    { lazy: true },
+  );
+  onCleanup(() => releaseChatMediaResourceOwner(refreshComments));
   return (
     <Show when={props.attachments.length}>
       <div
@@ -109,12 +129,15 @@ export function AssistantAttachments(
           },
         ]}
       >
-        <LitContent
-          value={renderSentCommentAttachments(comments(), props.options, resolveComment)}
+        <SentCommentAttachments
+          comments={comments()}
+          inline={props.inlineComments && files().length === 0}
+          options={props.options}
+          resolve={(item) => commentSources().get(item)!}
         />
         <For each={files()} keyed={false}>
           {(item) => {
-            const presentation = createMemo<"inline" | "card">(() => {
+            const presentation = (): "inline" | "card" => {
               const current = item();
               return props.inlinePlayback !== false ||
                 (current.type === "attachment" &&
@@ -122,7 +145,7 @@ export function AssistantAttachments(
                   current.attachment.isVoiceNote)
                 ? "inline"
                 : "card";
-            });
+            };
             return (
               <MessageAttachment
                 item={item()}
@@ -156,35 +179,30 @@ export function MessageAttachment(props: MessageAttachmentProps): SolidJSX.Eleme
         />
       }
     >
-      {(item) => (
-        <Show
-          when={shouldDeferAttachmentCard(item(), props.presentation ?? "inline")}
-          fallback={
-            <AttachmentContent
-              item={item()}
-              options={props.options}
-              onOpenSidebar={props.onOpenSidebar}
-              onAssistantAttachmentLoaded={props.onAssistantAttachmentLoaded}
-              presentation={props.presentation}
-            />
-          }
-        >
-          <ChatAttachmentAdmission
-            attachments={[item().attachment]}
+      {(item) => {
+        const content = (admission?: AttachmentAdmission) => (
+          <AttachmentContent
+            item={item()}
             options={props.options}
-            render={(admission) => (
-              <AttachmentContent
-                item={item()}
-                options={props.options}
-                onOpenSidebar={props.onOpenSidebar}
-                onAssistantAttachmentLoaded={props.onAssistantAttachmentLoaded}
-                presentation={props.presentation}
-                admission={admission}
-              />
-            )}
+            onOpenSidebar={props.onOpenSidebar}
+            onAssistantAttachmentLoaded={props.onAssistantAttachmentLoaded}
+            presentation={props.presentation}
+            admission={admission}
           />
-        </Show>
-      )}
+        );
+        return (
+          <Show
+            when={shouldDeferAttachmentCard(item(), props.presentation ?? "inline")}
+            fallback={content()}
+          >
+            <ChatAttachmentAdmission
+              attachments={[item().attachment]}
+              options={props.options}
+              render={content}
+            />
+          </Show>
+        );
+      }}
     </Show>
   );
 }
@@ -216,11 +234,12 @@ function prepareAttachment(
     attachment.kind === "video" && onOpenImage && safeAttachmentUrl
       ? (src: string) => {
           const requestVersion = onRequestOpenImage?.();
-          const videoItem = (video: AttachmentItem["attachment"]) =>
+          const videoItem = (video: AttachmentItem["attachment"], messageId = options.messageId) =>
             videoLightboxItem(
               video,
-              (onRequestUpdate) => resolveAttachmentSource(video, { ...options, onRequestUpdate }),
-              options.onRequestUpdate,
+              (onMediaChange) =>
+                resolveAttachmentSource(video, { ...options, messageId, onMediaChange }),
+              options.mediaOwner,
             );
           const membership = options.galleryVideos?.(item);
           const overlayItem = {
@@ -232,9 +251,9 @@ function prepareAttachment(
                   gallery: {
                     index: membership.index,
                     items: membership.items.map(
-                      ({ attachment: video }) =>
+                      ({ attachment: video, messageId }) =>
                         async () =>
-                          videoItem(video),
+                          videoItem(video, messageId),
                     ),
                   },
                 }
@@ -258,6 +277,13 @@ function prepareAttachment(
             mimeType: attachment.mimeType,
             ...(pastedText ? { plainText: true } : {}),
             sourceIdentity: attachment.url,
+            readForAttachment: (runtime, signal, maxBytes) =>
+              readAttachmentSource(
+                attachment,
+                { ...options, ...runtime, messageId: options.messageId },
+                signal,
+                maxBytes,
+              ),
             playback: media?.playback,
             authToken: media?.authToken,
             sizeBytes: media?.sizeBytes,
@@ -270,7 +296,8 @@ function prepareAttachment(
                   resolveSource: (sidebarUpdate, runtime): AttachmentSidebarState => {
                     const next = resolveAttachmentSource(attachment, {
                       ...runtime,
-                      onRequestUpdate: sidebarUpdate,
+                      messageId: options.messageId,
+                      onMediaChange: sidebarUpdate,
                     });
                     if (next.status === "available") {
                       return { status: "ready", ...next.source };
@@ -310,28 +337,35 @@ function AttachmentContent(
     admission?: AttachmentAdmission;
   },
 ): SolidJSX.Element {
-  const model = createMemo(() => prepareAttachment(props));
+  const refreshAttachment = () => void refresh(model);
+  const model = createMemo(() => {
+    observeChatMediaResourceSubscriber(props.options.mediaOwner, refreshAttachment);
+    return prepareAttachment({
+      ...props,
+      options: { ...props.options, onMediaChange: refreshAttachment },
+    });
+  });
+  onCleanup(() => releaseChatMediaResourceOwner(refreshAttachment));
   const attachment = () => model().attachment;
   const unavailable = () =>
     !model().pastedText &&
     (model().resolved?.status === "unavailable" ||
       (model().resolved?.status === "checking" && !props.admission));
-  const card = () =>
-    renderCompactAttachmentCard(
-      {
-        kind: attachment().kind,
-        label: attachment().label,
-        mimeType: attachment().mimeType,
-        sizeBytes: model().media?.sizeBytes ?? attachment().sizeBytes,
-        downloadHref: model().safeAttachmentUrl,
-        downloadPending: Boolean(props.admission && !model().media),
-        downloadPendingFocusable: Boolean(props.admission),
-        onExpand: model().openAttachmentSidebar,
-        voiceNote: attachment().isVoiceNote === true,
-      },
-      props.admission?.observeElement,
-      props.admission?.onAdmit,
-    );
+  const card = () => (
+    <CompactAttachmentCard
+      kind={attachment().kind}
+      label={attachment().label}
+      mimeType={attachment().mimeType}
+      sizeBytes={model().media?.sizeBytes ?? attachment().sizeBytes}
+      downloadHref={model().safeAttachmentUrl}
+      downloadPending={Boolean(props.admission && !model().media)}
+      downloadPendingFocusable={Boolean(props.admission)}
+      onExpand={model().openAttachmentSidebar}
+      voiceNote={attachment().isVoiceNote === true}
+      elementRef={props.admission?.observeElement}
+      onFocus={props.admission?.onAdmit}
+    />
+  );
   const scope = () =>
     JSON.stringify([
       attachment().url,
@@ -349,7 +383,7 @@ function AttachmentContent(
   };
   const ready = () => !props.admission || Boolean(model().media);
   return (
-    <Switch fallback={<LitContent value={card()} />}>
+    <Switch fallback={card()}>
       <Match when={unavailable()}>
         <AssistantAttachmentStatusCard
           label={attachment().label}
@@ -364,12 +398,12 @@ function AttachmentContent(
         />
       </Match>
       <Match when={model().pastedText}>
-        <openclaw-chat-pasted-text
-          prop:src={pastedTextSource()}
-          prop:sizeBytes={model().media?.sizeBytes ?? attachment().sizeBytes}
-          prop:scope={scope()}
-          prop:onOpen={model().openAttachmentSidebar}
-          prop:admission={props.admission}
+        <ChatPastedText
+          src={pastedTextSource()}
+          sizeBytes={model().media?.sizeBytes ?? attachment().sizeBytes}
+          scope={scope()}
+          onOpen={model().openAttachmentSidebar}
+          admission={props.admission}
         />
       </Match>
       <Match when={ready() && model().imageAttachment}>
@@ -473,9 +507,81 @@ function AttachmentContent(
           src={model().safeAttachmentUrl!}
           label={attachment().label}
           onOpen={() => model().openAttachmentSidebar?.()}
-          fallback={<LitContent value={card()} />}
+          fallback={card()}
         />
       </Match>
     </Switch>
   );
+}
+
+/** Catalog rows retain the native admission, source, retry and sidebar policies. */
+export function MessageAttachmentAction(
+  props: AttachmentProps & {
+    item: AssistantAttachmentItem;
+    render: (action: () => MessageMediaAction) => SolidJSX.Element;
+  },
+): SolidJSX.Element {
+  return (
+    <Show
+      when={props.item.type === "attachment" && props.item}
+      fallback={props.render(() => ({
+        pending: false,
+        reason:
+          props.item.type === "attachment_error"
+            ? attachmentFailureReason(props.item.attachment.code)
+            : undefined,
+      }))}
+    >
+      {(item) => (
+        <ChatAttachmentAdmission
+          attachments={[item().attachment]}
+          options={props.options}
+          render={(admission) => (
+            <AttachmentActionContent
+              item={item()}
+              options={props.options}
+              onOpenSidebar={props.onOpenSidebar}
+              admission={admission}
+              render={props.render}
+            />
+          )}
+        />
+      )}
+    </Show>
+  );
+}
+
+function AttachmentActionContent(
+  props: AttachmentProps & {
+    item: AttachmentItem;
+    admission: AttachmentAdmission;
+    render: (action: () => MessageMediaAction) => SolidJSX.Element;
+  },
+): SolidJSX.Element {
+  const refreshAttachment = () => void refresh(model);
+  const model = createMemo(() => {
+    observeChatMediaResourceSubscriber(props.options.mediaOwner, refreshAttachment);
+    return prepareAttachment({
+      ...props,
+      presentation: "card",
+      options: { ...props.options, onMediaChange: refreshAttachment },
+    });
+  });
+  onCleanup(() => releaseChatMediaResourceOwner(refreshAttachment));
+  const action = createMemo<MessageMediaAction>(() => ({
+    pending: !model().resolved || model().resolved?.status === "checking",
+    reason:
+      model().resolved?.status === "unavailable"
+        ? (model().resolved?.reason ?? t("chat.attachments.unavailable"))
+        : undefined,
+    onOpen: model().resolved?.status === "unavailable" ? undefined : model().openAttachmentSidebar,
+    onRetry: model().resolved?.status === "unavailable" ? model().resolved?.onRetry : undefined,
+    onAllow:
+      model().imageAttachment && model().resolved?.status === "unavailable"
+        ? model().resolved?.onAllow
+        : undefined,
+    observeElement: props.admission.observeElement,
+    onFocus: model().resolved?.status === "unavailable" ? undefined : props.admission.onAdmit,
+  }));
+  return props.render(action);
 }

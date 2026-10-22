@@ -1,6 +1,6 @@
 /** Process-local identity for the non-secret config that an owner may use with a credential. */
-import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseSecretRef } from "../config/types.secrets.js";
 import { secretRefKey } from "./ref-contract.js";
@@ -36,7 +36,7 @@ export function canonicalizeSecretRefsForOwnerContract(
  * process-local metadata only; raw config and credential-bearing values are never logged.
  */
 export function digestSecretOwnerContract(value: unknown): string {
-  return createHash("sha256").update(stableStringify(value)).digest("hex");
+  return sha256Hex(stableStringify(value));
 }
 
 /** Combines assignment fragments into one deterministic owner contract. */

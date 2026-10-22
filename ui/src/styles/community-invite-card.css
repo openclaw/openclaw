@@ -1,23 +1,12 @@
-.sidebar-shell__invite {
-  --community-invite-surface-current: var(--sidebar-bg, var(--bg));
-}
-
-:root[data-theme-mode="light"] .sidebar-shell__invite {
-  --community-invite-surface-current: color-mix(
-    in srgb,
-    var(--sidebar-bg, var(--bg)) 70%,
-    var(--bg-hover) 30%
-  );
-}
-
 .community-invite-card {
   --community-invite-copy-inset: 12px;
+  --community-invite-surface-current: var(--sidebar-bg, var(--bg));
 
   display: block;
   flex: none;
-  margin: 0;
+  margin-inline: calc(-1 * var(--sidebar-pad-x));
+  margin-block-end: calc(-1 * var(--sidebar-pad-bottom));
   border-block-start: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
-  animation: community-invite-enter var(--duration-normal, 180ms) var(--ease-out, ease-out) both;
 
   .invite {
     display: flex;
@@ -78,40 +67,56 @@
   }
 
   .invite__close {
+    --community-invite-close-visual-inset: 3px;
+
     position: absolute;
     z-index: 2;
-    inset-block-start: var(--space-2, 8px);
-    inset-inline-end: var(--space-2, 8px);
-    display: grid;
+    inset-block-start: 5px;
+    inset-inline-end: 5px;
     width: 28px;
     height: 28px;
-    place-items: center;
     padding: 0;
     border: 0;
-    border-radius: 50%;
-    /* These fixed translucent colors belong to photo chrome, not the theme surface. */
-    background: rgb(0 0 0 / 42%);
-    color: rgb(255 255 255 / 76%);
+    background: transparent;
+    color: var(--media-foreground);
     cursor: var(--cursor-action, default);
-    transition:
-      background 120ms ease,
-      color 120ms ease;
+    transition: color 120ms ease;
   }
 
-  .invite__close:hover {
-    background: rgb(255 255 255 / 14%);
-    color: rgb(255 255 255);
+  .invite__close::before {
+    content: "";
+    position: absolute;
+    inset-block-start: var(--community-invite-close-visual-inset);
+    inset-inline-end: var(--community-invite-close-visual-inset);
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    /* Keep photo chrome compact while the transparent button remains easy to tap. */
+    background: color-mix(in srgb, var(--media-control-bg) 65%, transparent);
+    pointer-events: none;
+    transition: background 120ms ease;
+  }
+
+  .invite__close:hover::before {
+    background: color-mix(in srgb, var(--media-control-bg-hover) 75%, transparent);
   }
 
   .invite__close:focus-visible {
-    outline: 2px solid rgb(255 255 255 / 70%);
-    outline-offset: 1px;
+    outline: none;
+  }
+
+  .invite__close:focus-visible::before {
+    outline: 2px solid var(--media-foreground);
+    outline-offset: 2px;
   }
 
   .invite__close svg {
+    position: absolute;
+    inset-block-start: calc(var(--community-invite-close-visual-inset) + 4px);
+    inset-inline-end: calc(var(--community-invite-close-visual-inset) + 4px);
     display: block;
-    width: 15px;
-    height: 15px;
+    width: 14px;
+    height: 14px;
     fill: none;
     stroke: currentcolor;
     stroke-width: 1.8;
@@ -154,7 +159,7 @@
     padding: 3px 1px;
     border: 1px solid var(--border);
     border-radius: var(--radius-md, 10px);
-    background: var(--bg-elevated);
+    background: var(--bg);
     color: var(--text);
     cursor: pointer;
     font-size: var(--control-ui-text-sm, 12px);
@@ -212,18 +217,34 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    &,
     .invite__close,
+    .invite__close::before,
     .invite__cta {
-      animation: none;
       transition: none;
     }
   }
 }
 
-@keyframes community-invite-enter {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
+/* The existing footer bleeds into the shell's bottom padding. */
+.sidebar-shell__footer + .community-invite-card {
+  margin-block-start: var(--sidebar-pad-bottom);
+}
+
+.shell--mobile-nav .community-invite-card {
+  .invite__header {
+    aspect-ratio: 3 / 1;
+  }
+
+  .invite__body {
+    padding-block-end: max(12px, env(safe-area-inset-bottom));
+  }
+
+  .invite__close {
+    --community-invite-close-visual-inset: 8px;
+
+    inset-block-start: 0;
+    inset-inline-end: 0;
+    width: 44px;
+    height: 44px;
   }
 }

@@ -1,5 +1,4 @@
 import type { Message } from "grammy/types";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveTelegramMessageThreadSpec } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { renderTelegramHtmlText, telegramHtmlToPlainTextFallback } from "./format.js";
@@ -70,7 +69,6 @@ export async function editMessageReplyMarkupTelegram(
           throw err;
         }
       }
-      logVerbose(`[telegram] Edited reply markup for message ${messageId} in chat ${chatId}`);
       return { ok: true, messageId: String(messageId), chatId };
     },
   );
@@ -240,10 +238,8 @@ export async function editMessageTelegram(
         });
       }
 
-      logVerbose(`[telegram] Edited message ${messageId} in chat ${chatId}`);
       return { ok: true, messageId: String(messageId), chatId };
     },
-    (err) =>
-      isRecoverableTelegramNetworkError(err, { context: "edit" }) || isTelegramServerError(err),
+    (err) => isRecoverableTelegramNetworkError(err) || isTelegramServerError(err),
   );
 }

@@ -5,6 +5,32 @@ import { createNodeDuplexEndpoint } from "./node-duplex-framing.js";
 const FRAGMENT_BYTES = 8 * 1024;
 const MAX_MESSAGE_BYTES = 100 * 1024 * 1024;
 
+function createEndpoint(options: Partial<Parameters<typeof createNodeDuplexEndpoint>[0]> = {}) {
+  return createNodeDuplexEndpoint({ sendFrame: () => {}, ...options });
+}
+
+function senderFor(
+  receiver: ReturnType<typeof createEndpoint>,
+  options: Partial<Parameters<typeof createNodeDuplexEndpoint>[0]> = {},
+) {
+  return createEndpoint({
+    sendFrame: (frame) => receiver.receive(JSON.stringify(frame)),
+    ...options,
+  });
+}
+
+function listeningEndpoint(
+  listener: Parameters<ReturnType<typeof createEndpoint>["onMessage"]>[0],
+  options: Partial<Parameters<typeof createNodeDuplexEndpoint>[0]> = {},
+) {
+  const endpoint = createEndpoint(options);
+  endpoint.onMessage(listener);
+  return endpoint;
+}
+
+const fullFragment = Buffer.alloc(FRAGMENT_BYTES).toString("base64");
+const readyFrame = JSON.stringify({ v: 1, kind: "ready" });
+
 function dataFrame(overrides: Record<string, unknown> = {}): string {
   return JSON.stringify({
     v: 1,
@@ -75,7 +101,7 @@ describe("node duplex message framing", () => {
       const received: Uint8Array[] = [];
       const first = Uint8Array.from({ length: firstBytes }, () => 1);
       const second = Uint8Array.from({ length: secondBytes }, () => 2);
-      const receiver = createNodeDuplexEndpoint({ sendFrame: () => {} });
+      const receiver = createEndpoint();
       receiver.onMessage((message) => {
         received.push(message);
       });
@@ -96,8 +122,7 @@ describe("node duplex message framing", () => {
     const entered = createDeferred();
     const released = createDeferred();
     const received = vi.fn();
-    const receiver = createNodeDuplexEndpoint({ sendFrame: () => {} });
-    receiver.onMessage(received);
+    const receiver = listeningEndpoint(received);
     const sender = createNodeDuplexEndpoint({
       async sendFrame(frame) {
         entered.resolve();
@@ -117,8 +142,7 @@ describe("node duplex message framing", () => {
 
   it("serializes framed readiness ahead of a concurrent message", async () => {
     const events: string[] = [];
-    const receiver = createNodeDuplexEndpoint({
-      sendFrame: () => {},
+    const receiver = createEndpoint({
       onReady: () => events.push("ready"),
     });
     receiver.onMessage(() => {
@@ -138,8 +162,7 @@ describe("node duplex message framing", () => {
 
   it("rejects data before required readiness while node-host input needs no reciprocal ready", () => {
     const gatewayError = vi.fn();
-    const gateway = createNodeDuplexEndpoint({
-      sendFrame: () => {},
+    const gateway = createEndpoint({
       onError: gatewayError,
       requireReady: true,
     });
@@ -148,7 +171,7 @@ describe("node duplex message framing", () => {
     expect(gatewayError).toHaveBeenCalledOnce();
 
     const hostMessage = vi.fn();
-    const host = createNodeDuplexEndpoint({ sendFrame: () => {} });
+    const host = createEndpoint();
     host.onMessage(hostMessage);
     host.receive(dataFrame());
     expect(hostMessage).toHaveBeenCalledOnce();
@@ -156,13 +179,10 @@ describe("node duplex message framing", () => {
 
   it("preserves empty binary messages as distinct complete messages", async () => {
     const received: Uint8Array[] = [];
-    const receiver = createNodeDuplexEndpoint({ sendFrame: () => {} });
-    receiver.onMessage((message) => {
+    const receiver = listeningEndpoint((message) => {
       received.push(message);
     });
-    const sender = createNodeDuplexEndpoint({
-      sendFrame: (frame) => receiver.receive(JSON.stringify(frame)),
-    });
+    const sender = senderFor(receiver);
 
     await sender.send(new Uint8Array());
     await sender.send(Uint8Array.of(7));
@@ -193,7 +213,7 @@ describe("node duplex message framing", () => {
   ])("fails closed on %s", (_reason, frame) => {
     const onError = vi.fn();
     const received = vi.fn();
-    const endpoint = createNodeDuplexEndpoint({ sendFrame: () => {}, onError });
+    const endpoint = createEndpoint({ onError });
     endpoint.onMessage(received);
 
     expect(() => endpoint.receive(frame)).toThrow();
@@ -206,44 +226,19 @@ describe("node duplex message framing", () => {
   it.each([
     [
       "duplicate fragment",
-      [
-        dataFrame({
-          last: false,
-          data: Buffer.alloc(FRAGMENT_BYTES).toString("base64"),
-        }),
-        dataFrame({ index: 0 }),
-      ],
+      [dataFrame({ last: false, data: fullFragment }), dataFrame({ index: 0 })],
     ],
-    [
-      "fragment gap",
-      [
-        dataFrame({
-          last: false,
-          data: Buffer.alloc(FRAGMENT_BYTES).toString("base64"),
-        }),
-        dataFrame({ index: 2 }),
-      ],
-    ],
+    ["fragment gap", [dataFrame({ last: false, data: fullFragment }), dataFrame({ index: 2 })]],
     [
       "interleaved message",
-      [
-        dataFrame({
-          last: false,
-          data: Buffer.alloc(FRAGMENT_BYTES).toString("base64"),
-        }),
-        dataFrame({ message: 1, index: 1 }),
-      ],
+      [dataFrame({ last: false, data: fullFragment }), dataFrame({ message: 1, index: 1 })],
     ],
     ["duplicate completed message", [dataFrame(), dataFrame()]],
-    [
-      "duplicate readiness",
-      [JSON.stringify({ v: 1, kind: "ready" }), JSON.stringify({ v: 1, kind: "ready" })],
-    ],
-    ["late readiness", [dataFrame(), JSON.stringify({ v: 1, kind: "ready" })]],
+    ["duplicate readiness", [readyFrame, readyFrame]],
+    ["late readiness", [dataFrame(), readyFrame]],
   ])("rejects %s without delivering subsequent messages", (_reason, frames) => {
     const onError = vi.fn();
-    const endpoint = createNodeDuplexEndpoint({ sendFrame: () => {}, onError });
-    endpoint.onMessage(() => {});
+    const endpoint = listeningEndpoint(() => {}, { onError });
     endpoint.receive(frames[0]!);
 
     expect(() => endpoint.receive(frames[1]!)).toThrow();
@@ -252,7 +247,7 @@ describe("node duplex message framing", () => {
 
   it("bounds pending message count and bytes before a listener subscribes", async () => {
     const countError = vi.fn();
-    const countBounded = createNodeDuplexEndpoint({ sendFrame: () => {}, onError: countError });
+    const countBounded = createEndpoint({ onError: countError });
     for (let message = 0; message < 8; message += 1) {
       countBounded.receive(dataFrame({ message }));
     }
@@ -260,10 +255,8 @@ describe("node duplex message framing", () => {
     expect(countError).toHaveBeenCalledOnce();
 
     const bytesError = vi.fn();
-    const bytesBounded = createNodeDuplexEndpoint({ sendFrame: () => {}, onError: bytesError });
-    const sender = createNodeDuplexEndpoint({
-      sendFrame: (frame) => bytesBounded.receive(JSON.stringify(frame)),
-    });
+    const bytesBounded = createEndpoint({ onError: bytesError });
+    const sender = senderFor(bytesBounded);
     await sender.send(new Uint8Array(600_000));
     await expect(sender.send(new Uint8Array(600_000))).rejects.toThrow(/pending/i);
     expect(bytesError).toHaveBeenCalledOnce();
@@ -271,15 +264,14 @@ describe("node duplex message framing", () => {
 
   it("bounds incomplete fragments against bytes already buffered before listener registration", () => {
     const onError = vi.fn();
-    const endpoint = createNodeDuplexEndpoint({ sendFrame: () => {}, onError });
+    const endpoint = createEndpoint({ onError });
     endpoint.receive(dataFrame({ data: "eA==" }));
-    const fragment = Buffer.alloc(FRAGMENT_BYTES).toString("base64");
     for (let index = 0; index < 127; index += 1) {
-      endpoint.receive(dataFrame({ message: 1, index, last: false, data: fragment }));
+      endpoint.receive(dataFrame({ message: 1, index, last: false, data: fullFragment }));
     }
 
     expect(() =>
-      endpoint.receive(dataFrame({ message: 1, index: 127, last: false, data: fragment })),
+      endpoint.receive(dataFrame({ message: 1, index: 127, last: false, data: fullFragment })),
     ).toThrow(/pending/i);
     expect(onError).toHaveBeenCalledOnce();
     expect(() => endpoint.receive(dataFrame({ message: 1, index: 128 }))).toThrow(/closed/i);
@@ -287,11 +279,8 @@ describe("node duplex message framing", () => {
 
   it("accepts logical messages above the pending-byte limit after listener registration", async () => {
     const received = vi.fn();
-    const receiver = createNodeDuplexEndpoint({ sendFrame: () => {} });
-    receiver.onMessage(received);
-    const sender = createNodeDuplexEndpoint({
-      sendFrame: (frame) => receiver.receive(JSON.stringify(frame)),
-    });
+    const receiver = listeningEndpoint(received);
+    const sender = senderFor(receiver);
     const message = new Uint8Array(1024 * 1024 + 1);
 
     await sender.send(message);
@@ -300,7 +289,7 @@ describe("node duplex message framing", () => {
   });
 
   it("delivers buffered whole messages in order when the listener subscribes", () => {
-    const endpoint = createNodeDuplexEndpoint({ sendFrame: () => {} });
+    const endpoint = createEndpoint();
     endpoint.receive(dataFrame());
     endpoint.receive(dataFrame({ message: 1, data: Buffer.from("second").toString("base64") }));
     const received: string[] = [];
@@ -326,8 +315,7 @@ describe("node duplex message framing", () => {
     expect(outboundError).toHaveBeenCalledOnce();
 
     const inboundError = vi.fn();
-    const receiver = createNodeDuplexEndpoint({
-      sendFrame: () => {},
+    const receiver = createEndpoint({
       onError: inboundError,
       maxMessageBytes: 5,
     });
@@ -338,9 +326,7 @@ describe("node duplex message framing", () => {
   it.each([0, -1, 1.5, Number.NaN, MAX_MESSAGE_BYTES + 1])(
     "rejects an unsafe logical message limit of %s bytes",
     (maxMessageBytes) => {
-      expect(() => createNodeDuplexEndpoint({ sendFrame: () => {}, maxMessageBytes })).toThrow(
-        /maximum/i,
-      );
+      expect(() => createEndpoint({ maxMessageBytes })).toThrow(/maximum/i);
     },
   );
 
@@ -348,8 +334,7 @@ describe("node duplex message framing", () => {
     "rejects an unsafe outstanding delivery limit of %s bytes",
     (maxOutstandingDeliveryBytes) => {
       expect(() =>
-        createNodeDuplexEndpoint({
-          sendFrame: () => {},
+        createEndpoint({
           maxMessageBytes: 16,
           maxOutstandingDeliveryBytes,
         }),
@@ -358,28 +343,24 @@ describe("node duplex message framing", () => {
   );
 
   it("rejects accumulated message overflow and excessive fragment counts", () => {
-    const fragment = Buffer.alloc(FRAGMENT_BYTES).toString("base64");
-    const overflow = createNodeDuplexEndpoint({
-      sendFrame: () => {},
+    const overflow = createEndpoint({
       maxMessageBytes: FRAGMENT_BYTES + 1,
     });
-    overflow.receive(dataFrame({ last: false, data: fragment }));
+    overflow.receive(dataFrame({ last: false, data: fullFragment }));
     expect(() =>
       overflow.receive(dataFrame({ index: 1, data: Buffer.from("xx").toString("base64") })),
     ).toThrow(/maximum/i);
 
-    const excessive = createNodeDuplexEndpoint({
-      sendFrame: () => {},
+    const excessive = createEndpoint({
       maxMessageBytes: FRAGMENT_BYTES,
     });
-    excessive.receive(dataFrame({ last: false, data: fragment }));
+    excessive.receive(dataFrame({ last: false, data: fullFragment }));
     expect(() => excessive.receive(dataFrame({ index: 1, data: "" }))).toThrow(/fragment/i);
   });
 
   it("ignores empty heartbeat frames without disturbing message ordering", () => {
     const received = vi.fn();
-    const endpoint = createNodeDuplexEndpoint({ sendFrame: () => {} });
-    endpoint.onMessage(received);
+    const endpoint = listeningEndpoint(received);
 
     endpoint.receive("");
     endpoint.receive(dataFrame());
@@ -395,8 +376,7 @@ describe("node duplex message framing", () => {
     const listener = vi.fn(() => {
       throw failure;
     });
-    const endpoint = createNodeDuplexEndpoint({ sendFrame: () => {}, onError });
-    endpoint.onMessage(listener);
+    const endpoint = listeningEndpoint(listener, { onError });
 
     expect(() => endpoint.receive(dataFrame())).toThrow(failure);
     expect(onError).toHaveBeenCalledExactlyOnceWith(failure);
@@ -414,7 +394,7 @@ describe("node duplex message framing", () => {
         void rejection.catch(() => {});
         return rejection;
       });
-      const endpoint = createNodeDuplexEndpoint({ sendFrame: () => {}, onError });
+      const endpoint = createEndpoint({ onError });
       if (delivery === "buffered") {
         endpoint.receive(dataFrame());
       }
@@ -429,93 +409,49 @@ describe("node duplex message framing", () => {
     },
   );
 
-  it("bounds outstanding asynchronous listener deliveries before invoking another callback", () => {
-    const onError = vi.fn();
-    const neverSettles = new Promise<void>(() => {});
-    const listener = vi.fn(() => neverSettles);
-    const endpoint = createNodeDuplexEndpoint({ sendFrame: () => {}, onError });
-    endpoint.onMessage(listener);
-    for (let message = 0; message < 8; message += 1) {
-      endpoint.receive(dataFrame({ message }));
-    }
-
-    expect(() => endpoint.receive(dataFrame({ message: 8 }))).toThrow(/pending|in.flight/i);
-    expect(listener).toHaveBeenCalledTimes(8);
-    expect(onError).toHaveBeenCalledOnce();
-  });
-
-  it("bounds combined bytes held by outstanding asynchronous listener deliveries", () => {
-    const onError = vi.fn();
-    const listener = vi.fn(() => new Promise<void>(() => {}));
-    const endpoint = createNodeDuplexEndpoint({
-      sendFrame: () => {},
-      onError,
-      maxMessageBytes: 16,
-    });
-    endpoint.onMessage(listener);
-    endpoint.receive(dataFrame({ data: Buffer.alloc(10).toString("base64") }));
-
-    expect(() =>
-      endpoint.receive(dataFrame({ message: 1, data: Buffer.alloc(7).toString("base64") })),
-    ).toThrow(/pending|in.flight/i);
-    expect(listener).toHaveBeenCalledOnce();
-    expect(onError).toHaveBeenCalledOnce();
-  });
-
-  it("enforces an expanded aggregate delivery budget independently of the message ceiling", () => {
-    const onError = vi.fn();
-    const listener = vi.fn(() => new Promise<void>(() => {}));
-    const endpoint = createNodeDuplexEndpoint({
-      sendFrame: () => {},
-      onError,
-      maxMessageBytes: 16,
-      maxOutstandingDeliveryBytes: 24,
-    });
-    endpoint.onMessage(listener);
-    endpoint.receive(dataFrame({ data: Buffer.alloc(16).toString("base64") }));
-    endpoint.receive(dataFrame({ message: 1, data: Buffer.alloc(8).toString("base64") }));
-
-    expect(() => endpoint.receive(dataFrame({ message: 2, data: "eA==" }))).toThrow(/pending/i);
-    expect(listener).toHaveBeenCalledTimes(2);
-    expect(onError).toHaveBeenCalledOnce();
-  });
+  it.each([
+    ["count", Array<number>(8).fill(7), 7, {}, /pending|in.flight/i],
+    ["bytes", [10], 7, { maxMessageBytes: 16 }, /pending|in.flight/i],
+    [
+      "expanded budget",
+      [16, 8],
+      1,
+      { maxMessageBytes: 16, maxOutstandingDeliveryBytes: 24 },
+      /pending/i,
+    ],
+  ] as const)(
+    "bounds outstanding asynchronous listener delivery %s",
+    (_limit, sizes, next, options, error) => {
+      const onError = vi.fn();
+      const listener = vi.fn(() => new Promise<void>(() => {}));
+      const endpoint = listeningEndpoint(listener, { onError, ...options });
+      sizes.forEach((size, message) => {
+        endpoint.receive(dataFrame({ message, data: Buffer.alloc(size).toString("base64") }));
+      });
+      expect(() =>
+        endpoint.receive(
+          dataFrame({ message: sizes.length, data: Buffer.alloc(next).toString("base64") }),
+        ),
+      ).toThrow(error);
+      expect(listener).toHaveBeenCalledTimes(sizes.length);
+      expect(onError).toHaveBeenCalledOnce();
+    },
+  );
 
   it("delivers an exact-limit response and bounded following notification before either delivery settles", async () => {
     const maxMessageBytes = 64 * 1024 * 1024;
     const maxOutstandingDeliveryBytes = maxMessageBytes + 2 * 1024 * 1024;
     const received: Uint8Array[] = [];
     const { promise: deliveriesFinished, resolve: finishDeliveries } = createDeferred();
-    const receiver = createNodeDuplexEndpoint({
-      sendFrame: () => {},
-      maxMessageBytes,
-      maxOutstandingDeliveryBytes,
-    });
-    receiver.onMessage((message) => {
+    const limits = { maxMessageBytes, maxOutstandingDeliveryBytes };
+    const receiver = listeningEndpoint((message) => {
       received.push(message);
       return deliveriesFinished;
-    });
-    const sender = createNodeDuplexEndpoint({
-      sendFrame: (frame) => receiver.receive(JSON.stringify(frame)),
-      maxMessageBytes,
-      maxOutstandingDeliveryBytes,
-    });
+    }, limits);
+    const sender = senderFor(receiver, limits);
     const response = Buffer.alloc(maxMessageBytes, 0x78);
-    const responseStart = Buffer.from('{"jsonrpc":"2.0","id":1,"result":"');
-    const responseEnd = Buffer.from('"}');
-    responseStart.copy(response);
-    responseEnd.copy(response, response.length - responseEnd.length);
-    const notification = Buffer.from(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        method: "http/request/bodyDelta",
-        params: {
-          requestId: "response-at-limit",
-          seq: 1,
-          deltaBase64: Buffer.alloc(1024 * 1024).toString("base64"),
-          done: false,
-        },
-      }),
-    );
+    // Framing treats payloads as opaque bytes; only their aggregate size matters here.
+    const notification = Buffer.alloc(1024 * 1024);
 
     try {
       await sender.send(response);
@@ -537,7 +473,7 @@ describe("node duplex message framing", () => {
     async (delivery) => {
       const { promise: listenerFinished, resolve: finishListener } = createDeferred();
       const received: Uint8Array[] = [];
-      const endpoint = createNodeDuplexEndpoint({ sendFrame: () => {} });
+      const endpoint = createEndpoint();
       if (delivery === "buffered") {
         endpoint.receive(dataFrame());
       }
@@ -571,7 +507,7 @@ describe("node duplex message framing", () => {
 
   it("continues draining listener work that arrives while an earlier delivery is pending", async () => {
     const finishListeners: Array<() => void> = [];
-    const endpoint = createNodeDuplexEndpoint({ sendFrame: () => {} });
+    const endpoint = createEndpoint();
     endpoint.onMessage(
       () =>
         new Promise<void>((resolve) => {
@@ -600,8 +536,7 @@ describe("node duplex message framing", () => {
     const { promise: listenerFinished, reject: rejectListener } = createDeferred();
     const failure = new Error("asynchronous drain listener exploded");
     const onError = vi.fn();
-    const endpoint = createNodeDuplexEndpoint({ sendFrame: () => {}, onError });
-    endpoint.onMessage(() => listenerFinished);
+    const endpoint = listeningEndpoint(() => listenerFinished, { onError });
     endpoint.receive(dataFrame());
     const drain = endpoint.drain();
 
@@ -613,8 +548,7 @@ describe("node duplex message framing", () => {
 
   it("rejects drain immediately when closing with a listener that never settles", async () => {
     const listenerFinished = new Promise<void>(() => {});
-    const endpoint = createNodeDuplexEndpoint({ sendFrame: () => {} });
-    endpoint.onMessage(() => listenerFinished);
+    const endpoint = listeningEndpoint(() => listenerFinished);
     endpoint.receive(dataFrame());
     const drain = endpoint.drain();
 
@@ -661,20 +595,19 @@ describe("node duplex message framing", () => {
   it("closes when the framed-ready callback rejects unexpected readiness", () => {
     const failure = new Error("node readiness preceded dispatch");
     const onError = vi.fn();
-    const endpoint = createNodeDuplexEndpoint({
-      sendFrame: () => {},
+    const endpoint = createEndpoint({
       onReady() {
         throw failure;
       },
       onError,
     });
 
-    expect(() => endpoint.receive(JSON.stringify({ v: 1, kind: "ready" }))).toThrow(failure);
+    expect(() => endpoint.receive(readyFrame)).toThrow(failure);
     expect(onError).toHaveBeenCalledExactlyOnceWith(failure);
   });
 
   it("rejects a second active listener and subscriptions after closure", () => {
-    const endpoint = createNodeDuplexEndpoint({ sendFrame: () => {} });
+    const endpoint = createEndpoint();
     const unsubscribe = endpoint.onMessage(() => {});
 
     expect(() => endpoint.onMessage(() => {})).toThrow(/listener/i);
@@ -686,8 +619,7 @@ describe("node duplex message framing", () => {
 
   it("rejects retained send and incoming data after an idempotent close", async () => {
     const listener = vi.fn();
-    const endpoint = createNodeDuplexEndpoint({ sendFrame: () => {} });
-    endpoint.onMessage(listener);
+    const endpoint = listeningEndpoint(listener);
 
     endpoint.close();
     endpoint.close();

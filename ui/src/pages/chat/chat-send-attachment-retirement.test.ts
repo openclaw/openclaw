@@ -157,7 +157,6 @@ describe("chat attachment terminal retirement", () => {
           chatMessagesBySession: new Map(),
           connectionEpoch: 1,
           pendingSessionMessageReloadSessionKey: null,
-          requestUpdate: vi.fn(),
         });
       }
       cacheChatSessionSnapshot(

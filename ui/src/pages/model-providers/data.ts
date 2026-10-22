@@ -1,6 +1,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
+import type { AgentModelConfig } from "../../../../src/config/types.agents-shared.js";
 import type {
   ProviderUsageSnapshot,
   UsageSummary,
@@ -23,6 +24,11 @@ import {
   listEffectiveModelAuthProviders,
 } from "../../lib/model-auth.ts";
 import type { ModelCatalogPresentation } from "../../lib/model-catalog-store.ts";
+import {
+  modelSettingFallbacks,
+  modelSettingPrimary,
+  readModelSetting,
+} from "../../lib/model-setting.ts";
 import type { ProviderUsageRequestResult } from "../../lib/provider-usage-request.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 
@@ -169,6 +175,46 @@ function addLogoutTarget(
     return;
   }
   existing.profileIds = [...new Set([...existing.profileIds, ...profileIds])];
+}
+
+export function collectProviderUsage(
+  summary: UsageSummary | null,
+): Map<string, { displayName: string; snapshot: ProviderUsageSnapshot }> {
+  const result = new Map<string, { displayName: string; snapshot: ProviderUsageSnapshot }>();
+  for (const snapshot of summary?.providers ?? []) {
+    const id = canonicalModelAuthProviderId(snapshot.provider);
+    if (id) {
+      result.set(id, {
+        displayName: result.get(id)?.displayName ?? snapshot.displayName,
+        snapshot,
+      });
+    }
+  }
+  return result;
+}
+
+export function collectProviderLocalCost(
+  entries: SessionModelUsage[] | null,
+): Map<string, ModelProviderLocalCost> {
+  const result = new Map<string, ModelProviderLocalCost>();
+  for (const entry of entries ?? []) {
+    const id = canonicalModelAuthProviderId(entry.provider ?? "");
+    if (!id) {
+      continue;
+    }
+    let cost = result.get(id);
+    if (!cost) {
+      cost = { totalCost: 0, totalTokens: 0, messageCount: 0 };
+      result.set(id, cost);
+    }
+    cost.totalCost += entry.totals.totalCost;
+    cost.totalTokens += entry.totals.totalTokens;
+    cost.messageCount += entry.count;
+    if (entry.totals.usageReport?.state === "unavailable") {
+      cost.usageReport = entry.totals.usageReport;
+    }
+  }
+  return result;
 }
 
 /**
@@ -341,28 +387,13 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
     }
   }
 
-  for (const snapshot of input.providerUsage?.providers ?? []) {
-    const draft = providerDraft(snapshot.provider, snapshot.displayName);
-    if (!draft) {
-      continue;
-    }
-    // usage.status snapshots carry cost history and errors that the
-    // auth-status embed drops, so they win when both are present.
-    draft.card.usage = snapshot;
+  for (const [id, { displayName, snapshot }] of collectProviderUsage(input.providerUsage)) {
+    // Live usage includes cost history and errors omitted by auth-status embeds.
+    ensureDraft(drafts, id, displayName || providerDisplayLabel(id)).card.usage = snapshot;
   }
 
-  for (const entry of input.costByProvider ?? []) {
-    const draft = providerDraft(entry.provider ?? "");
-    if (!draft) {
-      continue;
-    }
-    const cost = (draft.card.localCost ??= { totalCost: 0, totalTokens: 0, messageCount: 0 });
-    cost.totalCost += entry.totals.totalCost;
-    cost.totalTokens += entry.totals.totalTokens;
-    cost.messageCount += entry.count;
-    if (entry.totals.usageReport?.state === "unavailable") {
-      cost.usageReport = entry.totals.usageReport;
-    }
+  for (const [id, localCost] of collectProviderLocalCost(input.costByProvider)) {
+    ensureDraft(drafts, id, providerDisplayLabel(id)).card.localCost = localCost;
   }
 
   return drafts
@@ -395,7 +426,7 @@ export type DefaultModelSelection = {
   primary: string;
   fallbacks: string[];
   /** null = automatic/unset; empty string = explicitly disabled. */
-  utilityModel: string | null;
+  utilityModel: AgentModelConfig | null;
   /** Unset or null disables decisions globally. */
   decisionModel?: string | null;
 };
@@ -414,7 +445,8 @@ export function resolveDefaultModelPresentation(
   configured: DefaultsDraft,
   draft: DefaultsDraft | null,
 ): { defaults: DefaultsDraft; configuredModels: ModelPickerEntry[] } {
-  if (catalog.retired || catalog.modelSelectionPolicy?.restricted) {
+  // The page retires drafts on identity/access loss, not on catalog invalidation.
+  if ((catalog.retired && !draft) || catalog.modelSelectionPolicy?.restricted) {
     return {
       defaults: {
         ...configured,
@@ -448,9 +480,12 @@ function buildSelectableDefaultModels(
   selection: DefaultModelSelection,
 ): ModelPickerEntry[] {
   const selected = new Set<string>(
-    [selection.primary, ...selection.fallbacks, selection.utilityModel].filter(
-      (value): value is string => typeof value === "string" && value.length > 0,
-    ),
+    [
+      selection.primary,
+      ...selection.fallbacks,
+      modelSettingPrimary(selection.utilityModel),
+      ...modelSettingFallbacks(selection.utilityModel),
+    ].filter((value): value is string => typeof value === "string" && value.length > 0),
   );
   const selectable: ModelPickerEntry[] = (models ?? []).filter(
     (model) => model.available !== false || selected.has(modelCatalogRef(model)),
@@ -466,7 +501,21 @@ function buildSelectableDefaultModels(
     if (profile) {
       const match = (models ?? []).find((model) => modelCatalogRef(model) === modelRef);
       if (match) {
-        selectable.push({ ...match, selectionRef: ref });
+        // The agent-scoped catalog does not establish readiness or speed tiers for
+        // a saved account pin. Keep model metadata, not another account's evidence.
+        const {
+          available: _available,
+          unavailableReason: _reason,
+          unavailableUntil: _until,
+          supportsFastMode: _fastMode,
+          supportsServiceTierRecovery: _recovery,
+          serviceTiers: _tiers,
+          serviceTierObservation: _observation,
+          serviceTierObservations: _observations,
+          runtimeChoices: _runtimes,
+          ...unscoped
+        } = match;
+        selectable.push({ ...unscoped, selectionRef: ref });
         continue;
       }
     }
@@ -501,17 +550,7 @@ export function readModelProviderConfig(config: Record<string, unknown> | null):
   const providers = asRecord(models?.providers);
   const agents = asRecord(config?.agents);
   const defaults = asRecord(agents?.defaults);
-  const model = defaults?.model;
-  const modelObject = asRecord(model);
-  const primary =
-    typeof model === "string"
-      ? model
-      : typeof modelObject?.primary === "string"
-        ? modelObject.primary
-        : "";
-  const fallbacks = Array.isArray(modelObject?.fallbacks)
-    ? modelObject.fallbacks.filter((entry): entry is string => typeof entry === "string")
-    : [];
+  const model = readModelSetting(defaults?.model);
   return {
     providers: Object.entries(providers ?? {}).map(([key, value]) => {
       const provider = asRecord(value);
@@ -525,9 +564,9 @@ export function readModelProviderConfig(config: Record<string, unknown> | null):
       return entry;
     }),
     defaults: {
-      primary,
-      fallbacks,
-      utilityModel: typeof defaults?.utilityModel === "string" ? defaults.utilityModel : null,
+      primary: modelSettingPrimary(model) ?? "",
+      fallbacks: modelSettingFallbacks(model),
+      utilityModel: readModelSetting(defaults?.utilityModel),
       ...(typeof defaults?.decisionModel === "string"
         ? { decisionModel: defaults.decisionModel }
         : {}),

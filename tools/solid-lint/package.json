@@ -6,6 +6,6 @@
   "dependencies": {
     "eslint": "10.12.0",
     "eslint-plugin-solid": "0.18.1",
-    "typescript": "5.9.3"
+    "typescript": "6.0.3"
   }
 }

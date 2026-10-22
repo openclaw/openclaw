@@ -102,6 +102,7 @@ describeControlUiE2e("Control UI Models help mocked Gateway E2E", () => {
         await expect
           .poll(() => modelPickerValue(utilityField.locator("openclaw-select-picker")))
           .toBe("__openclaw_automatic_utility__");
+        await utilityField.locator(".picker-select__trigger").click();
         await expect
           .poll(() =>
             utilityField
@@ -110,6 +111,7 @@ describeControlUiE2e("Control UI Models help mocked Gateway E2E", () => {
               .then((value) => value?.trim()),
           )
           .toBe("Auto");
+        await page.keyboard.press("Escape");
 
         if (recordVisuals) {
           await page.screenshot({
@@ -204,13 +206,13 @@ describeControlUiE2e("Control UI Models help mocked Gateway E2E", () => {
         for (const help of [
           {
             button: "About thinking defaults",
-            text: "closest option supported by the selected model",
+            text: "other models map unsupported levels to their closest supported option",
             defaultText:
               "Uses the selected model's thinking policy instead of saving a global thinking override.",
           },
           {
             button: "About fast mode defaults",
-            text: "Auto starts in fast mode",
+            text: "Auto starts fast and returns to standard after the model's configured interval",
             defaultText:
               "Uses the selected model's fast-mode policy. Unlike Auto, Default does not enable fast mode by itself.",
           },

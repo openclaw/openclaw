@@ -1,68 +1,64 @@
 import {
   createEffect,
   createMemo,
-  createSignal,
+  Errored,
+  lazy,
+  Loading,
   Match,
   onCleanup,
+  onSettled,
   Show,
   Switch,
-  untrack,
 } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
-import { isStaleChunkImportError } from "../../app/stale-chunk-reload.ts";
+import {
+  isStaleChunkImportError,
+  retryStaleChunkReloadWhenReachable,
+  scheduleStaleChunkReload,
+} from "../../app/stale-chunk-reload.ts";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { registerLoginEnglish } from "../../i18n/locales/en-login.ts";
 import { resolveEmbedSandbox } from "../../lib/chat/tool-display.ts";
-import { projectGateway } from "../../lib/reactive/application.ts";
+import { projectCallbackOwner } from "../../lib/reactive/callback-owner.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { CustomPluginUiDisabled } from "../../plugins/control-ui-disabled.solid.tsx";
 import { PluginContribution } from "../../plugins/control-ui-view.solid.tsx";
-import {
-  BUNDLED_TAB_VIEWS,
-  PluginPageLifecycle,
-  type PluginPageProps,
-} from "./plugin-page-lifecycle.ts";
+import { PluginPageOwner, type PluginPageProps } from "./plugin-page-lifecycle.ts";
 export type { PluginPageProps } from "./plugin-page-lifecycle.ts";
 
 registerLoginEnglish();
 
 function PluginPageContent(props: PluginPageProps, host: HTMLElement) {
   const context = useApplication();
-  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-  const lifecycle = new PluginPageLifecycle(props, context, host, () =>
-    setRevision((value) => value + 1),
+  const { owner: lifecycle, view: projection } = projectCallbackOwner(
+    (notify) => new PluginPageOwner(props, context, host, notify),
+    (source) => source,
   );
+  const plugins = context.plugins && projectOwner(context.plugins, (source) => source).read;
   host.style.display = "contents";
-  const gateway = projectGateway(context.gateway);
-  const plugins = projectSource(context.plugins, {
-    read: (source) => source,
-    subscribe: (source, notify) => source?.subscribe(notify) ?? (() => {}),
-    equality: "revision",
-  });
-  const update = () => untrack(lifecycle.update);
-  const unsubscribeGateway = gateway.subscribe(update);
-  const unsubscribePlugins = plugins.subscribe(update);
-  createEffect(() => [props.pluginId, props.tabId], update);
-  update();
+  // Gateway receipts retire bundled views and frame-auth work before a replacement connection uses them.
+  const unsubscribeGateway = context.gateway.subscribe(lifecycle.update);
+  createEffect(() => [props.pluginId, props.tabId], lifecycle.update);
   onCleanup(() => {
     unsubscribeGateway();
-    unsubscribePlugins();
     lifecycle.dispose();
   });
   const view = createMemo(() => {
-    revision();
+    projection.read();
     const info = lifecycle.tabInfo();
     const key = lifecycle.tabKey();
-    const contribution = context.plugins?.registrations("pages").some((entry) => entry.key === key);
+    const contribution = plugins?.()
+      .registrations("pages")
+      .some((entry) => entry.key === key);
     const authKey = lifecycle.externalTabAuthKey(info, false);
     let mode = "unavailable";
     if (contribution) {
       mode = "native";
-    } else if (info && key in BUNDLED_TAB_VIEWS) {
+    } else if (lifecycle.hasBundledView(info)) {
       mode = "bundled";
     } else if (info?.path) {
       mode = "frame";
@@ -77,7 +73,7 @@ function PluginPageContent(props: PluginPageProps, host: HTMLElement) {
       }
     } else if (
       context.gateway.snapshot.phase !== "connected" ||
-      context.plugins?.isLoading(props.pluginId ?? "")
+      plugins?.().isLoading(props.pluginId ?? "")
     ) {
       mode = "loading";
     }
@@ -85,60 +81,91 @@ function PluginPageContent(props: PluginPageProps, host: HTMLElement) {
       info,
       key,
       mode,
-      state: lifecycle.bundledViewState,
       generation: lifecycle.pluginFrameGeneration,
+      bundledHost: lifecycle.bundledViewHost,
     };
   });
-  const readyView = () => {
-    const state = view().state;
-    return state.status === "ready" ? state.view : undefined;
-  };
-  const error = () => {
-    const state = view().state;
-    return state.status === "error" ? state.error : undefined;
-  };
   const disabled = () =>
     !view().info?.path &&
-    context.plugins?.errors.some(
+    plugins?.().errors.some(
       (entry) => entry.pluginId === props.pluginId && entry.code === "custom-plugin-ui-disabled",
     );
   const unavailableMessage = () =>
     view().info?.path
       ? t("pluginTabs.unavailableSubtitle")
-      : (context.plugins?.errors.find((entry) => entry.pluginId === props.pluginId)?.message ??
+      : (plugins?.().errors.find((entry) => entry.pluginId === props.pluginId)?.message ??
         t("pluginTabs.unavailableSubtitle"));
+
+  function BundledView() {
+    // Retire the import with its descriptor; Gateway epochs only remount the loaded view.
+    const Logbook = lazy(() => import("./logbook-view.tsx"), { export: "Logbook" });
+    return (
+      <Errored
+        fallback={(error, reset) => {
+          const staleError = () => {
+            const failure = error();
+            return isStaleChunkImportError(failure) ? failure : undefined;
+          };
+          return (
+            <>
+              <Show when={staleError()} keyed>
+                {(_failure) => {
+                  let current = true;
+                  onSettled(() => {
+                    void scheduleStaleChunkReload({
+                      canReload: () => current && lifecycle.hasBundledView(),
+                    });
+                    return () => {
+                      current = false;
+                    };
+                  });
+                  return null;
+                }}
+              </Show>
+              <LazyViewError
+                error={error()}
+                stale={Boolean(staleError())}
+                onRetry={() => {
+                  if (!lifecycle.hasBundledView()) {
+                    return;
+                  }
+                  if (staleError()) {
+                    void retryStaleChunkReloadWhenReachable({
+                      canReload: () => lifecycle.hasBundledView(),
+                    });
+                  } else {
+                    reset();
+                  }
+                }}
+              />
+            </>
+          );
+        }}
+      >
+        <Loading fallback={<LoadingState />}>
+          <Show when={view().bundledHost} keyed>
+            {(_epoch) => {
+              const initialClient =
+                context.gateway.snapshot.phase === "connected"
+                  ? context.gateway.snapshot.client
+                  : null;
+              return (
+                <Logbook initialClient={initialClient} getRetired={() => lifecycle.actionRetired} />
+              );
+            }}
+          </Show>
+        </Loading>
+      </Errored>
+    );
+  }
+
   return (
     <Switch>
       <Match when={view().mode === "native"}>
         <PluginContribution kind="pages" contributionKey={view().key} props={props.params ?? {}} />
       </Match>
       <Match when={view().mode === "bundled"}>
-        <Show when={view().state.status === "loading"}>
-          <LoadingState />
-        </Show>
-        <Show when={view().state.status === "error"}>
-          <LazyViewError
-            error={error()}
-            onRetry={lifecycle.retryBundledView}
-            stale={isStaleChunkImportError(error())}
-          />
-        </Show>
-        <Show when={readyView()} keyed>
-          {(loaded) =>
-            loaded.render({
-              get host() {
-                revision();
-                return lifecycle.bundledViewHost;
-              },
-              get client() {
-                return gateway.read().snapshot.client;
-              },
-              get connected() {
-                return gateway.read().snapshot.phase === "connected";
-              },
-            })
-          }
-        </Show>
+        <BundledView />
       </Match>
       <Match when={view().mode === "insecure"}>
         <section class="card lazy-view-state" role="status">
@@ -151,14 +178,18 @@ function PluginPageContent(props: PluginPageProps, host: HTMLElement) {
           <section class="plugin-tab-embed">
             <Show when={view().generation} keyed>
               {(_generation) => {
-                onCleanup(() => lifecycle.syncPluginThemeFrame(null));
+                let frame!: HTMLIFrameElement;
+                onSettled(() => {
+                  lifecycle.syncPluginThemeFrame(frame);
+                  return () => lifecycle.syncPluginThemeFrame(null);
+                });
                 return (
                   <iframe
                     class="plugin-tab-embed__frame"
                     src={view().info?.path}
                     title={view().info?.label}
                     sandbox={resolveEmbedSandbox(context.config.current.embedSandboxMode)}
-                    ref={(frame) => lifecycle.syncPluginThemeFrame(frame)}
+                    ref={(element) => (frame = element)}
                     onLoad={lifecycle.handlePluginThemeLoad}
                   />
                 );

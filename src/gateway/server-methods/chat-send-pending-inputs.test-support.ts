@@ -5,7 +5,6 @@ import type { ChatSendParamsSchema } from "../../../packages/gateway-protocol/sr
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
-import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
   appendTranscriptMessage,
@@ -20,7 +19,11 @@ import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-ident
 import { initializeGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type { PluginHookBeforeMessageWriteEvent } from "../../plugins/types.js";
-import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
+import {
+  captureSessionTarget,
+  captureSessionControllerSettlement,
+} from "../../sessions/session-controller.lifecycle.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -36,10 +39,11 @@ import type { GatewayClient, RespondFn } from "./types.js";
 export function setClientProfile(
   client: GatewayClient,
   profile: { id: string; updatedAt: number },
+  displayName: string | null = null,
 ) {
   client.authenticatedUserProfile = {
     profileId: profile.id,
-    displayName: null,
+    displayName,
     hasAvatar: false,
     updatedAt: profile.updatedAt,
   };
@@ -68,6 +72,7 @@ export function useBrowserFollowupFixture() {
   return async function createBrowserFollowupFixture(
     options: {
       active?: boolean;
+      sessionKey?: string;
       createdActor?: SessionCreatedActor;
       sandbox?: "required";
       preserveContent?: boolean;
@@ -86,7 +91,9 @@ export function useBrowserFollowupFixture() {
     const memoryIncognito = options.storage === "memory";
     const scope = {
       agentId: "main",
-      sessionKey: memoryIncognito ? "agent:main:dashboard:incognito-custody" : "agent:main:main",
+      sessionKey: memoryIncognito
+        ? "agent:main:dashboard:incognito-custody"
+        : (options.sessionKey ?? "agent:main:main"),
       sessionId: "cloud-session",
       storePath,
     };
@@ -99,7 +106,7 @@ export function useBrowserFollowupFixture() {
     };
     await writeSessionStore({
       entries: {
-        ...(!memoryIncognito ? { main: entry } : {}),
+        ...(!memoryIncognito ? { [scope.sessionKey]: entry } : {}),
         unrelated: {
           sessionId: "unrelated-browser-session",
           updatedAt: Date.now(),
@@ -129,12 +136,13 @@ export function useBrowserFollowupFixture() {
     } else {
       await seedTranscript();
     }
+    const memoryLocation = { agentId: scope.agentId, path: scope.storePath };
     const readTranscript = () => {
       if (!memoryIncognito) {
         return loadTranscriptEventsSync(scope);
       }
       const snapshot = memorySessionActorOwners
-        .read({ agentId: scope.agentId, path: scope.storePath })
+        .read(memoryLocation)
         ?.readStorage(
           scope.sessionKey,
           { type: "session.history.hydrate", input: { sessionId: scope.sessionId } },
@@ -147,11 +155,21 @@ export function useBrowserFollowupFixture() {
     };
     const activeTranscript = readTranscript();
     const activeRun = active
-      ? createReplyOperation({ ...scope, resetTriggered: false })
+      ? createReplyOperation({
+          ...scope,
+          target: captureSessionTarget({
+            storeScope: scope.storePath,
+            sessionKey: scope.sessionKey,
+            incarnation: scope.sessionId,
+            agentId: scope.agentId,
+          }),
+          resetTriggered: false,
+        })
       : undefined;
     // Cloud workers expose a running owner but explicitly reject message injection.
     activeRun?.attachBackend({
       kind: "embedded",
+      supportsTranscriptCommitWait: true,
       runId: "active-cloud-run",
       cancel: vi.fn(),
       messageInjection: { isAvailable: () => false, queueMessage: vi.fn() },
@@ -199,10 +217,9 @@ export function useBrowserFollowupFixture() {
       }
       return {};
     });
-    // The process-local placement fallback would retain the previous case's deleted home.
+    // Use a fresh placement store for each fixture's Gateway home.
     const context = createDirectChatContext({
       getRuntimeConfig,
-      chatQueuedTurns: new Map(),
       workerSessionPlacementService: createWorkerSessionPlacementStore(),
     });
     const client: GatewayClient = {
@@ -228,10 +245,12 @@ export function useBrowserFollowupFixture() {
         signal?: AbortSignal;
         sessionMutationCommitGuard?: () => void;
       },
+      p = params,
+      handler = handleChatSend,
     ) => {
       const request = {
-        req: { type: "req", id: params.idempotencyKey, method: "chat.send", params },
-        params,
+        req: { type: "req", id: p.idempotencyKey, method: "chat.send", params: p },
+        params: p,
         client,
         context,
         respond,
@@ -243,24 +262,31 @@ export function useBrowserFollowupFixture() {
           req: { ...request.req, expectedProfileId: binding.expectedProfileId },
           signal: binding.signal,
           sessionMutationCommitGuard: binding.sessionMutationCommitGuard,
-          extraHandlers: { "chat.send": handleChatSend },
+          extraHandlers: { "chat.send": handler },
         });
       } else {
         await withPluginRuntimeGatewayRequestScope(
           { context, isWebchatConnect: request.isWebchatConnect },
-          () => handleChatSend(request),
+          () => handler(request),
         );
       }
       return respond;
     };
     const finishDispatch = async () => {
-      const completion = getSessionWorkAdmissionRelease({
+      const completion = captureSessionControllerSettlement({
         scope: scope.storePath,
         identities: [scope.sessionKey, scope.sessionId],
       });
       dispatchRelease.resolve();
       activeRun?.complete();
       await completion;
+    };
+    const cleanup = async () => {
+      await finishDispatch();
+      dispatchInboundMessageMock.mockReset();
+      if (memoryIncognito) {
+        memorySessionActorOwners.closeSession(memoryLocation, scope.sessionKey);
+      }
     };
     return {
       scope,
@@ -274,17 +300,10 @@ export function useBrowserFollowupFixture() {
       readTranscript,
       send,
       dispatchedRecorder: dispatchedRecorder.promise,
+      releaseDispatch: () => dispatchRelease.resolve(),
       finishDispatch,
-      cleanup: async () => {
-        await finishDispatch();
-        dispatchInboundMessageMock.mockReset();
-        if (memoryIncognito) {
-          memorySessionActorOwners.closeSession(
-            { agentId: scope.agentId, path: scope.storePath },
-            scope.sessionKey,
-          );
-        }
-      },
+      cleanup,
+      [Symbol.asyncDispose]: cleanup,
     };
   };
 }

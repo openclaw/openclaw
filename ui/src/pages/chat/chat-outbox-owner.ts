@@ -26,15 +26,16 @@ import { ChatOutboxHistory } from "./chat-outbox-history.ts";
 import {
   projectChatOutboxItem,
   isActiveLocal,
+  hasActiveChatOutboxProjection,
   projectChatOutboxAttention,
   reconcileChatOutboxProjection,
   type ChatOutboxHostProjection as HostProjection,
 } from "./chat-outbox-owner.projection.ts";
+import { publishChatOutboxQueue, replaceChatOutboxQueue } from "./chat-outbox-queue.ts";
 import type { StoredChatQueueReplacement } from "./composer-persistence-state.ts";
 import {
   admitStoredChatComposerQueueItemResult,
   listStoredChatOutboxes,
-  removeStoredChatComposerQueueItem,
   updateStoredChatComposerQueueItems,
   storedChatOutboxScopeKey,
   type ChatComposerScope as Composer,
@@ -44,7 +45,7 @@ import {
   failOutboxPayload,
   prepareOutboxPayload,
 } from "./outbox-payloads.ts";
-type Host = Composer & { chatQueue: ChatQueueItem[]; sessionKey: string; requestUpdate?(): void };
+type Host = Composer & { chatQueue: ChatQueueItem[]; sessionKey: string };
 type LiveProjection = {
   item: ChatQueueItem;
   owner: Host;
@@ -54,7 +55,7 @@ type LiveProjection = {
 const LIVE_VERSION_KEYS = ["sendRunId", "sendAttempts", "sendState", "sendError"] as const;
 // One gateway owner merges durable, live, and pane-local rows for every subscribed pane.
 class ChatOutboxGatewayOwner {
-  readonly admissions = new ChatOutboxAdmissions();
+  readonly admissions = new ChatOutboxAdmissions(() => this.prune());
   attentionRevision = 0;
   private readonly hosts = new Map<Host, HostProjection>();
   private readonly panes = new Set<Host>();
@@ -91,6 +92,7 @@ class ChatOutboxGatewayOwner {
     return created;
   }
   private retireHost(host: Host): void {
+    this.admissions.cancelRequests(host);
     this.history.forget(host);
     const state = this.hosts.get(host);
     if (state) {
@@ -211,17 +213,18 @@ class ChatOutboxGatewayOwner {
       .filter((item) => outboxPayloadMatchesOwner(host, item))
       .toSorted(compareChatQueueOrder);
   }
-  syncHost(host: Host, options: { requestUpdate?: boolean } = {}): void {
+  syncHost(host: Host, options: { notify?: boolean } = {}): void {
     if (this.ownerGatewayKey !== outboxOwnerKey(host)) {
       chatOutboxOwner(host).syncHost(host, options);
       return;
     }
     readOfflineStorageScope(host);
+    const previousQueue = host.chatQueue;
     const queue = this.snapshot(host, resolveUiConversationIdentity(host, host.sessionKey));
     // Draft persistence also publishes outbox changes; an empty queue must not
     // invalidate the transcript merely because the composer changed.
-    if (queue.length || host.chatQueue.length) {
-      host.chatQueue = queue;
+    if (queue.length || previousQueue.length) {
+      replaceChatOutboxQueue(host, queue, options.notify);
     }
     for (const item of host.chatQueue) {
       const key = item.attachmentPayload?.key;
@@ -290,9 +293,6 @@ class ChatOutboxGatewayOwner {
         })
         .finally(() => this.hydrating.delete(key));
     }
-    if (options.requestUpdate !== false) {
-      host.requestUpdate?.();
-    }
     this.publishAttention();
   }
   publish(origin?: Host, reconcile = false): void {
@@ -313,7 +313,7 @@ class ChatOutboxGatewayOwner {
     if (!previous || previous === this) {
       return;
     }
-    let adopted = false;
+    const adopted: Host[] = [];
     // A shared client's credentials change before pane callbacks run. Move peers
     // together so the first reconnect drain still observes every pane's edit hold.
     for (const pane of previous.panes) {
@@ -327,11 +327,12 @@ class ChatOutboxGatewayOwner {
       pane.chatQueue = [];
       previous.detach(pane);
       this.attach(pane);
-      adopted = true;
+      adopted.push(pane);
     }
-    if (adopted) {
+    if (adopted.length) {
       // Publish only after every peer has moved, preserving shared edit holds.
       this.publish();
+      adopted.filter((pane) => !pane.chatQueue.length).forEach(publishChatOutboxQueue);
     }
   }
   private attach(host: Host): void {
@@ -339,6 +340,7 @@ class ChatOutboxGatewayOwner {
     this.unsubscribe ??= subscribeStoredChatOutboxChanges(() => this.publish(undefined, true));
   }
   private detach(host: Host): void {
+    this.admissions.cancelRequests(host);
     this.history.forget(host);
     this.panes.delete(host);
     if (!this.panes.size) {
@@ -352,7 +354,7 @@ class ChatOutboxGatewayOwner {
     subscriptions.set(host, subscription);
     this.attach(host);
     this.reconcile(host, this.state(host));
-    this.syncHost(host, { requestUpdate: false });
+    this.syncHost(host, { notify: false });
     return () => {
       if (subscriptions.get(host) !== subscription) {
         return;
@@ -553,11 +555,10 @@ class ChatOutboxGatewayOwner {
         live.owner !== host &&
         !(local && durable && LIVE_VERSION_KEYS.every((key) => local[key] === durable[key]))) ||
       (located?.durable &&
-        !removeStoredChatComposerQueueItem(
+        !updateStoredChatComposerQueueItems(
           host,
           located.scope.sessionKey,
-          id,
-          located.item,
+          [{ expected: located.item, next: null }],
           located.scope.agentId,
         ))
     ) {
@@ -571,6 +572,7 @@ class ChatOutboxGatewayOwner {
     }
     this.publish(undefined, true);
     if (located && options?.discard) {
+      this.admissions.cancelRequests(host, located.scope, located.item.sendRunId);
       // Row disappearance also means ACK retirement. Only successful explicit
       // discard invalidates admission presentation in every subscribed pane.
       for (const pane of this.panes) {
@@ -674,23 +676,21 @@ class ChatOutboxGatewayOwner {
     this.prune(host);
     return [...items.values()].filter((item) => outboxPayloadMatchesOwner(host, item));
   }
-  private prune(host: Host): void {
-    const state = this.hosts.get(host);
-    if (state && !this.panes.has(host)) {
-      const active = [...state.byScope.values()].some(({ queue }) =>
-        queue.some((item) => isActiveLocal(state, item)),
-      );
-      if (!active && !this.live.size) {
+  private prune(host?: Host): void {
+    const state = host ? this.hosts.get(host) : undefined;
+    if (host && state && !this.panes.has(host)) {
+      if (!hasActiveChatOutboxProjection(state) && !this.live.size) {
         this.hosts.delete(host);
       }
     }
-    if (!this.unsubscribe && !this.live.size && !this.hosts.size) {
+    if (!this.unsubscribe && !this.live.size && !this.hosts.size && !this.admissions.hasRequests) {
       // Defer eviction until a synchronous send transition can add its live overlay.
       queueMicrotask(() => {
         if (
           !this.unsubscribe &&
           !this.live.size &&
           !this.hosts.size &&
+          !this.admissions.hasRequests &&
           owners.get(this.ownerGatewayKey) === this
         ) {
           owners.delete(this.ownerGatewayKey);
@@ -717,9 +717,7 @@ export function chatOutboxOwner(host: Composer): ChatOutboxGatewayOwner {
 
 /** Read-only view of the existing tab/Gateway outbox; it does not claim a personal owner. */
 export function listChatOutboxAttention(host: Composer) {
-  if (!readOfflineStorageScope(host)) {
-    return [];
-  }
-  const owner = owners.get(outboxOwnerKey(host));
-  return projectChatOutboxAttention(listStoredChatOutboxes(host), owner);
+  return readOfflineStorageScope(host)
+    ? projectChatOutboxAttention(listStoredChatOutboxes(host), owners.get(outboxOwnerKey(host)))
+    : [];
 }

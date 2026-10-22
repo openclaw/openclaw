@@ -1,11 +1,13 @@
-import { For, Show } from "solid-js";
+import type { JSX } from "@solidjs/web";
+import { createDeferred, createMemo, Errored, For, isPending, Loading, Show } from "solid-js";
 import type {
   UserModelAccount,
   UserProfileAuthLink,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
-import { providerDisplayLabel, renderProviderBrandIcon } from "../../components/provider-icon.ts";
-import { renderPicker } from "../../components/select-picker.ts";
+import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
+import { Picker } from "../../components/select-picker.ts";
+import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
 import {
   LearnMoreLink,
   SettingsEmpty,
@@ -14,10 +16,9 @@ import {
   SettingsStatus,
   SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
-import { renderWizardStepControls } from "../../components/wizard-step-controls.ts";
+import { WizardStepControls } from "../../components/wizard-step-controls.tsx";
 import { registerModelAccountsEnglish } from "../../i18n/locales/en-model-accounts.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
 import type { ModelAccountsState } from "./model-accounts-state.ts";
 
 registerEnglishCatalog(registerModelAccountsEnglish);
@@ -109,11 +110,109 @@ function AccountRow(props: {
   );
 }
 
+function SignInChoice(props: StateProps & { pending: boolean; cancel: JSX.Element }) {
+  const state = () => props.readState();
+  const choice = () => state().signIn;
+  const provider = () => choice()?.providers.find((entry) => entry.id === choice()?.provider);
+  return (
+    <div class="model-accounts-choice">
+      <Picker
+        params={{
+          label: t("profilePage.modelAccounts.provider"),
+          className: "profile-auth-provider",
+          value: choice()?.provider || null,
+          options:
+            choice()?.providers.map((entry) => ({
+              value: entry.id,
+              label: entry.label,
+            })) ?? [],
+          disabled: props.pending || state().busy,
+          renderLeading: (entry) => <ProviderBrandIcon provider={entry.value} />,
+          onChange: (value) => state().selectProvider(value),
+        }}
+      />
+      <Show when={provider()}>
+        <Picker
+          params={{
+            label: t("profilePage.modelAccounts.method"),
+            className: "profile-auth-method",
+            value: choice()?.method || null,
+            options:
+              provider()?.methods.map((method) => ({
+                value: method.id,
+                label: method.label,
+                description: method.hint,
+              })) ?? [],
+            disabled: props.pending || state().busy,
+            onChange: (value) => state().selectMethod(value),
+          }}
+        />
+      </Show>
+      <Show
+        when={!props.pending && !state().busy && !state().error && choice()?.providers.length === 0}
+      >
+        <span>{t("profilePage.modelAccounts.noMethods")}</span>
+      </Show>
+      <div class="wizard-step__actions">
+        {props.cancel}
+        <button
+          type="button"
+          class="btn btn--sm primary profile-auth-connect-start"
+          disabled={props.pending || state().busy || !choice()?.method}
+          onClick={() => state().startConnect()}
+        >
+          {t("profilePage.modelAccounts.connectAction")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function StatusCheck(props: StateProps & { pending: boolean; onCheck: () => void }) {
+  const state = () => props.readState();
+  return (
+    <Show when={state().statusUnavailable || props.pending}>
+      <button
+        type="button"
+        class="btn btn--sm profile-auth-connect-check"
+        disabled={props.pending || state().cancelBusy}
+        onClick={() => props.onCheck()}
+      >
+        {t("profilePage.modelAccounts.checkStatusAction")}
+      </button>
+    </Show>
+  );
+}
+
 function SignIn(props: StateProps) {
   const state = () => props.readState();
   const choice = () => state().signIn;
   const provider = () => choice()?.providers.find((entry) => entry.id === choice()?.provider);
   const flow = () => state().connectFlow;
+  const catalogReceipt = createMemo(() => state().catalogReceipt);
+  const catalogRead = createDeferred(() =>
+    catalogReceipt().result.then((error) => {
+      if (error) {
+        throw new Error(error);
+      }
+    }),
+  );
+  const statusReceipt = createMemo(() => state().statusReceipt);
+  const statusRead = createDeferred(() =>
+    statusReceipt().result.then((error) => {
+      if (error) {
+        throw new Error(error);
+      }
+    }),
+  );
+  const readCatalog = () => {
+    catalogRead();
+    return null;
+  };
+  const readStatus = () => {
+    statusRead();
+    return null;
+  };
   const cancel = () => (
     <button
       type="button"
@@ -139,58 +238,22 @@ function SignIn(props: StateProps) {
           <Show
             when={flow()}
             fallback={
-              <div class="model-accounts-choice">
-                <LitContent
-                  render={() =>
-                    renderPicker({
-                      label: t("profilePage.modelAccounts.provider"),
-                      className: "profile-auth-provider",
-                      value: choice()?.provider || null,
-                      options:
-                        choice()?.providers.map((entry) => ({
-                          value: entry.id,
-                          label: entry.label,
-                        })) ?? [],
-                      disabled: state().busy,
-                      renderLeading: (entry) => renderProviderBrandIcon(entry.value),
-                      onChange: (value) => state().selectProvider(value),
-                    })
-                  }
-                />
-                <Show when={provider()}>
-                  <LitContent
-                    render={() =>
-                      renderPicker({
-                        label: t("profilePage.modelAccounts.method"),
-                        className: "profile-auth-method",
-                        value: choice()?.method || null,
-                        options:
-                          provider()?.methods.map((method) => ({
-                            value: method.id,
-                            label: method.label,
-                            description: method.hint,
-                          })) ?? [],
-                        disabled: state().busy,
-                        onChange: (value) => state().selectMethod(value),
-                      })
-                    }
+              <Errored
+                fallback={() => (
+                  <SignInChoice readState={props.readState} pending={false} cancel={cancel()} />
+                )}
+              >
+                <Loading
+                  fallback={<SignInChoice readState={props.readState} pending cancel={cancel()} />}
+                >
+                  {readCatalog()}
+                  <SignInChoice
+                    readState={props.readState}
+                    pending={isPending(catalogRead)}
+                    cancel={cancel()}
                   />
-                </Show>
-                <Show when={!state().busy && !state().error && choice()?.providers.length === 0}>
-                  <span>{t("profilePage.modelAccounts.noMethods")}</span>
-                </Show>
-                <div class="wizard-step__actions">
-                  {cancel()}
-                  <button
-                    type="button"
-                    class="btn btn--sm primary profile-auth-connect-start"
-                    disabled={state().busy || !choice()?.method}
-                    onClick={() => state().startConnect()}
-                  >
-                    {t("profilePage.modelAccounts.connectAction")}
-                  </button>
-                </div>
-              </div>
+                </Loading>
+              </Errored>
             }
           >
             <div class="model-accounts-flow">
@@ -204,38 +267,46 @@ function SignIn(props: StateProps) {
                 }
               >
                 {(step) => (
-                  <LitContent
-                    render={() => {
-                      const renderedStep = step();
-                      const cancelAction = document.createElement("button");
-                      cancelAction.type = "button";
-                      cancelAction.className = "btn btn--sm profile-auth-connect-cancel";
-                      cancelAction.disabled = state().cancelBusy;
-                      cancelAction.textContent = t("profilePage.modelAccounts.cancelAction");
-                      cancelAction.addEventListener("click", () => state().connectStatus("cancel"));
-                      return renderWizardStepControls({
-                        step: renderedStep,
-                        value: state().stepValue,
-                        busy: state().busy,
-                        inputId: "profile-account-auth-answer",
-                        leadingAction: cancelAction,
-                        onValueChange: (value) => state().setStepValue(renderedStep.id, value),
-                        onAnswer: (value) => state().answerStep(renderedStep.id, value),
-                      });
-                    }}
+                  <WizardStepControls
+                    step={step()}
+                    value={state().stepValue}
+                    busy={state().busy}
+                    inputId="profile-account-auth-answer"
+                    leadingAction={cancel()}
+                    onValueChange={(value) => state().setStepValue(step().id, value)}
+                    onAnswer={(value) => state().answerStep(step().id, value)}
                   />
                 )}
               </Show>
-              <Show when={state().statusUnavailable}>
-                <button
-                  type="button"
-                  class="btn btn--sm profile-auth-connect-check"
-                  disabled={state().cancelBusy}
-                  onClick={() => state().connectStatus("status")}
+              <Errored
+                fallback={(_error, reset) => (
+                  <StatusCheck
+                    readState={props.readState}
+                    pending={false}
+                    onCheck={() => {
+                      state().connectStatus("status");
+                      reset();
+                    }}
+                  />
+                )}
+              >
+                <Loading
+                  fallback={
+                    <StatusCheck
+                      readState={props.readState}
+                      pending
+                      onCheck={() => state().connectStatus("status")}
+                    />
+                  }
                 >
-                  {t("profilePage.modelAccounts.checkStatusAction")}
-                </button>
-              </Show>
+                  {readStatus()}
+                  <StatusCheck
+                    readState={props.readState}
+                    pending={isPending(statusRead)}
+                    onCheck={() => state().connectStatus("status")}
+                  />
+                </Loading>
+              </Errored>
             </div>
           </Show>
         }
@@ -338,11 +409,11 @@ function ModelAccountRows(props: StateProps) {
 
 export function ModelAccountsSection(props: StateProps) {
   const state = () => props.readState();
-  const snapshot = () => state().context.gateway.snapshot;
+  const snapshot = () => state().props.target.read().gateway;
   const person = () =>
-    snapshot().selfUser?.id === state().props.identityId ? snapshot().selfUser : null;
+    snapshot().selfUser?.id === state().props.target.read().identityId ? snapshot().selfUser : null;
   const personLabel = () =>
-    person()
+    person() || state().target
       ? state().props.personLabel ||
         person()?.name ||
         person()?.email ||
@@ -373,7 +444,7 @@ export function ModelAccountsSection(props: StateProps) {
           <button
             type="button"
             class="btn btn--sm profile-auth-accounts-refresh"
-            disabled={state().inventoryLoading}
+            disabled={!state().connected || state().inventoryLoading}
             onClick={() => void state().loadAccounts()}
           >
             {t("common.refresh")}

@@ -32,7 +32,7 @@ describe("callGoogleMeetGateway local fallback", () => {
       callGoogleMeetGateway({
         method: "googlemeet.status",
       }),
-    ).resolves.toEqual({ ok: false, error });
+    ).resolves.toEqual({ ok: false });
   });
 
   it("propagates a coded transport close", async () => {
@@ -69,7 +69,7 @@ describe("callGoogleMeetGateway local fallback", () => {
       callGoogleMeetGateway({
         method: "googlemeet.status",
       }),
-    ).resolves.toEqual({ ok: false, error });
+    ).resolves.toEqual({ ok: false });
   });
 
   it.each([

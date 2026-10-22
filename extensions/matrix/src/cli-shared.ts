@@ -605,9 +605,7 @@ export function printVerificationStatus(
   if (verbose) {
     console.log("Diagnostics:");
     printVerificationIdentity(status);
-    if (status.serverDeviceKnown !== undefined) {
-      console.log(`Device present on server: ${yesNoUnknown(status.serverDeviceKnown ?? null)}`);
-    }
+    console.log(`Device present on server: ${yesNoUnknown(status.serverDeviceKnown)}`);
     printVerificationTrustDiagnostics(status);
     printBackupStatus(backup);
     printTimestamp("Recovery key created at", status.recoveryKeyCreatedAt);

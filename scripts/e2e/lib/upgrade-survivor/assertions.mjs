@@ -9,6 +9,7 @@ import {
 } from "../../../lib/sqlite-transcript-payload.mjs";
 import {
   UPGRADE_SURVIVOR_ASSERTION_SCENARIOS,
+  usesCronOwnerAtBaseline,
   usesStructuredToolSearchAtBaseline,
 } from "../../../lib/upgrade-survivor-policy.mjs";
 import {
@@ -28,6 +29,7 @@ import * as sessionSourceFixture from "./session-source-fixture.mjs";
 import {
   assertUpgradeVolumeMigrated,
   measureVolumeDoctorBudget,
+  seedPublishedCronJobs,
   seedUpgradeVolume,
 } from "./sqlite-volume.mjs";
 
@@ -212,7 +214,7 @@ function seedLegacyMeetingTranscripts(stateDir) {
   write(path.join(sessionDir, "summary.md"), "# Design review\n\nShipped transcript summary.\n");
 }
 
-function seedLegacyCronScheduledAuthority(stateDir) {
+async function seedLegacyCronScheduledAuthority(stateDir, packageRoot) {
   const createdAtMs = Date.parse("2026-07-01T10:00:00.000Z");
   const base = {
     enabled: true,
@@ -224,53 +226,57 @@ function seedLegacyCronScheduledAuthority(stateDir) {
     delivery: { mode: "none" },
     state: { nextRunAtMs: createdAtMs + 3_600_000 },
   };
-  writeJson(path.join(stateDir, "cron", "jobs.json"), {
-    version: 1,
-    jobs: [
-      {
-        ...base,
-        id: "cron-pre-cap",
-        name: "Pre-cap agent job",
-        payload: { kind: "agentTurn", message: "pre-cap" },
+  const jobs = [
+    {
+      ...base,
+      id: "cron-pre-cap",
+      name: "Pre-cap agent job",
+      payload: { kind: "agentTurn", message: "pre-cap" },
+    },
+    {
+      ...base,
+      id: "cron-ownerless-cap",
+      name: "Ownerless capped job",
+      payload: { kind: "agentTurn", message: "ownerless", toolsAllow: ["write"] },
+    },
+    {
+      ...base,
+      id: "cron-owner-session",
+      name: "Persisted owner session",
+      owner: {
+        agentId: "main",
+        sessionKey: "agent:main:discord:group:ops",
       },
-      {
-        ...base,
-        id: "cron-ownerless-cap",
-        name: "Ownerless capped job",
-        payload: { kind: "agentTurn", message: "ownerless", toolsAllow: ["write"] },
+      payload: { kind: "agentTurn", message: "owned", toolsAllow: ["write"] },
+    },
+    {
+      ...base,
+      id: "cron-encoded-account",
+      name: "Encoded owner account",
+      owner: {
+        agentId: "main",
+        sessionKey: "agent:main:discord:personal:direct:user-1",
       },
-      {
-        ...base,
-        id: "cron-owner-session",
-        name: "Persisted owner session",
-        owner: {
-          agentId: "main",
-          sessionKey: "agent:main:discord:group:ops",
-        },
-        payload: { kind: "agentTurn", message: "owned", toolsAllow: ["write"] },
+      payload: { kind: "agentTurn", message: "encoded", toolsAllow: ["write"] },
+    },
+    {
+      ...base,
+      id: "cron-agent-mismatch",
+      name: "Mismatched owner agent",
+      owner: {
+        agentId: "other",
+        sessionKey: "agent:main:discord:work:direct:user-2",
       },
-      {
-        ...base,
-        id: "cron-encoded-account",
-        name: "Encoded owner account",
-        owner: {
-          agentId: "main",
-          sessionKey: "agent:main:discord:personal:direct:user-1",
-        },
-        payload: { kind: "agentTurn", message: "encoded", toolsAllow: ["write"] },
-      },
-      {
-        ...base,
-        id: "cron-agent-mismatch",
-        name: "Mismatched owner agent",
-        owner: {
-          agentId: "other",
-          sessionKey: "agent:main:discord:work:direct:user-2",
-        },
-        payload: { kind: "agentTurn", message: "mismatch", toolsAllow: ["write"] },
-      },
-    ],
-  });
+      payload: { kind: "agentTurn", message: "mismatch", toolsAllow: ["write"] },
+    },
+  ];
+  if (!usesCronOwnerAtBaseline(requireEnv("OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION"))) {
+    for (const job of jobs) {
+      delete job.owner;
+    }
+  }
+  const saved = await seedPublishedCronJobs(stateDir, packageRoot, jobs);
+  assertStrict.deepEqual(saved, jobs, "published cron authority fixture round-trip changed");
 }
 
 function getScenario() {
@@ -333,7 +339,7 @@ function assertRuntimeDependenciesSurvived(stateDir, versioned) {
   }
 }
 
-function seedState() {
+async function seedState(packageRoot) {
   const stateDir = requireEnv("OPENCLAW_STATE_DIR");
   const workspace = requireEnv("OPENCLAW_TEST_WORKSPACE_DIR");
   const scenario = getScenario();
@@ -372,7 +378,7 @@ function seedState() {
     seedLegacyMeetingTranscripts(stateDir);
   }
   if (scenario === "cron-scheduled-authority") {
-    seedLegacyCronScheduledAuthority(stateDir);
+    await seedLegacyCronScheduledAuthority(stateDir, packageRoot);
   }
   if (scenario === "auth-profile-v2026-7-2-beta-5") {
     const fixture = readJson(
@@ -910,14 +916,12 @@ function assertAuthProfileMigrationSurvived(stateDir, stage) {
 }
 
 function assertCronScheduledAuthorityMigrated(stateDir, stage) {
-  const legacyStorePath = path.join(stateDir, "cron", "jobs.json");
   const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+  assert(
+    !fs.existsSync(path.join(stateDir, "cron", "jobs.json")),
+    "retired cron fixture store exists",
+  );
   if (stage === "baseline") {
-    if (fs.existsSync(legacyStorePath)) {
-      const jobs = readJson(legacyStorePath).jobs ?? [];
-      assert(jobs.length === 5, "legacy cron authority fixture row count changed before update");
-      return;
-    }
     assert(fs.existsSync(databasePath), "legacy cron authority fixture missing before update");
     readDatabase(databasePath, (db) => {
       const rows = db.prepare("SELECT job_json FROM cron_jobs WHERE job_id LIKE 'cron-%'").all();
@@ -933,16 +937,34 @@ function assertCronScheduledAuthorityMigrated(stateDir, stage) {
     const rows = db
       .prepare("SELECT job_id, job_json FROM cron_jobs WHERE job_id LIKE 'cron-%'")
       .all();
-    const jobs = new Map(rows.map((row) => [row.job_id, JSON.parse(row.job_json)]));
+    const jobs = new Map(
+      rows.map((row) => {
+        assert(typeof row.job_id === "string", "persisted cron fixture ID must be a string");
+        return [row.job_id, JSON.parse(row.job_json)];
+      }),
+    );
     assert(jobs.size === 5, `cron authority fixture row count changed: ${jobs.size}`);
-    assert(
-      jobs.get("cron-encoded-account")?.scheduledToolPolicy?.ownerAccountId === "personal",
-      "session-encoded account authority was not recovered",
+    const persistedOwner = usesCronOwnerAtBaseline(
+      requireEnv("OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION"),
     );
-    assert(
-      jobs.get("cron-encoded-account")?.owner?.accountId === "personal",
-      "session-encoded account was not projected onto the owner",
-    );
+    if (persistedOwner) {
+      assert(
+        jobs.get("cron-encoded-account")?.scheduledToolPolicy?.ownerAccountId === "personal",
+        "session-encoded account authority was not recovered",
+      );
+      assert(
+        jobs.get("cron-encoded-account")?.owner?.accountId === "personal",
+        "session-encoded account was not projected onto the owner",
+      );
+    } else {
+      for (const job of jobs.values()) {
+        assert(job.owner === undefined, "ownerless baseline unexpectedly gained an owner");
+        assert(
+          job.scheduledToolPolicy === undefined,
+          "ownerless baseline unexpectedly gained scheduled authority",
+        );
+      }
+    }
     for (const id of [
       "cron-pre-cap",
       "cron-ownerless-cap",
@@ -1147,7 +1169,7 @@ function assertSessionMetadataMigrated(stateDir, stage) {
   assert(group?.sessionId === LEGACY_SESSION_GROUP_ID, "channel legacy session row missing");
   if (getScenario() === "acpx-openclaw-tools-bridge") {
     assertStrict.deepEqual(
-      group.acp,
+      readSavedAcpMetadata(stateDir, group),
       LEGACY_ACP_META,
       "saved ACP session or model selection changed",
     );
@@ -1208,6 +1230,47 @@ function assertSessionMetadataMigrated(stateDir, stage) {
     main.skillsSnapshot?.resolvedSkills === undefined,
     "heavy resolvedSkills cache was persisted into migrated session metadata",
   );
+}
+
+function readSavedAcpMetadata(stateDir, group) {
+  const dbPath = path.join(stateDir, "state", "openclaw.sqlite");
+  if (!fs.existsSync(dbPath)) {
+    return group.acp;
+  }
+  return readDatabase(dbPath, (db) => {
+    if (
+      !db
+        .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'acp_sessions'")
+        .get()
+    ) {
+      // Frozen releases predating shared ACP storage still own inline metadata.
+      return group.acp;
+    }
+    // Read-only external-fixture contract: this is the exact v1 identity for
+    // ["main", "agent:main:slack:channel:cupgrade"], not a runtime key encoder.
+    // Keep the observer independent of candidate imports and database admission.
+    const row = db
+      .prepare("SELECT * FROM acp_sessions WHERE session_key = ?")
+      .get("@acp:v1:WyJtYWluIiwiYWdlbnQ6bWFpbjpzbGFjazpjaGFubmVsOmN1cGdyYWRlIl0");
+    if (!row) {
+      return undefined;
+    }
+    assert(row.session_id === LEGACY_SESSION_GROUP_ID, "saved ACP session binding changed");
+    return {
+      backend: row.backend,
+      agent: row.agent,
+      runtimeSessionName: row.runtime_session_name,
+      ...(row.identity_json != null ? { identity: JSON.parse(row.identity_json) } : {}),
+      mode: row.mode,
+      ...(row.runtime_options_json != null
+        ? { runtimeOptions: JSON.parse(row.runtime_options_json) }
+        : {}),
+      ...(row.cwd != null ? { cwd: row.cwd } : {}),
+      state: row.state,
+      lastActivityAt: row.last_activity_at,
+      ...(row.last_error != null ? { lastError: row.last_error } : {}),
+    };
+  });
 }
 
 function readMigratedSessionStore(stateDir, targetStorePath) {
@@ -1288,7 +1351,7 @@ function readMigratedSessionStore(stateDir, targetStorePath) {
 
 function readInstalledPluginIndex() {
   const stateDir = requireEnv("OPENCLAW_STATE_DIR");
-  const index = readPluginInstallIndex({ stateDir });
+  const index = readPluginInstallIndex({ stateDir, summary: true });
   assert(index.installRecords, "installed plugin index missing");
   return index;
 }
@@ -1413,6 +1476,7 @@ function assertNpmPluginInstall([
   observationRoot,
   baselineVersion,
   publishedCompanionTarball,
+  expectedRegistryVersion = expectedVersion,
 ]) {
   assert(
     pluginId && packageName && expectedVersion,
@@ -1450,7 +1514,7 @@ function assertNpmPluginInstall([
   const { manifest } = validatePrepublishPluginRegistryArtifact({
     artifactDir,
     expectedSourceSha: requireEnv("OPENCLAW_DOCKER_E2E_SELECTED_SHA"),
-    expectedCandidateVersion: expectedVersion,
+    expectedCandidateVersion: expectedRegistryVersion,
     expectedManifestSha256: requireEnv("OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256"),
     requiredPackages: [packageName],
   });
@@ -1801,6 +1865,17 @@ function assertSuccessfulUpdateResult(result, expectedVersion) {
           (step?.name === "openclaw doctor" &&
             step.exitCode === 86 &&
             step.advisory?.kind === "package-post-install-doctor") ||
+          (step?.name === "candidate-gateway-startup-cleanup" &&
+            step.exitCode === null &&
+            step.advisory?.kind === "recoverable-maintenance" &&
+            !step.termination &&
+            !step.signal &&
+            !step.killed &&
+            !step.outputLimitExceeded &&
+            !step.failureFacts?.length &&
+            result.steps.some(
+              (primary) => primary?.name === "candidate-gateway-startup" && primary.exitCode === 0,
+            )) ||
           // Doctor lint exits 1 for selected INFO findings after verified activation.
           (step?.name === "post-activation doctor inspections" &&
             step.exitCode === 1 &&
@@ -1909,7 +1984,7 @@ function assertMobilePairingEvidence(files) {
 const commands = {
   "list-scenarios": () => process.stdout.write(`${JSON.stringify([...SCENARIOS])}\n`),
   "missing-load-path": () => import("./missing-load-path.mjs"),
-  seed: seedState,
+  seed: ([packageRoot]) => seedState(packageRoot),
   "seed-legacy-operator": legacyOperator?.seedLegacyOperatorState,
   "seed-legacy-operator-external-plugin": legacyOperator?.seedLegacyOperatorExternalPlugin,
   "assert-legacy-operator-external-plugin": ([version]) =>

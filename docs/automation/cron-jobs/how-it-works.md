@@ -16,10 +16,13 @@ How the Gateway scheduler runs a job, what it keeps between runs, and how a repe
 - Automations run **inside the Gateway process**, not inside the model. The Gateway must be running for schedules to fire.
 - Job definitions, runtime state, and run history persist in OpenClaw's shared SQLite state database, so restarts do not lose schedules.
 - Automation runs are recorded in cron run history.
+- Main-session system events use ordinary session admission and remain running until the exact turn settles. A restart before adoption records one interrupted failure; it does not report success or replay the reminder.
 - Agent, command, and script jobs write their result once into the chat or topic that receives it, including jobs without a creating conversation. A different delivery destination gets the result instead of the creating chat; without an external route, the creating conversation receives it. Execution context remains separate. See [Automation delivery](/automation/cron-jobs/delivery).
 - One-shot jobs (`--at`) auto-delete after successful completion: delivery is confirmed, not requested, intentionally suppressed, or explicitly best-effort. Failed or unknown required delivery retains the job disabled for inspection without replaying the payload. Pass `--keep-after-run` to keep successful jobs too.
 - Per-run wall-clock budget: `--timeout-seconds` when set. Otherwise, isolated/detached agent-turn jobs are bounded by the scheduler's own 60-minute watchdog; command jobs default to 10 minutes, and script payloads default to 5 minutes. This scheduler deadline is independent of the per-model-attempt budget (`agents.defaults.timeoutSeconds`, default 48 hours): starting a fallback does not reset it.
-- On Gateway startup, overdue agent-turn jobs and jobs that await a heartbeat are rescheduled instead of replayed immediately, keeping model/tool execution out of scheduler startup. This includes heartbeat monitors, migrated heartbeat tasks, and main-session system events with immediate wake. Startup catch-up delays survive label or payload-content reconciliation and another restart; changing the schedule starts a new scheduling decision.
+- On Gateway startup, overdue jobs that require agent execution are rescheduled instead of replayed immediately, keeping model/tool execution out of scheduler startup. This includes migrated monitors and main-session system events. Startup catch-up delays survive label or payload-content reconciliation and another restart; changing the schedule starts a new scheduling decision.
+- Jobs whose agents are still preparing remain queued without blocking healthy agents. They resume when their Gateway's preparation finishes.
+- Cron slots that pass during a successful or skipped scheduled run are not replayed at restart. Slots missed after that run finishes remain eligible for catch-up. Forced runs still leave their scheduled occurrence pending.
 - When a running Gateway wakes after a deadline, the cron worker coalesces missed timer ticks using its stored deadlines and run requests. The worker owns scheduling, queue capacity, and durable results; the Gateway launches committed requests and joins the worker during shutdown.
 - If you drive `openclaw agent` from system cron or another external scheduler, wrap it with a hard-kill escalation even though the CLI already handles `SIGTERM`/`SIGINT`. Gateway-backed runs ask the Gateway to abort accepted runs; `--local` runs get the same abort signal. For GNU `timeout`, prefer `timeout -k 60 600 openclaw agent ...` over plain `timeout 600 ...` — the `-k` value is the backstop if the process cannot drain in time. For systemd units, use a `SIGTERM` stop signal with a grace window (`TimeoutStopSec`) before the final kill. Reusing a `--run-id` while the original Gateway run is still active reports the duplicate as in-flight instead of starting a second run.
 
@@ -43,7 +46,7 @@ How the Gateway scheduler runs a job, what it keeps between runs, and how a repe
 
     The cron worker records execution and primary-delivery outcomes together with job state and history. Post-run notifications happen afterward; a notification failure cannot undo the recorded result.
 
-    Restart recovery matches a recorded terminal result to the exact run identity and restores it without running the payload or delivery again. Without a recorded terminal result, an active run becomes interrupted with delivery **Unknown**. An interrupted scheduled one-shot stays disabled; inspect its history and recipient before retrying manually. An early manual run preserves its separate scheduled occurrence even if it waited past that deadline before starting. The interrupted manual run is still failed and is not retried. Recurring jobs continue with future scheduling. A separately rescheduled one-shot keeps its new occurrence. This avoids replaying uncertain command, script, tool, or delivery effects after a crash, at the cost of possibly missing an occurrence that was marked active just before the crash.
+    Restart recovery matches a recorded terminal result to the exact run identity and restores it without running the payload or delivery again. Without a recorded terminal result, an active run becomes interrupted with delivery **Unknown**. An enabled, unchanged, time-scheduled agent-turn job interrupted before delivery gets one fresh retry, including one-shot jobs. The retry restores current job authority and asks the agent to reconcile prior work before continuing; arbitrary interrupted tool effects are not guaranteed exactly once. Possible prior delivery, command/script payloads, and event or process-exit schedules are not automatically replayed. Inspect their history and recipient before retrying manually. An early manual run preserves its separate scheduled occurrence even if it waited past that deadline before starting. The interrupted manual run is still failed and is not retried. A separately rescheduled one-shot keeps its new occurrence.
 
     Queued timed requests can resume after restart. Queued manual or event requests whose transient payload was lost record a skipped outcome instead of reconstructing the payload. Catch-up limits and delays still pace overdue scheduling. A terminal result with `deleteAfterRun` deletes the job only when completion is `succeeded`.
 
@@ -66,9 +69,12 @@ schedule.
 There is no repetition-detection engine and no new stored history. The agent
 recognizes the repeat from the conversation itself and checks
 `automations(action: "list")` for an existing job before proposing a new one,
-so a routine you already created is not duplicated. The prompting that drives
-this is gated on the automations tool, so agents without it never offer a
-routine they could not create.
+so a routine you already created is not duplicated. The prompt includes this
+guidance when the automations tool is available and tells the agent to offer
+promotion only when its current actions include `list`, `add`, `run`, and
+`remove`. Read-only recovery and other restricted tool variants do not support
+this workflow. This is model guidance; tool policy and approvals still govern
+the actions.
 
 The confirmation restates the schedule and the task in plain words before
 anything is created, for example: "Every weekday at 07:00 Europe/Vienna, I

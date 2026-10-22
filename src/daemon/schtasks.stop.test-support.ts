@@ -84,13 +84,13 @@ vi.mock("../utils.js", async () => {
 });
 
 const {
-  resolveTaskScriptPath,
   restartScheduledTask,
   resumeScheduledTaskAutoStartAfterUpdate,
   startScheduledTask,
   stopScheduledTask,
   suspendScheduledTaskAutoStartForUpdate,
-} = await import("./schtasks.js");
+} = await import("./schtasks-control.js");
+const { resolveTaskScriptPath } = await import("./schtasks-layout.js");
 const { probeProcessState, resolveScheduledTaskOwnedGatewayPids } =
   await import("./schtasks-process.js");
 const { formatWindowsTaskSupervisorChildArgument } =

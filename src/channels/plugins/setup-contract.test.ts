@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
 import {
@@ -7,29 +7,38 @@ import {
 } from "./setup-contract.js";
 import { moveSingleAccountChannelSectionToDefaultAccount } from "./setup-helpers.js";
 
-describe("defineChannelSetupContract", () => {
-  it("keeps released adapters intact while preferring channel-owned contracts", () => {
-    const setup = { applyAccountConfig: ({ cfg }: { cfg: OpenClawConfig }) => cfg };
-    const setupContract = defineChannelSetupContract({ fields: {}, adapter: setup });
+const adapter = { applyAccountConfig: ({ cfg }: { cfg: OpenClawConfig }) => cfg };
+const cli = (flags: string) => ({ flags, description: "Setup option" });
+const fields = {
+  token: { kind: "string", cli: cli("--token <token>") },
+  transport: {
+    kind: "choice",
+    choices: ["external-native", "container"],
+    cli: cli("--transport <kind>"),
+  },
+  port: { kind: "integer", cli: cli("--port <port>") },
+  allowFrom: { kind: "string-list", cli: cli("--allow-from <ids>") },
+  useEnv: { kind: "boolean", cli: cli("--use-env") },
+} as const;
 
-    expect(resolveChannelSetupExecutionAdapter({ setup })).toBe(setup);
-    expect(resolveChannelSetupExecutionAdapter({ setup, setupContract })).toBe(setupContract);
-    expect(resolveChannelSetupExecutionAdapter({})).toBeUndefined();
+function booleanContract(key: string, flags: string, negatedFlags: string) {
+  return defineChannelSetupContract({
+    fields: { [key]: { kind: "boolean", cli: { flags, negatedFlags, description: "Mode" } } },
+    adapter,
   });
+}
 
+describe("defineChannelSetupContract", () => {
   it("keeps ignored aliases ineligible during cold channel-owned promotion", () => {
     const defaultAccount = "work-phone";
     const next = withPluginCache(createPluginCache(), () => {
-      const promotion = {
-        accountKeyPolicy: { canonicalAliasesRequireOwnField: "account" },
-        singleAccountKeysToMove: ["account"],
-        namedAccountPromotionKeys: ["account"],
-      };
       const plugin = {
         setupContract: defineChannelSetupContract({
           fields: {},
           adapter: {
-            ...promotion,
+            accountKeyPolicy: { canonicalAliasesRequireOwnField: "account" },
+            singleAccountKeysToMove: ["account"],
+            namedAccountPromotionKeys: ["account"],
             applyAccountConfig: ({ cfg }) => cfg,
           },
         }),
@@ -63,155 +72,57 @@ describe("defineChannelSetupContract", () => {
   });
 
   it("requires negated flags to resolve to the same field key", () => {
-    expect(() =>
-      defineChannelSetupContract({
-        fields: {
-          tenant: {
-            kind: "boolean",
-            cli: {
-              flags: "--tenant",
-              negatedFlags: "--no-other",
-              description: "Tenant mode",
-            },
-          },
-        },
-        adapter: { applyAccountConfig: ({ cfg }) => cfg },
-      }),
-    ).toThrow('Channel setup field "tenant" must match camelCased long flag name "other"');
-
-    expect(() =>
-      defineChannelSetupContract({
-        fields: {
-          useEnv: {
-            kind: "boolean",
-            cli: {
-              flags: "--use-env",
-              negatedFlags: "--no-use-env",
-              description: "Use environment credentials",
-            },
-          },
-        },
-        adapter: { applyAccountConfig: ({ cfg }) => cfg },
-      }),
-    ).not.toThrow();
+    expect(() => booleanContract("tenant", "--tenant", "--no-other")).toThrow(
+      'Channel setup field "tenant" must match camelCased long flag name "other"',
+    );
+    expect(() => booleanContract("useEnv", "--use-env", "--no-use-env")).not.toThrow();
   });
 
   it("parses channel-owned fields and gives adapters inferred input types", () => {
-    const applyAccountConfig = vi.fn(
-      ({
-        input,
-      }: {
-        input: {
-          name?: string;
-          token?: string;
-          transport?: "external-native" | "container";
-          port?: number;
-          allowFrom?: string[];
-          useEnv?: boolean;
-        };
-      }) => {
-        void input.token;
-        return {};
-      },
-    );
-    const contract = defineChannelSetupContract({
-      fields: {
-        token: {
-          kind: "string",
-          cli: { flags: "--token <token>", description: "Bot token" },
-        },
-        transport: {
-          kind: "choice",
-          choices: ["external-native", "container"],
-          cli: { flags: "--transport <kind>", description: "Transport kind" },
-        },
-        port: {
-          kind: "integer",
-          cli: { flags: "--port <port>", description: "HTTP port" },
-        },
-        allowFrom: {
-          kind: "string-list",
-          cli: { flags: "--allow-from <ids>", description: "Allowed sender ids" },
-        },
-        useEnv: {
-          kind: "boolean",
-          cli: { flags: "--use-env", description: "Use environment credentials" },
-        },
-      },
-      adapter: {
-        applyAccountConfig,
-      },
-    });
-
-    const parsed = contract.parseInput({
+    const expected = {
       name: "work",
       token: "secret",
       transport: "container",
-      port: "8080",
-      allowFrom: "alice,bob",
+      port: 8080,
+      allowFrom: ["alice", "bob"],
       useEnv: true,
-    });
-
-    expect(parsed).toEqual({
-      ok: true,
-      value: {
-        name: "work",
-        token: "secret",
-        transport: "container",
-        port: 8080,
-        allowFrom: ["alice", "bob"],
-        useEnv: true,
+    };
+    const contract = defineChannelSetupContract({
+      fields,
+      adapter: {
+        applyAccountConfig: (params) => {
+          expectTypeOf(params.input.name).toEqualTypeOf<string | undefined>();
+          expectTypeOf(params.input.token).toEqualTypeOf<string | undefined>();
+          expectTypeOf(params.input.transport).toEqualTypeOf<
+            "external-native" | "container" | undefined
+          >();
+          expectTypeOf(params.input.port).toEqualTypeOf<number | undefined>();
+          expectTypeOf(params.input.allowFrom).toEqualTypeOf<string[] | undefined>();
+          expectTypeOf(params.input.useEnv).toEqualTypeOf<boolean | undefined>();
+          expect(params).toEqual({ cfg: {}, accountId: "default", input: expected });
+          return {};
+        },
       },
     });
+    const parsed = contract.parseInput({ ...expected, port: "8080", allowFrom: "alice,bob" });
+    expect(parsed).toEqual({ ok: true, value: expected });
     if (!parsed.ok) {
       throw new Error(parsed.error);
     }
     expect(
       contract.applyAccountConfig({ cfg: {}, accountId: "default", input: parsed.value }),
     ).toEqual({});
-    expect(applyAccountConfig).toHaveBeenCalledWith({
-      cfg: {},
-      accountId: "default",
-      input: {
-        name: "work",
-        token: "secret",
-        transport: "container",
-        port: 8080,
-        allowFrom: ["alice", "bob"],
-        useEnv: true,
-      },
-    });
   });
 
-  it("rejects unsupported fields and invalid channel-owned values", () => {
+  it.each([
+    [{ transport: "managed" }, 'transport must be one of: "external-native", "container".'],
+    [{ port: "8.5" }, "port must be a non-negative integer."],
+  ] as const)("rejects invalid input %j", (input, error) => {
     const contract = defineChannelSetupContract({
-      fields: {
-        transport: {
-          kind: "choice",
-          choices: ["external-native", "container"],
-          cli: { flags: "--transport <kind>", description: "Transport kind" },
-        },
-        port: {
-          kind: "integer",
-          cli: { flags: "--port <port>", description: "HTTP port" },
-        },
-      },
-      adapter: {
-        applyAccountConfig: ({ cfg }) => cfg,
-      },
+      fields: { transport: fields.transport, port: fields.port },
+      adapter,
     });
 
-    expect(contract.parseInput({ token: "wrong channel" })).toEqual({
-      ok: false,
-      error: "Unsupported setup option: token",
-    });
-    expect(contract.parseInput({ transport: "managed" })).toEqual({
-      ok: false,
-      error: 'transport must be one of: "external-native", "container".',
-    });
-    expect(contract.parseInput({ port: "8.5" })).toEqual({
-      ok: false,
-      error: "port must be a non-negative integer.",
-    });
+    expect(contract.parseInput(input)).toEqual({ ok: false, error });
   });
 });
