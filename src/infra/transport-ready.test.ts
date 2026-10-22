@@ -2,20 +2,12 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
+import { sleepWithAbort } from "./backoff.js";
 import { waitForTransportReady } from "./transport-ready.js";
 
-const transportReadyMocks = vi.hoisted(() => ({ injectedSleepError: null as Error | null }));
-
 vi.mock("./backoff.js", async (importOriginal) => {
-  const { sleepWithAbort } = await importOriginal<typeof import("./backoff.js")>();
-  return {
-    sleepWithAbort: async (ms: number, signal?: AbortSignal) => {
-      if (transportReadyMocks.injectedSleepError) {
-        throw transportReadyMocks.injectedSleepError;
-      }
-      return sleepWithAbort(ms, signal);
-    },
-  };
+  const actual = await importOriginal<typeof import("./backoff.js")>();
+  return { sleepWithAbort: vi.fn(actual.sleepWithAbort) };
 });
 
 describe("waitForTransportReady", () => {
@@ -37,7 +29,6 @@ describe("waitForTransportReady", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    transportReadyMocks.injectedSleepError = null;
   });
 
   it("returns when the check succeeds and logs after the delay", async () => {
@@ -134,7 +125,7 @@ describe("waitForTransportReady", () => {
   });
 
   it("rethrows non-abort sleep failures", async () => {
-    transportReadyMocks.injectedSleepError = new Error("sleep exploded");
+    vi.mocked(sleepWithAbort).mockRejectedValueOnce(new Error("sleep exploded"));
 
     await expect(wait()).rejects.toThrow("sleep exploded");
 
