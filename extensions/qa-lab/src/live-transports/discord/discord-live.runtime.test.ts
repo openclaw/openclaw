@@ -1,7 +1,11 @@
 import { once } from "node:events";
+import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import path from "node:path";
+import * as discordApi from "@openclaw/discord/api.js";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createFlowInput,
@@ -20,7 +24,10 @@ import {
   renderDiscordThreadReplyAttachmentHtml,
 } from "./discord-live.evidence.js";
 import * as testing from "./discord-live.runtime.js";
-import { discordQaTranscriptsVoiceAuthorizationScenario } from "./discord-transcripts-authorization.runtime.js";
+import {
+  discordQaTranscriptsVoiceAuthorizationScenario,
+  runDiscordTranscriptsVoiceAuthorizationScenario as runTranscriptScenario,
+} from "./discord-transcripts-authorization.runtime.js";
 import { createDiscordQaScenarioEnvironment } from "./scenario-environment.js";
 import { runDiscordScenario } from "./scenario-runtime.js";
 
@@ -112,6 +119,43 @@ async function prepareScenario(voiceDestination?: string) {
   return { call, patches, configureScenario: prepared.discordScenarioContext.configureScenario };
 }
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+function transcriptFixture() {
+  const outputDir = tempDirs.make("discord-transcript-auth-");
+  const run = discordQaTranscriptsVoiceAuthorizationScenario.buildRun(sutId);
+  if (run.kind !== "transcripts-voice-authorization") {
+    throw new Error("unexpected scenario run kind");
+  }
+  const configureTranscriptVoiceAccess = vi.fn(async () => {});
+  const environment = createScenarioEnvironment({
+    outputDir,
+    runtimeEnv: { ...flowEnv, voiceChannelId },
+    scenario: {
+      id: "discord-transcripts-voice-authorization",
+      timeoutMs: 60_000,
+      title: "Discord transcript authorization",
+    },
+  });
+  return {
+    run,
+    configureTranscriptVoiceAccess,
+    start: () =>
+      runTranscriptScenario(environment, {
+        cfg: {},
+        run,
+        configureTranscriptVoiceAccess,
+        voiceChannel: { id: voiceChannelId, type: 2 },
+      }),
+    evidence: async (): Promise<Record<string, unknown>> =>
+      JSON.parse(
+        await fs.readFile(
+          path.join(outputDir, "discord-transcripts-voice-authorization-evidence.json"),
+          "utf8",
+        ),
+      ),
+  };
+}
+
 describe("discord live qa runtime", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -120,18 +164,19 @@ describe("discord live qa runtime", () => {
   });
 
   it("forwards Discord Requests through the guarded QA endpoint and preserves null responses", async () => {
-    const received: Array<{ authorization?: string; body: string; method?: string; url?: string }> =
-      [];
+    const received: [string | undefined, string, string | undefined, string | undefined][] = [];
+    const authorization = "Bot qa-token";
+    const messagePath = "/api/v10/channels/123/messages";
     const server = createServer((request, response) => {
       const chunks: Buffer[] = [];
       request.on("data", (chunk: Buffer) => chunks.push(chunk));
       request.on("end", () => {
-        received.push({
-          authorization: request.headers.authorization,
-          body: Buffer.concat(chunks).toString("utf8"),
-          method: request.method,
-          url: request.url,
-        });
+        received.push([
+          request.headers.authorization,
+          Buffer.concat(chunks).toString("utf8"),
+          request.method,
+          request.url,
+        ]);
         if (request.method === "DELETE") {
           response.writeHead(204).end();
           return;
@@ -146,11 +191,11 @@ describe("discord live qa runtime", () => {
     const endpointFetch = createDiscordQaEndpointFetcher(`http://127.0.0.1:${port}/api/v10`);
     const request = (method: string, suffix: string, body?: string) =>
       endpointFetch(
-        new Request(`https://discord.com/api/v10/channels/123/messages${suffix}`, {
+        new Request(`https://discord.com${messagePath}${suffix}`, {
           method,
           body,
           headers: {
-            authorization: "Bot qa-token",
+            authorization,
             ...(body ? { "content-type": "application/json" } : {}),
           },
         }),
@@ -164,18 +209,8 @@ describe("discord live qa runtime", () => {
       expect(deleteResponse.status).toBe(204);
       expect(deleteResponse.body).toBeNull();
       expect(received).toEqual([
-        {
-          authorization: "Bot qa-token",
-          body: JSON.stringify({ content: "hello" }),
-          method: "POST",
-          url: "/api/v10/channels/123/messages",
-        },
-        {
-          authorization: "Bot qa-token",
-          body: "",
-          method: "DELETE",
-          url: "/api/v10/channels/123/messages/456",
-        },
+        [authorization, JSON.stringify({ content: "hello" }), "POST", messagePath],
+        [authorization, "", "DELETE", `${messagePath}/456`],
       ]);
     } finally {
       server.closeAllConnections();
@@ -194,22 +229,16 @@ describe("discord live qa runtime", () => {
     ).toEqual({ ...credentials, voiceChannelId });
   });
 
-  it("fails when a required Discord QA env var is missing", () => {
+  it.each([
+    ["SUT_APPLICATION_ID", undefined, "OPENCLAW_QA_DISCORD_SUT_APPLICATION_ID"],
+    ["GUILD_ID", "qa-guild", "OPENCLAW_QA_DISCORD_GUILD_ID must be a Discord snowflake."],
+  ])("rejects invalid environment field %s", (field, value, error) => {
     expect(() =>
       testing.resolveDiscordQaRuntimeEnv({
         ...runtimeEnv,
-        OPENCLAW_QA_DISCORD_SUT_APPLICATION_ID: undefined,
+        [`OPENCLAW_QA_DISCORD_${field}`]: value,
       }),
-    ).toThrow("OPENCLAW_QA_DISCORD_SUT_APPLICATION_ID");
-  });
-
-  it("fails when Discord IDs are not snowflakes", () => {
-    expect(() =>
-      testing.resolveDiscordQaRuntimeEnv({
-        ...runtimeEnv,
-        OPENCLAW_QA_DISCORD_GUILD_ID: "qa-guild",
-      }),
-    ).toThrow("OPENCLAW_QA_DISCORD_GUILD_ID must be a Discord snowflake.");
+    ).toThrow(error);
   });
 
   it("parses Discord pooled credential payloads", () => {
@@ -236,6 +265,7 @@ describe("discord live qa runtime", () => {
     expect(next.plugins?.allow).toContain("discord");
     expect(next.plugins?.entries?.discord).toEqual({ enabled: true });
     expect(next.messages?.groupChat?.visibleReplies).toBe("automatic");
+    const ingress = { requireMention: true, users: [driverId] };
     expect(next.channels?.discord).toEqual({
       enabled: true,
       defaultAccount: "sut",
@@ -246,17 +276,7 @@ describe("discord live qa runtime", () => {
           allowBots: "mentions",
           groupPolicy: "allowlist",
           guilds: {
-            [guildId]: {
-              requireMention: true,
-              users: [driverId],
-              channels: {
-                [channelId]: {
-                  enabled: true,
-                  requireMention: true,
-                  users: [driverId],
-                },
-              },
-            },
+            [guildId]: { ...ingress, channels: { [channelId]: { ...ingress, enabled: true } } },
           },
         },
       },
@@ -281,27 +301,18 @@ describe("discord live qa runtime", () => {
   });
 
   it("normalizes observed Discord messages", () => {
+    const timestamp = "2026-04-22T12:00:00.000Z";
     expect(
       normalizeDiscordObservedMessage({
         id: voiceChannelId,
         channel_id: channelId,
         guild_id: guildId,
         content: "hello",
-        timestamp: "2026-04-22T12:00:00.000Z",
-        author: {
-          id: driverId,
-          username: "driver",
-          bot: true,
-        },
+        timestamp,
+        author: { id: driverId, username: "driver", bot: true },
         referenced_message: { id: sutId },
       }),
-    ).toEqual({
-      messageId: voiceChannelId,
-      channelId,
-      senderId: driverId,
-      text: "hello",
-      timestamp: "2026-04-22T12:00:00.000Z",
-    });
+    ).toEqual({ ...polledReply(voiceChannelId, "hello", timestamp).message, senderId: driverId });
   });
 
   it("matches Discord scenario replies by SUT id and marker", () => {
@@ -311,10 +322,8 @@ describe("discord live qa runtime", () => {
         sutBotId: sutId,
         matchText: "DISCORD_QA_ECHO_TOKEN",
         message: {
-          messageId: voiceChannelId,
-          channelId,
+          ...polledReply(voiceChannelId, "reply DISCORD_QA_ECHO_TOKEN").message,
           senderId,
-          text: "reply DISCORD_QA_ECHO_TOKEN",
         },
       });
     expect(matches(sutId)).toBe(true);
@@ -401,40 +410,37 @@ describe("discord live qa runtime", () => {
     ).toBe("https://discord.com/channels/111111111111111111/222222222222222222/333333333333333333");
   });
 
-  it("waits for the Discord account to become connected, not just running", async () => {
-    vi.useFakeTimers();
-    const gateway = {
-      call: vi
-        .fn()
-        .mockResolvedValueOnce(discordStatus(false))
-        .mockResolvedValueOnce(discordStatus(true)),
-    } as unknown as Parameters<typeof testing.waitForDiscordChannelRunning>[0];
+  it.each([true, false])(
+    "waits for connection and reports readiness timeouts (connects: %s)",
+    async (connects) => {
+      vi.useFakeTimers();
+      const gateway = {
+        call: vi.fn().mockResolvedValue(
+          discordStatus(false, {
+            lastError: null,
+            lastDisconnect: { error: "runtime-not-ready" },
+          }),
+        ),
+      } as unknown as Parameters<typeof testing.waitForDiscordChannelRunning>[0];
 
-    const readyPromise = testing.waitForDiscordChannelRunning(gateway, "sut");
-    await vi.advanceTimersByTimeAsync(600);
-
-    await expect(readyPromise).resolves.toBeUndefined();
-    expect(gateway["call"]).toHaveBeenCalledTimes(2);
-  });
-
-  it("reports the last Discord status when connection readiness times out", async () => {
-    vi.useFakeTimers();
-    const gateway = {
-      call: vi.fn().mockResolvedValue(
-        discordStatus(false, {
-          lastError: null,
-          lastDisconnect: { error: "runtime-not-ready" },
-        }),
-      ),
-    } as unknown as Parameters<typeof testing.waitForDiscordChannelRunning>[0];
-
-    const readyPromise = testing.waitForDiscordChannelRunning(gateway, "sut");
-    const assertion = expect(readyPromise).rejects.toThrow(
-      'discord account "sut" did not become connected (last status: running=true connected=false',
-    );
-    await vi.advanceTimersByTimeAsync(45_500);
-    await assertion;
-  });
+      if (connects) {
+        vi.mocked(gateway.call)
+          .mockResolvedValueOnce(discordStatus(false))
+          .mockResolvedValueOnce(discordStatus(true));
+      }
+      const ready = testing.waitForDiscordChannelRunning(gateway, "sut");
+      const assertion = connects
+        ? expect(ready).resolves.toBeUndefined()
+        : expect(ready).rejects.toThrow(
+            'discord account "sut" did not become connected (last status: running=true connected=false',
+          );
+      await vi.advanceTimersByTimeAsync(connects ? 600 : 45_500);
+      await assertion;
+      if (connects) {
+        expect(gateway.call).toHaveBeenCalledTimes(2);
+      }
+    },
+  );
 
   it("normalizes missing current Discord voice state to null", async () => {
     stubFetch(Response.json({ message: "Unknown Voice State" }, { status: 404 }));
@@ -623,4 +629,72 @@ describe("discord live qa runtime", () => {
       }
     },
   );
+
+  it("proves visible denial, authorized join/stop, and message cleanup", async () => {
+    const f = transcriptFixture();
+    const send = vi
+      .spyOn(testing, "sendChannelMessage")
+      .mockResolvedValueOnce(sentMessage("623456789012345671", "2026-08-14T12:00:00.000Z"))
+      .mockResolvedValueOnce(sentMessage("623456789012345673", "2026-08-14T12:00:01.000Z"))
+      .mockResolvedValueOnce(sentMessage("623456789012345675", "2026-08-14T12:00:02.000Z"));
+    vi.spyOn(testing, "pollChannelMessages")
+      .mockResolvedValueOnce(
+        polledReply(
+          "623456789012345672",
+          `${f.run.negativeMarker} You are not authorized to use this command.`,
+        ),
+      )
+      .mockResolvedValueOnce(polledReply("623456789012345674", f.run.positiveMarker))
+      .mockResolvedValueOnce(polledReply("623456789012345676", f.run.stopMarker));
+    vi.spyOn(testing, "getCurrentDiscordVoiceState").mockResolvedValue(null);
+    vi.spyOn(testing, "waitForDiscordVoiceState").mockResolvedValue({
+      channel_id: voiceChannelId,
+      guild_id: guildId,
+      user_id: sutId,
+    });
+    const request = vi.spyOn(discordApi, "requestDiscord").mockResolvedValue(undefined);
+    await expect(f.start()).resolves.toMatchObject({
+      details: "visible denial, authorized transcript join, and verified stop/leave",
+    });
+    expect(f.configureTranscriptVoiceAccess).toHaveBeenCalledExactlyOnceWith(true);
+    expect(send).toHaveBeenCalledTimes(3);
+    const prompts = send.mock.calls.map((call) => call[2]);
+    expect(prompts[0]).toContain('"action":"start"');
+    expect(prompts[0]).toContain(f.run.deniedSessionId);
+    expect(prompts[1]).toContain(f.run.allowedSessionId);
+    expect(prompts[2]).toContain('"action":"stop"');
+    expect(prompts.join("\n")).not.toContain('"accountId"');
+    expect(request).toHaveBeenCalledTimes(6);
+    expect(await f.evidence()).toEqual({
+      schemaVersion: 1,
+      scenarioId: "discord-transcripts-voice-authorization",
+      denied: { replyObserved: true, visibleDenial: true, voiceStayedDisconnected: true },
+      allowed: { replyObserved: true, voiceJoined: true },
+      cleanup: {
+        emergencyStopAttempted: false,
+        messagesDeleted: 6,
+        messageDeleteFailures: 0,
+        stopReplyObserved: true,
+        voiceDisconnected: true,
+      },
+    });
+  });
+  it("does not attest voice disconnect when Discord state reads fail", async () => {
+    vi.useFakeTimers();
+    const f = transcriptFixture();
+    vi.spyOn(testing, "getCurrentDiscordVoiceState").mockRejectedValue(
+      new Error("REST unavailable"),
+    );
+    const send = vi
+      .spyOn(testing, "sendChannelMessage")
+      .mockRejectedValue(new Error("REST unavailable"));
+    const rejected = expect(f.start()).rejects.toThrow("did not leave Discord voice channel");
+    await vi.advanceTimersByTimeAsync(20_000);
+    await rejected;
+    expect((await f.evidence()).cleanup).toMatchObject({
+      emergencyStopAttempted: true,
+      voiceDisconnected: false,
+    });
+    expect(send).toHaveBeenCalledTimes(2);
+  });
 });
