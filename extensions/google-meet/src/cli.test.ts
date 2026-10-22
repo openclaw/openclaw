@@ -203,10 +203,32 @@ const cases: Case[] = [
 ];
 
 it.each(cases)("%s returns %j", async (command, result, expected) => {
-  const leave = vi.fn<GoogleMeetRuntime["leave"]>().mockResolvedValue(result);
-  const speak = vi.fn<GoogleMeetRuntime["speak"]>().mockResolvedValue(result);
+  const calls: string[] = [];
+  const leave = vi.fn<GoogleMeetRuntime["leave"]>(async () => {
+    calls.push("leave");
+    return result;
+  });
+  const speak = vi.fn<GoogleMeetRuntime["speak"]>(async () => {
+    calls.push("speak");
+    return result;
+  });
+  const ensureRuntime = vi.fn(async () => {
+    calls.push("runtime");
+    return { leave, speak } as unknown as GoogleMeetRuntime;
+  });
+  const callGatewayFromCli = vi.fn<
+    NonNullable<Parameters<typeof cli.setupCli>[0]["callGatewayFromCli"]>
+  >(async () => {
+    calls.push("gateway");
+    throw Object.assign(new Error(`unknown method: googlemeet.${command}`), {
+      name: "GatewayClientRequestError",
+      gatewayCode: "INVALID_REQUEST",
+      retryable: false,
+    });
+  });
   const parsed = run([command, "meet_1", ...(command === "speak" ? ["hello meeting"] : [])], {
-    runtime: { leave, speak },
+    ensureRuntime,
+    callGatewayFromCli,
   });
   if (expected instanceof Error) {
     await expect(parsed).rejects.toEqual(expected);
@@ -214,6 +236,13 @@ it.each(cases)("%s returns %j", async (command, result, expected) => {
     await parsed;
   }
   expect(output()).toBe(expected instanceof Error ? "" : expected);
+  expect(calls).toEqual(["gateway", "runtime", command]);
+  expect(callGatewayFromCli).toHaveBeenCalledWith(
+    `googlemeet.${command}`,
+    { json: true, timeout: "5000" },
+    { sessionId: "meet_1", ...(command === "speak" ? { message: "hello meeting" } : {}) },
+    { progress: false },
+  );
   expect(leave.mock.calls).toEqual(command === "leave" ? [["meet_1"]] : []);
   expect(speak.mock.calls).toEqual(command === "speak" ? [["meet_1", "hello meeting"]] : []);
 });

@@ -248,7 +248,7 @@ suite.define(() => {
     await details.waitFor({ state: "hidden" });
 
     await ui.action(reviewTile, "Edit card");
-    await expectVisible(editDialog);
+    await expectVisible(dialog(page, "Edit card"));
     await ui.fields({ Notes: "Keep unfinished notes" });
     const oldLists = await ui.count("workboard.cards.list"),
       oldBoards = await ui.count("workboard.boards.list");
