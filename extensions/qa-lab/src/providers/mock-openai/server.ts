@@ -4,7 +4,6 @@ import { once } from "node:events";
 import { createServer } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
 import { format as formatUrl } from "node:url";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   closeQaHttpServer,
   dispatchQaHttpRequest,
@@ -144,6 +143,7 @@ import {
   buildReasoningAndAssistantEvents,
   buildFailedResponseEvents,
 } from "./mock-openai-events.js";
+import { normalizeResponsesInput } from "./mock-openai-input.js";
 import {
   extractLatestScenarioFamilyPrompt,
   extractLastUserText,
@@ -332,16 +332,6 @@ const QA_TELEGRAM_VISIBLE_PARTIAL_FAILURE_MARKER = "TELEGRAM-VISIBLE-PARTIAL-BEF
 const QA_REPEATED_REQUEST_RESPONSE_PAUSE_MS = 80_000;
 const QA_REPEATED_REQUEST_STALLED_RESPONSE_PAUSE_MS = 180_000;
 const QA_REPEATED_REQUEST_STALL_ATTEMPT = 5;
-
-function normalizeResponsesInput(value: unknown): ResponsesInputItem[] {
-  if (Array.isArray(value)) {
-    return value.map(asOptionalRecord).filter((item) => item !== undefined);
-  }
-  if (typeof value === "string") {
-    return [{ role: "user", content: [{ type: "input_text", text: value }] }];
-  }
-  return [];
-}
 
 function resolveCompactionSummaryFaultMode(params: {
   allInputText: string;
