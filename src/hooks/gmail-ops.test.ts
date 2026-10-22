@@ -74,10 +74,12 @@ function shutdownHandler(signal: (typeof signals)[number]) {
   return () => added[0]!(signal);
 }
 
-function expectSignalsDetached() {
+function expectStopped() {
   for (const signal of signals) {
     expect(process.rawListeners(signal)).toEqual(signalBaselines.get(signal));
   }
+  expect(children.filter((child) => child.alive)).toHaveLength(0);
+  expect(vi.getTimerCount()).toBe(0);
 }
 
 beforeEach(() => {
@@ -110,9 +112,7 @@ afterEach(async () => {
     handler?.("SIGINT");
     await vi.advanceTimersByTimeAsync(10_000);
     await stopGmailWatcher();
-    expectSignalsDetached();
-    expect(children.filter((child) => child.alive)).toHaveLength(0);
-    expect(vi.getTimerCount()).toBe(0);
+    expectStopped();
   } finally {
     vi.useRealTimers();
   }
@@ -168,7 +168,7 @@ it("keeps renewal single-flight and cancels it on shutdown", async () => {
   await vi.advanceTimersByTimeAsync(60_000);
   expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(2);
   expect(children[0]?.alive).toBe(false);
-  expectSignalsDetached();
+  expectStopped();
 });
 
 it.each([
@@ -198,8 +198,7 @@ it.each([
       );
       expect(children[1]?.alive).toBe(false);
     }
-    expectSignalsDetached();
-    expect(vi.getTimerCount()).toBe(0);
+    expectStopped();
   },
 );
 
@@ -226,7 +225,7 @@ it.each([
     await starting;
     await vi.advanceTimersByTimeAsync(60_000);
     expect(children).toHaveLength(0);
-    expectSignalsDetached();
+    expectStopped();
     expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(boundary === "tailscale" ? 0 : 1);
   },
 );
@@ -243,8 +242,7 @@ it.each(["tailscale", "spawn"])("cleans up signals after %s startup failure", as
     runGmailService({ tailscale: boundary === "tailscale" ? "serve" : "off" }),
   ).rejects.toThrow("fixture setup failed");
   expect(children).toHaveLength(0);
-  expectSignalsDetached();
-  expect(vi.getTimerCount()).toBe(0);
+  expectStopped();
 });
 
 it("bounds retries after split bind errors while continuing watch renewal", async () => {

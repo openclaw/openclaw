@@ -42,7 +42,7 @@ async function runHooksCli(args: string[], env: NodeJS.ProcessEnv) {
   }
 }
 
-async function createHookPackFixture() {
+it("installs, discovers, toggles, and dispatches an authored hook pack", async () => {
   const rootDir = tempDirs.make("openclaw-hooks-lifecycle-e2e-");
   const homeDir = path.join(rootDir, "home");
   const stateDir = path.join(rootDir, "state");
@@ -95,22 +95,11 @@ async function createHookPackFixture() {
     VITEST: "",
   };
 
-  return {
-    archivePath,
-    options: { bundledHooksDir, managedHooksDir },
-    configPath,
-    env,
-    initialConfig,
-    workspaceDir,
-  };
-}
-
-it("installs, discovers, toggles, and dispatches an authored hook pack", async () => {
-  const fixture = await createHookPackFixture();
+  const options = { bundledHooksDir, managedHooksDir };
   const install = await installHooksFromPath({
-    config: fixture.initialConfig,
-    hooksDir: fixture.options.managedHooksDir,
-    path: fixture.archivePath,
+    config: initialConfig,
+    hooksDir: managedHooksDir,
+    path: archivePath,
   });
   expect(install).toMatchObject({
     ok: true,
@@ -126,9 +115,9 @@ it("installs, discovers, toggles, and dispatches an authored hook pack", async (
     fs.readFile(path.join(install.targetDir, "hooks", hookName, "HOOK.md"), "utf8"),
   ).resolves.toContain("gateway:startup");
 
-  const discovered = loadWorkspaceHookEntries(fixture.workspaceDir, {
-    ...fixture.options,
-    config: fixture.initialConfig,
+  const discovered = loadWorkspaceHookEntries(workspaceDir, {
+    ...options,
+    config: initialConfig,
   });
   expect(discovered).toEqual([
     expect.objectContaining({
@@ -138,17 +127,17 @@ it("installs, discovers, toggles, and dispatches an authored hook pack", async (
   ]);
 
   for (const enabled of [false, true]) {
-    const result = await runHooksCli([enabled ? "enable" : "disable", hookName], fixture.env);
+    const result = await runHooksCli([enabled ? "enable" : "disable", hookName], env);
     expect(result.stdout).toContain(hookName);
-    const config: OpenClawConfig = JSON5.parse(await fs.readFile(fixture.configPath, "utf8"));
+    const config: OpenClawConfig = JSON5.parse(await fs.readFile(configPath, "utf8"));
     expect(config.hooks?.internal?.entries?.[hookName]?.enabled).toBe(enabled);
     clearInternalHooks();
-    const prepared = await prepareInternalHooks(config, fixture.workspaceDir, fixture.options);
+    const prepared = await prepareInternalHooks(config, workspaceDir, options);
     expect(prepared.loadedCount).toBe(enabled ? 1 : 0);
     prepared.commit();
     const event = createInternalHookEvent("gateway", "startup", "gateway:startup", {
       cfg: config,
-      workspaceDir: fixture.workspaceDir,
+      workspaceDir,
     });
     await triggerInternalHook(event);
     expect(event.messages.includes(hookMarker)).toBe(enabled);

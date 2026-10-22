@@ -2,11 +2,17 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import * as tar from "tar";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, assert, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  requestDeferredPackageDirInstall,
+  resolvePackageDirInstallTransaction,
+} from "../infra/install-package-dir.js";
+import { packToArchive } from "../plugins/test-helpers/archive-fixtures.js";
 import { expectedNpmCommand, npmCommandArgs } from "../test-utils/npm-command.js";
 import {
   expectInstallUsesIgnoreScripts,
   expectIntegrityDriftRejected,
+  createCommandResult,
   mockNpmPackMetadataResult,
 } from "../test-utils/npm-spec-install-test-helpers.js";
 import { writeHookFixture } from "./hook-fixture.test-support.js";
@@ -63,6 +69,10 @@ function makeTempDir() {
   return dir;
 }
 
+function writeJson(dir: string, value: unknown) {
+  fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify(value));
+}
+
 afterAll(() => {
   try {
     fs.rmSync(fixtureRoot, { recursive: true, force: true });
@@ -110,19 +120,15 @@ function writeHookPackManifest(params: {
   dependencies?: Record<string, string>;
   extensions?: string[];
 }) {
-  fs.writeFileSync(
-    path.join(params.pkgDir, "package.json"),
-    JSON.stringify({
-      name: params.packageName ?? "@openclaw/test-hooks",
-      version: "0.0.1",
-      openclaw: {
-        hooks: params.hooks,
-        ...(params.extensions ? { extensions: params.extensions } : {}),
-      },
-      ...(params.dependencies ? { dependencies: params.dependencies } : {}),
-    }),
-    "utf-8",
-  );
+  writeJson(params.pkgDir, {
+    name: params.packageName ?? "@openclaw/test-hooks",
+    version: "0.0.1",
+    openclaw: {
+      hooks: params.hooks,
+      ...(params.extensions ? { extensions: params.extensions } : {}),
+    },
+    ...(params.dependencies ? { dependencies: params.dependencies } : {}),
+  });
 }
 
 function writeHookPackFiles(params: {
@@ -130,12 +136,7 @@ function writeHookPackFiles(params: {
   packageName?: string;
   dependencies?: Record<string, string>;
 }) {
-  writeHookPackManifest({
-    pkgDir: params.pkgDir,
-    packageName: params.packageName,
-    hooks: ["./hooks/one-hook"],
-    dependencies: params.dependencies,
-  });
+  writeHookPackManifest({ ...params, hooks: ["./hooks/one-hook"] });
   const hookDir = path.join(params.pkgDir, "hooks", "one-hook");
   writeHookFixture(
     hookDir,
@@ -195,6 +196,91 @@ function writeBareHook(hookDir: string, name = "my-hook") {
   writeHookFixture(hookDir, `---\nname: ${name}\n---\n`);
 }
 
+const sources = ["package", "single hook", "archive", "npm"] as const;
+async function deferredFixture(source: (typeof sources)[number]) {
+  const { pkgDir, hooksDir } = makePackage();
+  const hookDir = path.join(pkgDir, "hooks", "one-hook");
+  let sourcePath = source === "single hook" ? hookDir : pkgDir;
+  if (source === "archive" || source === "npm") {
+    sourcePath = await packToArchive({ pkgDir, outDir: makeTempDir(), outName: "hooks.tgz" });
+  }
+  if (source === "npm") {
+    runCommandWithTimeoutMock.mockImplementation(async (argv, options) => {
+      if (npmCommandArgs(argv)?.[0] !== "pack" || !options.cwd) {
+        throw new Error("unexpected npm fixture command");
+      }
+      fs.copyFileSync(sourcePath, path.join(options.cwd, "hooks.tgz"));
+      return createCommandResult({
+        stdout: JSON.stringify([
+          { name: "@acme/canonical-hooks", version: "0.0.1", filename: "hooks.tgz" },
+        ]),
+      });
+    });
+  }
+  return {
+    hookDir,
+    targetDir: path.join(hooksDir, source === "single hook" ? "one-hook" : "canonical-hooks"),
+    install: (options: Omit<Parameters<InstallHooksFromPath>[0], "path" | "hooksDir"> = {}) =>
+      source === "npm"
+        ? installHooksFromNpmSpec({ ...options, hooksDir, spec: "@acme/canonical-hooks@0.0.1" })
+        : installHooksFromPath({ ...options, hooksDir, path: sourcePath }),
+  };
+}
+
+it("passes acknowledgement through both scan stages", async () => {
+  const { install } = await deferredFixture("single hook");
+  const onInstallPolicyWarning = vi.fn().mockResolvedValue({ status: "approved" });
+  await install({ onInstallPolicyWarning });
+  for (const scan of [scanPackageInstallSourceMock, scanInstalledPackageDependencyTreeMock]) {
+    expect(scan).toHaveBeenCalledWith(expect.objectContaining({ onInstallPolicyWarning }));
+  }
+});
+
+it.each(["package", "single hook"] as const)(
+  "does not publish a %s after its authority closes during staged preparation",
+  async (source) => {
+    const { install, targetDir } = await deferredFixture(source);
+    let authorityActive = true;
+    scanInstalledPackageDependencyTreeMock.mockImplementationOnce(async () => {
+      authorityActive = false;
+    });
+    expect(
+      await install({
+        beforePersistentApply: () => assert(authorityActive, "hook installation authority closed"),
+      }),
+    ).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("hook installation authority closed"),
+    });
+    expect(scanInstalledPackageDependencyTreeMock).toHaveBeenCalledOnce();
+    expect(fs.existsSync(targetDir)).toBe(false);
+  },
+);
+
+it.each(
+  sources.flatMap((source) => (["install", "update"] as const).map((mode) => ({ source, mode }))),
+)("rolls back a deferred $source $mode payload", async ({ source, mode }) => {
+  const { hookDir, targetDir, install } = await deferredFixture(source);
+  const previousMarker = path.join(targetDir, "previous.txt");
+  if (mode === "update") {
+    fs.mkdirSync(targetDir, { recursive: true });
+    fs.writeFileSync(previousMarker, "previous payload");
+  }
+  const result = await install(requestDeferredPackageDirInstall({ mode }));
+  expect(result.ok).toBe(true);
+  const transaction = result.ok ? resolvePackageDirInstallTransaction(result) : undefined;
+  assert(transaction, "expected deferred hook payload transaction");
+  const installedHook =
+    source === "single hook" ? targetDir : path.join(targetDir, "hooks", "one-hook");
+  expect(fs.existsSync(path.join(installedHook, "handler.ts"))).toBe(true);
+  await transaction.rollback();
+  expect(fs.existsSync(targetDir)).toBe(mode === "update");
+  if (mode === "update") {
+    expect(fs.readFileSync(previousMarker, "utf8")).toBe("previous payload");
+  }
+  expect(fs.existsSync(path.join(hookDir, "handler.ts"))).toBe(true);
+});
+
 describe("installHooksFromPath", () => {
   it.each([
     {
@@ -209,10 +295,7 @@ describe("installHooksFromPath", () => {
     },
   ])("returns a stable code for $error", async ({ openclaw, error, code }) => {
     const pkgDir = makeTempDir();
-    fs.writeFileSync(
-      path.join(pkgDir, "package.json"),
-      JSON.stringify({ name: "@openclaw/test-hooks", openclaw }),
-    );
+    writeJson(pkgDir, { name: "@openclaw/test-hooks", openclaw });
 
     const result = await installHooksFromPath({ path: pkgDir, hooksDir: makeTempDir() });
 
@@ -229,9 +312,7 @@ describe("installHooksFromPath", () => {
     });
     for (const [index, name] of names.entries()) {
       const hookDir = path.join(pkgDir, "hooks", String(index));
-      fs.mkdirSync(hookDir, { recursive: true });
-      fs.writeFileSync(path.join(hookDir, "HOOK.md"), `---\nname: ${name}\n---\n`);
-      fs.writeFileSync(path.join(hookDir, "handler.js"), "export default async () => {};\n");
+      writeBareHook(hookDir, name);
     }
     const targetAvailability = vi.spyOn(hookInstallRuntime, "ensureInstallTargetAvailable");
 

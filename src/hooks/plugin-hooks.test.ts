@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { buildPluginCapabilitySummary } from "../plugins/capability-summary.js";
 import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
@@ -18,20 +18,15 @@ import {
 import { prepareInternalHooks } from "./loader.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 describe("bundle plugin hooks", () => {
-  let fixtureRoot = "";
-  let caseId = 0;
   let workspaceDir = "";
 
-  beforeAll(async () => {
-    fixtureRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-hooks-"));
-  });
-
-  beforeEach(async () => {
+  beforeEach(() => {
     clearInternalHooks();
     setInternalHooksEnabled(true);
-    workspaceDir = path.join(fixtureRoot, `case-${caseId++}`);
-    await fsp.mkdir(workspaceDir, { recursive: true });
+    workspaceDir = tempDirs.make("openclaw-plugin-hooks-");
     vi.stubEnv("OPENCLAW_BUNDLED_HOOKS_DIR", "/nonexistent/bundled/hooks");
   });
 
@@ -41,10 +36,6 @@ describe("bundle plugin hooks", () => {
     clearInternalHooks();
     setInternalHooksEnabled(true);
     vi.unstubAllEnvs();
-  });
-
-  afterAll(async () => {
-    await fsp.rm(fixtureRoot, { recursive: true, force: true });
   });
 
   async function writeBundleFiles(root: string, files: Record<string, string>) {
@@ -96,13 +87,18 @@ describe("bundle plugin hooks", () => {
     expect(event.messages).toEqual(messages);
   }
 
-  function requireOnlyHookEntry(entries: ReturnType<typeof loadWorkspaceHookEntries>) {
-    expect(entries).toHaveLength(1);
-    const [entry] = entries;
-    if (!entry) {
-      throw new Error("Expected bundled hook entry");
-    }
-    return entry;
+  function expectBundleEntry(bundleRoot: string, config: OpenClawConfig) {
+    expect(loadWorkspaceHookEntries(workspaceDir, { config })).toEqual([
+      expect.objectContaining({
+        hook: expect.objectContaining({
+          name: "bundle-hook",
+          source: "openclaw-plugin",
+          pluginId: "sample-bundle",
+          baseDir: fs.realpathSync.native(path.join(bundleRoot, "hooks", "bundle-hook")),
+        }),
+        metadata: expect.objectContaining({ events: ["command:new"] }),
+      }),
+    ]);
   }
 
   function projectBundleComponents(pluginId: string, config: OpenClawConfig) {
@@ -125,19 +121,10 @@ describe("bundle plugin hooks", () => {
     async ({ format, withJsonHooks, root, supported }) => {
       const bundleRoot = await writeBundleHookFixture(format, withJsonHooks, root);
       const config = createConfig(true);
-      const entries = loadWorkspaceHookEntries(workspaceDir, { config });
-
       if (supported.length > 0) {
-        const entry = requireOnlyHookEntry(entries);
-        expect(entry.hook).toMatchObject({
-          name: "bundle-hook",
-          source: "openclaw-plugin",
-          pluginId: "sample-bundle",
-          baseDir: fs.realpathSync.native(path.join(bundleRoot, "hooks", "bundle-hook")),
-        });
-        expect(entry.metadata?.events).toEqual(["command:new"]);
+        expectBundleEntry(bundleRoot, config);
       } else {
-        expect(entries).toHaveLength(0);
+        expect(loadWorkspaceHookEntries(workspaceDir, { config })).toHaveLength(0);
       }
 
       const { declared, components } = projectBundleComponents("sample-bundle", config);
@@ -158,13 +145,7 @@ describe("bundle plugin hooks", () => {
     const scanManifests = vi.spyOn(manifestRegistry, "loadPluginManifestRegistryForInstalledIndex");
 
     for (let iteration = 0; iteration < 2; iteration += 1) {
-      const entry = requireOnlyHookEntry(loadWorkspaceHookEntries(workspaceDir, { config }));
-      expect(entry.hook).toMatchObject({
-        name: "bundle-hook",
-        source: "openclaw-plugin",
-        pluginId: "sample-bundle",
-        baseDir: fs.realpathSync.native(path.join(bundleRoot, "hooks", "bundle-hook")),
-      });
+      expectBundleEntry(bundleRoot, config);
     }
 
     expect(scanManifests).not.toHaveBeenCalled();

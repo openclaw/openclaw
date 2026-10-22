@@ -1,13 +1,12 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
-import { captureEnv } from "../test-utils/env.js";
 import { writeHookFixture } from "./hook-fixture.test-support.js";
 import {
   clearInternalHooks,
@@ -20,19 +19,25 @@ import {
 import { prepareInternalHooks } from "./loader.js";
 import type { OpenClawHookMetadata } from "./types.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 describe("loader", () => {
-  let fixtureRoot = "";
-  let caseId = 0;
   let tmpDir: string;
-  let envSnapshot: ReturnType<typeof captureEnv>;
   let managedHooksDir: string;
   let options: { managedHooksDir: string; bundledHooksDir: string };
+
+  function prepare(
+    cfg: OpenClawConfig,
+    opts: Parameters<typeof prepareInternalHooks>[2] = options,
+  ) {
+    return prepareInternalHooks(cfg, tmpDir, opts);
+  }
 
   async function commitPreparedHooks(
     cfg: OpenClawConfig,
     opts: Parameters<typeof prepareInternalHooks>[2] = options,
   ) {
-    const prepared = await prepareInternalHooks(cfg, tmpDir, opts);
+    const prepared = await prepare(cfg, opts);
     prepared.commit();
     return prepared.loadedCount;
   }
@@ -43,19 +48,13 @@ describe("loader", () => {
     expect(event.messages).toEqual(messages);
   }
 
-  beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hooks-loader-"));
-  });
-
-  beforeEach(async () => {
+  beforeEach(() => {
     clearInternalHooks();
     setInternalHooksEnabled(true);
-    tmpDir = path.join(fixtureRoot, `case-${caseId++}`);
-    await fs.mkdir(tmpDir, { recursive: true });
+    tmpDir = tempDirs.make("openclaw-hooks-loader-");
     managedHooksDir = path.join(tmpDir, "managed-hooks");
     options = { managedHooksDir, bundledHooksDir: "/nonexistent/bundled/hooks" };
-    envSnapshot = captureEnv(["OPENCLAW_BUNDLED_HOOKS_DIR"]);
-    process.env.OPENCLAW_BUNDLED_HOOKS_DIR = "/nonexistent/bundled/hooks";
+    vi.stubEnv("OPENCLAW_BUNDLED_HOOKS_DIR", options.bundledHooksDir);
     setLoggerOverride({ level: "silent", consoleLevel: "error" });
     loggingState.rawConsole = { log: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   });
@@ -109,15 +108,8 @@ describe("loader", () => {
     setInternalHooksEnabled(true);
     loggingState.rawConsole = null;
     setLoggerOverride(null);
-    envSnapshot.restore();
+    vi.unstubAllEnvs();
     vi.unstubAllGlobals();
-  });
-
-  afterAll(async () => {
-    if (!fixtureRoot) {
-      return;
-    }
-    await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
   it("skips hook discovery until internal hooks are configured", async () => {
@@ -171,7 +163,7 @@ describe("loader", () => {
       handlerCode:
         'globalThis.openclawHookImportGate.started(); await globalThis.openclawHookImportGate.wait; export default async function(event) { event.messages.push("replacement"); }',
     });
-    const loading = prepareInternalHooks(createHooksConfig(["replacement"]), tmpDir, options);
+    const loading = prepare(createHooksConfig(["replacement"]));
     try {
       await importStarted.promise;
       await expectMessages(["original"]);
@@ -341,17 +333,14 @@ describe("loader", () => {
   it("commits disable and re-enable for registered internal hook listeners", async () => {
     const handler = vi.fn();
     registerInternalHook("command:new", handler);
-    const disabled = await prepareInternalHooks(
-      { hooks: { internal: { enabled: false } } },
-      tmpDir,
-    );
+    const disabled = await prepare(createHooksConfig([], false));
     await triggerInternalHook(createInternalHookEvent("command", "new", "test-session"));
     expect(handler).toHaveBeenCalledTimes(1);
     disabled.commit();
     await triggerInternalHook(createInternalHookEvent("command", "new", "test-session"));
     expect(handler).toHaveBeenCalledTimes(1);
 
-    const enabled = await prepareInternalHooks(createHooksConfig([], true), tmpDir);
+    const enabled = await prepare(createHooksConfig([], true));
     await triggerInternalHook(createInternalHookEvent("command", "new", "test-session"));
     expect(handler).toHaveBeenCalledTimes(1);
     enabled.commit();
@@ -369,7 +358,7 @@ describe("loader", () => {
       if (transfer === "before preparation") {
         await disable();
       }
-      const startup = await prepareInternalHooks(createHooksConfig([], true), tmpDir);
+      const startup = await prepare(createHooksConfig([], true));
       if (transfer === "after preparation") {
         await disable();
       } else if (transfer === "after shutdown") {
@@ -462,9 +451,7 @@ describe("loader", () => {
     const enabledCount = await commitPreparedHooks(createHooksConfig(["workspace-hook"], true));
     expect(enabledCount).toBe(1);
 
-    const event = createInternalHookEvent("command", "new", "test-session");
-    await triggerInternalHook(event);
-    expect(event.messages).toContain("workspace-hook");
+    await expectMessages(["workspace-hook"]);
   });
 
   it("keeps managed hooks active when a workspace hook reuses the same name", async () => {
@@ -482,9 +469,6 @@ describe("loader", () => {
     });
     expect(count).toBe(1);
 
-    const event = createInternalHookEvent("command", "new", "test-session");
-    await triggerInternalHook(event);
-    expect(event.messages).toContain("managed");
-    expect(event.messages).not.toContain("workspace-override");
+    await expectMessages(["managed"]);
   });
 });
