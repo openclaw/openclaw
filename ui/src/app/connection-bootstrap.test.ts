@@ -3,43 +3,33 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { createConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 
 describe("connection bootstrap coordinator", () => {
-  it.each(["disconnected"])(
-    "does not start queued work after its connection is %s",
-    async (boundary) => {
-      const coordinator = createConnectionBootstrapCoordinator();
-      coordinator.synchronize({ client: {}, connected: true });
-      const first = createDeferred();
-      const second = createDeferred();
-      let boundaryReturned = false;
-      let startedAfterBoundary = false;
-      let staleStarted = false;
-      const block = (completion: ReturnType<typeof createDeferred<void>>) => async () => {
-        startedAfterBoundary ||= boundaryReturned;
-        await completion.promise;
-      };
-      const firstTask = coordinator.run("first", block(first));
-      const secondTask = coordinator.run("second", block(second));
-      const staleTask = coordinator.run("stale", async () => {
-        startedAfterBoundary ||= boundaryReturned;
-        staleStarted = true;
-      });
+  it("does not start queued work after its connection is disconnected", async () => {
+    const coordinator = createConnectionBootstrapCoordinator();
+    coordinator.synchronize({ client: {}, connected: true });
+    const first = createDeferred();
+    const second = createDeferred();
+    let boundaryReturned = false;
+    let startedAfterBoundary = false;
+    let staleStarted = false;
+    const block = (completion: ReturnType<typeof createDeferred<void>>) => async () => {
+      startedAfterBoundary ||= boundaryReturned;
+      await completion.promise;
+    };
+    const firstTask = coordinator.run("first", block(first));
+    const secondTask = coordinator.run("second", block(second));
+    const staleTask = coordinator.run("stale", async () => {
+      startedAfterBoundary ||= boundaryReturned;
+      staleStarted = true;
+    });
 
-      if (boundary === "reset") {
-        coordinator.reset();
-      } else {
-        coordinator.synchronize({
-          client: boundary === "replaced" ? {} : null,
-          connected: boundary === "replaced",
-        });
-      }
-      boundaryReturned = true;
-      first.resolve();
-      second.resolve();
-      await Promise.all([firstTask, secondTask, staleTask]);
-      expect(startedAfterBoundary).toBe(false);
-      expect(staleStarted).toBe(false);
-    },
-  );
+    coordinator.synchronize({ client: null, connected: false });
+    boundaryReturned = true;
+    first.resolve();
+    second.resolve();
+    await Promise.all([firstTask, secondTask, staleTask]);
+    expect(startedAfterBoundary).toBe(false);
+    expect(staleStarted).toBe(false);
+  });
 
   it("starts a replacement connection while both old tasks remain pending and retains its concurrency", async () => {
     const coordinator = createConnectionBootstrapCoordinator();
@@ -85,6 +75,8 @@ describe("connection bootstrap coordinator", () => {
     const retiredPane = {};
     const sessionKey = "agent:main:selected";
     const started: string[] = [];
+    const expectStarted = (...background: string[]) =>
+      expect(started).toEqual(["route-prerequisite", ...background]);
     const completion = [createDeferred(), createDeferred(), createDeferred()];
     coordinator.setForegroundRoute(undefined);
     coordinator.synchronize({ client, connected: true });
@@ -101,18 +93,14 @@ describe("connection bootstrap coordinator", () => {
     await coordinator.run("route-prerequisite", async () => {
       started.push("route-prerequisite");
     });
-    expect(started).toEqual(["route-prerequisite"]);
+    expectStarted();
     expect(coordinator.foregroundReady).toBe(false);
 
     coordinator.setForegroundPane(retiredPane, { sessionKey, client, ready: true });
-    expect(started, "an unresolved route has not selected that transcript").toEqual([
-      "route-prerequisite",
-    ]);
+    expectStarted(); // An unresolved route has not selected that transcript.
     coordinator.setForegroundPane(retiredPane, null);
     coordinator.setForegroundRoute(sessionKey);
-    expect(started, "a retired pane cannot satisfy the newly resolved route").toEqual([
-      "route-prerequisite",
-    ]);
+    expectStarted(); // A retired pane cannot satisfy the newly resolved route.
     for (const state of [
       { sessionKey, client: null, ready: true },
       { sessionKey, client: {}, ready: true },
@@ -120,27 +108,15 @@ describe("connection bootstrap coordinator", () => {
       { sessionKey: "agent:main:other", client, ready: true },
     ]) {
       coordinator.setForegroundPane(pane, state);
-      expect(
-        started,
-        "cached, old, pending, and other-session facts cannot release bulk reads",
-      ).toEqual(["route-prerequisite"]);
+      expectStarted();
       expect(coordinator.foregroundReady).toBe(false);
     }
     coordinator.setForegroundPane(retiredPane, null);
     coordinator.setForegroundPane(pane, { sessionKey, client, ready: true });
     expect(coordinator.foregroundReady).toBe(true);
-    await vi.waitFor(() =>
-      expect(started).toEqual(["route-prerequisite", "background-0", "background-1"]),
-    );
+    await vi.waitFor(() => expectStarted("background-0", "background-1"));
     completion[0]!.resolve();
-    await vi.waitFor(() =>
-      expect(started).toEqual([
-        "route-prerequisite",
-        "background-0",
-        "background-1",
-        "background-2",
-      ]),
-    );
+    await vi.waitFor(() => expectStarted("background-0", "background-1", "background-2"));
     completion.forEach((deferred) => deferred.resolve());
     await Promise.all(background);
   });

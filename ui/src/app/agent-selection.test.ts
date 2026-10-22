@@ -227,13 +227,12 @@ describe("agent selection", () => {
   });
 
   it("clears selection and remembered roster scope when the loaded roster becomes empty", () => {
-    const mode = "roster";
     const { gateway, roster, preferences, select } = selectionFixture("main");
     const selection = select();
     const result = { ...agentRoster("main"), agents: [{ id: "shared" }] };
     roster.publish(result);
     selection.set("shared");
-    preferences.setMode(mode);
+    preferences.setMode("roster");
 
     roster.publish(null);
     expect(selection.state.selectedId).toBe("shared");
@@ -357,16 +356,8 @@ describe("configured Settings agent selection", () => {
     defaultSelection(assistantAgentId, { configured: true });
 
   it("keeps a cold link private until the roster confirms it, independently of chat", () => {
-    const gateway = createGateway(null);
-    const roster = createRoster();
+    const { gateway, roster, selection: settings } = settingsFixture(null);
     const chat = createAgentSelectionCapability(gateway.gateway, roster.roster);
-    const settings = createAgentSelectionCapability(
-      gateway.gateway,
-      roster.roster,
-      undefined,
-      undefined,
-      { requireConfiguredAgent: true },
-    );
     settings.set("Research");
     expect(settings.state).toEqual({ selectedId: null, scopeId: null });
     gateway.publish({ assistantAgentId: "main" });
