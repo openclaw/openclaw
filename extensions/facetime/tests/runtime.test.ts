@@ -749,4 +749,90 @@ describe("FaceTime runtime call sequencing", () => {
       await runtime.stop();
     },
   );
+  async function activateCarrierAliases() {
+    const talk = ft.createTalkDriver({});
+    ft.mocks.startTalk.mockResolvedValueOnce(talk);
+    const runtime = await ft.createRuntime();
+    const send = (call_uuid = "call-1", call_status = 1) =>
+      ft.mocks.helperParams?.onMessage(
+        ft.incomingCall(call_status, { call_uuid, conversation_uuid: "shared-conversation" }),
+      );
+    await send();
+    expect(talk.activate).toHaveBeenCalledOnce();
+    await send("replacement-call");
+    expect(talk.activate).toHaveBeenCalledTimes(2);
+    return { talk, runtime, send };
+  }
+
+  it("falls back to a retained carrier alias when the current helper owner disappears", async () => {
+    const safetyMute = ft.mocks.helper.safetyMute.getMockImplementation()!;
+    ft.mocks.helper.safetyMute.mockImplementation(async (callUUID: string) =>
+      callUUID === "call-1" ? ft.completeAbsence() : await safetyMute(callUUID),
+    );
+    ft.mocks.helper.leaveCall.mockImplementation(async (callUUID: string) =>
+      callUUID === "replacement-call"
+        ? ft.completeAction({ outcome: "termination-requested" })
+        : ft.completeAbsence(),
+    );
+    const { talk, runtime, send } = await activateCarrierAliases();
+    await send();
+    expect(talk.activate).toHaveBeenCalledTimes(3);
+    await expect(runtime.hangup()).resolves.toEqual({ callUUID: "call-1" });
+
+    expect(ft.mocks.helper.safetyMute.mock.calls).toEqual([["call-1"], ["replacement-call"]]);
+    expect(ft.mocks.helper.leaveCall).toHaveBeenCalledWith("replacement-call");
+    expect((await runtime.status()).calls).toEqual([]);
+    await runtime.stop();
+  });
+
+  it("ignores an ended event for a stale carrier alias", async () => {
+    const { talk, runtime, send } = await activateCarrierAliases();
+
+    await send("call-1", 6);
+
+    expect((await runtime.status()).calls).toHaveLength(1);
+    expect(talk.close).not.toHaveBeenCalled();
+
+    await send("replacement-call", 6);
+    expect((await runtime.status()).calls).toEqual([]);
+    expect(talk.close).toHaveBeenCalledWith("native-ended");
+    await runtime.stop();
+  });
+  it("keeps the latest pending carrier after a cancellation reply without identity", async () => {
+    const state = await ft.pendingDialState({ callUUID: "original-call" });
+    const reply = Promise.withResolvers<ReturnType<typeof ft.pendingDialCancellationResult>>();
+    ft.mocks.helper.cancelOutgoingCall.mockResolvedValue(ft.pendingDialCancellationResult());
+    ft.mocks.helper.cancelOutgoingCall.mockImplementationOnce(() => reply.promise);
+    const runtime = await ft.createRuntime(state);
+    const cancellation = runtime.hangup();
+    try {
+      await vi.waitFor(() => expect(ft.mocks.helper.cancelOutgoingCall).toHaveBeenCalledOnce());
+      await ft.mocks.helperParams?.onMessage(
+        {
+          event: "ft-outbound-call-identified",
+          data: { dial_id: "approved-dial", call_uuid: "replacement-call" },
+        },
+        { ...ft.carrierPeer, connectionGeneration: 1 },
+      );
+      reply.resolve(ft.pendingDialCancellationResult());
+      await cancellation;
+      expect(await state.lookup("active")).toMatchObject({
+        delivery: "cancelling",
+        callUUID: "replacement-call",
+        callUUIDAliases: ["original-call", "replacement-call"],
+      });
+      await runtime.hangup();
+      expect(ft.mocks.helper.cancelOutgoingCall).toHaveBeenLastCalledWith(
+        expect.objectContaining({ dialID: "approved-dial", callUUID: "replacement-call" }),
+      );
+      expect(ft.mocks.startTalk).not.toHaveBeenCalled();
+    } finally {
+      reply.resolve(ft.pendingDialCancellationResult());
+      await cancellation;
+      await ft.mocks.helperParams?.onMessage(
+        ft.endedCall("replacement-call", { dial_id: "approved-dial" }),
+      );
+      await runtime.stop();
+    }
+  });
 });

@@ -201,9 +201,19 @@ export const endedCall = (callUUID: string, identity: { dial_id?: string } = {})
 
 export const outgoingCall = (
   callUUID: string,
-  status = 3,
-  overrides: Record<string, unknown> = {},
-) => incomingCall(status, { call_uuid: callUUID, is_outgoing: true, ...overrides });
+  callStatus = 1,
+  identity: { dial_id?: string; is_sending_audio?: boolean } = {},
+) => ({
+  event: "ft-call-status-changed",
+  data: {
+    call_uuid: callUUID,
+    call_status: callStatus,
+    is_outgoing: true,
+    handle: { value: "owner@example.com" },
+    transport: incomingCall().data.transport,
+    ...identity,
+  },
+});
 
 export const dialReply = (call_uuid = "outbound-call", extra: Record<string, unknown> = {}) => ({
   call_uuid,
