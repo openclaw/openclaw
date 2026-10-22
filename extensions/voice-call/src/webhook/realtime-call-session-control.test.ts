@@ -63,12 +63,9 @@ describe("realtime call session control", () => {
   it.each(["silent", "playing", "queued"] as const)(
     "interrupts a consult only while model audio is active (%s)",
     (playback) => {
-      const sent: string[] = [];
+      const send = vi.fn(() => true);
       const audioPacer = new RealtimeAudioPacer({
-        send: (message) => {
-          sent.push(message);
-          return true;
-        },
+        send,
         serializer: {
           serializeMedia: (payload) => payload,
           serializeClear: () => "clear",
@@ -98,7 +95,7 @@ describe("realtime call session control", () => {
       try {
         controller.cancelOutputAudioForBargeIn("local", () => consult.abort());
         expect(consult.signal.aborted).toBe(playback !== "silent");
-        expect(sent).toContain("clear");
+        expect(send).toHaveBeenCalledWith("clear");
       } finally {
         audioPacer.close();
       }
@@ -116,18 +113,36 @@ describe("realtime call session control", () => {
     expect(triggerGreeting).toHaveBeenCalledExactlyOnceWith("Exact greeting");
   });
 
-  it.each(["human", "unknown", "timeout", "machine_start", "machine_end_other"])(
-    "holds the realtime opening and audio until AMD returns %s",
-    async (classification) => {
+  it.each([
+    ["human", 30_000],
+    ["unknown", 30_000],
+    ["timeout", 30_000],
+    ["timeout", 45_000],
+    ["machine_start", 30_000],
+    ["machine_end_other", 30_000],
+    ["closed", 30_000],
+  ] as const)(
+    "holds the realtime opening until AMD resolves (%s, cap=%d)",
+    async (classification, holdOpeningMaxMs) => {
       const call = amdCall();
-      const { controller, triggerGreeting, ready } = greeting({ call });
+      const { controller, triggerGreeting, ready } = greeting({
+        call,
+        ...(holdOpeningMaxMs === 45_000 ? { holdOpeningMaxMs } : {}),
+      });
       ready();
+      if (classification === "closed") {
+        controller.close();
+        await vi.advanceTimersByTimeAsync(holdOpeningMaxMs);
+        expect(triggerGreeting).not.toHaveBeenCalled();
+        return;
+      }
       await vi.advanceTimersByTimeAsync(3_000);
       expect(triggerGreeting).not.toHaveBeenCalled();
       expect(controller.claim()).toBe(false);
       if (classification === "timeout") {
-        await vi.advanceTimersByTimeAsync(26_999);
+        await vi.advanceTimersByTimeAsync(holdOpeningMaxMs - 3_001);
         expect(controller.isBlocked()).toBe(true);
+        expect(triggerGreeting).not.toHaveBeenCalled();
         await vi.advanceTimersByTimeAsync(1);
       } else {
         call.metadata = { ...call.metadata, answeredBy: classification };
@@ -149,29 +164,6 @@ describe("realtime call session control", () => {
       controller.close();
     },
   );
-
-  it("uses the operator's AMD hold cap when no classification arrives", async () => {
-    const { controller, triggerGreeting, ready } = greeting({
-      holdOpeningMaxMs: 45_000,
-      call: amdCall(),
-    });
-    ready();
-    await vi.advanceTimersByTimeAsync(44_999);
-    expect(controller.isBlocked()).toBe(true);
-    expect(triggerGreeting).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(controller.isBlocked()).toBe(false);
-    expect(triggerGreeting).toHaveBeenCalledExactlyOnceWith("Exact opening");
-    controller.close();
-  });
-
-  it("cancels a pending AMD opening when the bridge closes", async () => {
-    const { controller, triggerGreeting, ready } = greeting({ call: amdCall() });
-    ready();
-    controller.close();
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(triggerGreeting).not.toHaveBeenCalled();
-  });
 
   it("starts idle monitoring on media activation and pauses it during consults", async () => {
     const { controller, onIdle } = activity();
