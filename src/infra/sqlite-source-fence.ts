@@ -76,7 +76,8 @@ function readGrant(): SqliteSourceFenceGrant {
     value.decision.byteLength !== 4 ||
     !isRecord(value.destination) ||
     !Array.isArray(value.sources) ||
-    typeof value.deadlineNs !== "bigint"
+    typeof value.deadlineAtMs !== "number" ||
+    !Number.isFinite(value.deadlineAtMs)
   ) {
     throw new SqliteWorkerError("SQLite source fence grant is unavailable", "closed");
   }
@@ -163,10 +164,7 @@ export async function runSqliteSourceFence<T>(
   };
   const decision = new Int32Array(grant.decision);
   const assertReady = () => {
-    if (
-      Atomics.load(decision, 0) !== SOURCE_FENCE_READY ||
-      process.hrtime.bigint() >= grant.deadlineNs
-    ) {
+    if (Atomics.load(decision, 0) !== SOURCE_FENCE_READY || Date.now() >= grant.deadlineAtMs) {
       throw new SqliteWorkerError("SQLite source fence authority expired", "closed");
     }
     for (const { database } of captured) {
@@ -276,7 +274,7 @@ export async function runSqliteSourceFence<T>(
         throw error;
       }
       assertReady();
-      const remainingMs = Number(grant.deadlineNs - process.hrtime.bigint()) / 1_000_000;
+      const remainingMs = Math.max(0, grant.deadlineAtMs - Date.now());
       await sleep(Math.min(25, Math.max(0, remainingMs)));
     }
   }

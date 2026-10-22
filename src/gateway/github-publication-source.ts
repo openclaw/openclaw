@@ -117,7 +117,7 @@ export function bindGitHubPublicationSource(
         },
         sources: [binding.source],
         signal: binding.signal,
-        deadlineNs: process.hrtime.bigint() + 120_000_000_000n,
+        deadlineMs: 120_000,
       })(operation);
     }) satisfies SqliteWorkerAdmissionFactory,
   };

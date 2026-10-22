@@ -4,7 +4,7 @@ import { existsSync, symlinkSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { getEnvironmentData, setEnvironmentData } from "node:worker_threads";
-import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
@@ -170,7 +170,11 @@ function owner(identity: SqliteSourceFenceIdentity) {
 function persist(
   fixture: Fixture,
   input: Omit<FenceFixtureCommand, "expectedRevision"> & { expectedRevision?: number },
-  options: { deadlineNs?: bigint; source?: ReturnType<typeof owner> } = {},
+  options: {
+    deadlineMs?: number;
+    hostNowAt?: number;
+    source?: ReturnType<typeof owner>;
+  } = {},
 ) {
   const command = { expectedRevision: 1, ...input };
   const controller = new AbortController();
@@ -178,11 +182,18 @@ function persist(
   const destination = owner(fixture.destination);
   const receipts: unknown[] = [];
   const settlements: Promise<SqliteWorkerOperationSettlement>[] = [];
+  // The host fixes an absolute wall-clock deadline at grant creation (Date.now + budget),
+  // so the worker's preparation time (module loading, backend prep) cannot restart the
+  // budget. hostNowAt advances the wall clock the host sees when it seeds the grant; the
+  // worker consumes the fixed absolute deadline on its own (real) wall clock.
+  if (options.hostNowAt !== undefined) {
+    vi.spyOn(Date, "now").mockReturnValue(options.hostNowAt);
+  }
   const factory = createSqliteSourceFenceAdmission({
     destination: destination.value,
     sources: [source.value, ...(command.alias ? [source.value] : [])],
     signal: controller.signal,
-    deadlineNs: options.deadlineNs ?? process.hrtime.bigint() + 30_000_000_000n,
+    deadlineMs: options.deadlineMs ?? 30_000,
   });
   const result = fixture.broker.runOperation(
     fixture.store,
@@ -200,6 +211,9 @@ function persist(
   );
   // Rejections are asserted after the deterministic gate, without an unhandled interval.
   void result.catch(() => {});
+  if (options.hostNowAt !== undefined) {
+    vi.restoreAllMocks();
+  }
   return { result, receipts, settlements, controller, source, destination };
 }
 
@@ -330,7 +344,7 @@ it("retains accepted commit custody after cancellation", async ({ signal }) => {
 
 it.each([
   ["stale", { expectedRevision: 2 }, {}],
-  ["expired", {}, { deadlineNs: 0n }],
+  ["expired", {}, { deadlineMs: 0 }],
   ["kernel", { fault: "kernel" }, {}],
   ["missing-receipt", { fault: "missing-receipt" }, {}],
   ["host-admission", { fault: "host-admission" }, {}],
@@ -346,6 +360,22 @@ it.each([
   if (fixture !== forward) {
     await fixture.broker.close();
   }
+});
+
+it("expires the fence at the host's absolute wall-clock deadline when the worker reads late", async () => {
+  // The host seeds the grant as if its wall clock were 90s in the past with a 30s budget,
+  // so the originating wall-clock deadline (realNow - 60s) is already past when the worker
+  // reads it after preparation. The worker must reject by that absolute deadline rather than
+  // restarting a 30s budget from its own (later) read time.
+  const realNow = Date.now();
+  const operation = persist(
+    forward,
+    { id: "worker-clock-behind", expectedRevision: 1 },
+    { hostNowAt: realNow - 90_000 },
+  );
+  await expect(operation.result).rejects.toThrow(/authority expired/);
+  assertRows(second, "worker-clock-behind");
+  expect(operation.receipts).toEqual([]);
 });
 
 it("refuses absent rows, captured-incarnation mismatch, and missing durable files", async () => {

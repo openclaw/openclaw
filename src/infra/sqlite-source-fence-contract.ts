@@ -30,5 +30,8 @@ export type SqliteSourceFenceGrant = {
   decision: SharedArrayBuffer;
   destination: SqliteSourceFenceIdentity;
   sources: readonly SqliteSourceFenceIdentity[];
-  deadlineNs: bigint;
+  /** Absolute wall-clock deadline (epoch ms) fixed by the host at grant creation. Wall-clock is
+      consistent across threads even when Bun resets each thread's monotonic clock, and fixing the
+      deadline at creation preserves the originating expiry bound across worker preparation. */
+  deadlineAtMs: number;
 };

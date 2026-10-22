@@ -31,11 +31,17 @@ export function createSqliteSourceFenceAdmission(options: {
   destination: SqliteSourceFenceOwner;
   sources: readonly SqliteSourceFenceOwner[];
   signal: AbortSignal;
-  deadlineNs: bigint;
+  deadlineMs: number;
 }): SqliteWorkerAdmissionFactory {
   if (options.sources.length === 0) {
     throw new Error("SQLite source fence requires an explicit source");
   }
+  // Bun starts process.hrtime at zero per thread, so the absolute deadline
+  // cannot cross threads. The host keeps its own admission on its local monotonic
+  // clock, while the worker consumes a wall-clock deadline fixed at grant creation
+  // (see deadlineAtMs below) that stays consistent across threads and preparation.
+  const deadlineNs =
+    process.hrtime.bigint() + BigInt(Math.max(0, Math.ceil(options.deadlineMs))) * 1_000_000n;
   const owners = [options.destination, ...options.sources];
   const identities = owners.map(({ identity }) => {
     if (!identity.physical.key.startsWith("file:") || !identity.incarnation) {
@@ -64,7 +70,7 @@ export function createSqliteSourceFenceAdmission(options: {
       }
       if (
         Atomics.load(decision, 0) === SOURCE_FENCE_REVOKED ||
-        process.hrtime.bigint() >= options.deadlineNs
+        process.hrtime.bigint() >= deadlineNs
       ) {
         throw new SqliteWorkerError("SQLite source fence authority expired", "closed");
       }
@@ -91,7 +97,10 @@ export function createSqliteSourceFenceAdmission(options: {
       decision: decision.buffer,
       destination,
       sources: identities.slice(1),
-      deadlineNs: options.deadlineNs,
+      // Fixed at grant creation so worker preparation cannot restart the budget: a
+      // worker that reads this grant after module loading and backend preparation still
+      // expires at the host's originating wall-clock instant.
+      deadlineAtMs: Date.now() + options.deadlineMs,
     };
     try {
       const admission = createSqliteWorkerOperationAdmission((request, grant) => {
