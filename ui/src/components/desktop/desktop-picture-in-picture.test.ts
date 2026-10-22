@@ -59,16 +59,11 @@ async function setup(mode: "mirror" | "pending" | "denied" = "mirror", docked = 
     options.onConnect?.();
     return connection;
   });
-  const panel = panels.createPanel();
-  panels.updatePanel(panel, {
-    client: { request, addEventListener: () => () => {} } as unknown as GatewayBrowserClient,
-    available: true,
-    embedded: !docked,
-    presented: true,
-    requestedSource: "gateway",
-    desktopClientFactory: () => ({ connect }),
-  });
-  await panels.mountPanel(panel);
+  const panel = await panels.mountDesktop(
+    { request, addEventListener: () => () => {} } as unknown as GatewayBrowserClient,
+    connect,
+    { embedded: !docked, presented: true, requestedSource: "gateway" },
+  );
   if (docked) {
     toggle(panel, true);
   }

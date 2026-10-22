@@ -3,13 +3,10 @@
 import type { EnvironmentSummary } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import type { DesktopClient } from "./desktop-client.ts";
 import {
-  createConnectionHandle,
+  connectedClient,
   createGatewayClient,
-  createPanel,
-  mountPanel,
-  updatePanel,
+  mountDesktop,
 } from "./desktop-panel.test-support.ts";
 
 const UNAVAILABLE = "The requested desktop is unavailable. Retry when the machine is ready.";
@@ -55,22 +52,14 @@ async function mount(
     return observed;
   });
   const gateway = createGatewayClient(request);
-  const connect = vi.fn(async (connection: Parameters<DesktopClient["connect"]>[0]) => {
-    connection.onConnect?.();
-    return createConnectionHandle();
-  });
-  const panel = createPanel();
-  updatePanel(panel, {
-    client: gateway.client,
-    available: true,
+  const connect = connectedClient();
+  const panel = await mountDesktop(gateway.client, connect, {
     embedded: true,
     presented: true,
     sessionKey: "agent:main:local",
     requestedSource: environment.id,
-    desktopClientFactory: () => ({ connect }),
     runtimeConfig,
   });
-  await mountPanel(panel);
   const button = (name: string) =>
     Array.from(panel.querySelectorAll("button")).find(
       (entry) => (entry.getAttribute("aria-label") ?? entry.textContent)?.trim() === name,

@@ -1,59 +1,35 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { createStorageMock } from "../../test-helpers/storage.ts";
 import type { DesktopClient, DesktopConnectionHandle } from "./desktop-client.ts";
 import {
   clickPanelButton,
   createConnectionHandle,
   createGatewayClient,
   createPanel,
+  connectedClient as connected,
+  desktopRequest,
   desktopEnvironment,
+  expectObserve,
+  mountDesktop as mount,
+  rpcCalls,
+  type RpcParams,
   selectSizing,
   sizingMenu,
-  mountPanel,
   unmountPanel,
+  usePanelStorage,
   updatePanel,
 } from "./desktop-panel.test-support.ts";
 
 const node = { id: "node:workstation", type: "node", status: "available", desktop: true };
-function expectObserve(request: unknown, environmentId: string, control = false) {
-  expect(request).toHaveBeenLastCalledWith("desktop.observe", {
-    source: { kind: "environment", environmentId },
-    control,
-  });
-}
-function rpcCalls<T extends unknown[]>(request: { mock: { calls: T[] } }, method: string) {
-  return request.mock.calls.filter(([name]) => name === method);
-}
-function connected(overrides: Partial<DesktopConnectionHandle> = {}) {
-  return vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
-    options.onConnect?.();
-    return createConnectionHandle(overrides);
-  });
-}
-type RpcParams = {
-  control?: boolean;
-  environmentId?: string;
-  credentials?: { username: string; password: string };
-};
 type Reply = (params?: RpcParams) => unknown;
 const workerInventory = {
   "environments.list": () => ({ environments: [desktopEnvironment] }),
   "environments.status": () => desktopEnvironment,
 };
-const observation = (control = false) => ({ transport: "rfb", wsPath: "/view", control });
-function desktopRequest(
-  handlers: Record<string, Reply>,
-  fallback: Reply = (params) => observation(params?.control),
-) {
-  return vi.fn(async (method: string, params?: RpcParams) =>
-    (handlers[method] ?? fallback)(params),
-  );
-}
 function viewer(handlers: Record<string, Reply>, fallback?: Reply) {
   const request = desktopRequest(handlers, fallback);
   const gateway = createGatewayClient(request);
@@ -70,22 +46,6 @@ function expectViewer(panel: Panel, connect: ReturnType<typeof connected>, disco
   expect(connect.mock.calls[0]?.[0].isCurrent()).toBe(true);
   expect(disconnect).not.toHaveBeenCalled();
   expect(panel.querySelector(".desktop-surface")).not.toBeNull();
-}
-
-async function mount(
-  client: ReturnType<typeof createGatewayClient>["client"],
-  connect: DesktopClient["connect"] | undefined,
-  options: Partial<ReturnType<typeof createPanel>> = {},
-) {
-  const panel = createPanel();
-  updatePanel(panel, {
-    client,
-    available: true,
-    ...(connect ? { desktopClientFactory: () => ({ connect }) } : {}),
-    ...options,
-  });
-  await mountPanel(panel);
-  return panel;
 }
 
 async function handoffFixture(initialControl = false, delayedHandle = false) {
@@ -125,14 +85,7 @@ async function handoffFixture(initialControl = false, delayedHandle = false) {
 }
 
 describe("embedded desktop panel presentation", () => {
-  beforeEach(() => {
-    vi.stubGlobal("localStorage", createStorageMock());
-  });
-
-  afterEach(() => {
-    document.body.replaceChildren();
-    vi.unstubAllGlobals();
-  });
+  usePanelStorage();
 
   it.each([
     { reason: "control-taken:林 🦞", notice: "林 🦞 took control" },

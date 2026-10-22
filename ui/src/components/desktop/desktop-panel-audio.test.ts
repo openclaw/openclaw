@@ -13,9 +13,8 @@ import {
   clickPanelButton,
   createConnectionHandle,
   createGatewayClient,
-  createPanel,
   desktopEnvironment,
-  mountPanel,
+  mountDesktop,
   unmountPanel,
   updatePanel,
 } from "./desktop-panel.test-support.ts";
@@ -60,18 +59,13 @@ async function setup(
     options.onConnect?.();
     return handle;
   });
-  const panel = createPanel();
-  updatePanel(panel, {
-    client: createGatewayClient(request).client,
-    available: true,
+  const panel = await mountDesktop(createGatewayClient(request).client, connect, {
     embedded: !documentMode,
     presented: true,
     documentMode,
     sessionKey: "main",
     requestedSource: desktopEnvironment.id,
-    desktopClientFactory: () => ({ connect }),
   });
-  await mountPanel(panel);
   await panel.updateComplete;
   await vi.advanceTimersByTimeAsync(0);
   if (!pending) {

@@ -1,18 +1,22 @@
 /* @vitest-environment jsdom */
 
 import type { DesktopObserveResult, EnvironmentSummary } from "@openclaw/gateway-protocol";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { createStorageMock } from "../../test-helpers/storage.ts";
 import type { DesktopClient } from "./desktop-client.ts";
 import {
   clickPanelButton,
   createConnectionHandle,
   createGatewayClient,
   createPanel,
+  desktopRequest,
   desktopEnvironment,
-  mountPanel,
+  expectObserve,
+  mountDesktop,
+  rpcCalls,
+  type RpcParams,
+  usePanelStorage,
   updatePanel,
 } from "./desktop-panel.test-support.ts";
 
@@ -22,15 +26,6 @@ const observation = {
   expiresAtMs: Date.now() + 60_000,
   control: false,
 } satisfies DesktopObserveResult;
-function rpcCalls<T extends unknown[]>(request: { mock: { calls: T[] } }, method: string) {
-  return request.mock.calls.filter(([name]) => name === method);
-}
-function expectObserve(request: unknown, environmentId: string, control = false) {
-  expect(request).toHaveBeenLastCalledWith("desktop.observe", {
-    source: { kind: "environment", environmentId },
-    control,
-  });
-}
 function waitForStatus(request: unknown) {
   return waitForSolid(() =>
     expect(request).toHaveBeenCalledWith("environments.status", {
@@ -38,25 +33,17 @@ function waitForStatus(request: unknown) {
     }),
   );
 }
-type Params = { control?: boolean; environmentId?: string };
-type Reply = (params?: Params) => unknown;
+type Reply = (params?: RpcParams) => unknown;
 function requests(handlers: Record<string, Reply>, fallback: Reply = () => observation) {
-  return vi.fn(async (method: string, params?: Params) => (handlers[method] ?? fallback)(params));
+  return desktopRequest(handlers, fallback);
 }
 const describeSession = (key: string, environmentId = desktopEnvironment.id) => ({
   session: { key, placement: { state: "active", environmentId } },
 });
 
 describe("session desktop connection", () => {
-  beforeEach(() => {
-    vi.stubGlobal("localStorage", createStorageMock());
-  });
-
-  afterEach(() => {
-    document.body.replaceChildren();
-    vi.useRealTimers();
-    vi.unstubAllGlobals();
-  });
+  usePanelStorage();
+  afterEach(() => vi.useRealTimers());
 
   async function mount(
     request: ReturnType<typeof requests>,
@@ -76,18 +63,13 @@ describe("session desktop connection", () => {
       }
       return createConnectionHandle({ disconnect });
     });
-    const panel = createPanel();
-    updatePanel(panel, {
-      client: gateway.client,
-      available: true,
+    const panel = await mountDesktop(gateway.client, connect, {
       embedded: true,
       presented: true,
       sessionKey: "agent:main:preview",
       requestedSource: desktopEnvironment.id,
-      desktopClientFactory: () => ({ connect }),
       ...options,
     });
-    await mountPanel(panel);
     return { panel, gateway, connect, disconnect };
   }
 

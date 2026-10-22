@@ -1,8 +1,7 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { createStorageMock } from "../../test-helpers/storage.ts";
 import type { DesktopClient } from "./desktop-client.ts";
 import {
   clickPanelButton,
@@ -12,7 +11,8 @@ import {
   desktopEnvironment,
   selectSizing,
   sizingMenu,
-  mountPanel,
+  mountDesktop,
+  usePanelStorage,
   updatePanel,
 } from "./desktop-panel.test-support.ts";
 
@@ -29,14 +29,7 @@ const sizingCases = [false, true].flatMap((documentMode) =>
   capabilities.map(([canResize, control]) => ({ documentMode, canResize, control })),
 );
 
-beforeEach(() => {
-  vi.stubGlobal("localStorage", createStorageMock());
-});
-
-afterEach(() => {
-  document.body.replaceChildren();
-  vi.unstubAllGlobals();
-});
+usePanelStorage();
 
 function observeRequest(
   observed: object | ((params?: { control?: boolean }) => object),
@@ -78,17 +71,12 @@ function connections(authenticate = false) {
 }
 
 async function mount(request: unknown, connect: Connect, options: Partial<Panel> = {}) {
-  const panel = createPanel();
-  updatePanel(panel, {
-    client: createGatewayClient(request).client,
-    available: true,
+  const panel = await mountDesktop(createGatewayClient(request).client, connect, {
     embedded: true,
     presented: true,
     requestedSource: desktopEnvironment.id,
-    desktopClientFactory: () => ({ connect }),
     ...options,
   });
-  await mountPanel(panel);
   await connected(panel, connect, 1);
   return panel;
 }

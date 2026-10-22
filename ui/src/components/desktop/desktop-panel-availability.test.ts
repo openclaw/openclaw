@@ -9,6 +9,7 @@ import {
   createConnectionHandle,
   createGatewayClient,
   createPanel,
+  mountDesktop,
   mountPanel,
   unmountPanel,
   updatePanel,
@@ -50,15 +51,10 @@ async function mount(
     connection.onConnect?.();
     return handle ?? createConnectionHandle();
   });
-  const panel = createPanel();
-  updatePanel(panel, {
-    client: gateway.client,
-    available: true,
+  const panel = await mountDesktop(gateway.client, connect, {
     requestedSource: workstation.id,
-    desktopClientFactory: () => ({ connect }),
     ...options,
   });
-  await mountPanel(panel);
   return { gateway, connect, panel };
 }
 

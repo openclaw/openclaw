@@ -1,10 +1,9 @@
 /* @vitest-environment jsdom */
 
 import type { DesktopObserveResult } from "@openclaw/gateway-protocol";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { createStorageMock } from "../../test-helpers/storage.ts";
 import type { DesktopClient, DesktopConnectionHandle } from "./desktop-client.ts";
 import * as desktop from "./desktop-panel.test-support.ts";
 
@@ -38,26 +37,18 @@ function expectReleased(request: Requests, released = true) {
 }
 
 async function openPanel(request: Requests, connect: DesktopClient["connect"]) {
-  const panel = Object.assign(desktop.createPanel(), {
-    client: desktop.createGatewayClient(request).client,
-    available: true,
+  const panel = await desktop.mountDesktop(desktop.createGatewayClient(request).client, connect, {
     embedded: true,
     presented: true,
     suppliedEnvironments: [desktop.desktopEnvironment],
-    desktopClientFactory: () => ({ connect }),
   });
-  await desktop.mountPanel(panel);
   await panel.updateComplete;
   desktop.clickPanelButton(panel);
   await waitForSolid(() => expect(calls(request, "desktop.observe")).toHaveLength(1));
   return panel;
 }
 
-beforeEach(() => vi.stubGlobal("localStorage", createStorageMock()));
-afterEach(() => {
-  document.body.replaceChildren();
-  vi.unstubAllGlobals();
-});
+desktop.usePanelStorage();
 
 it.each(["hidden", "removed", "Gateway replaced"] as const)(
   "releases a late observe through its original client after the panel is %s",

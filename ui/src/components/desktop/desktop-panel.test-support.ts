@@ -1,12 +1,71 @@
 import type { EnvironmentSummary } from "@openclaw/gateway-protocol";
 import { expectDefined } from "@openclaw/normalization-core";
-import { vi } from "vitest";
+import { afterEach, beforeEach, expect, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventListener } from "../../api/gateway.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import type { DesktopConnectionHandle } from "./desktop-client.ts";
+import { createStorageMock } from "../../test-helpers/storage.ts";
+import type { DesktopClient, DesktopConnectionHandle } from "./desktop-client.ts";
 import "./desktop-panel.ts";
 
 type Panel = HTMLElementTagNameMap["openclaw-desktop-panel"];
+
+export function usePanelStorage() {
+  beforeEach(() => vi.stubGlobal("localStorage", createStorageMock()));
+  afterEach(() => {
+    document.body.replaceChildren();
+    vi.unstubAllGlobals();
+  });
+}
+
+export function connectedClient(overrides: Partial<DesktopConnectionHandle> = {}) {
+  return vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
+    options.onConnect?.();
+    return createConnectionHandle(overrides);
+  });
+}
+
+export async function mountDesktop(
+  client: GatewayBrowserClient,
+  connect: DesktopClient["connect"] | undefined,
+  options: Partial<Panel> = {},
+) {
+  const panel = createPanel();
+  updatePanel(panel, {
+    client,
+    available: true,
+    ...(connect ? { desktopClientFactory: () => ({ connect }) } : {}),
+    ...options,
+  });
+  await mountPanel(panel);
+  return panel;
+}
+
+export function rpcCalls<T extends unknown[]>(request: { mock: { calls: T[] } }, method: string) {
+  return request.mock.calls.filter(([name]) => name === method);
+}
+
+export function expectObserve(request: unknown, environmentId: string, control = false) {
+  expect(request).toHaveBeenLastCalledWith("desktop.observe", {
+    source: { kind: "environment", environmentId },
+    control,
+  });
+}
+
+export type RpcParams = {
+  control?: boolean;
+  environmentId?: string;
+  credentials?: { username: string; password: string };
+};
+type Reply = (params?: RpcParams) => unknown;
+const observation = (control = false) => ({ transport: "rfb", wsPath: "/view", control });
+export function desktopRequest(
+  handlers: Record<string, Reply>,
+  fallback: Reply = (params) => observation(params?.control),
+) {
+  return vi.fn(async (method: string, params?: RpcParams) =>
+    (handlers[method] ?? fallback)(params),
+  );
+}
 
 export const desktopEnvironment = {
   id: "worker-desktop-1",
