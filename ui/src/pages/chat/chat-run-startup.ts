@@ -102,6 +102,7 @@ const STARTUP_LABEL_KEYS = {
   waiting_for_state: "chat.startupStatus.waitingForState",
   preparing_workspace: "chat.startupStatus.preparingWorkspace",
   naming_worktree: "chat.startupStatus.namingWorktree",
+  preparing_worktree_base: "chat.startupStatus.updatingRepository",
   creating_worktree: "chat.startupStatus.creatingWorktree",
   running_setup: "chat.startupStatus.runningSetup",
   provisioning_environment: "chat.startupStatus.provisioningEnvironment",

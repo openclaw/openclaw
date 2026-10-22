@@ -187,6 +187,24 @@ describe("managed worktree creation groups", () => {
     }
   });
 
+  it("reports repository updates only while fetching the default base", async () => {
+    const execute = gitExec.executeGitCommand;
+    const events: string[] = [];
+    vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
+      if (args[0] === "fetch") {
+        events.push("fetch");
+      }
+      return await execute(cwd, args, options);
+    });
+    const onProgress = (phase: string) => events.push(phase);
+    await service.create({ repoRoot: repo, name: "default", onProgress });
+    expect(events.slice(0, 2)).toEqual(["base", "fetch"]);
+    expect(events.at(-1)).toBe("checkout");
+    events.length = 0;
+    await service.create({ repoRoot: repo, name: "explicit", baseRef: "HEAD", onProgress });
+    expect(events).toEqual(["checkout"]);
+  });
+
   it("reuses a recent default, then refreshes after its freshness window", async () => {
     const now = Date.now();
     const clock = vi.spyOn(Date, "now").mockReturnValue(now);

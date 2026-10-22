@@ -89,6 +89,22 @@ suite.define(() => {
                 )
                 .toBe(true);
             }
+            if (testCase.id === "assistant-video") {
+              // Metadata replaces the video's initial 150px height with its intrinsic ratio.
+              const videoElement = page.locator(".chat-assistant-video-frame video");
+              await expectBrowser(videoElement).toBeVisible();
+              await expect
+                .poll(() =>
+                  videoElement.evaluate(
+                    (element) =>
+                      element instanceof HTMLVideoElement &&
+                      element.readyState >= HTMLMediaElement.HAVE_METADATA &&
+                      element.videoWidth > 0 &&
+                      element.videoHeight > 0,
+                  ),
+                )
+                .toBe(true);
+            }
             if (testCase.id === "clawhub") {
               // Compare settled catalog content, not the transient loading card.
               await expectBrowser(page.locator(".chat-clawhub-card")).toHaveAttribute(

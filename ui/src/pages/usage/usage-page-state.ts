@@ -10,7 +10,7 @@ import {
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
 import { GatewayPageBinding, type GatewayPageChange } from "../../lib/gateway-page-binding.ts";
-import { createPageRequest } from "../../lib/page-request.ts";
+import { createPageRequest, type PageReadResult } from "../../lib/page-request.ts";
 import { projectMutableSource } from "../../lib/reactive/projection.ts";
 import type { SessionUsageQuery } from "../../lib/sessions/usage.ts";
 import { isUsageCacheIncomplete, resolveUsagePublication } from "./cache-status.ts";
@@ -97,6 +97,8 @@ export function createUsagePage(context: ApplicationContext) {
   >();
   let routeDataInitialized = false;
   let routeDataEnabled = true;
+  const routeRead = Promise.withResolvers<PageReadResult>();
+  let dateRead: PromiseWithResolvers<PageReadResult> | null = null;
   const refreshPolicy = new UsageRefreshPolicy({
     isLoading: usageLoading,
     reload: (reason) => {
@@ -225,6 +227,7 @@ export function createUsagePage(context: ApplicationContext) {
       return;
     }
     routeDataInitialized = true;
+    routeRead.resolve(null);
     if (!routeDataEnabled) {
       return;
     }
@@ -433,9 +436,11 @@ export function createUsagePage(context: ApplicationContext) {
   }
 
   function clearDebounce(timer: "dateDebounceTimer" | "queryDebounceTimer") {
-    if (timers[timer] !== null) {
-      window.clearTimeout(timers[timer]);
-      timers[timer] = null;
+    window.clearTimeout(timers[timer] ?? undefined);
+    timers[timer] = null;
+    if (timer === "dateDebounceTimer") {
+      dateRead?.resolve(null);
+      dateRead = null;
     }
   }
 
@@ -447,8 +452,9 @@ export function createUsagePage(context: ApplicationContext) {
     // Cancel the old query's poll before it can consume this debounce and retry budget.
     refreshPolicy.resetPayload();
     routeDataEnabled = false;
+    dateRead = Promise.withResolvers<PageReadResult>();
     timers.dateDebounceTimer = window.setTimeout(() => {
-      timers.dateDebounceTimer = null;
+      clearDebounce("dateDebounceTimer");
       void refreshPolicy.request("manual");
     }, 400);
   }
@@ -522,6 +528,7 @@ export function createUsagePage(context: ApplicationContext) {
       result: usageResult(),
       data: {
         loading: usageLoading(),
+        read: !routeDataInitialized ? routeRead.promise : (dateRead?.promise ?? usageRequest.read),
         exporting: usageExportRequest.pending,
         error: usageError ?? usageResult()?.partial?.message ?? null,
         sessions: usageRosterResult()?.sessions ?? [],
@@ -548,13 +555,16 @@ export function createUsagePage(context: ApplicationContext) {
         context: {
           weight: details.session.data?.contextWeight,
           loading: details.session.loading,
+          read: details.session.read,
           status: details.session.status,
         },
         timeSeries,
         timeSeriesLoading: details.timeSeries.loading,
+        timeSeriesRead: details.timeSeries.read,
         timeSeriesStatus: details.timeSeries.status,
         sessionLogs: details.sessionLogs.data,
         sessionLogsLoading: details.sessionLogs.loading,
+        sessionLogsRead: details.sessionLogs.read,
         sessionLogsStatus: details.sessionLogs.status,
       },
       callbacks: {
@@ -717,6 +727,7 @@ export function createUsagePage(context: ApplicationContext) {
   const stopAgentScope = observeAgentScope(context.agentSelection);
   onCleanup(() => {
     publish = () => {};
+    routeRead.resolve(null);
     stopAgentScope();
     clearDebounce("dateDebounceTimer");
     clearDebounce("queryDebounceTimer");

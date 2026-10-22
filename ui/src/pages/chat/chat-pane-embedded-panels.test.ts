@@ -337,7 +337,15 @@ it.each(["ready", "unavailable", "error"] as const)(
     const video = await vi.waitFor(() => expectDefined(panel.querySelector("video"), "video"));
     expect(video.hasAttribute("src")).toBe(false);
     expect(video.preload).toBe("auto");
-    const presentation = panel.querySelector('[role="status"]');
+    const presentation = expectDefined(
+      panel.querySelector(".chat-video-skeleton"),
+      "Video loading skeleton",
+    );
+    const failureStatus = expectDefined(
+      panel.querySelector('.sr-only[role="status"]'),
+      "Video failure status",
+    );
+    expect(failureStatus.textContent).toBe("");
     const header = panel.querySelector(".chat-assistant-attachment-card__header");
     expect(secondResolver).toHaveBeenCalledOnce();
     if (outcome === "error") {
@@ -352,13 +360,15 @@ it.each(["ready", "unavailable", "error"] as const)(
         expect(video.getAttribute("src")).toBe(`${source}?mediaTicket=renewed`),
       );
       expect(panel.querySelector("video")).toBe(video);
-      expect(panel.querySelector('[role="status"]')).toBe(presentation);
+      expect(panel.querySelector(".chat-video-skeleton")).toBe(presentation);
       expect(panel.querySelector(".chat-assistant-attachment-card__header")).toBe(header);
       expect(panel.querySelector('[aria-busy="true"]')).not.toBeNull();
       Object.defineProperty(video, "readyState", { configurable: true, value: 2 });
       video.dispatchEvent(new Event("loadeddata"));
       await player?.updateComplete;
-      expect(panel.querySelector('[role="status"]')).toBeNull();
+      expect(panel.querySelector(".chat-video-skeleton")).toBeNull();
+      expect(panel.querySelector('.sr-only[role="status"]')).toBe(failureStatus);
+      expect(failureStatus.textContent).toBe("");
       expect(panel.querySelector('[aria-busy="true"]')).toBeNull();
       expect(panel.textContent).not.toContain("Preview unavailable");
     } else {
