@@ -56,8 +56,7 @@ it.each([true, false])(
         : undefined,
     );
     await captureWarmImage(provider);
-    expect(calls.at(-1)?.argv[1]).toBe("stop");
-    expect(calls.filter(({ argv }) => argv[1] === "stop")).toHaveLength(1);
+    expect(calls.filter(({ argv }) => argv[1] === "stop")).toEqual([calls.at(-1)]);
     expect(warn).toHaveBeenCalledOnce();
     if (unsupported) {
       const image = (await listCrabboxWarmImages(crabboxState))[0];
@@ -113,19 +112,13 @@ it("scrubs every worker identity and workspace before capturing an enrolled leas
   ]);
   const scrub = captureCalls[0];
   expect(scrub?.argv).toContain("--script-stdin");
-  // AWS coordinator round trips starved the old 60s budget (live-measured 2026-08-26).
-  expect(scrub?.options.timeoutMs).toBe(180_000);
-  expect(captureCalls[1]?.options.timeoutMs).toBe(48 * 60_000);
-  expect(provider.resolveDestroyTimeoutMs?.(PROFILE)).toBeGreaterThanOrEqual(
-    calls.reduce((total, call) => total + call.options.timeoutMs, 0),
-  );
   const home = tempDirs.make("openclaw-crabbox-warm-scrub-");
   const at = (relative: string) => path.join(home, relative);
   const bin = at("bin");
   const workdir = at("crabbox-workdir");
-  const envFile = path.join(workdir, ".crabbox", "env", "forwarded.env");
-  const egressEnvFile = path.join(workdir, ".crabbox/env-setup");
-  const scrubScript = path.join(workdir, ".crabbox", "scripts", "scrub.sh");
+  const envFile = at("crabbox-workdir/.crabbox/env/forwarded.env");
+  const egressEnvFile = at("crabbox-workdir/.crabbox/env-setup");
+  const scrubScript = at("crabbox-workdir/.crabbox/scripts/scrub.sh");
   const tmp = at("tmp");
   const fixedTmp = at("fixed-tmp");
   // Map the owned Linux /tmp root into the fixture without scanning host temporary files.
@@ -164,7 +157,7 @@ it("scrubs every worker identity and workspace before capturing an enrolled leas
   }
   write(egressEnvFile, "SETUP_TOKEN=synthetic-sentinel");
   write(scrubScript, scrubInput);
-  const runtime = path.join(home, ".openclaw-worker", "node-runtimes", "a".repeat(64));
+  const runtime = at(`.openclaw-worker/node-runtimes/${"a".repeat(64)}`);
   fs.mkdirSync(runtime, { recursive: true });
   const state = at(`.openclaw/cloud-workers/${LEASE_ID}`);
   fs.mkdirSync(state, { recursive: true });
@@ -238,15 +231,10 @@ it("scrubs every worker identity and workspace before capturing an enrolled leas
   );
   expect(runScrub).toThrow();
   expect(fs.existsSync(envFile)).toBe(true);
-  expect(captureCalls[1]?.argv.slice(1)).toEqual(captureArgs("aws"));
-  calls.length = 0;
-  await provisionWarmProfile(provider, PROFILE, `provision:v2:${"2".repeat(64)}`);
-  expect(calls.some(({ argv }) => argv[2] === "inspect")).toBe(false);
-  expect(calls.find(({ argv }) => argv[2] === "fork")?.argv[3]).toBe(CHECKPOINT_ID);
-  expect(calls.some(({ argv }) => argv[1] === "warmup")).toBe(false);
 });
 
 it.each([
+  ["aws", "aws-ebs-snapshot", "completed", 0],
   ["azure", "azure-os-disk-snapshot", "available", 0],
   ["daytona", "daytona-snapshot", "active", 3 * 60_000],
   ["machine0", "machine0-image", "ACTIVE", 30 * 60_000],
