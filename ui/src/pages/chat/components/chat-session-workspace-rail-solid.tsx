@@ -463,9 +463,12 @@ function WorkspaceContents(props: { workspace: SessionWorkspaceProps }) {
           </div>
         </Show>
       </div>
-      <Errored
-        fallback={(error, reset) => (
-          <>
+      <Loading
+        on={scope()}
+        fallback={<PanelLoadingSkeleton variant="files" label={t("chat.workspaceFiles.loading")} />}
+      >
+        <Errored
+          fallback={(error, reset) => (
             <div class="chat-workspace-rail__state chat-workspace-rail__state--error">
               <div role="alert">{formatUiError(error())}</div>
               <button
@@ -479,27 +482,19 @@ function WorkspaceContents(props: { workspace: SessionWorkspaceProps }) {
                 {t("common.retry")}
               </button>
             </div>
-            <Contents pending={false} />
-          </>
-        )}
-      >
-        <Loading
-          on={scope()}
+          )}
+        >
+          {read()}
+        </Errored>
+        <Show
+          when={props.workspace.list || !isPending(read)}
           fallback={
             <PanelLoadingSkeleton variant="files" label={t("chat.workspaceFiles.loading")} />
           }
         >
-          {read()}
-          <Show
-            when={props.workspace.list || !isPending(read)}
-            fallback={
-              <PanelLoadingSkeleton variant="files" label={t("chat.workspaceFiles.loading")} />
-            }
-          >
-            <Contents pending={isPending(read)} />
-          </Show>
-        </Loading>
-      </Errored>
+          <Contents pending={isPending(read)} />
+        </Show>
+      </Loading>
     </aside>
   );
 }

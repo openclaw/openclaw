@@ -673,9 +673,9 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
         </label>
         <ActivityMenu workspace={props.workspace} filters={filters()} filter={filter()} />
       </div>
-      <Errored
-        fallback={(error, reset) => (
-          <>
+      <Loading on={scope()} fallback={<WorkspaceLoading />}>
+        <Errored
+          fallback={(error, reset) => (
             <div class="workspace-desktop__notice">
               <div role="alert">{formatUiError(error())}</div>
               <button
@@ -689,17 +689,14 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
                 {t("common.retry")}
               </button>
             </div>
-            <Contents pending={false} />
-          </>
-        )}
-      >
-        <Loading on={scope()} fallback={<WorkspaceLoading />}>
+          )}
+        >
           {read()}
-          <Show when={props.workspace.list || !isPending(read)} fallback={<WorkspaceLoading />}>
-            <Contents pending={isPending(read)} />
-          </Show>
-        </Loading>
-      </Errored>
+        </Errored>
+        <Show when={props.workspace.list || !isPending(read)} fallback={<WorkspaceLoading />}>
+          <Contents pending={isPending(read)} />
+        </Show>
+      </Loading>
     </aside>
   );
 }
