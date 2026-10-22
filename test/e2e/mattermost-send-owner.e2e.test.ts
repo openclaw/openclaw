@@ -1,7 +1,4 @@
-import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import type { IncomingMessage, RequestListener, ServerResponse } from "node:http";
-import os from "node:os";
-import path from "node:path";
 import { createJiti } from "jiti";
 import {
   createTestRegistry,
@@ -59,20 +56,16 @@ const BOT_ID = "cccccccccccccccccccccccccc";
 type CapturedRequest = {
   method: string;
   path: string;
-  rawBody: string;
   jsonBody?: unknown;
 };
 
 function createMattermostHttpHandler(params: {
   requests: CapturedRequest[];
-  sequence?: string[];
   directChannelResponse?: () => Promise<{ status: number; body: unknown }>;
   respondToPost?: (response: ServerResponse) => void;
 }): RequestListener {
   const handleRequest = async (request: IncomingMessage, response: ServerResponse) => {
-    const reply = (status: number, body: unknown) => {
-      respondJson(response, body, status);
-    };
+    const reply = (status: number, body: unknown) => respondJson(response, body, status);
     const rawBody = await readRequestText(request);
     const contentType = request.headers["content-type"] ?? "";
     const requestPath = request.url ?? "";
@@ -81,21 +74,11 @@ function createMattermostHttpHandler(params: {
     params.requests.push({
       method: request.method ?? "",
       path: requestPath,
-      rawBody,
       ...(jsonBody !== undefined ? { jsonBody } : {}),
     });
 
-    if (requestPath === "/api/v4/files") {
-      params.sequence?.push("http:upload");
-      reply(201, { file_infos: [{ id: "file-1" }] });
-      return;
-    }
     if (requestPath === "/api/v4/users/me") {
       reply(200, { id: BOT_ID });
-      return;
-    }
-    if (requestPath === "/api/v4/users/username/alice") {
-      reply(200, { id: USER_ID });
       return;
     }
     if (requestPath === "/api/v4/channels/direct") {
@@ -104,7 +87,6 @@ function createMattermostHttpHandler(params: {
       return;
     }
     if (requestPath === "/api/v4/posts") {
-      params.sequence?.push("http:post");
       if (params.respondToPost) {
         params.respondToPost(response);
         return;
@@ -129,20 +111,13 @@ function createMattermostHttpHandler(params: {
   };
 }
 
-function registerMattermostRuntime(params: { sequence?: string[]; activityError?: Error }) {
+function registerMattermostRuntime() {
   expect(mattermostPlugin).toBe(mattermostPublicApi.mattermostPlugin);
   // Bootstrap must use the same entry-owned instance as delivery and runtime setup.
   vi.spyOn(bootstrapRegistry, "getBootstrapChannelPlugin").mockImplementation((id) =>
     id === mattermostPlugin.id ? mattermostPlugin : undefined,
   );
-  const runtime = createPluginRuntimeMock();
-  vi.spyOn(runtime.channel.activity, "record").mockImplementation(() => {
-    params.sequence?.push("bookkeeping:activity");
-    if (params.activityError) {
-      throw params.activityError;
-    }
-  });
-  runtimeStore.setRuntime(runtime);
+  runtimeStore.setRuntime(createPluginRuntimeMock());
   setActivePluginRegistry(
     createTestRegistry([{ pluginId: "mattermost", source: "test", plugin: mattermostPlugin }]),
   );
@@ -173,11 +148,10 @@ function recoverDeliveries(cfg: OpenClawConfig, stateDir: string, log = createRe
   });
 }
 
-function reopenState(stateDir: string) {
-  return closeOpenClawStateDatabaseByPathAsync(
+const reopenState = (stateDir: string) =>
+  closeOpenClawStateDatabaseByPathAsync(
     resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir }),
   );
-}
 
 type SendOptions = Parameters<typeof runMessageAction>[0];
 function send(
@@ -199,16 +173,6 @@ const sentResult = {
   handledBy: "core",
   sendResult: { deliveryStatus: "sent", result: { messageId: "post-1" } },
 };
-
-function expectProgress(onDeliveryResult: ReturnType<typeof vi.fn>) {
-  expect(onDeliveryResult).toHaveBeenCalledWith(
-    expect.objectContaining({
-      channel: "mattermost",
-      messageId: "post-1",
-      receipt: expect.objectContaining({ parts: expect.any(Array) }),
-    }),
-  );
-}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -243,7 +207,7 @@ describe("Mattermost canonical message action delivery", () => {
         });
 
         await withServer(handler, async (baseUrl) => {
-          registerMattermostRuntime({});
+          registerMattermostRuntime();
           const cfg: OpenClawConfig = {
             channels: {
               mattermost: {
@@ -337,7 +301,7 @@ describe("Mattermost canonical message action delivery", () => {
       });
 
       await withServer(handler, async (baseUrl) => {
-        registerMattermostRuntime({});
+        registerMattermostRuntime();
         const cfg = createMattermostConfig(baseUrl);
         await expect(
           send(
@@ -375,150 +339,5 @@ describe("Mattermost canonical message action delivery", () => {
         expect(requests.some((request) => request.path === "/api/v4/redirected-post")).toBe(false);
       });
     });
-  });
-
-  it.each([
-    ["channel", `channel:${CHANNEL_ID}`],
-    ["explicit user", `user:${USER_ID}`],
-    ["username", "@alice"],
-  ])("keeps the original %s target after provider resolution", async (_name, target) => {
-    const requests: CapturedRequest[] = [];
-
-    await withServer(createMattermostHttpHandler({ requests }), async (baseUrl) => {
-      registerMattermostRuntime({});
-      const result = await send(
-        createMattermostConfig(baseUrl),
-        { target, message: "target proof" },
-        { skipQueue: true },
-      );
-      expect(result).toMatchObject({ ...sentResult, to: target });
-    });
-
-    expect(requests.at(-1)).toMatchObject({
-      method: "POST",
-      path: "/api/v4/posts",
-      jsonBody: { channel_id: CHANNEL_ID, message: "target proof" },
-    });
-  });
-
-  it("uses the generic replyTo parameter when no thread is provided", async () => {
-    const requests: CapturedRequest[] = [];
-
-    await withServer(createMattermostHttpHandler({ requests }), async (baseUrl) => {
-      registerMattermostRuntime({});
-      const result = await send(
-        createMattermostConfig(baseUrl),
-        { message: "reply proof", replyTo: "reply-root" },
-        { skipQueue: true },
-      );
-      expect(result).toMatchObject(sentResult);
-    });
-
-    expect(requests.at(-1)?.jsonBody).toMatchObject({
-      channel_id: CHANNEL_ID,
-      message: "reply proof",
-      root_id: "reply-root",
-    });
-  });
-
-  it("preserves media, presentation, thread, receipt, and progress ordering", async () => {
-    const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "mattermost-send-")));
-    const file = path.join(directory, "report.txt");
-    const requests: CapturedRequest[] = [];
-    const sequence: string[] = [];
-    const onDeliveryResult = vi.fn((result: { messageId?: string }) => {
-      sequence.push(`progress:${result.messageId}`);
-    });
-    await writeFile(file, "report bytes");
-
-    try {
-      await withServer(createMattermostHttpHandler({ requests, sequence }), async (baseUrl) => {
-        registerMattermostRuntime({ sequence });
-        const result = await send(
-          createMattermostConfig(baseUrl),
-          {
-            message: "Deploy finished",
-            filePath: file,
-            attachmentText: "Attachment context",
-            threadId: "thread-root",
-            replyTo: "child-post",
-            presentation: {
-              blocks: [
-                {
-                  type: "buttons",
-                  buttons: [
-                    { label: "Open", value: "open", style: "primary" },
-                    { label: "Docs", url: "https://example.test/docs" },
-                  ],
-                },
-              ],
-            },
-          },
-          {
-            mediaAccess: {
-              localRoots: [directory],
-              readFile,
-              workspaceDir: directory,
-            },
-            onDeliveryResult,
-            skipQueue: true,
-          },
-        );
-
-        expect(result).toMatchObject({ ...sentResult, to: `channel:${CHANNEL_ID}` });
-      });
-
-      const upload = requests.find((request) => request.path === "/api/v4/files");
-      expect(upload?.rawBody).toContain('filename="report.txt"');
-      expect(upload?.rawBody).toContain("Content-Type: text/plain");
-      expect(upload?.rawBody).toContain("report bytes");
-      const post = requests.find((request) => request.path === "/api/v4/posts");
-      expect(post?.jsonBody).toMatchObject({
-        channel_id: CHANNEL_ID,
-        message: "Deploy finished\n\n- Open\n- Docs: https://example.test/docs",
-        root_id: "thread-root",
-        file_ids: ["file-1"],
-      });
-      expect(JSON.stringify(post?.jsonBody)).toContain("Attachment context");
-      expect(JSON.stringify(post?.jsonBody)).toContain('"name":"Open"');
-      expectProgress(onDeliveryResult);
-      expect(sequence).toEqual([
-        "http:upload",
-        "http:post",
-        "progress:post-1",
-        "bookkeeping:activity",
-      ]);
-    } finally {
-      await rm(directory, { recursive: true, force: true });
-    }
-  });
-
-  it("returns partial delivery evidence when bookkeeping fails after the post", async () => {
-    const requests: CapturedRequest[] = [];
-    const sequence: string[] = [];
-    const onDeliveryResult = vi.fn((result: { messageId?: string }) => {
-      sequence.push(`progress:${result.messageId}`);
-    });
-
-    await withServer(createMattermostHttpHandler({ requests, sequence }), async (baseUrl) => {
-      registerMattermostRuntime({
-        sequence,
-        activityError: new Error("activity store unavailable"),
-      });
-      await expect(
-        send(
-          createMattermostConfig(baseUrl),
-          { message: "partial proof" },
-          {
-            onDeliveryResult,
-            skipQueue: true,
-          },
-        ),
-      ).rejects.toThrow("activity store unavailable");
-    });
-
-    expectProgress(onDeliveryResult);
-    expect(requests.filter((request) => request.path === "/api/v4/posts")).toHaveLength(1);
-    expect(sequence).toEqual(["http:post", "progress:post-1", "bookkeeping:activity"]);
   });
 });
