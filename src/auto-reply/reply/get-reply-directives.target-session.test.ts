@@ -94,10 +94,18 @@ async function resolveHelloWithModelDefaults(params: {
 }
 
 // mock-isolation: Use the synthetic target-session agent scope instead of operator configuration.
-vi.mock("../../agents/agent-scope.js", () => ({ listAgentEntries: mocks.listAgentEntries }));
-vi.mock("../../agents/defaults.js", () => ({ DEFAULT_CONTEXT_TOKENS: 8192 }));
+vi.mock("../../agents/agent-scope.js", () => ({
+  listAgentEntries: mocks.listAgentEntries,
+}));
+
+vi.mock("../../agents/defaults.js", () => ({
+  DEFAULT_CONTEXT_TOKENS: 8192,
+}));
+
 // mock-isolation: Keep target-session selection independent of provider policy discovery.
-vi.mock("../../agents/fast-mode.js", () => ({ resolveFastModeState: mocks.resolveFastModeState }));
+vi.mock("../../agents/fast-mode.js", () => ({
+  resolveFastModeState: mocks.resolveFastModeState,
+}));
 
 vi.mock("../../agents/sandbox/runtime-status.js", () => ({
   resolveSandboxRuntimeStatus: vi.fn(() => ({ sandboxed: false })),
@@ -171,7 +179,11 @@ vi.mock("./model-selection.js", () => ({
 
 vi.mock("./reply-elevated.js", () => ({
   formatElevatedUnavailableMessage: vi.fn(() => "elevated unavailable"),
-  resolveElevatedPermissions: vi.fn(() => ({ enabled: true, allowed: true, failures: [] })),
+  resolveElevatedPermissions: vi.fn(() => ({
+    enabled: true,
+    allowed: true,
+    failures: [],
+  })),
 }));
 
 describe("resolveReplyDirectives", () => {
@@ -228,7 +240,10 @@ describe("resolveReplyDirectives", () => {
     const text =
       error instanceof ModelSelectionLockedError ? MODEL_SELECTION_LOCKED_MESSAGE : error.message;
     const { result, typing } = await resolveHelloWithModelDefaults({ modelError: error });
-    expect(result).toEqual({ kind: "reply", reply: { text, isError: true } });
+    expect(result).toEqual({
+      kind: "reply",
+      reply: { text, isError: true },
+    });
     expect(typing.cleanup).toHaveBeenCalledOnce();
     expect(mocks.applyInlineDirectiveOverrides).not.toHaveBeenCalled();
   });
