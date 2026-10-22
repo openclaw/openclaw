@@ -35,17 +35,10 @@ const mockSock = {
     phoneNumber: "15559876543@s.whatsapp.net",
   },
 };
+const SAVED = { id: "saved-media", path: "/tmp/saved-media", size: 15 };
 
 function download(message: Record<string, unknown>, maxBytes?: number) {
   return downloadInboundMedia({ message } as never, mockSock as never, maxBytes);
-}
-
-async function expectMedia(message: Record<string, unknown>, mime: string, fileName?: string) {
-  expect(await download(message)).toEqual({
-    saved: { id: "saved-media", path: "/tmp/saved-media", size: 15, contentType: mime },
-    mimetype: mime,
-    fileName,
-  });
 }
 
 describe("downloadInboundMedia", () => {
@@ -68,7 +61,7 @@ describe("downloadInboundMedia", () => {
             throw new Error("Media exceeds limit");
           }
         }
-        return { id: "saved-media", path: "/tmp/saved-media", size: total, contentType };
+        return { ...SAVED, size: total, contentType };
       },
     );
     mockSock.updateMediaMessage.mockClear();
@@ -79,21 +72,22 @@ describe("downloadInboundMedia", () => {
   });
 
   it.each([
-    { name: "audio", message: { audioMessage: {} }, mimetype: "audio/ogg; codecs=opus" },
-    { name: "image", message: { imageMessage: {} }, mimetype: "image/jpeg" },
-    { name: "video", message: { videoMessage: {} }, mimetype: "video/mp4" },
-    { name: "video note", message: { ptvMessage: {} }, mimetype: "video/mp4" },
-    { name: "sticker", message: { stickerMessage: {} }, mimetype: "image/webp" },
-  ])("defaults MIME for $name messages without explicit MIME", async ({ message, mimetype }) => {
-    await expectMedia(message, mimetype);
-  });
-
-  it("preserves fileName from document messages", async () => {
-    await expectMedia(
+    [{ audioMessage: {} }, "audio/ogg; codecs=opus", undefined],
+    [{ imageMessage: {} }, "image/jpeg", undefined],
+    [{ videoMessage: {} }, "video/mp4", undefined],
+    [{ ptvMessage: {} }, "video/mp4", undefined],
+    [{ stickerMessage: {} }, "image/webp", undefined],
+    [
       { documentMessage: { mimetype: "application/pdf", fileName: "report.pdf" } },
       "application/pdf",
       "report.pdf",
-    );
+    ],
+  ] as const)("downloads %j with MIME %s and file name %s", async (message, mimetype, fileName) => {
+    expect(await download(message)).toEqual({
+      saved: { ...SAVED, contentType: mimetype },
+      mimetype,
+      fileName,
+    });
   });
 
   it("downloads in stream mode and rejects over the configured cap", async () => {

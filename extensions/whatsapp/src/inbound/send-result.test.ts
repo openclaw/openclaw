@@ -82,20 +82,13 @@ describe("WhatsApp send receipts", () => {
       toJid: "123@s.whatsapp.net",
       meta: { fromMe: true, participant: "456@s.whatsapp.net" },
     };
-    const expectedPart = {
-      platformMessageId: "receipt-raw-enrichment",
-      kind: "text",
-      index: 7,
-      ...context,
-      raw: expectedRaw,
-    };
     expect(enriched.deliveryResult.receipt).toMatchObject({
       primaryPlatformMessageId: "receipt-raw-enrichment",
       platformMessageIds: ["receipt-raw-enrichment"],
       ...context,
       ...tokens,
       raw: [expectedRaw],
-      parts: [expectedPart],
+      parts: [{ platformMessageId: key.id, kind: "text", index: 7, ...context, raw: expectedRaw }],
     });
     expect(enriched).toMatchObject({ sentBeforeError: true, visibleReplySent: true });
   });

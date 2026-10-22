@@ -50,6 +50,18 @@ function payload(id: string, remoteJid = REMOTE_JID): WhatsAppDurableInboundPayl
   };
 }
 
+async function enqueue(queue: ReturnType<typeof createQueue>, id: string, receivedAt?: number) {
+  await queue.enqueue(eventId(id), payload(id), { laneKey: REMOTE_JID, receivedAt });
+}
+
+async function expectCompleted(queue: ReturnType<typeof createQueue>, ids: string[]) {
+  for (const id of ids) {
+    await expect(queue.enqueue(eventId(id), payload(id))).resolves.toMatchObject({
+      kind: "completed",
+    });
+  }
+}
+
 function createQueue(stateDir: string, now?: () => number) {
   return createChannelIngressQueueForTests<WhatsAppDurableInboundPayload>({
     channelId: "whatsapp",
@@ -113,7 +125,7 @@ describe("createWhatsAppIngressMonitor", () => {
   it("releases claims when dispatch throws before adoption", async () => {
     await withQueue(async (queue) => {
       const id = eventId("msg-1");
-      await queue.enqueue(id, payload("msg-1"), { laneKey: REMOTE_JID });
+      await enqueue(queue, "msg-1");
 
       const monitor = createMonitor(queue, {
         dispatch: async () => {
@@ -136,14 +148,8 @@ describe("createWhatsAppIngressMonitor", () => {
     await withQueue(async (queue) => {
       const firstId = eventId("msg-4a");
       const secondId = eventId("msg-4b");
-      await queue.enqueue(firstId, payload("msg-4a"), {
-        laneKey: REMOTE_JID,
-        receivedAt: 1,
-      });
-      await queue.enqueue(secondId, payload("msg-4b"), {
-        laneKey: REMOTE_JID,
-        receivedAt: 2,
-      });
+      await enqueue(queue, "msg-4a", 1);
+      await enqueue(queue, "msg-4b", 2);
 
       const dispatched: string[] = [];
       const adoptions: Array<() => void | Promise<void>> = [];
@@ -166,22 +172,15 @@ describe("createWhatsAppIngressMonitor", () => {
         );
         expect(await queue.listPending({ limit: "all" })).toEqual([]);
 
-        const [adoptFirst, adoptSecond] = adoptions;
-        if (!adoptFirst || !adoptSecond) {
-          throw new Error("expected both adoption callbacks");
+        expect(adoptions).toHaveLength(2);
+        for (const [index, adopt] of adoptions.entries()) {
+          await adopt();
+          await adopt();
+          expect((await queue.listClaims()).map((row) => row.id)).toEqual(
+            index === 0 ? [secondId] : [],
+          );
+          await expectCompleted(queue, [index === 0 ? "msg-4a" : "msg-4b"]);
         }
-        await adoptFirst();
-        await adoptFirst();
-        expect((await queue.listClaims()).map((row) => row.id)).toEqual([secondId]);
-        await expect(queue.enqueue(firstId, payload("msg-4a"))).resolves.toMatchObject({
-          kind: "completed",
-        });
-        await adoptSecond();
-        await adoptSecond();
-        expect(await queue.listClaims()).toEqual([]);
-        await expect(queue.enqueue(secondId, payload("msg-4b"))).resolves.toMatchObject({
-          kind: "completed",
-        });
         expect(dispatched).toEqual(["msg-4a", "msg-4b"]);
       } finally {
         await monitor.stop();
@@ -246,11 +245,7 @@ describe("createWhatsAppIngressMonitor", () => {
         );
         expect(onError).not.toHaveBeenCalled();
         expect(await queue.listClaims()).toEqual([]);
-        for (const id of ["first", "second", "third"]) {
-          await expect(queue.enqueue(eventId(id), payload(id))).resolves.toMatchObject({
-            kind: "completed",
-          });
-        }
+        await expectCompleted(queue, ["first", "second", "third"]);
       } finally {
         await monitor.pause();
         await debouncer.drain();
@@ -259,42 +254,25 @@ describe("createWhatsAppIngressMonitor", () => {
     });
   });
 
-  it("dispatches accepted pending records older than the legacy 30-day TTL", async () => {
+  it.each([
+    ["older than the legacy 30-day TTL", 1],
+    ["past the legacy 450-entry cap", 451],
+  ] as const)("dispatches all accepted records %s", async (_name, count) => {
     const thirtyOneDaysAgo = Date.now() - 31 * 24 * 60 * 60 * 1_000;
+    const transportIds = Array.from(
+      { length: count },
+      (_, index) => `msg-${String(index).padStart(3, "0")}`,
+    );
     await withQueue(
       async (queue) => {
-        await queue.enqueue(eventId("msg-old"), payload("msg-old"), {
-          laneKey: REMOTE_JID,
-          receivedAt: thirtyOneDaysAgo,
-        });
-
-        const dispatched = await drainToIds(queue);
-
-        expect(dispatched).toEqual(["msg-old"]);
+        for (const [index, id] of transportIds.entries()) {
+          await enqueue(queue, id, count === 1 ? thirtyOneDaysAgo : index + 1);
+        }
+        expect((await drainToIds(queue)).toSorted()).toEqual(transportIds.toSorted());
         expect(await queue.listPending({ limit: "all" })).toEqual([]);
       },
-      () => thirtyOneDaysAgo,
+      count === 1 ? () => thirtyOneDaysAgo : undefined,
     );
-  });
-
-  it("dispatches every accepted pending record past the legacy 450-entry cap", async () => {
-    await withQueue(async (queue) => {
-      const transportIds = Array.from(
-        { length: 451 },
-        (_unused, index) => `msg-${String(index).padStart(3, "0")}`,
-      );
-      for (const [index, transportId] of transportIds.entries()) {
-        await queue.enqueue(eventId(transportId), payload(transportId), {
-          laneKey: REMOTE_JID,
-          receivedAt: index + 1,
-        });
-      }
-
-      const dispatched = await drainToIds(queue);
-
-      expect(dispatched.toSorted()).toEqual(transportIds.toSorted());
-      expect(await queue.listPending({ limit: "all" })).toEqual([]);
-    });
   });
 });
 

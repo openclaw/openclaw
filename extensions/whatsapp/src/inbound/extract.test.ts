@@ -20,10 +20,6 @@ function nativeFlow(paramsJson: string): proto.IMessage {
   };
 }
 
-function expectUserContent(message: proto.IMessage | undefined, expected = true) {
-  expect(hasInboundUserContent(message)).toBe(expected);
-}
-
 describe("extractMentionedJids", () => {
   const botJid = "5511999999999@s.whatsapp.net";
   const otherJid = "5511888888888@s.whatsapp.net";
@@ -123,68 +119,46 @@ describe("extractText", () => {
     expect(extractText(message)).toBe(expected);
   });
 
-  it("ignores malformed native-flow response JSON", () => {
-    expect(extractText(nativeFlow("{"))).toBeUndefined();
-  });
-
-  it("ignores non-record native-flow response JSON", () => {
-    expect(extractText(nativeFlow("[]"))).toBeUndefined();
+  it.each(["{", "[]"])("ignores invalid native-flow response object: %s", (json) => {
+    expect(extractText(nativeFlow(json))).toBeUndefined();
   });
 });
 
 describe("hasInboundUserContent", () => {
-  it("returns true for plain text conversation", () => {
-    expectUserContent({ conversation: "hello" });
-  });
-
-  it("returns true for image message", () => {
-    expectUserContent({ imageMessage: { mimetype: "image/png" } });
-  });
-
   it("classifies captionless video notes as user-visible video media", () => {
     const message = { ptvMessage: { mimetype: "video/mp4" } } as proto.IMessage;
 
     expect(extractMediaKind(message)).toBe("video");
-    expectUserContent(message);
+    expect(hasInboundUserContent(message)).toBe(true);
   });
-
-  it("returns true for sticker message", () => {
-    expectUserContent({ stickerMessage: { mimetype: "image/webp" } });
-  });
-
-  it("returns true for location message with valid coords", () => {
-    expectUserContent({ locationMessage: { degreesLatitude: 1, degreesLongitude: 2 } });
-  });
-
-  it("returns true for buttons response wrapped in ephemeralMessage (regression for #73797 + greptile review)", () => {
-    expectUserContent({
-      ephemeralMessage: {
-        message: {
-          buttonsResponseMessage: {
-            selectedButtonId: "ok",
-            selectedDisplayText: "OK",
+  it.each<[string, proto.IMessage | undefined, boolean]>([
+    ["plain text", { conversation: "hello" }, true],
+    ["image", { imageMessage: { mimetype: "image/png" } }, true],
+    ["sticker", { stickerMessage: { mimetype: "image/webp" } }, true],
+    ["location", { locationMessage: { degreesLatitude: 1, degreesLongitude: 2 } }, true],
+    [
+      "wrapped button (#73797)",
+      {
+        ephemeralMessage: {
+          message: {
+            buttonsResponseMessage: { selectedButtonId: "ok", selectedDisplayText: "OK" },
           },
         },
       },
-    });
-  });
-
-  it("returns false for undefined message (regression for #73797)", () => {
-    expectUserContent(undefined, false);
-  });
-
-  it("returns false for receipt-style senderKeyDistribution-only payload (regression for #73797)", () => {
-    expectUserContent(
+      true,
+    ],
+    ["missing message (#73797)", undefined, false],
+    [
+      "receipt only (#73797)",
       {
         senderKeyDistributionMessage: {
           groupId: "g@example",
         } as unknown as proto.Message.ISenderKeyDistributionMessage,
       },
       false,
-    );
-  });
-
-  it("returns false when extendedTextMessage has only empty text", () => {
-    expectUserContent({ extendedTextMessage: { text: "  " } }, false);
+    ],
+    ["empty extended text", { extendedTextMessage: { text: "  " } }, false],
+  ])("classifies %s user content", (_name, message, expected) => {
+    expect(hasInboundUserContent(message)).toBe(expected);
   });
 });

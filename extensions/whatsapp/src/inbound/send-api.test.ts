@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { AnyMessageContent, MiscMessageGenerationOptions, WAMessage } from "baileys";
+import type { WAMessage } from "baileys";
 import {
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
@@ -21,35 +21,20 @@ const imageOps = vi.hoisted(() => ({
   resizeToJpeg: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async () => {
-  const actual = await vi.importActual<
-    typeof import("openclaw/plugin-sdk/channel-activity-runtime")
-  >("openclaw/plugin-sdk/channel-activity-runtime");
-  return {
-    ...actual,
-    recordChannelActivity: (...args: unknown[]) => recordChannelActivity(...args),
-  };
-});
+vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-activity-runtime")>()),
+  recordChannelActivity,
+}));
 
-vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-runtime")>(
-    "openclaw/plugin-sdk/media-runtime",
-  );
-  return {
-    ...actual,
-    getImageMetadata: imageOps.getImageMetadata,
-    resizeToJpeg: imageOps.resizeToJpeg,
-  };
-});
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
+  ...imageOps,
+}));
 
 function createSocket() {
   return {
-    sendMessage: vi.fn(
-      async (
-        _jid: string,
-        _content: AnyMessageContent,
-        _options?: MiscMessageGenerationOptions,
-      ): Promise<WAMessage | undefined> => ({ key: { id: "msg-1" } }) as WAMessage,
+    sendMessage: vi.fn<Parameters<typeof createWebSendApi>[0]["sock"]["sendMessage"]>(
+      async () => ({ key: { id: "msg-1" } }) as WAMessage,
     ),
     sendPresenceUpdate: vi.fn(async () => {}),
   };
@@ -92,14 +77,8 @@ describe("createWebSendApi", () => {
     expectOutboundActivityOnce();
   }
 
-  function expectFirstSendJid(jid: string) {
-    expect(sendMessage.mock.calls[0]?.[0]).toBe(jid);
-  }
-
-  function expectSendContentFields(callIndex: number, fields: Record<string, unknown>) {
-    for (const [key, value] of Object.entries(fields)) {
-      expect(sendMessage.mock.calls[callIndex]?.[1]).toHaveProperty(key, value);
-    }
+  function expectSend(fields: Record<string, unknown>, jid = "1555@s.whatsapp.net") {
+    expect(sendMessage.mock.calls[0]?.slice(0, 2)).toMatchObject([jid, fields]);
   }
 
   function expectAccepted(result: WhatsAppSendResult, kind: string, messageId: string) {
@@ -107,54 +86,35 @@ describe("createWebSendApi", () => {
   }
 
   function expectOutboundActivityOnce(accountId = "main") {
-    expect(recordChannelActivity).toHaveBeenCalledOnce();
-    expect(recordChannelActivity).toHaveBeenCalledWith({
+    expect(recordChannelActivity).toHaveBeenCalledExactlyOnceWith({
       channel: "whatsapp",
       accountId,
       direction: "outbound",
     });
   }
 
-  it("sends structured contact messages through the canonical send path", async () => {
-    const contact = Object.freeze({
-      displayName: "QA Contact",
-      vcard: "BEGIN:VCARD\nFN:QA Contact\nEND:VCARD",
-    });
-    const res = await api.sendContact("+1555", contact);
-
-    expect(sendMessage).toHaveBeenCalledWith("1555@s.whatsapp.net", {
-      contacts: {
-        displayName: "QA Contact",
-        contacts: [contact],
-      },
-    });
-    expectAccepted(res, "contact", "msg-1");
-    expect(recordChannelActivity).toHaveBeenCalledWith({
-      channel: "whatsapp",
-      accountId: "main",
-      direction: "outbound",
-    });
+  const contact = Object.freeze({
+    displayName: "QA Contact",
+    vcard: "BEGIN:VCARD\nFN:QA Contact\nEND:VCARD",
   });
-
-  it("sends structured location messages through the canonical send path", async () => {
-    const coordinates = { degreesLatitude: 37.7749, degreesLongitude: -122.4194 };
-    const res = await api.sendLocation("+1555", { ...coordinates, name: "QA Location" });
-
-    expect(sendMessage).toHaveBeenCalledWith("1555@s.whatsapp.net", {
-      location: { address: undefined, ...coordinates, name: "QA Location" },
-    });
-    expectAccepted(res, "location", "msg-1");
-  });
-
-  it("sends structured sticker messages through the canonical send path", async () => {
-    const payload = Buffer.from("webp");
-    const res = await api.sendSticker("+1555", payload);
-
-    expect(sendMessage).toHaveBeenCalledWith("1555@s.whatsapp.net", {
-      sticker: payload,
-      mimetype: "image/webp",
-    });
-    expectAccepted(res, "sticker", "msg-1");
+  const location = { degreesLatitude: 37.7749, degreesLongitude: -122.4194, name: "QA Location" };
+  const sticker = Buffer.from("webp");
+  it.each([
+    [
+      "contact",
+      () => api.sendContact("+1555", contact),
+      { contacts: { displayName: contact.displayName, contacts: [contact] } },
+    ],
+    [
+      "location",
+      () => api.sendLocation("+1555", location),
+      { location: { address: undefined, ...location } },
+    ],
+    ["sticker", () => api.sendSticker("+1555", sticker), { sticker, mimetype: "image/webp" }],
+  ] as const)("sends structured %s messages", async (kind, send, content) => {
+    expectAccepted(await send(), kind, "msg-1");
+    expect(sendMessage).toHaveBeenCalledWith("1555@s.whatsapp.net", content);
+    expectOutboundActivityOnce();
   });
 
   it("only sends native mentions for visible phone numbers outside inline code", async () => {
@@ -174,7 +134,7 @@ describe("createWebSendApi", () => {
       contentType: " Video/MP4; charset=binary ",
     });
     await api.sendMessage("+1555", "cap", media.buffer, media.mimetype);
-    expectSendContentFields(0, { video: payload, caption: "cap", mimetype: "video/mp4" });
+    expectSend({ video: payload, caption: "cap", mimetype: "video/mp4" });
   });
 
   it("prepopulates image thumbnails and dimensions before Baileys media upload", async () => {
@@ -191,7 +151,7 @@ describe("createWebSendApi", () => {
       quality: 50,
       withoutEnlargement: true,
     });
-    expectSendContentFields(0, {
+    expectSend({
       image: payload,
       caption: "cap",
       mimetype: "image/png",
@@ -207,13 +167,15 @@ describe("createWebSendApi", () => {
 
     await api.sendMessage("120363000000000000@g.us", "cap @15551234567", payload, "image/jpeg");
 
-    expectFirstSendJid("120363000000000000@g.us");
-    expectSendContentFields(0, {
-      image: payload,
-      caption: "cap @15551234567",
-      mimetype: "image/jpeg",
-      mentions: ["15551234567@s.whatsapp.net"],
-    });
+    expectSend(
+      {
+        image: payload,
+        caption: "cap @15551234567",
+        mimetype: "image/jpeg",
+        mentions: ["15551234567@s.whatsapp.net"],
+      },
+      "120363000000000000@g.us",
+    );
   });
 
   it("uses resolved mention caption text for forced-document media", async () => {
@@ -227,14 +189,16 @@ describe("createWebSendApi", () => {
       fileName: "promo.jpg",
     });
 
-    expectFirstSendJid("120363000000000000@g.us");
-    expectSendContentFields(0, {
-      document: payload,
-      fileName: "promo.jpg",
-      caption: "cap @277038292303944",
-      mimetype: "image/jpeg",
-      mentions: ["277038292303944@lid"],
-    });
+    expectSend(
+      {
+        document: payload,
+        fileName: "promo.jpg",
+        caption: "cap @277038292303944",
+        mimetype: "image/jpeg",
+        mentions: ["277038292303944@lid"],
+      },
+      "120363000000000000@g.us",
+    );
   });
 
   it("sends visible text separately from push-to-talk voice notes", async () => {
@@ -243,12 +207,7 @@ describe("createWebSendApi", () => {
       .mockResolvedValueOnce({ key: { id: "voice-1" } })
       .mockResolvedValueOnce({ key: { id: "voice-text-1" } });
     const res = await api.sendMessage("+1555", "voice text", payload, "audio/ogg");
-    expectFirstSendJid("1555@s.whatsapp.net");
-    expectSendContentFields(0, {
-      audio: payload,
-      ptt: true,
-      mimetype: "audio/ogg",
-    });
+    expectSend({ audio: payload, ptt: true, mimetype: "audio/ogg" });
     expect(sendMessage).toHaveBeenNthCalledWith(2, "1555@s.whatsapp.net", {
       text: "voice text",
     });
@@ -298,39 +257,31 @@ describe("createWebSendApi", () => {
     );
   });
 
-  it("retains the accepted poll receipt when activity recording fails", async () => {
-    const activityError = new Error("channel activity bookkeeping disconnected");
-    sendMessage.mockResolvedValueOnce({ key: { id: "poll-accepted" } });
-    recordChannelActivity.mockImplementationOnce(() => {
-      throw activityError;
-    });
+  it.each([
+    ["poll", () => api.sendPoll("+1555", { question: "Q?", options: ["a", "b"] })],
+    ["voice", () => api.sendMessage("+1555", "voice text", Buffer.from("voice"), "audio/ogg")],
+  ] as const)(
+    "retains the first accepted %s receipt when activity recording fails",
+    async (kind, send) => {
+      const activityError = new Error("channel activity bookkeeping disconnected");
+      sendMessage.mockResolvedValueOnce({ key: { id: `${kind}-accepted` } });
+      recordChannelActivity.mockImplementationOnce(() => {
+        throw activityError;
+      });
 
-    const failure = await api
-      .sendPoll("+1555", { question: "Q?", options: ["a", "b"] })
-      .catch((caught: unknown) => caught);
-
-    expectPartial(failure, ["poll-accepted"], activityError, 1);
-  });
-
-  it("retains the first accepted voice receipt when immediate activity recording fails", async () => {
-    const activityError = new Error("channel activity bookkeeping disconnected");
-    sendMessage.mockResolvedValueOnce({ key: { id: "voice-accepted-3" } });
-    recordChannelActivity.mockImplementationOnce(() => {
-      throw activityError;
-    });
-
-    const failure = await api
-      .sendMessage("+1555", "voice text", Buffer.from("voice"), "audio/ogg")
-      .catch((caught: unknown) => caught);
-
-    expectPartial(failure, ["voice-accepted-3"], activityError, 1);
-  });
+      expectPartial(
+        await send().catch((caught: unknown) => caught),
+        [`${kind}-accepted`],
+        activityError,
+        1,
+      );
+    },
+  );
 
   it("supports video media and gifPlayback option", async () => {
     const payload = Buffer.from("vid");
     await api.sendMessage("+1555", "cap", payload, "video/mp4", { gifPlayback: true });
-    expectFirstSendJid("1555@s.whatsapp.net");
-    expectSendContentFields(0, {
+    expectSend({
       video: payload,
       caption: "cap",
       mimetype: "video/mp4",
@@ -340,13 +291,16 @@ describe("createWebSendApi", () => {
 
   it("sends reactions with participant JID normalization", async () => {
     const res = await api.sendReaction("+1555", "msg-2", "👍", false, "+1999");
-    expectFirstSendJid("1555@s.whatsapp.net");
-    expectSendContentFields(0, {
-      "react.text": "👍",
-      "react.key.remoteJid": "1555@s.whatsapp.net",
-      "react.key.id": "msg-2",
-      "react.key.fromMe": false,
-      "react.key.participant": "1999@s.whatsapp.net",
+    expectSend({
+      react: {
+        text: "👍",
+        key: {
+          remoteJid: "1555@s.whatsapp.net",
+          id: "msg-2",
+          fromMe: false,
+          participant: "1999@s.whatsapp.net",
+        },
+      },
     });
     expectAccepted(res, "reaction", "msg-1");
   });
@@ -364,54 +318,36 @@ describe("createWebSendApi", () => {
 
     await api.sendMessage("123", "hello", mediaBuffer, undefined);
 
-    expectFirstSendJid("123@s.whatsapp.net");
-    expectSendContentFields(0, {
-      document: mediaBuffer,
-      mimetype: "application/octet-stream",
-    });
+    expectSend(
+      {
+        document: mediaBuffer,
+        mimetype: "application/octet-stream",
+      },
+      "123@s.whatsapp.net",
+    );
   });
 
-  it("preserves the quoted remoteJid provided by the outbound adapter", async () => {
+  it.each([
+    ["preserves an unproven LID quote", false, undefined, "277038292303944@lid"],
+    ["aligns a lookup-proven LID quote", true, "1555@s.whatsapp.net", "1555@s.whatsapp.net"],
+  ] as const)("%s", async (_name, fromMe, lookupTargetJid, expectedJid) => {
     await api.sendMessage("+1555", "hello", undefined, undefined, {
       quotedMessageKey: {
         id: "quoted-1",
         remoteJid: "277038292303944@lid",
-        fromMe: false,
+        fromMe,
+        lookupTargetJid,
         participant: "1234@s.whatsapp.net",
         messageText: "quoted body",
       },
     });
-
-    expectFirstSendJid("1555@s.whatsapp.net");
-    expect(sendMessage.mock.calls[0]?.[1]).toEqual({ text: "hello" });
+    expect(sendMessage.mock.calls[0]?.slice(0, 2)).toEqual([
+      "1555@s.whatsapp.net",
+      { text: "hello" },
+    ]);
     expect(sendMessage.mock.calls[0]?.[2]).toHaveProperty(
       "quoted.key",
-      expect.objectContaining({
-        remoteJid: "277038292303944@lid",
-        id: "quoted-1",
-      }),
-    );
-  });
-
-  it("aligns a lookup-proven LID quote with the final PN destination", async () => {
-    await api.sendMessage("+1555", "hello", undefined, undefined, {
-      quotedMessageKey: {
-        id: "quoted-self",
-        remoteJid: "277038292303944@lid",
-        fromMe: true,
-        lookupTargetJid: "1555@s.whatsapp.net",
-        messageText: "quoted body",
-      },
-    });
-
-    expectFirstSendJid("1555@s.whatsapp.net");
-    expect(sendMessage.mock.calls[0]?.[2]).toHaveProperty(
-      "quoted.key",
-      expect.objectContaining({
-        remoteJid: "1555@s.whatsapp.net",
-        id: "quoted-self",
-        fromMe: true,
-      }),
+      expect.objectContaining({ remoteJid: expectedJid, id: "quoted-1", fromMe }),
     );
   });
 });
