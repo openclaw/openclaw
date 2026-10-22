@@ -2,6 +2,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
 import type {
   ModelAuthStatusResult,
+  ModelCatalogEntry,
   ProviderLoginOption,
   SystemAgentSetupDetectResult,
 } from "../../api/types.ts";
@@ -10,6 +11,8 @@ import { t } from "../../i18n/index.ts";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
 import { resolveAgentConfig, resolveModelPrimary } from "../../lib/agents/display.ts";
 import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
+import type { ModelCatalogPresentation } from "../../lib/model-catalog-store.ts";
+import type { ModelSetupWizardCompletion } from "../model-setup/wizard-runner.ts";
 
 registerModelSetupEnglish();
 
@@ -138,4 +141,42 @@ export function resolveLoginSelection(
     modelRef,
     missing: { model, provider: canonicalModelAuthProviderId(modelProvider), authProvider },
   };
+}
+
+export function filterLoginProviders(groups: LoginProvider[], query: string): LoginProvider[] {
+  const search = query.trim().toLocaleLowerCase();
+  return groups.filter((group) =>
+    [
+      group.id,
+      group.label,
+      ...(group.apiKeyProvider ? [t("modelProviders.status.apiKey")] : []),
+      ...group.choices.flatMap((choice) => [choice.label, choice.hint ?? ""]),
+    ].some((text) => text.toLocaleLowerCase().includes(search)),
+  );
+}
+
+export function resolveLoginStarterModel(
+  catalog: ModelCatalogPresentation,
+  activation: NonNullable<ModelSetupWizardCompletion["modelActivation"]>,
+  authProviderId?: string,
+): ModelCatalogEntry | undefined {
+  const slash = activation.modelRef.indexOf("/");
+  const provider = activation.modelRef.slice(0, slash);
+  const id = activation.modelRef.slice(slash + 1);
+  const known = catalog.models.find((model) => model.provider === provider && model.id === id);
+  const recommended =
+    !catalog.retired &&
+    catalog.models.find(
+      (model) =>
+        canonicalModelAuthProviderId(model.provider) === authProviderId &&
+        model.available === true &&
+        model.manualSelectionAllowed !== false &&
+        model.recommended === true,
+    );
+  const name = activation.modelName ?? known?.name;
+  return recommended
+    ? { provider: recommended.provider, id: recommended.id, name: recommended.name }
+    : name
+      ? { provider, id, name }
+      : undefined;
 }

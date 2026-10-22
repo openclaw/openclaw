@@ -253,6 +253,19 @@ function ProviderActions(props: ModelProvidersViewProps & { card: ModelProviderC
           )}
         </button>
       </Show>
+      <For each={props.card.setupActions}>
+        {(choice) => (
+          <button
+            class="btn btn--sm"
+            data-models-setup-provider={props.card.id}
+            disabled={configMutationDisabled(props) || props.loginBusy}
+            title={props.mutationBlockedReason ?? choice.hint ?? ""}
+            onClick={() => props.onSetupProvider(props.card, choice)}
+          >
+            {choice.actionLabel ?? t("modelProviders.setup.action")}
+          </button>
+        )}
+      </For>
       <Show when={isProviderUsable(props.card)}>
         <button
           class="btn btn--sm"

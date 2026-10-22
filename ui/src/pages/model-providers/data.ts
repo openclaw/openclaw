@@ -61,6 +61,7 @@ export type ModelProviderCard = {
   configKey?: string;
   configAuthMode?: string;
   apiKeySupported?: boolean;
+  setupActions?: NonNullable<ModelAuthStatusResult["providerCapabilities"]>[number]["setupActions"];
   /** Provider ids that own credentials merged into this card. */
   credentialProviderIds: string[];
   /** Saved OAuth/token profiles eligible for targeted logout. */
@@ -204,6 +205,7 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
     return id ? ensureDraft(drafts, id, displayName || providerDisplayLabel(id)) : undefined;
   };
   const apiKeyCapabilities = new Map<string, boolean>();
+  const setupActionsByProvider = new Map<string, NonNullable<ModelProviderCard["setupActions"]>>();
   const apiKeySources = new Map(
     input.authStatus?.providers.map((provider) => [
       normalizeProviderId(provider.provider),
@@ -218,6 +220,9 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
       continue;
     }
     apiKeyCapabilities.set(id, apiKeyCapabilities.get(id) === true || capability.apiKeySupported);
+    if (capability.setupActions?.length) {
+      setupActionsByProvider.set(id, capability.setupActions);
+    }
   }
 
   for (const provider of input.configProviders ?? []) {
@@ -389,11 +394,13 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
     )
     .map((draft) => {
       const apiKeySupported = apiKeyCapabilities.get(draft.card.id);
+      const setupActions = setupActionsByProvider.get(draft.card.id);
       return Object.assign(
         {},
         draft.card,
         draft.catalogOutcome ? { catalogStatus: draft.catalogOutcome.status } : {},
         apiKeySupported === undefined ? {} : { apiKeySupported },
+        setupActions?.length ? { setupActions } : {},
       );
     })
     .toSorted((a, b) => a.displayName.localeCompare(b.displayName));
