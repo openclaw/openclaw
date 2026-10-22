@@ -224,6 +224,9 @@ it.each(["managed write", "file watcher"])(
     const port = await getFreePort();
     server = await start(port);
     await server.startupSettled;
+    await expect
+      .poll(async () => (await fetch(`http://127.0.0.1:${port}/readyz`)).status)
+      .toBe(200);
     client = await connectGatewayClient({
       url: `ws://127.0.0.1:${port}`,
       scopes: ["operator.admin"],
@@ -268,6 +271,9 @@ it.each(["managed write", "file watcher"])(
     await state.writeConfig(cfg);
     server = await start(port);
     await server.startupSettled;
+    await expect
+      .poll(async () => (await fetch(`http://127.0.0.1:${port}/readyz`)).status)
+      .toBe(200);
     reloadError.mockClear();
     const application = createRuntimeConfigWriteApplication();
     await writeConfigFile(nextConfig, attachRuntimeConfigWriteApplication({}, application));
