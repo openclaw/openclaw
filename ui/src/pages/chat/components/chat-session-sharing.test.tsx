@@ -567,6 +567,35 @@ describe("chat session sharing menu", () => {
     expect(onVisibilityChange).toHaveBeenCalledWith("read-only");
   });
 
+  it("retains the access controls through a rejected command and held retry", async () => {
+    const failed = createDeferred();
+    const retry = createDeferred();
+    const change = vi.fn().mockReturnValueOnce(failed.promise).mockReturnValueOnce(retry.promise);
+    const root = await mount({
+      allowedVisibilities: ["shared", "read-only"],
+      onVisibilityChange: change,
+    });
+    await select(root, "visibility:read-only");
+    const button = item(root, "visibility:read-only");
+    expect(button?.disabled).toBe(true);
+    failed.reject(new Error("Sharing command rejected"));
+    await waitForSolid(() => {
+      expect(root.querySelector('[role="alert"]')?.textContent).toContain(
+        "Sharing command rejected",
+      );
+      expect(button?.disabled).toBe(false);
+    });
+    button!.click();
+    await waitForSolid(() => {
+      expect(root.querySelector('[role="alert"]')).toBeNull();
+      expect(item(root, "visibility:read-only")).toBe(button);
+      expect(button?.disabled).toBe(true);
+    });
+    retry.resolve();
+    await waitForSolid(() => expect(button?.disabled).toBe(false));
+    expect(item(root, "visibility:read-only")).toBe(button);
+  });
+
   it("shows rejected sharing changes for visibility-only Gateways", async () => {
     const root = await mount({
       state: { loading: false, error: "Visibility update rejected" },

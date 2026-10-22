@@ -157,7 +157,11 @@ export function createChatSessionSharingPresentation(
     },
   );
   const read = createMemo(() => source()?.state?.read);
-  const [saving, setSaving] = createOptimistic<ReturnType<typeof scope> | null>(null);
+  const activity = createMemo(() => {
+    const target = scope();
+    const [saving, setSaving] = createOptimistic(false);
+    return { target, saving, setSaving };
+  });
   const [completion, setCompletion] = createSignal<Promise<void> | undefined>(() => {
     scope();
     return undefined;
@@ -166,13 +170,14 @@ export function createChatSessionSharingPresentation(
   onSettled(() => () => disposed.resolve());
 
   const present = action(function* (
-    target: ReturnType<typeof scope>,
+    view: ReturnType<typeof activity>,
     pending: Promise<void | ChatSessionSharingOutcome>,
   ): Generator<
     Promise<void | ChatSessionSharingOutcome>,
     void | ChatSessionSharingOutcome,
     void | ChatSessionSharingOutcome
   > {
+    const { target } = view;
     const retired = Promise.withResolvers<void>();
     const stop = target.signal
       ? listen(target.signal, "abort", () => retired.resolve(), { once: true })
@@ -180,7 +185,7 @@ export function createChatSessionSharingPresentation(
     if (target.signal?.aborted) {
       retired.resolve();
     } else if (scope() === target) {
-      setSaving(target);
+      view.setSaving(true);
     }
     try {
       return yield Promise.race([pending, retired.promise, disposed.promise]);
@@ -194,7 +199,8 @@ export function createChatSessionSharingPresentation(
     if (!props) {
       return;
     }
-    const target = scope();
+    const view = activity();
+    const { target } = view;
     const pending = (async () => {
       // Admission and its synchronous publication precede the presentation transaction.
       const selected = selectChatSessionSharingItem(props, value);
@@ -202,7 +208,7 @@ export function createChatSessionSharingPresentation(
         return selected;
       }
       await Promise.resolve();
-      return await present(target, selected);
+      return await present(view, selected);
     })().catch((cause: unknown) => {
       if (!target.signal?.aborted && scope() === target) {
         throw cause;
@@ -221,7 +227,7 @@ export function createChatSessionSharingPresentation(
     );
   }
 
-  return { read, scope, select, completion, busy: () => saving() === scope() };
+  return { read, scope, select, completion, busy: () => activity().saving() };
 }
 
 export function ChatSessionSharingError(props: {
