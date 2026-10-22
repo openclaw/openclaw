@@ -298,7 +298,7 @@ describe("chat session sharing menu", () => {
     initialRead.resolve();
     await waitForSolid(() => expect(item(root, "member:alice")).not.toBeNull());
     const person = item(root, "member:alice");
-    root.querySelector<HTMLButtonElement>('[aria-label="Search people"]')!.click();
+    root.querySelector<HTMLButtonElement>('[aria-label="Search people…"]')!.click();
     await waitForSolid(() => expect(root.querySelector("input[type=search]")).not.toBeNull());
     const search = root.querySelector<HTMLInputElement>("input[type=search]")!;
     search.value = "Ali";

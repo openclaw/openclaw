@@ -146,7 +146,7 @@ it("keeps sharing busy through refresh and retires it for a same-key successor",
   );
   view.setSource(pane.prepareSessionSharing(replacement));
   await waitForSolid(() =>
-    expect(view.getByRole("button", { name: /Read only/ }).getAttribute("aria-pressed")).toBe(
+    expect(view.getByRole("button", { name: /Read-only/ }).getAttribute("aria-pressed")).toBe(
       "true",
     ),
   );
@@ -212,7 +212,7 @@ it.each(["destination", "session"] as const)(
         session: { ...view.source().session, sessionId: "replacement", visibility: "read-only" },
       });
       await waitForSolid(() => {
-        expect(view.getByRole("button", { name: /Read only/ }).getAttribute("aria-pressed")).toBe(
+        expect(view.getByRole("button", { name: /Read-only/ }).getAttribute("aria-pressed")).toBe(
           "true",
         );
         expect(view.getByRole("button", { name: /Draft/ }).hasAttribute("disabled")).toBe(false);
@@ -292,6 +292,7 @@ it("keeps Public confirmed until its owner publishes and preserves membership fo
   });
   flush();
   expect(toggle.checked).toBe(true);
+  await waitForSolid(() => expect(permission.getAttribute("aria-disabled")).toBeNull());
   permission.click();
   expect(member).toHaveBeenCalledExactlyOnceWith("member", true);
   expect(view.getByRole("checkbox", { name: /^Owner,/ }).hasAttribute("disabled")).toBe(true);
