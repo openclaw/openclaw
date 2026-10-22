@@ -38,6 +38,8 @@ const telegramAuthFailure = {
 };
 const questionReply = (isOther = false) =>
   chatReply("Choose one.", { question: { ...closedQuestion, isOther } });
+const rejectedRequest = () =>
+  new GatewayRequestError({ code: "INVALID_REQUEST", message: "Request failed" });
 const nudge = (page: HTMLElement) => page.querySelector(".custodian__nudge");
 const alert = (page: HTMLElement) => page.querySelector('[role="alert"]');
 const question = (page: HTMLElement) => page.querySelector("openclaw-option-card");
@@ -238,9 +240,7 @@ describe("custodian page nudges", () => {
       .fn()
       .mockResolvedValueOnce(questionReply())
       .mockImplementationOnce(rejectAfterSend)
-      .mockRejectedValueOnce(
-        new GatewayRequestError({ code: "INVALID_REQUEST", message: "Request failed" }),
-      );
+      .mockRejectedValueOnce(rejectedRequest());
     const { page, emitHealth } = await mountCaretaker(request);
 
     await emitHealth(discordAuthFailure);
@@ -268,9 +268,7 @@ describe("custodian page nudges", () => {
     const request = vi
       .fn()
       .mockResolvedValueOnce(questionReply())
-      .mockRejectedValueOnce(
-        new GatewayRequestError({ code: "INVALID_REQUEST", message: "Request failed" }),
-      );
+      .mockRejectedValueOnce(rejectedRequest());
     const { page, emitHealth } = await mountCaretaker(request);
 
     await emitHealth(discordAuthFailure);
@@ -340,9 +338,7 @@ describe("custodian page nudges", () => {
   });
 
   it("restores an event nudge after its request fails", async () => {
-    const request = createHealthyRequest().mockRejectedValueOnce(
-      new GatewayRequestError({ code: "INVALID_REQUEST", message: "Request failed" }),
-    );
+    const request = createHealthyRequest().mockRejectedValueOnce(rejectedRequest());
     const { page, emitHealth } = await mountCaretaker(request);
 
     await emitHealth(telegramAuthFailure);

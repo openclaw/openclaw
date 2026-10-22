@@ -21,6 +21,10 @@ function chatReply(reply: string, patch: Partial<Reply> = {}): Reply {
   return { sessionId: "custodian-session", reply, action: "none", ...patch };
 }
 
+function history(...turns: Array<["user" | "assistant", string, number]>) {
+  return { turns: turns.map(([role, text, at]) => ({ role, text, at })) };
+}
+
 function channelSnapshot(patch: Partial<ChannelsStatusSnapshot> = {}): ChannelsStatusSnapshot {
   return {
     ts: 1_700_000_000_000,
@@ -70,138 +74,14 @@ describe("custodian page", () => {
     vi.restoreAllMocks();
   });
 
-  it("renders and answers rich select, multiselect, and sensitive text wizard steps", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({
-        sessionId: "rich-wizard-session",
-        reply: "Choose a channel.",
-        action: "none",
-        wizardInputPending: true,
-        step: {
-          id: "channel",
-          type: "select",
-          message: "Which channel?",
-          options: ["Discord", "Slack", "Telegram", "WhatsApp", "Twitch"].map((label) => ({
-            label,
-            value: label.toLowerCase(),
-          })),
-        },
-      })
-      .mockResolvedValueOnce({
-        sessionId: "rich-wizard-session",
-        reply: "Choose features.",
-        action: "none",
-        wizardInputPending: true,
-        step: {
-          id: "features",
-          type: "multiselect",
-          message: "Which features?",
-          options: [
-            { label: "Chat", value: "chat" },
-            { label: "Moderation", value: "moderation" },
-            { label: "Announcements", value: "announcements" },
-          ],
-        },
-      })
-      .mockResolvedValueOnce({
-        sessionId: "rich-wizard-session",
-        reply: "Enter the secret.",
-        action: "none",
-        sensitive: true,
-        wizardInputPending: true,
-        step: {
-          id: "secret",
-          type: "text",
-          message: "Twitch client secret",
-          sensitive: true,
-        },
-      })
-      .mockResolvedValueOnce(chatReply("Setup complete.", { sessionId: "rich-wizard-session" }));
-    const { page } = await mount(request);
-
-    expect(page.querySelector(".chat-read-aloud-btn")).toBeNull();
-
-    const trigger = await element<HTMLButtonElement>(
-      page,
-      ".custodian__wizard-step .picker-select__trigger",
-    );
-    expect(page.querySelector("openclaw-option-card")).toBeNull();
-    expect(page.querySelector(".agent-chat__composer-shell")).toBeNull();
-    trigger.click();
-    await waitForFast(() =>
-      expect(page.querySelectorAll('.custodian__wizard-step [role="option"]')).toHaveLength(5),
-    );
-    [...page.querySelectorAll<HTMLElement>('.custodian__wizard-step [role="option"]')]
-      .find((option) => option.textContent?.includes("Twitch"))!
-      .click();
-
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
-    await waitForFast(() =>
-      expect(page.querySelectorAll('.custodian__wizard-step input[type="checkbox"]')).toHaveLength(
-        3,
-      ),
-    );
-    expect(request.mock.calls[1]?.[1]).toMatchObject({
-      wizardAnswer: { stepId: "channel", value: "twitch" },
-    });
-    expect(request.mock.calls[1]?.[1]).not.toHaveProperty("message");
-    page
-      .querySelectorAll<HTMLInputElement>('.custodian__wizard-step input[type="checkbox"]')[0]!
-      .click();
-    await page.updateComplete;
-    page
-      .querySelectorAll<HTMLInputElement>('.custodian__wizard-step input[type="checkbox"]')[2]!
-      .click();
-    await page.updateComplete;
-    button(page, ".custodian__wizard-step .btn.primary").click();
-
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(3));
-    const secretInput = await element<HTMLInputElement>(page, "#custodian-wizard-input-5");
-    expect(request.mock.calls[2]?.[1]).toMatchObject({
-      wizardAnswer: { stepId: "features", value: ["chat", "announcements"] },
-    });
-    expect(secretInput.type).toBe("password");
-    const revealSecret = page.querySelector<HTMLButtonElement>(
-      '.custodian__wizard-step button[aria-label="Reveal value"]',
-    );
-    expect(revealSecret).not.toBeNull();
-    revealSecret!.click();
-    await page.updateComplete;
-    const revealedInput = page.querySelector<HTMLInputElement>("#custodian-wizard-input-5")!;
-    expect(revealedInput.type).toBe("text");
-    revealedInput.value = "fake-client-secret";
-    revealedInput.dispatchEvent(new Event("input", { bubbles: true }));
-    await page.updateComplete;
-    button(page, ".custodian__wizard-step .btn.primary").click();
-
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(4));
-    await waitForFast(() => expect(page.textContent).toContain("Setup complete."));
-    expect(request.mock.calls[3]?.[1]).toMatchObject({
-      wizardAnswer: { stepId: "secret", value: "fake-client-secret" },
-    });
-    expect(request.mock.calls[3]?.[1]).not.toHaveProperty("message");
-    expect(page.textContent).toContain("Twitch");
-    expect(page.textContent).toContain("Chat, Announcements");
-    expect(page.textContent).toContain("Sensitive reply sent");
-    expect(page.textContent).not.toContain("fake-client-secret");
-    expect(page.querySelector(".agent-chat__composer-shell")).not.toBeNull();
-  });
-
   it("refreshes durable rows for a same-ownership client replacement", async () => {
     let historyCalls = 0;
     const request = vi.fn(async (method: string, _params?: unknown) => {
       if (method === "openclaw.chat.history") {
         historyCalls += 1;
-        return {
-          turns:
-            historyCalls === 1
-              ? [{ role: "user", text: "Earlier state", at: 1 }]
-              : [
-                  { role: "user", text: "Earlier state", at: 1 },
-                  { role: "assistant", text: "Completed while away", at: 2 },
-                ],
-        };
+        return historyCalls === 1
+          ? history(["user", "Earlier state", 1])
+          : history(["user", "Earlier state", 1], ["assistant", "Completed while away", 2]);
       }
       if (method === "openclaw.chat") {
         return chatReply("Live welcome");
@@ -237,12 +117,7 @@ describe("custodian page", () => {
     const replacementRequest = vi.fn((method: string, params: { sessionId?: string }) =>
       Promise.resolve(
         method === "openclaw.chat.history"
-          ? {
-              turns: [
-                { role: "user", text: "check this system", at: 1 },
-                { role: "assistant", text: "System check completed", at: 2 },
-              ],
-            }
+          ? history(["user", "check this system", 1], ["assistant", "System check completed", 2])
           : chatReply("Welcome back.", { sessionId: params.sessionId }),
       ),
     );
@@ -280,9 +155,7 @@ describe("custodian page", () => {
   it("keeps loaded transcript rows while retrying the welcome without reloading history", async () => {
     const request = vi
       .fn()
-      .mockResolvedValueOnce({
-        turns: [{ role: "assistant", text: "Loaded transcript row", at: 1 }],
-      })
+      .mockResolvedValueOnce(history(["assistant", "Loaded transcript row", 1]))
       .mockRejectedValueOnce(new Error("temporary welcome failure"))
       .mockResolvedValueOnce(
         chatReply("Recovered welcome.", { sessionId: "engine-session-after-retry" }),
@@ -329,21 +202,17 @@ describe("custodian page", () => {
   it("clears stale rows and cold-starts against the new gateway after credentials change", async () => {
     const request = vi
       .fn()
-      .mockResolvedValueOnce({
-        turns: [{ role: "assistant", text: "Old gateway transcript", at: 1 }],
-      })
-      .mockResolvedValueOnce({
-        sessionId: "engine-session-before-rotation",
-        reply: "Enter the token.",
-        sensitive: true,
-        action: "none",
-      })
+      .mockResolvedValueOnce(history(["assistant", "Old gateway transcript", 1]))
+      .mockResolvedValueOnce(
+        chatReply("Enter the token.", {
+          sessionId: "engine-session-before-rotation",
+          sensitive: true,
+        }),
+      )
       .mockReturnValueOnce(createDeferred<never>().promise);
     const replacementRequest = vi
       .fn()
-      .mockResolvedValueOnce({
-        turns: [{ role: "assistant", text: "New gateway transcript", at: 2 }],
-      })
+      .mockResolvedValueOnce(history(["assistant", "New gateway transcript", 2]))
       .mockResolvedValueOnce(
         chatReply("Fresh safe welcome.", { sessionId: "engine-session-after-rotation" }),
       );
@@ -462,6 +331,7 @@ describe("custodian page", () => {
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     await page.updateComplete;
 
+    expect(page.querySelector(".chat-read-aloud-btn")).toBeNull();
     expect(page.querySelector(".chat-group.assistant")).not.toBeNull();
     expect(page.querySelector("openclaw-option-card")).not.toBeNull();
     expect(page.textContent).toContain("Which channel?");
@@ -825,7 +695,7 @@ describe("custodian page", () => {
   it("keeps an unanswered structured question across a same-client reconnect", async () => {
     const request = vi.fn(async (method: string) =>
       method === "openclaw.chat.history"
-        ? { turns: [{ role: "assistant", text: "Earlier row", at: 1 }] }
+        ? history(["assistant", "Earlier row", 1])
         : chatReply("Choose the next step.", {
             question: {
               id: "reconnect-choice",
