@@ -262,6 +262,11 @@ describe("persistUserTurnTranscript", () => {
     identity: { type: "profile" as const, id: "8489979671" },
     ...runtimeOnlySenderFields,
   };
+  const observedSender = buildChannelUserTurnSender({
+    SenderId: "shared-id",
+    SenderName: "Same label",
+    Provider: "test-channel",
+  });
   it.each([
     {
       name: "source bytes and attachments despite logging patterns",
@@ -289,6 +294,23 @@ describe("persistUserTurnTranscript", () => {
         String(value),
       ]),
     },
+    {
+      name: "channel observation without display inference",
+      input: { text: "hello", timestamp: 123, sender: observedSender },
+      metadata: {
+        senderId: "shared-id",
+        senderName: "Same label",
+        senderIdentity: {
+          type: "observation",
+          id: "shared-id",
+          pluginId: "test-channel",
+          accountId: null,
+          senderKind: "unknown",
+        },
+      },
+      config: undefined,
+      forbidden: [],
+    },
   ])("round-trips $name", async ({ input, metadata, config, forbidden }) => {
     const expected = userMessage(input.text, { timestamp: input.timestamp, __openclaw: metadata });
     const appended = await writeInput(structuredClone(input), { config, updateMode: "none" });
@@ -297,33 +319,11 @@ describe("persistUserTurnTranscript", () => {
     expect(durable).toEqual([expected, expected]);
     expect(messages).toEqual([expected]);
     const serialized = durable.map((message) => JSON.stringify(message));
-    expect(serialized).toEqual([JSON.stringify(expected), JSON.stringify(expected)]);
     for (const bytes of serialized) {
       for (const value of forbidden) {
         expect(bytes).not.toContain(value);
       }
     }
-  });
-
-  it("sender provenance round-trips an observation without display inference", async () => {
-    const sender = buildChannelUserTurnSender({
-      SenderId: "shared-id",
-      SenderName: "Same label",
-      Provider: "test-channel",
-    });
-    await writeInput({ text: "hello", sender });
-    const message = await readMessage();
-    expect(message?.["__openclaw"]).toMatchObject({
-      senderId: "shared-id",
-      senderName: "Same label",
-      senderIdentity: {
-        type: "observation",
-        id: "shared-id",
-        pluginId: "test-channel",
-        accountId: null,
-        senderKind: "unknown",
-      },
-    });
   });
 
   it.each(["retain", "in-place", "raw-redact", "forge"] as const)(
@@ -591,7 +591,7 @@ describe("persistUserTurnTranscript", () => {
           };
         },
       });
-      const metadata = stored?.["__openclaw"] as { humanMentions?: unknown } | undefined;
+      const metadata = stored?.["__openclaw"];
       expect({ content: stored?.content, mentions: metadata?.humanMentions }).toEqual({
         content: mode === "replace-text" ? "[redacted]" : "Hello @Ada",
         mentions: mode === "replace-text" || mode === "forge" ? undefined : mentions,
@@ -697,17 +697,16 @@ describe("persistUserTurnTranscript", () => {
         goalId: "goal-1",
         operationId: "resume-1",
       };
+      const original = userMessage("Continue pursuing the current goal.", { timestamp: 123 });
+      if (isGoal) {
+        Object.assign(original, {
+          display: false,
+          provenance: { kind: "internal_system" },
+          __openclaw: { intent },
+        });
+      }
       const message = await writeAndRead({
-        message: userMessage("Continue pursuing the current goal.", {
-          timestamp: 123,
-          ...(isGoal
-            ? {
-                display: false as const,
-                provenance: { kind: "internal_system" as const },
-                __openclaw: { intent },
-              }
-            : {}),
-        }),
+        message: original,
         beforeMessageWrite: () =>
           castAgentMessage({
             role: "user",

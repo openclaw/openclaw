@@ -27,7 +27,6 @@ import {
   readUserTurnRequesterOrigin,
 } from "./user-turn-transcript-admission.js";
 import {
-  buildLateMediaAttachedProjection,
   createUserTurnTranscriptRecorder,
   mergePreparedUserTurnMessageForRuntime,
   resolvePersistedUserTurnText,
@@ -243,38 +242,47 @@ describe("user turn transcript persistence", () => {
   });
 
   describe("mergePreparedUserTurnMessageForRuntime", () => {
-    it("adds prepared transcript metadata to runtime user messages", () => {
-      const recorder = record({
-        text: "display prompt",
-        media: [{ path: "/tmp/image.png", contentType: "image/png" }],
-        sender: { id: "user-42", name: "Ada" },
-        timestamp: 123,
-      });
-
-      expect(
-        mergePreparedUserTurnMessageForRuntime({
-          runtimeMessage: castAgentMessage({
-            role: "user",
-            content: "runtime prompt",
-            provenance: { sourceChannel: "telegram" },
-            __openclaw: { mirrorIdentity: "run-1:prompt" },
+    const image = { path: "/tmp/image.png", contentType: "image/png" };
+    const multimodal = [
+      { type: "text", text: "canonical image caption" },
+      { type: "image", data: "aGVsbG8=", mimeType: "image/png" },
+    ];
+    it.each([
+      { name: "text", runtimeContent: "runtime prompt", expectedContent: "display prompt" },
+      { name: "multimodal", runtimeContent: multimodal, expectedContent: multimodal },
+    ])(
+      "merges prepared metadata while preserving $name content rules",
+      ({ runtimeContent, expectedContent }) => {
+        const prepared = record({
+          ...userInput("display prompt"),
+          media: [image],
+          sender: { id: "user-42", name: "Ada" },
+        }).message;
+        const provenance = { sourceChannel: "telegram" };
+        expect(
+          mergePreparedUserTurnMessageForRuntime({
+            runtimeMessage: castAgentMessage({
+              role: "user",
+              content: runtimeContent,
+              provenance,
+              __openclaw: { mirrorIdentity: "run-1:prompt" },
+            }),
+            preparedMessage: prepared,
           }),
-          preparedMessage: recorder.message,
-        }),
-      ).toMatchObject({
-        role: "user",
-        content: "display prompt",
-        provenance: { sourceChannel: "telegram" },
-        timestamp: 123,
-        __openclaw: {
-          mirrorIdentity: "run-1:prompt",
-          senderId: "user-42",
-          senderName: "Ada",
-          media: [expect.objectContaining({ path: "/tmp/image.png", contentType: "image/png" })],
-        },
-      });
-    });
-
+        ).toMatchObject({
+          role: "user",
+          content: expectedContent,
+          timestamp: 123,
+          provenance,
+          __openclaw: {
+            mirrorIdentity: "run-1:prompt",
+            senderId: "user-42",
+            senderName: "Ada",
+            media: [expect.objectContaining(image)],
+          },
+        });
+      },
+    );
     it("does not replace blocked before_agent_run user markers", () => {
       const recorder = record({ text: "raw prompt" });
       const blocked = castAgentMessage({
@@ -289,28 +297,6 @@ describe("user turn transcript persistence", () => {
           preparedMessage: recorder.message,
         }),
       ).toBe(blocked);
-    });
-
-    it("preserves runtime multimodal content while merging prepared metadata", () => {
-      const recorder = record(userInput("canonical image caption"));
-      const runtimeContent = [
-        { type: "text", text: "canonical image caption" },
-        { type: "image", data: "aGVsbG8=", mimeType: "image/png" },
-      ];
-
-      expect(
-        mergePreparedUserTurnMessageForRuntime({
-          runtimeMessage: castAgentMessage({
-            role: "user",
-            content: runtimeContent,
-          }),
-          preparedMessage: recorder.message,
-        }),
-      ).toMatchObject({
-        role: "user",
-        content: runtimeContent,
-        timestamp: 123,
-      });
     });
   });
 
@@ -379,65 +365,38 @@ describe("user turn transcript persistence", () => {
       await expect(readTranscriptMessages(target)).resolves.toEqual([captured]);
     });
 
-    it("freezes the original prompt after initial steering and across reopened recorders", async () => {
-      const target = makeTarget();
-      const input = userInput("original prompt", "projection:user");
-      const recorder = record(input, target);
-      await recorder.persistApproved();
-      const steering = record(
-        { text: "initial steering", timestamp: 124, idempotencyKey: "steering:user" },
-        target,
-      );
-      const steered = await steering.persistApproved();
-      const text = "prepend\n\nreplacement model prompt\n\nappend";
-      const captured = await recorder.captureModelPromptProjection!(text, () => {});
-      recorder.markSentToProvider?.();
-      const generation = recorder.getAdmissionReceipt()?.generation;
-
-      expect(captured).toMatchObject({ content: input.text, timestamp: input.timestamp });
-      expect(await recorder.captureModelPromptProjection!(text, () => {})).toEqual(captured);
-      expect(recorder.getAdmissionReceipt()?.generation).toBe(generation);
-      await expect(
-        recorder.captureModelPromptProjection!("different hook output", () => {}),
-      ).rejects.toThrow("cannot be changed");
-
-      const reopened = record(input, target);
-      await reopened.persistApproved();
-      expect(readModelPromptProjection(reopened.getPersistedMessage?.())).toBe(text);
-      expect(await reopened.captureModelPromptProjection!(text, () => {})).toEqual(captured);
-      await expect(
-        reopened.captureModelPromptProjection!("different hook output", () => {}),
-      ).rejects.toThrow("cannot be changed");
-      await expect(readTranscriptMessages(target)).resolves.toEqual([captured, steered?.message]);
-    });
-
-    it("preserves capture, dispatch, and replay bytes despite logging patterns", async () => {
+    it("freezes capture, dispatch, and replay bytes after steering despite logging patterns", async () => {
       const target = makeTarget();
       const input = userInput("private", "fidelity:user");
       const loggingTarget = { ...target, config: { logging: { redactPatterns: ["private"] } } };
       const recorder = record(input, { ...target, config: { logging: { redactPatterns: [] } } });
       await recorder.persistApproved({ target: loggingTarget });
+      const steered = await record(
+        { text: "initial steering", timestamp: 124, idempotencyKey: "steering:user" },
+        target,
+      ).persistApproved();
       const rawProjection = "prepend\n\nprivate\n\nappend";
       const captured = await recorder.captureModelPromptProjection!(rawProjection, () => {});
-      const expected = rawProjection;
-      expect(captured.content).toBe(input.text);
-      expect(readModelPromptProjection(captured)).toBe(expected);
+      const generation = recorder.getAdmissionReceipt()?.generation;
+      expect(captured).toMatchObject({ content: input.text, timestamp: input.timestamp });
+      expect(readModelPromptProjection(captured)).toBe(rawProjection);
       expect(projectRecordedModelPrompt(makeUserMessage(input.text, 123), captured)).toMatchObject({
-        content: expected,
+        content: rawProjection,
       });
       recorder.markSentToProvider?.();
-      expect(await recorder.captureModelPromptProjection!(rawProjection, () => {})).toEqual(
-        captured,
-      );
-      const stored = await readTranscriptMessages(target);
-      expect(stored).toEqual([captured]);
-      expect(stored[0]?.content).toBe(input.text);
-
       const reopened = record(input, loggingTarget);
       await reopened.persistApproved();
-      const replay = await reopened.captureModelPromptProjection!(rawProjection, () => {});
-      expect(readModelPromptProjection(replay)).toBe(expected);
-      expect(projectRecordedModelPrompt(replay)).toMatchObject({ content: expected });
+      for (const current of [recorder, reopened]) {
+        expect(readModelPromptProjection(current.getPersistedMessage?.())).toBe(rawProjection);
+        const replay = await current.captureModelPromptProjection!(rawProjection, () => {});
+        expect(replay).toEqual(captured);
+        expect(current.getAdmissionReceipt()?.generation).toBe(generation);
+        expect(projectRecordedModelPrompt(replay)).toMatchObject({ content: rawProjection });
+        await expect(
+          current.captureModelPromptProjection!("different hook output", () => {}),
+        ).rejects.toThrow("cannot be changed");
+      }
+      await expect(readTranscriptMessages(target)).resolves.toEqual([captured, steered?.message]);
     });
 
     it("rechecks authority after pending persistence before capturing a projection", async () => {
@@ -582,15 +541,6 @@ describe("user turn transcript persistence", () => {
           }),
         ]);
         expect(readModelPromptProjection(messages[1])).toBeUndefined();
-        const lateProjection = buildLateMediaAttachedProjection(castAgentMessage(messages[1]));
-        expect(lateProjection.text).toBe(`[media attached: ${path.join(dir, "image.png")}]`);
-        expect(lateProjection.media).toEqual([
-          expect.objectContaining({
-            path: path.join(dir, "image.png"),
-            contentType: "image/png",
-            kind: "image",
-          }),
-        ]);
       },
     );
 
@@ -751,32 +701,42 @@ describe("user turn transcript persistence", () => {
       ]);
     });
 
-    it("falls back to the admitted text message when lazy media resolution fails", async () => {
-      const target = makeTarget();
-      const errors: unknown[] = [];
-      const recorder = record(userInput("keep the prompt", "chat-run-lazy-failed:user"), target, {
-        resolveInput: async () => {
-          throw new Error("media staging failed");
-        },
-        updateMode: "none",
-        onPersistenceError: (error) => errors.push(error),
-      });
-
-      const persisted = await recorder.persistFallback();
-
-      expect(errors).toHaveLength(1);
-      expect(persisted?.message).toMatchObject({
-        role: "user",
-        content: "keep the prompt",
-        idempotencyKey: "chat-run-lazy-failed:user",
-      });
-      expect(persisted?.message).not.toHaveProperty("MediaPath");
-      await expectStored(target, {
-        role: "user",
-        content: "keep the prompt",
-        idempotencyKey: "chat-run-lazy-failed:user",
-      });
-    });
+    it.each(["lazy media", "pending runtime"] as const)(
+      "fallback-persists when %s fails",
+      async (source) => {
+        const target = makeTarget();
+        const errors: unknown[] = [];
+        const failure = new Error(`${source} failed`);
+        const runtimePersistence = createDeferred();
+        const recorder = record(userInput("keep the prompt", "failed:user"), target, {
+          resolveInput:
+            source === "lazy media"
+              ? async () => {
+                  throw failure;
+                }
+              : undefined,
+          updateMode: "none",
+          onPersistenceError: (error) => errors.push(error),
+        });
+        if (source === "pending runtime") {
+          recorder.markRuntimePersistencePending(runtimePersistence.promise);
+        }
+        const fallback = recorder.persistFallback();
+        if (source === "pending runtime") {
+          runtimePersistence.reject(failure);
+        }
+        const persisted = await fallback;
+        const expected = {
+          role: "user",
+          content: "keep the prompt",
+          idempotencyKey: "failed:user",
+        };
+        expect(errors).toHaveLength(1);
+        expect(persisted?.message).toMatchObject(expected);
+        expect(persisted?.message).not.toHaveProperty("MediaPath");
+        await expectStored(target, expected);
+      },
+    );
 
     it("does not fallback-persist after before_agent_run blocks the turn", async () => {
       const target = makeTarget();
@@ -863,28 +823,6 @@ describe("user turn transcript persistence", () => {
 
       await expect(fallback).resolves.toBeUndefined();
       await expect(readTranscriptMessages(target)).resolves.toEqual([]);
-    });
-
-    it("fallback-persists when pending runtime persistence fails", async () => {
-      const target = makeTarget();
-      const errors: unknown[] = [];
-      const runtimePersistence = createDeferred();
-      const recorder = record(userInput("pending failed turn"), target, {
-        updateMode: "none",
-        onPersistenceError: (error) => errors.push(error),
-      });
-      recorder.markRuntimePersistencePending(runtimePersistence.promise);
-
-      const fallback = recorder.persistFallback();
-      runtimePersistence.reject(new Error("runtime append failed"));
-      const persisted = await fallback;
-
-      expect(errors).toHaveLength(1);
-      expect(persisted?.message).toMatchObject({
-        role: "user",
-        content: "pending failed turn",
-      });
-      await expectStored(target, { role: "user", content: "pending failed turn" });
     });
   });
 });

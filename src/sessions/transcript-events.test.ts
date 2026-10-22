@@ -17,7 +17,14 @@ function listen() {
   const internalListener = vi.fn();
   cleanup.push(onSessionTranscriptUpdate(publicListener));
   cleanup.push(onInternalSessionTranscriptUpdate(internalListener));
-  return { publicListener, internalListener };
+  return {
+    publicListener,
+    internalListener,
+    expectUpdates(publicUpdate: unknown, internalUpdate: unknown) {
+      expect(publicListener.mock.calls).toEqual([[publicUpdate]]);
+      expect(internalListener.mock.calls).toEqual([[internalUpdate]]);
+    },
+  };
 }
 
 function assistant(content: unknown, stopReason: string) {
@@ -30,34 +37,31 @@ afterEach(() => {
   }
 });
 
-it.each(["assistant", "toolResult"])("persists normalized run ownership on %s rows", (role) => {
-  const message = { role, content: [], __openclaw: { seq: 2 } };
-
-  expect(attachSessionTranscriptRunId(message, "  run-owned  ")).toEqual({
-    ...message,
-    __openclaw: { seq: 2, runId: "run-owned" },
-  });
-  expect(attachSessionTranscriptRunId(message, "  ")).toBe(message);
-  expect(readSessionTranscriptRunId(attachSessionTranscriptRunId(message, "  run-owned  "))).toBe(
-    "run-owned",
-  );
-});
-
-it("does not assign output run ownership to user rows", () => {
-  const message = { role: "user", content: "prompt" };
-
-  expect(attachSessionTranscriptRunId(message, "run-owned")).toBe(message);
-});
+it.each(["assistant", "toolResult", "user"])(
+  "normalizes output run ownership on %s rows",
+  (role) => {
+    const message = { role, content: [], __openclaw: { seq: 2 } };
+    const attached = attachSessionTranscriptRunId(message, "  run-owned  ");
+    if (role === "user") {
+      expect(attached).toBe(message);
+    } else {
+      expect(attached).toEqual({ ...message, __openclaw: { seq: 2, runId: "run-owned" } });
+      expect(readSessionTranscriptRunId(attached)).toBe("run-owned");
+    }
+    expect(attachSessionTranscriptRunId(message, "  ")).toBe(message);
+  },
+);
 
 it("does not expose file-only archive updates to public listeners", () => {
-  const { publicListener, internalListener } = listen();
+  const { expectUpdates } = listen();
+  const message = { role: "assistant", content: "hi" };
 
   emitSessionTranscriptUpdate({
     sessionFile: "  /tmp/session.jsonl  ",
     sessionKey: "  agent:main:main  ",
     agentId: "  main  ",
     sessionId: "  sess-1  ",
-    message: { role: "assistant", content: "hi" },
+    message,
     messageId: "  msg-1  ",
     messageSeq: 2,
     runId: "  run-1  ",
@@ -65,20 +69,16 @@ it("does not expose file-only archive updates to public listeners", () => {
 
   const expected = {
     ...identity,
-    message: { role: "assistant", content: "hi" },
+    message,
     messageId: "msg-1",
     messageSeq: 2,
     runId: "run-1",
   };
-  expect(publicListener).toHaveBeenCalledWith(expected);
-  expect(internalListener).toHaveBeenCalledWith({
-    ...expected,
-    sessionFile: "/tmp/session.jsonl",
-  });
+  expectUpdates(expected, { ...expected, sessionFile: "/tmp/session.jsonl" });
 });
 
 it("keeps normalized committed lifecycle and store ownership on internal events only", () => {
-  const { publicListener, internalListener } = listen();
+  const { expectUpdates } = listen();
 
   emitSessionTranscriptUpdate({
     target: {
@@ -92,17 +92,16 @@ it("keeps normalized committed lifecycle and store ownership on internal events 
     assistantItemIds: ["native-item"],
   });
 
-  expect(internalListener).toHaveBeenCalledWith({
-    ...identity,
-    target: { ...target, storePath: "/tmp/custom-sessions.json" },
-    lifecycleRevision: "committed-revision",
-    messageId: "msg-1",
-    assistantItemIds: ["native-item"],
-  });
-  expect(publicListener).toHaveBeenCalledWith({
-    ...identity,
-    messageId: "msg-1",
-  });
+  expectUpdates(
+    { ...identity, messageId: "msg-1" },
+    {
+      ...identity,
+      target: { ...target, storePath: "/tmp/custom-sessions.json" },
+      lifecycleRevision: "committed-revision",
+      messageId: "msg-1",
+      assistantItemIds: ["native-item"],
+    },
+  );
 });
 
 it("omits provider replay only from the shallow public message projection", () => {
@@ -124,32 +123,17 @@ it("omits provider replay only from the shallow public message projection", () =
   expect(message.providerReplay).toBe(providerReplay);
 });
 
-it("derives public target identity from legacy-shaped internal updates", () => {
-  const listener = vi.fn();
-  cleanup.push(onSessionTranscriptUpdate(listener));
-
-  emitSessionTranscriptUpdate({
-    sessionFile: "/tmp/session.jsonl",
-    sessionKey: "agent:main:main",
-    sessionId: "sess-1",
-  });
-
-  expect(listener).toHaveBeenCalledWith(identity);
-});
-
-it("drops public global file updates without target identity", () => {
+it.each([
+  ["legacy identity", { sessionKey: target.sessionKey, sessionId: target.sessionId }, [[identity]]],
+  ["global file without identity", { sessionKey: "global" }, []],
+] as const)("projects %s updates", (_name, update, publicCalls) => {
   const { publicListener, internalListener } = listen();
-
-  emitSessionTranscriptUpdate({
-    sessionFile: "/tmp/session.jsonl",
-    sessionKey: "global",
-  });
-
-  expect(publicListener).not.toHaveBeenCalled();
-  expect(internalListener).toHaveBeenCalledWith({
-    sessionFile: "/tmp/session.jsonl",
-    sessionKey: "global",
-  });
+  const sessionFile = "/tmp/session.jsonl";
+  emitSessionTranscriptUpdate({ sessionFile, ...update });
+  expect(publicListener.mock.calls).toEqual(publicCalls);
+  expect(internalListener).toHaveBeenCalledWith(
+    _name === "legacy identity" ? { sessionFile, ...identity } : { sessionFile, ...update },
+  );
 });
 
 it("drops invalid message sequence values on internal file updates", () => {
@@ -164,24 +148,17 @@ it("drops invalid message sequence values on internal file updates", () => {
 });
 
 it.each([
-  { name: "user", message: { role: "user" }, expected: undefined },
-  { name: "tool result", message: { role: "toolResult" }, expected: undefined },
-  {
-    name: "intermediate tool turn without a call block",
-    message: assistant([], "toolUse"),
-    expected: undefined,
-  },
-  ...["toolCall", "toolUse", "functionCall"].map((type) => ({
-    name: `incomplete ${type} block`,
-    message: assistant([{ type }], "error"),
-    expected: undefined,
-  })),
-  ...["stop", "aborted"].map((stopReason) => ({
-    name: `${stopReason} terminal assistant`,
-    message: assistant([{ type: "text", text: "answer" }], stopReason),
-    expected: "run-owned",
-  })),
-])("attributes run ownership only to terminal assistants: $name", ({ message, expected }) => {
+  ["user", { role: "user" }, undefined],
+  ["tool result", { role: "toolResult" }, undefined],
+  ["intermediate tool turn", assistant([], "toolUse"), undefined],
+  ...["toolCall", "toolUse", "functionCall"].map(
+    (type) => [type, assistant([{ type }], "error"), undefined] as const,
+  ),
+  ...["stop", "aborted"].map(
+    (stopReason) =>
+      [stopReason, assistant([{ type: "text", text: "answer" }], stopReason), "run-owned"] as const,
+  ),
+])("attributes run ownership only to terminal assistants: %s", (_name, message, expected) => {
   expect(resolveTerminalAssistantTranscriptRunId(message, "  run-owned  ")).toBe(expected);
   expect(resolveTerminalAssistantTranscriptRunId(message, "  ")).toBeUndefined();
 });
