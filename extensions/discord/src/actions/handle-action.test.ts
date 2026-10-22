@@ -21,6 +21,11 @@ const sourceRoute = {
   sourceMessageId: "message-1",
 };
 const threadContext = { accountId: sourceRoute.accountId, sessionKey };
+const discordContext = { currentChannelProvider: "discord" };
+const foreignRequester = {
+  requesterSenderId: "telegram-user-id",
+  toolContext: { currentChannelProvider: "telegram" },
+};
 function runAction(
   action: Parameters<typeof handleDiscordMessageAction>[0]["action"],
   params: Record<string, unknown>,
@@ -55,52 +60,58 @@ function sendPayload(overrides: Record<string, unknown>) {
   };
 }
 
+function threadAction(action: "thread-create" | "thread-reply", params: Record<string, unknown>) {
+  return runAction(action, params, { cfg: discordConfig({ threads: true }), ...threadContext });
+}
+
 describe("handleDiscordMessageAction", () => {
   beforeEach(() => {
     handleDiscordActionMock.mockClear();
   });
 
-  it("uses trusted requesterSenderId for moderation and ignores params senderUserId", async () => {
-    const cfg = discordConfig({ moderation: true });
-    await handleDiscordMessageAction({
+  it.each([
+    {
       action: "timeout",
-      params: {
-        guildId: "guild-1",
-        userId: "user-2",
-        durationMin: 5,
-        senderUserId: "spoofed-admin-id",
-      },
-      cfg,
-      requesterSenderId: "trusted-sender-id",
-      toolContext: { currentChannelProvider: "discord" },
-    });
-
-    expectDiscordActionCall({
+      actions: { moderation: true },
+      params: { guildId: "guild-1", userId: "user-2", durationMin: 5 },
       payload: {
         action: "timeout",
-        accountId: undefined,
         guildId: "guild-1",
         userId: "user-2",
         durationMinutes: 5,
         until: undefined,
         reason: undefined,
         deleteMessageDays: undefined,
-        senderUserId: "trusted-sender-id",
       },
-      cfg,
-    });
-  });
+    },
+    {
+      action: "channel-delete",
+      actions: { channels: true },
+      params: { channelId: "channel-1" },
+      payload: { action: "channelDelete", channelId: "channel-1" },
+    },
+  ] as const)(
+    "uses trusted sender identity for $action, ignoring spoofed params",
+    async ({ action, actions, params, payload }) => {
+      const cfg = discordConfig(actions);
+      await runAction(
+        action,
+        { ...params, senderUserId: "spoofed-admin-id" },
+        { cfg, requesterSenderId: "trusted-sender-id", toolContext: discordContext },
+      );
+      expectDiscordActionCall({
+        payload: { ...payload, accountId: undefined, senderUserId: "trusted-sender-id" },
+        cfg,
+      });
+    },
+  );
 
   it("rejects fractional moderation durations before invoking Discord runtime", async () => {
     const cfg = discordConfig({ moderation: true });
     await expectRejected(
       "durationMin must be a non-negative integer",
       "timeout",
-      {
-        guildId: "guild-1",
-        userId: "user-2",
-        durationMin: 5.5,
-      },
+      { guildId: "guild-1", userId: "user-2", durationMin: 5.5 },
       {
         cfg,
         requesterSenderId: "trusted-sender-id",
@@ -114,72 +125,27 @@ describe("handleDiscordMessageAction", () => {
     await expectRejected(
       "autoArchiveMin must be one of 60, 1440, 4320, or 10080 minutes",
       "thread-create",
-      {
-        channelId: "channel-1",
-        threadName: "proof-thread",
-        autoArchiveMin: 999,
-      },
+      { channelId: "channel-1", threadName: "proof-thread", autoArchiveMin: 999 },
       { cfg, toolContext: { currentChannelProvider: "discord" } },
     );
   });
 
-  it("uses Discord requesterSenderId for guild admin actions and ignores params senderUserId", async () => {
-    const cfg = discordConfig({ channels: true });
-    await handleDiscordMessageAction({
-      action: "channel-delete",
-      params: {
-        channelId: "channel-1",
-        senderUserId: "spoofed-admin-id",
-      },
-      cfg,
-      requesterSenderId: "trusted-sender-id",
-      toolContext: { currentChannelProvider: "discord" },
+  it.each([
+    ["channel-delete", { channelId: "channel-1" }, { channels: true }],
+    ["timeout", { guildId: "guild-1", userId: "user-2", durationMin: 5 }, { moderation: true }],
+  ] as const)("rejects foreign requester identities for %s", async (action, params, actions) => {
+    await expectRejected("trusted Discord sender identity", action, params, {
+      cfg: discordConfig(actions),
+      ...foreignRequester,
     });
-
-    expectDiscordActionCall({
-      payload: {
-        action: "channelDelete",
-        accountId: undefined,
-        channelId: "channel-1",
-        senderUserId: "trusted-sender-id",
-      },
-      cfg,
-    });
-  });
-
-  it("rejects non-Discord requester ids for Discord guild admin actions", async () => {
-    const cfg = discordConfig({ channels: true });
-    await expectRejected(
-      "trusted Discord sender identity",
-      "channel-delete",
-      {
-        channelId: "channel-1",
-      },
-      {
-        cfg,
-        requesterSenderId: "telegram-user-id",
-        toolContext: { currentChannelProvider: "telegram" },
-      },
-    );
   });
 
   it("keeps no-context Discord guild admin actions on the manual runtime path", async () => {
     const cfg = discordConfig({ channels: true });
-    await handleDiscordMessageAction({
-      action: "channel-delete",
-      params: {
-        channelId: "channel-1",
-      },
-      cfg,
-      senderIsOwner: true,
-    });
+    await runAction("channel-delete", { channelId: "channel-1" }, { cfg, senderIsOwner: true });
 
     expectDiscordActionCall({
-      payload: {
-        action: "channelDelete",
-        accountId: undefined,
-        channelId: "channel-1",
-      },
+      payload: { action: "channelDelete", accountId: undefined, channelId: "channel-1" },
       cfg,
     });
   });
@@ -189,28 +155,8 @@ describe("handleDiscordMessageAction", () => {
     await expectRejected(
       "trusted Discord sender identity",
       "channel-delete",
-      {
-        channelId: "channel-1",
-      },
+      { channelId: "channel-1" },
       { cfg },
-    );
-  });
-
-  it("rejects non-Discord requester ids for Discord moderation actions", async () => {
-    const cfg = discordConfig({ moderation: true });
-    await expectRejected(
-      "trusted Discord sender identity",
-      "timeout",
-      {
-        guildId: "guild-1",
-        userId: "user-2",
-        durationMin: 5,
-      },
-      {
-        cfg,
-        requesterSenderId: "telegram-user-id",
-        toolContext: { currentChannelProvider: "telegram" },
-      },
     );
   });
 
@@ -225,9 +171,7 @@ describe("handleDiscordMessageAction", () => {
     "keeps %s available from non-Discord requesters",
     async (action, runtimeAction, params) => {
       const cfg = discordConfig({ channelInfo: true });
-      await handleDiscordMessageAction({
-        action,
-        params,
+      await runAction(action, params, {
         cfg,
         requesterSenderId: "telegram-user-id",
         toolContext: { currentChannelProvider: "telegram" },
@@ -242,18 +186,18 @@ describe("handleDiscordMessageAction", () => {
 
   it("falls back to Discord toolContext.currentChannelId for reaction targets", async () => {
     const cfg = discordConfig();
-    await handleDiscordMessageAction({
-      action: "react",
-      params: {
-        emoji: "ok",
+    await runAction(
+      "react",
+      { emoji: "ok" },
+      {
+        cfg,
+        toolContext: {
+          currentChannelProvider: "discord",
+          currentChannelId: "user:U1",
+          currentMessageId: "9001",
+        },
       },
-      cfg,
-      toolContext: {
-        currentChannelProvider: "discord",
-        currentChannelId: "user:U1",
-        currentMessageId: "9001",
-      },
-    });
+    );
 
     expectDiscordActionCall({
       payload: {
@@ -271,21 +215,17 @@ describe("handleDiscordMessageAction", () => {
 
   it("forwards attested current-conversation context to Discord reads", async () => {
     const cfg = discordConfig();
-    await handleDiscordMessageAction({
-      action: "read",
-      params: {
-        channelId: "channel:123",
-        messageId: "1542546825066577940",
+    await runAction(
+      "read",
+      { channelId: "channel:123", messageId: "1542546825066577940" },
+      {
+        cfg,
+        accountId: "ops",
+        requesterAccountId: "ops",
+        conversationReadOrigin: "delegated",
+        toolContext: { currentChannelProvider: "discord", currentChannelId: "channel:123" },
       },
-      cfg,
-      accountId: "ops",
-      requesterAccountId: "ops",
-      conversationReadOrigin: "delegated",
-      toolContext: {
-        currentChannelProvider: "discord",
-        currentChannelId: "channel:123",
-      },
-    });
+    );
 
     expectDiscordActionCall({
       payload: {
@@ -313,27 +253,20 @@ describe("handleDiscordMessageAction", () => {
 
   it("forwards attested current-conversation context to Discord channel info", async () => {
     const cfg = discordConfig({ channelInfo: true });
-    await handleDiscordMessageAction({
-      action: "channel-info",
-      params: {
-        channelId: "123",
+    await runAction(
+      "channel-info",
+      { channelId: "123" },
+      {
+        cfg,
+        accountId: "ops",
+        requesterAccountId: "ops",
+        conversationReadOrigin: "delegated",
+        toolContext: { currentChannelProvider: "discord", currentChannelId: "channel:123" },
       },
-      cfg,
-      accountId: "ops",
-      requesterAccountId: "ops",
-      conversationReadOrigin: "delegated",
-      toolContext: {
-        currentChannelProvider: "discord",
-        currentChannelId: "channel:123",
-      },
-    });
+    );
 
     expectDiscordActionCall({
-      payload: {
-        action: "channelInfo",
-        accountId: "ops",
-        channelId: "123",
-      },
+      payload: { action: "channelInfo", accountId: "ops", channelId: "123" },
       cfg,
       options: {
         conversationReadOrigin: "delegated",
@@ -348,15 +281,11 @@ describe("handleDiscordMessageAction", () => {
 
   it("forwards threadName on sends", async () => {
     const cfg = discordConfig();
-    await handleDiscordMessageAction({
-      action: "send",
-      params: {
-        target: "channel:thread-1",
-        message: "hello",
-        threadName: "Renamed thread",
-      },
-      cfg,
-    });
+    await runAction(
+      "send",
+      { target: "channel:thread-1", message: "hello", threadName: "Renamed thread" },
+      { cfg },
+    );
 
     expectDiscordActionCall({
       payload: sendPayload({ to: "channel:thread-1", threadName: "Renamed thread" }),
@@ -366,22 +295,10 @@ describe("handleDiscordMessageAction", () => {
   });
 
   it.each([
-    {
-      action: "send" as const,
-      params: { to: "channel:c1", message: "hello" },
-    },
-    {
-      action: "upload-file" as const,
-      params: { to: "channel:c1", filePath: "/tmp/image.png" },
-    },
-    {
-      action: "sticker" as const,
-      params: { to: "channel:c1", stickerId: ["sticker-1"] },
-    },
-    {
-      action: "thread-reply" as const,
-      params: { threadId: "c1", message: "thread update" },
-    },
+    { action: "send" as const, params: { to: "channel:c1", message: "hello" } },
+    { action: "upload-file" as const, params: { to: "channel:c1", filePath: "/tmp/image.png" } },
+    { action: "sticker" as const, params: { to: "channel:c1", stickerId: ["sticker-1"] } },
+    { action: "thread-reply" as const, params: { threadId: "c1", message: "thread update" } },
     {
       action: "thread-create" as const,
       params: { channelId: "c1", messageId: "message-1", threadName: "investigation" },
@@ -473,64 +390,33 @@ describe("handleDiscordMessageAction", () => {
       onThreadReplyDelivered,
     });
     try {
-      expect(
-        notifyDiscordActiveTurnThreadReplyDelivered({
-          ...threadContext,
-        }),
-      ).toBe(false);
+      expect(notifyDiscordActiveTurnThreadReplyDelivered({ ...threadContext })).toBe(false);
 
       handleDiscordActionMock.mockResolvedValueOnce({
         content: [],
         details: { ok: true, thread: { id: "thread-1" } },
       });
-      await handleDiscordMessageAction({
-        action: "thread-create",
-        params: {
-          channelId: "channel-1",
-          messageId: "message-1",
-          threadName: "investigation",
-        },
-        cfg: discordConfig({ threads: true }),
-        ...threadContext,
+      await threadAction("thread-create", {
+        channelId: "channel-1",
+        messageId: "message-1",
+        threadName: "investigation",
       });
 
       expect(onThreadAdopted).toHaveBeenCalledWith("thread-1");
 
-      handleDiscordActionMock.mockResolvedValueOnce({
-        content: [],
-        details: { ok: true },
-      });
-      const mismatchedResult = await handleDiscordMessageAction({
-        action: "thread-reply",
-        params: {
-          threadId: "thread-2",
-          message: "unrelated",
-        },
-        cfg: discordConfig({ threads: true }),
-        ...threadContext,
+      handleDiscordActionMock.mockResolvedValueOnce({ content: [], details: { ok: true } });
+      const mismatchedResult = await threadAction("thread-reply", {
+        threadId: "thread-2",
+        message: "unrelated",
       });
 
       expect(mismatchedResult.details).toEqual({ ok: true });
       expect(onThreadReplyDelivered).not.toHaveBeenCalled();
 
-      handleDiscordActionMock.mockResolvedValueOnce({
-        content: [],
-        details: { ok: true },
-      });
-      const result = await handleDiscordMessageAction({
-        action: "thread-reply",
-        params: {
-          threadId: "thread-1",
-          message: "done",
-        },
-        cfg: discordConfig({ threads: true }),
-        ...threadContext,
-      });
+      handleDiscordActionMock.mockResolvedValueOnce({ content: [], details: { ok: true } });
+      const result = await threadAction("thread-reply", { threadId: "thread-1", message: "done" });
 
-      expect(result.details).toEqual({
-        ok: true,
-        sourceReplyRoute: "current-source",
-      });
+      expect(result.details).toEqual({ ok: true, sourceReplyRoute: "current-source" });
       expect(onThreadReplyDelivered).toHaveBeenCalledWith("thread-1");
     } finally {
       endRoute();
@@ -565,10 +451,7 @@ describe("handleDiscordMessageAction", () => {
       });
 
       expect(
-        notifyDiscordActiveTurnThreadReplyDelivered({
-          ...threadContext,
-          threadId: "thread-2",
-        }),
+        notifyDiscordActiveTurnThreadReplyDelivered({ ...threadContext, threadId: "thread-2" }),
       ).toBe(true);
       expect(firstReplyDelivered).not.toHaveBeenCalled();
       expect(secondReplyDelivered).toHaveBeenCalledWith("thread-2");
@@ -589,19 +472,12 @@ describe("handleDiscordMessageAction", () => {
       onThreadAdoptionError,
     });
     try {
-      const expectedResult = {
-        content: [],
-        details: { ok: true, thread: { id: "thread-1" } },
-      };
+      const expectedResult = { content: [], details: { ok: true, thread: { id: "thread-1" } } };
       handleDiscordActionMock.mockResolvedValueOnce(expectedResult);
 
       const result = await handleDiscordMessageAction({
         action: "thread-create",
-        params: {
-          channelId: "channel-1",
-          messageId: "message-1",
-          threadName: "investigation",
-        },
+        params: { channelId: "channel-1", messageId: "message-1", threadName: "investigation" },
         cfg: discordConfig({ threads: true }),
         sessionKey,
       });
@@ -617,18 +493,11 @@ describe("handleDiscordMessageAction", () => {
     const components = { blocks: [{ type: "text", text: "Pick one" }] };
     const cfg = discordConfig();
 
-    await handleDiscordMessageAction({
-      action: "send",
-      params: {
-        message: "hello",
-        components: JSON.stringify(components),
-      },
-      cfg,
-      toolContext: {
-        currentChannelProvider: "discord",
-        currentChannelId: "channel:123",
-      },
-    });
+    await runAction(
+      "send",
+      { message: "hello", components: JSON.stringify(components) },
+      { cfg, toolContext: { currentChannelProvider: "discord", currentChannelId: "channel:123" } },
+    );
 
     expectDiscordActionCall({
       payload: sendPayload({ components }),
@@ -641,15 +510,8 @@ describe("handleDiscordMessageAction", () => {
     await expectRejected(
       /channel target is required/i,
       "send",
-      {
-        message: "hello",
-      },
-      {
-        toolContext: {
-          currentChannelProvider: "telegram",
-          currentChannelId: "channel:123",
-        },
-      },
+      { message: "hello" },
+      { toolContext: { currentChannelProvider: "telegram", currentChannelId: "channel:123" } },
     );
   });
 
@@ -657,9 +519,7 @@ describe("handleDiscordMessageAction", () => {
     await expectRejected(
       /channel target is required/i,
       "react",
-      {
-        emoji: "ok",
-      },
+      { emoji: "ok" },
       {
         toolContext: {
           currentChannelProvider: "telegram",
@@ -671,25 +531,16 @@ describe("handleDiscordMessageAction", () => {
   });
 
   it("rejects reactions when no message id source is available", async () => {
-    await expectRejected(/messageId required/i, "react", {
-      channelId: "123",
-      emoji: "ok",
-    });
+    await expectRejected(/messageId required/i, "react", { channelId: "123", emoji: "ok" });
   });
 
   it("does not inject session channel when guildId is explicit and no channel filters are provided", async () => {
     handleDiscordActionMock.mockResolvedValueOnce({ content: [], details: { ok: true } });
     await handleDiscordMessageAction({
       action: "search",
-      params: {
-        query: "guild-wide query",
-        guildId: "g1",
-      },
+      params: { query: "guild-wide query", guildId: "g1" },
       cfg: discordConfig(),
-      toolContext: {
-        currentChannelProvider: "discord",
-        currentChannelId: "session-ch",
-      },
+      toolContext: { currentChannelProvider: "discord", currentChannelId: "session-ch" },
     });
 
     expect(handleDiscordActionMock).toHaveBeenCalledTimes(1);
@@ -723,10 +574,7 @@ describe("handleDiscordMessageAction", () => {
 
       const unrelatedResult = await handleDiscordMessageAction({
         action: "send",
-        params: {
-          to: "channel:thread-2",
-          message: "unrelated",
-        },
+        params: { to: "channel:thread-2", message: "unrelated" },
         cfg: discordConfig(),
         ...threadContext,
       });
@@ -736,18 +584,12 @@ describe("handleDiscordMessageAction", () => {
 
       const result = await handleDiscordMessageAction({
         action: "send",
-        params: {
-          to: "channel:thread-1",
-          message: "done",
-        },
+        params: { to: "channel:thread-1", message: "done" },
         cfg: discordConfig(),
         ...threadContext,
       });
 
-      expect(result.details).toEqual({
-        ok: true,
-        sourceReplyRoute: "current-source",
-      });
+      expect(result.details).toEqual({ ok: true, sourceReplyRoute: "current-source" });
       expect(onThreadReplyDelivered).toHaveBeenCalledWith("thread-1");
     } finally {
       endRoute();
@@ -757,10 +599,7 @@ describe("handleDiscordMessageAction", () => {
   it("preserves a successful send when route-only target parsing rejects the target", async () => {
     const result = await handleDiscordMessageAction({
       action: "send",
-      params: {
-        to: "@alice",
-        message: "hello",
-      },
+      params: { to: "@alice", message: "hello" },
       cfg: discordConfig(),
     });
 
@@ -781,19 +620,16 @@ describe("handleDiscordMessageAction", () => {
     };
     const cfg = discordConfig({ threads: true });
 
-    await handleDiscordMessageAction({
-      action: "thread-reply",
-      params: {
+    await runAction(
+      "thread-reply",
+      {
         threadId: "thread-123",
         message: "thread update",
         filePath: "./report.md",
         mediaAccess: forgedMediaAccess,
       },
-      cfg,
-      mediaAccess,
-      mediaLocalRoots: mediaAccess.localRoots,
-      mediaReadFile,
-    });
+      { cfg, mediaAccess, mediaLocalRoots: mediaAccess.localRoots, mediaReadFile },
+    );
 
     expect(handleDiscordActionMock).toHaveBeenCalledTimes(1);
     expect(handleDiscordActionMock).toHaveBeenCalledWith(
@@ -820,9 +656,9 @@ describe("handleDiscordMessageAction", () => {
     const cfg = discordConfig();
     const authoredText = `${"x".repeat(1997)}AUTHORED_TAIL`;
 
-    await handleDiscordMessageAction({
-      action: "send",
-      params: {
+    await runAction(
+      "send",
+      {
         to: "channel:123",
         presentation: {
           title: authoredText,
@@ -845,8 +681,8 @@ describe("handleDiscordMessageAction", () => {
           ],
         },
       },
-      cfg,
-    });
+      { cfg },
+    );
 
     const [call] = handleDiscordActionMock.mock.calls;
     const payload = call?.[0] as Record<string, unknown> | undefined;
@@ -883,18 +719,11 @@ describe("handleDiscordMessageAction", () => {
     const cfg = discordConfig();
     const mediaAccess = { localRoots: ["/tmp/agent-root"], readFile: mediaReadFile };
 
-    await handleDiscordMessageAction({
-      action: "upload-file",
-      params: {
-        target: "channel:123",
-        media: "/tmp/agent-root/chart.png",
-        ...params,
-      },
-      cfg,
-      mediaAccess,
-      mediaLocalRoots: ["/tmp/agent-root"],
-      mediaReadFile,
-    });
+    await runAction(
+      "upload-file",
+      { target: "channel:123", media: "/tmp/agent-root/chart.png", ...params },
+      { cfg, mediaAccess, mediaLocalRoots: ["/tmp/agent-root"], mediaReadFile },
+    );
 
     expect(handleDiscordActionMock).toHaveBeenCalledTimes(1);
     const [call] = handleDiscordActionMock.mock.calls;

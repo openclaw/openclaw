@@ -84,19 +84,13 @@ describe("Discord reaction read target resolution", () => {
     ["a context without the current user target", dmContext({ currentMessagingTarget: undefined })],
     [
       "an unattested user target",
-      {
-        conversationReadOrigin: undefined,
-        requesterAccountId: undefined,
-        toolContext: undefined,
-      },
+      { conversationReadOrigin: undefined, requesterAccountId: undefined, toolContext: undefined },
     ],
   ])("rejects %s before resolving a Discord DM", async (_name, overrides) => {
     const error = await readReactions(overrides).catch((caught: unknown) => caught);
     expect(loopback.requests).toEqual([]);
     expect(error).toBeInstanceOf(Error);
-    expect(error).toMatchObject({
-      message: "Discord channel id is required (use channel:<id>).",
-    });
+    expect(error).toMatchObject({ message: "Discord channel id is required (use channel:<id>)." });
   });
 
   it("applies disabled-DM policy after resolving the current user target", async () => {
@@ -104,9 +98,7 @@ describe("Discord reaction read target resolution", () => {
       readReactions({
         cfg: {
           channels: {
-            discord: {
-              accounts: { work: { token: "test-token", dmPolicy: "disabled" } },
-            },
+            discord: { accounts: { work: { token: "test-token", dmPolicy: "disabled" } } },
           },
         },
       }),
@@ -130,8 +122,6 @@ describe("Discord reaction read target resolution", () => {
       ["GET", "/v10/channels/111"],
       ["GET", "/v10/channels/111/messages/444"],
     ]);
-    expect(loopback.requests[0]).toMatchObject({
-      body: JSON.stringify({ recipient_id: "222" }),
-    });
+    expect(loopback.requests[0]).toMatchObject({ body: JSON.stringify({ recipient_id: "222" }) });
   });
 });
