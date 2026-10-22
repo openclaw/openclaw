@@ -141,7 +141,9 @@ it.each(["enter", "modifier-enter"] as const)(
   "keeps mobile Side chat multiline and button-submitted with preference %s",
   async (sendShortcut) => {
     vi.spyOn(navigator, "userAgent", "get").mockReturnValue("iPhone");
-    onTestFinished(() => vi.restoreAllMocks());
+    onTestFinished(() => {
+      vi.restoreAllMocks();
+    });
     const submit = vi.fn();
     const { container } = mountSolid(() => (
       <SessionRailComposer
@@ -177,7 +179,9 @@ it.each(["iPhone", "Android"])(
   "keeps %s Return native in Chat and New Session",
   async (userAgent) => {
     vi.spyOn(navigator, "userAgent", "get").mockReturnValue(userAgent);
-    onTestFinished(() => vi.restoreAllMocks());
+    onTestFinished(() => {
+      vi.restoreAllMocks();
+    });
     for (const surface of ["chat", "new-session"] as const) {
       const submit = vi.fn();
       const input = vi.fn();
