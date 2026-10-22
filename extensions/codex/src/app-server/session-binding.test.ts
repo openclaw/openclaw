@@ -448,7 +448,11 @@ describe("Codex app-server binding store", () => {
           marketplaceName: "company-tools",
           pluginName: "security-review",
           allowDestructiveActions: true,
-          readOnlyTools: { read: true, write: false, stale: false },
+          readOnlyTools: {
+            read: { enabled: true, approval_mode: "prompt" as const },
+            write: { enabled: false },
+            stale: { enabled: false },
+          },
           destructiveApprovalMode: "ask" as const,
           mcpServerNames: ["github"],
         },

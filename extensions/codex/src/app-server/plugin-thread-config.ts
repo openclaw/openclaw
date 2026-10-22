@@ -10,7 +10,7 @@ import {
 } from "./config.js";
 import { ensureCodexPluginActivation } from "./plugin-activation.js";
 import { buildCodexAppApprovalOverrides } from "./plugin-app-approval-overrides.js";
-import { buildCodexAppReadOnlyTools, readOnlyToolsConfig } from "./plugin-app-read-only.js";
+import { buildCodexAppReadOnlyTools, type CodexAppReadOnlyTools } from "./plugin-app-read-only.js";
 import {
   readCodexPluginInventory,
   toCodexPluginOwnedAccountApp,
@@ -458,7 +458,7 @@ function buildEnabledAppConfig(
   policy: {
     allowDestructiveActions: boolean;
     allowOpenWorld?: boolean;
-    readOnlyTools?: Record<string, boolean>;
+    readOnlyTools?: CodexAppReadOnlyTools;
     destructiveApprovalMode?: CodexPluginDestructiveApprovalMode;
   },
   approvalOverrides: JsonObject = {},
@@ -473,7 +473,7 @@ function buildEnabledAppConfig(
           default_tools_enabled: false,
           tools: mergeCodexThreadConfigs(
             isJsonObject(approvalOverrides.tools) ? approvalOverrides.tools : {},
-            readOnlyToolsConfig(policy.readOnlyTools),
+            policy.readOnlyTools,
           ),
         }
       : {}),

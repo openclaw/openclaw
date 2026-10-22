@@ -7,12 +7,14 @@ import {
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { CodexAppInventorySnapshot } from "./app-inventory-cache.js";
 import { isCodexAppServerRequestTimeoutError, type CodexAppServerClient } from "./client.js";
 import { fingerprintCodexPolicy } from "./config-policy-json.js";
 import type { CodexPluginDestructiveApprovalMode } from "./config.js";
 import { readCodexMcpToolConnectorId } from "./mcp-tool-metadata.js";
 import { buildCodexAppApprovalOverrides } from "./plugin-app-approval-overrides.js";
-import { readOnlyToolEnabled } from "./plugin-app-read-only.js";
+import { buildCodexAppReadOnlyTools, readOnlyToolEnabled } from "./plugin-app-read-only.js";
+import { toCodexPluginOwnedAccountApp } from "./plugin-inventory.js";
 import {
   buildCodexPluginAppsConfigPatchFromPolicyContext,
   buildPluginAppPolicyContext,
@@ -47,6 +49,7 @@ type CronRuntimeAuthority = NonNullable<EmbeddedRunAttemptParams["scheduledRunti
 export type CurrentCodexScheduledAppPolicy = {
   config: Record<string, unknown>;
   toolsByApp: ReadonlyMap<string, ReadonlyMap<string, CodexScheduledAppTool>>;
+  appInventory?: CodexAppInventorySnapshot["apps"];
 };
 
 export type ScheduledCodexAppCreatorAuth =
@@ -128,6 +131,7 @@ type ScheduledCodexAppAuthorityPayload = {
     id: string;
     allowDestructiveActions: boolean;
     allowOpenWorld: boolean;
+    readOnly?: true;
     destructiveApprovalMode: CodexPluginDestructiveApprovalMode;
     tools: Record<string, CodexAppToolApprovalMode>;
   }>;
@@ -191,6 +195,7 @@ function parseScheduledCodexAppAuthority(
       seen.has(id) ||
       typeof app?.allowDestructiveActions !== "boolean" ||
       typeof app.allowOpenWorld !== "boolean" ||
+      (app.readOnly !== undefined && typeof app.readOnly !== "boolean") ||
       !destructiveApprovalMode ||
       !rawTools
     ) {
@@ -206,13 +211,16 @@ function parseScheduledCodexAppAuthority(
       }
       tools[toolName] = mode;
     }
-    return {
-      id,
-      allowDestructiveActions: app.allowDestructiveActions,
-      allowOpenWorld: app.allowOpenWorld,
-      destructiveApprovalMode,
-      tools,
-    };
+    return Object.assign(
+      {
+        id,
+        allowDestructiveActions: app.allowDestructiveActions,
+        allowOpenWorld: app.allowOpenWorld,
+        destructiveApprovalMode,
+        tools,
+      },
+      app.readOnly === true ? { readOnly: true as const } : {},
+    );
   });
   return { version: 1, auth: parsedAuth, apps };
 }
@@ -292,6 +300,7 @@ export async function readCurrentCodexScheduledAppPolicy(params: {
   request: CodexScheduledAppPolicyRequest;
   configCwd?: string;
   threadId?: string;
+  appInventory?: CodexAppInventorySnapshot["apps"];
 }): Promise<CurrentCodexScheduledAppPolicy> {
   const [configResponse, toolsByApp] = await Promise.all([
     params.request("config/read", {
@@ -306,6 +315,7 @@ export async function readCurrentCodexScheduledAppPolicy(params: {
   return {
     config: isJsonObject(configResponse.config) ? configResponse.config : {},
     toolsByApp,
+    appInventory: params.appInventory,
   };
 }
 
@@ -392,26 +402,31 @@ export async function captureScheduledCodexAppAuthority(params: {
   );
   const apps = Object.entries(params.policyContext.apps)
     .filter(([id]) => callableIds.has(id) && currentPolicy.toolsByApp.has(id))
-    .map(([id, policy]) => ({
-      id,
-      allowDestructiveActions: policy.allowDestructiveActions,
-      allowOpenWorld: policy.allowOpenWorld !== false,
-      destructiveApprovalMode: defaultApprovalMode(policy),
-      tools: Object.fromEntries(
-        [...(currentPolicy.toolsByApp.get(id)?.keys() ?? [])]
-          .toSorted()
-          .map((toolName) => [
-            toolName,
-            readCurrentToolPolicy(
-              currentPolicy.config,
-              id,
-              toolName,
-              currentPolicy.toolsByApp.get(id)?.get(toolName),
-              appApprovalCeiling(defaultApprovalMode(policy)),
-            ).approvalMode,
-          ]),
+    .map(([id, policy]) =>
+      Object.assign(
+        {
+          id,
+          allowDestructiveActions: policy.allowDestructiveActions,
+          allowOpenWorld: policy.allowOpenWorld !== false,
+          destructiveApprovalMode: defaultApprovalMode(policy),
+          tools: Object.fromEntries(
+            [...(currentPolicy.toolsByApp.get(id)?.keys() ?? [])]
+              .toSorted()
+              .map((toolName) => [
+                toolName,
+                readCurrentToolPolicy(
+                  currentPolicy.config,
+                  id,
+                  toolName,
+                  currentPolicy.toolsByApp.get(id)?.get(toolName),
+                  appApprovalCeiling(defaultApprovalMode(policy)),
+                ).approvalMode,
+              ]),
+          ),
+        },
+        policy.readOnlyTools !== undefined ? { readOnly: true } : {},
       ),
-    }))
+    )
     .toSorted((left, right) => left.id.localeCompare(right.id));
   if (apps.length === 0) {
     return undefined;
@@ -492,8 +507,20 @@ export function intersectCodexPluginThreadConfigWithScheduledAuthority(
     if (!captured) {
       continue;
     }
+    const inventoryApp = captured.readOnly
+      ? currentPolicy.appInventory?.find((app) => app.id === id)
+      : undefined;
     apps[id] = {
       ...current,
+      ...(captured.readOnly
+        ? {
+            readOnlyTools: buildCodexAppReadOnlyTools(
+              currentPolicy.config,
+              inventoryApp ? toCodexPluginOwnedAccountApp(inventoryApp) : { id },
+              current.readOnlyTools,
+            ),
+          }
+        : {}),
       allowDestructiveActions: current.allowDestructiveActions && captured.allowDestructiveActions,
       allowOpenWorld: current.allowOpenWorld !== false && captured.allowOpenWorld,
       destructiveApprovalMode: stricterApprovalMode(

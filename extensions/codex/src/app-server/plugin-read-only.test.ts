@@ -14,9 +14,12 @@ import {
   buildCodexPluginThreadConfig,
   buildCodexPluginAppsConfigPatchFromPolicyContext,
   refreshCodexPluginAppApprovalPolicy,
+  mergeCodexThreadConfigs,
 } from "./plugin-thread-config.js";
 import type { CodexAppServerRequestParams, v2 } from "./protocol.js";
 import { intersectCodexPluginThreadConfigWithScheduledAuthority } from "./scheduled-app-authority.js";
+import { readCurrentToolPolicy } from "./scheduled-app-tool-policy.js";
+import { readPluginAppPolicyContext } from "./session-binding-record.js";
 
 type Tool = NonNullable<v2.AppInfo["toolSummaries"]>[number];
 const tool = (name: string, isReadOnly: boolean, extra: Partial<Tool> = {}): Tool => ({
@@ -80,6 +83,10 @@ function fixture(
   };
   return {
     request,
+    nativeConfig,
+    setNativeTools(value: Record<string, { enabled?: boolean; approval_mode?: string }>) {
+      Object.assign(nativeConfig.apps["sample-app"].tools, value);
+    },
     setTools(value: Tool[] | undefined) {
       tools = value;
     },
@@ -116,6 +123,35 @@ function fixture(
 }
 
 describe("plugin read_only policy", () => {
+  it.each([
+    [{ Browse: { approval_mode: "prompt" } }, "prompt"],
+    [{ Browse: { approval_mode: "writes" } }, "writes"],
+    [{ Browse: { approval_mode: "prompt" }, browse: { approval_mode: "approve" } }, "approve"],
+    [{ Browse: { approval_mode: "prompt" }, browse: { enabled: true } }, "auto"],
+  ] as const)(
+    "preserves native whole-entry approval precedence across binding replay (%j)",
+    async (native, expected) => {
+      const f = fixture(true, "auto");
+      f.setTools([tool("browse", true, { title: "Browse" })]);
+      f.setNativeTools(native);
+      const result = await f.build();
+      // Exercise serialized binding storage, not only an in-memory clone.
+      const serialized = JSON.stringify(result.policyContext);
+      const restored = readPluginAppPolicyContext(JSON.parse(serialized));
+      expect(restored).toBeDefined();
+      for (const patch of [
+        result.configPatch,
+        buildCodexPluginAppsConfigPatchFromPolicyContext(restored!),
+      ]) {
+        const effective = mergeCodexThreadConfigs(f.nativeConfig, patch);
+        expect(effective).toBeDefined();
+        expect(
+          readCurrentToolPolicy(effective!, "sample-app", "browse", { title: "Browse" }),
+        ).toEqual({ enabled: true, approvalMode: expected });
+      }
+    },
+  );
+
   it.each([
     [true, false],
     [false, true],
@@ -264,7 +300,9 @@ describe("plugin read_only policy", () => {
     });
     expect(missing.policyContext.apps["sample-app"]).toBeDefined();
     expect(
-      Object.values(missing.policyContext.apps["sample-app"]?.readOnlyTools ?? {}).some(Boolean),
+      Object.values(missing.policyContext.apps["sample-app"]?.readOnlyTools ?? {}).some(
+        (entry) => entry.enabled,
+      ),
     ).toBe(false);
   });
 });
