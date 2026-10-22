@@ -29,13 +29,22 @@ type Sample = {
   cpuSeconds: number;
   maxRssKiB: number;
   hostLoad: number[];
+  discovery: InspectedPlugin[];
+};
+type InspectedPlugin = {
+  id: string;
+  status: string;
+  rootDir: string;
+  source: string;
+  origin: string;
 };
 const samples: Sample[] = [];
+const arms = [
+  { arm: "baseline", entry: baselineEntry, pluginRoot: baseline },
+  { arm: "candidate", entry: candidateEntry, pluginRoot: candidate },
+];
 for (let sample = 1; sample <= runs; sample++) {
-  for (const [arm, { entry, pluginRoot }] of Object.entries({
-    baseline: { entry: baselineEntry, pluginRoot: baseline },
-    candidate: { entry: candidateEntry, pluginRoot: candidate },
-  })) {
+  for (const { arm, entry, pluginRoot } of arms) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-registration-"));
     try {
       for (const name of ["home", "state", "tmp", "workspace"]) {
@@ -96,11 +105,25 @@ for (let sample = 1; sample <= runs; sample++) {
         },
       );
       assert.equal(result.status, 0, result.stderr || result.error?.message || "CLI failed");
-      const inventory = JSON.parse(result.stdout) as Array<{
-        plugin: { id: string; status: string; error?: string };
-      }>;
-      const plugin = inventory.find((row) => row.plugin.id === pluginId)?.plugin;
-      assert.equal(plugin?.status, "loaded", plugin?.error ?? "Plugin was not discovered");
+      const inventory = JSON.parse(result.stdout) as Array<{ plugin: InspectedPlugin }>;
+      const matches: InspectedPlugin[] = inventory
+        .map((row) => row.plugin)
+        .filter((row) => row.id === pluginId);
+      const [plugin, ...duplicates] = matches.filter((row) => row.status === "loaded");
+      assert.ok(plugin, "Plugin was not discovered or did not load");
+      assert.equal(duplicates.length, 0, "Expected exactly one loaded plugin with the selected ID");
+      assert.equal(
+        fs.realpathSync(plugin.rootDir),
+        fs.realpathSync(pluginRoot),
+        "Loaded plugin must come from the requested external package root",
+      );
+      const discovery = matches.map(({ id, status, rootDir, source, origin }) => ({
+        id,
+        status,
+        rootDir,
+        source,
+        origin,
+      }));
       const phases = [...result.stderr.matchAll(/phase=(\S+) plugin=(\S+) elapsedMs=([\d.]+)/gu)];
       const elapsed = (phase: string) => {
         const found = phases.find((row) => row[1] === phase && row[2] === pluginId);
@@ -121,6 +144,7 @@ for (let sample = 1; sample <= runs; sample++) {
         cpuSeconds: usage.user + usage.system,
         maxRssKiB: usage.rss,
         hostLoad,
+        discovery,
       };
       samples.push(row);
       console.log(JSON.stringify(row));
