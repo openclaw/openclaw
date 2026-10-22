@@ -3,19 +3,16 @@ import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-ow
 import { createDeferredCore } from "../../../shared/deferred.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import {
-  SubagentRegistryWriteError,
-  mutateSubagentRuns,
-} from "../registry/subagent-registry-persistence.js";
+import { SubagentRegistryWriteError } from "../registry/subagent-registry-persistence.js";
 import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "../registry/subagent-registry.browser-cleanup.test-support.js";
 import { useCompletionDatabase } from "./completion-database.test-support.js";
 import {
   advanceRequesterWakeTime,
-  armRequesterWake,
-  records,
   requesterWakeDriver,
   seedSubagentCompletionOwner,
+  updateCompletionOwner,
+  wakeBatch,
 } from "./subagent-completion-admission.test-helpers.js";
 
 vi.mock("../registry/subagent-registry.js", () => ({ resumeSubagentRun: vi.fn() }));
@@ -32,16 +29,12 @@ it.each([
   "preserves the known $outcome after a failed Stop with a $owner owner",
   async ({ outcome, owner }) => {
     vi.useFakeTimers();
-    const input = records();
-    const sibling = records();
+    const inputs = wakeBatch("run", "cancel-sibling");
+    const [input, sibling] = [inputs[0]!, inputs[1]!];
     sibling.subagent.taskRunId = "task-run-cancel-sibling";
-    sibling.subagent.runId = "cancel-sibling";
-    sibling.subagent.childSessionKey = "agent:main:subagent:cancel-sibling";
-    const inputs = [input, sibling];
     const batch = inputs.map(({ subagent }) => subagent);
     const batchRunIds = batch.map(({ runId }) => runId);
     for (const record of inputs) {
-      armRequesterWake(record, batchRunIds);
       record.subagent.requesterSettleWake!.status = "dispatching";
       record.subagent.requesterSettleWake!.attemptCount = 1;
       seedSubagentCompletionOwner({ ...record, databaseOptions: { database: db.value } });
@@ -146,10 +139,7 @@ it.each([
           successor.generation = (original.generation ?? 0) + 1;
         }
         const next = successor;
-        successorWrite = mutateSubagentRuns([next.runId], () => ({
-          value: undefined,
-          postimages: new Map([[next.runId, next]]),
-        }));
+        successorWrite = updateCompletionOwner(next.runId, () => next);
       }
       releaseWriter.resolve();
       expect(await stopResult).toEqual([{ status: "rejected", reason: failure }]);

@@ -80,7 +80,7 @@ export async function advanceRequesterWakeTime(
   }
 }
 
-export function records() {
+export function records(overrides: Partial<SubagentRunRecord> = {}) {
   const now = Date.now();
   const subagent = createSubagentRunRecord({
     runId: "completion-run",
@@ -103,8 +103,20 @@ export function records() {
       windowStartedAt: now,
       deadlineAt: now + 30 * 60_000,
     },
+    ...overrides,
   });
   return { subagent };
+}
+
+export function wakeBatch(...names: string[]) {
+  const inputs = names.map((name) =>
+    records({
+      runId: `completion-${name}`,
+      ...(name === "run" ? {} : { childSessionKey: `agent:main:subagent:${name}` }),
+    }),
+  );
+  const ids = inputs.map(({ subagent }) => subagent.runId);
+  return inputs.map((input) => armRequesterWake(input, ids));
 }
 
 export function requesterWakeDriver(inputs: ReturnType<typeof records>[]) {

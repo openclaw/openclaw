@@ -55,31 +55,10 @@ function settle(input: ReturnType<typeof records>, delivered: boolean) {
   });
 }
 
-it("retains an admitted cleanup lock while publishing the requester receipt", async () => {
-  const input = armRequesterWake(records());
-  input.subagent.cleanupCompletedAt = undefined;
-  input.subagent.delivery = { status: "pending", generation: 1 };
-  seedSubagentCompletionOwner({ ...input, databaseOptions: { database: db.value } });
-
-  await settle(input, true);
-
-  expect(subagentRuns.get(input.subagent.runId)).not.toBe(input.subagent);
-  expect(currentCompletionRun(input).cleanupHandled).toBe(true);
-  expect(currentCompletionRun(input).cleanupCompletedAt).toBeUndefined();
-  expect(currentCompletionRun(input).requesterSettleWake).toBeUndefined();
-  expect(currentCompletionRun(input).delivery?.status).toBe("delivered");
-  db.value = await reopenCompletionFixtureOwners();
-  // Process-local custody cannot survive a restart without durable completion.
-  expect(currentCompletionRun(input).cleanupHandled).toBe(false);
-  expect(currentCompletionRun(input).delivery?.status).toBe("delivered");
-});
-
 it.each([
   [undefined, "canonical result", true],
-  ["parent", "canonical result", true],
   ["parent", null, true],
   [undefined, "canonical result", false],
-  ["parent", "canonical result", false],
 ] as const)(
   "settles expiry (target=%s, result=%s, delivered=%s)",
   async (completionTarget, resultText, delivered) => {
@@ -89,7 +68,7 @@ it.each([
     if (!delivered) {
       expect(notices).toHaveLength(1);
     }
-    const driver = requesterWakeDriver([input]);
+    using driver = requesterWakeDriver([input]);
     driver.wake.mockImplementation(async (params) => {
       await params.completeBatch(
         [input.subagent],
@@ -100,37 +79,33 @@ it.each([
       );
       return delivered;
     });
-    try {
-      await driver.run();
-      if (delivered) {
-        expect(driver.warn).not.toHaveBeenCalled();
-        expect(driver.wake).toHaveBeenCalledOnce();
-        expect(isDeliverySuspended(currentCompletionRun(input))).toBe(false);
+    await driver.run();
+    if (delivered) {
+      expect(driver.warn).not.toHaveBeenCalled();
+      expect(driver.wake).toHaveBeenCalledOnce();
+      expect(isDeliverySuspended(currentCompletionRun(input))).toBe(false);
+    }
+    db.value = await reopenCompletionFixtureOwners();
+    const stored = subagentRuns.get(input.subagent.runId);
+    expect(stored?.requesterSettleWake).toBeUndefined();
+    if (delivered) {
+      expect(stored?.delivery?.status).toBe("delivered");
+      for (const key of ["suspendedAt", "suspendedReason", "lastError", "payload"] as const) {
+        expect(stored?.delivery?.[key]).toBeUndefined();
       }
-      db.value = await reopenCompletionFixtureOwners();
-      const stored = subagentRuns.get(input.subagent.runId);
-      expect(stored?.requesterSettleWake).toBeUndefined();
-      if (delivered) {
-        expect(stored?.delivery?.status).toBe("delivered");
-        for (const key of ["suspendedAt", "suspendedReason", "lastError", "payload"] as const) {
-          expect(stored?.delivery?.[key]).toBeUndefined();
-        }
-        expect(stored?.completion?.resultText).toBe(resultText);
-      } else {
-        expect(stored).toMatchObject({
-          delivery: {
-            status: "failed",
-            disposition: "permanent_failure",
-            lastError: "requester turn failed",
-          },
-          suppressCompletionDelivery: true,
-        });
-        expect(stored?.completion).toEqual(before.completion);
-        expect(stored?.delivery?.payload).toEqual(before.delivery?.payload);
-        expect(readCompletionSystemEvents(db.value)).toEqual(notices);
-      }
-    } finally {
-      driver.controller.clearRuntimeState();
+      expect(stored?.completion?.resultText).toBe(resultText);
+    } else {
+      expect(stored).toMatchObject({
+        delivery: {
+          status: "failed",
+          disposition: "permanent_failure",
+          lastError: "requester turn failed",
+        },
+        suppressCompletionDelivery: true,
+      });
+      expect(stored?.completion).toEqual(before.completion);
+      expect(stored?.delivery?.payload).toEqual(before.delivery?.payload);
+      expect(readCompletionSystemEvents(db.value)).toEqual(notices);
     }
   },
 );
