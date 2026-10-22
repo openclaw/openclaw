@@ -103,14 +103,17 @@ describe("matrix qa config", () => {
   });
 
   it("applies room-keyed Matrix QA config overrides", () => {
+    const agentDefaults = {
+      blockStreamingChunk: { breakPreference: "newline", maxChars: 48, minChars: 1 },
+      blockStreamingCoalesce: { idleMs: 0, maxChars: 48, minChars: 1 },
+    } as const;
+    const threadBindings = { enabled: true, idleHours: 1, spawnSessions: true };
+    const audio = { echoTranscript: false, enabled: true };
     const next = build(
       {
         autoJoin: "allowlist",
         autoJoinAllowlist: [" !dm:matrix-qa.test ", "#ops:matrix-qa.test"],
-        agentDefaults: {
-          blockStreamingChunk: { breakPreference: "newline", maxChars: 48, minChars: 1 },
-          blockStreamingCoalesce: { idleMs: 0, maxChars: 48, minChars: 1 },
-        },
+        agentDefaults: structuredClone(agentDefaults),
         blockStreaming: true,
         dm: { sessionScope: "per-room", threadReplies: "off" },
         encryption: true,
@@ -127,25 +130,17 @@ describe("matrix qa config", () => {
         },
         replyToMode: "all",
         streaming: "quiet",
-        threadBindings: { enabled: true, idleHours: 1, spawnSessions: true },
+        threadBindings: structuredClone(threadBindings),
         threadReplies: "always",
-        audio: { echoTranscript: false, enabled: true },
+        audio: structuredClone(audio),
         toolProfile: "coding",
       },
       { observerAccessToken: "observer-token" },
     );
 
-    expect(next.agents?.defaults).toEqual(
-      expect.objectContaining({
-        blockStreamingChunk: { breakPreference: "newline", maxChars: 48, minChars: 1 },
-        blockStreamingCoalesce: { idleMs: 0, maxChars: 48, minChars: 1 },
-      }),
-    );
+    expect(next.agents?.defaults).toEqual(expect.objectContaining(agentDefaults));
     expect(next.tools?.profile).toBe("coding");
-    expect(next.tools?.media?.audio).toEqual({
-      echoTranscript: false,
-      enabled: true,
-    });
+    expect(next.tools?.media?.audio).toEqual(audio);
     expect(next.messages?.groupChat?.mentionPatterns).toEqual(["\\S"]);
     expect(next.channels?.matrix?.accounts?.["qa-observer-bot-source"]).toMatchObject({
       accessToken: "observer-token",
@@ -174,7 +169,7 @@ describe("matrix qa config", () => {
         tools: { allow: ["sessions_spawn"] },
       },
     });
-    expect(sut?.threadBindings).toEqual({ enabled: true, idleHours: 1, spawnSessions: true });
+    expect(sut?.threadBindings).toEqual(threadBindings);
   });
 
   it("restores owned baseline leaves while preserving current Matrix lifecycle and siblings", () => {

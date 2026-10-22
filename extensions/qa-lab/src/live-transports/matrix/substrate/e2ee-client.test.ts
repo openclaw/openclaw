@@ -76,25 +76,6 @@ function expectCalls(counts: Partial<Record<Operation, number>>) {
   }
 }
 const shutdownFailure = "shutdown failed while waiting for active Matrix SDK operations";
-const makeEvent = (
-  eventId: string,
-  extra: Partial<MatrixQaObservedEvent> = {},
-): MatrixQaObservedEvent => ({
-  eventId,
-  kind: "message",
-  roomId: "!room:matrix-qa.test",
-  sender: "@bot:matrix-qa.test",
-  type: "m.room.message",
-  ...extra,
-});
-function recording() {
-  const observed: MatrixQaObservedEvent[] = [];
-  const recorder = createMatrixQaE2eeObservedEventRecorder({
-    append: (event) => observed.push(event),
-  });
-  return { observed, recorder };
-}
-
 describe("matrix qa e2ee client", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let client: Awaited<ReturnType<typeof createMatrixQaE2eeScenarioClient>>;
@@ -346,50 +327,45 @@ describe("matrix qa e2ee client", () => {
 });
 
 describe("matrix qa e2ee event recording", () => {
-  it("records late-decrypted payload updates for an existing event id", () => {
-    const previous = makeEvent("$reply");
-    const { observed, recorder } = recording();
+  it("deduplicates late decryption and rehydrates replacements of the threaded target", () => {
+    const observed: MatrixQaObservedEvent[] = [];
+    const recorder = createMatrixQaE2eeObservedEventRecorder({
+      append: (event) => observed.push(event),
+    });
+    const previous: MatrixQaObservedEvent = {
+      eventId: "$preview",
+      kind: "message",
+      roomId: "!room:matrix-qa.test",
+      sender: "@bot:matrix-qa.test",
+      type: "m.room.message",
+    };
+    const replacement = {
+      ...previous,
+      eventId: "$final",
+      body: "final",
+      msgtype: "m.text",
+      replacesEventId: "$preview",
+    };
     const decrypted = {
       ...previous,
       body: "MATRIX_QA_E2EE_CLI_GATEWAY_OK",
       msgtype: "m.text",
+      relatesTo: {
+        eventId: "$root",
+        inReplyToId: "$driver",
+        isFallingBack: true,
+        relType: "m.thread",
+      },
     };
-
+    recorder.record(replacement);
     recorder.record(previous);
     recorder.record(decrypted);
     recorder.record(decrypted);
-
-    expect(observed).toEqual([previous, decrypted]);
-  });
-
-  it("rehydrates a replacement when its threaded target decrypts later", () => {
-    const { observed, recorder } = recording();
-    const replacement = makeEvent("$final", {
-      body: "final",
-      msgtype: "m.text",
-      replacesEventId: "$preview",
-    });
-    const relation = {
-      eventId: "$root",
-      inReplyToId: "$driver",
-      isFallingBack: true,
-      relType: "m.thread",
-    };
-
-    recorder.record(replacement);
-    recorder.record(
-      makeEvent("$preview", {
-        kind: "notice",
-        body: "preview",
-        msgtype: "m.notice",
-        relatesTo: relation,
-      }),
-    );
-
     expect(observed).toEqual([
       replacement,
-      expect.objectContaining({ eventId: "$preview", relatesTo: relation }),
-      { ...replacement, relatesTo: relation },
+      previous,
+      decrypted,
+      { ...replacement, relatesTo: decrypted.relatesTo },
     ]);
   });
 });
