@@ -42,6 +42,41 @@ suite.define(() => {
       const loadMore = page.getByRole("button", { name: "Load more", exact: true });
       await loadMore.click();
       await expect.poll(() => rows.count()).toBe(jobs.length);
+      const menuClient = await context.newCDPSession(page);
+      try {
+        await menuClient.send("Performance.enable");
+        const before: { metrics: Array<{ name: string; value: number }> } =
+          await menuClient.send("Performance.getMetrics");
+        const started = performance.now();
+        await page.locator(".cron-job-menu__trigger").first().click();
+        await page.getByRole("menuitem", { name: "Remove", exact: true }).waitFor();
+        const after: typeof before = await menuClient.send("Performance.getMetrics");
+        console.log(
+          JSON.stringify({
+            proof: "cron-expanded-inventory-menu-open",
+            jobs: jobs.length,
+            elapsedMs: performance.now() - started,
+            metrics: Object.fromEntries(
+              ["ScriptDuration", "TaskDuration", "LayoutDuration", "RecalcStyleDuration"].map(
+                (name) => {
+                  const earlier = before.metrics.find((entry) => entry.name === name)?.value;
+                  const later = after.metrics.find((entry) => entry.name === name)?.value;
+                  if (earlier === undefined || later === undefined) {
+                    throw new Error(`Missing CDP metric: ${name}`);
+                  }
+                  return [name, (later - earlier) * 1000];
+                },
+              ),
+            ),
+          }),
+        );
+        await page.keyboard.press("Escape");
+        await page
+          .getByRole("menuitem", { name: "Remove", exact: true })
+          .waitFor({ state: "hidden" });
+      } finally {
+        await menuClient.detach();
+      }
       const search = page.getByRole("searchbox", { name: "Search automations" });
       await search.click();
       await gateway.deferNext("cron.list", { query: "i" });
