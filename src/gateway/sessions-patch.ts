@@ -43,7 +43,9 @@ import {
   normalizeFastMode,
   normalizeReasoningLevel,
   normalizeThinkLevel,
+  normalizeTraceLevel,
   normalizeUsageDisplay,
+  normalizeVerboseLevel,
   resolveThinkingProfile,
 } from "../auto-reply/thinking.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
@@ -63,12 +65,6 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { applyModelOverrideWithAuthProfileCompatibility } from "../sessions/auth-profile-preservation.js";
-import {
-  applyTraceOverride,
-  applyVerboseOverride,
-  parseTraceOverride,
-  parseVerboseOverride,
-} from "../sessions/level-overrides.js";
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
 import {
   isSessionAgentAttentionIconId,
@@ -456,24 +452,18 @@ function* projectSessionPatchSteps(
     }
   }
 
-  if ("verboseLevel" in patch) {
-    const parsed = parseVerboseOverride(patch.verboseLevel);
-    if (!parsed.ok) {
-      return invalid(parsed.error);
-    }
-    applyVerboseOverride(next, parsed.value);
-  }
-
-  if ("traceLevel" in patch) {
-    const parsed = parseTraceOverride(patch.traceLevel);
-    if (!parsed.ok) {
-      return invalid(parsed.error);
-    }
-    applyTraceOverride(next, parsed.value);
-  }
-
   // Explicit "off" values remain stored so session preferences override defaults.
   const preferenceError =
+    applyNormalizedPreference(
+      "verboseLevel",
+      normalizeVerboseLevel,
+      'invalid verboseLevel (use "on"|"off"|"full")',
+    ) ??
+    applyNormalizedPreference(
+      "traceLevel",
+      normalizeTraceLevel,
+      'invalid traceLevel (use "on"|"off"|"raw")',
+    ) ??
     applyNormalizedPreference(
       "reasoningLevel",
       normalizeReasoningLevel,
