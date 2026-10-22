@@ -45,6 +45,10 @@ function config(incomingUrl: string, token = "loopback-token") {
   return { channels: { "synology-chat": { enabled: true, token, incomingUrl } } };
 }
 
+function readPayload(req: http.IncomingMessage, done: (payload: Record<string, unknown>) => void) {
+  readForm(req, (body) => done(JSON.parse(body ?? "{}") as Record<string, unknown>));
+}
+
 function drip(res: http.ServerResponse) {
   // Keep bytes flowing so the socket-idle timeout cannot end the response.
   const timer = setInterval(() => {
@@ -192,10 +196,8 @@ describe("Synology Chat client loopback", () => {
   it("acquires durable send custody before webhook bytes cross the loopback boundary", async () => {
     const receivedPayloads: Array<Record<string, unknown>> = [];
     const port = await listenLoopback((req, res) => {
-      readForm(req, (payload) => {
-        if (payload) {
-          receivedPayloads.push(JSON.parse(payload) as Record<string, unknown>);
-        }
+      readPayload(req, (payload) => {
+        receivedPayloads.push(payload);
         respond(res, true);
       });
     });
@@ -244,8 +246,8 @@ describe("Synology Chat client loopback", () => {
   it("rejects invalid recipients before HTTP and delivers normalized numeric IDs", async () => {
     const payloads: unknown[] = [];
     const port = await listenLoopback((req, res) => {
-      readForm(req, (body) => {
-        payloads.push(JSON.parse(body ?? "{}"));
+      readPayload(req, (payload) => {
+        payloads.push(payload);
         respond(res, true);
       });
     });
@@ -353,8 +355,7 @@ describe("Synology Chat client loopback", () => {
       const dispatchOrder: string[] = [];
       const port = await listenLoopback((req, res) => {
         dispatchOrder.push("post");
-        readForm(req, (body) => {
-          const payload = JSON.parse(body ?? "{}") as Record<string, unknown>;
+        readPayload(req, (payload) => {
           receivedPayloads.push(payload);
           const accepted =
             typeof payload.text === "string" &&
@@ -416,8 +417,10 @@ describe("Synology Chat client loopback", () => {
     "preserves genuine webhook identities for $name",
     async ({ text, media, missingChunk, ids }) => {
       let requestCount = 0;
+      const payloads: Record<string, unknown>[] = [];
       const port = await listenLoopback((req, res) => {
-        readForm(req, () => {
+        readPayload(req, (payload) => {
+          payloads.push(payload);
           const index = requestCount++;
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(
@@ -446,35 +449,16 @@ describe("Synology Chat client loopback", () => {
       expect(result?.messageId).toBe(ids[0] ?? "");
       expect(result?.receipt.platformMessageIds).toEqual(ids);
       expect(result?.receipt.parts.map((part) => part.platformMessageId)).toEqual(ids);
+      if (!media) {
+        expect(payloads.map((payload) => payload.text).join("")).toBe(text);
+        for (const [index, payload] of payloads.entries()) {
+          expect(typeof payload.text).toBe("string");
+          expect(payload.text).toHaveLength(Math.min(2_000, text.length - index * 2_000));
+          expect(payload.user_ids).toEqual([123456]);
+        }
+      }
     },
   );
-
-  it("chunks long text before the Synology payload limit for every text adapter", async () => {
-    const receivedPayloads: Array<{ text: string; user_ids?: number[] }> = [];
-    const port = await listenLoopback((req, res) => {
-      readForm(req, (body) => {
-        const payload = JSON.parse(body ?? "{}") as {
-          text?: string;
-          user_ids?: number[];
-        };
-        receivedPayloads.push({ text: payload.text ?? "", user_ids: payload.user_ids });
-        const accepted = (payload.text?.length ?? 0) <= 2_000;
-        respond(res, accepted, accepted ? 200 : 413);
-      });
-    });
-    const incomingUrl = `http://127.0.0.1:${port}/webapi/entry.cgi`;
-    const cfg = config(incomingUrl);
-    const text = "x".repeat(2_001);
-
-    await synologyChatPlugin.outbound.sendText({ cfg, text, to: "42" });
-    await synologyChatPlugin.message.send?.text?.({ cfg, text, to: "42" });
-    await sendMessage(incomingUrl, text, "42");
-
-    expect(receivedPayloads).toHaveLength(6);
-    expect(receivedPayloads.map(({ text: chunk }) => chunk).join("")).toBe(text + text + text);
-    expect(receivedPayloads.every(({ text: chunk }) => chunk.length <= 2_000)).toBe(true);
-    expect(receivedPayloads.every(({ user_ids }) => user_ids?.[0] === 42)).toBe(true);
-  });
 
   it("rejects unauthenticated webhook sends without fabricating delivery receipts", async () => {
     let rejectedRequests = 0;
@@ -503,106 +487,60 @@ describe("Synology Chat client loopback", () => {
     expect(rejectedRequests).toBe(2);
   });
 
-  it("aborts a streamed overflow and returns the stale cached identity", async () => {
-    let requestCount = 0;
-    const port = await listenLoopback((_req, res) => {
-      requestCount += 1;
-      res.on("error", () => {});
-      res.writeHead(200, { "Content-Type": "application/json" });
-      if (requestCount === 1) {
-        res.end(
-          JSON.stringify({
-            success: true,
-            data: { users: [{ user_id: 17, username: "cached", nickname: "cached-user" }] },
-          }),
-        );
-        return;
-      }
-      res.write(Buffer.alloc(USER_LIST_RESPONSE_MAX_BYTES, 0x78));
-      res.end(Buffer.from("x"));
-    });
-    const incomingUrl =
-      `http://127.0.0.1:${port}/webapi/entry.cgi?` +
-      "api=SYNO.Chat.External&method=chatbot&version=2";
-    const now = vi.spyOn(Date, "now");
-    now.mockReturnValue(1_700_000_000_000);
-
-    await expect(
-      resolveLegacyWebhookNameToChatUserId({
-        incomingUrl,
-        mutableWebhookUsername: "cached-user",
-      }),
-    ).resolves.toBe(17);
-
-    now.mockReturnValue(1_700_000_000_000 + 10 * 60 * 1000);
-    const warnings: string[] = [];
-    await expect(
-      resolveLegacyWebhookNameToChatUserId({
-        incomingUrl,
-        mutableWebhookUsername: "cached-user",
-        log: { warn: (...args) => warnings.push(args.map(String).join(" ")) },
-      }),
-    ).resolves.toBe(17);
-
-    expect(requestCount).toBe(2);
-    expect(warnings).toContain(
-      `fetchChatUsers: user_list response exceeded ${USER_LIST_RESPONSE_MAX_BYTES} bytes, using cached data`,
-    );
-  });
-
-  it("bounds a dripping user_list body with a wall-clock deadline", async () => {
-    let requestCount = 0;
-    const port = await listenLoopback((_req, res) => {
-      requestCount += 1;
-      res.on("error", () => {});
-      res.writeHead(200, {
-        "Content-Type": "application/json",
-        "Transfer-Encoding": "chunked",
+  it.each(["overflow", "deadline"] as const)(
+    "returns stale identity after a streamed user_list %s",
+    async (failure) => {
+      let requestCount = 0;
+      const port = await listenLoopback((_req, res) => {
+        requestCount += 1;
+        res.on("error", () => {});
+        res.writeHead(200, { "Content-Type": "application/json", "Transfer-Encoding": "chunked" });
+        if (requestCount === 1) {
+          res.end(
+            JSON.stringify({
+              success: true,
+              data: {
+                users: [{ user_id: 17, username: "cached", nickname: "cached-user" }],
+              },
+            }),
+          );
+        } else if (failure === "deadline") {
+          drip(res);
+        } else {
+          res.write(Buffer.alloc(USER_LIST_RESPONSE_MAX_BYTES, 0x78));
+          res.end(Buffer.from("x"));
+        }
       });
-      if (requestCount === 1) {
-        res.end(
-          JSON.stringify({
-            success: true,
-            data: { users: [{ user_id: 21, username: "cached", nickname: "drip-user" }] },
-          }),
+      const incomingUrl = `http://127.0.0.1:${port}/webapi/entry.cgi?method=chatbot&token=${randomUUID()}`;
+      const warnings: string[] = [];
+      const lookup = () =>
+        resolveLegacyWebhookNameToChatUserId({
+          incomingUrl,
+          mutableWebhookUsername: "cached-user",
+          log: { warn: (...args) => warnings.push(args.map(String).join(" ")) },
+        });
+      const now = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+      await expect(lookup()).resolves.toBe(17);
+      now.mockReturnValue(1_700_000_000_000 + 10 * 60 * 1000);
+      const timeoutMs = 250;
+      const timeoutSpy =
+        failure === "deadline" ? shortenDeadline(15_000, timeoutMs, true) : undefined;
+      const startedAt = performance.now();
+      await expect(lookup()).resolves.toBe(17);
+      const elapsedMs = performance.now() - startedAt;
+      expect(requestCount).toBe(2);
+      if (failure === "deadline") {
+        expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), 15_000);
+        expect(warnings).toContain("fetchChatUsers: request timed out, using cached data");
+        expect(elapsedMs).toBeGreaterThanOrEqual(timeoutMs - 50);
+        expect(elapsedMs).toBeLessThan(timeoutMs + 1_500);
+      } else {
+        expect(warnings).toContain(
+          `fetchChatUsers: user_list response exceeded ${USER_LIST_RESPONSE_MAX_BYTES} bytes, using cached data`,
         );
-        return;
       }
-      drip(res);
-    });
-    const incomingUrl =
-      `http://127.0.0.1:${port}/webapi/entry.cgi?` +
-      `api=SYNO.Chat.External&method=chatbot&version=2&token=${randomUUID()}`;
-    const now = vi.spyOn(Date, "now");
-    now.mockReturnValue(1_700_000_100_000);
-
-    await expect(
-      resolveLegacyWebhookNameToChatUserId({
-        incomingUrl,
-        mutableWebhookUsername: "drip-user",
-      }),
-    ).resolves.toBe(21);
-
-    now.mockReturnValue(1_700_000_100_000 + 10 * 60 * 1000);
-    const warnings: string[] = [];
-    const timeoutMs = 250;
-    const timeoutSpy = shortenDeadline(15_000, timeoutMs, true);
-    const startedAt = performance.now();
-    await expect(
-      resolveLegacyWebhookNameToChatUserId({
-        incomingUrl,
-        mutableWebhookUsername: "drip-user",
-        log: { warn: (...args) => warnings.push(args.map(String).join(" ")) },
-      }),
-    ).resolves.toBe(21);
-    const elapsedMs = performance.now() - startedAt;
-
-    expect(requestCount).toBe(2);
-    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), 15_000);
-    expect(warnings).toContain("fetchChatUsers: request timed out, using cached data");
-    expect(elapsedMs).toBeGreaterThanOrEqual(timeoutMs - 50);
-    expect(elapsedMs).toBeLessThan(timeoutMs + 1_500);
-  });
+    },
+  );
 
   it("does not replay a code-less wall-clock timeout from a dripping chatbot response", async () => {
     let requestCount = 0;

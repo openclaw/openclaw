@@ -44,12 +44,6 @@ function createWebhookHandler(deps: TestWebhookHandlerDeps) {
   });
 }
 
-type TestLog = {
-  info: (...args: unknown[]) => void;
-  warn: (...args: unknown[]) => void;
-  error: (...args: unknown[]) => void;
-};
-
 function deliveredMessage(deliver: TestDeliver) {
   expect(deliver).toHaveBeenCalledTimes(1);
   const message = vi.mocked(deliver).mock.calls[0]?.[0];
@@ -111,36 +105,17 @@ async function postToWebhook(
 }
 
 describe("createWebhookHandler", () => {
-  let log: TestLog;
+  let log: NonNullable<WebhookHandlerDeps["log"]>;
 
   beforeEach(() => {
     setSynologyRuntime(createPluginRuntimeMock());
     resolveLegacyWebhookNameToChatUserId.mockClear();
     resolveLegacyWebhookNameToChatUserId.mockResolvedValue(undefined);
-    log = {
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-    };
+    log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   });
 
   function admissionHandler(receive: WebhookHandlerDeps["receive"]) {
     return createWebhookHandlerWithIngress({ account: makeAccount(), receive, log });
-  }
-
-  async function expectForbiddenByPolicy(params: {
-    account: Partial<ResolvedSynologyChatAccount>;
-    bodyContains: string;
-    deliver?: TestDeliver;
-  }) {
-    const deliver = params.deliver ?? vi.fn();
-    const { handler } = makeTestHandler({ account: params.account, deliver });
-
-    const res = await postToWebhook(handler);
-
-    expect(res.status).toBe(403);
-    expect(res.body).toContain(params.bodyContains);
-    expect(deliver).not.toHaveBeenCalled();
   }
 
   function makeTestHandler(
@@ -187,10 +162,7 @@ describe("createWebhookHandler", () => {
   });
 
   it("does not acknowledge until durable admission completes", async () => {
-    let resolveAdmission: ((value: { kind: "durable" }) => void) | undefined;
-    const admission = new Promise<{ kind: "durable" }>((resolve) => {
-      resolveAdmission = resolve;
-    });
+    const { promise: admission, resolve } = Promise.withResolvers<{ kind: "durable" }>();
     const receive = vi.fn(() => admission);
     const handler = admissionHandler(receive);
 
@@ -200,7 +172,7 @@ describe("createWebhookHandler", () => {
     expect(res.status).toBe(0);
     expect(res.headers["x-openclaw-delivery-accepted"]).toBeUndefined();
 
-    resolveAdmission?.({ kind: "durable" });
+    resolve({ kind: "durable" });
     await pending;
     expect(res.status).toBe(204);
     expect(res.headers["x-openclaw-delivery-accepted"]).toBe("durable");
@@ -436,18 +408,15 @@ describe("createWebhookHandler", () => {
     expect(deliver).toHaveBeenCalled();
   });
 
-  it("returns 403 when allowlist policy is set with empty allowedUserIds", async () => {
-    await expectForbiddenByPolicy({
-      account: { dmPolicy: "allowlist", allowedUserIds: [] },
-      bodyContains: "Allowlist is empty",
-    });
-  });
-
-  it("returns 403 when DMs are disabled", async () => {
-    await expectForbiddenByPolicy({
-      account: { dmPolicy: "disabled" },
-      bodyContains: "disabled",
-    });
+  it.each([
+    { dmPolicy: "allowlist", bodyContains: "Allowlist is empty" },
+    { dmPolicy: "disabled", bodyContains: "disabled" },
+  ] as const)("returns 403 for $dmPolicy DMs", async ({ dmPolicy, bodyContains }) => {
+    const { handler, deliver } = makeTestHandler({ account: { dmPolicy, allowedUserIds: [] } });
+    const res = await postToWebhook(handler);
+    expect(res.status).toBe(403);
+    expect(res.body).toContain(bodyContains);
+    expect(deliver).not.toHaveBeenCalled();
   });
 
   it("returns 429 when rate limited", async () => {
@@ -473,17 +442,17 @@ describe("createWebhookHandler", () => {
     expect(deliveredMessage(deliver).body).toBe("Hello there");
   });
 
-  it("only resolves reply recipient by username when break-glass mode is enabled", async () => {
-    const deliver = await runDangerousNameMatchReply(456);
-    expect(deliveredMessage(deliver)).toMatchObject({ from: "123", chatUserId: "456" });
-  });
-
-  it("falls back to payload.user_id when break-glass resolution does not find a match", async () => {
-    const deliver = await runDangerousNameMatchReply();
-    expect(log.warn).toHaveBeenCalledWith(
-      'Could not resolve Chat API user_id for "testuser" — falling back to webhook user_id 123. Reply delivery may fail.',
-    );
-    expect(deliveredMessage(deliver)).toMatchObject({ from: "123", chatUserId: "123" });
+  it.each([456, undefined])("resolves break-glass reply identity (%s)", async (resolved) => {
+    const deliver = await runDangerousNameMatchReply(resolved);
+    if (resolved === undefined) {
+      expect(log.warn).toHaveBeenCalledWith(
+        'Could not resolve Chat API user_id for "testuser" — falling back to webhook user_id 123. Reply delivery may fail.',
+      );
+    }
+    expect(deliveredMessage(deliver)).toMatchObject({
+      from: "123",
+      chatUserId: String(resolved ?? 123),
+    });
   });
 
   it("awaits deliver directly with no local hardcoded timeout wrapper", async () => {

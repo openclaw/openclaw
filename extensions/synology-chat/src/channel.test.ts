@@ -101,6 +101,30 @@ const PAIRING_CFG = {
   },
 };
 
+function makeOutboundConfig(overrides: SynologyChatChannelConfig = {}) {
+  return {
+    channels: {
+      "synology-chat": {
+        enabled: true,
+        token: "t",
+        incomingUrl: "https://nas/incoming",
+        webhookUrl: "https://gateway.example.com/w",
+        ...overrides,
+      },
+    },
+  };
+}
+
+async function snapshot(webhookUrl: string) {
+  const cfg = makeOutboundConfig({ token: "test-token", webhookUrl });
+  const account = plugin.config.resolveAccount(cfg, "default");
+  return plugin.status?.buildAccountSnapshot?.({
+    account,
+    cfg,
+    runtime: { accountId: "default", lifecycle: "ready" },
+  });
+}
+
 describe("synology chat target classification", () => {
   it("accepts numeric chat user ids as direct", () => {
     expect(plugin.messaging?.inferTargetChatType?.({ to: "42" })).toBe("direct");
@@ -177,55 +201,24 @@ describe("createSynologyChatPlugin", () => {
   });
 
   it("projects lifecycle through the computed status adapter", async () => {
-    const cfg = {
-      channels: {
-        "synology-chat": {
-          token: "test-token",
-          incomingUrl: "https://nas/incoming",
-          webhookUrl: "https://gateway.example.com/webhook/synology?proxy-token=redacted",
-        },
-      },
-    };
-    const account = plugin.config.resolveAccount(cfg, "default");
-
-    const snapshot = await plugin.status?.buildAccountSnapshot?.({
-      account,
-      cfg,
-      runtime: { accountId: "default", lifecycle: "ready" },
-    });
-
-    expect(snapshot).toMatchObject({
+    const result = await snapshot(
+      "https://gateway.example.com/webhook/synology?proxy-token=redacted",
+    );
+    expect(result).toMatchObject({
       accountId: "default",
       configured: true,
       lifecycle: "ready",
       webhookPath: "/webhook/synology",
       attachmentsReady: true,
     });
-    expect(snapshot).not.toHaveProperty("webhookUrl");
+    expect(result).not.toHaveProperty("webhookUrl");
   });
 
   it.each([
     "https://gateway.example.com/webhook/synology#fragment",
     "https://gateway.example.com/webhook/synology?__openclaw_synology_media_token_fixture=value",
   ])("reports attachments unready when webhookUrl is invalid: %s", async (webhookUrl) => {
-    const cfg = {
-      channels: {
-        "synology-chat": {
-          token: "test-token",
-          incomingUrl: "https://nas/incoming",
-          webhookUrl,
-        },
-      },
-    };
-    const account = plugin.config.resolveAccount(cfg, "default");
-
-    const snapshot = await plugin.status?.buildAccountSnapshot?.({
-      account,
-      cfg,
-      runtime: { accountId: "default", lifecycle: "ready" },
-    });
-
-    expect(snapshot).toMatchObject({ configured: true, attachmentsReady: false });
+    expect(await snapshot(webhookUrl)).toMatchObject({ configured: true, attachmentsReady: false });
   });
 
   describe("config", () => {
@@ -275,8 +268,7 @@ describe("createSynologyChatPlugin", () => {
       if (!result) {
         throw new Error("resolveDmPolicy returned null");
       }
-      expect(result.policy).toBe("allowlist");
-      expect(result.allowFrom).toEqual(["user1"]);
+      expect(result).toMatchObject({ policy: "allowlist", allowFrom: ["user1"] });
       expect(result.normalizeEntry?.("  USER1  ")).toBe("user1");
     });
   });
@@ -364,20 +356,6 @@ describe("createSynologyChatPlugin", () => {
     });
   });
 
-  function makeOutboundConfig(overrides: SynologyChatChannelConfig = {}) {
-    return {
-      channels: {
-        "synology-chat": {
-          enabled: true,
-          token: "t",
-          incomingUrl: "https://nas/incoming",
-          webhookUrl: "https://gateway.example.com/w",
-          ...overrides,
-        },
-      },
-    };
-  }
-
   function sendMedia() {
     return plugin.outbound.sendMedia({
       cfg: makeOutboundConfig(),
@@ -400,13 +378,13 @@ describe("createSynologyChatPlugin", () => {
         text: `**Read** [the docs](https://example.com/a_(b)) [titled](https://example.com "Documentation") \`[literal](https://example.com)\` \\[escaped](https://example.com) [x > y](https://example.com) [bad](<https://example.com) [bad title](https://example.com "oops') ![logo](https://example.com/logo.png) ${malformedLink}`,
         to: "user1",
       });
-      expect(result.channel).toBe("synology-chat");
-      expect(result.target).toEqual({ kind: "chat", id: "user1" });
-      expect(result.messageId).toBe("");
+      expect(result).toMatchObject({
+        channel: "synology-chat",
+        target: { kind: "chat", id: "user1" },
+        messageId: "",
+        receipt: { platformMessageIds: [], parts: [], threadId: "user1" },
+      });
       expect(result.receipt.primaryPlatformMessageId).toBeUndefined();
-      expect(result.receipt.platformMessageIds).toHaveLength(0);
-      expect(result.receipt.parts).toHaveLength(0);
-      expect(result.receipt.threadId).toBe("user1");
       expect(mockSendMessage).toHaveBeenLastCalledWith(
         "https://nas/incoming",
         `**Read** <https://example.com/a_(b)|the docs> <https://example.com|titled> \`[literal](https://example.com)\` \\[escaped](https://example.com) [x > y](https://example.com) [bad](<https://example.com) [bad title](https://example.com "oops') ![logo](https://example.com/logo.png) ${malformedLink}`,
@@ -440,17 +418,15 @@ describe("createSynologyChatPlugin", () => {
   });
 
   describe("gateway", () => {
-    function makeStartAccountCtx(
-      accountConfig: Record<string, unknown>,
-      abortController = new AbortController(),
-    ) {
+    function makeStartAccountCtx(accountConfig: SynologyChatChannelConfig, accountId = "default") {
+      const abortController = new AbortController();
       return {
         abortController,
         ctx: {
           cfg: {
             channels: { "synology-chat": accountConfig },
           },
-          accountId: "default",
+          accountId,
           log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
           abortSignal: abortController.signal,
           setStatus: vi.fn(),
@@ -458,40 +434,27 @@ describe("createSynologyChatPlugin", () => {
       };
     }
 
-    function makeNamedStartAccountCtx(
-      accountOverrides: Record<string, unknown>,
-      abortController = new AbortController(),
-    ) {
-      return {
-        abortController,
-        ctx: {
-          cfg: {
-            channels: {
-              "synology-chat": {
-                enabled: true,
-                token: "default-token",
-                incomingUrl: "https://nas/default",
-                webhookPath: "/webhook/synology-shared",
-                webhookUrl: "https://gateway.example.com/webhook/synology-default",
-                dmPolicy: "allowlist",
-                allowedUserIds: ["123"],
-                accounts: {
-                  alerts: {
-                    enabled: true,
-                    token: "alerts-token",
-                    incomingUrl: "https://nas/alerts",
-                    ...accountOverrides,
-                  },
-                },
-              },
+    function makeNamedStartAccountCtx(accountOverrides: SynologyChatChannelConfig) {
+      return makeStartAccountCtx(
+        {
+          enabled: true,
+          token: "default-token",
+          incomingUrl: "https://nas/default",
+          webhookPath: "/webhook/synology-shared",
+          webhookUrl: "https://gateway.example.com/webhook/synology-default",
+          dmPolicy: "allowlist",
+          allowedUserIds: ["123"],
+          accounts: {
+            alerts: {
+              enabled: true,
+              token: "alerts-token",
+              incomingUrl: "https://nas/alerts",
+              ...accountOverrides,
             },
           },
-          accountId: "alerts",
-          log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-          abortSignal: abortController.signal,
-          setStatus: vi.fn(),
         },
-      };
+        "alerts",
+      );
     }
 
     async function expectPendingStartAccountPromise(
@@ -571,29 +534,21 @@ describe("createSynologyChatPlugin", () => {
       });
     });
 
-    it("startAccount refuses allowlist accounts with empty allowedUserIds", async () => {
-      const { ctx, abortController } = makeStartAccountCtx({
-        enabled: true,
-        token: "t",
-        incomingUrl: "https://nas/incoming",
-        dmPolicy: "allowlist",
-        allowedUserIds: [],
-      });
-
-      await expectBlockedStart({ ctx, abortController }, "empty allowedUserIds");
-    });
-
-    it("startAccount refuses open accounts with empty allowedUserIds", async () => {
-      const { ctx, abortController } = makeStartAccountCtx({
-        enabled: true,
-        token: "t",
-        incomingUrl: "https://nas/incoming",
-        dmPolicy: "open",
-        allowedUserIds: [],
-      });
-
-      await expectBlockedStart({ ctx, abortController }, "dmPolicy=open but empty allowedUserIds");
-    });
+    it.each(["allowlist", "open"] as const)(
+      "startAccount refuses %s accounts with empty allowedUserIds",
+      async (dmPolicy) => {
+        await expectBlockedStart(
+          makeStartAccountCtx({
+            enabled: true,
+            token: "t",
+            incomingUrl: "https://nas/incoming",
+            dmPolicy,
+            allowedUserIds: [],
+          }),
+          dmPolicy === "open" ? "dmPolicy=open but empty allowedUserIds" : "empty allowedUserIds",
+        );
+      },
+    );
 
     it("startAccount refuses named accounts without explicit webhookPath in multi-account setups", async () => {
       const { ctx, abortController } = makeNamedStartAccountCtx({

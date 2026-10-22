@@ -121,13 +121,23 @@ function prepare(account: ResolvedSynologyChatAccount, mediaUrl: string) {
 }
 
 function mockPdf(buffer: Buffer, fileName = "report.pdf") {
-  loadWebMediaMock.mockResolvedValueOnce({
-    buffer,
-    kind: undefined,
-    contentType: "application/pdf",
-    fileName,
-  });
+  mockMedia(buffer, "application/pdf", fileName);
 }
+
+function mockMedia(
+  buffer: Buffer,
+  contentType = "application/octet-stream",
+  fileName = "document.bin",
+) {
+  loadWebMediaMock.mockResolvedValueOnce({ buffer, kind: undefined, contentType, fileName });
+}
+
+const image = {
+  buffer: Buffer.from("frozen-image-bytes"),
+  kind: "image",
+  contentType: "image/png",
+  fileName: "floor-plan.png",
+} satisfies Awaited<ReturnType<typeof loadWebMediaType>>;
 
 function serve(
   url: string,
@@ -176,12 +186,7 @@ describe("Synology Chat hosted outbound media", () => {
     installRuntime();
     account = createAccount();
     loadWebMediaMock.mockReset();
-    loadWebMediaMock.mockResolvedValue({
-      buffer: Buffer.from("frozen-image-bytes"),
-      kind: "image",
-      contentType: "image/png",
-      fileName: "floor-plan.png",
-    });
+    loadWebMediaMock.mockResolvedValue(image);
   });
 
   afterEach(() => {
@@ -300,12 +305,7 @@ describe("Synology Chat hosted outbound media", () => {
     const { promise: loadGate, resolve: releaseLoads } = Promise.withResolvers<void>();
     loadWebMediaMock.mockImplementation(async () => {
       await loadGate;
-      return {
-        buffer: Buffer.from("frozen-image-bytes"),
-        kind: "image",
-        contentType: "image/png",
-        fileName: "floor-plan.png",
-      };
+      return image;
     });
     const first = prepare(account, "https://files.example.com/one.png");
     const second = prepare(account, "https://files.example.com/two.png");
@@ -604,12 +604,7 @@ describe("Synology Chat hosted outbound media", () => {
   ])(
     "rejects %s",
     async (_name, buffer, contentType = "application/octet-stream", fileName = "document.bin") => {
-      loadWebMediaMock.mockResolvedValueOnce({
-        buffer,
-        kind: undefined,
-        contentType,
-        fileName,
-      });
+      mockMedia(buffer, contentType, fileName);
       await expect(prepare(account, "https://files.example.com/disguised-content")).rejects.toThrow(
         "do not support active content type",
       );
@@ -618,12 +613,7 @@ describe("Synology Chat hosted outbound media", () => {
 
   it("keeps passive BOM-less UTF-32 source text containing embedded markup available", async () => {
     const buffer = utf32Buffer("Example source: <div> is a literal tag.", "le", false);
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer,
-      kind: undefined,
-      contentType: "text/plain",
-      fileName: "example.txt",
-    });
+    mockMedia(buffer, "text/plain", "example.txt");
     const prepared = await prepare(account, "https://files.example.com/example.txt");
     const response = makeRes();
 

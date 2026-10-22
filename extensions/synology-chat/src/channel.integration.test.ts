@@ -48,6 +48,22 @@ function makeStartContext<T>(cfg: T, accountId: string, abortSignal: AbortSignal
   };
 }
 
+function startAccount(
+  cfg: Parameters<typeof synologyChatPlugin.gateway.startAccount>[0]["cfg"],
+  accountId = "default",
+) {
+  const controller = new AbortController();
+  const ctx = makeStartContext(cfg, accountId, controller.signal);
+  const started = synologyChatPlugin.gateway.startAccount(ctx);
+  return {
+    ctx,
+    stop: async () => {
+      controller.abort();
+      await started;
+    },
+  };
+}
+
 const requireRecord = createRequireRecord("record", "expected-label-record");
 
 function requireMockCall<TArgs extends unknown[]>(
@@ -121,8 +137,6 @@ describe("Synology channel wiring integration", () => {
   });
 
   it("registers real webhook handler with resolved account config and enforces allowlist", async () => {
-    const plugin = synologyChatPlugin;
-    const abortController = new AbortController();
     const cfg = config({
       enabled: true,
       accounts: {
@@ -130,9 +144,7 @@ describe("Synology channel wiring integration", () => {
       },
     });
 
-    const started = plugin.gateway.startAccount(
-      makeStartContext(cfg, "alerts", abortController.signal),
-    );
+    const { stop } = startAccount(cfg, "alerts");
     expect(registerPluginHttpRouteMock).toHaveBeenCalledTimes(1);
 
     const [registered] = requireMockCall(registerPluginHttpRouteMock, 0, "alerts route");
@@ -153,16 +165,12 @@ describe("Synology channel wiring integration", () => {
     expect(res.status).toBe(403);
     expect(res.body).toContain("not authorized");
     expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
-    abortController.abort();
-    await started;
+    await stop();
   });
 
   it("dispatches hosted GET and HEAD capabilities before the inbound webhook parser", async () => {
-    const abortController = new AbortController();
     const cfg = config(account({ webhookUrl: "https://gateway.example.com/webhook/synology" }));
-    const started = synologyChatPlugin.gateway.startAccount(
-      makeStartContext(cfg, "default", abortController.signal),
-    );
+    const { stop } = startAccount(cfg);
     const [registered] = requireMockCall(
       registerPluginHttpRouteMock,
       0,
@@ -181,8 +189,7 @@ describe("Synology channel wiring integration", () => {
 
     expect(tryHandleSynologyHostedMediaRequestMock).toHaveBeenCalledTimes(2);
     expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
-    abortController.abort();
-    await started;
+    await stop();
   });
 
   it("stops ingress and rejects startup when the webhook route cannot bind", async () => {
@@ -206,8 +213,6 @@ describe("Synology channel wiring integration", () => {
   });
 
   it("uses gateway trusted proxy settings for pre-auth invalid-token throttling", async () => {
-    const plugin = synologyChatPlugin;
-    const abortController = new AbortController();
     const cfg = {
       gateway: {
         trustedProxies: ["127.0.0.1"],
@@ -215,8 +220,7 @@ describe("Synology channel wiring integration", () => {
       ...config(account({ dmPolicy: "open", allowedUserIds: ["*"], rateLimitPerMinute: 1 })),
     };
 
-    const startContext = makeStartContext(cfg, "default", abortController.signal);
-    const started = plugin.gateway.startAccount(startContext);
+    const { ctx: startContext, stop } = startAccount(cfg);
     expect(registerPluginHttpRouteMock).toHaveBeenCalledTimes(1);
     const [registered] = requireMockCall(registerPluginHttpRouteMock, 0, "default Synology route");
 
@@ -253,14 +257,10 @@ describe("Synology channel wiring integration", () => {
         turnAdoptionLifecycle: expect.objectContaining({ admission: "exclusive" }),
       }),
     );
-    abortController.abort();
-    await started;
+    await stop();
   });
 
   it("isolates same user_id across different accounts", async () => {
-    const plugin = synologyChatPlugin;
-    const alphaAbortController = new AbortController();
-    const betaAbortController = new AbortController();
     const cfg = {
       channels: {
         "synology-chat": {
@@ -288,12 +288,8 @@ describe("Synology channel wiring integration", () => {
       },
     };
 
-    const alphaStarted = plugin.gateway.startAccount(
-      makeStartContext(cfg, "alpha", alphaAbortController.signal),
-    );
-    const betaStarted = plugin.gateway.startAccount(
-      makeStartContext(cfg, "beta", betaAbortController.signal),
-    );
+    const alpha = startAccount(cfg, "alpha");
+    const beta = startAccount(cfg, "beta");
 
     expect(registerPluginHttpRouteMock).toHaveBeenCalledTimes(2);
     const [alphaRoute] = requireMockCall(registerPluginHttpRouteMock, 0, "alpha Synology route");
@@ -335,9 +331,6 @@ describe("Synology channel wiring integration", () => {
       SessionKey: "agent:agent-beta:synology-chat:beta:direct:123",
     });
 
-    alphaAbortController.abort();
-    betaAbortController.abort();
-    await alphaStarted;
-    await betaStarted;
+    await Promise.all([alpha.stop(), beta.stop()]);
   });
 });

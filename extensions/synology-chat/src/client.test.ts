@@ -146,87 +146,76 @@ const sendText = (text = "Hello", userId?: string, insecure = false) =>
   settleTimers(sendMessage(webhookUrl, text, userId, insecure));
 const sendFile = (url = webhookUrl) => settleTimers(sendHostedFileUrl(url, hostedCapabilityUrl));
 
-const tlsVerificationDefaultCases: Array<{ name: string; invoke: () => Promise<unknown> }> = [
-  {
-    name: "sendMessage",
-    invoke: () => sendMessage("https://nas.example.com/incoming", "Hello"),
-  },
-  {
-    name: "sendHostedFileUrl",
-    invoke: () => sendHostedFileUrl("https://nas.example.com/incoming", hostedCapabilityUrl),
-  },
-];
-
 describe("Synology Chat TLS verification defaults", () => {
   installFakeTimerHarness();
 
-  it.each(
-    tlsVerificationDefaultCases.flatMap(({ name, invoke }) => [
-      { name, invoke, refused: false },
-      { name, invoke, refused: true },
-    ]),
-  )(
-    "prepares $name webhook POST before handoff (refused=$refused)",
-    async ({ name, invoke, refused }) => {
-      const preparing = createDeferred<void>();
-      const prepared = createDeferred<void>();
-      const handedOff = createDeferred<void>();
-      const acknowledgment = createDeferred<void>();
-      const refusal = new Error("Synology message authority ended");
-      const authority = fetchRuntime.captureEffectAuthority();
-      const capture = vi.spyOn(fetchRuntime, "captureEffectAuthority").mockReturnValue({
-        ...authority,
-        async initiate(effect) {
-          preparing.resolve();
-          await prepared.promise;
-          if (refused) {
-            throw refusal;
-          }
-          return authority.initiate(effect);
-        },
-      });
-      vi.mocked(https.request).mockImplementation(((...args) => {
-        handedOff.resolve();
-        const res = createMockResponseEmitter(200);
-        void acknowledgment.promise.then(() => {
-          args[2]?.(res);
-          res.end('{"success":true}');
-        });
-        return createMockRequestEmitter();
-      }) as MockRequestHandler);
-      const sending = invoke();
-      try {
-        await Promise.race([
-          preparing.promise,
-          handedOff.promise.then(() => {
-            throw new Error("webhook POST bypassed preparation");
-          }),
-        ]);
-        expect(https.request).not.toHaveBeenCalled();
-        prepared.resolve();
-        if (!refused) {
-          await handedOff.promise;
-          acknowledgment.resolve();
-        }
+  it.each([
+    { name: "sendMessage", refused: false },
+    { name: "sendMessage", refused: true },
+    { name: "sendHostedFileUrl", refused: false },
+    { name: "sendHostedFileUrl", refused: true },
+  ])("prepares $name webhook POST before handoff (refused=$refused)", async ({ name, refused }) => {
+    const preparing = createDeferred<void>();
+    const prepared = createDeferred<void>();
+    const handedOff = createDeferred<void>();
+    const acknowledgment = createDeferred<void>();
+    const refusal = new Error("Synology message authority ended");
+    const authority = fetchRuntime.captureEffectAuthority();
+    const capture = vi.spyOn(fetchRuntime, "captureEffectAuthority").mockReturnValue({
+      ...authority,
+      async initiate(effect) {
+        preparing.resolve();
+        await prepared.promise;
         if (refused) {
-          await expect(sending).rejects.toBe(refusal);
-        } else {
-          expect(await sending).toEqual(
-            name === "sendMessage" ? { messageIds: [] } : { status: "accepted" },
-          );
+          throw refusal;
         }
-        expect(https.request).toHaveBeenCalledTimes(refused ? 0 : 1);
-        if (!refused) {
-          expect(firstHttpsRequestCall()[1]?.rejectUnauthorized).toBe(true);
-        }
-      } finally {
-        prepared.resolve();
+        return authority.initiate(effect);
+      },
+    });
+    vi.mocked(https.request).mockImplementation(((...args) => {
+      handedOff.resolve();
+      const res = createMockResponseEmitter(200);
+      void acknowledgment.promise.then(() => {
+        args[2]?.(res);
+        res.end('{"success":true}');
+      });
+      return createMockRequestEmitter();
+    }) as MockRequestHandler);
+    const sending =
+      name === "sendMessage"
+        ? sendMessage(webhookUrl, "Hello")
+        : sendHostedFileUrl(webhookUrl, hostedCapabilityUrl);
+    try {
+      await Promise.race([
+        preparing.promise,
+        handedOff.promise.then(() => {
+          throw new Error("webhook POST bypassed preparation");
+        }),
+      ]);
+      expect(https.request).not.toHaveBeenCalled();
+      prepared.resolve();
+      if (!refused) {
+        await handedOff.promise;
         acknowledgment.resolve();
-        await sending.catch(() => {});
-        capture.mockRestore();
       }
-    },
-  );
+      if (refused) {
+        await expect(sending).rejects.toBe(refusal);
+      } else {
+        expect(await sending).toEqual(
+          name === "sendMessage" ? { messageIds: [] } : { status: "accepted" },
+        );
+      }
+      expect(https.request).toHaveBeenCalledTimes(refused ? 0 : 1);
+      if (!refused) {
+        expect(firstHttpsRequestCall()[1]?.rejectUnauthorized).toBe(true);
+      }
+    } finally {
+      prepared.resolve();
+      acknowledgment.resolve();
+      await sending.catch(() => {});
+      capture.mockRestore();
+    }
+  });
 });
 
 describe("sendMessage", () => {
@@ -322,13 +311,8 @@ describe("sendMessage", () => {
     expect(vi.mocked(https.request)).toHaveBeenCalledTimes(2);
   });
 
-  it.each([
-    {
-      name: "oversized rejection envelope",
-      body: JSON.stringify({ success: false, padding: "x".repeat(1 * 1024 * 1024) }),
-    },
-  ])("preserves HTTP-successful webhook responses with $name", async ({ body }) => {
-    mockResponse(200, body);
+  it("preserves HTTP-successful webhook responses with oversized rejection envelopes", async () => {
+    mockResponse(200, JSON.stringify({ success: false, padding: "x".repeat(1 * 1024 * 1024) }));
 
     const result = await sendText();
 
@@ -361,20 +345,15 @@ describe("sendHostedFileUrl", () => {
     expect(firstHttpsRequestPayload()).toEqual({ file_url: hostedCapabilityUrl });
   });
 
-  it("returns indeterminate when the request outcome is lost", async () => {
-    mockRequestErrorOnce(new Error("connection reset"));
-
-    const result = await sendFile();
-
-    expect(result).toEqual({ status: "indeterminate" });
-  });
-
-  it("returns not-dispatched when the transport proves it never connected", async () => {
-    mockRequestErrorOnce(Object.assign(new Error("host not found"), { code: "ENOTFOUND" }));
-
-    const result = await sendFile();
-
-    expect(result).toEqual({ status: "not-dispatched" });
+  it.each([
+    { error: new Error("connection reset"), status: "indeterminate" },
+    {
+      error: Object.assign(new Error("host not found"), { code: "ENOTFOUND" }),
+      status: "not-dispatched",
+    },
+  ])("returns $status for $error", async ({ error, status }) => {
+    mockRequestErrorOnce(error);
+    expect(await sendFile()).toEqual({ status });
   });
 
   it("returns not-dispatched when request construction fails synchronously", async () => {

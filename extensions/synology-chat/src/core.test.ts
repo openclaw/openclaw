@@ -265,24 +265,12 @@ describe("synology-chat security helpers", () => {
     expect(result).toContain("[truncated]");
   });
 
-  it("truncates long inputs without splitting a surrogate pair", () => {
-    const input = "a".repeat(3999) + "\u{1F600}" + "b".repeat(2000);
-
-    const result = sanitizeInput(input);
-
-    expect(result).toContain("[truncated]");
-    expect(result).not.toMatch(loneSurrogatePattern);
-    expect(result).toBe(`${"a".repeat(3999)}... [truncated]`);
-  });
-
-  it("keeps complete supplementary-plane characters that fit before truncation", () => {
+  it.each([3999, 3998])("truncates without splitting the emoji after %i characters", (length) => {
     const emoji = "\u{1F600}";
-    const input = "a".repeat(3998) + emoji + "b".repeat(2000);
-
-    const result = sanitizeInput(input);
-
+    const prefix = "a".repeat(length);
+    const result = sanitizeInput(prefix + emoji + "b".repeat(2000));
     expect(result).toContain("[truncated]");
-    expect(result.startsWith(`${"a".repeat(3998)}${emoji}`)).toBe(true);
     expect(result).not.toMatch(loneSurrogatePattern);
+    expect(result).toBe(`${prefix}${length === 3998 ? emoji : ""}... [truncated]`);
   });
 });
