@@ -4483,7 +4483,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "src/audit/audit-event-writer.test.ts",
   "src/audit/audit-events.test.ts",
   "src/audit/execution-identity-context.test.ts",
-  "src/audit/execution-owner-lifecycle-receipts.test.ts",
   "src/auto-reply/dispatch-dispatcher.test.ts",
   "src/auto-reply/reply/agent-runner-execution-cli-progress.test.ts",
   "src/auto-reply/reply/agent-runner.media-ownership.test.ts",

@@ -1067,7 +1067,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/subagents/spawn/subagent-spawn.requester-incarnation.test.ts",
   "src/agents/subagents/spawn/subagent-spawn.in-process-gateway.test.ts",
   "src/agents/tools/swarm-tools.integration.test.ts",
-  "src/audit/execution-owner-lifecycle-receipts.test.ts",
   "src/claws/provenance-runtime-read.async.test.ts",
   "src/claws/provenance-runtime-read.test.ts",
   "src/projects/project-registry.test.ts",
