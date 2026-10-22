@@ -550,7 +550,10 @@ export async function createBundleLspToolRuntime(params: {
       try {
         session = createLspSession(
           serverName,
-          await spawnLspServerProcess(launchConfig, { abortSignal: params.abortSignal }),
+          await spawnLspServerProcess(launchConfig, {
+            abortSignal: params.abortSignal,
+            serverName,
+          }),
         );
         activeBundleLspSessions.add(session);
         attachLspProcessHandlers(session);
