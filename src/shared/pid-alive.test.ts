@@ -49,12 +49,13 @@ afterEach(() => {
   readFreeBsdProcessStartTimeMock.mockReset();
 });
 
-function mockProcReads(entries: Record<string, string>) {
+function mockProcReads(entries: Record<string, string | (() => string)>) {
   const originalReadFileSync = fsSync.readFileSync;
   vi.spyOn(fsSync, "readFileSync").mockImplementation((filePath, encoding) => {
     const key = String(filePath);
     if (Object.hasOwn(entries, key)) {
-      return entries[key] as never;
+      const value = entries[key];
+      return (typeof value === "function" ? value() : value) as never;
     }
     return originalReadFileSync(filePath as never, encoding as never) as never;
   });
@@ -135,13 +136,11 @@ describe("Linux process liveness", () => {
 
 it("confirms exit when procfs disappears after the initial existence probe", () => {
   let statusRead = false;
-  const originalReadFileSync = fsSync.readFileSync;
-  vi.spyOn(fsSync, "readFileSync").mockImplementation((...args) => {
-    if (String(args[0]) !== "/proc/42/status") {
-      return originalReadFileSync(...args);
-    }
-    statusRead = true;
-    throw Object.assign(new Error("process status unavailable"), { code: "ENOENT" });
+  mockProcReads({
+    "/proc/42/status": () => {
+      statusRead = true;
+      throw Object.assign(new Error("process status unavailable"), { code: "ENOENT" });
+    },
   });
   vi.spyOn(process, "kill").mockImplementation(() => {
     if (!statusRead) {
@@ -158,14 +157,7 @@ it.each(["ESRCH", "EPERM", "success"])(
   "revalidates a zero-thread Linux snapshot (fresh probe=%s)",
   (result) => {
     mockProcReads({ "/proc/42/status": "Name:\tnode\nState:\tZ\nThreads:\t0\n" });
-    vi.spyOn(process, "kill")
-      .mockImplementationOnce(() => true)
-      .mockImplementation(() => {
-        if (result === "success") {
-          return true;
-        }
-        throw Object.assign(new Error("current PID probe failed"), { code: result });
-      });
+    mockKill(result).mockImplementationOnce(() => true);
     withMockedPlatform("linux", () => {
       expect(isPidDefinitelyDead(42)).toBe(result === "ESRCH");
     });
@@ -219,17 +211,16 @@ describe("process start times", () => {
         .mockReturnValueOnce(111)
         .mockReturnValueOnce(222);
       readFreeBsdProcessStartTimeMock.mockImplementation(probe);
-      const originalReadFileSync = fsSync.readFileSync;
-      vi.spyOn(fsSync, "readFileSync").mockImplementation((filePath, encoding) => {
-        const pid = /^\/proc\/(\d+)\/stat$/.exec(String(filePath))?.[1];
-        if (!pid) {
-          return originalReadFileSync(filePath as never, encoding as never) as never;
-        }
-        const value = probe(Number(pid));
+      const stat = (pid: number) => () => {
+        const value = probe(pid);
         if (value === null) {
           throw new Error("process start time unavailable");
         }
-        return `${pid} (node) S ${"0 ".repeat(18)}${value}` as never;
+        return `${pid} (node) S ${"0 ".repeat(18)}${value}`;
+      };
+      mockProcReads({
+        [`/proc/${process.pid}/stat`]: stat(process.pid),
+        [`/proc/${foreignPid}/stat`]: stat(foreignPid),
       });
 
       await withMockedPlatform(platform, async () => {
