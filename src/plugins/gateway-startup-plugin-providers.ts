@@ -132,41 +132,25 @@ export function collectConfiguredAgentModelProviderIds(
   return new Set(
     [...modelIdsByProvider]
       .filter(([providerId, modelIds]) =>
-        [...modelIds].some((modelId) =>
-          configuredModelProviderNeedsRuntimePlugin({
-            config,
-            manifestModelProviders,
-            providerId,
-            modelId,
-          }),
-        ),
+        [...modelIds].some((modelId) => {
+          // A model API hint cannot replace the runtime registration of a selected CLI backend.
+          if (manifestModelProviders.cliBackendIds.has(providerId)) {
+            return true;
+          }
+          const providerConfig = config.models?.providers?.[providerId];
+          const configuredModel = providerConfig?.models?.find((model) => model.id === modelId);
+          const modelApi =
+            configuredModel?.api ??
+            providerConfig?.api ??
+            manifestModelProviders.modelApis.get(buildModelCatalogMergeKey(providerId, modelId));
+          if (typeof modelApi === "string") {
+            return !CORE_BUILT_IN_MODEL_APIS.has(modelApi);
+          }
+          return manifestModelProviders.providerIds.has(providerId);
+        }),
       )
       .map(([providerId]) => providerId),
   );
-}
-
-function configuredModelProviderNeedsRuntimePlugin(params: {
-  config: OpenClawConfig;
-  manifestModelProviders: ManifestModelProviderLookup;
-  providerId: string;
-  modelId: string;
-}): boolean {
-  // A model API hint cannot replace the runtime registration of a selected CLI backend.
-  if (params.manifestModelProviders.cliBackendIds.has(params.providerId)) {
-    return true;
-  }
-  const providerConfig = params.config.models?.providers?.[params.providerId];
-  const configuredModel = providerConfig?.models?.find((model) => model.id === params.modelId);
-  const modelApi =
-    configuredModel?.api ??
-    providerConfig?.api ??
-    params.manifestModelProviders.modelApis.get(
-      buildModelCatalogMergeKey(params.providerId, params.modelId),
-    );
-  if (typeof modelApi === "string") {
-    return !CORE_BUILT_IN_MODEL_APIS.has(modelApi);
-  }
-  return params.manifestModelProviders.providerIds.has(params.providerId);
 }
 
 export function manifestOwnsConfiguredModelProvider(params: {

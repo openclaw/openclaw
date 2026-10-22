@@ -42,57 +42,6 @@ function sortedRecordEntries<T>(value: Record<string, T> | undefined) {
   return Object.entries(value ?? {}).toSorted(([left], [right]) => left.localeCompare(right));
 }
 
-function fingerprintProviderUsageCredentials(params: {
-  cfg: OpenClawConfig;
-  directApiKeys: ReadonlyMap<string, ResolvedDirectApiKey>;
-  providerIds: readonly UsageProviderId[];
-  store: AuthProfileStore;
-}): string {
-  const profiles = sortedRecordEntries(params.store.profiles).map(([profileId, credential]) => {
-    const fingerprint =
-      fingerprintAuthProfileCredential({ profileId, credential }) ??
-      fingerprintAuthProfileOwnerShape({ profileId, credential });
-    return fingerprint ?? `${profileId}:${credential.type}:${credential.provider}`;
-  });
-  const direct = [...params.directApiKeys]
-    .toSorted(([left], [right]) => left.localeCompare(right))
-    .map(([provider, resolved]) => [
-      provider,
-      fingerprintResolvedProviderAuth({ ...resolved, mode: "api-key" }) ?? null,
-    ]);
-  const selectedProfiles = params.providerIds.map((provider) => [
-    provider,
-    resolveAuthProfileOrder({ cfg: params.cfg, store: params.store, provider }),
-  ]);
-  // Profile selection can switch accounts without changing the profile set.
-  // Record its resolved order so routine bookkeeping writes do not invalidate
-  // usage while a real account-selection change still does.
-  return JSON.stringify({
-    profiles,
-    direct,
-    order: sortedRecordEntries(params.store.order),
-    lastGood: sortedRecordEntries(params.store.lastGood),
-    selectedProfiles,
-  });
-}
-
-function resolveDirectApiKeys(
-  config: OpenClawConfig,
-  providerIds: readonly UsageProviderId[],
-): Map<string, ResolvedDirectApiKey> {
-  const directApiKeys = new Map<string, ResolvedDirectApiKey>();
-  for (const provider of providerIds) {
-    const resolved =
-      resolveUsableCustomProviderApiKey({ cfg: config, provider, env: process.env }) ??
-      resolveEnvApiKey(provider, process.env, { config });
-    if (!resolved) {
-      continue;
-    }
-    directApiKeys.set(provider, resolved);
-  }
-  return directApiKeys;
-}
-
 export function clearProviderUsageRuntimeSnapshot(): void {
   current = undefined;
 }
@@ -130,16 +79,45 @@ export async function getProviderUsageRuntimeSnapshot(params: {
     }));
   const descriptors = listProviderUsagePluginDescriptors({ config: configRef, env: process.env });
   const providerIds = descriptors.map((descriptor) => descriptor.provider);
-  const directApiKeys = resolveDirectApiKeys(configRef, providerIds);
+  const directApiKeys = new Map<string, ResolvedDirectApiKey>();
+  for (const provider of providerIds) {
+    const resolved =
+      resolveUsableCustomProviderApiKey({ cfg: configRef, provider, env: process.env }) ??
+      resolveEnvApiKey(provider, process.env, { config: configRef });
+    if (!resolved) {
+      continue;
+    }
+    directApiKeys.set(provider, resolved);
+  }
+  const profiles = sortedRecordEntries(store.profiles).map(([profileId, credential]) => {
+    const fingerprint =
+      fingerprintAuthProfileCredential({ profileId, credential }) ??
+      fingerprintAuthProfileOwnerShape({ profileId, credential });
+    return fingerprint ?? `${profileId}:${credential.type}:${credential.provider}`;
+  });
+  const direct = [...directApiKeys]
+    .toSorted(([left], [right]) => left.localeCompare(right))
+    .map(([provider, resolved]) => [
+      provider,
+      fingerprintResolvedProviderAuth({ ...resolved, mode: "api-key" }) ?? null,
+    ]);
+  const selectedProfiles = providerIds.map((provider) => [
+    provider,
+    resolveAuthProfileOrder({ cfg: configRef, store, provider }),
+  ]);
   current = {
     agentDir,
     agentId,
     configRef,
-    credentialKey: fingerprintProviderUsageCredentials({
-      cfg: configRef,
-      directApiKeys,
-      providerIds,
-      store,
+    // Profile selection can switch accounts without changing the profile set.
+    // Record its resolved order so routine bookkeeping writes do not invalidate
+    // usage while a real account-selection change still does.
+    credentialKey: JSON.stringify({
+      profiles,
+      direct,
+      order: sortedRecordEntries(store.order),
+      lastGood: sortedRecordEntries(store.lastGood),
+      selectedProfiles,
     }),
     providerIds,
     store,
