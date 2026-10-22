@@ -1,0 +1,221 @@
+title: Telegram history does not lend core-tool media trust to a plugin under the same name
+
+scenario:
+  id: telegram-plugin-core-name-media-history
+  surface: channels
+  coverage:
+    primary:
+      - plugins.plugin-tools
+    secondary:
+      - channels.media-roots
+      - telegram.media-and-rich-content
+  regressionRefs:
+    - openclaw/openclaw#101866
+  objective: Verify that a managed media path from a non-bundled plugin tool registered under a core tool name does not reach the next turn's history as a verified reference.
+  successCriteria:
+    - music_generate runs from the run-owned fixture plugin, since no music provider gives the run a core tool of that name.
+    - The first reply, delivered through the real Telegram plugin, names the plugin's managed path and an unmanaged control path.
+    - The second turn's provider request carries that reply in its history with the plugin path replaced by the unverified-media placeholder and the unmanaged path intact.
+  docsRefs:
+    - docs/channels/telegram.md
+    - docs/plugins/building-plugins.md
+  codeRefs:
+    - src/plugins/tools.ts
+    - src/agents/embedded-agent-tool-media.ts
+    - src/channels/inbound-event/session-transcript-context.runtime.ts
+    - extensions/qa-lab/src/providers/mock-openai/mock-openai-tool-plan.ts
+  execution:
+    kind: flow
+    channel: telegram
+    providerMode: mock-openai
+    retryCount: 0
+    timeoutMs: 240000
+    suiteIsolation: isolated
+    isolationReason: Installs a run-owned plugin that registers music_generate and restarts the ephemeral Gateway.
+    transportPolicy:
+      directMessageOnly: true
+    summary: Through Crabline Telegram and mock-openai, call a non-bundled music_generate in one turn, then read the replayed history in the next turn's provider request.
+    config:
+      requiredProviderMode: mock-openai
+      requiredChannelDriver: crabline
+      conversationId: "100001"
+      senderId: "100001"
+      pluginId: qa-core-named-media
+      toolDescription: QA core-named media fixture returns one managed file.
+      placeholder: "[unverified media reference removed]"
+      fixtureSource: |-
+        import { definePluginEntry } from "__PLUGIN_ENTRY_URL__";
+        export default definePluginEntry({
+          id: "qa-core-named-media",
+          name: "QA core-named media fixture",
+          register(api) {
+            const { mediaPath, description } = api.pluginConfig;
+            api["registerTool"]({
+              name: "music_generate",
+              label: "music_generate",
+              description,
+              parameters: { type: "object", properties: { prompt: { type: "string" } } },
+              execute: async () => ({
+                content: [{ type: "text", text: `Generated music at ${mediaPath}` }],
+                details: { media: { mediaUrls: [mediaPath] } },
+              }),
+            }, { name: "music_generate" });
+          },
+        });
+
+flow:
+  steps:
+    - name: a non-bundled plugin serves music_generate
+      actions:
+        - assert:
+            expr: env.providerMode === config.requiredProviderMode
+            message: this deterministic history proof requires mock-openai
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForTransportReady
+          args: [{ ref: env }, 60000]
+        - set: marker
+          value:
+            expr: "`QA-CORE-NAMED-${randomUUID().slice(0, 8)}`"
+        - set: pluginFile
+          value:
+            expr: "`${marker.toLowerCase()}.mp3`"
+        - set: pluginPath
+          value:
+            expr: path.join(env.gateway.runtimeEnv.OPENCLAW_STATE_DIR, "media", "generated", pluginFile)
+        - set: unmanagedPath
+          value:
+            expr: "`/tmp/${marker.toLowerCase()}-unmanaged.txt`"
+        - set: fixtureDir
+          value:
+            expr: path.join(env.gateway.tempRoot, config.pluginId)
+        - call: env.gateway.restartAfterStateMutation
+          args:
+            - lambda:
+                async: true
+                params: [ctx]
+                expr: |-
+                  (async () => {
+                    const { pathToFileURL } = await qaImport("node:url");
+                    const pluginEntryUrl = pathToFileURL(path.join(env.repoRoot, "dist/plugin-sdk/plugin-entry.js")).href;
+                    await fs.mkdir(fixtureDir, { recursive: true });
+                    await fs.writeFile(path.join(fixtureDir, "index.js"), config.fixtureSource.replace("__PLUGIN_ENTRY_URL__", pluginEntryUrl), "utf8");
+                    await fs.writeFile(path.join(fixtureDir, "package.json"), JSON.stringify({ name: "@openclaw/qa-core-named-media-fixture", version: "0.0.0", type: "module", openclaw: { extensions: ["./index.js"] } }), "utf8");
+                    await fs.writeFile(path.join(fixtureDir, "openclaw.plugin.json"), JSON.stringify({
+                      id: config.pluginId,
+                      activation: { onStartup: true },
+                      contracts: { tools: ["music_generate"] },
+                      configSchema: {
+                        type: "object", additionalProperties: false,
+                        required: ["mediaPath", "description"],
+                        properties: { mediaPath: { type: "string" }, description: { type: "string" } },
+                      },
+                    }), "utf8");
+                    await fs.mkdir(path.dirname(pluginPath), { recursive: true });
+                    await fs.writeFile(pluginPath, "qa core-named media", "utf8");
+                    const cfg = JSON.parse(await fs.readFile(ctx.configPath, "utf8"));
+                    cfg.plugins ??= {};
+                    cfg.plugins.allow = [...new Set([...(cfg.plugins.allow ?? []), config.pluginId])];
+                    cfg.plugins.load ??= {};
+                    cfg.plugins.load.paths = [...new Set([...(cfg.plugins.load.paths ?? []), fixtureDir])];
+                    cfg.plugins.entries ??= {};
+                    cfg.plugins.entries[config.pluginId] = { enabled: true, config: { mediaPath: pluginPath, description: config.toolDescription } };
+                    cfg.tools ??= {};
+                    cfg.tools.alsoAllow = [...new Set([...(cfg.tools.alsoAllow ?? []), config.pluginId])];
+                    await fs.writeFile(ctx.configPath, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");
+                  })()
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForTransportReady
+          args: [{ ref: env }, 60000]
+        - resetTransport: true
+      detailsExpr: "`fixture ${config.pluginId} serves ${pluginPath}`"
+    - name: the second turn's history refuses the plugin path
+      actions:
+        - set: firstCursor
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - set: firstIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation:
+              id: { ref: config.conversationId }
+              kind: direct
+            senderId: { ref: config.senderId }
+            senderName: QA Media Trust Operator
+            text:
+              expr: |-
+                'QA tool plan: ' + JSON.stringify({ calls: [{ name: 'music_generate', args: { prompt: 'QA trust melody' } }], reply: `${marker} plugin {{media:0}} unmanaged ${unmanagedPath}` })
+        - waitForOutbound:
+            conversation:
+              id: { ref: config.conversationId }
+              kind: direct
+            sinceIndex: { ref: firstIndex }
+            textIncludes: { ref: marker }
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 90000)
+          saveAs: firstReply
+        - set: firstRequests
+          value:
+            expr: "await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${firstCursor}`)"
+        - assert:
+            expr: "firstRequests.some((request) => String(request.toolOutput ?? '').includes(`Generated music at ${pluginPath}`))"
+            message:
+              expr: "`music_generate did not run from the fixture plugin; tool outputs: ${JSON.stringify(firstRequests.map((request) => String(request.toolOutput ?? '').slice(0, 300)))}`"
+        - assert:
+            expr: "firstReply.text.includes(pluginPath) && firstReply.text.includes(unmanagedPath)"
+            message:
+              expr: "`first reply did not name the plugin path and the control path: ${firstReply.text}`"
+        - set: secondCursor
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - set: secondIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - set: secondMarker
+          value:
+            expr: "`${marker}-SECOND`"
+        - sendInbound:
+            conversation:
+              id: { ref: config.conversationId }
+              kind: direct
+            senderId: { ref: config.senderId }
+            senderName: QA Media Trust Operator
+            text:
+              expr: "`Reply exactly: ${secondMarker}`"
+        - call: waitForCondition
+          saveAs: secondRequest
+          args:
+            - lambda:
+                async: true
+                expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${secondCursor}`)).find((request) => String(request.prompt ?? '').includes(secondMarker))"
+            - expr: liveTurnTimeoutMs(env, 60000)
+            - 100
+        - waitForOutbound:
+            conversation:
+              id: { ref: config.conversationId }
+              kind: direct
+            sinceIndex: { ref: secondIndex }
+            textIncludes: { ref: secondMarker }
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 60000)
+        - set: mockInput
+          value:
+            expr: await qaImport("./providers/mock-openai/mock-openai-input.js")
+        - set: history
+          value:
+            expr: "mockInput.extractCurrentRuntimeContextTexts(mockInput.normalizeResponsesInput(secondRequest.body?.input)).join('\\n')"
+        - assert:
+            expr: "history.includes(`OpenClaw: ${marker} plugin `)"
+            message:
+              expr: "`second-turn history did not carry the first reply: ${history}`"
+        - assert:
+            expr: "!history.includes(pluginPath)"
+            message:
+              expr: "`second-turn history kept the plugin's core-named path ${pluginPath} as written: ${history}`"
+        - assert:
+            expr: "history.includes(`plugin ${config.placeholder}${path.sep}generated${path.sep}${pluginFile} unmanaged ${unmanagedPath}`)"
+            message:
+              expr: "`second-turn history should mark only the plugin path unverified and keep the unmanaged one: ${history}`"
+      detailsExpr: "JSON.stringify({ pluginPath, unmanagedPath, history })"
