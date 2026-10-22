@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
+import * as ingressHealth from "../../channels/message/ingress-queue-health.js";
 import * as packageState from "../../channels/plugins/package-state-probes.js";
 import type { ChannelAccountSnapshot, ChannelPlugin } from "../../channels/plugins/types.public.js";
 import * as configRuntime from "../../config/config.js";
@@ -8,6 +9,7 @@ import {
   makeRegistry,
 } from "../../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import * as deliveryQueueState from "../../infra/delivery-queue-sqlite.js";
 import { setGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -216,4 +218,29 @@ it("uses admitted channels and configured failures without credential discovery"
       error: expect.stringContaining("failed to load"),
     },
   ]);
+});
+
+it("preserves the health snapshot when outbound admission capture fails", async () => {
+  state = await createOpenClawTestState({ label: "health-queue-admission" });
+  vi.spyOn(configRuntime, "getRuntimeConfig").mockReturnValue({ agents });
+  setActivePluginRegistry(createTestRegistry([]));
+  const capture = vi
+    .spyOn(deliveryQueueState, "captureDeliveryQueueStateContext")
+    .mockImplementation(() => {
+      throw new Error("outbound admission unavailable");
+    });
+  const countOutbound = vi.spyOn(deliveryQueueState, "countFailedDeliveryQueueEntries");
+  const failed = [{ channelId: "telegram", accountId: "ops", count: 1 }];
+  vi.spyOn(ingressHealth, "countChannelIngressQueueHealth").mockResolvedValue({
+    failed,
+    pressure: [],
+  });
+  const pending = collectGatewayHealthSnapshot({ audience: "admin", probe: false });
+  expect(capture).toHaveBeenCalledTimes(1);
+  expect(await pending).toMatchObject({
+    channels: {},
+    deliveryQueues: { failed: [], ingressFailed: failed },
+  });
+  expect(capture).toHaveBeenCalledTimes(1);
+  expect(countOutbound).not.toHaveBeenCalled();
 });
