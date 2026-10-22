@@ -11,12 +11,11 @@ import { mockLargeDirectoryId } from "../../test/helpers/fs-large-directory-id.j
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { captureUpdateCommandExecutorAuthority } from "../cli/update-cli/update-command-executor-capabilities.js";
 import {
   childLineageDigest,
   type UpdateCommandChildGrant,
 } from "../cli/update-cli/update-command-executor-children.js";
-import { withDelegatedUpdateCommandExecutor } from "../cli/update-cli/update-command-executor-delegated.js";
+import { resolveUpdateCommandChildBinding } from "../cli/update-cli/update-command-executor-grant.js";
 import { nativeBoundaryTestEntrypoints } from "./native-boundary-runtime.test-support.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import {
@@ -498,11 +497,9 @@ it.each(["9.4 identity-less", "9.6 numeric", "9.6 bridge", "9.7 exact"] as const
       legacy = false,
     ): UpdateCommandChildGrant => {
       const childKey = `${sender.key}/.openclaw-update-child-${randomUUID()}${legacy ? "" : `-lineage-${childLineageDigest(parent.lease, sender, parent.lease, identity)}`}`;
-      const childPayload = payloadFor(
-        store.processIdentity(process.pid),
-        legacy ? { kind: "update" } : sender.action,
-        sender.executor,
-      );
+      const childPayload = legacy
+        ? payloadFor(store.processIdentity(process.pid), { kind: "update" }, executor)
+        : payloadFor(sender.executor, sender.action);
       withSqlite((db) => insertRow(db, childKey, runId, childPayload, sender.updatedAt + 1));
       const grant = { runId, root, databasePath, parent: parent.lease, childKey };
       return legacy
@@ -516,19 +513,7 @@ it.each(["9.4 identity-less", "9.6 numeric", "9.6 bridge", "9.7 exact"] as const
           };
     };
     const grant = makeGrant(spawner.lease, databaseIdentity, identityLess);
-    const resolveGrant = (candidate: UpdateCommandChildGrant) =>
-      withDelegatedUpdateCommandExecutor(candidate, runId, root, async (fence) => {
-        const admittedIdentity = captureUpdateCommandExecutorAuthority(fence, runId);
-        const pinnedStore = createManagedHandoffLeaseStore({
-          databasePath,
-          existingIdentity: admittedIdentity,
-          serviceManagerEnv: {},
-        });
-        const child = pinnedStore.read(candidate.childKey);
-        assert(child.kind === "current");
-        return { databaseIdentity: admittedIdentity, store: pinnedStore, child: child.lease };
-      });
-    const resolve = () => resolveGrant(grant);
+    const resolve = () => resolveUpdateCommandChildBinding(grant, runId, root);
     const admitted = await resolve();
     assert(admitted.databaseIdentity);
     expect(admitted.databaseIdentity.parentIdentity).toMatch(new RegExp(`^\\d+:${initialInode}$`));
@@ -540,7 +525,7 @@ it.each(["9.4 identity-less", "9.6 numeric", "9.6 bridge", "9.7 exact"] as const
       assert(descriptor);
       Object.defineProperty(process, "ppid", { value: admitted.child.executor.pid });
       try {
-        return await resolveGrant(descendantGrant);
+        return await resolveUpdateCommandChildBinding(descendantGrant, runId, root);
       } finally {
         Object.defineProperty(process, "ppid", descriptor);
       }
