@@ -67,6 +67,43 @@ it(
   TEST_TIMEOUT_MS,
 );
 
+it(
+  "rejects typed soft reset in local mode without replacing the visible conversation",
+  async () => {
+    const fixture = await startTuiFixture();
+    try {
+      await fixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+      await fixture.run.write("soft reset history marker\r", { delay: false });
+      await waitForSynchronizedFrameRows(
+        fixture.run,
+        (rows) =>
+          rows.some((row) => row.includes("PTY_RESPONSE: soft reset history marker")) &&
+          rows.some((row) => row.includes("local ready | idle")),
+        OUTPUT_TIMEOUT_MS,
+      );
+      await fixture.run.write("/reset soft please reload\r", { delay: false });
+      const rows = await waitForSynchronizedFrameRows(
+        fixture.run,
+        (frame) => frame.some((row) => row.includes("/reset soft is not available")),
+        OUTPUT_TIMEOUT_MS,
+      );
+      expect(rows.join("\n")).toContain("PTY_RESPONSE: soft reset history marker");
+      expect(
+        (await readFixtureLog(fixture.logPath)).filter((entry) => entry.method === "resetSession"),
+      ).toEqual([]);
+      expect(
+        (await readFixtureLog(fixture.logPath))
+          .filter((entry) => entry.method === "sendChat")
+          .map((entry) => entry.payload),
+      ).toEqual([expect.objectContaining({ message: "soft reset history marker" })]);
+      console.info("[behavior-evidence] tui-soft-reset-local", JSON.stringify({ rows }));
+    } finally {
+      await fixture.cleanup();
+    }
+  },
+  TEST_TIMEOUT_MS,
+);
+
 describe.each([
   { input: "typed suffix", nativePaste: false },
   { input: "large paste with default macOS coalescing", nativePaste: true },
