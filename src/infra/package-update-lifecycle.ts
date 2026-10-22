@@ -249,39 +249,32 @@ async function cleanupStagedPackageInstall(stage: StagedPackageInstall): Promise
 export async function discardPackageUpdateStage(params: {
   stage: StagedPackageInstall;
   committed: boolean;
-}): Promise<PackageUpdateLifecycleResult | { status: "advisory"; step: UpdateStepResult }> {
+}): Promise<UpdateStepResult | null> {
   try {
     await cleanupStagedPackageInstall(params.stage);
-    return { status: "complete" };
+    return null;
   } catch (error) {
     // Only a refused disposable-prefix removal after a verified swap is harmless.
     // Discovery, lifecycle ownership and release failures remain strict.
     if (params.committed && error instanceof PackageStageRemovalError) {
       const message = `${error.message}. Installation verification succeeded; inspect the retained stage before removing it manually.`;
       return {
-        status: "advisory",
-        step: {
-          name: "package-stage-cleanup",
-          command: `discard ${params.stage.prefix}`,
-          cwd: params.stage.prefix,
-          durationMs: 0,
-          exitCode: 1,
-          stderrTail: message,
-          advisory: { kind: "recoverable-maintenance", message },
-        },
+        name: "package-stage-cleanup",
+        command: `discard ${params.stage.prefix}`,
+        cwd: params.stage.prefix,
+        durationMs: 0,
+        exitCode: 1,
+        stderrTail: message,
+        advisory: { kind: "recoverable-maintenance", message },
       };
     }
     return {
-      status: "failed",
-      preserveStage: true,
-      step: {
-        name: `${params.stage.installTarget.manager}-package-lifecycle`,
-        command: `discard ${params.stage.packageRoot}`,
-        cwd: params.stage.packageRoot,
-        durationMs: 0,
-        exitCode: 1,
-        stderrTail: formatErrorMessage(error),
-      },
+      name: `${params.stage.installTarget.manager}-package-lifecycle`,
+      command: `discard ${params.stage.packageRoot}`,
+      cwd: params.stage.packageRoot,
+      durationMs: 0,
+      exitCode: 1,
+      stderrTail: formatErrorMessage(error),
     };
   }
 }

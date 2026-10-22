@@ -147,7 +147,7 @@ export type ReadDiagnosticStabilityBundleResult =
 
 type DiagnosticStabilityBundleFailureWriteOutcome =
   | { status: "written"; message: string; path: string }
-  | { status: "failed"; message: string; error: unknown };
+  | { status: "failed"; message: string };
 
 let fatalHookInstalled = false;
 
@@ -904,7 +904,6 @@ export function writeDiagnosticStabilityBundleForFailureSync(
   } catch (writeError) {
     return {
       status: "failed",
-      error: writeError,
       message: `failed to write stability bundle: ${String(writeError)}`,
     };
   }
