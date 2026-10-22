@@ -209,6 +209,14 @@ export async function prepareAgentRequestPreflight(params: {
   if (isProgressCardRefreshInputProvenance(inputProvenance) && !canUseInternalRuntimeHandoff) {
     return rejectInvalidRequest("Progress refresh input is reserved for progressCard.refresh.");
   }
+  // Plugin tools read the starting run named on exec completion wakes; only the host stamps it.
+  if (
+    inputProvenance?.kind === "internal_system" &&
+    inputProvenance.sourceTool === "exec" &&
+    !canUseInternalRuntimeHandoff
+  ) {
+    return rejectInvalidRequest("Exec completion input is reserved for background exec owners.");
+  }
   if (inputProvenance?.kind === "inter_session" && inputProvenance.sourceTool === "sessions_send") {
     const sourceSessionKey = inputProvenance.sourceSessionKey;
     const sourceAgentId = parseAgentSessionKey(sourceSessionKey)?.agentId;

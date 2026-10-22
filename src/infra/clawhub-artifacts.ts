@@ -216,7 +216,6 @@ export async function downloadClawHubSkillArchiveUrl(
 export async function downloadClawHubGitHubSkillArchive(params: {
   repo: string;
   commit: string;
-  timeoutMs?: number;
 }): Promise<ClawHubDownloadResult> {
   const configuredBaseUrl =
     normalizeOptionalString(process.env.CLAWHUB_GITHUB_CODELOAD_BASE_URL) ||
@@ -231,7 +230,6 @@ export async function downloadClawHubGitHubSkillArchive(params: {
   downloadUrl.pathname = `${basePath}/${repoPath}/zip/${encodeURIComponent(params.commit)}`;
   const { bytes } = await fetchClawHubArchive(
     {
-      ...params,
       url: downloadUrl.toString(),
       skipAuth: true,
     },

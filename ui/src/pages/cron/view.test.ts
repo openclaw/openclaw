@@ -323,6 +323,24 @@ describe("cron view editor", () => {
     expectInvalidField(webhook, "delivery-to", "deliveryTo", "Webhook URL is required.");
   });
 
+  it("announces field validation errors as alerts", () => {
+    const container = renderEditor(
+      { name: "", everyAmount: "0" },
+      {
+        fieldErrors: {
+          name: "cron.errors.nameRequired",
+          everyAmount: "cron.errors.everyAmountInvalid",
+        },
+        canSubmit: false,
+      },
+    );
+    const alerts = Array.from(container.querySelectorAll('[role="alert"]'), (alert) =>
+      alert.textContent?.trim(),
+    );
+    expect(alerts).toEqual(["Name is required.", "Interval must be greater than 0."]);
+    expectInvalidField(container, "name", "name", "Name is required.");
+  });
+
   it("waits for scheduler status before presenting trigger capability", () => {
     const pending = renderEditor({}, { status: null });
     expect(findToggleByLabel(pending, "Condition trigger")).toBeNull();

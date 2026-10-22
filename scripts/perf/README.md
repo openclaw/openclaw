@@ -186,6 +186,37 @@ all clients connect, including partially warmed samples.
 only that module; place the baseline beside the original so relative imports
 remain valid. Swap the CPU halves for the next pair and compare paired differences.
 
+## Codex process inspection
+
+`codex-process-inspection-measure.ts` starts a real isolated Gateway, touches and
+retains `--ballast-mib 8192` of fixed memory, then measures `CodexAppServerClient.start`, durable child
+registration, and `initialize` against a synthetic stdio peer. It verifies the
+initialized notification, registration fingerprint, polite shutdown, and deletion
+of the registration after each sample. It does not run model turns or full attempt
+policy preparation. Run only on the approved Linux benchmark host, using fresh
+state and loopback ports for each side:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/codex-process-inspection-measure.ts \
+  --state-dir /srv/perf-sandbox/<lane>/state-a --port 41570 \
+  --samples 200 --ballast-mib 8192 --start-at <future-epoch-ms> \
+  --output /srv/perf-sandbox/<lane>/result-a.json
+```
+
+Use `--snapshot-owner <baseline-sibling.ts>` to replace only the process snapshot
+owner through a module resolution hook. Reports separate actual main-thread peer
+and inspection spawns and their synchronous durations, startup and cleanup time,
+CPU, observed RSS, event-loop sample counts, and total/major GC. Actual RSS includes
+the 8 GiB ballast plus Gateway/worker heaps; those heaps can shrink after setup, so
+the fixture never sizes ballast against transient startup RSS. Setup and one warmup
+are excluded; whole-run CPU/GC also include the registration verification reads.
+Hold one shared quiet lock around each concurrent pair, give its sides interleaved
+CPUs, then swap sides for the second pair. Use the production guard before and
+during each pair. Decide on the mean of paired deltas: reject a mean at least 20%
+adverse or a metric at least 10% adverse in both pairs. p95 requires 200 samples per
+side and p99 requires 1,000; reported eligibility is per side, so both sides must
+qualify. Major GC is context-only below 50 collections per side.
+
 ## Startup with a populated multi-agent fixture
 
 For a bounded multi-agent boot workload, use the opt-in `teamBoot` case:
@@ -588,6 +619,59 @@ reads from navigation or idle reads. Use `--request-stacks` for caller diagnosis
 then omit it for paired timing.
 Failed attempts retain the available browser probe under `failure`, including
 failures in the final Details assertions; they are diagnostics, not accepted samples.
+
+Add `--activity-row-mix` to the two-session patch workload to cycle selected-session
+label changes, other-session status changes, selected-session status changes,
+sidebar hover, sidebar scrolling, session opening through the sidebar, and opening
+the session menu with an owner-submenu hover. The two keys must be visible in the
+synthetic sidebar; the reload fixture's session 1 and pinned session 2 work. Use
+`--reload-census` to count every browser RPC. Each action records its following
+observation window, `sessions.changed` events, `sessions.describe` requests and
+session-scoped `models.list` requests; the report also normalizes the warm window
+to requests per tab-minute. An interval contains deferred work from preceding
+actions too, so use the retained event timestamps for causal attribution. Closed
+menu panel, owner-submenu and avatar inventories are captured at readiness and
+before the activity window. The menu step waits for its root panel and the owner
+search input, recording their separate automation-to-visible times. With
+`--screenshot`, the first open owner menu is also captured beside the final image;
+omit screenshots during paired timing. This mode does not need model inference.
+
+On Linux, pass `--gateway-pid <pid>` using `gatewayPid` from the reload fixture's
+ready record to capture that Gateway's main-thread CPU during the warm window.
+CPU per action and (with `--reload-census`) CPU per browser RPC include controller
+patches and background work; they are workload-normalized costs, not handler
+self-time. Keep both sides' fixture, interval, seed and duration identical, and
+keep caller-stack recording off for timing runs. The report retains each RPC's
+timestamps for latency analysis; report sample counts with any derived tails.
+
+Use `--activity-delete-sessions <key-a>,<key-b>,...` with `--load-runs 1` and
+`--expect-session <different-visible-key>` to isolate unrelated session removals.
+Supply one distinct existing synthetic key per interval: 12 keys with
+`--duration 24 --interval-ms 2000` performs 12 deletions. This mode excludes other activity
+modes, preserves the visible conversation, requires each deletion to succeed,
+and waits for its keyed `sessions.changed` event. The retained event trace also
+shows any unscoped deletion notification and its following browser requests.
+Deleted keys are consumed; use fresh keys or a fresh synthetic fixture per run.
+
+For account service-tier observations, launch the reload fixture with
+`--service-tier-port <unused-loopback-port>` and run the browser probe with
+`--activity-service-tiers --load-runs 1 --expect-session <existing-key>`.
+The fixture serves a synthetic OpenAI Responses endpoint returning `fast`; its
+log records only the requested/returned tier and timestamp, never prompt content.
+The probe creates two uniquely named sessions using the real `openclaw` runtime
+and `openai/gpt-5` model: one requests priority, the other ultrafast. It completes
+one warmup turn per session before browser navigation, then alternates real
+`chat.send` turns and waits for successful `agent.wait` settlement. No inference
+credentials or external provider calls are needed. The visible conversation
+remains unchanged so catalog/descriptor requests expose cross-session effects.
+
+Use `--duration 42 --interval-ms 2000` for 21 measured initiating turns and
+`--reload-census --gateway-pid <fixture-pid>` for browser request counts and
+Gateway main-thread CPU. Verify the fixture log contains the expected alternating
+priority/ultrafast requests in addition to both warmups; a successful controller
+response alone does not prove model execution. Compare total CPU and CPU per
+fixed initiating turn, not CPU per remaining browser RPC. This mode excludes
+patch, delete, mixed-interaction, catalog-refresh and cron workloads.
 
 For active-session loads, add `--activity-session <synthetic-key>` and configure
 that isolated Gateway with two loopback mock-provider models:
@@ -2064,6 +2148,49 @@ counts exported `path.resolve` and `path.join` calls. These are owner-level
 operation counts, not Gateway calls per turn. Run both revisions with identical
 arguments, interleave samples, and compare with the `chat.send` allocation
 workload below before drawing an end-to-end conclusion.
+
+## Tool schema preparation
+
+`tool-schema-preparation-measure.ts` measures the source owners used by provider
+requests and generic schema validation. The default fixture has 100 nested tools.
+It covers SDK OpenAI compatibility normalization, Responses, completions, the
+Moonshot typed-union dialect, Anthropic, Google, and the actual Mistral SDK with an
+in-process synthetic fetch. It makes no network requests.
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/tool-schema-preparation-measure.ts \
+  --tools 100 --iterations 20 --samples 5 \
+  --output /path/to/report.json --golden-output /path/to/provider-json.json
+```
+
+Reports include sampled allocated bytes per catalog, named schema-function self
+and inclusive allocations, elapsed time, and median/p95/min/max. Sampling includes
+objects collected by minor and major GC. Warm published schemas, fresh mutable
+schemas, and cold publication are separate modes. Fresh fixture construction is
+outside sampling; cold publication includes publication and the first preparation
+of each new identity, but does not reset process-wide content caches. Separate
+work counts observe enumeration, serialization, and cloning of source schema
+objects after warmup, outside allocation measurement.
+
+For synchronized A/B pairs, select the same `--workload` and `--mode`, use
+`--samples 1`, and pass a shared future epoch millisecond `--start-at`. For example,
+`--workload sdk-responses-loose --mode warm-published`. Start both processes under
+the host's exclusive measurement lock on separate CPU halves, swap halves for
+the next pair, and compare at least five paired differences. A missed start fails
+the run. Use `--golden-only` for a setup check without allocation sampling.
+
+`--schemas /path/to/catalog.json` accepts an array of `{name, description,
+parameters, value?}` or OpenAI function descriptors. `value` supplies validation
+input and otherwise defaults to `{}`. Only use synthetic or approved catalogs.
+The report records the input hash and each provider's exact serialized byte count
+and hash; compare the two `--golden-output` files byte for byte across revisions.
+A catalog captured from an outgoing request already contains that provider's
+projection, so label that evidence separately from raw tool definitions.
+
+This probe measures preparation and validation, including Mistral serialization;
+it does not measure a whole chat turn. Pair it with
+`transcript-broadcast-measure.ts --scenario chat.send --allocations` when assessing
+the effect on Gateway turn allocations.
 
 ## Allocated bytes per RPC or turn
 

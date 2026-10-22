@@ -290,6 +290,13 @@ describe("completion delivery route fallback", () => {
   });
 
   const requesterSessionOrigin = { ...discordRequester, channel: "slack" };
+  const foldedOrigin = { channel: "folded-chat", to: "channel:c123", threadId: "reply-1" };
+  const scopedOrigin = {
+    channel: "scoped-chat",
+    to: "room:topic:root:sender:a",
+    threadId: "reply-a",
+  };
+  const opaqueOrigin = { channel: "matrix", to: "room:!example:topic:100", threadId: "$reply" };
   const topicOrigin = {
     channel: "telegram",
     accountId: "bot-1",
@@ -301,8 +308,8 @@ describe("completion delivery route fallback", () => {
   it.each<CompletionRouteCase>([
     ...["completionDirectOrigin", "directOrigin"].map((field) => ({
       name: `a case-folded ${field} target`,
-      directOrigin: { channel: "folded-chat", to: "channel:c123", threadId: "reply-1" },
-      requesterSessionOrigin: { channel: "folded-chat", to: "channel:c123", threadId: "reply-1" },
+      directOrigin: foldedOrigin,
+      requesterSessionOrigin: foldedOrigin,
       [field]: { channel: "folded-chat", to: "channel:C123" },
       expected: { channel: "folded-chat", to: "channel:C123", threadId: "reply-1" },
     })),
@@ -345,11 +352,6 @@ describe("completion delivery route fallback", () => {
       ),
     ),
     ...["same", "different-port"].map((destination) => {
-      const opaqueOrigin = {
-        channel: "matrix",
-        to: "room:!example:topic:100",
-        threadId: "$reply",
-      };
       const to = destination === "same" ? opaqueOrigin.to : "room:!example:topic:101";
       return {
         name: `an opaque Matrix room with ${destination} identity`,
@@ -361,11 +363,6 @@ describe("completion delivery route fallback", () => {
       };
     }),
     ...[false, true].map((retargeted) => {
-      const scopedOrigin = {
-        channel: "scoped-chat",
-        to: "room:topic:root:sender:a",
-        threadId: "reply-a",
-      };
       const to = retargeted ? "alias-b" : "alias-a";
       return {
         name: retargeted ? "a different scoped identity with the same parent" : "a scoped alias",

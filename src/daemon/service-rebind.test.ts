@@ -7,6 +7,36 @@ import {
   withGatewayServiceRebindCapture,
 } from "./service-rebind.js";
 
+it("retains both the operation and final rebind observation failures", async () => {
+  const command = { programArguments: ["/node", "/openclaw.mjs"] };
+  const before = await fingerprintGatewayServiceDefinition(command);
+  const operationFailure = new Error("native operation failed");
+  const cleanupFailure = new Error("final authority revoked");
+  await withGatewayServiceRebindCapture(before, async () => {
+    let retired = false;
+    const assertCurrent = () => {
+      if (retired) {
+        throw cleanupFailure;
+      }
+    };
+    const work = settleGatewayServiceRebind(assertCurrent, async () => {
+      await captureGatewayServiceRebind(
+        async () => command,
+        assertCurrent,
+        async () => {},
+      );
+      retired = true;
+      throw operationFailure;
+    });
+    await expect(work).rejects.toMatchObject({
+      message: "Service rebind settlement could not be verified.",
+      errors: [operationFailure, cleanupFailure],
+      cause: cleanupFailure,
+    });
+    expect(currentGatewayServiceRebindReceipt()).toBeUndefined();
+  });
+});
+
 it.each<[string, boolean, string?]>([
   ["failed-after-write", false],
   ["mismatch", false, "definition changed"],

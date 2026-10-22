@@ -7,6 +7,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { registerListener } from "../../../../../src/shared/listeners.ts";
 import { createDeferred as deferred } from "../../../../../test/helpers/promise.js";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../../app/context.ts";
+import { hasOperatorReadAccess } from "../../../app/operator-access.ts";
 import { ShellLayoutOwner } from "../../../app/shell-layout-owner.ts";
 import { ShellLayoutProvider } from "../../../app/shell-layout-traits-solid.tsx";
 import { showConfirmDialog } from "../../../components/confirm-dialog.ts";
@@ -125,7 +126,14 @@ async function createPage(
     state = createAgentMemory(context, () => agentTarget);
     return AgentMemoryView({ state });
   });
-  await waitForSolid(() => expect(state.view().header.refreshLoading).toBe(false));
+  await waitForSolid(() => {
+    // Initial config loading can yield before the first resource is admitted.
+    if (agentId && hasOperatorReadAccess(hello.auth)) {
+      expect(request).toHaveBeenCalledWith(STATUS, { agentId });
+      expect(request).toHaveBeenCalledWith(DIARY, { agentId });
+    }
+    expect(state.view().header.refreshLoading).toBe(false);
+  });
   return {
     get state() {
       return state;
@@ -270,6 +278,102 @@ function wikiOverview(title = "Original title") {
   };
 }
 
+it.each(["dreams", "insights", "wiki"] as const)(
+  "keeps the %s diary toolbar focused through a failed read and retry",
+  async (tab) => {
+    const failure = deferred<unknown>();
+    const methods = {
+      dreams: DIARY,
+      insights: "wiki.importInsights",
+      wiki: "wiki.overview",
+    } as const;
+    const method = methods[tab];
+    let fail = false;
+    const replies = {
+      [DIARY]: () => diary("Retained diary"),
+      "wiki.overview": () => wikiOverview(),
+      "wiki.importInsights": () => ({
+        sourceType: "chatgpt",
+        totalItems: 0,
+        totalClusters: 0,
+        clusters: [],
+        truncated: false,
+      }),
+    };
+    const settled = replies[method];
+    const page = await createPage(
+      { ...replies, [method]: () => (fail ? failure.promise : settled()) },
+      "main",
+      gatewayHelloForMethods(["wiki.overview", "wiki.importInsights", "config.patch"]),
+    );
+    await waitForSolid(() =>
+      expect(page.request.mock.calls.some(([name]) => name === method)).toBe(true),
+    );
+    await waitForSolid(() =>
+      expect(
+        {
+          dreams: page.dreaming.dreamDiaryLoading,
+          insights: page.dreaming.wikiImportInsightsLoading,
+          wiki: page.dreaming.wikiOverviewLoading,
+        }[tab],
+      ).toBe(false),
+    );
+    page.context.setConfig({ plugins: { entries: { "memory-wiki": { enabled: true } } } });
+    click(page.container, "#dreams-tab-diary");
+    click(page.container, `#dream-diary-tab-${tab}`);
+    const toolbar = page.query(".dreams-diary__chrome");
+    const tabControl = page.query<HTMLButtonElement>(`#dream-diary-tab-${tab}`)!;
+    tabControl.focus();
+    const refresh = () => {
+      ({
+        dreams: page.dreaming.onRefreshDiary,
+        insights: page.dreaming.onRefreshImports,
+        wiki: page.dreaming.onRefreshWikiOverview,
+      })[tab]();
+    };
+    const initialRequests = page.request.mock.calls.filter(([name]) => name === method).length;
+    fail = true;
+    refresh();
+    await waitForSolid(() =>
+      expect(page.request.mock.calls.filter(([name]) => name === method)).toHaveLength(
+        initialRequests + 1,
+      ),
+    );
+    expect(page.query(".dreams-diary__chrome")).toBe(toolbar);
+    failure.reject(new Error("Scoped read failed"));
+    await page.waitText(".dreams-diary__error", "Scoped read failed");
+    expect(page.query(".dreams-diary__chrome")).toBe(toolbar);
+    expect(document.activeElement).toBe(tabControl);
+    fail = false;
+    refresh();
+    await waitForSolid(() => expect(page.query(".dreams-diary__error")).toBeNull());
+    expect(page.query(".dreams-diary__chrome")).toBe(toolbar);
+    expect(document.activeElement).toBe(tabControl);
+  },
+);
+
+it("retains accepted scene status and its DOM when the status refresh fails", async () => {
+  const failure = deferred<unknown>();
+  let fail = false;
+  const page = await createPage({
+    [STATUS]: () => (fail ? failure.promise : memoryStatus(23)),
+  });
+  await waitForSolid(() => expect(page.text(".dreams__status-detail")).toContain("23"));
+  const scene = page.query(".dreams");
+  const detail = page.query(".dreams__status-detail");
+  fail = true;
+  const pending = page.state.loadResources("dreamingStatus", false);
+  await waitForSolid(() =>
+    expect(page.request.mock.calls.filter(([method]) => method === STATUS)).toHaveLength(2),
+  );
+  failure.reject(new Error("Status refresh failed"));
+  await pending;
+  await page.waitText(".dreams__controls-error", "Status refresh failed");
+  expect(page.query(".dreams")).toBe(scene);
+  expect(page.query(".dreams__status-detail")).toBe(detail);
+  expect(detail?.textContent).toContain("23");
+});
+
 it("scopes native memory requests to the current agent and releases shell layout", async () => {
   const request = vi.fn(emptyReply);
   const context = contextWithRequest(request);
@@ -373,7 +477,11 @@ it.each(["", "main"])(
     );
     const page = await createPage(request);
     await waitForSolid(() => expect(page.dreaming.dreamDiaryContent).toBe("main-only"));
+    click(page.container, "#dreams-tab-diary");
+    await page.waitText("#dream-diary-panel", "main-only\n");
     page.setAgentId("support");
+    flush();
+    expect(page.container.textContent).not.toContain("main-only");
     expect(page.dreaming).toMatchObject({ selectedAgentId: "support", dreamDiaryContent: null });
     await waitForSolid(() => expect(request).toHaveBeenCalledWith(DIARY, { agentId: "support" }));
     page.setAgentId(agentId);
@@ -508,9 +616,13 @@ it.each(["agent", "client", "access", "unmount"] as const)(
   "retires pending wiki requests and modal state on %s replacement",
   async (replacement) => {
     const pending = deferred<unknown>();
-    const page = await createPage({ "wiki.get": () => pending.promise }, "support");
+    const page = await createPage(
+      { [DIARY]: () => diary("support-only"), "wiki.get": () => pending.promise },
+      "support",
+    );
     const { context } = page;
     click(page.container, "#dreams-tab-diary");
+    await page.waitText("#dream-diary-panel", "support-only\n");
     const preview = page.dreaming.onOpenWikiPage("support.md");
     page.state.setEnabled(false);
     await waitForSolid(() => expect(page.query(PREVIEW)).not.toBeNull());
@@ -532,6 +644,7 @@ it.each(["agent", "client", "access", "unmount"] as const)(
     if (replacement !== "unmount") {
       expect(page.toggle.open).toBe(false);
       expect(page.dreaming.wikiPreview).toBeNull();
+      expect(page.container.textContent).not.toContain("support-only");
     }
   },
 );
@@ -612,6 +725,7 @@ it("updates the mounted view across tab selection and owner notifications", asyn
   const scene = page.query(".dreams");
   promotedToday = 9;
   await page.state.loadResources();
+  await waitForSolid(() => expect(page.dreaming.readStatusData().promotedCount).toBe(9));
   await waitForSolid(() => expect(page.text(".dreams__status-detail")).toContain("9 promoted"));
   expect(page.query(".dreams")).toBe(scene);
   expect(page.container.querySelectorAll(".dreams__phase--off")).toHaveLength(2);
