@@ -11,6 +11,7 @@ export { normalizeTabIconPreference, type TabIconPreference } from "./tab-icon.j
 export const UI_APPEARANCE_PREFERENCE_KEYS = {
   theme: "ui.theme",
   themeMode: "ui.themeMode",
+  contrast: "ui.contrast",
   accent: "ui.accent",
   fontUi: "ui.fontUi",
   fontChat: "ui.fontChat",
@@ -21,6 +22,7 @@ export const UI_APPEARANCE_PREFERENCE_KEYS = {
 export type UiAppearancePreferenceValues = {
   "ui.theme": ThemeId;
   "ui.themeMode": ThemeMode;
+  "ui.contrast": "system" | "standard" | "enhanced";
   "ui.accent": string;
   "ui.fontUi": (typeof UI_APPEARANCE_TYPEFACE_VALUES)[number];
   "ui.fontChat": (typeof UI_APPEARANCE_TYPEFACE_VALUES)[number];
@@ -38,6 +40,8 @@ const normalizers: {
   // Legacy browser-local "custom" never follows a profile without its palette.
   "ui.theme": (value) => (isThemeId(value) ? value : undefined),
   "ui.themeMode": normalizeThemeMode,
+  "ui.contrast": (value) =>
+    value === "system" || value === "standard" || value === "enhanced" ? value : undefined,
   // Explicit theme ownership is distinct from an absent (inherited) accent.
   "ui.accent": (value) =>
     typeof value === "string" && (value === "theme" || /^#[0-9a-f]{6}$/i.test(value))

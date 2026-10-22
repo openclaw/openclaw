@@ -290,6 +290,8 @@ export const SETTINGS_SEARCH_TARGETS = {
     labelKey: "configView.appearance.theme",
     searchKeys: [
       "configView.appearance.chooseTheme",
+      "configView.appearance.contrast.title",
+      "configView.appearance.contrast.hint",
       "configView.appearance.importedTheme",
       "configView.appearance.import",
       "configView.appearance.importFromTweakcn",

@@ -325,3 +325,54 @@ it.each([false, true])("retains device-local appearance when rejected=%s", async
     value: local.theme,
   });
 });
+
+it("syncs contrast alone, resets to System, and keeps read-only choices local", async () => {
+  let entries: Record<string, unknown> = {
+    "ui.theme": "claw",
+    "ui.accent": "#123456",
+    "ui.fontUi": "geist",
+    "ui.contrast": "standard",
+  };
+  const request = vi.fn(async (method: string, params?: unknown) => {
+    if (method === "users.prefs.get") {
+      return response(entries);
+    }
+    expect(method).toBe("users.prefs.set");
+    // SAFETY: this RPC boundary supplies the documented entries record.
+    const update = (params as { entries: Record<string, unknown> }).entries;
+    expect(Object.keys(update)).toEqual(["ui.contrast"]);
+    entries = { ...entries, ...update };
+    return response(entries);
+  });
+  const config = configWithPrefs({});
+  const { writer, refresh } = readProfile(request, config, true);
+  await refresh();
+  expect(loadSettings().contrast).toBe("standard");
+  const previous = loadSettings();
+  const next = patchSettings({ contrast: "enhanced" });
+  const delta = changedServerUiPrefs(previous, next);
+  const committed = vi.fn();
+  pushServerUiPrefs(writer, delta!, { ...hooks, afterCommit: committed });
+  await waitForFast(() => expect(committed).toHaveBeenCalledOnce());
+  expect(entries["ui.contrast"]).toBe("enhanced");
+  expect(loadSettings()).toMatchObject({ theme: "claw", accent: "#123456", fontUi: "geist" });
+  const beforeReset = loadSettings();
+  const reset = resetServerUiPref("contrast", profileState(config, "contrast"), scope, profileId);
+  expect(reset.contrast).toBe("system");
+  const resetDelta = changedServerUiPrefs(beforeReset, reset);
+  expect(resetDelta).toEqual({ contrast: null });
+  committed.mockClear();
+  pushServerUiPrefs(writer, resetDelta!, { ...hooks, afterCommit: committed });
+  await waitForFast(() => expect(committed).toHaveBeenCalledOnce());
+  expect(entries["ui.contrast"]).toBeNull();
+  request.mockClear();
+  patchSettings({ contrast: "enhanced" });
+  pushServerUiPrefs(writer, { contrast: "enhanced" }, { profileId, canWrite: false });
+  await refresh();
+  expect(loadSettings().contrast).toBe("enhanced");
+  expect(request.mock.calls.every(([method]) => method === "users.prefs.get")).toBe(true);
+  expect(profileState(config, "contrast", { canSync: false })).toMatchObject({
+    provenance: "device-local",
+    value: "enhanced",
+  });
+});

@@ -4238,7 +4238,11 @@ openclaw-tooltip.sidebar-hover-tooltip {
   min-height: 0;
 }
 
-@media (forced-colors: active), (prefers-contrast: more) {
+:root[data-contrast="enhanced"] .shell {
+  background-image: none;
+}
+
+@media (forced-colors: active) {
   .shell {
     background-image: none;
   }

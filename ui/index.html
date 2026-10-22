@@ -69,6 +69,7 @@
           clawdash: "dash:light",
           system: "claw:system",
         };
+        var resolveContrast = __OPENCLAW_RESOLVE_CONTRAST__;
         try {
           var keys = Object.keys(localStorage);
           var raw;
@@ -129,11 +130,24 @@
             document.head.appendChild(palette);
           }
           document.documentElement.setAttribute("data-theme", resolved);
+          document.documentElement.setAttribute(
+            "data-contrast",
+            resolveContrast(
+              s && s.contrast,
+              window.matchMedia("(prefers-contrast: more)").matches,
+              t !== "custom" && t.indexOf("/") < 0,
+            ),
+          );
           var resolvedMode = resolved.includes("light") ? "light" : "dark";
           document.documentElement.setAttribute("data-theme-mode", resolvedMode);
           // Plugin semantic styles select on [data-theme-resolved]; keep in lockstep.
           document.documentElement.setAttribute("data-theme-resolved", resolvedMode);
-        } catch (e) {}
+        } catch (e) {
+          document.documentElement.setAttribute(
+            "data-contrast",
+            resolveContrast(undefined, window.matchMedia("(prefers-contrast: more)").matches),
+          );
+        }
       })();
     </script>
     <style>

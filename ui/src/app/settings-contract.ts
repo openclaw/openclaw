@@ -9,6 +9,7 @@ import type {
   SidebarSessionLayouts,
 } from "../pages/chat/sidebar-layout-persistence.ts";
 import type { ChatSplitLayout } from "../pages/chat/split-layout-types.ts";
+import type { ContrastPreference } from "./contrast.ts";
 import type { ImportedCustomTheme } from "./custom-theme.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
 import type { TypefaceId } from "./typography.ts";
@@ -64,6 +65,7 @@ export function normalizeTextScale(value: unknown): TextScaleStop {
 export const UI_APPEARANCE_DEFAULTS = {
   theme: "claw",
   themeMode: "system",
+  contrast: "system",
   textScale: 100,
   sidebarLiveActivity: true,
   chatMessageMaxWidth: "48rem",
@@ -86,6 +88,7 @@ export type UiSettings = {
   selectedAgentId?: string;
   theme: ThemeName;
   themeMode: ThemeMode;
+  contrast?: ContrastPreference;
   accent?: string;
   // Browser typeface overrides; undefined = theme default.
   fontUi?: TypefaceId;

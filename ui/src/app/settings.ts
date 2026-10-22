@@ -4,7 +4,10 @@ import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import { normalizeTabIconPreference } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
+import {
+  normalizeUiAppearancePreference,
+  normalizeTabIconPreference,
+} from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
 import { CONTROL_UI_TOKEN_SESSION_KEY_PREFIX } from "../../../src/shared/control-ui-storage.js";
 import { DEFAULT_SIDEBAR_ENTRIES, normalizeSidebarEntries } from "../app-navigation.ts";
 import { configuredUiDevGateway } from "../dev-gateway.ts";
@@ -366,6 +369,7 @@ export function loadUiPreferences(
     lastActiveSessionKey: "main",
     theme: UI_APPEARANCE_DEFAULTS.theme,
     themeMode: UI_APPEARANCE_DEFAULTS.themeMode,
+    contrast: UI_APPEARANCE_DEFAULTS.contrast,
     chatShowThinking: true,
     chatShowToolCalls: true,
     chatPersistCommentary: true,
@@ -422,6 +426,9 @@ export function loadUiPreferences(
       selectedAgentId: scopedSessionSelection.selectedAgentId,
       theme: theme === "custom" && !customTheme ? "claw" : theme,
       themeMode: mode,
+      contrast:
+        normalizeUiAppearancePreference("ui.contrast", parsed.contrast) ??
+        UI_APPEARANCE_DEFAULTS.contrast,
       accent: normalizeAccentColor(parsed.accent),
       fontUi: normalizeTypefaceOverride(parsed.fontUi),
       fontChat: normalizeTypefaceOverride(parsed.fontChat),
@@ -574,6 +581,9 @@ export function saveSettings(
     gatewayUrl: next.gatewayUrl,
     theme: next.theme,
     themeMode: next.themeMode,
+    contrast:
+      normalizeUiAppearancePreference("ui.contrast", next.contrast) ??
+      UI_APPEARANCE_DEFAULTS.contrast,
     accent: normalizeAccentColor(next.accent),
     fontUi: normalizeTypefaceOverride(next.fontUi),
     fontChat: normalizeTypefaceOverride(next.fontChat),

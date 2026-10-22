@@ -66,7 +66,11 @@ export default {
     },
     {
       // Theme token definitions are the one source of stylesheet hex colors.
-      files: ["../ui/src/styles/base.css", "../ui/public/themes/*.css"],
+      files: [
+        "../ui/src/styles/base.css",
+        "../ui/src/styles/enhanced-contrast.css",
+        "../ui/public/themes/*.css",
+      ],
       rules: {
         "color-no-hex": null,
       },

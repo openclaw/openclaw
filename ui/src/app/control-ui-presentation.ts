@@ -68,7 +68,9 @@ export function applyControlUiAccent(userAccent?: string): void {
   // An explicit theme selection must not expose the lower-precedence seam color.
   const accent =
     userAccentOverride === "theme" ? undefined : (userAccentOverride ?? operatorSeamColor);
-  const hex = accent?.trim().replace(/^#/, "");
+  // Enhanced built-ins own audited fill/ink pairs. Keep the saved override intact
+  // so Standard restores it, rather than letting inline styles defeat the palette.
+  const hex = root.dataset.contrast === "enhanced" ? undefined : accent?.trim().replace(/^#/, "");
   const color = hex && /^[0-9a-fA-F]{6}$/.test(hex) ? `#${hex}` : null;
   if (!color) {
     for (const property of ACCENT_CSS_VARIABLES) {

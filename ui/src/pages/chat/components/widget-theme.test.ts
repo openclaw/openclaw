@@ -200,6 +200,15 @@ it("shares one token sample across frames and refreshes mounted widgets on root 
   expectTheme(boardPost, { tokens: { surface: "#101010", accent: "#207d82" } });
   expect(unrelatedPost).not.toHaveBeenCalled();
 
+  readStyles.mockClear();
+  values["--accent"] = "#93301f";
+  document.documentElement.dataset.contrast = "enhanced";
+  postWidgetTheme(chatFrame);
+  expectTheme(chatPost, { tokens: { surface: "#101010", accent: "#93301f" } });
+  await Promise.resolve();
+  expect(readStyles).toHaveBeenCalledTimes(1);
+  expectTheme(boardPost, { tokens: { surface: "#101010", accent: "#93301f" } });
+
   boardFrame.remove();
   document.documentElement.dataset.themeMode = "light";
   await Promise.resolve();

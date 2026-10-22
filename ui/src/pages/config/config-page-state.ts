@@ -12,6 +12,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context-types.ts";
+import type { ContrastPreference } from "../../app/contrast.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { resetServerUiPref, selectThemeSettings } from "../../app/server-prefs-controls.ts";
 import { canSyncAppearancePreference } from "../../app/server-prefs-profile-runtime.ts";
@@ -602,6 +603,7 @@ export function createConfigPage(
     const unlocked = lobsterdex.read();
     const themePref = currentSyncedPref("theme");
     const themeModePref = currentSyncedPref("themeMode");
+    const contrastPref = currentSyncedPref("contrast");
     const accentPref = currentSyncedPref("accent");
     const localePref = currentSyncedPref("locale");
     const chatSendShortcutPref = currentSyncedPref("chatSendShortcut");
@@ -685,6 +687,21 @@ export function createConfigPage(
       themeModeOverridden: themeModePref.overridden,
       themeModeProvenance: themeModePref.provenance,
       themeModeResetValue: themeModePref.resetValue ?? UI_APPEARANCE_DEFAULTS.themeMode,
+      contrast: settings.contrast ?? UI_APPEARANCE_DEFAULTS.contrast,
+      contrastProvenance: contrastPref.provenance,
+      contrastOverridden: contrastPref.overridden,
+      contrastResetValue: contrastPref.resetValue ?? UI_APPEARANCE_DEFAULTS.contrast,
+      setContrast: (contrast: ContrastPreference) => {
+        const preference = currentSyncedPref("contrast");
+        if (
+          preference.overridden &&
+          contrast === (preference.resetValue ?? UI_APPEARANCE_DEFAULTS.contrast)
+        ) {
+          resetSyncedPref("contrast");
+        } else {
+          applySettings({ contrast });
+        }
+      },
       accent: settings.accent,
       accentProvenance: accentPref.provenance,
       accentResetValue: accentPref.resetValue,

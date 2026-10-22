@@ -1688,6 +1688,17 @@ const enSettings = {
       intro: "Theme, chat, and sidebar preferences for this Control UI client.",
       theme: "Theme",
       chooseTheme: "Choosing a different theme resets its fonts and accent colors.",
+      contrast: {
+        title: "Contrast",
+        standard: "Standard",
+        enhanced: "Enhanced",
+        hint: "System follows this device’s contrast preference. Standard keeps the authored theme; Enhanced strengthens text, controls, and focus without changing fonts or shape.",
+        effective: "Currently using {value} contrast.",
+        unsupported:
+          "Enhanced palettes are available for built-in themes only. This theme keeps its authored colors; your contrast choice is retained.",
+        accentHint:
+          "Enhanced uses this theme’s contrast-tested colors. Your saved accent returns in Standard contrast.",
+      },
       themeUnavailable: "{id} is unavailable. Using Claw until the theme becomes available again.",
       background: {
         title: "Background",

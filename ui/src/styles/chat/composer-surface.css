@@ -342,7 +342,21 @@
   opacity: 0.6;
 }
 
-@media (forced-colors: active), (prefers-contrast: more), (prefers-reduced-transparency: reduce) {
+:root[data-contrast="enhanced"][data-theme-mode] .agent-chat__input {
+  --chat-composer-hairline: var(--border);
+
+  background: var(--chat-composer-surface);
+  border-color: var(--border);
+  box-shadow: none;
+
+  /* Beat the mode-specific focus treatment, which deliberately fades Standard. */
+  &:has(.agent-chat__composer-combobox > :is(textarea, input):focus) {
+    border-color: var(--ring);
+    box-shadow: var(--focus-ring);
+  }
+}
+
+@media (forced-colors: active), (prefers-reduced-transparency: reduce) {
   .agent-chat__input {
     background: var(--chat-composer-surface);
   }

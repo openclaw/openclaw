@@ -86,6 +86,12 @@ export const SYNCED_PREFS = {
     local: (settings) => settings.themeMode,
     write: (value) => ({ themeMode: value ?? UI_APPEARANCE_DEFAULTS.themeMode }),
   }),
+  contrast: prefSpec<NonNullable<UiSettings["contrast"]>>({
+    configSync: false,
+    extract: (value) => normalizeUiAppearancePreference("ui.contrast", value),
+    local: (settings) => settings.contrast ?? UI_APPEARANCE_DEFAULTS.contrast,
+    write: (value) => ({ contrast: value ?? UI_APPEARANCE_DEFAULTS.contrast }),
+  }),
   accent: optionalPrefSpec("accent", normalizeAccentColor),
   fontUi: optionalPrefSpec("fontUi", normalizeTypefaceOverride, false),
   fontChat: optionalPrefSpec("fontChat", normalizeTypefaceOverride, false),
@@ -123,6 +129,7 @@ export type SyncedPrefKey = keyof typeof SYNCED_PREFS;
 export type ResettableServerUiPrefKey =
   | "theme"
   | "themeMode"
+  | "contrast"
   | "accent"
   | "fontUi"
   | "fontChat"

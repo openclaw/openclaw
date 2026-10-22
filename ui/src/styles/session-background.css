@@ -129,7 +129,12 @@ openclaw-session-background[data-presentation="faded"][data-surface="session"]
   );
 }
 
-@media (forced-colors: active), (prefers-contrast: more), (prefers-reduced-transparency: reduce) {
+:root[data-contrast="enhanced"] .session-background__image {
+  display: none;
+  background-image: none;
+}
+
+@media (forced-colors: active), (prefers-reduced-transparency: reduce) {
   .session-background__image {
     display: none;
     background-image: none;

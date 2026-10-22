@@ -1,10 +1,12 @@
 import {
   BUILTIN_THEMES,
+  isBuiltinThemeId,
   resolveThemeBranding,
 } from "../../../packages/gateway-protocol/src/theme.ts";
 import { createChangeListeners } from "../../../src/shared/listeners.js";
 import { listen } from "../lib/reactive/listener.ts";
 import type { ApplicationGateway, ApplicationTheme, ApplicationThemePalette } from "./context.ts";
+import { resolveContrast } from "./contrast.ts";
 import { applyControlUiAccent, syncControlUiSystemChrome } from "./control-ui-presentation.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { backgroundPreferenceStorageKey } from "./settings-background.ts";
@@ -54,6 +56,11 @@ function applyThemePresentation(settings: UiPreferences, catalogTheme?: CatalogT
   root.dataset.themeId = effectiveTheme;
   root.dataset.theme = resolvedTheme;
   root.dataset.themeMode = resolvedMode;
+  root.dataset.contrast = resolveContrast(
+    settings.contrast,
+    globalThis.matchMedia?.("(prefers-contrast: more)").matches ?? false,
+    isBuiltinThemeId(settings.theme),
+  );
   const branding = themeBranding(settings, catalogTheme);
   syncThemeBackgroundArtwork(root, branding, resolvedMode, settings.background?.visibility);
   root.dataset.themeMascot = branding.mascot;
@@ -197,6 +204,13 @@ export function createApplicationTheme(
     });
   };
 
+  // Only the preference travels with the profile; this OS signal stays on this device.
+  const contrastCleanup = subscribeMediaQuery("(prefers-contrast: more)", () => {
+    if (!settings.contrast || settings.contrast === "system") {
+      publish();
+    }
+  });
+
   const chromeBreakpointCleanup = subscribeMediaQuery(
     "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)",
     () => syncControlUiSystemChrome(),
@@ -287,6 +301,7 @@ export function createApplicationTheme(
       presentationGeneration += 1;
       detachSystemThemeListener();
       chromeBreakpointCleanup?.();
+      contrastCleanup?.();
       listeners.clear();
     },
   };

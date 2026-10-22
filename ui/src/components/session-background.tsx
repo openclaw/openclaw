@@ -61,10 +61,10 @@ export const SessionBackground = defineSolidBridge<Props>(
     let imageElement: HTMLImageElement | undefined;
     const accessibility =
       typeof matchMedia === "function"
-        ? matchMedia(
-            "(forced-colors: active), (prefers-contrast: more), (prefers-reduced-transparency: reduce)",
-          )
+        ? matchMedia("(forced-colors: active), (prefers-reduced-transparency: reduce)")
         : null;
+    const suppressBackground = () =>
+      accessibility?.matches || host.ownerDocument.documentElement.dataset.contrast === "enhanced";
     let request: BackgroundImageRequest | null = null;
     let failedIdentity: string | null = null;
     let surfaceElement: HTMLElement | null = null;
@@ -88,7 +88,7 @@ export const SessionBackground = defineSolidBridge<Props>(
     };
     const currentIdentity = () => {
       const source = currentSource();
-      return context() && props.presented && !accessibility?.matches && source?.kind === "custom"
+      return context() && props.presented && !suppressBackground() && source?.kind === "custom"
         ? backgroundImageReadIdentity(context()!, source.assetId)
         : null;
     };
@@ -162,7 +162,12 @@ export const SessionBackground = defineSolidBridge<Props>(
       const observer = new MutationObserver(notify);
       observer.observe(host.ownerDocument.documentElement, {
         attributes: true,
-        attributeFilter: ["data-theme", "data-theme-mode", "data-theme-background"],
+        attributeFilter: [
+          "data-theme",
+          "data-theme-mode",
+          "data-theme-background",
+          "data-contrast",
+        ],
       });
       const stopAccessibility =
         accessibility &&
@@ -193,7 +198,7 @@ export const SessionBackground = defineSolidBridge<Props>(
       contextProjection().revision();
       const source = currentSource();
       const fullBleed = preference()?.presentation === "full-bleed";
-      const visible = props.presented && !accessibility?.matches;
+      const visible = props.presented && !suppressBackground();
       // Direct Solid mounts compute before the bridge host inherits its palette.
       if (visible && source?.kind === "custom" && host.isConnected) {
         const key = backgroundPaletteKey(host);

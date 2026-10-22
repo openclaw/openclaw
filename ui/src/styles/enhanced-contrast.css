@@ -1,0 +1,277 @@
+/* Authored built-in variants. The theme owner enables this attribute only for
+   built-ins; Standard never enters this cascade. Compound specificity keeps lazy
+   palette loads from undoing contrast. Typography, artwork colors and geometry
+   stay with the selected theme. */
+:root[data-contrast="enhanced"][data-theme] {
+  --border-strong: var(--border);
+  --input: var(--border);
+  --border-hover: color-mix(in srgb, var(--border) 82%, var(--text-strong));
+  --overlay-border: var(--border);
+  --sidebar-rail-control-color: var(--muted);
+  --sidebar-rail-action-bg: var(--accent);
+  --sidebar-rail-action-hover-bg: var(--accent-hover);
+  --sidebar-rail-action-active-bg: var(--accent-hover);
+}
+
+/* Beacon already owns stronger text, links, status pairs, and opaque 3px focus.
+   Do not replace its derived --link with the less legible raw accent. */
+:root[data-contrast="enhanced"][data-theme="beacon"] {
+  --border: #858585;
+}
+:root[data-contrast="enhanced"][data-theme="beacon-light"] {
+  --border: #707070;
+  --border-strong: #5a5a5a;
+}
+
+:root[data-contrast="enhanced"]:not([data-theme^="beacon"]) {
+  --muted-strong: var(--muted);
+  --muted-foreground: var(--muted);
+  --accent: var(--link);
+  --accent-muted: var(--link);
+  --ring: var(--link);
+  --link-hover: color-mix(in srgb, var(--link) 88%, var(--text-strong));
+  --accent-hover: var(--link-hover);
+  --accent-subtle: color-mix(in srgb, var(--accent) 6%, transparent);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 5px var(--ring);
+  --focus-glow: var(--focus-ring);
+  --ok-muted: var(--ok);
+  --danger-muted: var(--danger);
+  --destructive-foreground: #ffffff;
+}
+
+:root[data-contrast="enhanced"][data-theme-mode="dark"]:not([data-theme^="beacon"]) {
+  --accent-foreground: #0a0a0a;
+  --ok: #7ee6a0;
+  --ok-subtle: #102c1b;
+  --warn: #ffd074;
+  --warn-subtle: #30220b;
+  --danger: #ffa0a8;
+  --danger-subtle: #35151d;
+  --info: #9bc8ff;
+  --info-subtle: #13283f;
+  --hljs-addition: #9af0b4;
+  --hljs-deletion: #ffb4bb;
+  --destructive: #ab1828;
+  --destructive-hover: #951323;
+}
+
+:root[data-contrast="enhanced"][data-theme-mode="light"]:not([data-theme^="beacon"]) {
+  --accent-foreground: #ffffff;
+  --ok: #124d2a;
+  --ok-subtle: #edf7f0;
+  --warn: #673509;
+  --warn-subtle: #fff4dc;
+  --danger: #861c2a;
+  --danger-subtle: #fff0f1;
+  --info: #173c88;
+  --info-subtle: #edf3ff;
+  --hljs-addition: #124d2a;
+  --hljs-deletion: #861c2a;
+  --destructive: #a0152a;
+  --destructive-hover: #881020;
+}
+
+:root[data-contrast="enhanced"][data-theme="dark"] {
+  --muted: #b5b5bf;
+  --primary: #a7252d;
+  --primary-foreground: #ffffff;
+  --primary-hover: color-mix(in srgb, var(--primary) 88%, black);
+  --link: #ff918c;
+  --border: #7f8291;
+}
+
+:root[data-contrast="enhanced"][data-theme="light"] {
+  --muted: #49443c;
+  --primary: #9b3524;
+  --primary-foreground: #ffffff;
+  --primary-hover: color-mix(in srgb, var(--primary) 88%, black);
+  --link: #792719;
+  --border: #7d776d;
+}
+
+:root[data-contrast="enhanced"][data-theme="openknot"] {
+  --muted: #ababb4;
+  --primary: #ab1830;
+  --primary-foreground: #ffffff;
+  --primary-hover: color-mix(in srgb, var(--primary) 88%, black);
+  --link: #ff8090;
+  --border: #757580;
+}
+
+:root[data-contrast="enhanced"][data-theme="openknot-light"] {
+  --muted: #48474f;
+  --primary: #a0152a;
+  --primary-foreground: #ffffff;
+  --primary-hover: color-mix(in srgb, var(--primary) 88%, black);
+  --link: #801322;
+  --border: #7a7a86;
+}
+
+:root[data-contrast="enhanced"][data-theme="dash"] {
+  --muted: #c5b5a5;
+  --primary: #e0a76f;
+  --primary-foreground: #1a1210;
+  --primary-hover: color-mix(in srgb, var(--primary) 88%, white);
+  --link: #e0b484;
+  --border: #948575;
+}
+
+:root[data-contrast="enhanced"][data-theme="dash-light"] {
+  --muted: #4b3c2d;
+  --primary: #794421;
+  --primary-foreground: #ffffff;
+  --primary-hover: color-mix(in srgb, var(--primary) 88%, black);
+  --link: #5e351a;
+  --border: #807163;
+}
+
+:root[data-contrast="enhanced"][data-theme="absolutely"] {
+  --muted: #c5bfb3;
+  --primary: #efa07d;
+  --primary-foreground: #241f1b;
+  --primary-hover: color-mix(in srgb, var(--primary) 88%, white);
+  --link: #f0b090;
+  --border: #928b7e;
+}
+
+:root[data-contrast="enhanced"][data-theme="absolutely-light"] {
+  --muted: #46413a;
+  --primary: #923920;
+  --primary-foreground: #ffffff;
+  --primary-hover: color-mix(in srgb, var(--primary) 88%, black);
+  --link: #782f1a;
+  --border: #7d766b;
+}
+
+:root[data-contrast="enhanced"][data-theme="tide"] {
+  --muted: #b4c3d0;
+  --primary: #5ab6d8;
+  --primary-foreground: #0b1116;
+  --primary-hover: color-mix(in srgb, var(--primary) 88%, white);
+  --link: #8acfe5;
+  --border: #8195a5;
+}
+
+:root[data-contrast="enhanced"][data-theme="tide-light"] {
+  --muted: #3c4751;
+  --primary: #195d79;
+  --primary-foreground: #ffffff;
+  --primary-hover: color-mix(in srgb, var(--primary) 88%, black);
+  --link: #13475e;
+  --border: #718392;
+}
+
+:root[data-contrast="enhanced"][data-theme="phosphor"] {
+  --muted: #a8c6ab;
+  --primary: #4ade80;
+  --primary-foreground: #07120a;
+  --primary-hover: color-mix(in srgb, var(--primary) 88%, white);
+  --link: #70e69b;
+  --border: #7d9581;
+}
+
+:root[data-contrast="enhanced"][data-theme="phosphor-light"] {
+  --muted: #3a493b;
+  --primary: #0c5c30;
+  --primary-foreground: #ffffff;
+  --primary-hover: color-mix(in srgb, var(--primary) 88%, black);
+  --link: #0a4b27;
+  --border: #718273;
+}
+
+:root[data-contrast="enhanced"][data-theme="crt"] {
+  --muted: #aaaaaa;
+  --primary: #e8e8e8;
+  --primary-foreground: #111111;
+  --primary-hover: color-mix(in srgb, var(--primary) 88%, white);
+  --link: #e8e8e8;
+  --border: #7d7d7d;
+}
+
+:root[data-contrast="enhanced"][data-theme="crt-light"] {
+  --muted: #444444;
+  --primary: #1f1f1f;
+  --primary-foreground: #ffffff;
+  --primary-hover: color-mix(in srgb, var(--primary) 88%, black);
+  --link: #191919;
+  --border: #777777;
+}
+
+:root[data-contrast="enhanced"][data-theme="manuscript"] {
+  --muted: #d0c1a1;
+  --primary: #8fa8e0;
+  --primary-foreground: #101c33;
+  --primary-hover: color-mix(in srgb, var(--primary) 88%, white);
+  --link: #b4c8f2;
+  --border: #978970;
+}
+
+:root[data-contrast="enhanced"][data-theme="manuscript-light"] {
+  --muted: #483f30;
+  --primary: #31549b;
+  --primary-foreground: #ffffff;
+  --primary-hover: color-mix(in srgb, var(--primary) 88%, black);
+  --link: #203663;
+  --border: #81755e;
+}
+
+:root[data-contrast="enhanced"][data-theme="rose"] {
+  --muted: #b6b0cf;
+  --primary: #ebbcba;
+  --primary-foreground: #3f2224;
+  --primary-hover: color-mix(in srgb, var(--primary) 88%, white);
+  --link: #ebbcba;
+  --border: #8f87a8;
+}
+
+:root[data-contrast="enhanced"][data-theme="rose-light"] {
+  --muted: #4b415a;
+  --primary: #823c52;
+  --primary-foreground: #ffffff;
+  --primary-hover: color-mix(in srgb, var(--primary) 88%, black);
+  --link: #6b3143;
+  --border: #83748f;
+}
+
+:root[data-contrast="enhanced"][data-theme="miami"] {
+  --muted: #b6a7d5;
+  --primary: #ff94c8;
+  --primary-foreground: #3c0a24;
+  --primary-hover: color-mix(in srgb, var(--primary) 88%, white);
+  --link: #ff94c8;
+  --border: #927aa7;
+}
+
+:root[data-contrast="enhanced"][data-theme="miami-light"] {
+  --muted: #493c52;
+  --primary: #951b5b;
+  --primary-foreground: #ffffff;
+  --primary-hover: color-mix(in srgb, var(--primary) 88%, black);
+  --link: #7a164b;
+  --border: #86728f;
+}
+
+/* The composer locally derives translucent text and hover fills. These explicit
+   consumers must keep the enhanced pairs instead of mixing them back down. */
+:root[data-contrast="enhanced"] :is(.chat-footer, .agent-chat__composer-shell, .agent-chat__input) {
+  --chat-composer-light-outline: var(--border);
+  --chat-composer-secondary: var(--muted);
+  --chat-composer-tertiary: var(--muted);
+}
+:root[data-contrast="enhanced"] .agent-chat__input .chat-send-btn:hover:not(:disabled) {
+  background: var(--primary-hover);
+}
+
+/* Search uses --input as a fill, unlike ordinary inputs which use it as an edge. */
+:root[data-contrast="enhanced"] .palette-session-settings__search {
+  background: var(--bg);
+}
+
+@media (forced-colors: none) {
+  :root[data-contrast="enhanced"] .settings-segmented > .settings-segmented__btn:focus-visible,
+  :root[data-contrast="enhanced"]
+    .settings-segmented
+    > .settings-segmented__btn:has(> input:focus-visible) {
+    box-shadow: var(--focus-ring);
+  }
+}

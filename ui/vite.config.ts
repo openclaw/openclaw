@@ -27,6 +27,7 @@ import {
   controlUiCodeSplitting,
   controlUiIsolatedDesktopRuntimePlugin,
 } from "./config/control-ui-chunking.ts";
+import { controlUiContrastBootstrapPlugin } from "./config/control-ui-contrast-bootstrap.ts";
 import { createControlUiDevGateway } from "./config/control-ui-dev-gateway.ts";
 import { controlUiHoverGuardPlugin } from "./config/control-ui-hover-guard.ts";
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
@@ -773,6 +774,7 @@ export default function controlUiViteConfig(
     },
     plugins: [
       controlUiSolidPlugin(),
+      controlUiContrastBootstrapPlugin(),
       mermaidClassicBundlePlugin(),
       controlUiIsolatedDesktopRuntimePlugin(),
       {

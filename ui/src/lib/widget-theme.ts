@@ -58,6 +58,7 @@ export function buildWidgetThemeMessage(): WidgetThemeMessage {
   const revision = JSON.stringify([
     root.dataset.theme,
     root.dataset.themeMode,
+    root.dataset.contrast,
     root.getAttribute("style"),
   ]);
   if (state.message && state.revision === revision) {
@@ -120,7 +121,7 @@ function widgetThemeState(root: HTMLElement): WidgetThemeState {
     attributes: true,
     // "style" carries the accent override (inline custom properties on <html>);
     // without it a user accent change would only reach frames incidentally.
-    attributeFilter: ["data-theme", "data-theme-mode", "style"],
+    attributeFilter: ["data-theme", "data-theme-mode", "data-contrast", "style"],
   });
   // Custom palettes replace style text; plugin activation changes link media.
   const head = root.ownerDocument.head;

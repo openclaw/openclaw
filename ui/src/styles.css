@@ -1,4 +1,5 @@
 @import "./styles/base.css";
+@import "./styles/enhanced-contrast.css";
 @import "./styles/theme-backgrounds.css";
 @import "./styles/layout.css";
 @import "./styles/layout.mobile.css";
