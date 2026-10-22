@@ -6,7 +6,7 @@ import {
   startGatewayWithClient,
 } from "../src/gateway/test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
-import { writeOpenAiResponsesSse } from "./helpers/openai-responses-sse.js";
+import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import { listenProofProvider, useRuntimeProofFixture } from "./runtime-proof.test-support.js";
 
 const createFixture = useRuntimeProofFixture(afterEach);
@@ -23,28 +23,11 @@ it(
 
     try {
       providerServer = createServer((_request, response) => {
-        const message = {
-          type: "message",
-          id: "pr119473-proof-message",
-          role: "assistant",
-          status: "completed",
-          content: [{ type: "output_text", text: "PR119473_RUNTIME_OK", annotations: [] }],
-        };
-        writeOpenAiResponsesSse(response, [
-          {
-            type: "response.output_item.added",
-            output_index: 0,
-            item: { ...message, status: "in_progress", content: [] },
-          },
-          { type: "response.output_item.done", output_index: 0, item: message },
-          {
-            type: "response.completed",
-            response: {
-              status: "completed",
-              usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
-            },
-          },
-        ]);
+        writeOpenAiResponsesText(response, {
+          messageId: "pr119473-proof-message",
+          responseId: "pr119473-proof-response",
+          text: "PR119473_RUNTIME_OK",
+        });
       });
       const baseUrl = await listenProofProvider(providerServer);
       const provider = buildMockOpenAiResponsesProvider(`${baseUrl}/v1`);
