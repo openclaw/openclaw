@@ -1,8 +1,5 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledSettingsStorageKey,
   installMockGateway,
@@ -48,24 +45,13 @@ suite.define(() => {
         const spinnerLocator = status.locator(".session-run-spinner");
         const labelLocator = status.locator(".gateway-status__label");
         await status.getByText("Reconnecting…", { exact: true }).waitFor();
-        const capture = async (name: string) => {
-          const frame = await takeControlUiScreenshotFrame(page, status, [status], {
-            elements: [page.locator(".sidebar-shell__footer")],
-            animations: "disabled",
-          });
-          await writeFile(path.join(suite.artifactDir, name + ".png"), frame.png);
-          await writeFile(
-            path.join(suite.artifactDir, name + "-footer.png"),
-            frame.elements[0]!.png,
-          );
-        };
+
         expect(await status.getByRole("button").count()).toBe(0);
         expect(await spinnerLocator.count()).toBe(1);
         const stateBounds = await status.locator(".gateway-status__state").boundingBox();
         await expectStyles(spinnerLocator, {
           "border-top-color": (await computedStyles(labelLocator, ["color"])).color,
         });
-        await capture("reconnecting-backoff");
         const spinner = await spinnerLocator.elementHandle();
         expect(await spinner!.evaluate((element) => getComputedStyle(element).animationName)).toBe(
           "btn-spinner-spin",
@@ -92,7 +78,6 @@ suite.define(() => {
           expect(icon!.width).toBeCloseTo((12 * textScale) / 100, 1);
         };
         await aligned();
-        await capture("reconnecting-attempt");
 
         await animation.evaluate((current) => current.play());
         await page.clock.resume();
@@ -131,13 +116,11 @@ suite.define(() => {
             })),
           )
           .toEqual({ spinner: "rgb(146, 64, 14)", label: "rgb(146, 64, 14)" });
-        await capture("reconnecting-light");
         await moving();
         await page.setViewportSize({ width: 390, height: 844 });
         await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
         await status.waitFor({ state: "visible" });
         await aligned();
-        await capture("reconnecting-mobile");
         expect(await status.getByRole("button").count()).toBe(0);
         await page.emulateMedia({ reducedMotion: "reduce" });
         await expectStyles(spinnerLocator, { "animation-name": "none" });

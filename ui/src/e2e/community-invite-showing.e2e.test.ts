@@ -1,8 +1,5 @@
-import { writeFile } from "node:fs/promises";
-import nodePath from "node:path";
 import { expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   createControlUiMockBootstrapConfig,
@@ -120,20 +117,6 @@ suite.define(() => {
                 .locator(".invite__body")
                 .evaluate((node) => Number.parseFloat(getComputedStyle(node).paddingLeft)),
             ).toBeGreaterThanOrEqual(12);
-            if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-              const frame = await takeControlUiScreenshotFrame(page, shell, [card, close], {
-                elements: [page.locator(".sidebar"), card],
-                animations: "disabled",
-              });
-              const name = `after-${mobile ? "mobile" : "desktop"}-${mode}`;
-              for (const [suffix, png] of [
-                ["", frame.png],
-                ["-sidebar", frame.elements[0]!.png],
-                ["-card", frame.elements[1]!.png],
-              ] as const) {
-                await writeFile(nodePath.join(suite.artifactDir, `${name}${suffix}.png`), png);
-              }
-            }
             for (let index = 0; index < 3; index += 1) {
               await page.getByRole("button", { name: "Show more", exact: true }).click();
             }
@@ -192,27 +175,6 @@ suite.define(() => {
             }
             await page.locator(".sidebar-shell").waitFor();
             expect(await card.count()).toBe(0);
-            if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-              await resize(mobile ? 844 : 900);
-              if (mobile) {
-                const toggle = page.getByRole("button", { name: "Expand sidebar", exact: true });
-                if (await toggle.isVisible()) {
-                  await toggle.click();
-                }
-              }
-              const sidebar = page.locator(".sidebar");
-              const frame = await takeControlUiScreenshotFrame(page, sidebar, [list], {
-                elements: [sidebar],
-                animations: "disabled",
-              });
-              await writeFile(
-                nodePath.join(
-                  suite.artifactDir,
-                  `dismissed-${mobile ? "mobile" : "desktop"}-${mode}.png`,
-                ),
-                frame.png,
-              );
-            }
           },
         ));
     }

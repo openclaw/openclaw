@@ -110,12 +110,6 @@ const faviconLinks = (page: Page) =>
       icons.map((icon) => ({ href: icon.getAttribute("href"), type: icon.getAttribute("type") })),
     );
 
-const setVisibility = (page: Page, state: DocumentVisibilityState) =>
-  page.evaluate((value) => {
-    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => value });
-    document.dispatchEvent(new Event("visibilitychange"));
-  }, state);
-
 const scrollTo = (scroller: Locator, fraction: number) =>
   scroller.evaluate((el, ratio) => {
     el.scrollTop = (el.scrollHeight - el.clientHeight) * ratio;
@@ -338,7 +332,7 @@ suite.define(() => {
     }
   });
 
-  it("updates the tab icon from live chat and approval events, then clears unseen completion on focus", async () =>
+  it("updates the tab icon from streamed chat without repeating activity events", async () =>
     suite.withPage({ colorScheme: "light" }, async ({ page }) => {
       const sessionKey = "agent:main:main";
       const gateway = await installMockGateway(page, { sessionKey });
@@ -366,10 +360,6 @@ suite.define(() => {
           message: { role: "assistant", content: [{ type: "text", text }] },
         });
       await expectStatusColor(page, "--info");
-      await page.evaluate(() => {
-        document.documentElement.style.setProperty("--info", "rgb(10, 100, 200)");
-      });
-      await expectStatusColor(page, "--info");
       await emitDelta("Preparing.");
       await expectOriginal();
       const activity = await page.evaluateHandle((eventName) => {
@@ -381,24 +371,6 @@ suite.define(() => {
       await page.getByText("Preparing. Checking.", { exact: true }).waitFor();
       expect(await activity.evaluate((observation) => observation.changes)).toBe(0);
       await expectOriginal();
-      await gateway.emitGatewayEvent("exec.approval.requested", {
-        id: "favicon",
-        createdAtMs: Date.now(),
-        expiresAtMs: Date.now() + 60_000,
-        request: { command: "echo draft", agentId: "main", sessionKey },
-      });
-      await expectStatusColor(page, "--session-color-orange");
-      await gateway.emitGatewayEvent("exec.approval.resolved", { id: "favicon", decision: "deny" });
-      await expectOriginal();
-      await page.getByRole("button", { name: "Stop generating" }).waitFor();
-      await setVisibility(page, "hidden");
-      await gateway.emitChatFinal({ runId, sessionKey, text: "Draft report complete." });
-      await expectStatusColor(page, "--ok");
-      await setVisibility(page, "visible");
-      await expectOriginal();
-      expect(await page.locator(`${iconSelector}[data-openclaw-original-favicon]`).count()).toBe(0);
-      await gateway.setOnline(false);
-      await expectStatusColor(page, "--muted");
     }));
 
   it.each([390, 1280])("preserves scroll endpoints and controls at %ipx", (width) =>

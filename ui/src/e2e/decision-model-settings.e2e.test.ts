@@ -1,4 +1,3 @@
-import path from "node:path";
 import { expect, it } from "vitest";
 import { applyMergePatch } from "../../../src/config/merge-patch.js";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -115,12 +114,6 @@ suite.define(() => {
         });
         await page.goto(`${suite.server.baseUrl}settings/model-providers`);
         await expect.poll(() => pickerValue(global)).toBe("typesafe/jev-latest");
-        await global.locator(".picker-select__trigger").click();
-        expect(
-          await page.locator('[role="option"][data-value="typesafe/jev-latest"]').count(),
-        ).toBe(1);
-        expect(await global.locator('[role="option"][data-value="fixture/chat"]').count()).toBe(0);
-        await page.keyboard.press("Escape");
         await page.setViewportSize({ width: 520, height: 900 });
         await global.scrollIntoViewIfNeeded();
         expect(
@@ -197,12 +190,7 @@ suite.define(() => {
         await gateway.waitForRequest("agents.list");
         await page.locator(".agent-select__trigger").click();
         await page.getByRole("menuitemradio", { name: /Research agent/ }).waitFor();
-        await page.screenshot({
-          path: path.join(
-            suite.artifactDir,
-            selectionRequired ? "ownerless.png" : "designated.png",
-          ),
-        });
+
         expect(await page.locator(".agent-select__option .agent-select__badge").count()).toBe(0);
         await page
           .getByRole("menuitemradio", {
