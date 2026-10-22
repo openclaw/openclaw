@@ -99,49 +99,32 @@ describe("buildStatusText channel features", () => {
     }
   });
 
-  it("uses Telegram account rich message overrides", async () => {
-    const text = await renderTelegramStatus({
-      cfg: {
-        channels: {
-          telegram: {
-            richMessages: true,
-            accounts: { Work: { richMessages: false } },
+  it.each(["delivery", "command"] as const)(
+    "uses the Telegram %s account override",
+    async (source) => {
+      const text = await renderTelegramStatus({
+        cfg: {
+          channels: {
+            telegram: { richMessages: true, accounts: { Work: { richMessages: false } } },
           },
         },
-      },
-      sessionEntry: {
-        sessionId: "telegram-rich-account",
-        updatedAt: 0,
-        delivery: normalizeSessionDeliveryState({
-          context: { channel: "telegram", accountId: "work" },
-        }),
-      },
-    });
-
-    expect(text).toContain("Telegram rich messages: off");
-    expect(text).toContain("enable richMessages for this Telegram account");
-  });
-
-  it("uses the current Telegram command account before the session records it", async () => {
-    const text = await renderTelegramStatus({
-      cfg: {
-        channels: {
-          telegram: {
-            richMessages: true,
-            accounts: { Work: { richMessages: false } },
-          },
+        sessionEntry: {
+          sessionId: "telegram-rich-account",
+          updatedAt: 0,
+          ...(source === "delivery"
+            ? {
+                delivery: normalizeSessionDeliveryState({
+                  context: { channel: "telegram", accountId: "work" },
+                }),
+              }
+            : {}),
         },
-      },
-      sessionEntry: {
-        sessionId: "telegram-rich-command-account",
-        updatedAt: 0,
-      },
-      statusAccountId: "work",
-    });
-
-    expect(text).toContain("Telegram rich messages: off");
-    expect(text).toContain("enable richMessages for this Telegram account");
-  });
+        ...(source === "command" ? { statusAccountId: "work" } : {}),
+      });
+      expect(text).toContain("Telegram rich messages: off");
+      expect(text).toContain("enable richMessages for this Telegram account");
+    },
+  );
 });
 
 describe("buildStatusText global subagent scope", () => {
@@ -302,87 +285,55 @@ describe("session status cost line", () => {
     );
   }
 
-  it("shows cached current-session cost and tokens", async () => {
-    mocks.loadSessionCostSummariesFromCache.mockResolvedValue({
-      cacheStatus: {
-        status: "fresh" as const,
-        cachedFiles: 1,
-        pendingFiles: 0,
-        staleFiles: 0,
-      },
-      summaries: [
-        {
-          ...costSummary,
-          missingCostEntries: 0,
+  it.each([
+    ["fresh", 0, "💵 $1.23 · 456k tok (today)"],
+    [
+      "fresh",
+      12,
+      "💵 missing cost: 12 (openai/gpt-5.6-sol 10, openai-codex/gpt-5.5 2) · 456k tok (today)",
+    ],
+    ["stale", 0, undefined],
+  ] as const)(
+    "renders %s cost with %i missing prices",
+    async (status, missingCostEntries, expected) => {
+      mocks.loadSessionCostSummariesFromCache.mockResolvedValue({
+        cacheStatus: {
+          status,
+          cachedFiles: status === "fresh" ? 1 : 0,
+          pendingFiles: status === "fresh" ? 0 : 1,
+          staleFiles: status === "stale" ? 1 : 0,
         },
-      ],
-    });
-
-    await expect(renderCostStatus()).resolves.toContain("💵 $1.23 · 456k tok (today)");
-    expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessions: [
-          { sessionId: "cost-session", sessionFile: `sqlite:main:cost-session:${storePath}` },
+        summaries: [
+          {
+            ...costSummary,
+            missingCostEntries,
+            ...(missingCostEntries
+              ? { missingCostByModel: { "openai/gpt-5.6-sol": 10, "openai-codex/gpt-5.5": 2 } }
+              : {}),
+          },
         ],
-      }),
-    );
-  });
+      });
+      const text = await renderCostStatus();
+      if (expected) {
+        expect(text).toContain(expected);
+      } else {
+        expect(text).not.toContain("💵");
+      }
+      expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessions: [
+            { sessionId: "cost-session", sessionFile: `sqlite:main:cost-session:${storePath}` },
+          ],
+        }),
+      );
+    },
+  );
 
   it("preserves existing usage when the session cost cache fails", async () => {
     mocks.loadSessionCostSummariesFromCache.mockRejectedValue(new Error("cache unavailable"));
-
     const text = await renderCostStatus();
     expect(text).toContain("📊 Usage: 5h 75% left");
     expect(text).not.toContain("💵");
-  });
-
-  it("omits a stale cached summary", async () => {
-    mocks.loadSessionCostSummariesFromCache.mockResolvedValue({
-      cacheStatus: {
-        status: "stale",
-        cachedFiles: 0,
-        pendingFiles: 1,
-        staleFiles: 1,
-      },
-      summaries: [
-        {
-          ...costSummary,
-          input: 1,
-          output: 1,
-          totalTokens: 2,
-          totalCost: 1,
-          outputCost: 0,
-          missingCostEntries: 0,
-        },
-      ],
-    });
-
-    await expect(renderCostStatus()).resolves.not.toContain("💵");
-  });
-
-  it("marks incomplete pricing", async () => {
-    mocks.loadSessionCostSummariesFromCache.mockResolvedValue({
-      cacheStatus: {
-        status: "fresh",
-        cachedFiles: 1,
-        pendingFiles: 0,
-        staleFiles: 0,
-      },
-      summaries: [
-        {
-          ...costSummary,
-          missingCostEntries: 12,
-          missingCostByModel: {
-            "openai/gpt-5.6-sol": 10,
-            "openai-codex/gpt-5.5": 2,
-          },
-        },
-      ],
-    });
-
-    await expect(renderCostStatus()).resolves.toContain(
-      "💵 missing cost: 12 (openai/gpt-5.6-sol 10, openai-codex/gpt-5.5 2) · 456k tok (today)",
-    );
   });
 });
 

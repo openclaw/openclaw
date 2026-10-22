@@ -54,34 +54,28 @@ vi.mock("../gateway/plugin-activation-runtime-config.js", async (importOriginal)
   } as typeof actual;
 });
 
-const resolveReadOnlyChannelPluginsForConfigMock = vi.mocked(
-  resolveReadOnlyChannelPluginsForConfig,
-);
-const loadGatewayStartupPluginPlanMock = vi.mocked(loadGatewayStartupPluginPlan);
-const resolveGatewayStartupPluginActivationConfigMock = vi.mocked(
-  resolveGatewayStartupPluginActivationConfig,
-);
-const collectUnregisteredConfiguredMemoryEmbeddingProvidersMock = vi.mocked(
-  collectUnregisteredConfiguredMemoryEmbeddingProviders,
-);
+const channelsMock = vi.mocked(resolveReadOnlyChannelPluginsForConfig);
+const planMock = vi.mocked(loadGatewayStartupPluginPlan);
+const activationMock = vi.mocked(resolveGatewayStartupPluginActivationConfig);
+const missingProvidersMock = vi.mocked(collectUnregisteredConfiguredMemoryEmbeddingProviders);
 const missingProvider = { configuredId: "custom-embed", source: "provider" } as const;
 const collect = (config?: Parameters<typeof collectInstalledPluginHealthSnapshot>[0]["config"]) =>
   collectInstalledPluginHealthSnapshot({ config, workspaceDir: "/tmp/ws" });
 
 beforeEach(() => {
-  resolveReadOnlyChannelPluginsForConfigMock.mockReturnValue({
+  channelsMock.mockReturnValue({
     loadFailures: [],
     missingConfiguredChannelIds: [],
   } as never);
-  loadGatewayStartupPluginPlanMock.mockReturnValue({ channelPluginIds: [], pluginIds: [] });
+  planMock.mockReturnValue({ channelPluginIds: [], pluginIds: [] });
 });
 
 afterEach(() => {
-  resolveReadOnlyChannelPluginsForConfigMock.mockReset();
-  loadGatewayStartupPluginPlanMock.mockReset();
-  resolveGatewayStartupPluginActivationConfigMock.mockClear();
-  collectUnregisteredConfiguredMemoryEmbeddingProvidersMock.mockReset();
-  collectUnregisteredConfiguredMemoryEmbeddingProvidersMock.mockReturnValue([]);
+  channelsMock.mockReset();
+  planMock.mockReset();
+  activationMock.mockClear();
+  missingProvidersMock.mockReset();
+  missingProvidersMock.mockReturnValue([]);
   clearRuntimeConfigSnapshot();
   resetPluginRuntimeStateForTest();
   resetPluginStateStoreForTests();
@@ -90,7 +84,7 @@ afterEach(() => {
 describe("installed plugin health should-run drift", () => {
   it("flags startup plugins that are not loaded as drift", async () => {
     await withStateDirEnv("openclaw-status-should-run-drift-", async () => {
-      loadGatewayStartupPluginPlanMock.mockReturnValue({
+      planMock.mockReturnValue({
         channelPluginIds: [],
         pluginIds: ["planned-missing", "runtime-ok"],
       });
@@ -109,7 +103,7 @@ describe("installed plugin health should-run drift", () => {
       const rawConfig = {} as never;
       const snapshot = await collect(rawConfig);
 
-      expect(loadGatewayStartupPluginPlanMock).toHaveBeenCalledWith(
+      expect(planMock).toHaveBeenCalledWith(
         expect.objectContaining({ config: rawConfig, activationSourceConfig: rawConfig }),
       );
       expect(snapshot.shouldRunPluginIds).toEqual(["planned-missing", "runtime-ok"]);
@@ -123,10 +117,6 @@ describe("installed plugin health should-run drift", () => {
 
   it("builds the plan via the shared gateway helper using source + runtime config", async () => {
     await withStateDirEnv("openclaw-status-should-run-source-cfg-", async () => {
-      loadGatewayStartupPluginPlanMock.mockReturnValue({
-        channelPluginIds: [],
-        pluginIds: [],
-      });
       // /status passes the live runtime config; the activation source must be the original
       // operator source config, and the effective config must be assembled from the runtime
       // config (so runtime/defaulted fields survive) — via the shared gateway-boot helper.
@@ -135,15 +125,12 @@ describe("installed plugin health should-run drift", () => {
       setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
       setActivePluginRegistry(createEmptyPluginRegistry(), "empty", "default", "/tmp/ws");
 
-      await collectInstalledPluginHealthSnapshot({
-        config: runtimeConfig,
-        workspaceDir: "/tmp/ws",
-      });
+      await collect(runtimeConfig);
 
-      expect(resolveGatewayStartupPluginActivationConfigMock).toHaveBeenCalledWith(
+      expect(activationMock).toHaveBeenCalledWith(
         expect.objectContaining({ runtimeConfig, activationSourceConfig: sourceConfig }),
       );
-      expect(loadGatewayStartupPluginPlanMock).toHaveBeenCalledWith(
+      expect(planMock).toHaveBeenCalledWith(
         expect.objectContaining({ config: runtimeConfig, activationSourceConfig: sourceConfig }),
       );
     });
@@ -156,7 +143,9 @@ describe("installed plugin health should-run drift", () => {
       const snapshot = await collect();
 
       expect(snapshot.shouldRunPluginIds).toBeUndefined();
-      expect(loadGatewayStartupPluginPlanMock).not.toHaveBeenCalled();
+      expect(snapshot.unregisteredMemoryEmbeddingProviders).toBeUndefined();
+      expect(missingProvidersMock).not.toHaveBeenCalled();
+      expect(planMock).not.toHaveBeenCalled();
       expect(formatDetailedPluginHealth(snapshot)).not.toContain(
         "Configured to run but not loaded:",
       );
@@ -166,7 +155,7 @@ describe("installed plugin health should-run drift", () => {
 
 describe("installed plugin health unregistered memory embedding providers", () => {
   beforeEach(() => {
-    collectUnregisteredConfiguredMemoryEmbeddingProvidersMock.mockReturnValue([missingProvider]);
+    missingProvidersMock.mockReturnValue([missingProvider]);
   });
   it("surfaces configured memory embedding providers the runtime registry does not register", async () => {
     await withStateDirEnv("openclaw-status-memory-embed-", async () => {
@@ -175,7 +164,7 @@ describe("installed plugin health unregistered memory embedding providers", () =
       const snapshot = await collect({});
 
       expect(snapshot.unregisteredMemoryEmbeddingProviders).toEqual([missingProvider]);
-      expect(collectUnregisteredConfiguredMemoryEmbeddingProvidersMock).toHaveBeenCalledWith(
+      expect(missingProvidersMock).toHaveBeenCalledWith(
         expect.objectContaining({ registeredProviderIds: expect.any(Set) }),
       );
       expect(formatDetailedPluginHealth(snapshot)).toContain(
@@ -190,21 +179,10 @@ describe("installed plugin health unregistered memory embedding providers", () =
       const snapshot = await collect({});
 
       expect(snapshot.unregisteredMemoryEmbeddingProviders).toBeUndefined();
-      expect(collectUnregisteredConfiguredMemoryEmbeddingProvidersMock).not.toHaveBeenCalled();
+      expect(missingProvidersMock).not.toHaveBeenCalled();
       expect(formatDetailedPluginHealth(snapshot)).not.toContain(
         "Configured memory provider not registered:",
       );
-    });
-  });
-
-  it("omits the check when no config is provided", async () => {
-    await withStateDirEnv("openclaw-status-memory-embed-no-config-", async () => {
-      setActivePluginRegistry(createEmptyPluginRegistry(), "empty", "default", "/tmp/ws");
-
-      const snapshot = await collectInstalledPluginHealthSnapshot({ workspaceDir: "/tmp/ws" });
-
-      expect(snapshot.unregisteredMemoryEmbeddingProviders).toBeUndefined();
-      expect(collectUnregisteredConfiguredMemoryEmbeddingProvidersMock).not.toHaveBeenCalled();
     });
   });
 });
