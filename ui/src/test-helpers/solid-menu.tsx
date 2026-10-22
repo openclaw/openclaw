@@ -66,18 +66,10 @@ export function item(label: string, id = "people"): HTMLButtonElement {
 
 export async function phase(element: HTMLElement, value: "open" | "hidden"): Promise<void> {
   await expect
-    .poll(() => element.matches(":popover-open"), { message: `${element.id} native visibility` })
-    .toBe(value === "open");
-  if (element.dataset.phase === value) {
-    return;
-  }
-  return new Promise((resolve) => {
-    element.addEventListener(
-      value === "open" ? "overlay-after-show" : "overlay-after-hide",
-      () => resolve(),
-      { once: true },
-    );
-  });
+    .poll(() => [element.matches(":popover-open"), element.dataset.phase], {
+      message: `${element.id} native visibility and completed phase`,
+    })
+    .toEqual([value === "open", value]);
 }
 
 export async function openMenu(id = "people") {
