@@ -3134,7 +3134,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/gateway/worker-environments/workspace-result-staging.reads.test.ts",
   "src/gateway/worker-environments/workspace-sync-inventory.test.ts",
   "src/gateway/worker-environments/workspace-sync-scripts.test.ts",
-  "src/gateway/worker-environments/workspace-sync-tunnel.git.test.ts",
   "src/gateway/worker-environments/workspace-sync-tunnel.test.ts",
   "src/gateway/worker-workspace-recovery-binding.test.ts",
   "src/gateway/worker-workspace-recovery-transcript.test.ts",

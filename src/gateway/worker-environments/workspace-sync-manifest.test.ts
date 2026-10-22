@@ -55,7 +55,21 @@ function transactionRunner(workspace: string, env = process.env) {
   };
 }
 
-const fixture = (prefix: string) => createScriptWorkspace(tempDirs.make(prefix));
+async function fixture(prefix: string) {
+  const workspace = await createScriptWorkspace(tempDirs.make(prefix));
+  return {
+    ...workspace,
+    capture: async (...args: string[]) => {
+      const result = await workspace.runManifest(args);
+      expect(result.code, result.stderr).toBe(0);
+      const ref = result.stdout.trim();
+      const digest = ref.slice("sha256:".length);
+      const file = path.join(workspace.manifestRoot, `${digest}.json`);
+      const raw = await fs.readFile(file, "utf8");
+      return { ref, digest, file, raw, manifest: parseWorkerWorkspaceManifest(raw, ref) };
+    },
+  };
+}
 
 async function transactionWorkspace(prefix: string) {
   const root = tempDirs.make(prefix);
@@ -91,7 +105,12 @@ function spawnTransaction(argv: string[], env: NodeJS.ProcessEnv) {
     child.once("error", reject);
     child.once("close", (code, signal) => resolve({ code, signal, stderr }));
   });
-  return { child, ready: ready.promise, exited };
+  return {
+    child,
+    exited,
+    waitUntilReady: (signal: AbortSignal, message: string) =>
+      withinTest(awaitGateBeforeSettlement(ready.promise, exited, message), signal),
+  };
 }
 
 describe("remote workspace manifest script", () => {
@@ -251,54 +270,43 @@ describe("remote workspace manifest script", () => {
     await fs.chmod(path.join(workspace, "parent"), 0o700);
   });
 
-  it("reports strict settlement outcomes for each durable transaction phase", async () => {
-    const { root, workspace, runTransaction, begin, stage, ok } = await transactionWorkspace(
-      "openclaw-accepted-settlement-outcomes-",
-    );
-    const expectSettlement = (
-      value: Awaited<ReturnType<typeof runTransaction>>,
-      outcome: "begun" | "rolled-back" | "applied" | "committed",
-    ) => {
-      expect(value).toMatchObject({
+  it.each(["begun", "applied", "committed"] as const)(
+    "reports strict settlement for %s transactions",
+    async (outcome) => {
+      const { root, workspace, runTransaction, begin, stage, ok } = await transactionWorkspace(
+        "openclaw-accepted-settlement-outcomes-",
+      );
+      const nonce = "a".repeat(32);
+      if (outcome === "begun") {
+        expect(await begin(nonce, ["result.txt"])).toMatchObject({ code: 0 });
+      } else {
+        await stage(nonce, { "result.txt": `${outcome}\n` });
+        await ok("apply", nonce);
+        if (outcome === "committed") {
+          await ok("commit", nonce);
+        }
+      }
+      expect(await runTransaction("settle", nonce)).toMatchObject({
         code: 0,
         stderr: "",
         stdout: `${JSON.stringify({ version: 1, outcome })}\n`,
       });
-    };
-
-    const begunNonce = "a".repeat(32);
-    expect(await begin(begunNonce, ["result.txt"])).toMatchObject({ code: 0 });
-    expectSettlement(await runTransaction("settle", begunNonce), "begun");
-    await ok("rollback", begunNonce);
-
-    const appliedNonce = "b".repeat(32);
-    await stage(appliedNonce, { "result.txt": "applied\n" });
-    await ok("apply", appliedNonce);
-    expectSettlement(await runTransaction("settle", appliedNonce), "applied");
-    await ok("rollback", appliedNonce);
-
-    const committedNonce = "c".repeat(32);
-    await stage(committedNonce, { "result.txt": "committed\n" });
-    await ok("apply", committedNonce);
-    await ok("commit", committedNonce);
-    expectSettlement(await runTransaction("settle", committedNonce), "committed");
-    await ok("recover", "d".repeat(32));
-    await expectFiles(workspace, { "result.txt": "committed\n" });
-    expect(
-      (await fs.readdir(root)).filter((name) => name.startsWith(".openclaw-accepted-")),
-    ).toEqual([]);
-  });
+      if (outcome === "committed") {
+        await ok("recover", "d".repeat(32));
+        await expectFiles(workspace, { "result.txt": "committed\n" });
+      } else {
+        await ok("rollback", nonce);
+      }
+      expect(
+        (await fs.readdir(root)).filter((name) => name.startsWith(".openclaw-accepted-")),
+      ).toEqual([]);
+    },
+  );
 
   it("serializes a live apply against rollback and recovery", async ({ signal }) => {
     for (const contender of ["rollback", "recover"] as const) {
-      const root = tempDirs.make(`openclaw-accepted-${contender}-`);
-      let workspace = path.join(root, "workspace");
-      const applyMarker = path.join(root, "apply-started");
-      const contenderMarker = path.join(root, "contender-waiting");
+      const { root, workspace } = await transactionWorkspace(`openclaw-accepted-${contender}-`);
       const preload = path.join(root, "gate.cjs");
-      await fs.mkdir(workspace);
-      workspace = await fs.realpath(workspace);
-      await fs.writeFile(path.join(workspace, "result.txt"), "old\n");
       await fs.writeFile(
         preload,
         `const fs = require("node:fs");
@@ -353,14 +361,7 @@ process.kill = function(pid, signal) {
       const apply = spawnAction("apply", nonce);
       let competing: ReturnType<typeof spawnTransaction> | undefined;
       try {
-        await withinTest(
-          awaitGateBeforeSettlement(
-            apply.ready,
-            apply.exited,
-            `timeout waiting for ${applyMarker}`,
-          ),
-          signal,
-        );
+        await apply.waitUntilReady(signal, "apply did not reach its gate");
         const transaction = path.dirname(staging);
         await expect(fs.access(path.join(workspace, "result.txt"))).rejects.toThrow();
         await expectFiles(transaction, { "backup/result.txt": "old\n" });
@@ -368,14 +369,7 @@ process.kill = function(pid, signal) {
 
         const contenderNonce = contender === "rollback" ? nonce : "5".repeat(32);
         competing = spawnAction(contender, contenderNonce);
-        await withinTest(
-          awaitGateBeforeSettlement(
-            competing.ready,
-            competing.exited,
-            `timeout waiting for ${contenderMarker}`,
-          ),
-          signal,
-        );
+        await competing.waitUntilReady(signal, "contender did not reach its gate");
         await expect(fs.access(path.join(workspace, "result.txt"))).rejects.toThrow();
         await expectFiles(transaction, { "backup/result.txt": "old\n" });
 
@@ -451,39 +445,28 @@ process.kill = function(pid, signal) {
   });
 
   it("keeps the gateway's canonical manifest available across a second turn", async () => {
-    const { home, workspace, runManifest } = await fixture("openclaw-manifest-lifecycle-test-");
+    const { manifestRoot, workspace, runManifest, capture } = await fixture(
+      "openclaw-manifest-lifecycle-test-",
+    );
     await fs.writeFile(path.join(workspace, ".gitignore"), "");
     const baseCommit = await initializeScriptGitWorkspace(workspace, ".gitignore");
 
-    const initial = await runManifest([baseCommit, "eligible"]);
-    expect(initial.code).toBe(0);
+    const initial = await capture(baseCommit, "eligible");
 
     await fs.writeFile(path.join(workspace, "notes.md"), "cloud edit\n", { mode: 0o664 });
-    await Promise.all([
-      fs.writeFile(path.join(workspace, "Zebra.md"), "upper\n"),
-      fs.writeFile(path.join(workspace, "éclair.md"), "unicode\n"),
-      fs.writeFile(path.join(workspace, "älg.md"), "collation\n"),
-    ]);
-    const firstTurn = await runManifest([
-      baseCommit,
-      "eligible",
-      initial.stdout.trim().slice("sha256:".length),
-    ]);
-    expect(firstTurn.code).toBe(0);
-    const firstTurnRef = firstTurn.stdout.trim();
-    const firstTurnDigest = firstTurnRef.slice("sha256:".length);
-    const manifestRoot = path.join(home, ".openclaw-worker", "manifests");
-    const firstTurnPath = path.join(manifestRoot, `${firstTurnDigest}.json`);
-    const firstTurnRaw = await fs.readFile(firstTurnPath, "utf8");
-    const firstTurnManifest = parseWorkerWorkspaceManifest(firstTurnRaw, firstTurnRef);
-    expect(firstTurnRaw).toBe(serializeWorkerWorkspaceManifest(firstTurnManifest));
+    await writeFiles(workspace, {
+      "Zebra.md": "upper\n",
+      "éclair.md": "unicode\n",
+      "älg.md": "collation\n",
+    });
+    const first = await capture(baseCommit, "eligible", initial.digest);
+    expect(first.raw).toBe(serializeWorkerWorkspaceManifest(first.manifest));
+    await fs.rm(first.file);
+    const published = await runManifest(["", "publish", first.digest], { input: first.raw });
+    expect(published).toMatchObject({ code: 0, stdout: first.ref + "\n" });
+    await expect(fs.readFile(first.file, "utf8")).resolves.toBe(first.raw);
 
-    await fs.rm(firstTurnPath);
-    const published = await runManifest(["", "publish", firstTurnDigest], { input: firstTurnRaw });
-    expect(published).toMatchObject({ code: 0, stdout: firstTurnRef + "\n" });
-    await expect(fs.readFile(firstTurnPath, "utf8")).resolves.toBe(firstTurnRaw);
-
-    const legacy = JSON.parse(firstTurnRaw) as {
+    const legacy = JSON.parse(first.raw) as {
       entries: Array<{ path: string; type: string; mode: number }>;
     };
     for (const entry of legacy.entries) {
@@ -497,7 +480,7 @@ process.kill = function(pid, signal) {
     const legacyRaw = JSON.stringify(legacy);
     const legacyDigest = createHash("sha256").update(legacyRaw).digest("hex");
     await fs.writeFile(path.join(manifestRoot, `${legacyDigest}.json`), legacyRaw);
-    await fs.rm(firstTurnPath);
+    await fs.rm(first.file);
 
     const legacyCanonical = structuredClone(legacy);
     for (const entry of legacyCanonical.entries) {
@@ -522,53 +505,39 @@ process.kill = function(pid, signal) {
     await expect(fs.readFile(acceptedPath, "utf8")).resolves.toBe(acceptedRaw);
 
     await fs.writeFile(path.join(workspace, "notes.md"), "second cloud edit\n");
-    const secondTurn = await runManifest([baseCommit, "eligible", acceptedDigest]);
-    expect(secondTurn.code).toBe(0);
-    expect(secondTurn.stdout.trim()).not.toBe(acceptedRef);
+    expect((await capture(baseCommit, "eligible", acceptedDigest)).ref).not.toBe(acceptedRef);
   });
 
   it("keeps base tombstones in the final ignored-path verification", async () => {
-    const { workspace, runManifest } = await fixture("openclaw-manifest-tombstone-test-");
+    const { workspace, capture } = await fixture("openclaw-manifest-tombstone-test-");
     await fs.writeFile(path.join(workspace, ".gitignore"), "");
     const baseCommit = await initializeScriptGitWorkspace(workspace, ".gitignore");
 
     await fs.writeFile(path.join(workspace, "artifact.txt"), "base artifact\n");
-    const base = await runManifest([baseCommit, "eligible"]);
-    expect(base.code).toBe(0);
-    const baseDigest = base.stdout.trim().slice("sha256:".length);
+    const base = await capture(baseCommit, "eligible");
 
     await Promise.all([
       fs.writeFile(path.join(workspace, ".gitignore"), "artifact.txt\n"),
       fs.rm(path.join(workspace, "artifact.txt")),
     ]);
-    const current = await runManifest([baseCommit, "eligible", baseDigest]);
-    expect(current.code).toBe(0);
-    const currentRef = current.stdout.trim();
-    const currentDigest = currentRef.slice("sha256:".length);
+    const current = await capture(baseCommit, "eligible", base.digest);
 
     await fs.writeFile(path.join(workspace, "artifact.txt"), "late recreated artifact\n");
-    const verified = await runManifest([baseCommit, "eligible", currentDigest, baseDigest]);
-    expect(verified.code).toBe(0);
-    expect(verified.stdout.trim()).not.toBe(currentRef);
+    expect((await capture(baseCommit, "eligible", current.digest, base.digest)).ref).not.toBe(
+      current.ref,
+    );
   });
 
   it("drops stale descendants when a tracked directory becomes a file", async () => {
-    const { workspace, runManifest, readManifest } = await fixture("openclaw-manifest-test-");
+    const { workspace, capture } = await fixture("openclaw-manifest-test-");
     await fs.mkdir(path.join(workspace, "src"), { recursive: true });
     await fs.writeFile(path.join(workspace, "src", "old.txt"), "old");
     const baseCommit = await initializeScriptGitWorkspace(workspace, ".");
-    const initial = await runManifest([baseCommit, "eligible", ""]);
-    expect(initial.code).toBe(0);
+    const initial = await capture(baseCommit, "eligible", "");
 
     await fs.rm(path.join(workspace, "src"), { recursive: true });
     await fs.writeFile(path.join(workspace, "src"), "replacement");
-    const current = await runManifest([
-      baseCommit,
-      "eligible",
-      initial.stdout.trim().slice("sha256:".length),
-    ]);
-    expect(current.code).toBe(0);
-    const manifest = await readManifest(current.stdout.trim());
+    const { manifest } = await capture(baseCommit, "eligible", initial.digest);
     expect(manifest.entries).toContainEqual(expect.objectContaining({ path: "src", type: "file" }));
     expect(manifest.entries.some((entry) => entry.path === "src/old.txt")).toBe(false);
   });
