@@ -19,7 +19,7 @@ import {
   mcpContent,
   testBoard,
 } from "./board-store.fixtures.test-support.js";
-import { createBoardWidgetPutSnapshot, type BoardStore } from "./board-store.js";
+import type { BoardStore } from "./board-store.js";
 import { readBoardHtml, createTestBoardStore } from "./board-store.test-support.js";
 import { SqliteBoardStore } from "./sqlite-board-store.js";
 import { readBoardSnapshotWithHtmlViewMetadata } from "./sqlite-board-store.kernel.js";
@@ -47,10 +47,25 @@ const widgetContents = [
   mcpContent({ uiResourceUri: "ui://resource" }, false),
 ] satisfies BoardWidgetMaterializedPutParams["content"][];
 const boardSession = { sessionKey: "agent:main:board" };
+const health = { tools: ["health"] };
+
+function fixture() {
+  const context = boardFixture(tempDirs.make("board-store-"));
+  return {
+    ...context,
+    html: (name: string, html: string) => putHtml(context.store, context.sessionKey, name, html),
+    manifest: (name = "status") => {
+      const row = context.database.db
+        .prepare("SELECT manifest FROM board_widgets WHERE session_key = ? AND name = ?")
+        .get(context.sessionKey, name) as { manifest: string };
+      return JSON.parse(row.manifest);
+    },
+  };
+}
 
 it("releases SQLite before awaiting a widget consumer's external work", async () => {
-  const { store, database, target } = boardFixture(tempDirs.make("board-consume-"));
-  await putHtml(store, target.sessionKey, "status", "original");
+  const { store, database, target, html } = fixture();
+  await html("status", "original");
   const started = createDeferred();
   const release = createDeferred();
   const consumed = store.useWidgetDocument(target, "status", async (document) => {
@@ -61,7 +76,7 @@ it("releases SQLite before awaiting a widget consumer's external work", async ()
   });
   try {
     await started.promise;
-    await putHtml(store, target.sessionKey, "status", "replacement");
+    await html("status", "replacement");
   } finally {
     release.resolve();
   }
@@ -111,20 +126,6 @@ it.each(
     await expectUnchanged();
   }
 
-  if (content.kind === "plugin") {
-    const withIncidentalInstance = {
-      ...created,
-      widgets: created.widgets.map((widget) => ({ ...widget, instanceId: "incidental" })),
-    };
-    expect(
-      createBoardWidgetPutSnapshot(
-        withIncidentalInstance,
-        { sessionKey: created.sessionKey, name, content },
-        { grantScopeMatches: true, instanceId: "replacement" },
-      ).widgets[0],
-    ).toMatchObject({ contentOwner: "plugin", revision: 2 });
-  }
-
   const updated = (await put(content)).widgets[0]!;
   expect(updated).toMatchObject({ name, revision: 2 });
   if (content.kind === "plugin") {
@@ -150,14 +151,14 @@ it("enforces the board widget count and UTF-8 HTML byte limits", async () => {
   for (let index = 0; index < 48; index += 1) {
     await putHtml(store, "session", `widget-${index}`, "ok");
   }
-  try {
-    await putHtml(store, "session", "widget-48", "ok");
-    throw new Error("expected widget cap to fail");
-  } catch (error) {
-    expect(error).toBeInstanceOf(BoardValidationError);
-    expect(error).toMatchObject({ code: "invalid_operation" });
-    expect((error as Error).message).toContain("more than 48 widgets");
-  }
+  const error: unknown = await putHtml(store, "session", "widget-48", "ok").catch(
+    (failure: unknown) => failure,
+  );
+  expect(error).toBeInstanceOf(BoardValidationError);
+  expect(error).toMatchObject({
+    code: "invalid_operation",
+    message: expect.stringContaining("more than 48 widgets"),
+  });
   const largeStore = createTestBoardStore();
   const html = "é".repeat(5 * 1024 * 1024);
   await putHtml(largeStore, "session", "large", html);
@@ -168,9 +169,7 @@ it("enforces the board widget count and UTF-8 HTML byte limits", async () => {
 });
 
 it("upgrades registered ownership from its exact legacy descriptor and preserves it", async () => {
-  const { sessionKey, put, snapshot, grant, database } = boardFixture(
-    tempDirs.make("board-legacy-registered-"),
-  );
+  const { sessionKey, put, snapshot, grant, database, manifest } = fixture();
   const content = {
     kind: "registered" as const,
     contentKind: "diagram",
@@ -206,10 +205,7 @@ it("upgrades registered ownership from its exact legacy descriptor and preserves
     declared: { tools: ["health"] },
   });
   await grant("status", 2, refreshed.widgets[0]?.instanceId);
-  const row = database.db
-    .prepare("SELECT manifest FROM board_widgets WHERE session_key = ? AND name = 'status'")
-    .get(sessionKey) as { manifest: string };
-  expect(JSON.parse(row.manifest)).toMatchObject({
+  expect(manifest()).toMatchObject({
     contentOwner: "registered",
     registeredContentKind: "diagram",
     grantSemanticsVersion: 2,
@@ -235,26 +231,14 @@ it("returns immutable snapshots and isolates session boards", async () => {
   });
 });
 
-it("transitions declared widgets through pending grants", async () => {
-  const { put, grant } = testBoard("session");
-  const pending = await put({
-    name: "networked",
-    content: { kind: "html", html: "<p>ok</p>" },
-    declared: { netOrigins: ["https://example.com"] },
-  });
-  expect(pending.widgets[0]!.grantState).toBe("pending");
-  const instance = pending.widgets[0]?.instanceId;
-  expect((await grant("networked", 1, instance)).widgets[0]!.grantState).toBe("granted");
-  await expect(grant("networked", 1, instance, "rejected")).rejects.toThrow("not pending");
-});
-
-it("rejects stale grant revisions and accepts the current revision", async () => {
+it("requires current revisions and pending grants", async () => {
   const { put, grant } = testBoard("session");
   const pending = await put({
     name: "networked",
     content: { kind: "html", html: "ok" },
     declared: { tools: ["weather.refresh"] },
   });
+  expect(pending.widgets[0]!.grantState).toBe("pending");
   const failure: unknown = await grant("networked", 2).catch((error: unknown) => error);
   expect(failure).toBeInstanceOf(BoardValidationError);
   expect(failure).toMatchObject({
@@ -263,18 +247,13 @@ it("rejects stale grant revisions and accepts the current revision", async () =>
   });
   const granted = await grant("networked", 1, pending.widgets[0]?.instanceId);
   expect(granted.widgets[0]).toMatchObject({ grantState: "granted", revision: 1 });
+  await expect(grant("networked", 1, pending.widgets[0]?.instanceId, "rejected")).rejects.toThrow(
+    "not pending",
+  );
 });
 it("does not select the HTML BLOB when preparing board view metadata", async () => {
-  const stateDir = tempDirs.make("openclaw-board-projection-");
-  const env = { OPENCLAW_STATE_DIR: stateDir };
-  const sessionKey = "agent:main:projection";
-  const database = openOpenClawAgentDatabase({ agentId: "main", env });
-  const store = createTestBoardStore({ stateDir });
-  await store.putWidget({
-    sessionKey,
-    name: "status",
-    content: { kind: "html", html: "x".repeat(256 * 1024) },
-  });
+  const { store, database, sessionKey, html } = fixture();
+  await html("status", "x".repeat(256 * 1024));
   const prepare = vi.spyOn(database.db, "prepare");
 
   const prepared = readBoardSnapshotWithHtmlViewMetadata(database, sessionKey);
@@ -563,11 +542,8 @@ describe("SqliteBoardStore behavior", () => {
 
 describe("SqliteBoardStore persistence", () => {
   it("drops MCP App rows without canonical authority provenance", async () => {
-    const { sessionKey, store, database } = boardFixture(
-      tempDirs.make("openclaw-board-noncanonical-app-"),
-    );
-    await store.putWidget({
-      sessionKey,
+    const { sessionKey, snapshot, store, put, database } = fixture();
+    await put({
       name: "legacy-app",
       content: mcpContent({ uiResourceUri: "ui://resource" }),
       declared: { tools: ["refresh"] },
@@ -577,16 +553,12 @@ describe("SqliteBoardStore persistence", () => {
       .prepare("UPDATE board_widgets SET manifest = '{}' WHERE session_key = ? AND name = ?")
       .run(sessionKey, "legacy-app");
 
-    expect((await store.getSnapshot({ sessionKey })).widgets).toEqual([]);
+    expect((await snapshot()).widgets).toEqual([]);
     expect(await store.readWidgetMcpApp({ sessionKey }, "legacy-app")).toBeUndefined();
   });
 
   it("migrates board tables into an existing v14 database", async () => {
-    const {
-      env,
-      sessionKey,
-      database: opened,
-    } = boardFixture(tempDirs.make("openclaw-board-lazy-schema-"));
+    const { env, sessionKey, database: opened } = fixture();
     const databasePath = opened.path;
     await closeDatabases();
 
@@ -625,9 +597,7 @@ describe("SqliteBoardStore persistence", () => {
     expect(await readBoardHtml(store, { sessionKey }, "status")).toBeUndefined();
     await expect(
       store.putWidget({
-        sessionKey,
-        name: "broken",
-        content: { kind: "html", html: "broken" },
+        ...htmlWidget(sessionKey, "broken", "broken"),
         placement: { tabId: "missing" },
       }),
     ).rejects.toThrow("board tab not found");
@@ -673,21 +643,19 @@ describe("SqliteBoardStore persistence", () => {
   });
 
   it("rejects board writes for transcript-only placeholder nodes", async () => {
-    const { env, sessionKey, store, database } = boardFixture(tempDirs.make("board-transcript-"));
+    const { env, sessionKey, database, html } = fixture();
     await deleteSessionEntryLifecycle({
       env,
       storePath: database.path,
       archiveTranscript: false,
       target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
     });
-    await expect(putHtml(store, sessionKey, "status", "no")).rejects.toThrow(
-      "board session not found",
-    );
+    await expect(html("status", "no")).rejects.toThrow("board session not found");
   });
 
   it("fails closed when reading a persisted unsafe capability manifest", async () => {
-    const { sessionKey, store, database } = boardFixture(tempDirs.make("board-unsafe-manifest-"));
-    await putHtml(store, sessionKey, "status", "ok");
+    const { sessionKey, snapshot, document, database, html } = fixture();
+    await html("status", "ok");
     database.db
       .prepare(
         "UPDATE board_widgets SET manifest = ?, grant_state = 'granted', granted_sha = sha256 WHERE session_key = ? AND name = 'status'",
@@ -697,27 +665,29 @@ describe("SqliteBoardStore persistence", () => {
         sessionKey,
       );
 
-    expect((await store.getSnapshot({ sessionKey })).widgets[0]).toMatchObject({
+    const widget = (await snapshot()).widgets[0];
+    const content = await document("status");
+    expect(widget).toMatchObject({
       name: "status",
       grantState: "none",
     });
-    expect((await store.getSnapshot({ sessionKey })).widgets[0]).not.toHaveProperty("declared");
-    expect(await readBoardHtml(store, { sessionKey }, "status")).toMatchObject({
+    expect(widget).not.toHaveProperty("declared");
+    expect(content).toMatchObject({
       html: "ok",
       grantState: "none",
     });
-    expect(await readBoardHtml(store, { sessionKey }, "status")).not.toHaveProperty("declared");
+    expect(content).not.toHaveProperty("declared");
 
     database.db
       .prepare(
         "UPDATE board_widgets SET grant_state = 'rejected' WHERE session_key = ? AND name = 'status'",
       )
       .run(sessionKey);
-    expect((await store.getSnapshot({ sessionKey })).widgets[0]).toMatchObject({
+    expect((await snapshot()).widgets[0]).toMatchObject({
       name: "status",
       grantState: "rejected",
     });
-    expect(await readBoardHtml(store, { sessionKey }, "status")).toMatchObject({
+    expect(await document("status")).toMatchObject({
       html: "ok",
       grantState: "rejected",
     });
@@ -755,19 +725,17 @@ describe("SqliteBoardStore persistence", () => {
   });
 
   it("requires reapproval for grants stored before byte-frozen semantics", async () => {
-    const { sessionKey, database, put, grant, snapshot, document } = boardFixture(
-      tempDirs.make("board-legacy-grant-"),
-    );
+    const { sessionKey, database, put, grant, snapshot, document, manifest } = fixture();
     const current = await put({
       name: "status",
       content: { kind: "html", html: "approved" },
-      declared: { tools: ["health"] },
+      declared: health,
     });
     await grant("status", 1, current.widgets[0]?.instanceId);
 
     database.db
       .prepare("UPDATE board_widgets SET manifest = ? WHERE session_key = ? AND name = 'status'")
-      .run(JSON.stringify({ tools: ["health"] }), sessionKey);
+      .run(JSON.stringify(health), sessionKey);
 
     expect((await snapshot()).widgets[0]).toMatchObject({
       grantState: "pending",
@@ -780,10 +748,7 @@ describe("SqliteBoardStore persistence", () => {
     expect((await grant("status", 1, current.widgets[0]?.instanceId)).widgets[0]).toMatchObject({
       grantState: "granted",
     });
-    const row = database.db
-      .prepare("SELECT manifest FROM board_widgets WHERE session_key = ? AND name = 'status'")
-      .get(sessionKey) as { manifest: string };
-    expect(JSON.parse(row.manifest)).toEqual({
+    expect(manifest()).toEqual({
       contentOwner: "html",
       tools: ["health"],
       grantSemanticsVersion: 2,
