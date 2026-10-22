@@ -23,21 +23,19 @@ import {
 } from "./chat-thread-fixtures.test-support.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
 import * as threadItems from "./chat-thread-items.ts";
+import { persistedMessageEntryId, readPendingSendStatus } from "./chat-thread-items.ts";
 import { buildItems, createProps, type CachedChatItemsProps } from "./chat-thread.test-support.ts";
 import {
   buildCachedChatItems,
-  coalesceStreamRuns,
-  collapseCompletedTurnWork,
   getExpansionStateVersion,
   getExpandedToolCards,
   getExpandedUserMessages,
-  persistedMessageEntryId,
-  readPendingSendStatus,
   resetChatThreadState,
   setExpansionState,
   subscribeExpansionState,
   syncToolCardExpansionState,
 } from "./chat-thread.ts";
+import { coalesceStreamRuns, collapseCompletedTurnWork } from "./chat-turn-presentation.ts";
 import { publishChatSessionProjectionMessages } from "./history-merge.ts";
 import { readLiveTerminalRevision, rememberLiveTerminalRun } from "./terminal-message-identity.ts";
 

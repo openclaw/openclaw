@@ -20,7 +20,6 @@ import {
 } from "solid-js";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { hasOperatorReadAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
-import { formatUiError } from "../../lib/format-error.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { isArchiveAccessDeniedError } from "../../lib/gateway-errors.ts";
 import { createPageRequest } from "../../lib/page-request.ts";
@@ -43,7 +42,6 @@ type ArchiveReadResults = {
   "transcripts.get": TranscriptsGetResult;
   "transcripts.export": TranscriptsExportResult;
 };
-type OperationState = { kind: "idle" | "done" | "error"; message?: string };
 // Cancellation settles presentation even when the retired RPC replies later.
 type Operation = {
   abort: AbortController;
@@ -106,26 +104,27 @@ export function MeetingsPage(props: { routeSearch?: string }) {
   const [summary, setSummary] = createSignal<TranscriptsGetResult | null>(null, {
     ownedWrite: true,
   });
-  const [summaryGeneration, setSummaryGeneration] = createSignal<OperationState>(
-    { kind: "idle" },
-    { ownedWrite: true },
-  );
+  let summaryAttempted = false;
+  const [summaryCompletion, setSummaryCompletion] = createSignal<Promise<void> | null>(null, {
+    ownedWrite: true,
+  });
+  const summaryCompleted = createMemo(() => summaryCompletion()?.then(() => true) ?? false);
   let summaryOperation: Operation | null = null;
   const [generating, setGenerating] = createOptimistic(false);
   const presentSummary = action(function* (completion: Promise<void>) {
     setGenerating(true);
-    yield completion;
+    yield completion.catch(() => {});
   });
   const [readerPages, setReaderPages] = createStore<TranscriptsGetResult[]>([]);
-  const [exportState, setExportState] = createSignal<OperationState>(
-    { kind: "idle" },
-    { ownedWrite: true },
-  );
+  const [exportCompletion, setExportCompletion] = createSignal<Promise<void> | null>(null, {
+    ownedWrite: true,
+  });
+  const exportCompleted = createMemo(() => exportCompletion()?.then(() => true) ?? false);
   let exportOperation: Operation | null = null;
   const [exporting, setExporting] = createOptimistic(false);
   const presentExport = action(function* (completion: Promise<void>) {
     setExporting(true);
-    yield completion;
+    yield completion.catch(() => {});
   });
   let focusSelection = false;
   const focusTargets: Partial<Record<"search" | "reader-title" | "reader-error", HTMLElement>> = {};
@@ -355,7 +354,7 @@ export function MeetingsPage(props: { routeSearch?: string }) {
     exportOperation = null;
     previous?.abort.abort();
     previous?.completion.resolve();
-    setExportState({ kind: "idle" });
+    setExportCompletion(null);
   }
 
   function cancelSummaryGeneration() {
@@ -363,7 +362,8 @@ export function MeetingsPage(props: { routeSearch?: string }) {
     summaryOperation = null;
     previous?.abort.abort();
     previous?.completion.resolve();
-    setSummaryGeneration({ kind: "idle" });
+    summaryAttempted = false;
+    setSummaryCompletion(null);
   }
 
   async function generateMissingSummary(retry = false, page = summary()) {
@@ -380,7 +380,7 @@ export function MeetingsPage(props: { routeSearch?: string }) {
       page.summary ||
       page.session.utteranceCount === 0 ||
       summaryOperation !== null ||
-      (!retry && summaryGeneration().kind !== "idle")
+      (!retry && summaryAttempted)
     ) {
       return;
     }
@@ -389,7 +389,10 @@ export function MeetingsPage(props: { routeSearch?: string }) {
       completion: Promise.withResolvers<void>(),
     };
     summaryOperation = operation;
-    setSummaryGeneration({ kind: "idle" });
+    summaryAttempted = true;
+    void setSummaryCompletion(operation.completion.promise);
+    // A hidden or retired summary may never consume its error boundary.
+    void operation.completion.promise.catch(() => {});
     const current = () =>
       !operation.abort.signal.aborted &&
       summaryOperation === operation &&
@@ -412,10 +415,9 @@ export function MeetingsPage(props: { routeSearch?: string }) {
         }
         summaryTask.abort();
         setSummary(result);
-        setSummaryGeneration({ kind: "done" });
       } catch (error) {
         if (current()) {
-          setSummaryGeneration({ kind: "error", message: formatUiError(error) });
+          operation.completion.reject(error);
         }
       } finally {
         if (summaryOperation === operation) {
@@ -501,7 +503,9 @@ export function MeetingsPage(props: { routeSearch?: string }) {
       completion: Promise.withResolvers<void>(),
     };
     exportOperation = operation;
-    setExportState({ kind: "idle" });
+    void setExportCompletion(operation.completion.promise);
+    // The error boundary owns feedback, including after the action has settled.
+    void operation.completion.promise.catch(() => {});
     const current = () => exportOperation === operation && !operation.abort.signal.aborted;
     const completed = (async () => {
       try {
@@ -522,7 +526,6 @@ export function MeetingsPage(props: { routeSearch?: string }) {
               anchor.download = result.filename;
               document.body.append(anchor);
               anchor.click();
-              setExportState({ kind: "done" });
             } finally {
               anchor.remove();
               // Allow the browser to consume the object URL before releasing the bytes.
@@ -532,7 +535,7 @@ export function MeetingsPage(props: { routeSearch?: string }) {
         });
       } catch (error) {
         if (current()) {
-          setExportState({ kind: "error", message: formatUiError(error) });
+          operation.completion.reject(error);
         }
       } finally {
         if (exportOperation === operation) {
@@ -668,9 +671,13 @@ export function MeetingsPage(props: { routeSearch?: string }) {
           },
         }}
         readerTab={readerTab()}
-        summaryGeneration={generating() ? { kind: "loading" } : summaryGeneration()}
+        summaryGenerating={generating()}
+        summaryCompletion={summaryCompletion()}
+        summaryRead={summaryCompleted}
         onSummaryRetry={() => void generateMissingSummary(true)}
-        exportState={exporting() ? { kind: "loading" } : exportState()}
+        exporting={exporting()}
+        exportCompletion={exportCompletion()}
+        exportRead={exportCompleted}
         onNavigate={navigate}
         onOpenCaptureSettings={() => {
           const target = SETTINGS_SEARCH_TARGETS.meetingCapture;

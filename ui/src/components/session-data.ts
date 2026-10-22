@@ -232,6 +232,14 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
 
   sessionListQuery = (agentId: string) => sidebarSessionListQuery(this.inputs, agentId);
 
+  resultForAgent(agentId: string): SessionsListResult | null {
+    const selected = normalizeAgentId(agentId);
+    // The current window, even while empty/loading, supersedes its cached result.
+    return this.sessionsAgentId === null || selected === normalizeAgentId(this.sessionsAgentId)
+      ? this.sessionsResult
+      : (this.sessionResultsByAgent[selected] ?? null);
+  }
+
   connect(): () => void {
     this.disconnect(true);
     // The Solid component owns one application context for this mount.
@@ -251,7 +259,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
       return;
     }
     const roster =
-      this.inputs.sidebarAgentsMode === "roster" && this.sessionLineageVisible && this.context
+      this.inputs.sidebarAgentsMode === "roster" && this.sessionLineageVisible
         ? rosterActivityStore(this.context)
         : undefined;
     roster?.setInvolvingMe(this.inputs.sidebarSessionOwnerFilter().involvingMe);
@@ -342,7 +350,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
   }
 
   sessionCatalogGatewayClient(): GatewayBrowserClient | null {
-    return sessionCatalogListClient(this.context?.gateway.snapshot, this.inputs.connected);
+    return sessionCatalogListClient(this.context.gateway.snapshot, this.inputs.connected);
   }
 
   private synchronizeOwnerSessionCounts(): void {
@@ -350,27 +358,26 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
       (user) => user.identity?.type === "profile",
     );
     this.ownerCounts.synchronize(
-      this.inputs.connected && hasProfiles ? this.context?.sessions : undefined,
-      this.context?.gateway.snapshot.selfUser?.id ?? null,
-      this.context?.connectionBootstrap,
+      this.inputs.connected && hasProfiles ? this.context.sessions : undefined,
+      this.context.gateway.snapshot.selfUser?.id ?? null,
+      this.context.connectionBootstrap,
     );
   }
 
   synchronizeSessionScope(): void {
     const context = this.context;
-    const selection = context?.agentSelection;
+    const selection = context.agentSelection;
     const foreground =
-      selection !== undefined &&
       selection === this.agentSelectionSource &&
       selection.intentRevision !== this.agentSelectionIntentRevision;
     // Consume same-agent intent too, before a later automatic scope change can reuse it.
     this.agentSelectionSource = selection;
-    this.agentSelectionIntentRevision = selection?.intentRevision;
-    const nextAgentId = context ? normalizeAgentId(this.inputs.expandedAgentId()) : null;
+    this.agentSelectionIntentRevision = selection.intentRevision;
+    const nextAgentId = normalizeAgentId(this.inputs.expandedAgentId());
     // A reconnect cannot revoke ownership until its replacement hello is authoritative.
     const nextCatalogAgentId =
       resolveSessionCatalogAgentId(this) ??
-      (context?.gateway.snapshot.phase !== "connected" ? this.sessionCatalogAgentId : null);
+      (context.gateway.snapshot.phase !== "connected" ? this.sessionCatalogAgentId : null);
     if (
       nextAgentId === this.sessionScopeAgentId &&
       nextCatalogAgentId === this.sessionCatalogAgentId
@@ -388,10 +395,9 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
       previousCatalogAgentId !== null && previousCatalogAgentId !== nextCatalogAgentId;
     const ownsCurrentCanonicalList =
       !hasSidebarListFilter(this.inputs) &&
-      nextAgentId !== null &&
       this.sessionsAgentId !== null &&
       normalizeAgentId(this.sessionsAgentId) === nextAgentId &&
-      this.sessionsResult === context?.sessions.presentation.result;
+      this.sessionsResult === context.sessions.presentation.result;
 
     this.sessionScopeAgentId = nextAgentId;
     this.sessionCatalogAgentId = nextCatalogAgentId;
@@ -414,7 +420,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
     if (
       agentChanged &&
       this.inputs.sidebarAgentsMode !== "roster" &&
-      context?.gateway.snapshot.phase === "connected" &&
+      context.gateway.snapshot.phase === "connected" &&
       hasSidebarListFilter(this.inputs)
     ) {
       void (foreground ? this.refreshSidebarSessions() : this.scheduleSidebarSessions());
@@ -489,7 +495,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
       this.sessionsSource = sessions;
     }
     this.updateSessions(sessions);
-    if (this.context?.gateway.snapshot.phase === "connected") {
+    if (this.context.gateway.snapshot.phase === "connected") {
       if (sourceChanged && hasSidebarListFilter(this.inputs)) {
         void this.scheduleSidebarSessions();
       }
@@ -593,12 +599,8 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
   }
 
   private bindFilteredSessions(): void {
-    const sessions = this.context?.sessions;
-    if (
-      !sessions ||
-      this.inputs.sidebarAgentsMode === "roster" ||
-      !hasSidebarListFilter(this.inputs)
-    ) {
+    const sessions = this.context.sessions;
+    if (this.inputs.sidebarAgentsMode === "roster" || !hasSidebarListFilter(this.inputs)) {
       this.retireFilteredSessions();
       return;
     }
@@ -616,7 +618,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
       query,
       () =>
         this.filteredSessionScope === scopeKey &&
-        this.context?.sessions === sessions &&
+        this.context.sessions === sessions &&
         this.inputs.sidebarSessionStatusFilter() === query.archivedFilter &&
         this.sessionListQuery(this.inputs.expandedAgentId()).agentId === query.agentId,
     );
@@ -656,10 +658,9 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
   }
 
   async loadChildSessions(parentKey: string, retry = false): Promise<void> {
-    const sessions = this.context?.sessions;
+    const sessions = this.context.sessions;
     if (
       !this.inputs.isConnected ||
-      !sessions ||
       !sessions.captureConnectionScope() ||
       !parentKey ||
       this.childSessionErrorsByParent.has(parentKey)
@@ -677,7 +678,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
     this.childSessionQueries.set(parentKey, query);
     const isCurrent = () =>
       this.inputs.isConnected &&
-      sessions === this.context?.sessions &&
+      sessions === this.context.sessions &&
       this.childSessionQueries.get(parentKey) === query;
     query.observation = sessions.observeList(
       scope,
@@ -733,11 +734,11 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
     // pending request from the retired view can repopulate its cleared rows.
     this.resetChildSessionState();
     this.sessionResultsByAgent = {};
-    if (!hasSidebarListFilter(this.inputs) && this.context) {
+    if (!hasSidebarListFilter(this.inputs)) {
       const presentation = this.context.sessions.presentation;
       this.sessionsResult = presentation.resultCached ? null : presentation.result;
       this.sessionsAgentId = presentation.resultCached ? null : presentation.agentId;
-    } else if (this.context) {
+    } else {
       this.bindFilteredSessions();
     }
     this.requestSessionDataUpdate();

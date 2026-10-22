@@ -145,7 +145,23 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     terminal: () => this.headerWorkspace?.onToggleTerminal?.(),
     browser: () => this.headerWorkspace?.onToggleBrowser?.(),
     desktop: () => this.headerWorkspace?.onToggleDesktop?.(),
-    discussion: () => this.resolveSessionDiscussionAction()?.onToggle(),
+    discussion: () => {
+      const discussion = this.resolveSessionDiscussionAction();
+      if (!discussion) {
+        return;
+      }
+      // Cached menu actions follow the pane's current desktop/mobile presentation.
+      if (
+        this.usesMobileHost &&
+        this.state &&
+        !this.isSlotShown(this.state.sidebarLayout, "discussion")
+      ) {
+        this.openSessionDiscussionSlot();
+        this.navigateMobileHost({ area: "panels", slot: "discussion" });
+      } else {
+        discussion.onToggle();
+      }
+    },
     changes: () => this.headerWorkspace?.onOpenDiff?.(),
     files: () => this.headerWorkspace?.onToggleCollapsed(),
     companion: () => this.requestSessionRail("toggle"),
@@ -304,18 +320,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
                 ? "chat.sessionDiscussion.hide"
                 : "chat.sessionDiscussion.show",
             ),
-            onToggle: () => {
-              const admitted = this.resolveSessionDiscussionAction();
-              if (!admitted) {
-                return;
-              }
-              if (isPanelVisible("discussion")) {
-                admitted.onToggle();
-              } else {
-                this.openSessionDiscussionSlot();
-                this.navigateMobileHost({ area: "panels", slot: "discussion" });
-              }
-            },
           }
         : nativeDiscussion;
     const currentLayout = sidebarLayout ?? this.state?.sidebarLayout;
@@ -348,7 +352,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
           callbacks: this.headerPanelCallbacks,
           desktopPanelAvailable,
           discussion,
-          usesMobileHost: this.usesMobileHost,
           sessionRailVisible,
           subagentsVisible,
           processesVisible,

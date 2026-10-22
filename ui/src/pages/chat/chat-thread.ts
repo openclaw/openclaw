@@ -21,15 +21,6 @@ import type { ChatInputOrderState } from "./chat-thread-inputs.ts";
 import { readChatThreadMessageIdentity, sanitizeStreamText } from "./chat-thread-items.ts";
 import { getOrCreateSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 
-export { persistedMessageEntryId, readPendingSendStatus } from "./chat-thread-items.ts";
-export {
-  assistantGroupCanOwnActiveRunStatus,
-  coalesceActivityRuns,
-  coalesceStreamRuns,
-  collapseCompletedTurnWork,
-} from "./chat-thread-grouping.ts";
-export { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
-
 type CachedChatItems = {
   generation: number;
   input: BuildChatItemsProps | null;

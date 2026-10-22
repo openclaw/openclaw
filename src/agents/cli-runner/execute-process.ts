@@ -19,6 +19,7 @@ import { appendCapturedOutput, createCapturedOutputBuffers } from "../../process
 import { withChildProcessOperation } from "../../process/spawn-diagnostics.js";
 import { getProcessSupervisor } from "../../process/supervisor/index.js";
 import type { RunExit } from "../../process/supervisor/types.js";
+import { truncateUtf8Suffix } from "../../utils/utf8-truncate.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { runWithAgentToolSourceExecutionScope } from "../agent-tool-source-execution-guard.js";
 import type { CliOutput, CliTerminalInterruption } from "../cli-output-contracts.js";
@@ -31,7 +32,6 @@ import { classifyFailoverReason } from "../failover/classify.js";
 import { CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE } from "../failover/error.js";
 import type { CliEventHandlers } from "./execute-events.js";
 import { createCliAbortError, executeNodeClaudeRun } from "./execute-node-claude.js";
-import { appendCliOutputTail } from "./execute-output-buffer.js";
 import { executePluginOwnedProcess } from "./execute-plugin.js";
 import type { CliToolTracking } from "./execute-tool-tracking.js";
 import { attachCliReplyBackend } from "./execution-target.js";
@@ -50,6 +50,7 @@ import { buildCliSupervisorScopeKey } from "./reliability.js";
 import type { NodeClaudePlacement, PreparedCliRunContext } from "./types.js";
 
 const CLI_RUNNER_OUTPUT_PARSE_BYTES = 1024 * 1024;
+const CLI_RUNNER_OUTPUT_TAIL_BYTES = 64 * 1024;
 
 type ExecuteCliProcessOptions = {
   onPhase?: (phase: "send" | "resolve" | "cleanup") => void;
@@ -239,7 +240,7 @@ export async function executeCliProcess(params: {
     }
     stdoutBytes += chunkBytes;
     stdoutHash.update(chunk);
-    stdoutTail = appendCliOutputTail(stdoutTail, chunk);
+    stdoutTail = truncateUtf8Suffix(`${stdoutTail}${chunk}`, CLI_RUNNER_OUTPUT_TAIL_BYTES);
     if (chunk && stdoutCapture.truncatedBytes === 0) {
       appendCapturedOutput(stdoutCapture, chunk, CLI_RUNNER_OUTPUT_PARSE_BYTES, "head");
     }
@@ -252,7 +253,7 @@ export async function executeCliProcess(params: {
     params.diagnostics?.observeCliOutput(chunk, "stderr");
     stderrBytes += Buffer.byteLength(chunk);
     stderrHash.update(chunk);
-    stderrTail = appendCliOutputTail(stderrTail, chunk);
+    stderrTail = truncateUtf8Suffix(`${stderrTail}${chunk}`, CLI_RUNNER_OUTPUT_TAIL_BYTES);
     if (chunk && stderrCapture.truncatedBytes === 0) {
       appendCapturedOutput(stderrCapture, chunk, CLI_RUNNER_OUTPUT_PARSE_BYTES, "head");
     }

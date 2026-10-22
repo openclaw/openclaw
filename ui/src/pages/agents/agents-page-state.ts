@@ -4,7 +4,7 @@ import { pathForAgentPanel } from "../../app-route-paths.ts";
 import { togglePinnedAgent } from "../../app/bootstrap-navigation-preferences.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
-import { selectableAgentsList } from "../../lib/agents/display.ts";
+import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { buildToolsEffectiveRequestKey, type AgentsState } from "../../lib/agents/index.ts";
 import { setDefaultAgent } from "../../lib/agents/mutations.ts";
 import { DEFAULT_AGENT_PANEL, type AgentsPanel } from "../../lib/agents/panels.ts";
@@ -55,10 +55,11 @@ import {
 } from "./skills.ts";
 import { createAgentToolsCatalog, createAgentEffectiveTools } from "./tools.ts";
 
-type AgentsPageData = Omit<AgentsState, "agentsLoading" | "agentsError"> &
+type AgentsPageData = Omit<AgentsState, "agentsLoading" | "agentsError" | "agentsList"> &
   AgentFilesState &
   AgentFilesViewState &
   AgentSkillsState & {
+    readonly agentsList: AgentsState["agentsList"];
     chatModelCatalogRead: Promise<void> | null;
     identityDraft: AgentIdentityDraft;
     identitySaving: boolean;
@@ -94,7 +95,9 @@ export function createAgentsPageState(
   const navigation = projectOwner(context.navigation, (source) => source.snapshot);
   // The domain helpers mutate then read their state synchronously; Solid only observes it.
   const observation = observeState<AgentsPageData>({
-    agentsList: null,
+    get agentsList() {
+      return context.agents.state.agentsList;
+    },
     agentsSelectedId: null,
     chatModelCatalogRead: null,
     agentFilesLoading: false,
@@ -263,8 +266,6 @@ export function createAgentsPageState(
   }
 
   function syncAgentState(agents = context.agents) {
-    const agentState = agents.state;
-    state.agentsList = agentState.agentsList ? selectableAgentsList(agentState.agentsList) : null;
     syncSettingsSelection();
     files.sync(agents);
   }
@@ -285,7 +286,6 @@ export function createAgentsPageState(
     identityAutosave.cancel();
     selectionDrafts.clear();
     identitySaves = selectionDrafts.bindContext(context);
-    state.agentsList = null;
     state.agentsSelectedId = null;
     resetSelectionState();
   }
@@ -317,9 +317,6 @@ export function createAgentsPageState(
       return;
     }
     routeDataInitialized = true;
-    if (gateway.isRouteDataCurrent(data) && data.agentsList) {
-      state.agentsList = data.agentsList;
-    }
     const selection = context.settingsAgentSelection;
     const ownsIntent =
       data.settingsAgentSelection === selection &&
@@ -397,7 +394,9 @@ export function createAgentsPageState(
   }
 
   function ensureAgentIdentities() {
-    void context.agentIdentity.ensure(state.agentsList?.agents.map((entry) => entry.id) ?? []);
+    void context.agentIdentity.ensure(
+      listSelectableAgents(state.agentsList?.agents ?? []).map((entry) => entry.id),
+    );
   }
 
   function loadActivePanelData() {
