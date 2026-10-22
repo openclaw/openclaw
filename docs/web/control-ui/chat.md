@@ -190,8 +190,13 @@ Tap an image to open the zoomable viewer. The existing preview stays visible
 while a sharper, screen-sized rendition loads. If that request fails, **Retry**
 loads it again without replacing the preview or opening another tab. Swiping to
 a gallery image loads that selection, not the rest of the gallery in advance.
-**Download image** fetches the original only when selected. Copy and download
-also remain available from the image's action menu when a preview cannot load.
+Hover over a managed image, or focus it with the keyboard, to reveal **Copy image**
+and **Download image** inside its lower-right corner. Devices without hover keep
+these controls visible. Selecting the image itself still opens the viewer.
+**Download image** fetches the original only when selected. A failed preview can
+still have an accessible original, so its action menu retains copy and download.
+When the Gateway confirms that the source is unavailable, the card omits these
+file actions and keeps its applicable recovery action, such as **Retry**.
 Third-party image URLs retain a secondary browser link because their servers
 may allow image display but block cross-origin downloads; this is not a recovery
 action for uploaded or managed previews.
@@ -643,6 +648,7 @@ Run-error banners offer **Refresh** to reload the conversation without resending
     - Exact-run Stop cancels that parent's associated sub-agents and Swarm collectors, including their descendants. Successful cancellation prevents selected queued children from starting while running siblings stop; it leaves unrelated parent turns and session-wide queues alone.
     - If Stop reports incomplete descendant cancellation, inspect the remaining native subagent runs with `/subagents list` and ask the agent to retry their cancellation with `subagents`. Do not treat the parent's stopped state as confirmation that every child stopped or that runtime cleanup was instantaneous. See [Sub-agent stopping](/tools/subagents#stopping) for scope details.
     - While a run is active, normal follow-ups use the Gateway's effective `messages.queue` mode. `steer` injects into the running turn; other modes keep the browser's durable queued delivery. If the Gateway queues an input instead of steering it, the message appears above the composer until consumed or canceled. Reconnecting also recovers queued inputs from older history pages without changing the page you are viewing. Once the Gateway accepts input for an existing session, its database owns the approved input until it reaches the transcript. Collected messages are retired together with their combined transcript entry. Unconsumed input survives a Gateway restart as interrupted input requiring an explicit resend. Click **Steer** on a browser-owned queued message to inject it manually; removing a server-owned queued message requests its cancellation. A message you steer moves once from the queue to the bottom of the transcript when delivery starts. It stays there while acknowledgment and history catch up, until its saved copy replaces it. Accepted messages keep their saved transcript positions: earlier saved output stays above the steer and later output appears below it. This order survives history refreshes, reconnects, and reloading a finished run. Unsaved assistant text remains a single live tail after saved rows until its own transcript entries arrive.
+    - Type `/steer <message>` to steer explicitly. Once consumed, the message belongs in the transcript, with no separate command chip waiting for the entire run to finish. If the Gateway defers the input, its queued message remains above the composer until consumed or canceled.
     - With **Settings → Appearance → Send shortcut** set to **Enter**, **Cmd/Ctrl+Enter** submits the opposite follow-up action while connected to an active run: queue when Enter steers, or steer when Enter queues (including inherited `collect` and `followup` modes). The send button tooltip shows both actions for the current follow-up setting. This affects only that message, not your saved preference. With the **Cmd/Ctrl+Enter** send shortcut selected, modified Enter remains the normal send action and plain Enter inserts a newline. Interrupt mode keeps its normal behavior.
     - Reorder the queue from the handle on the left of a queued message: drag it, or focus it and press the up and down arrow keys. The position is stored with the message, so it survives a reload and decides delivery order, not just what the list looks like. Rows already handed to a run — sending, steering, running a command, awaiting settings, or waiting on an uncertain delivery — hold their place and split the queue: a message moves only among the rows between two of them, so it can never reach the Gateway ahead of work already handed over.
     - Edit a queued message with the pencil on its row, or by double-clicking the row. The row becomes its own textarea and stays in place while the main composer remains independent, including any separate draft and attachments. Submit replaces the row in the same slot and preserves its attachments and delivery choice, even when the composer currently defaults to Steer or Interrupt; Cancel or Escape discards the row-local draft and restores the queued message. A normal composer send remains a separate queued item even while a row edit is open. The queue behind an edited row waits rather than delivering a message you are still rewriting, so that row splits the queue for reordering the same way an in-flight row does. Queued slash commands keep the discard-and-retype flow.
@@ -847,8 +853,10 @@ flowchart LR
 ```
 ````
 
-Open the **Diagram options** menu in the top-right corner to switch between the
-diagram and source or choose **Expand diagram** for the image viewer with zoom.
+Click or tap the diagram to open the image viewer with zoom. With keyboard
+focus on the diagram, press **Enter** or **Space**. The **Diagram options** menu
+in the top-right corner still lets you switch between the diagram and source
+or choose **Expand diagram**.
 The copy button appears on hover or keyboard focus and stays visible on touch
 screens. It copies the original Mermaid text.
 Diagram colors and fonts follow the current UI theme.

@@ -2,6 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { For, Show, createMemo, createStore, createUniqueId, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
+import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
@@ -119,7 +120,9 @@ function DesktopRow(props: {
       >
         <SubagentDesktopAvatar sessionKey={props.row.session.key} working={group() === "active"} />
         <span class="subagents-desktop__identity">
-          <span class="subagents-desktop__name">{name()}</span>
+          <span ref={createTextOverflow(name)} class="subagents-desktop__name">
+            {name()}
+          </span>
           <Show when={group() !== "done"}>
             <span class="subagents-desktop__status">
               <Show

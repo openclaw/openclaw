@@ -37,7 +37,9 @@ suite.define(() => {
         ],
       });
       await page.goto(`${suite.server.baseUrl}chat`);
-      const compact = page.locator('.chat-attachment-file-icon[data-mode="preview-with-favicon"]');
+      const compact = page.locator(
+        '.chat-assistant-attachment-card--audio .chat-attachment-file-icon[data-mode="preview-with-favicon"]',
+      );
       await compact.waitFor({ state: "visible" });
       const documentCard = page.locator(".chat-assistant-attachment-card--compact", {
         hasText: "report.pdf",
@@ -83,17 +85,16 @@ suite.define(() => {
           sample.remove();
           return resolved;
         });
-        await expectStyles(unavailable, { color: danger, display: "block", padding: "0px" });
+        await expectStyles(unavailable, { display: "block", padding: "0px" });
         await expectStyles(unavailable.locator(".chat-attachment-file-icon"), {
-          color: danger,
           opacity: "0.42",
         });
-        await expectStyles(unavailable.locator(".chat-assistant-attachment-card__status-meta"), {
+        await expectStyles(unavailable.locator(".chat-assistant-attachment-card__status-badge"), {
           color: danger,
         });
         await expectStyles(unavailable.locator(".chat-assistant-attachment-card__title"), {
-          "text-decoration-line": "line-through",
-          "text-decoration-thickness": "1px",
+          "text-decoration-line": "none",
+          "white-space": "nowrap",
         });
       }
     });

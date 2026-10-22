@@ -92,8 +92,8 @@ export function createChatSessionSharingMobileAdapter(
     get anyoneWithLink() {
       return t("chat.sessionSharing.anyoneWithLink");
     },
-    get messagePermissions() {
-      return t("chat.sessionSharing.messagePermissions");
+    get sessionMembers() {
+      return t("chat.sessionSharing.sessionMembers");
     },
     get showSearch() {
       return t("chat.sessionSharing.searchPeople");

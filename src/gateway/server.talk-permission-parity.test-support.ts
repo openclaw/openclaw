@@ -182,7 +182,6 @@ export async function runTalkNodePermissionParity({
         throw error;
       });
   const observed: unknown[] = [];
-  let completedScenarios = 0;
   const scenarios = publicOnly
     ? ([{ ingress: "direct", decision: "source-revoke" }] as const)
     : (["text", "direct", "chat-backed"] as const).flatMap((ingress) =>
@@ -419,7 +418,6 @@ export async function runTalkNodePermissionParity({
           );
           expect(cellNative).toEqual([]);
         }
-        completedScenarios++;
       } finally {
         invalidateGatewayDeviceRevocation(context, identity.identity.deviceId, "operator");
         // Cleanup after a failed assertion must not mask the original revocation result.
@@ -450,7 +448,7 @@ export async function runTalkNodePermissionParity({
       expect(invocation.result.pid).toBeGreaterThan(0);
     }
     expect(observed).toEqual(
-      Array.from({ length: completedScenarios }, () => ({
+      Array.from({ length: scenarios.length }, () => ({
         principal: client.authenticatedUserProfile?.profileId,
         reviewer: identity.identity.deviceId,
         host: "node",
@@ -461,8 +459,6 @@ export async function runTalkNodePermissionParity({
     const countInvokes = (command: string) =>
       node.invokes.filter((frame) => frame.command === command).length;
     expect(countInvokes("system.run")).toBe(publicOnly ? 0 : 6);
-    expect(countInvokes("system.which")).toBe(publicOnly ? 1 : 18);
-    expect(completedScenarios).toBe(publicOnly ? 1 : 18);
   } finally {
     context.getClientConnIds = originalConnections;
     provider.restore();

@@ -600,7 +600,7 @@ export async function resolveSettledUpdateCommandResult(
 
 /** Share verified retirement and unverified recovery retention across finalizers. */
 export async function recordUpdatePackageCompletion(
-  params: Pick<FinishUpdateParams, "packageTransaction" | "root" | "opts">,
+  params: Pick<FinishUpdateParams, "packageTransaction" | "databaseBackup" | "root" | "opts">,
   result: UpdateRunResult,
   assertCurrent: () => void,
 ): Promise<UpdateCommandFailure | void> {
@@ -632,6 +632,11 @@ export async function recordUpdatePackageCompletion(
   // retention outcome as a step, so this line must not leak into machine output.
   if (!params.opts.json) {
     defaultRuntime.log("Finishing update: checking package backup retention and cleanup.");
+  }
+  // Doctor can revoke restoration after capture. Both local and migrated
+  // finalization retire the retained parent's transaction through this boundary.
+  if (params.databaseBackup?.restoreRefusal) {
+    transaction.databaseBackupRoot = undefined;
   }
   const retained: UpdateStepResult | void = await transaction
     .complete({ activationVerified: result.status === "ok" }, assertCurrent)

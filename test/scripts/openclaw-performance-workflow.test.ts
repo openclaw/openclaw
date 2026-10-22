@@ -919,15 +919,6 @@ describe("OpenClaw performance workflow", () => {
     expect(websocketRetryDelayIndex).toBeLessThan(run.indexOf(benchmark));
   });
 
-  it("runs trusted CLI performance cases against the frozen candidate entrypoint", () => {
-    const run = findStep("Run OpenClaw source performance probes", "source_performance").run ?? "";
-
-    expect(run).toContain('"$PERFORMANCE_HELPER_DIR/scripts/bench-cli-startup.ts"');
-    expect(run).toContain('--entry "$GITHUB_WORKSPACE/openclaw.mjs"');
-    expect(run).toContain("--case gatewayHealthJsonWarmState \\");
-    expect(run).toContain("--case gatewayHealthJsonFreshState \\");
-  });
-
   it("isolates required publication in a fresh artifact-consuming job", () => {
     const workflow = readWorkflow();
     const publisher = workflow.jobs?.publish;

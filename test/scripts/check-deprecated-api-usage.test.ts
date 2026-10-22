@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
 import { buildDeprecatedPluginSdkModuleSpecifiers } from "../../scripts/lib/deprecated-plugin-sdk-usage.mts";
 import { createScriptTestHarness } from "./test-helpers.js";
+import { writeFixtureFiles } from "./z0632-fixtures.test-support.js";
 
 const inbound = "openclaw/plugin-sdk/inbound-reply-dispatch";
 const migration = "use focused non-deprecated plugin SDK subpaths";
@@ -23,18 +24,14 @@ it("keeps removed root and private compatibility aliases out of the inventory", 
 
 it("reads overlapping rule inputs once while preserving complete diagnostic order", () => {
   const fixtureRoot = fs.realpathSync(createTempDir("deprecated-guard-"));
-  for (const [repoPath, source] of Object.entries({
+  writeFixtureFiles(fixtureRoot, {
     "src/a.ts": `import { x } from "${inbound}";\nimport { y } from "@${inbound}";\ndeliverOutboundPayloads();`,
     "extensions/probe/src/a.ts": `export { x } from "${inbound}";\ndeliverOutboundPayloads();`,
     "packages/a.ts":
       'import { x } from "openclaw/plugin-sdk/agent-media-payload";\ndeliverOutboundPayloads();',
     "src/infra/outbound/deliver.ts": "deliverOutboundPayloads();",
     "src/a.test.ts": "deliverOutboundPayloads();",
-  })) {
-    const filePath = path.join(fixtureRoot, repoPath);
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(filePath, source);
-  }
+  });
   const accountingPath = path.join(fixtureRoot, "account-source-io.mjs");
   fs.writeFileSync(
     accountingPath,

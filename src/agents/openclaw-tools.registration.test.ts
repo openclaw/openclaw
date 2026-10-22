@@ -595,7 +595,7 @@ describe("gateway client capability tool filtering", () => {
           action: "prepare_pr",
           pullRequestUrl: "https://github.com/example/repository/pull/1",
         }),
-      ).toBe(publishing);
+      ).toBe(false);
       expect(Value.Check(tool.parameters, { action: "refresh_base" })).toBe(false);
       expect(Value.Check(tool.parameters, { action: "edit" })).toBe(publishing);
       expect(Value.Check(tool.parameters, { action: "ready" })).toBe(publishing || actions);

@@ -306,7 +306,6 @@ export class CodexToolTranscriptProjection {
         }
       }
       if (args) {
-        this.pendingRawOutputIds.add(callId);
         this.recordToolCall({ id: callId, name: "apply_patch", arguments: args });
       }
       return;

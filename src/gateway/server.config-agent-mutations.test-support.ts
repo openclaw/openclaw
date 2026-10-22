@@ -24,6 +24,10 @@ export function registerAgentConfigMutationTests({
 }) {
   const patch = (baseHash: string, config: unknown) =>
     rpc("config.patch", { baseHash, raw: JSON.stringify(config) });
+  const expectOk = async (result: Promise<RpcResult>) => {
+    const { ok, error } = await result;
+    expect(ok, error?.message).toBe(true);
+  };
   it("uses fresh revisions after agent create, update, and delete before reload applies", async () => {
     const workspace = workspacePath("revision-workspace");
     const skill = { name: "revision-guide", description: "Ready after acknowledgement" };
@@ -62,10 +66,7 @@ export function registerAgentConfigMutationTests({
           });
         }
 
-        const patched = await patch(current.hash, {
-          agents: { entries: { main: { name: method } } },
-        });
-        expect(patched.ok, patched.error?.message).toBe(true);
+        await expectOk(patch(current.hash, { agents: { entries: { main: { name: method } } } }));
         expect(current.hash).not.toBe(before);
       } finally {
         gate.resolve();
@@ -81,21 +82,16 @@ export function registerAgentConfigMutationTests({
       const { readAgentDeletionJournal, removeAgentDeletionJournal } =
         await import("../test-utils/agent-deletion-journal.js");
       const original = await getCurrentConfigObject();
-      const seed = await patch(original.hash, { logging: { level: "warn" } });
-      expect(seed.ok, seed.error?.message).toBe(true);
+      await expectOk(patch(original.hash, { logging: { level: "warn" } }));
       for (const name of ["survivor", "doomed"]) {
-        const created = await rpc("agents.create", { name, workspace: workspacePath(name) });
-        expect(created.ok, created.error?.message).toBe(true);
+        await expectOk(rpc("agents.create", { name, workspace: workspacePath(name) }));
         // Config RPC settlement publishes the new roster before the next agent RPC.
         const current = await getCurrentConfigObject();
-        const applied = await patch(current.hash, { agents: { entries: { main: { name } } } });
-        expect(applied.ok, applied.error?.message).toBe(true);
+        await expectOk(patch(current.hash, { agents: { entries: { main: { name } } } }));
       }
-      const enlarged = await rpc("agents.update", {
-        agentId: "doomed",
-        name: "Large agent " + "x".repeat(8192),
-      });
-      expect(enlarged.ok, enlarged.error?.message).toBe(true);
+      await expectOk(
+        rpc("agents.update", { agentId: "doomed", name: "Large agent " + "x".repeat(8192) }),
+      );
       const before = await getCurrentConfigObject();
       const beforeRaw = await fs.readFile(original.path, "utf8");
       const newer = { ...JSON.parse(beforeRaw), ui: { prefs: { locale: "fr" } } };

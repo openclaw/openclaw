@@ -1373,15 +1373,23 @@ openclaw-settings-save-indicator:empty {
   gap: 8px;
   min-height: 24px;
   padding: 0 10px 0 var(--sidebar-inset);
+  border-radius: var(--radius-md);
   color: color-mix(in srgb, var(--muted) 72%, var(--text) 28%);
-  transition: color var(--duration-fast) ease;
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
 }
 
 .sidebar-recent-sessions__head .sidebar-recent-sessions__label-text {
   transition: color var(--duration-fast) ease;
 }
 
-/* Label lift only, no fill: section headers toggle rather than navigate. */
+/* Pointer hover shares the session-row fill so the whole header reads as one
+   grabbable row; keyboard focus keeps the label lift and its own focus ring. */
+.sidebar-recent-sessions__head:hover {
+  background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
+}
+
 .sidebar-recent-sessions__head:where(:hover, :has(:focus-visible)),
 .sidebar-recent-sessions__head:where(:hover, :has(:focus-visible))
   .sidebar-recent-sessions__label-text {
@@ -1564,33 +1572,6 @@ openclaw-settings-save-indicator:empty {
   opacity: 0.55;
 }
 
-.sidebar-session-group-drag-handle {
-  position: absolute;
-  top: 50%;
-  left: 1px;
-  z-index: 1;
-  width: 4px;
-  height: 18px;
-  transform: translateY(-50%);
-  border-radius: 3px;
-  background-image: radial-gradient(circle, currentColor 1px, transparent 1.2px);
-  background-position: 0 0;
-  background-size: 4px 4px;
-  color: var(--muted);
-  opacity: 0;
-  cursor: grab;
-  transition: opacity var(--duration-fast) ease;
-}
-
-.sidebar-recent-sessions__head--draggable:hover .sidebar-session-group-drag-handle,
-.sidebar-recent-sessions__head--draggable:has(:focus-visible) .sidebar-session-group-drag-handle {
-  opacity: 0.55;
-}
-
-.sidebar-session-group-drag-handle:active {
-  cursor: grabbing;
-}
-
 .sidebar-session-sort {
   position: relative;
 }
@@ -1628,6 +1609,14 @@ openclaw-settings-save-indicator:empty {
   background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
   color: var(--text);
   opacity: 1;
+}
+
+/* Trailing header actions read as one cluster: 2px apart, not the 8px header gap.
+   The new-session link sits inside its tooltip host, so match that wrapper too. */
+.sidebar-recent-sessions__head
+  > :is(.sidebar-session-group-actions, openclaw-tooltip:has(> .sidebar-session-group-actions))
+  + :is(.sidebar-session-group-actions, openclaw-tooltip:has(> .sidebar-session-group-actions)) {
+  margin-inline-start: -6px;
 }
 
 @media (hover: none), (pointer: coarse) {
@@ -1985,13 +1974,24 @@ openclaw-settings-save-indicator:empty {
 
 /* A single selected owner's sessions sit directly under the owner picker:
    titles start at the picker's leading edge, so the link inset only offsets
-   the list's negative inline margin and an empty status slot takes no room.
-   Running and draft rows keep their leading indicator. */
+   the list's negative inline margin. Status moves to the trailing edge
+   instead of shifting titles, and an empty status slot takes no room. */
 .sidebar-recent-sessions__group--inline-owner
   .sidebar-recent-session:not(.sidebar-recent-session--child)
   > .sidebar-recent-session__link
-  > .sidebar-session-indicator:empty {
-  display: none;
+  > .sidebar-session-indicator {
+  order: 1;
+  /* Center the trailing status glyph in the 24px archive action column. */
+  margin-inline-end: calc((24px - var(--sidebar-lead)) / 2);
+
+  &:empty {
+    display: none;
+  }
+}
+
+/* No section header separates the rows from the owner picker. */
+.sidebar-recent-sessions > .sidebar-recent-sessions__group--inline-owner:first-child {
+  margin-top: calc(4px - var(--sidebar-group-gap));
 }
 
 .shell:not(.shell--mobile-nav)
@@ -1999,6 +1999,25 @@ openclaw-settings-save-indicator:empty {
   .sidebar-recent-session:not(.sidebar-recent-session--child)
   > .sidebar-recent-session__link {
   padding-inline-start: 6px;
+}
+
+/* Row actions overlay the link's trailing edge (on hover, or always on the
+   mobile drawer); reserve that space on the link instead of the title so the
+   trailing status slides left of them rather than hiding beneath them. */
+.shell:not(.shell--mobile-nav)
+  .sidebar-recent-sessions__group--inline-owner
+  .sidebar-recent-session:not(.sidebar-recent-session--child):is(:hover, :focus-within),
+.shell--mobile-nav
+  .sidebar-recent-sessions__group--inline-owner
+  .sidebar-recent-session:not(.sidebar-recent-session--child) {
+  > .sidebar-recent-session__link {
+    padding-inline-end: var(--session-row-actions-reserve);
+  }
+
+  .sidebar-recent-session__text,
+  .sidebar-recent-session__title-row {
+    padding-right: 0;
+  }
 }
 
 .sidebar-child-session-toggle {
@@ -3313,7 +3332,7 @@ openclaw-sidebar-attention {
   background: var(--inbox-attention);
   color: var(--inbox-attention-foreground);
   font-size: calc(9px * var(--control-ui-text-scale));
-  font-weight: 700;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
   line-height: 1;
 }
@@ -3571,31 +3590,32 @@ openclaw-tooltip.sidebar-hover-tooltip {
 .gateway-status__retry {
   flex: none;
   padding: 3px 8px;
-  border: 1px solid currentColor;
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   background: transparent;
-  color: inherit;
+  color: var(--text);
   font: inherit;
   cursor: var(--cursor-action);
 }
 
-.gateway-status__retry:hover:not(:disabled) {
-  background: color-mix(in srgb, currentColor 12%, transparent);
+.gateway-status__retry:hover {
+  background: var(--bg-hover);
 }
 
-.gateway-status__retry:disabled {
-  cursor: default;
-}
-
-.gateway-status__spinner {
+.gateway-status__icon {
   display: inline-flex;
-  animation: btn-spinner-spin 1s linear infinite;
+  flex: none;
+  width: calc(12px * var(--control-ui-text-scale));
+  height: calc(12px * var(--control-ui-text-scale));
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .gateway-status__spinner {
-    animation: none;
-  }
+.gateway-status__icon > :is(svg, .session-run-spinner) {
+  width: 100%;
+  height: 100%;
+}
+
+.gateway-status__icon > .session-run-spinner {
+  --accent: currentColor;
 }
 
 .gateway-status__retry:focus-visible {
@@ -3605,9 +3625,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
 
 .session-menu__color-swatch svg,
 .sidebar-gateway-check svg,
-.sidebar-build-hover-card__copy svg,
-.gateway-status__icon svg,
-.gateway-status__spinner svg {
+.sidebar-build-hover-card__copy svg {
   width: 12px;
   height: 12px;
 }
@@ -3979,9 +3997,17 @@ openclaw-tooltip.sidebar-hover-tooltip {
   margin-block: 4px;
 }
 
-.sidebar-identity-menu .nav-item__icon {
+.sidebar-identity-menu .nav-item__icon,
+.sidebar-identity-menu .sidebar-gateway-health-slot {
   width: 20px;
   height: 20px;
+}
+
+.sidebar-gateway-health-slot {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
 }
 
 .sidebar-identity-menu__help .oc-menu-item__submenu-icon {
@@ -4581,6 +4607,22 @@ html.openclaw-native-web-chrome
   overflow: hidden;
   flex: 0 1 auto;
   margin-left: auto;
+}
+
+/* Trailing state shares the hover-action column: inset visible metadata so a
+   12px badge centers on the 24px archive action instead of crowding the
+   sidebar edge. Touch and drawer rows keep their always-visible actions beside
+   the text, and an empty endcap charges the title nothing. */
+@media (hover: hover) and (pointer: fine) {
+  .shell:not(.shell--mobile-nav)
+    .sidebar-recent-session:not(.sidebar-recent-session--child, .sidebar-recent-session--team)
+    .sidebar-recent-session__details-endcap:has(
+      .session-row-badges,
+      .viewer-facepile,
+      .session-row-trail
+    ) {
+    padding-inline-end: calc((24px - 12px) / 2);
+  }
 }
 
 .sidebar-session-attention-tooltip {

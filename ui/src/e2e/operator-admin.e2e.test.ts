@@ -71,14 +71,8 @@ function skillStatus(eligible: boolean) {
         commandVisible: eligible,
         primaryEnv: undefined,
         homepage: undefined,
-        requirements: {
-          ...emptyRequirements,
-          bins: ["deploy-helper"],
-        },
-        missing: {
-          ...emptyRequirements,
-          bins: eligible ? [] : ["deploy-helper"],
-        },
+        requirements: { ...emptyRequirements, bins: ["deploy-helper"] },
+        missing: { ...emptyRequirements, bins: eligible ? [] : ["deploy-helper"] },
         install: [
           {
             id: "node-deploy-helper",
@@ -104,13 +98,8 @@ function reviewerApprovals(
 }
 
 function withPage(run: (page: Page) => Promise<void>) {
-  return suite.withPage(
-    {
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport,
-    },
-    ({ page }) => run(page),
+  return suite.withPage({ locale: "en-US", serviceWorkers: "block", viewport }, ({ page }) =>
+    run(page),
   );
 }
 
@@ -278,10 +267,7 @@ suite.define(() => {
             ...filesResponse,
             file: { ...agentFile, content: "# Main agent\n" },
           },
-          "agents.files.list": {
-            ...filesResponse,
-            files: [agentFile],
-          },
+          "agents.files.list": { ...filesResponse, files: [agentFile] },
           "config.get": configResponse(readOnlyConfig),
           "skills.workshop.list": {
             agentId: "main",
@@ -510,15 +496,15 @@ suite.define(() => {
       await expect
         .poll(async () => (await gateway.getRequests("exec.approvals.get")).length)
         .toBeGreaterThan(getRequestsBeforeSave);
-      await expect.poll(() => modeSelects.nth(0).inputValue()).toBe("full");
-      await expect.poll(() => modeSelects.nth(1).inputValue()).toBe("always");
-      await expect
-        .poll(() => page.getByRole("combobox", { name: "Fallback" }).inputValue())
-        .toBe("allowlist");
+      for (const [control, value] of [
+        [modeSelects.nth(0), "full"],
+        [modeSelects.nth(1), "always"],
+        [page.getByRole("combobox", { name: "Fallback" }), "allowlist"],
+        [page.getByRole("textbox", { name: "Pattern" }), "/usr/bin/gh"],
+      ] as const) {
+        await expect.poll(() => control.inputValue()).toBe(value);
+      }
       await expect.poll(() => autoAllowSwitch.isChecked()).toBe(true);
-      await expect
-        .poll(() => page.getByRole("textbox", { name: "Pattern" }).inputValue())
-        .toBe("/usr/bin/gh");
       await expect.poll(() => saveButton.isDisabled()).toBe(true);
       expect(await page.getByRole("alert").count()).toBe(0);
     });

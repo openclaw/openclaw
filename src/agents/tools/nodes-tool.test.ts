@@ -40,6 +40,10 @@ const nodesCameraMocks = vi.hoisted(() => ({
     facing ? `/tmp/camera-${facing}.mp4` : "/tmp/camera.mp4",
   ),
   writeCameraPayloadToFile: vi.fn(async () => undefined),
+  // This suite isolates tool orchestration; rollback ownership has real-filesystem coverage.
+  withCameraArtifactBatch: vi.fn(
+    async (paths: string[], publish: (paths: string[]) => Promise<unknown>) => publish(paths),
+  ),
 }));
 
 const screenMocks = vi.hoisted(() => ({
@@ -93,6 +97,8 @@ function onNode(
 }
 const gatewayPayload = (payload: unknown = { ok: true }) =>
   gatewayMocks.callGatewayTool.mockResolvedValue({ payload });
+const snapshot = { base64: "ZmFrZQ==", format: "png", screenIndex: 0, width: 1920, height: 1080 };
+const photo = { base64: "ZmFrZQ==", format: "jpg", width: 800, height: 600 };
 
 function mockNodePairApproveFlow(pendingRequest: {
   requiredApproveScopes?: string[];
@@ -295,13 +301,7 @@ it.each([
 );
 
 it("invokes screen.snapshot with validated params and returns file details", async () => {
-  gatewayPayload({
-    base64: "ZmFrZQ==",
-    format: "png",
-    screenIndex: 0,
-    width: 1920,
-    height: 1080,
-  });
+  gatewayPayload(snapshot);
   const result = await onNode("screen_snapshot", { screenIndex: 1, maxWidth: "1200" });
 
   expect(gatewayMocks.callGatewayTool).toHaveBeenCalledTimes(1);
@@ -357,13 +357,7 @@ it("requests the encoding a caller-supplied outPath already promises", async () 
 
 it("refuses to write snapshot bytes that contradict the outPath extension", async () => {
   // A node that ignores the requested format must not silently mislabel the file.
-  gatewayPayload({
-    base64: "ZmFrZQ==",
-    format: "jpeg",
-    screenIndex: 0,
-    width: 1600,
-    height: 1049,
-  });
+  gatewayPayload({ ...snapshot, format: "jpeg" });
   await expect(
     onNode("screen_snapshot", { node: "miniclaw", outPath: "/workspace/shot.png" }),
   ).rejects.toThrow("screen.snapshot returned jpg; outPath must use a matching extension");
@@ -377,53 +371,34 @@ it("rejects a positioned camera device with both facings before invoking the nod
   expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
 });
 
-it("captures one unknown-position snap for Linux facing requests", async () => {
+it.each([
+  ["camera_snap", "both", { snaps: [{ facing: "unknown", path: "/tmp/camera-unknown.jpg" }] }],
+  ["camera_clip", "back", { facing: "unknown", path: "/tmp/camera-unknown.mp4" }],
+] as const)("captures %s on Linux without forwarding facing", async (action, facing, details) => {
   nodeUtilsMocks.resolveAgentNode.mockResolvedValueOnce({
     nodeId: "linux-node",
     remoteIp: "127.0.0.1",
     platform: "linux",
   });
   gatewayPayload();
-  const result = await onNode("camera_snap", {
+  const result = await onNode(action, {
     node: "linux-node",
-    facing: "both",
+    facing,
     deviceId: "/dev/video2",
   });
 
   expect(gatewayMocks.callGatewayTool).toHaveBeenCalledTimes(1);
   expect(gatewayMocks.callGatewayTool.mock.calls[0]?.[2]).toMatchObject({
-    command: "camera.snap",
+    command: action.replace("_", "."),
     params: { facing: undefined, deviceId: "/dev/video2" },
   });
-  expect(result?.details).toMatchObject({
-    snaps: [{ facing: "unknown", path: "/tmp/camera-unknown.jpg" }],
-  });
-});
-
-it("captures an unknown-position clip on Linux without forwarding facing", async () => {
-  nodeUtilsMocks.resolveAgentNode.mockResolvedValueOnce({
-    nodeId: "linux-node",
-    remoteIp: "127.0.0.1",
-    platform: "linux",
-  });
-  gatewayPayload();
-  const result = await onNode("camera_clip", {
-    node: "linux-node",
-    facing: "back",
-    deviceId: "/dev/video2",
-  });
-
-  expect(gatewayMocks.callGatewayTool.mock.calls[0]?.[2]).toMatchObject({
-    command: "camera.clip",
-    params: { facing: undefined, deviceId: "/dev/video2" },
-  });
-  expect(result?.details).toMatchObject({ facing: "unknown", path: "/tmp/camera-unknown.mp4" });
+  expect(result?.details).toMatchObject(details);
 });
 
 it("returns latest photos via details.media.mediaUrls", async () => {
   gatewayPayload({
     photos: [
-      { base64: "ZmFrZQ==", format: "jpg", width: 800, height: 600, createdAt: "now" },
+      { ...photo, createdAt: "now" },
       { base64: "YmFy", format: "jpg", width: 1024, height: 768 },
     ],
   });
@@ -431,7 +406,7 @@ it("returns latest photos via details.media.mediaUrls", async () => {
     .mockReturnValueOnce("/tmp/photo-1.jpg")
     .mockReturnValueOnce("/tmp/photo-2.jpg");
   nodesCameraMocks.parseCameraSnapPayload
-    .mockReturnValueOnce({ base64: "ZmFrZQ==", format: "jpg", width: 800, height: 600 })
+    .mockReturnValueOnce(photo)
     .mockReturnValueOnce({ base64: "YmFy", format: "jpg", width: 1024, height: 768 });
   const result = await onNode("photos_latest", { limit: 2 });
 
@@ -446,9 +421,7 @@ it("returns latest photos via details.media.mediaUrls", async () => {
 });
 
 it("keeps inspected photos private (not auto-attached to replies)", async () => {
-  gatewayPayload({
-    photos: [{ base64: "ZmFrZQ==", format: "jpg", width: 800, height: 600 }],
-  });
+  gatewayPayload({ photos: [photo] });
   const tool = createNodesTool({ modelHasVision: true });
 
   const result = await tool.execute("call-privacy", {
@@ -471,9 +444,7 @@ it("keeps inspected photos private (not auto-attached to replies)", async () => 
 });
 
 it("does not claim photos were loaded into model context when modelHasVision is false", async () => {
-  gatewayPayload({
-    photos: [{ base64: "ZmFrZQ==", format: "jpg", width: 800, height: 600 }],
-  });
+  gatewayPayload({ photos: [photo] });
   const result = await onNode("photos_latest", {}, { modelHasVision: false });
 
   expect(result?.content).toEqual([
@@ -536,18 +507,17 @@ it("forwards typed which bins to system.which", async () => {
   expect(result.details).toEqual({ bins: ["hostname"], paths: { hostname: "/bin/hostname" } });
 });
 
-it("uses operator.pairing plus operator.admin to approve exec-capable node pair requests", async () => {
-  mockNodePairApproveFlow({ requiredApproveScopes: ["operator.pairing", "operator.admin"] });
+it.each([
+  {
+    request: { requiredApproveScopes: ["operator.pairing", "operator.admin"] },
+    scope: "operator.admin",
+  },
+  { request: { commands: ["canvas.snapshot"] }, scope: "operator.write" },
+])("approves node pair requests using $scope", async ({ request, scope }) => {
+  mockNodePairApproveFlow(request);
   await createNodesTool().execute("call", { action: "approve", requestId: "req-1" });
 
-  expectNodePairApproveScopes(["operator.pairing", "operator.admin"]);
-});
-
-it("falls back to command inspection when the gateway does not advertise required scopes", async () => {
-  mockNodePairApproveFlow({ commands: ["canvas.snapshot"] });
-  await createNodesTool().execute("call", { action: "approve", requestId: "req-1" });
-
-  expectNodePairApproveScopes(["operator.pairing", "operator.write"]);
+  expectNodePairApproveScopes(["operator.pairing", scope]);
 });
 
 it("forwards the owning agent session for generic node invokes", async () => {

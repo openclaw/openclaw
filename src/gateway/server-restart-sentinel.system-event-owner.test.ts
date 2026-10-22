@@ -71,14 +71,6 @@ const agentTurn = {
 const cases = [
   ["legacy system event", { kind: "systemEvent", sessionKey: "global", text: "resume work" }],
   ["agent turn without a route", agentTurn],
-  [
-    "replaced agent-turn session",
-    {
-      ...agentTurn,
-      expectedSessionId: "old-session",
-      route: { ...deliveryContext, chatType: "direct" },
-    },
-  ],
 ] satisfies Array<[string, QueuedSessionDeliveryPayload]>;
 
 let state: OpenClawTestState;

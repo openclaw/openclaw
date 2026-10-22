@@ -28,6 +28,7 @@ export function createChannelsViewProps(
     channelsLoadingProbe: null,
     channelsRefreshSeq: 0,
     channelsSnapshot: snapshot,
+    channelsRead: null,
     channelsError: null,
     channelsLastSuccess: null,
     pairingLoading: false,

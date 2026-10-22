@@ -2,13 +2,21 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
-import { afterEach, expect, it, vi } from "vitest";
+import { setImmediate } from "node:timers/promises";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import * as ownership from "../agents/auth-profiles/path-resolve.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "../agents/auth-profiles/path-resolve.native.js";
 import * as persisted from "../agents/auth-profiles/persisted.js";
 import { setAuthProfileOrder } from "../agents/auth-profiles/profiles.js";
 import * as paths from "../agents/auth-profiles/shared-main-dir.js";
+import * as bootstrap from "../agents/auth-profiles/shared-store-bootstrap.js";
+import {
+  loadPersistedAuthProfileStoreFromRows,
+  prepareAgentAuthProfileRowsRead,
+  readSharedAuthProfileRows,
+} from "../agents/auth-profiles/sqlite-read.js";
 import * as sqlite from "../agents/auth-profiles/sqlite.js";
 import * as authState from "../agents/auth-profiles/state.js";
 import {
@@ -16,14 +24,21 @@ import {
   saveAuthProfileStore,
 } from "../agents/auth-profiles/store-runtime.js";
 import { upsertAuthProfileWithLockOrThrow } from "../agents/auth-profiles/upsert-with-lock.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
+import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import * as stateDb from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { captureAuthProfileCredentialAuthority } from "../state/user-model-account-authority.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -48,9 +63,9 @@ function inspectCopy(fixture: Awaited<ReturnType<typeof createEmptyFixture>>) {
   });
 }
 
-function detectLegacy(env: NodeJS.ProcessEnv, homedir?: () => string) {
+function detectLegacy(env: NodeJS.ProcessEnv, homedir?: () => string, config?: OpenClawConfig) {
   return doctor.detectLegacyStateMigrations({
-    cfg: { plugins: { enabled: false } },
+    cfg: { ...config, plugins: { enabled: false } },
     env,
     homedir,
     doctorOnlyStateMigrations: true,
@@ -115,6 +130,7 @@ const NO_CHANGES = { changes: [], warnings: [] };
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const ownerStates: OpenClawTestState[] = [];
 let ownerFixtureRun: Promise<void> | undefined;
+let unregisterAfterClose: (() => void) | undefined;
 
 function makeStore(profileId: string, key: string) {
   return {
@@ -130,6 +146,8 @@ afterEach(async () => {
   vi.restoreAllMocks();
   sqlite.closeAuthProfileReadPool();
   await closeOpenClawAgentDatabasesAsync();
+  unregisterAfterClose?.();
+  unregisterAfterClose = undefined;
   closeOpenClawAgentDatabasesForTest();
   await stateDb.closeOpenClawStateDatabaseAsync();
   stateDb.closeOpenClawStateDatabaseForTest();
@@ -158,11 +176,21 @@ async function createFixture() {
   return { ...fixture, mainAgentDir, opsAgentDir, sharedStore, sharedState };
 }
 
-async function createEmptyFixture(createSourceDatabase: boolean) {
-  const stateDir = tempDirs.make("openclaw-shared-auth-empty-");
+async function createEmptyFixture(createSourceDatabase: boolean, isolated = false) {
+  const owner = isolated
+    ? await createOpenClawTestState({ prefix: "openclaw-shared-auth-" })
+    : undefined;
+  if (owner) {
+    ownerStates.push(owner);
+  }
+  const stateDir = owner?.stateDir ?? tempDirs.make("openclaw-shared-auth-empty-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   vi.stubEnv("OPENCLAW_AGENT_DIR", "");
-  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir, OPENCLAW_AGENT_DIR: undefined };
+  const env: NodeJS.ProcessEnv = owner?.env ?? {
+    ...process.env,
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_AGENT_DIR: undefined,
+  };
   const mainAgentDir = paths.resolveSharedMainAuthAgentDir(env);
   const sourcePath = sqlite.resolveAuthProfileDatabasePath(mainAgentDir);
   if (createSourceDatabase) {
@@ -173,6 +201,7 @@ async function createEmptyFixture(createSourceDatabase: boolean) {
     env,
     stateDir,
     sourcePath,
+    agentDir: () => mainAgentDir,
     detect: (
       overrides: Partial<Parameters<typeof migration.detectSharedAuthStoreMigration>[0]> = {},
     ) =>
@@ -184,7 +213,8 @@ async function createEmptyFixture(createSourceDatabase: boolean) {
     migrate: (
       detected: Parameters<typeof migration.migrateSharedAuthStore>[0]["detected"],
       selectedEnv?: NodeJS.ProcessEnv,
-    ) => migration.migrateSharedAuthStore({ detected, stateDir, env: selectedEnv }),
+      integrityCheck?: "full",
+    ) => migration.migrateSharedAuthStore({ detected, stateDir, env: selectedEnv, integrityCheck }),
   };
 }
 
@@ -237,6 +267,180 @@ it.each(["legacy-main", "state-db"])(
     expect(inventory()).toEqual(before);
   },
 );
+
+describe("shared auth relocation lifecycle", () => {
+  let state: Awaited<ReturnType<typeof createEmptyFixture>>;
+  beforeEach(async () => {
+    state = await createEmptyFixture(false, true);
+  });
+  const migrate = (sourcePath: string, integrityCheck?: "full") =>
+    state.migrate({ sourcePath, hasLegacy: true }, state.env, integrityCheck);
+
+  const credential = { type: "api_key" as const, provider: "openai", key: "relocated-key" };
+  const store = { version: 1, profiles: { "openai:default": credential } };
+  const rotation = { version: 1, order: { openai: ["openai:default"] } };
+  function registerSourceClose(sourcePath: string, close: () => Promise<void>) {
+    unregisterAfterClose = registerOpenClawAgentDatabaseAsyncResource({
+      agentId: "main",
+      path: sourcePath,
+      revoke: () => {},
+      close,
+    });
+  }
+
+  it.each([undefined, "full"] as const)(
+    "uses requested integrity coverage for shared credential relocation (%s)",
+    async (integrityCheck) => {
+      const { sourcePath } = state;
+      fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+      {
+        using database = new DatabaseSync(sourcePath);
+        database.exec(`${OPENCLAW_AGENT_SCHEMA_SQL};
+        PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};
+        INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
+        VALUES ('primary', 'agent', ${OPENCLAW_AGENT_SCHEMA_VERSION}, 'main', 1, 1);
+      `);
+        database
+          .prepare("INSERT INTO auth_profile_store VALUES ('primary', ?, 1)")
+          .run(JSON.stringify(store));
+        database
+          .prepare("INSERT INTO auth_profile_state VALUES ('primary', ?, 1)")
+          .run(JSON.stringify(rotation));
+        // An unrelated index defect distinguishes QUICK from whole-database FULL.
+        database.enableDefensive?.(false);
+        database.exec(`
+          DROP INDEX idx_agent_cache_updated;
+          CREATE INDEX idx_agent_cache_updated ON cache_entries(scope, key, updated_at);
+          INSERT INTO cache_entries (scope, key, value_json, updated_at)
+          VALUES ('retained', 'history', '"untouched"', 1);
+          PRAGMA writable_schema = ON;
+          UPDATE sqlite_schema SET sql =
+            'CREATE INDEX idx_agent_cache_updated ON cache_entries(scope, updated_at DESC, key)'
+            WHERE name = 'idx_agent_cache_updated';
+          PRAGMA writable_schema = OFF;
+        `);
+      }
+
+      const sourceChecks = new Map<DatabaseSync, string[]>();
+      // oxlint-disable-next-line typescript/unbound-method -- Invoked with the intercepted native database receiver.
+      const prepare = DatabaseSync.prototype.prepare;
+      vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
+        this: DatabaseSync,
+        sql,
+      ) {
+        const statement = prepare.call(this, sql);
+        if (this.location() !== sourcePath || !/^PRAGMA (?:quick|integrity)_check\b/u.test(sql)) {
+          return statement;
+        }
+        const all = statement.all.bind(statement);
+        statement.all = () => {
+          const checks = sourceChecks.get(this) ?? [];
+          checks.push(sql);
+          sourceChecks.set(this, checks);
+          return all();
+        };
+        return statement;
+      });
+
+      const result = await migrate(sourcePath, integrityCheck);
+      if (integrityCheck === "full") {
+        expect([...sourceChecks.values()]).toEqual([["PRAGMA integrity_check;"]]);
+        expect(result).toMatchObject({
+          changes: [],
+          warnings: [expect.stringMatching(/integrity_check.*idx_agent_cache_updated/su)],
+        });
+      } else {
+        expect([...sourceChecks.values()]).toEqual([
+          ["PRAGMA quick_check;"],
+          [
+            "PRAGMA quick_check;",
+            "PRAGMA integrity_check('auth_profile_store');",
+            "PRAGMA integrity_check('auth_profile_state');",
+          ],
+        ]);
+        expect(result.warnings).toEqual([]);
+        expect(
+          await readSharedAuthProfileRows(captureOpenClawStateWorkerContext({ env: state.env })),
+        ).toMatchObject({
+          store: { status: "readable", raw: store },
+          state: { status: "readable", raw: rotation },
+        });
+      }
+      {
+        using source = new DatabaseSync(sourcePath, { readOnly: true });
+        expect(source.prepare("SELECT store_json FROM auth_profile_store").all()).toEqual(
+          integrityCheck === "full" ? [{ store_json: JSON.stringify(store) }] : [],
+        );
+        expect(source.prepare("SELECT state_json FROM auth_profile_state").all()).toEqual(
+          integrityCheck === "full" ? [{ state_json: JSON.stringify(rotation) }] : [],
+        );
+        expect(source.prepare("SELECT value_json FROM cache_entries").get()?.value_json).toBe(
+          '"untouched"',
+        );
+      }
+      if (integrityCheck !== "full") {
+        // Successful QUICK relocation must not admit a later FULL runtime open.
+        expect(() =>
+          openOpenClawAgentDatabase({ agentId: "main", path: sourcePath, env: state.env }),
+        ).toThrow(/integrity_check.*idx_agent_cache_updated/su);
+      }
+    },
+  );
+
+  it("joins pre-existing source resources before returning a migration read failure", async () => {
+    sqlite.writePersistedAuthProfileStoreRaw({ version: 1, profiles: {} }, state.agentDir());
+    const { sourcePath } = state;
+    let drained = false;
+    registerSourceClose(sourcePath, async () => {
+      await setImmediate();
+      drained = true;
+    });
+    vi.spyOn(bootstrap, "readSharedAuthLegacyRowsFromDatabase").mockImplementationOnce(() => {
+      throw new Error("source read failed");
+    });
+
+    const result = await migrate(sourcePath);
+
+    expect(result.warnings).toEqual([expect.stringContaining("source read failed")]);
+    expect(drained).toBe(true);
+  });
+
+  it("revokes the source credential authority before relocation and cold-loads the shared credential", async () => {
+    sqlite.writePersistedAuthProfileStoreRaw(store, state.agentDir());
+    const { sourcePath } = state;
+    const reader = prepareAgentAuthProfileRowsRead({
+      databasePath: sourcePath,
+      agentId: "main",
+      env: state.env,
+    });
+    const authority = reader.captureCredentialAuthority("openai:default")!;
+    authority.observe(credential);
+    await reader.dispose();
+    let deniedBeforeSourceRelease = false;
+    registerSourceClose(sourcePath, async () => {
+      expect(() => authority.readCurrentCredential()).toThrow();
+      deniedBeforeSourceRelease = true;
+    });
+    const result = await migrate(sourcePath);
+    expect(result.warnings).toEqual([]);
+    expect(deniedBeforeSourceRelease).toBe(true);
+    expect(() => authority.readCurrentCredential()).toThrow();
+    const context = captureOpenClawStateWorkerContext({ env: state.env });
+    const identity = `${context.admission.identity.key}:${context.admission.identity.birthtime ?? ""}`;
+    const current = captureAuthProfileCredentialAuthority(
+      context,
+      { identity, databasePath: context.admission.databasePath },
+      "openai:default",
+    );
+    const sharedRows = await readSharedAuthProfileRows(context);
+    current.observe(
+      loadPersistedAuthProfileStoreFromRows(sharedRows, context.admission.databasePath)?.profiles[
+        "openai:default"
+      ],
+    );
+    expect(current.readCurrentCredential()).toEqual(credential);
+  });
+});
 
 it("does not pin runtime auth ownership during copied inspection", async () => {
   const fixture = await createEmptyFixture(false);
@@ -339,6 +543,100 @@ it("moves exact rows, preserves every effective agent store, and records receipt
     ),
   ).toEqual({ count: 2 });
 });
+
+it.each(["standard", "custom", "main override"] as const)(
+  "relocates the configured inheritance owner through Doctor (%s)",
+  async (layout) => {
+    const fixture = await createEmptyFixture(false);
+    const ownerDir = path.join(
+      fixture.stateDir,
+      layout === "custom" ? "custom-owner" : "agents/ops/agent",
+    );
+    const peerDir = path.join(fixture.stateDir, "agents/dev/agent");
+    const config: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        defaults: { authInheritance: { agentId: "ops" } },
+        entries: { ops: { agentDir: ownerDir }, dev: {} },
+      },
+    };
+    if (layout === "main override") {
+      fixture.env.OPENCLAW_AGENT_DIR = path.join(fixture.stateDir, "relocated-main");
+    }
+    const inherited = makeStore("openai:owner", "synthetic-owner-key");
+    const privateStore = makeStore("openai:private", "synthetic-private-key");
+    resolveAgentDir(config, "ops", fixture.env);
+    sqlite.writePersistedAuthProfileStoreRaw(inherited, ownerDir);
+    sqlite.writePersistedAuthProfileStoreRaw(privateStore, peerDir);
+    const detected = await detectLegacy(fixture.env, undefined, config);
+
+    expect(await fixture.migrate(detected.sharedAuthStore, fixture.env)).toMatchObject({
+      warnings: [],
+    });
+    expect(sharedAuth(fixture.env).store).toEqual(inherited);
+    expect(localAuth(ownerDir).store).toBeNull();
+    expect(localAuth(peerDir).store).toEqual(privateStore);
+    expect(loadAuthProfileStoreWithoutExternalProfiles(peerDir).profiles).toEqual({
+      ...inherited.profiles,
+      ...privateStore.profiles,
+    });
+    const db = stateDb.openOpenClawStateDatabase({ env: fixture.env }).db;
+    expect(
+      rows(
+        db,
+        "SELECT DISTINCT source_path FROM migration_sources WHERE migration_kind = 'shared-auth-store-state-db'",
+      ),
+    ).toEqual([{ source_path: path.join(ownerDir, "openclaw-agent.sqlite") }]);
+    expect((await detectLegacy(fixture.env, undefined, config)).sharedAuthStore.hasLegacy).toBe(
+      false,
+    );
+  },
+);
+
+it("keeps both credential stores when the configured owner and main are populated", async () => {
+  const fixture = await createFixture();
+  const detected = await detectLegacy(fixture.env, undefined, {
+    agents: { defaults: { authInheritance: { agentId: "ops" } }, entries: { ops: {} } },
+  });
+  const before = [localAuth(fixture.mainAgentDir), localAuth(fixture.opsAgentDir)];
+
+  expect(await fixture.migrate(detected.sharedAuthStore, fixture.env)).toMatchObject({
+    changes: [],
+    outcome: "skipped",
+    warningDisposition: "recoverable",
+    warnings: [expect.stringContaining("also stores credentials")],
+  });
+  expect([localAuth(fixture.mainAgentDir), localAuth(fixture.opsAgentDir)]).toEqual(before);
+  expect(ownership.resolveSharedAuthStoreOwnership(fixture.env)).toEqual({
+    location: "legacy-main",
+  });
+});
+
+it.each(["empty owner", "directory alias"] as const)(
+  "preserves main-source relocation with a configured %s",
+  async (scenario) => {
+    const fixture = await createEmptyFixture(false);
+    const mainDir = path.dirname(fixture.sourcePath);
+    const ownerDir = path.join(fixture.stateDir, "ops-alias");
+    const store = makeStore("openai:shared", "synthetic-main-key");
+    sqlite.writePersistedAuthProfileStoreRaw(store, mainDir);
+    if (scenario === "directory alias") {
+      fs.symlinkSync(mainDir, ownerDir, process.platform === "win32" ? "junction" : "dir");
+    }
+    const detected = await detectLegacy(fixture.env, undefined, {
+      agents: {
+        defaults: { authInheritance: { agentId: "ops" } },
+        entries: { ops: { agentDir: ownerDir } },
+      },
+    });
+
+    expect(await fixture.migrate(detected.sharedAuthStore, fixture.env)).toMatchObject({
+      warnings: [],
+    });
+    expect(sharedAuth(fixture.env).store).toEqual(store);
+    expect(localAuth(mainDir).store).toBeNull();
+  },
+);
 
 it.each(["order state", "credential override"] as const)(
   "preserves post-relocation main-agent %s without treating it as legacy",

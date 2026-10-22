@@ -78,7 +78,7 @@ describe("resolveCodexProviderWebSearchSupport", () => {
       });
       vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
       const stdinClosed = once(harness.process.stdin, "close");
-      const pending = resolveCodexProviderWebSearchSupport({
+      const pending = resolveSupport({
         clientFactory: createIsolatedCodexAppServerClient,
         appServer: {
           ...appServer,
@@ -86,9 +86,6 @@ describe("resolveCodexProviderWebSearchSupport", () => {
         },
         authProfileId: null,
         agentDir,
-        config: undefined,
-        modelProviderOverride: undefined,
-        signal: new AbortController().signal,
       });
       let settled = false;
       const outcome = pending.finally(() => {
@@ -129,10 +126,9 @@ describe("resolveCodexProviderWebSearchSupport", () => {
       method === "config/read" ? { config: { model_provider: undefined } } : { webSearch: true },
     );
     clientFactory.mockResolvedValue({ request: read } as unknown as CodexAppServerClient);
-    const result = await resolveSupport({
-      expectedNativeModelProvider: "copilot",
-    });
-    expect(result).toBe("unknown");
+    await expect(resolveSupport({ expectedNativeModelProvider: "copilot" })).resolves.toBe(
+      "unknown",
+    );
     expect(read).toHaveBeenCalledExactlyOnceWith(
       "config/read",
       { includeLayers: false },
@@ -142,17 +138,10 @@ describe("resolveCodexProviderWebSearchSupport", () => {
 
   it("forwards one prepared auth handoff to capability startup", async () => {
     request.mockResolvedValue({ webSearch: true });
-    const preparedAuth = {
-      kind: "api-key" as const,
-      apiKey: "prepared-platform-key",
-    };
-
-    await expect(
-      resolveSupport({
-        authProfileId: "openai:decoy",
-        preparedAuth,
-      }),
-    ).resolves.toBe("supported");
+    const preparedAuth = { kind: "api-key" as const, apiKey: "prepared-platform-key" };
+    await expect(resolveSupport({ authProfileId: "openai:decoy", preparedAuth })).resolves.toBe(
+      "supported",
+    );
 
     expect(clientFactory.mock.calls[0]?.[0]?.preparedAuth).toBe(preparedAuth);
     expect(clientFactory).not.toHaveBeenCalledWith(

@@ -17,6 +17,7 @@ import {
   upsertConversationIdentities,
 } from "./session-accessor.sqlite-conversation.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import { readSessionTranscriptWatermark } from "./session-accessor.sqlite-transcript-watermark.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { trimSessionTranscriptForManualCompact } from "./session-accessor.transcript.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
@@ -120,6 +121,18 @@ it("trims through the worker and clears accounting without host data SQL", async
       cliSessionIds: { synthetic: "obsolete" },
     });
     replaceTranscriptEventsSync(f.scope, createManualCompactRecords(f.scope.sessionId));
+    const prior = readSessionTranscriptWatermark(f.scope);
+    replaceSessionEntrySync(f.scope, {
+      ...f.read()!,
+      worktree: { id: "adopted", branch: "pr", repoRoot: "/synthetic/current" },
+      priorWorkspace: {
+        worktreeId: "adopted",
+        sessionId: f.scope.sessionId,
+        workspaceDir: "/synthetic/original",
+        fileRoot: "/synthetic/original",
+        through: { generation: prior.generation, maxSeq: 3 },
+      },
+    });
     const sql = observeHostDataSql();
     try {
       await expect(
@@ -139,6 +152,9 @@ it("trims through the worker and clears accounting without host data SQL", async
     expect(entry?.inputTokens).toBeUndefined();
     expect(entry?.totalTokens).toBeUndefined();
     expect(entry?.cliSessionIds).toBeUndefined();
+    const current = readSessionTranscriptWatermark(f.scope);
+    expect(current.generation).not.toBe(prior.generation);
+    expect(entry?.priorWorkspace?.through).toEqual({ generation: current.generation, maxSeq: 1 });
   });
 });
 

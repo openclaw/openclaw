@@ -292,35 +292,13 @@ export type CronFailureAlertPatch = {
 
 /** Payload variants cron can execute in main-session or detached modes. */
 export type CronPayload =
-  | Exclude<CronJobWire["payload"], { kind: "agentTurn" | "heartbeat" }>
-  | (Extract<CronJobWire["payload"], { kind: "agentTurn" }> & CronExternalContent)
-  // System-owned heartbeat monitor: execution requests an interval heartbeat
-  // wake. Gateway-converged only; not accepted from client create/patch APIs.
-  | ({ kind: "heartbeat" } & CronPayloadToolAllow);
+  | Exclude<CronJobWire["payload"], { kind: "agentTurn" }>
+  | (Extract<CronJobWire["payload"], { kind: "agentTurn" }> & CronExternalContent);
 
 /** Partial payload update shape used by cron patch/edit flows. */
 export type CronPayloadPatch =
   | Exclude<CronPayloadPatchWire, { kind: "agentTurn" }>
-  | (Extract<CronPayloadPatchWire, { kind: "agentTurn" }> & CronExternalContent)
-  // Representable so the service can reject it with a typed boundary error;
-  // transports and tools never accept it.
-  | ({ kind: "heartbeat" } & CronPayloadToolAllowPatch);
-
-export function isSystemOwnedCronPayloadKind(kind: unknown): kind is "heartbeat" {
-  return kind === "heartbeat";
-}
-
-type CronPayloadToolAllow = {
-  /** Restricts agentTurn execution, or the trigger runtime for other payload kinds. */
-  toolsAllow?: string[];
-  /** Server-managed marker for auto-stamped defaults; explicit restrictions omit it. */
-  toolsAllowIsDefault?: boolean;
-};
-
-type CronPayloadToolAllowPatch = {
-  toolsAllow?: string[] | null;
-  toolsAllowIsDefault?: boolean;
-};
+  | (Extract<CronPayloadPatchWire, { kind: "agentTurn" }> & CronExternalContent);
 
 type CronPayloadPatchWire = NonNullable<CronUpdateParamsWire["patch"]["payload"]>;
 

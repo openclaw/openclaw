@@ -21,6 +21,8 @@ type ChatDetailsPeopleFacts = {
   people: readonly SessionParticipant[];
   /** Distinct total for this union, if known; not the raw participantCount. */
   totalCount?: number;
+  /** The loaded identities are not a confirmed complete participant list. */
+  partial?: boolean;
 };
 
 export type ChatDetailsPeopleProps = ChatDetailsPeopleFacts & {
@@ -67,9 +69,11 @@ export function ChatDetailsPeopleSummary(props: ChatDetailsPeopleSummaryProps) {
   const remaining = () => total() - preview().length;
   return (
     <span class="chat-details-people__summary">
-      <span class="sr-only">
-        {t("chat.sessionDetails.participants", { count: String(total()) })}
-      </span>
+      <Show when={!props.partial}>
+        <span class="sr-only">
+          {t("chat.sessionDetails.peopleCount", { count: String(total()) })}
+        </span>
+      </Show>
       <Show
         when={props.expanded}
         fallback={
@@ -93,13 +97,15 @@ export function ChatDetailsPeopleSummary(props: ChatDetailsPeopleSummaryProps) {
           </span>
         }
       >
-        <span
-          class="chat-details-people__count chat-details-desktop-section__count"
-          aria-hidden="true"
-        >
-          <span class="chat-details-desktop-section__count-separator">·</span>
-          {total()}
-        </span>
+        <Show when={!props.partial}>
+          <span
+            class="chat-details-people__count chat-details-desktop-section__count"
+            aria-hidden="true"
+          >
+            <span class="chat-details-desktop-section__count-separator">·</span>
+            {total()}
+          </span>
+        </Show>
       </Show>
     </span>
   );

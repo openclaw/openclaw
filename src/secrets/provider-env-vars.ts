@@ -377,11 +377,8 @@ export function listKnownProviderAuthEnvVarNamesCore(
 
 /** Prepare machine-owned discovery facts before deriving the same provider env-name policy. */
 export async function listKnownProviderAuthEnvVarNamesAsync(
-  params?: ProviderEnvVarLookupParams,
+  params?: Omit<ProviderEnvVarLookupParams, "metadataSnapshot">,
 ): Promise<string[]> {
-  if (params?.metadataSnapshot) {
-    return listKnownProviderAuthEnvVarNamesCore(params);
-  }
   const env = cloneEnvWithPlatformSemantics(params?.env ?? process.env);
   const lookup = { ...params, env };
   const cache = getPluginCache();

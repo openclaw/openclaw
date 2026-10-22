@@ -95,7 +95,6 @@ extensions/clickclack/src/outbound.ts	1
 extensions/clickclack/src/setup-claim.ts	1
 extensions/clickclack/src/setup-core.ts	5
 extensions/clickclack/src/setup-surface.ts	8
-extensions/clickclack/src/setup-verify.ts	1
 extensions/codex/harness.ts	1
 extensions/codex/index.ts	5
 extensions/codex/src/app-server/attempt-notifications.ts	1
@@ -489,7 +488,7 @@ extensions/memory-wiki/src/apply.ts	1
 extensions/memory-wiki/src/bounded-walk.ts	1
 extensions/memory-wiki/src/cli.ts	3
 extensions/memory-wiki/src/compiled-cache.ts	1
-extensions/memory-wiki/src/gateway.ts	3
+extensions/memory-wiki/src/gateway.ts	2
 extensions/memory-wiki/src/log.ts	1
 extensions/memory-wiki/src/mutation-coordinator.ts	1
 extensions/memory-wiki/src/tool.ts	2
@@ -559,7 +558,6 @@ extensions/ollama/src/stream.runtime.ts	3
 extensions/onepassword/index.ts	2
 extensions/openai/embedding-batch.ts	2
 extensions/openai/index.ts	2
-extensions/openai/native-web-search.ts	1
 extensions/openai/openai-chatgpt-oauth-token.runtime.ts	1
 extensions/openai/provider-policy-api.ts	2
 extensions/opencode/provider-catalog.ts	2
@@ -724,7 +722,7 @@ extensions/slack/src/monitor/context.ts	2
 extensions/slack/src/monitor/event-scope.ts	1
 extensions/slack/src/monitor/events/assistant.ts	1
 extensions/slack/src/monitor/events/channels.ts	1
-extensions/slack/src/monitor/events/interactions.block-actions.ts	12
+extensions/slack/src/monitor/events/interactions.block-actions.ts	9
 extensions/slack/src/monitor/events/interactions.modal.ts	1
 extensions/slack/src/monitor/events/message-subtype-handlers.ts	2
 extensions/slack/src/monitor/events/messages.ts	11
@@ -909,7 +907,7 @@ extensions/zalouser/src/tool.ts	1
 extensions/zalouser/src/zalo-js.ts	7
 extensions/zalouser/src/zca-client.ts	1
 packages/acp-core/src/runtime/errors.ts	6
-packages/agent-core/src/agent-loop.ts	2
+packages/agent-core/src/agent-loop.ts	1
 packages/agent-core/src/harness/compaction/branch-summarization.ts	1
 packages/agent-core/src/harness/compaction/compaction.ts	1
 packages/agent-core/src/harness/session/tool-result-pairing.ts	3
@@ -966,7 +964,6 @@ packages/ai/src/transports/openai-responses-replay-internal.ts	10
 packages/ai/src/transports/openai-responses-replay-messages-internal.ts	7
 packages/ai/src/transports/openai-responses-stream-observer-internal.ts	1
 packages/ai/src/transports/openai-responses-stream-slots-internal.ts	2
-packages/ai/src/transports/openai-responses-stream-terminal-internal.ts	1
 packages/ai/src/transports/openai-responses-websocket.ts	3
 packages/ai/src/transports/openai-transport-params.ts	2
 packages/ai/src/transports/openai-transport-shared.ts	2
@@ -1297,7 +1294,7 @@ src/agents/subagents/swarm/swarm-scheduler.ts	1
 src/agents/system-prompt-report.ts	1
 src/agents/system-prompt.ts	1
 src/agents/thinking-block.ts	1
-src/agents/tool-call-id.ts	8
+src/agents/tool-call-id.ts	7
 src/agents/tool-catalog.ts	1
 src/agents/tool-display-common.ts	1
 src/agents/tool-images.ts	2
@@ -1594,8 +1591,6 @@ src/commands/doctor/shared/allowfrom-fallback-migration.ts	1
 src/commands/doctor/shared/codex-native-assets.ts	1
 src/commands/doctor/shared/codex-route-session-repair.ts	1
 src/commands/doctor/shared/configured-channel-ids.ts	1
-src/commands/doctor/shared/empty-allowlist-policy.ts	12
-src/commands/doctor/shared/empty-allowlist-scan.ts	3
 src/commands/doctor/shared/legacy-config-core-normalizers.ts	1
 src/commands/doctor/shared/legacy-config-issues.ts	1
 src/commands/doctor/shared/legacy-config-migrate.ts	2
@@ -2052,7 +2047,6 @@ src/logging/parse-log-line.ts	1
 src/logging/redact.ts	2
 src/logging/secret-redaction-registry.ts	1
 src/logging/state.ts	6
-src/logging/subsystem.ts	1
 src/mcp/channel-bridge.ts	4
 src/mcp/channel-shared.ts	2
 src/mcp/codex-supervision-tools-serve.ts	1
@@ -2289,7 +2283,7 @@ src/secrets/store/secret-store.ts	2
 src/secrets/target-registry-query.ts	1
 src/security/audit-channel.ts	4
 src/security/audit-extra.summary.ts	2
-src/security/audit-extra.sync.ts	12
+src/security/audit-extra.sync.ts	8
 src/security/audit-model-refs.ts	5
 src/security/audit-plugins-trust.ts	5
 src/security/config-regex.ts	1
@@ -2308,7 +2302,7 @@ src/shared/config-eval.ts	1
 src/shared/deferred.ts	1
 src/shared/frontmatter.ts	1
 src/shared/global-singleton.ts	4
-src/shared/json-schema-defaults.ts	17
+src/shared/json-schema-defaults.ts	16
 src/shared/node-list-parse.ts	3
 src/shared/node-presence.ts	1
 src/shared/node-resolve.ts	1
@@ -2425,7 +2419,6 @@ ui/src/app/web-push.runtime.ts	1
 ui/src/components/app-sidebar-session-narration.ts	4
 ui/src/components/browser/browser-annotation.ts	1
 ui/src/components/browser/browser-client.ts	1
-ui/src/components/config-form-copy-on-write.ts	1
 ui/src/components/config-form.analyze.ts	1
 ui/src/components/desktop/desktop-client.ts	2
 ui/src/components/desktop/desktop-mobile-keyboard.ts	1
@@ -2452,7 +2445,6 @@ ui/src/lib/chat/outbox-store-codec.ts	1
 ui/src/lib/chat/outbox-store.ts	1
 ui/src/lib/chat/tool-call-patch.ts	1
 ui/src/lib/chat/tool-cards.ts	1
-ui/src/lib/config-form-utils.ts	1
 ui/src/lib/config/config-draft-model.ts	2
 ui/src/lib/keyboard-shortcuts.ts	1
 ui/src/lib/nodes/index.ts	2

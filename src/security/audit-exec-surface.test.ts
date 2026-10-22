@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
 import { captureEnv } from "../test-utils/env.js";
+import { collectPluginsTrustFindings } from "./audit-plugins-trust.js";
 import { collectSecurityAuditFindings } from "./audit.test-support.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
 
@@ -111,6 +112,93 @@ describe("security audit exec surface findings", () => {
     expect(hasFinding("tools.exec.security_full_configured", "critical", findings)).toBe(true);
     expect(hasFinding("security.exposure.open_channels_with_exec", "critical", findings)).toBe(
       true,
+    );
+  });
+
+  it("uses configured plugin and selected channel policies throughout the audit", async () => {
+    const stateDir = path.join(process.env.OPENCLAW_HOME!, ".openclaw");
+    const pluginDir = path.join(stateDir, "extensions", "audit-fixture");
+    await fs.mkdir(pluginDir, { recursive: true });
+    await fs.writeFile(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "audit-fixture",
+        version: "1.0.0",
+        type: "module",
+        openclaw: {
+          extensions: ["./index.js"],
+          channel: {
+            id: "audit-fixture",
+            label: "Audit fixture",
+            selectionLabel: "Audit fixture",
+            docsPath: "/channels/audit-fixture",
+            blurb: "Synthetic audit metadata",
+            doctorCapabilities: { dmAllowFromMode: "nestedOnly" },
+          },
+        },
+      }),
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "audit-fixture",
+        channels: ["audit-fixture"],
+        contracts: { tools: ["audit_fixture_tool"] },
+        configSchema: { type: "object", additionalProperties: false, properties: {} },
+      }),
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "index.js"),
+      'throw new Error("metadata-only fixture");\n',
+    );
+    const pluginFindings = await collectPluginsTrustFindings({
+      stateDir,
+      cfg: {
+        plugins: { allow: ["audit-fixture"] },
+        tools: { profile: "coding", alsoAllow: ["group:plugins"] },
+      },
+    });
+    expect(pluginFindings).toContainEqual(
+      expect.objectContaining({
+        checkId: "plugins.tools_reachable_permissive_policy",
+        severity: "warn",
+      }),
+    );
+    const findings = await collectSecurityAuditFindings({
+      plugins: {
+        allow: ["audit-fixture"],
+        load: { paths: [pluginDir] },
+      },
+      agents: { entries: { home: {}, work: {} } },
+      channels: {
+        "audit-fixture": {
+          dmPolicy: "disabled",
+          dm: { policy: "open" },
+          accounts: { work: { groups: { room: { groupPolicy: "open" } } } },
+        },
+        "top-policy-fixture": { dmPolicy: "disabled", dm: { policy: "open" } },
+      },
+      tools: { exec: { mode: "full" } },
+    });
+    const openPaths = [
+      "channels.audit-fixture.accounts.work.groups.room.groupPolicy",
+      "channels.audit-fixture.dm.policy",
+    ];
+    for (const checkId of [
+      "security.exposure.open_channels_with_exec",
+      "security.exposure.open_groups_with_elevated",
+      "security.trust_model.multi_user_heuristic",
+      "security.trust_model.cross_agent_session_access_default",
+    ]) {
+      const finding = findings.find((entry) => entry.checkId === checkId);
+      expect(finding, checkId).toBeDefined();
+      for (const policyPath of openPaths) {
+        expect(finding?.detail, checkId).toContain(policyPath);
+      }
+      expect(finding?.detail, checkId).not.toContain("channels.top-policy-fixture.dm.policy");
+    }
+    expect(findings.find((entry) => entry.checkId === "summary.attack_surface")?.detail).toContain(
+      "groups: open=1, allowlist=0\ndirect messages: open=1",
     );
   });
 

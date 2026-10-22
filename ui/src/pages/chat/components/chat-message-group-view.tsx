@@ -111,6 +111,8 @@ function PreparedMessage(props: {
           : {}),
       };
     }
+    const entryId = persistedMessageEntryId(props.item.message) ?? undefined;
+    const openFile = props.options.onOpenWorkspaceFile;
     return {
       ...props.options,
       firstBubbleKey:
@@ -118,7 +120,17 @@ function PreparedMessage(props: {
           ? props.options.firstBubbleKey
           : (props.group.messages.find((message) => message.hasVisibleContent)?.key ?? null),
       isStreaming: isStreaming(),
-      entryId: persistedMessageEntryId(props.item.message) ?? undefined,
+      entryId,
+      // Tool-row file links carry their message like rendered markdown links, so earlier
+      // messages keep reading their original source; sender-owned links stay session-scoped.
+      ...(entryId && openFile && !props.group.senderSession?.sessionKey
+        ? {
+            onOpenWorkspaceFile: (target: { path: string; line?: number | null }) => {
+              const owned = { ...target, messageEntryId: entryId };
+              openFile(owned);
+            },
+          }
+        : {}),
       duplicateCount: props.item.duplicateCount ?? 1,
       showToolCalls: props.options.showToolCalls ?? true,
       assistantMessageDisclosure,

@@ -8,6 +8,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { settleChatPage, stubMatchMedia } from "./chat-page.test-support.ts";
 import "./chat-page.tsx";
@@ -86,11 +87,15 @@ it.each(["admission", "rollback"] as const)(
         container.querySelector<HTMLElementTagNameMap["openclaw-chat-page"]>("openclaw-chat-page"),
         "chat page",
       );
-      await vi.waitFor(() => expect(page.textContent).toContain("Previous transcript"));
+      await settleChatPage(page);
       const previousPane = expectDefined(
         page.querySelector<ChatPaneElement>("openclaw-chat-pane"),
         "previous pane",
       );
+      // History can wait two seconds for its initial stored snapshot before requesting startup.
+      await vi.waitFor(() => expect(previousPane.transcriptReady).toBe(true), { timeout: 5_000 });
+      await settleChatPage(page);
+      expect(page.textContent).toContain("Previous transcript");
       expect(startupKeys).toEqual([previousKey]);
       const creation = { sessionKey, admitted: false };
       context.agents.state.pendingAgent = { id: agentId, name: "New agent" };
@@ -125,7 +130,7 @@ it.each(["admission", "rollback"] as const)(
       clear();
       await settleChatPage(page);
       await settleChatPage(page);
-      await vi.waitFor(() =>
+      await waitForSolid(() =>
         expect(page.querySelector(".chat-pane-cache__pane--visible")?.textContent).toContain(
           outcome === "admission" ? "Hi, I’m New agent. Happy to help." : "Previous transcript",
         ),

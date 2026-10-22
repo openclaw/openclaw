@@ -18,6 +18,7 @@ import {
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import type { executeAgentTurn } from "../../auto-reply/reply/agent-runner-execution.js";
+import * as restartRecovery from "../../auto-reply/reply/agent-runner-restart-recovery.js";
 import { withFullRuntimeReplyConfig } from "../../auto-reply/reply/get-reply-fast-path.js";
 import * as replyRunHelpers from "../../auto-reply/reply/get-reply-run-helpers.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
@@ -28,6 +29,7 @@ import {
   getAgentEventLifecycleGeneration,
   rotateAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
+import { createRestartRecoveryClaimChangedError } from "../../infra/agent-lifecycle-error.js";
 import * as runAuthority from "../../infra/agent-run-registry.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { getSessionControllerOperation } from "../../sessions/session-controller.js";
@@ -575,3 +577,69 @@ it.for([false, true])(
     }
   },
 );
+
+it("preserves direct pre-adoption rejection guidance instead of publishing queued cancellation", async ({
+  signal,
+}) => {
+  const fixture = await createFixture({ active: false, preserveContent: true });
+  const runId = "direct-admission-rejected-before-adoption";
+  fixture.params.idempotencyKey = runId;
+  const config = withFullRuntimeReplyConfig(fixture.context.getRuntimeConfig());
+  fixture.context.getRuntimeConfig = () => config;
+  const dispatchActual = await loadRealChatDispatch();
+  const dispatched = createDeferred();
+  const originalCreate = restartRecovery.createReplyAgentRestartRecoveryController;
+  const admissionFailure = createRestartRecoveryClaimChangedError();
+  let inputSignal: AbortSignal | undefined;
+  const rejectAdmission = vi
+    .spyOn(restartRecovery, "createReplyAgentRestartRecoveryController")
+    .mockImplementation((context) => {
+      const recovery = originalCreate(context);
+      if (context.opts?.runId !== runId) {
+        return recovery;
+      }
+      return {
+        ...recovery,
+        admitUserTurn: async () => {
+          throw admissionFailure;
+        },
+      };
+    });
+  runtime.execute.mockReset();
+  dispatchInboundMessageMock.mockImplementation(async (raw: unknown) => {
+    const params = raw as Parameters<typeof dispatchInboundMessage>[0];
+    inputSignal = params.replyOptions?.turnAdoptionLifecycle?.abortSignal;
+    try {
+      return await dispatchActual({ ...params, cfg: config });
+    } finally {
+      dispatched.resolve();
+    }
+  });
+  const guidance =
+    "⚠️ This conversation changed before your message could start. Check the latest messages, then try again if needed.";
+  try {
+    const ack = await fixture.send();
+    expect(ack.mock.calls[0]?.[1]).toMatchObject({ runId, status: "started" });
+    await withinTest(dispatched.promise, signal);
+    await fixture.finishDispatch();
+    expect(rejectAdmission).toHaveBeenCalledOnce();
+    expect(inputSignal?.aborted).toBe(false);
+    expect(runtime.execute).not.toHaveBeenCalled();
+    expect(fixture.context.dedupe.get(`chat:${runId}`)).toMatchObject({
+      ok: false,
+      payload: { runId, status: "error", summary: guidance },
+    });
+    expect(fixture.context.broadcast).not.toHaveBeenCalledWith(
+      "chat",
+      expect.objectContaining({ runId, state: "aborted" }),
+      expect.anything(),
+    );
+    const replay = await fixture.send();
+    expect(replay.mock.calls[0]?.[0]).toBe(false);
+    expect(replay.mock.calls[0]?.[1]).toMatchObject({ runId, status: "error", summary: guidance });
+    expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+  } finally {
+    rejectAdmission.mockRestore();
+    await fixture.cleanup();
+  }
+});

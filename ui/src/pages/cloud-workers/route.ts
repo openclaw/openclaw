@@ -9,7 +9,6 @@ export const page = definePage({
   loader: (context: ApplicationContext) => context.runtimeConfig.ensureLoaded(),
   component: () =>
     import("./cloud-workers-page.tsx").then((module) => ({
-      header: true,
       renderSolid: () =>
         createComponent(ShellLayoutBoundary, {
           traits: { toolbarHeader: true, settingsPage: true, settingsWorkspace: true },
