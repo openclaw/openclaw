@@ -3,10 +3,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { readConfigFileSnapshot } from "../config/io.js";
 import { copyConfigResolutionFacts } from "../config/resolution-facts.js";
 import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import {
-  assignSessionOwner,
-  replaceSessionEntrySync,
-} from "../config/sessions/session-accessor.js";
+import { assignSessionOwner } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createAgentDatabaseInspectionRefusal,
@@ -14,18 +11,21 @@ import {
   recordAgentDatabaseAdmissions,
 } from "../state/agent-database-admission.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { startGatewayConfigReloader, type GatewayReloadPlan } from "./config-reload.js";
+import { ownedConfigReloadOptions } from "./config-reload.test-support.js";
 import { installWatcherMock } from "./config-reload.watcher.test-support.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
+import { seedRow } from "./session-row-projection.read-fixture.test-support.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 
+type ReloadOptions = Parameters<typeof startGatewayConfigReloader>[0];
+
 // The threaded projection fixture has no Gateway host broker; lease behavior has its own suite.
-vi.mock("../plugins/plugin-lifecycle-lease.js", () => ({
+vi.mock("../plugins/plugin-lifecycle-lease.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-lifecycle-lease.js")>()),
   hasPluginLifecycleLease: () => false,
-  runOutsidePluginLifecycleLease: (run: () => unknown) => run(),
   withPluginLifecycleLease: async (
     _options: unknown,
     run: (lease: { assertOwned: () => void }) => Promise<unknown>,
@@ -45,44 +45,34 @@ it("retains resident rows across projection-neutral commits and unchanged admiss
     let cfg = initial.config;
     setRuntimeConfigSnapshot(cfg);
     for (let index = 0; index < count; index++) {
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: `agent:main:config-${index}` },
-        { sessionId: `config-${index}`, updatedAt: index + 1 },
-      );
+      const sessionId = `config-${index}`;
+      seedRow(`agent:main:${sessionId}`, { sessionId, updatedAt: index + 1 });
     }
+    await using cleanup = new AsyncDisposableStack();
     const release = retainSessionListForegroundWork();
+    cleanup.defer(release);
     const projection = await createSessionRowProjection({
       cfg,
       getConfig: () => getRuntimeConfigSnapshot()!,
       modelCatalog: [],
     });
+    cleanup.defer(() => projection.dispose());
     const watcher = installWatcherMock();
     onTestFinished(watcher.restore);
     let applied = createDeferred<GatewayReloadPlan>();
     let dirtyAtCommit = 0;
-    const commit: Parameters<typeof startGatewayConfigReloader>[0]["onHotReload"] = async (
-      plan,
-      next,
-      ownership,
-    ) => {
+    const commit: ReloadOptions["onHotReload"] = async (plan, next, ownership) => {
       await ownership.checkpoint();
       ownership.markRuntimeCommitted(next, plan);
       return "applied";
     };
+    const initialReload = await ownedConfigReloadOptions(initial, state.configPath);
+    const { subscribeToWrites: _, ...initialOptions } = initialReload;
+    const reject = (message: string) => applied.reject(new Error(message));
     const reloader = startGatewayConfigReloader({
-      scheduler: createTestGatewayScheduler("fake-timers"),
-      initialConfig: cfg,
-      initialCompareConfig: initial.sourceConfig,
-      initialSnapshotRawHash: initial.hash ?? null,
-      initialAuthoredConfig: initial.parsed,
-      initialSnapshotValid: initial.valid,
-      initialSnapshotIssues: initial.issues,
-      testDebounceMs: 0,
+      ...initialOptions,
       readSnapshot,
       promoteSnapshot: async () => true,
-      watchPath: state.configPath,
-      initialPluginInstallRecords: {},
-      readPluginInstallRecords: async () => ({}),
       onHotReload: commit,
       onNoopConfigCommit: commit,
       onRuntimeConfigCommitted: (_plan, next) => {
@@ -96,10 +86,11 @@ it("retains resident rows across projection-neutral commits and unchanged admiss
       },
       log: {
         info: vi.fn(),
-        warn: (message) => applied.reject(new Error(message)),
-        error: (message) => applied.reject(new Error(message)),
+        warn: reject,
+        error: reject,
       },
     });
+    cleanup.defer(() => reloader.stop());
     const reload = async (update: OpenClawConfig) => {
       applied = createDeferred<GatewayReloadPlan>();
       await state.writeConfig({ ...cfg, ...update });
@@ -108,7 +99,14 @@ it("retains resident rows across projection-neutral commits and unchanged admiss
     };
     const list = (archived?: "all") =>
       listProjectedSessions({ projection, opts: { archived, limit: 247 } });
-    const verifyRows = async (event: string, before: number, expected = 0, archived?: "all") => {
+    const verifyRows = async (
+      event: string,
+      change: () => Promise<unknown>,
+      expected = 0,
+      archived?: "all",
+    ) => {
+      const before = projection.materializedCount;
+      await change();
       const dirtyRows = dirtyAtCommit;
       const result = await list(archived);
       await projection.ensureMaterialized();
@@ -129,72 +127,59 @@ it("retains resident rows across projection-neutral commits and unchanged admiss
       await preparePendingAgentDatabase(refusal, { assertCurrent() {} }, async () => {});
       dirtyAtCommit = projection.dirtyRowCount;
     };
-    try {
-      await reloader.ready;
-      await projection.ensureMaterialized();
-      for (const [event, update, expected] of [
-        ["channel streaming", { channels: { slack: { streaming: { mode: "partial" } } } }, 0],
-        ["ui.prefs", { ui: { prefs: { sidebarEntries: ["sessions"] } } }, 0],
-        ["unchanged admission", undefined, 0],
-        [
-          "agent roster",
-          { agents: { ...cfg.agents, ownership: "explicit", entries: { main: {}, other: {} } } },
-          count,
-        ],
-      ] satisfies [string, OpenClawConfig | undefined, number][]) {
-        const before = projection.materializedCount;
-        if (update) {
-          await reload(update);
-        } else {
-          await readmit();
-        }
-        await verifyRows(event, before, expected);
-      }
-      const scope = { agentId: "main", sessionKey: "agent:main:config-0" };
-      replaceSessionEntrySync(scope, {
-        sessionId: "config-0",
-        updatedAt: count + 1,
-        archivedAt: 1,
-      });
-      assignSessionOwner(scope, {
-        owner: { type: "agent", id: "main" },
-        assignedBy: { type: "system", id: "test" },
-      });
-      const residentRows = (await list("all")).sessions.map(
-        ({ snapshotAt: _snapshotAt, ...row }) => row,
-      );
-      for (const model of ["unit-test/talk-a", "unit-test/talk-b", undefined]) {
-        const before = projection.materializedCount;
-        await reload({ talk: { realtime: model === undefined ? {} : { model } } });
-        const result = await verifyRows(`Talk model: ${model}`, before, 0, "all");
-        expect(result.sessions.map(({ snapshotAt: _snapshotAt, ...row }) => row)).toEqual(
-          residentRows,
-        );
-      }
-      const beforeRename = projection.materializedCount;
-      const previousConfig = cfg;
-      cfg = {
-        ...cfg,
-        agents: {
-          ...cfg.agents,
-          entries: {
-            ...cfg.agents?.entries,
-            main: { ...cfg.agents?.entries?.main, identity: { name: "After" } },
-          },
-        },
-      };
-      copyConfigResolutionFacts(previousConfig, cfg);
-      setRuntimeConfigSnapshot(cfg);
-      expect((await list("all")).sessions[0]?.owner?.actor.label).toBe("After");
-      expect(projection.materializedCount).toBe(beforeRename);
-      await readmit();
-      expect((await list("all")).sessions[0]?.owner?.actor.label).toBe("After");
-      expect(projection.dirtyRowCount).toBe(0);
-      expect(projection.materializedCount).toBe(beforeRename);
-    } finally {
-      await reloader.stop();
-      projection.dispose();
-      release();
+    await reloader.ready;
+    await projection.ensureMaterialized();
+    await list();
+    for (const [event, update, expected] of [
+      ["channel streaming", { channels: { slack: { streaming: { mode: "partial" } } } }, 0],
+      ["ui.prefs", { ui: { prefs: { sidebarEntries: ["sessions"] } } }, 0],
+      ["unchanged admission", undefined, 0],
+      [
+        "agent roster",
+        { agents: { ...cfg.agents, ownership: "explicit", entries: { main: {}, other: {} } } },
+        count,
+      ],
+    ] satisfies [string, OpenClawConfig | undefined, number][]) {
+      await verifyRows(event, () => (update ? reload(update) : readmit()), expected);
     }
+    const scope = { agentId: "main", sessionKey: "agent:main:config-0" };
+    seedRow(scope.sessionKey, {
+      sessionId: "config-0",
+      updatedAt: count + 1,
+      archivedAt: 1,
+    });
+    assignSessionOwner(scope, {
+      owner: { type: "agent", id: "main" },
+      assignedBy: { type: "system", id: "test" },
+    });
+    const residentRows = (await list("all")).sessions.map(
+      ({ snapshotAt: _snapshotAt, ...row }) => row,
+    );
+    for (const model of ["unit-test/talk-a", "unit-test/talk-b", undefined]) {
+      const result = await verifyRows(
+        `Talk model: ${model}`,
+        () => reload({ talk: { realtime: model === undefined ? {} : { model } } }),
+        0,
+        "all",
+      );
+      expect(result.sessions.map(({ snapshotAt: _snapshotAt, ...row }) => row)).toEqual(
+        residentRows,
+      );
+    }
+    const beforeRename = projection.materializedCount;
+    const previousConfig = cfg;
+    const renamed = { ...cfg.agents?.entries?.main, identity: { name: "After" } };
+    cfg = {
+      ...cfg,
+      agents: { ...cfg.agents, entries: { ...cfg.agents?.entries, main: renamed } },
+    };
+    copyConfigResolutionFacts(previousConfig, cfg);
+    setRuntimeConfigSnapshot(cfg);
+    expect((await list("all")).sessions[0]?.owner?.actor.label).toBe("After");
+    expect(projection.materializedCount).toBe(beforeRename);
+    await readmit();
+    expect((await list("all")).sessions[0]?.owner?.actor.label).toBe("After");
+    expect(projection.dirtyRowCount).toBe(0);
+    expect(projection.materializedCount).toBe(beforeRename);
   });
 });

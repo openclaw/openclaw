@@ -101,12 +101,19 @@ async function refObjects(
 }
 
 export async function readSessionRepositoryArtifacts(
-  params: CheckpointSource & { previewPath?: string; assertCurrent: () => void },
+  params: CheckpointSource & {
+    previewPath?: string;
+    downloadPath?: string;
+    assertCurrent: () => void;
+  },
 ): Promise<StagedWorkerArtifactInventory> {
   const { workspace, root } = await owner(params);
   const ref = checkpointRef(workspace, params.checkpointRef);
   const snapshot = await runGitWorkerOperation(
-    { type: "workspace.artifacts", input: { root, ref, previewPath: params.previewPath } },
+    {
+      type: "workspace.artifacts",
+      input: { root, ref, previewPath: params.previewPath, downloadPath: params.downloadPath },
+    },
     { assertCurrent: params.assertCurrent },
   );
   assertBase(workspace, snapshot);
@@ -134,7 +141,7 @@ async function publicationBinding(root: string, currentManifestRef: string) {
 }
 
 export async function withSessionRepositoryCheckpoint<T>(
-  params: CheckpointSource & { includePublication?: boolean },
+  params: CheckpointSource,
   use: (snapshot: SessionRepositoryCheckpointPayload) => Promise<T>,
 ): Promise<T> {
   const { workspace, root } = await owner(params);
@@ -143,9 +150,6 @@ export async function withSessionRepositoryCheckpoint<T>(
     assertBase(workspace, snapshot);
     if (ref === workspace.checkpointRef && snapshot.currentManifestRef !== workspace.manifestHash) {
       throw new Error("Repository checkpoint differs from its accepted manifest");
-    }
-    if (!params.includePublication) {
-      return await use(snapshot);
     }
     let useStarted = false;
     try {
@@ -428,7 +432,7 @@ export async function forkSessionRepositoryWorkspace(params: {
     }
     if (source.checkpointRef) {
       target = await withSessionRepositoryCheckpoint(
-        { workspaceId: source.workspaceId, store, includePublication: true },
+        { workspaceId: source.workspaceId, store },
         async (snapshot) => {
           const prepared = await stageSessionRepositoryCheckpoint({
             ...snapshot,

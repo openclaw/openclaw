@@ -1,6 +1,22 @@
+import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime";
 import type { DiagnosticEventMetadata, DiagnosticEventPayload } from "../api.js";
 import { seconds } from "./prometheus-format.js";
 import type { PrometheusMetricStore } from "./prometheus-metric-store.js";
+
+const GC_DURATION_NAME = "openclaw_gc_duration_seconds";
+const GC_DURATION_HELP =
+  "Elapsed garbage collection duration in seconds by collection kind, callback flags, and isolate role.";
+
+export function reserveMainGcHistograms(store: PrometheusMetricStore): void {
+  // The first native batch can arrive after startup traffic fills the shared series cap.
+  for (const kind of ["scavenge", "mark_sweep_compact", "incremental", "weak_processing"]) {
+    store.reserveHistogram(GC_DURATION_NAME, GC_DURATION_HELP, {
+      kind,
+      reason: "other",
+      thread: "main",
+    });
+  }
+}
 
 // Preserve existing le series while narrowing RPC quantile interpolation through 30 seconds.
 const RPC_DURATION_BUCKETS_SECONDS = [
@@ -10,6 +26,7 @@ const RPC_DURATION_BUCKETS_SECONDS = [
 ];
 
 const RESPONSE_BYTE_BUCKETS = Array.from({ length: 17 }, (_, index) => 1024 * 2 ** index);
+const MAIN_THREAD_STALL_BUCKETS_SECONDS = [0.25, 0.5, 1, 2.5, 5, 10];
 const HEAP_DELTA_BYTE_BUCKETS = [
   ...RESPONSE_BYTE_BUCKETS.toReversed().map((bytes) => -bytes),
   0,
@@ -26,8 +43,37 @@ const CATALOG_LIST_PHASES = new Set([
   "projection_final",
   "delivery",
 ]);
+const DIFF_CACHE_MISS_REASONS = new Set([
+  "cold",
+  "evicted",
+  "pending",
+  "no-revision",
+  "no-revision-environment",
+  "no-revision-platform",
+  "no-revision-metadata",
+  "no-revision-git-installation",
+  "no-revision-config",
+  "no-revision-reftable",
+  "no-revision-alternates",
+  "no-revision-symlink",
+  "no-revision-nested-repository",
+  "no-revision-status",
+  "no-revision-unmerged",
+  "no-revision-submodule",
+  "no-revision-permission",
+  "no-revision-missing",
+  "no-revision-io",
+  "oversized",
+  "revision-changed-head",
+  "revision-changed-index",
+  "revision-changed-untracked-set",
+  "revision-changed-worktree-mtime",
+  "revision-changed-metadata",
+]);
 const CHAT_SEND_PHASE =
   /^chat\.send\.(authority|admission|preparation|attachments|replyContext|authoring|persist|runAdmission|replyInitialization|snapshot|worktree|effects|response|dispatch)$/;
+const CONTROL_UI_DOCUMENT_STAGE =
+  /^control-ui\.document\.(auth_grants|identity_avatar|plugin_catalog|git_branch|preferences|render|total)$/;
 
 export function recordOperationTimingEvent(
   store: PrometheusMetricStore,
@@ -36,17 +82,28 @@ export function recordOperationTimingEvent(
     {
       type:
         | "gateway.rpc"
+        | "sessions.list.baseline.retired"
         | "diagnostic.phase.completed"
         | "gateway.http.cancelled"
         | "secret.egress"
         | "tool.catalog"
         | "diagnostic.gc"
-        | "gateway.event_loop.sample";
+        | "gateway.event_loop.sample"
+        | "gateway.main_thread.stall";
     }
   >,
   metadata: DiagnosticEventMetadata,
 ): void {
   switch (evt.type) {
+    case "sessions.list.baseline.retired":
+      if (metadata.trusted) {
+        store.counter(
+          "openclaw_sessions_list_baseline_retirements_total",
+          "Session list baseline retirement events by cause, not rows or views retired.",
+          { cause: evt.cause },
+        );
+      }
+      return;
     case "secret.egress":
       store.counter(
         "openclaw_secret_egress_requests_total",
@@ -74,10 +131,32 @@ export function recordOperationTimingEvent(
       return;
     case "diagnostic.gc":
       store.histogram(
-        "openclaw_gc_duration_seconds",
-        "Elapsed garbage collection duration in seconds by collection kind and isolate role.",
-        { kind: evt.kind ?? "unknown", thread: evt.thread ?? "main" },
+        GC_DURATION_NAME,
+        GC_DURATION_HELP,
+        {
+          kind: evt.kind ?? "unknown",
+          reason: evt.reason ?? "other",
+          thread: evt.thread ?? "main",
+          ...(evt.workerSlot === undefined ? {} : { slot: String(evt.workerSlot) }),
+        },
         seconds(evt.durationMs),
+      );
+      return;
+    case "gateway.main_thread.stall":
+      for (const stall of evt.stalls) {
+        store.histogram(
+          "openclaw_gateway_main_thread_stall_seconds",
+          "Elapsed main-thread tasks lasting at least 250 milliseconds, by work scope.",
+          { task: normalizeDiagnosticValue(stall.task) },
+          seconds(stall.durationMs),
+          MAIN_THREAD_STALL_BUCKETS_SECONDS,
+        );
+      }
+      store.counter(
+        "openclaw_gateway_main_thread_stalls_dropped_total",
+        "Main-thread stall records dropped because the attribution buffer was full.",
+        {},
+        evt.dropped,
       );
       return;
     case "gateway.event_loop.sample":
@@ -98,8 +177,83 @@ export function recordOperationTimingEvent(
       if (!metadata.trusted) {
         return;
       }
+      const documentStage = CONTROL_UI_DOCUMENT_STAGE.exec(evt.name)?.[1];
+      if (documentStage) {
+        store.histogram(
+          "openclaw_control_ui_document_duration_seconds",
+          "Elapsed Control UI HTML document handler stages in seconds; stages can overlap.",
+          { stage: documentStage },
+          seconds(evt.durationMs),
+        );
+        return;
+      }
+      if (evt.name === "sessions.diff" || evt.name === "checkout.diff") {
+        const outcome = evt.details?.outcome;
+        if (outcome !== "cache-hit" && outcome !== "cache-miss") {
+          return;
+        }
+        const reason = evt.details?.missReason;
+        if (
+          outcome === "cache-miss" &&
+          typeof reason === "string" &&
+          DIFF_CACHE_MISS_REASONS.has(reason)
+        ) {
+          store.counter(
+            "openclaw_diff_cache_misses_total",
+            "Local diff cache misses by bounded reason; pending reads join an existing load.",
+            { method: evt.name, reason },
+          );
+        }
+        for (const stage of [
+          "admission",
+          "checkout-resolve",
+          "cache-validate",
+          "worker-queue",
+          "git-wall",
+          "encode",
+        ]) {
+          const elapsed = evt.details?.[stage];
+          store.histogram(
+            "openclaw_diff_stage_seconds",
+            "Elapsed local diff stages; cache validation includes its worker queue and Git wall time.",
+            { method: evt.name, stage, outcome },
+            typeof elapsed === "number" ? seconds(elapsed) : undefined,
+            RPC_DURATION_BUCKETS_SECONDS,
+          );
+        }
+        return;
+      }
       if (evt.name === "worktree.preparation") {
-        recordWorktreePreparation(store, evt);
+        const { kind, template, outcome } = evt.details ?? {};
+        if (
+          (kind !== "managed" && kind !== "sandbox") ||
+          !["warm", "cold", "unavailable", "reused"].includes(String(template)) ||
+          (outcome !== "returned" && outcome !== "threw")
+        ) {
+          return;
+        }
+        for (const preparationPhase of [
+          "total",
+          "allocate",
+          "checkout",
+          "setup",
+          "templatePrepare",
+          "templateApply",
+          "snapshot",
+          "synchronizeCanonical",
+          "synchronizeProjection",
+          "containerStart",
+          "workspaceLayout",
+        ]) {
+          const elapsed =
+            preparationPhase === "total" ? evt.durationMs : evt.details?.[preparationPhase];
+          store.histogram(
+            "openclaw_worktree_preparation_seconds",
+            "Elapsed managed worktree preparation time; nested phases are inclusive.",
+            { kind, template: String(template), outcome, phase: preparationPhase },
+            typeof elapsed === "number" ? seconds(elapsed) : undefined,
+          );
+        }
         return;
       }
       const sendPhase = CHAT_SEND_PHASE.exec(evt.name)?.[1];
@@ -149,9 +303,69 @@ export function recordOperationTimingEvent(
           "Authenticated Gateway WebSocket requests received.",
           labels,
         );
+        // One extra sample per observed kind/method, without multiplying histogram buckets.
+        store.counter(
+          "openclaw_gateway_rpc_client_requests_total",
+          "Gateway RPC requests by bounded handshake client kind.",
+          { method: evt.method, client_kind: evt.clientKind ?? "other" },
+        );
+        if (evt.method === "models.list" && evt.modelsList) {
+          const catalog = evt.modelsList;
+          store.counter(
+            "openclaw_models_list_requests_total",
+            "Model catalog requests by client kind and bounded request shape.",
+            {
+              client_kind: catalog.clientKind,
+              source: catalog.source,
+              view: catalog.view,
+              scope: catalog.scope,
+              refresh: String(catalog.refresh),
+              prepared_only: String(catalog.preparedOnly),
+            },
+          );
+        }
+        if (evt.method === "sessions.list" && evt.sessionsList) {
+          const sessions = evt.sessionsList;
+          store.counter(
+            "openclaw_sessions_list_requests_total",
+            "Session list requests by client kind and bounded request shape.",
+            {
+              client_kind: sessions.clientKind,
+              source: sessions.source,
+              caller_source: sessions.callerSource,
+              row_mode: sessions.rowMode,
+              filter: sessions.filter,
+            },
+          );
+        }
+        if (evt.method === "cron.list" && evt.cronList) {
+          const cron = evt.cronList;
+          store.counter(
+            "openclaw_cron_list_requests_total",
+            "Cron list requests by client kind and bounded request shape.",
+            {
+              client_kind: cron.clientKind,
+              source: cron.source,
+              scope: cron.scope,
+              compact: String(cron.compact),
+              page: cron.page,
+            },
+          );
+        }
         return;
       }
       if (evt.phase === "response" && (evt.outcome === "ok" || evt.outcome === "error")) {
+        if (
+          evt.outcome === "ok" &&
+          evt.firstResponse !== false &&
+          evt.sessionsList?.baseMissReason
+        ) {
+          store.counter(
+            "openclaw_sessions_list_base_misses_total",
+            "Successful full sidebar responses with a supplied base, by miss reason.",
+            { reason: evt.sessionsList.baseMissReason },
+          );
+        }
         store.histogram(
           "openclaw_gateway_rpc_response_bytes",
           "Encoded Gateway RPC response frame size in bytes, including later frames.",
@@ -159,6 +373,47 @@ export function recordOperationTimingEvent(
           evt.responseBytes,
           RESPONSE_BYTE_BUCKETS,
         );
+        if (evt.responseBytes !== undefined && evt.sessionsList) {
+          const sessions = evt.sessionsList;
+          store.counter(
+            "openclaw_sessions_list_response_bytes_total",
+            "Encoded successful session list response bytes by request shape and row outcome.",
+            {
+              client_kind: sessions.clientKind,
+              source: sessions.source,
+              caller_source: sessions.callerSource,
+              row_mode: sessions.rowMode,
+              filter: sessions.filter,
+              rows_outcome: sessions.rowsOutcome,
+            },
+            evt.responseBytes,
+          );
+        }
+        if (evt.chatHistory) {
+          const history = evt.chatHistory;
+          const historyLabels = {
+            client_kind: history.clientKind,
+            source: history.source,
+            shape: history.shape,
+            limit_bucket: history.limitBucket,
+            outcome: history.outcome,
+          };
+          if (evt.firstResponse !== false) {
+            store.counter(
+              "openclaw_chat_history_requests_total",
+              "Successful chat history requests by request shape and response outcome.",
+              historyLabels,
+            );
+          }
+          if (evt.responseBytes !== undefined) {
+            store.counter(
+              "openclaw_chat_history_response_bytes_total",
+              "Encoded successful chat history response bytes by request shape and response outcome.",
+              historyLabels,
+              evt.responseBytes,
+            );
+          }
+        }
         if (evt.firstResponse === false) {
           return;
         }
@@ -215,40 +470,5 @@ export function recordOperationTimingEvent(
         );
       }
     }
-  }
-}
-
-function recordWorktreePreparation(
-  store: PrometheusMetricStore,
-  evt: Extract<DiagnosticEventPayload, { type: "diagnostic.phase.completed" }>,
-) {
-  const { kind, template, outcome } = evt.details ?? {};
-  if (
-    (kind !== "managed" && kind !== "sandbox") ||
-    !["warm", "cold", "unavailable", "reused"].includes(String(template)) ||
-    (outcome !== "returned" && outcome !== "threw")
-  ) {
-    return;
-  }
-  for (const phase of [
-    "total",
-    "allocate",
-    "checkout",
-    "setup",
-    "templatePrepare",
-    "templateApply",
-    "snapshot",
-    "synchronizeCanonical",
-    "synchronizeProjection",
-    "containerStart",
-    "workspaceLayout",
-  ]) {
-    const elapsed = phase === "total" ? evt.durationMs : evt.details?.[phase];
-    store.histogram(
-      "openclaw_worktree_preparation_seconds",
-      "Elapsed managed worktree preparation time; nested phases are inclusive.",
-      { kind, template: String(template), outcome, phase },
-      typeof elapsed === "number" ? seconds(elapsed) : undefined,
-    );
   }
 }

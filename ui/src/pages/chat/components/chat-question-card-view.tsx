@@ -1,12 +1,13 @@
-import { createEffect, createSignal, lazy, Loading, onCleanup } from "solid-js";
+import { createMemo, createSignal, Errored, lazy, Loading, onSettled, Show } from "solid-js";
 import {
-  isOptionalElementDefined,
-  LazyCustomElementRequestController,
-} from "../../../app/lazy-custom-element.ts";
+  cancelStaleChunkRecovery,
+  isStaleChunkImportError,
+  retryStaleChunkReloadWhenReachable,
+} from "../../../app/stale-chunk-reload.ts";
 import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
 import { LoadingState } from "../../../components/solid/loading-state.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import type { QuestionPanelProps } from "./chat-question-types.ts";
 
 type CardProps = { props?: QuestionPanelProps };
@@ -16,67 +17,89 @@ export type ChatQuestionCard = SolidBridgeElement<CardProps>;
 const QuestionPanel = lazy(() => import("./chat-question-panel.tsx"), {
   export: "ChatQuestionPanel",
 });
-const questionPanelElement = {
-  tagName: "openclaw-chat-question-panel",
-  get label() {
-    return t("chat.questions.eyebrow");
-  },
-  loadModule: QuestionPanel.preload,
-};
 
 export const ChatQuestionCard = defineSolidBridge<CardProps>(
   "openclaw-chat-question-card",
   (props, host) => {
     host.style.display = "contents";
-    const [revision, setRevision] = createSignal(0);
-    let live = true;
-    const loader = new LazyCustomElementRequestController({
-      requestUpdate: () => {
-        if (live) {
-          setRevision((value) => value + 1);
-        }
-      },
-    });
-    createEffect(
-      () => Boolean(props.props),
-      (active) => loader.requestWhileActive(questionPanelElement, active),
-    );
-    onCleanup(() => {
-      live = false;
-      loader.requestWhileActive(questionPanelElement, false);
-    });
-    const loaded = () => {
-      revision();
-      return isOptionalElementDefined(questionPanelElement);
-    };
-    const failure = () => {
-      revision();
-      const value = loader.visibleState;
-      return value?.status === "error" ? value : undefined;
-    };
     return (
-      <>
-        {props.props && (
-          <Loading fallback={<LoadingState />}>
-            {loaded() ? (
-              <QuestionPanel props={props.props} />
-            ) : failure() ? (
-              <LazyViewError
-                error={failure()?.error}
-                stale={failure()?.stale}
-                subtitle={questionPanelElement.label}
-                onRetry={() => loader.retry()}
-              />
-            ) : (
-              <LoadingState />
-            )}
-          </Loading>
-        )}
-      </>
+      <Show when={props.props}>
+        {(panel) => <QuestionCardContents panel={panel()} host={host} />}
+      </Show>
     );
   },
   { properties: { props: { default: undefined, attribute: false } } },
 );
+
+function QuestionCardContents(props: { panel: QuestionPanelProps; host: HTMLElement }) {
+  const [attempt, setAttempt] = createSignal(0);
+  return (
+    <Loading on={attempt()} fallback={<LoadingState />}>
+      <Errored
+        fallback={(error, reset) => {
+          const failedRequest = createMemo(() => [error(), props.panel.model.requestKey] as const, {
+            equals: (before, after) => before[0] === after[0] && before[1] === after[1],
+          });
+          return (
+            <Show when={failedRequest()} keyed>
+              {([failure, requestKey]) => {
+                const stale = isStaleChunkImportError(failure);
+                const [recovery, setRecovery] = createSignal<Promise<boolean>>();
+                const recovered = createMemo(() => recovery());
+                let active = true;
+                onSettled(() => () => {
+                  active = false;
+                  if (stale) {
+                    cancelStaleChunkRecovery();
+                  }
+                });
+                const retry = () => {
+                  if (!active || !props.host.isConnected) {
+                    return;
+                  }
+                  if (!stale) {
+                    setAttempt((value) => value + 1);
+                    reset();
+                    return;
+                  }
+                  const isCurrent = () =>
+                    active &&
+                    props.host.isConnected &&
+                    error() === failure &&
+                    props.panel.model.requestKey === requestKey;
+                  void setRecovery(
+                    retryStaleChunkReloadWhenReachable({ canReload: isCurrent }).then(
+                      (reloading) => {
+                        if (!reloading && isCurrent()) {
+                          setAttempt((value) => value + 1);
+                          reset();
+                        }
+                        return reloading;
+                      },
+                    ),
+                  );
+                };
+                return (
+                  <Loading on={recovery()} fallback={<LoadingState />}>
+                    {recovered()}
+                    <LazyViewError
+                      error={failure}
+                      stale={stale}
+                      subtitle={t("chat.questions.eyebrow")}
+                      onRetry={retry}
+                    />
+                  </Loading>
+                );
+              }}
+            </Show>
+          );
+        }}
+      >
+        <QuestionPanel props={props.panel} />
+      </Errored>
+    </Loading>
+  );
+}
 
 declare module "@solidjs/web" {
   namespace JSX {

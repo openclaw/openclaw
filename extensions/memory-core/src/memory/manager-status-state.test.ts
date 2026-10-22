@@ -1,10 +1,9 @@
-// Memory Core tests cover manager status state plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { encodeMemoryEmbedding } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { assert, describe, expect, it } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import { collectMemoryStatusSnapshot, resolveStatusProviderInfo } from "./manager-status-state.js";
 
 describe("memory manager status state", () => {
@@ -35,10 +34,12 @@ describe("memory manager status state", () => {
         });
       const storage = readStatus().storage;
       assert.isDefined(storage);
-      expect(storage.embeddingCacheEntries).toBe(2);
-      expect(storage.embeddingCacheBytes).toBe(16);
-      expect(storage.databaseBytes).toBe(fs.statSync(databasePath).size);
-      expect(storage.walBytes).toBe(fs.statSync(`${databasePath}-wal`).size);
+      expect(storage).toMatchObject({
+        embeddingCacheEntries: 2,
+        embeddingCacheBytes: 16,
+        databaseBytes: fs.statSync(databasePath).size,
+        walBytes: fs.statSync(`${databasePath}-wal`).size,
+      });
       expect(storage.walBytes).toBeGreaterThan(1048576);
       expect(storage.reusableBytes).toBeGreaterThanOrEqual(1048576);
       expect(db.prepare("SELECT total_changes() AS changes").get()).toEqual(before);
@@ -57,65 +58,30 @@ describe("memory manager status state", () => {
   });
 
   it.each([
-    {
-      name: "requested provider before initialization",
-      params: {
-        provider: null,
-        providerInitialized: false,
+    [false, null, ["openai", "mock-embed", "hybrid"]],
+    [true, null, ["none", undefined, "fts-only"]],
+    [true, { id: "local", model: "fallback-model" }, ["local", "fallback-model", "hybrid"]],
+  ] as const)("reports provider state %j %j %j", (initialized, provider, expected) => {
+    const resolveConfiguredModel = vi.fn(() => "mock-embed");
+    expect(
+      resolveStatusProviderInfo({
+        provider,
+        providerInitialized: initialized,
         requestedProvider: "openai",
-        resolveConfiguredModel: () => "mock-embed",
-      },
-      expected: {
-        provider: "openai",
-        model: "mock-embed",
-        searchMode: "hybrid" as const,
-      },
-    },
-    {
-      name: "FTS-only after providerless initialization",
-      params: {
-        provider: null,
-        providerInitialized: true,
-        requestedProvider: "openai",
-        resolveConfiguredModel: () => {
-          throw new Error("Configured model must not resolve after provider initialization");
-        },
-      },
-      expected: {
-        provider: "none",
-        model: undefined,
-        searchMode: "fts-only" as const,
-      },
-    },
-    {
-      name: "effective fallback provider without resolving the configured model",
-      params: {
-        provider: { id: "local", model: "fallback-model" },
-        providerInitialized: true,
-        requestedProvider: "openai",
-        resolveConfiguredModel: () => {
-          throw new Error("Configured model must not override an effective provider");
-        },
-      },
-      expected: {
-        provider: "local",
-        model: "fallback-model",
-        searchMode: "hybrid" as const,
-      },
-    },
-  ])("reports $name", ({ params, expected }) => {
-    expect(resolveStatusProviderInfo(params)).toEqual(expected);
+        resolveConfiguredModel,
+      }),
+    ).toEqual({ provider: expected[0], model: expected[1], searchMode: expected[2] });
+    expect(resolveConfiguredModel).toHaveBeenCalledTimes(initialized ? 0 : 1);
   });
 
   it("counts ordinary status without evaluating stored payload columns", () => {
-    const db = new DatabaseSync(":memory:");
+    using db = new DatabaseSync(":memory:");
     let payloadReads = 0;
-    try {
-      db.function("read_payload", { deterministic: true }, (source) => {
-        payloadReads += 1;
-        return `${String(source)} payload`;
-      });
-      db.exec(`
+    db.function("read_payload", { deterministic: true }, (source) => {
+      payloadReads += 1;
+      return `${String(source)} payload`;
+    });
+    db.exec(`
         CREATE TABLE memory_index_sources (source TEXT);
         CREATE TABLE memory_index_chunks (
           source TEXT,
@@ -127,80 +93,61 @@ describe("memory manager status state", () => {
         INSERT INTO memory_index_sources VALUES ('memory'), ('sessions');
         INSERT INTO memory_index_chunks(source) VALUES ('memory'), ('sessions');
       `);
-      payloadReads = 0;
+    payloadReads = 0;
 
-      const status = collectMemoryStatusSnapshot(db, ":memory:", {
-        sources: ["memory", "sessions"],
-        cacheEnabled: false,
-        includeStorage: false,
-      });
+    const status = collectMemoryStatusSnapshot(db, ":memory:", {
+      sources: ["memory", "sessions"],
+      cacheEnabled: false,
+      includeStorage: false,
+    });
 
-      expect(payloadReads).toBe(0);
-      expect(status.aggregate).toEqual({
-        files: 2,
-        chunks: 2,
-        sourceCounts: [
-          { source: "memory", files: 1, chunks: 1 },
-          { source: "sessions", files: 1, chunks: 1 },
-        ],
-      });
-    } finally {
-      db.close();
-    }
+    expect(payloadReads).toBe(0);
+    expect(status.aggregate).toEqual({
+      files: 2,
+      chunks: 2,
+      sourceCounts: [
+        { source: "memory", files: 1, chunks: 1 },
+        { source: "sessions", files: 1, chunks: 1 },
+      ],
+    });
   });
 
   it("reports stored payload bytes by source without counting characters or other sources", () => {
-    const db = new DatabaseSync(":memory:");
-    try {
-      db.exec(`
+    using db = new DatabaseSync(":memory:");
+    db.exec(`
         CREATE TABLE memory_index_sources (source TEXT);
         CREATE TABLE memory_index_chunks (source TEXT, text TEXT, embedding BLOB);
         CREATE TABLE memory_embedding_cache (embedding BLOB);
         INSERT INTO memory_index_sources VALUES ('memory'), ('memory'), ('sessions');
       `);
-      const insertChunk = db.prepare("INSERT INTO memory_index_chunks VALUES (?, ?, ?)");
-      insertChunk.run("memory", "🦞", encodeMemoryEmbedding([1, 2]));
-      insertChunk.run("memory", "abc", encodeMemoryEmbedding([]));
-      insertChunk.run("sessions", "session", encodeMemoryEmbedding([3]));
-      expect(
-        collectMemoryStatusSnapshot(db, ":memory:", {
-          cacheEnabled: false,
-          includeStorage: true,
-          sources: ["memory", "sessions"],
-        }).aggregate,
-      ).toEqual({
-        files: 3,
-        chunks: 3,
-        sourceCounts: [
-          { source: "memory", files: 2, chunks: 2, chunkBytes: 23 },
-          { source: "sessions", files: 1, chunks: 1, chunkBytes: 15 },
-        ],
-      });
-      expect(
-        collectMemoryStatusSnapshot(db, ":memory:", {
-          cacheEnabled: false,
-          includeStorage: true,
-          sources: ["memory"],
-        }).aggregate,
-      ).toEqual({
-        files: 2,
-        chunks: 2,
-        sourceCounts: [{ source: "memory", files: 2, chunks: 2, chunkBytes: 23 }],
-      });
-      db.exec("DELETE FROM memory_index_sources; DELETE FROM memory_index_chunks;");
-      expect(
-        collectMemoryStatusSnapshot(db, ":memory:", {
-          sources: ["memory"],
-          cacheEnabled: false,
-          includeStorage: true,
-        }).aggregate,
-      ).toEqual({
-        files: 0,
-        chunks: 0,
-        sourceCounts: [{ source: "memory", files: 0, chunks: 0, chunkBytes: 0 }],
-      });
-    } finally {
-      db.close();
-    }
+    const insertChunk = db.prepare("INSERT INTO memory_index_chunks VALUES (?, ?, ?)");
+    insertChunk.run("memory", "🦞", encodeMemoryEmbedding([1, 2]));
+    insertChunk.run("memory", "abc", encodeMemoryEmbedding([]));
+    insertChunk.run("sessions", "session", encodeMemoryEmbedding([3]));
+    const aggregate = (sources: Array<"memory" | "sessions">) =>
+      collectMemoryStatusSnapshot(db, ":memory:", {
+        cacheEnabled: false,
+        includeStorage: true,
+        sources,
+      }).aggregate;
+    expect(aggregate(["memory", "sessions"])).toEqual({
+      files: 3,
+      chunks: 3,
+      sourceCounts: [
+        { source: "memory", files: 2, chunks: 2, chunkBytes: 23 },
+        { source: "sessions", files: 1, chunks: 1, chunkBytes: 15 },
+      ],
+    });
+    expect(aggregate(["memory"])).toEqual({
+      files: 2,
+      chunks: 2,
+      sourceCounts: [{ source: "memory", files: 2, chunks: 2, chunkBytes: 23 }],
+    });
+    db.exec("DELETE FROM memory_index_sources; DELETE FROM memory_index_chunks;");
+    expect(aggregate(["memory"])).toEqual({
+      files: 0,
+      chunks: 0,
+      sourceCounts: [{ source: "memory", files: 0, chunks: 0, chunkBytes: 0 }],
+    });
   });
 });

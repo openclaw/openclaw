@@ -1,18 +1,16 @@
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import { ssrfPolicyFromPrivateNetworkOptIn } from "openclaw/plugin-sdk/ssrf-runtime";
+import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { fetchWithSsrFGuard } from "../runtime-api.js";
+import { resolveNextcloudTalkAccount } from "./accounts.js";
 import { readNextcloudTalkErrorBody } from "./guarded-response.js";
 import { stripNextcloudTalkTargetPrefix } from "./normalize.js";
-import {
-  convertMarkdownTables,
-  fetchWithSsrFGuard,
-  generateNextcloudTalkSignature,
-  getOptionalNextcloudTalkRuntime,
-  requireRuntimeConfig,
-  resolveMarkdownTableMode,
-  resolveNextcloudTalkAccount,
-  ssrfPolicyFromPrivateNetworkOptIn,
-} from "./send.runtime.js";
+import { getOptionalNextcloudTalkRuntime } from "./runtime.js";
+import { generateNextcloudTalkSignature } from "./signature.js";
 import type { CoreConfig, NextcloudTalkSendResult } from "./types.js";
 
 const NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_CHARS = 200;
@@ -29,17 +27,15 @@ function collapseErrorSnippet(text: string): string {
 
 type NextcloudTalkSendOpts = {
   cfg: CoreConfig;
-  secret?: string;
   accountId?: string;
   replyTo?: string;
-  timeoutMs?: number;
 };
 
 function resolveNextcloudTalkSendContext(opts: NextcloudTalkSendOpts) {
   const cfg = requireRuntimeConfig(opts.cfg, "Nextcloud Talk send") as CoreConfig;
   const account = resolveNextcloudTalkAccount({ cfg, accountId: opts.accountId });
   const baseUrl = account.baseUrl;
-  const secret = opts.secret?.trim() ?? account.secret;
+  const secret = account.secret;
 
   if (!baseUrl) {
     throw new Error(
@@ -65,6 +61,42 @@ function normalizeRoomToken(to: string): string {
   return normalized;
 }
 
+async function postNextcloudTalkBot(params: {
+  context: ReturnType<typeof resolveNextcloudTalkSendContext>;
+  path: string;
+  payload: object;
+  signedValue: string;
+  auditContext: string;
+  beforeRequest?: () => void;
+}) {
+  const { account, baseUrl, secret } = params.context;
+  // Talk signs the extracted message/reaction value, not the JSON envelope.
+  const { random, signature } = generateNextcloudTalkSignature({
+    body: params.signedValue,
+    secret,
+  });
+  const guarded = await fetchWithSsrFGuard({
+    url: `${baseUrl}/ocs/v2.php/apps/spreed/api/v1/bot/${params.path}`,
+    beforeRequest: params.beforeRequest,
+    init: {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "OCS-APIRequest": "true",
+        "X-Nextcloud-Talk-Bot-Random": random,
+        "X-Nextcloud-Talk-Bot-Signature": signature,
+      },
+      body: JSON.stringify(params.payload),
+    },
+    auditContext: params.auditContext,
+    policy: ssrfPolicyFromPrivateNetworkOptIn(
+      account.config.network?.dangerouslyAllowPrivateNetwork,
+    ),
+    timeoutMs: NEXTCLOUD_TALK_SEND_TIMEOUT_MS,
+  });
+  return { ...guarded, signature };
+}
+
 export async function sendMessageNextcloudTalk(
   to: string,
   text: string,
@@ -73,7 +105,8 @@ export async function sendMessageNextcloudTalk(
     assertDirectAdapterHandoff?: () => void;
   },
 ): Promise<NextcloudTalkSendResult> {
-  const { cfg, account, baseUrl, secret } = resolveNextcloudTalkSendContext(opts);
+  const context = resolveNextcloudTalkSendContext(opts);
+  const { cfg, account } = context;
   const roomToken = normalizeRoomToken(to);
 
   if (!text?.trim()) {
@@ -86,38 +119,15 @@ export async function sendMessageNextcloudTalk(
     accountId: account.accountId,
   });
   const message = convertMarkdownTables(text.trim(), tableMode);
-  const body = JSON.stringify({ message, replyTo: opts.replyTo || undefined });
-
-  // Nextcloud Talk verifies signature against the extracted message text,
-  // not the full JSON body. See ChecksumVerificationService.php:
-  //   hash_hmac('sha256', $random . $data, $secret)
-  // where $data is the "message" parameter, not the raw request body.
-  const { random, signature } = generateNextcloudTalkSignature({
-    body: message,
-    secret,
-  });
-
-  const url = `${baseUrl}/ocs/v2.php/apps/spreed/api/v1/bot/${roomToken}/message`;
 
   await opts.onPlatformSendDispatch?.();
-  const { response, release } = await fetchWithSsrFGuard({
-    url,
+  const { response, release, signature } = await postNextcloudTalkBot({
+    context,
+    path: `${roomToken}/message`,
+    payload: { message, replyTo: opts.replyTo || undefined },
+    signedValue: message,
     beforeRequest: opts.assertDirectAdapterHandoff,
-    init: {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "OCS-APIRequest": "true",
-        "X-Nextcloud-Talk-Bot-Random": random,
-        "X-Nextcloud-Talk-Bot-Signature": signature,
-      },
-      body,
-    },
     auditContext: "nextcloud-talk-send",
-    policy: ssrfPolicyFromPrivateNetworkOptIn(
-      account.config.network?.dangerouslyAllowPrivateNetwork,
-    ),
-    timeoutMs: opts.timeoutMs ?? NEXTCLOUD_TALK_SEND_TIMEOUT_MS,
   });
 
   try {
@@ -200,36 +210,16 @@ export async function sendReactionNextcloudTalk(
   messageId: string,
   reaction: string,
   opts: Omit<NextcloudTalkSendOpts, "replyTo">,
-): Promise<{ ok: true }> {
-  const { account, baseUrl, secret } = resolveNextcloudTalkSendContext(opts);
+): Promise<void> {
+  const context = resolveNextcloudTalkSendContext(opts);
   const normalizedToken = normalizeRoomToken(roomToken);
 
-  const body = JSON.stringify({ reaction });
-  // Sign only the reaction string, not the full JSON body
-  const { random, signature } = generateNextcloudTalkSignature({
-    body: reaction,
-    secret,
-  });
-
-  const url = `${baseUrl}/ocs/v2.php/apps/spreed/api/v1/bot/${normalizedToken}/reaction/${messageId}`;
-
-  const { response, release } = await fetchWithSsrFGuard({
-    url,
-    init: {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "OCS-APIRequest": "true",
-        "X-Nextcloud-Talk-Bot-Random": random,
-        "X-Nextcloud-Talk-Bot-Signature": signature,
-      },
-      body,
-    },
+  const { response, release, signature } = await postNextcloudTalkBot({
+    context,
+    path: `${normalizedToken}/reaction/${messageId}`,
+    payload: { reaction },
+    signedValue: reaction,
     auditContext: "nextcloud-talk-reaction",
-    policy: ssrfPolicyFromPrivateNetworkOptIn(
-      account.config.network?.dangerouslyAllowPrivateNetwork,
-    ),
-    timeoutMs: opts.timeoutMs ?? NEXTCLOUD_TALK_SEND_TIMEOUT_MS,
   });
 
   try {
@@ -237,8 +227,6 @@ export async function sendReactionNextcloudTalk(
       const errorBody = collapseErrorSnippet(await readNextcloudTalkErrorBody(response, signature));
       throw new Error(`Nextcloud Talk reaction failed: ${response.status} ${errorBody}`.trim());
     }
-
-    return { ok: true };
   } finally {
     await release();
   }

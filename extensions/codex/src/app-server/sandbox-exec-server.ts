@@ -43,7 +43,6 @@ const codexNodeExecServerLeases = new WeakMap<
   CodexNodeExecServerLease
 >();
 
-/** Starts or reuses a sandbox exec-server and registers it with Codex app-server. */
 export async function ensureCodexSandboxExecServerEnvironment(params: {
   client: CodexAppServerClient;
   sandbox: SandboxContext | null;
@@ -125,7 +124,6 @@ export async function ensureCodexSandboxExecServerEnvironment(params: {
   return environment;
 }
 
-/** Releases the sandbox exec-server lease associated with a sandbox runtime. */
 export async function releaseCodexSandboxExecServerEnvironment(
   sandbox: SandboxContext | null | undefined,
   environment?: CodexSandboxExecEnvironment,

@@ -1,4 +1,3 @@
-import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -13,6 +12,8 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import * as embeddedStateLock from "../infra/embedded-state-lock.js";
+import { captureNativeSignalBridge } from "../infra/embedded-state-lock.test-support.js";
+import * as gatewayLockProcessModule from "../infra/gateway-lock-process.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { registerSqliteAuditRecordAsync } from "../infra/sqlite-audit-record-store.async.js";
@@ -32,11 +33,24 @@ import { createTestRuntime } from "./test-runtime-config-helpers.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const acquireStateLock = embeddedStateLock.acquireEmbeddedStateLock;
 const createSignalBridge = embeddedStateLock.createEmbeddedStateSignalBridge;
-afterEach(() => vi.restoreAllMocks());
+const signalCaptures: ReturnType<typeof captureNativeSignalBridge>[] = [];
+afterEach(() => {
+  try {
+    for (const signals of signalCaptures) {
+      signals.dispose();
+    }
+    signalCaptures.length = 0;
+  } finally {
+    vi.restoreAllMocks();
+  }
+});
 const success = () => ({ payloads: [{ text: "done" }], meta: { durationMs: 1 } });
 function stateFixture() {
   const stateDir = tempDirs.make("openclaw-agent-exec-lock-");
   const lockDir = path.join(stateDir, "gateway-locks");
+  vi.spyOn(gatewayLockProcessModule, "readGatewayLockProcessStartTime").mockImplementation(
+    () => 123_456,
+  );
   const lockOptions = {
     allowInTests: true,
     env: {
@@ -46,7 +60,6 @@ function stateFixture() {
     },
     lockDir,
     timeoutMs: 100,
-    readProcessStartTime: () => 123_456,
   };
   vi.spyOn(embeddedStateLock, "acquireEmbeddedStateLock").mockImplementation((params) =>
     acquireStateLock({ ...params, options: lockOptions }),
@@ -83,6 +96,13 @@ describe("agent exec retained-state ownership", () => {
           ),
         );
         expect(result.exitCode).toBe(1);
+        expect(result.envelope).toMatchObject({
+          ok: false,
+          status: "error",
+          final: "done",
+          payloads: [{ text: "done" }],
+          error: { kind: "cleanup" },
+        });
         expect(cleanupScope.outcome).toBe("uncertain");
         expect(process.env.OPENCLAW_STATE_DIR).toBe(previousStateDir);
         if (fixture) {
@@ -137,36 +157,57 @@ describe("agent exec retained-state ownership", () => {
     expect((await fs.readdir(stateDir)).toSorted()).toEqual(["gateway-locks", "keep.txt", "tmp"]);
   });
 
-  it("releases the embedded state lock when SIGTERM aborts the run", async () => {
-    const { stateDir, lockPath } = stateFixture();
-    const signals = new EventEmitter();
+  it.each([
+    { retained: false, signal: "SIGINT", exitCode: 130 },
+    { retained: false, signal: "SIGTERM", exitCode: 143 },
+    { retained: true, signal: "SIGINT", exitCode: 130 },
+    { retained: true, signal: "SIGTERM", exitCode: 143 },
+  ] as const)("settles state after $signal (retained: $retained)", async (testCase) => {
+    const fixture = testCase.retained ? stateFixture() : undefined;
+    const signals = captureNativeSignalBridge(createSignalBridge);
+    signalCaptures.push(signals);
     const entered = createDeferred();
     const runtime = createTestRuntime();
-    vi.spyOn(embeddedStateLock, "createEmbeddedStateSignalBridge").mockImplementation(() =>
-      createSignalBridge(signals),
+    let stateDir = "";
+    vi.spyOn(embeddedStateLock, "createEmbeddedStateSignalBridge").mockImplementationOnce(
+      signals.create,
     );
-    const run = runAgentExecWithMock("inspect", { stateDir }, runtime, async (opts) => {
-      const signal = opts.abortSignal as AbortSignal;
-      const pending = new Promise<never>((_, reject) => {
-        signal.addEventListener(
-          "abort",
-          () => reject(Object.assign(new Error("agent exec aborted"), { name: "AbortError" })),
-          { once: true },
-        );
-      });
-      entered.resolve();
-      return pending;
-    });
+    const run = runAgentExecWithMock(
+      "inspect",
+      fixture ? { stateDir: fixture.stateDir } : {},
+      runtime,
+      async (opts) => {
+        stateDir = process.env.OPENCLAW_STATE_DIR!;
+        await fs.writeFile(path.join(stateDir, "keep.txt"), "keep");
+        const signal = opts.abortSignal as AbortSignal;
+        const pending = new Promise<never>((_, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => reject(Object.assign(new Error("agent exec aborted"), { name: "AbortError" })),
+            { once: true },
+          );
+        });
+        entered.resolve();
+        return pending;
+      },
+    );
     await Promise.race([
       entered.promise,
       run.then(() => {
         throw new Error("Run ended before signal admission");
       }),
     ]);
-    signals.emit("SIGTERM");
+    signals.emit(testCase.signal);
     await run;
-    await expect(fs.stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(runtime.exit).toHaveBeenCalledWith(143, { resetStream: process.stderr });
+    if (fixture) {
+      await expect(fs.stat(fixture.lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.readFile(path.join(stateDir, "keep.txt"), "utf8")).resolves.toBe("keep");
+    } else {
+      await expect(fs.stat(stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+    expect(signals.listenerCount("SIGINT")).toBe(0);
+    expect(signals.listenerCount("SIGTERM")).toBe(0);
+    expect(runtime.exit).toHaveBeenCalledWith(testCase.exitCode, { resetStream: process.stderr });
   });
 });
 

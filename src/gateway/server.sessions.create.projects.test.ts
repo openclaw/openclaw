@@ -15,7 +15,7 @@ import { requireGit } from "../agents/worktrees/git.js";
 import { createManagedWorktreeOwnerPolicy } from "../agents/worktrees/owner-protection.js";
 import { getRegistryWorktree } from "../agents/worktrees/registry.test-support.js";
 import { ManagedWorktreeService, managedWorktrees } from "../agents/worktrees/service.js";
-import { materializeManagedWorktreeFixture } from "../agents/worktrees/service.test-support.js";
+import { materializeManagedWorktreeFixtures } from "../agents/worktrees/service.test-support.js";
 import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
 import { getRuntimeConfig } from "../config/io.js";
 import {
@@ -26,26 +26,24 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
-import { hasErrnoCode } from "../infra/errno.js";
 import { readPersistedMediaFacts } from "../media/media-facts.js";
 import { resolveMediaReferenceLocalPath } from "../media/media-reference.js";
 import { ProjectCloneError } from "../projects/project-clone-runtime.js";
 import { registerProjectRegistry } from "../projects/project-registry.js";
-import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
+import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
-import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { createChatRunState } from "./server-chat-state.js";
-import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import {
   controlUiClient,
   initializeRepository,
+  removeOwnedSessionWorktree,
   settleWorkspaceRuns,
+  successfulSessionRequest as request,
 } from "./server.sessions.create.projects.test-support.js";
 import { dispatchInboundMessageMock, testState } from "./test-helpers.js";
 import {
@@ -78,52 +76,113 @@ let receipts: FixtureReceiptChannel;
 beforeAll(async () => {
   receipts = await openFixtureReceiptChannel();
 });
-afterAll(async () => {
-  await receipts.close();
-});
-
-async function setupStartedBeforeSettlement(
-  marker: string,
-  operation: PromiseLike<void> | undefined,
-): Promise<void> {
-  // The fixture writes the attempt marker before notifying. Admission release can
-  // beat socket delivery, so the durable marker decides that race.
-  const settled = Promise.resolve(operation).then(async () => {
-    await fs.access(marker).catch((error: unknown) => {
-      if (hasErrnoCode(error, "ENOENT")) {
-        throw new Error(`timeout waiting for ${marker}`);
-      }
-      throw error;
-    });
-  });
-  await Promise.race([receipts.waitFor(marker, "started"), settled]);
-}
+afterAll(() => receipts.close());
 
 afterEach(async () => {
-  titleMocks.generate.mockReset();
-  projectCloneMocks.materialize.mockReset();
-  projectCloneMocks.prepareIdentity.mockReset();
-  projectCloneMocks.assertSelected.mockReset();
-  dispatchInboundMessageMock.mockReset();
+  for (const mock of [
+    titleMocks.generate,
+    ...Object.values(projectCloneMocks),
+    dispatchInboundMessageMock,
+  ]) {
+    mock.mockReset();
+  }
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = undefined;
 });
 
 // Register after the resets so stacked teardown drains fixture stores first.
-const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
+const { createSessionStoreDir, withSessionTestState } = setupGatewaySessionsHandlerTestHarness();
 
-function createRemoteSession(params: Record<string, unknown>, context: Record<string, unknown>) {
-  return directSessionReq<{
-    entry: SessionEntry;
-    key: string;
-    runId: string;
-    runStarted: boolean;
-    sessionId: string;
-  }>(
-    "sessions.create",
+const readReadme = (dir: string) => fs.readFile(path.join(dir, "README.md"), "utf8");
+const readEntry = (storePath: string, sessionKey: string) =>
+  loadSessionEntry({ agentId: "main", sessionKey, storePath });
+const removeWorktree = (id: string) =>
+  managedWorktrees.remove({ id, reason: "test-cleanup", allowSnapshotLoss: true });
+function mockDispatch() {
+  dispatchInboundMessageMock.mockResolvedValue({
+    queuedFinal: false,
+    counts: { block: 0, final: 0, tool: 0 },
+  });
+}
+function expectChatEvent(broadcast: ReturnType<typeof vi.fn>, fields: Record<string, unknown>) {
+  expect(broadcast).toHaveBeenCalledWith(
+    "chat",
+    expect.objectContaining(fields),
+    expect.anything(),
+  );
+}
+function expectPreparedProject(
+  entry: SessionEntry | null | undefined,
+  sessionId: string,
+  project: Awaited<ReturnType<typeof registerProjectRegistry>>,
+  projectRoot: string,
+  worktree: boolean,
+) {
+  expect(entry).toMatchObject({
+    sessionId,
+    projectId: project.id,
+    ...(worktree
+      ? { worktree: { canonicalWorkspaceDir: projectRoot } }
+      : { spawnedCwd: projectRoot, sessionRoot: projectRoot }),
+  });
+}
+async function remoteProjectFixture<T = Awaited<ReturnType<typeof registerProjectRegistry>>>(
+  prefix: string,
+  options: { sandboxed?: boolean; alias?: boolean; recordInput?: boolean } = {},
+) {
+  const root = tempDirs.make(prefix);
+  const workspace = await initializeRepository(root, "workspace");
+  const projectRoot = await initializeRepository(options.sandboxed ? workspace : root, "project");
+  const selectedWorkspace = options.alias ? path.join(root, "workspace-alias") : workspace;
+  if (options.alias) {
+    await fs.symlink(workspace, selectedWorkspace, directoryLinkType);
+  }
+  testState.agentConfig = {
+    workspace: selectedWorkspace,
+    ...(options.sandboxed === undefined
+      ? {}
+      : { sandbox: { mode: options.sandboxed ? "all" : "off" } }),
+  };
+  const { storePath } = await createSessionStoreDir();
+  const project = await registerProjectRegistry({ path: projectRoot, name: "Project" });
+  const materialization = createDeferredCore<T>();
+  projectCloneMocks.materialize.mockReturnValueOnce(materialization.promise);
+  if (options.recordInput) {
+    projectCloneMocks.prepareIdentity.mockResolvedValue({
+      token: "protected-native-token",
+      assertSelected: projectCloneMocks.assertSelected,
+    });
+    dispatchInboundMessageMock.mockImplementation(async (params: unknown) => {
+      const { replyOptions } = params as Parameters<typeof dispatchInboundMessage>[0];
+      await replyOptions?.userTurnTranscriptRecorder?.persistApproved();
+      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+    });
+  } else {
+    mockDispatch();
+  }
+  return { storePath, projectRoot, project, materialization };
+}
+
+type CreatedSession = {
+  entry: SessionEntry;
+  key: string;
+  runId: string;
+  runStarted: boolean;
+  sessionId: string;
+};
+function createSession(
+  params: Record<string, unknown>,
+  options: Parameters<typeof directSessionReq<CreatedSession>>[2] = controlUiClient,
+) {
+  return request<CreatedSession>("sessions.create", { agentId: "main", ...params }, options);
+}
+function createRemoteSession(
+  context: Record<string, unknown>,
+  params: Record<string, unknown> = { worktree: true, worktreeName: "retry-worktree" },
+) {
+  return createSession(
     {
-      agentId: "main",
       message: "Inspect the remote project",
       projectGitUrl: "https://github.com/openclaw/openclaw.git",
       ...params,
@@ -133,32 +192,23 @@ function createRemoteSession(params: Record<string, unknown>, context: Record<st
 }
 
 test.each([
-  { worktree: true, sandboxed: false, image: true, baseRef: "main" },
-  { worktree: false, sandboxed: true },
+  { mode: "ready", worktree: true, sandboxed: false, image: true, baseRef: "main" },
+  { mode: "ready", worktree: false, sandboxed: true },
+  { mode: "abort", worktree: true },
+  { mode: "retry", worktree: false },
+  { mode: "retry", worktree: true },
 ])(
-  "sessions.create admits remote project work (worktree=$worktree, base=$baseRef, sandboxed=$sandboxed) before materialization and dispatches only after authoritative binding",
-  async ({ worktree, sandboxed, image, baseRef }) => {
-    vi.stubEnv("GH_TOKEN", "");
-    vi.stubEnv("GITHUB_TOKEN", "");
-    const root = tempDirs.make("openclaw-session-remote-project-startup-");
-    const workspace = await initializeRepository(root, "workspace");
-    const projectRoot = await initializeRepository(sandboxed ? workspace : root, "project");
-    const alias = path.join(root, "workspace-alias");
-    await fs.symlink(workspace, alias, directoryLinkType);
-    testState.agentConfig = { workspace: alias, sandbox: { mode: sandboxed ? "all" : "off" } };
-    const { storePath } = await createSessionStoreDir();
-    const project = await registerProjectRegistry({ path: projectRoot, name: "Project" });
-    projectCloneMocks.prepareIdentity.mockResolvedValue({
-      token: "protected-native-token",
-      assertSelected: projectCloneMocks.assertSelected,
-    });
-    const materialization = createDeferredCore<typeof project>();
-    projectCloneMocks.materialize.mockReturnValueOnce(materialization.promise);
-    dispatchInboundMessageMock.mockImplementation(async (dispatchParams: unknown) => {
-      const { replyOptions } = dispatchParams as Parameters<typeof dispatchInboundMessage>[0];
-      await replyOptions?.userTurnTranscriptRecorder?.persistApproved();
-      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
-    });
+  "remote project $mode (worktree=$worktree, sandboxed=$sandboxed)",
+  async ({ mode, worktree, sandboxed, image, baseRef }) => {
+    const ready = mode === "ready";
+    if (ready) {
+      vi.stubEnv("GH_TOKEN", "");
+      vi.stubEnv("GITHUB_TOKEN", "");
+    }
+    const { storePath, projectRoot, project, materialization } = await remoteProjectFixture(
+      `openclaw-remote-${mode}-`,
+      { sandboxed, alias: ready, recordInput: ready },
+    );
     const attachments = image
       ? [
           {
@@ -171,135 +221,251 @@ test.each([
         ]
       : undefined;
     const broadcast = vi.fn();
+    if (mode === "abort") {
+      rpcSourceTesting.clear();
+    }
+    const chatRunState = mode === "abort" ? createChatRunState() : undefined;
+    const dedupe = new Map();
     const context = {
       broadcast,
-      chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
+      ...(ready ? {} : { dedupe }),
+      ...(chatRunState ? { chatRunState } : {}),
     };
     const events: AgentEventPayload[] = [];
-    const unsubscribe = onAgentEvent((event) => events.push(event));
-
+    const unsubscribe = ready ? onAgentEvent((event) => events.push(event)) : () => {};
     let key: string | undefined;
     try {
       const created = await createRemoteSession(
-        {
-          ...(attachments ? { attachments } : {}),
-          projectGitUrl: "git@github.com:OpenClaw/OpenClaw.git",
-          ...(worktree
-            ? { worktree: true, worktreeName: "remote-startup", worktreeBaseRef: baseRef }
-            : {}),
-        },
         context,
+        ready
+          ? {
+              ...(attachments ? { attachments } : {}),
+              projectGitUrl: "git@github.com:OpenClaw/OpenClaw.git",
+              ...(worktree
+                ? { worktree: true, worktreeName: "remote-startup", worktreeBaseRef: baseRef }
+                : {}),
+            }
+          : worktree
+            ? { worktree: true, worktreeName: "retry-worktree" }
+            : {},
       );
-
-      expect(created.ok, JSON.stringify(created.error)).toBe(true);
-      expect(created.payload).toMatchObject({
-        key: expect.any(String),
-        runId: expect.any(String),
-        runStarted: true,
-        sessionId: expect.any(String),
-      });
-      expect(created.payload?.entry).not.toHaveProperty("pendingProjectGitUrl");
-      expect(created.payload?.entry).not.toHaveProperty("pendingWorktree");
-      const { runId, sessionId } = created.payload!;
-      key = created.payload!.key;
-      expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
-        sessionId,
-        pendingProjectGitUrl: "https://github.com/openclaw/openclaw.git",
-        ...(worktree ? { pendingWorktree: { baseRef } } : {}),
-      });
-      await vi.waitFor(() => expect(projectCloneMocks.materialize).toHaveBeenCalledOnce());
-      expect(projectCloneMocks.materialize).toHaveBeenCalledWith(
-        expect.objectContaining({ gitUrl: "https://github.com/openclaw/openclaw.git" }),
-        expect.objectContaining({
-          signal: expect.any(AbortSignal),
-          token: "protected-native-token",
-        }),
-      );
-      expect(events).toContainEqual(
-        expect.objectContaining({
-          runId,
-          stream: "run_status",
-          data: expect.objectContaining({ phase: "preparing_workspace" }),
-        }),
-      );
-      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      const transcriptScope = { agentId: "main", sessionKey: key, sessionId, storePath };
-      const pending = await listSessionPendingInputs(transcriptScope);
-      if (image) {
-        expect(
-          loadTranscriptEventsSync(transcriptScope).filter(
-            (event) => asNullableRecord(event)?.type === "message",
-          ),
-        ).toEqual([]);
-        expect(pending).toMatchObject({
-          total: 1,
-          items: [{ runId, state: "queued", message: { idempotencyKey: `${runId}:user` } }],
+      key = created.key;
+      const { runId, sessionId } = created;
+      if (ready) {
+        expect(created).toMatchObject({
+          key: expect.any(String),
+          runId: expect.any(String),
+          runStarted: true,
+          sessionId: expect.any(String),
         });
-        const startup = await directSessionReq(
-          "chat.startup",
-          { sessionKey: key },
+        expect(created?.entry).not.toHaveProperty("pendingProjectGitUrl");
+        expect(created?.entry).not.toHaveProperty("pendingWorktree");
+        expect(readEntry(storePath, key)).toMatchObject({
+          sessionId,
+          pendingProjectGitUrl: "https://github.com/openclaw/openclaw.git",
+          ...(worktree ? { pendingWorktree: { baseRef } } : {}),
+        });
+        await vi.waitFor(() => expect(projectCloneMocks.materialize).toHaveBeenCalledOnce());
+        expect(projectCloneMocks.materialize).toHaveBeenCalledWith(
+          expect.objectContaining({ gitUrl: "https://github.com/openclaw/openclaw.git" }),
+          expect.objectContaining({
+            signal: expect.any(AbortSignal),
+            token: "protected-native-token",
+          }),
+        );
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            runId,
+            stream: "run_status",
+            data: expect.objectContaining({ phase: "preparing_workspace" }),
+          }),
+        );
+        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+        const transcriptScope = { agentId: "main", sessionKey: key, sessionId, storePath };
+        const pending = await listSessionPendingInputs(transcriptScope);
+        if (image) {
+          expect(
+            loadTranscriptEventsSync(transcriptScope).filter(
+              (event) => asNullableRecord(event)?.type === "message",
+            ),
+          ).toEqual([]);
+          expect(pending).toMatchObject({
+            total: 1,
+            items: [{ runId, state: "queued", message: { idempotencyKey: `${runId}:user` } }],
+          });
+          const startup = await request(
+            "chat.startup",
+            { sessionKey: key },
+            { ...controlUiClient, context },
+          );
+          expect(startup).toMatchObject({
+            messages: [],
+            pendingInputs: { total: 1, items: [{ runId, state: "queued" }] },
+          });
+          expect(created).not.toHaveProperty("messageSeq");
+          const media = readPersistedMediaFacts(pending.items[0]!.message);
+          expect(media).toMatchObject([{ contentType: "image/png" }]);
+          expect(await fs.readFile(await resolveMediaReferenceLocalPath(media![0]!.url!))).toEqual(
+            Buffer.from(attachments![0]!.content, "base64"),
+          );
+        }
+
+        materialization.resolve(project);
+        await settleWorkspaceRuns(context, storePath, key);
+        expect(projectCloneMocks.assertSelected).toHaveBeenCalled();
+        const error = broadcast.mock.calls.find(
+          ([event, payload]) => event === "chat" && payload.state === "error",
+        );
+        expect(error?.[1]).toBeUndefined();
+        expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+        const transcript = loadTranscriptEventsSync(transcriptScope).map(asNullableRecord);
+        expect(
+          transcript.filter((event) => asNullableRecord(event?.message)?.role === "user"),
+        ).toHaveLength(1);
+        expect(transcript.at(-1)).toMatchObject({ message: { idempotencyKey: `${runId}:user` } });
+        expect(await listSessionPendingInputs(transcriptScope)).toEqual({ items: [], total: 0 });
+        if (image) {
+          expect(transcript.at(-1)?.id).toBe(pending.items[0]?.id);
+          const persistedMessage = expectDefined(
+            asNullableRecord(transcript.at(-1)?.message),
+            "persisted initial input",
+          );
+          expect(readPersistedMediaFacts(persistedMessage)).toEqual(
+            readPersistedMediaFacts(pending.items[0]!.message),
+          );
+        }
+        const prepared = readEntry(storePath, key);
+        expectPreparedProject(prepared, sessionId, project, projectRoot, worktree);
+        if (worktree) {
+          expect((await managedWorktrees.findLiveByOwner("session", key))?.baseRef).toBe("main");
+          expect(prepared?.spawnedCwd).not.toBe(projectRoot);
+          expect(await readReadme(prepared!.spawnedCwd!)).toBe("project\n");
+          await removeWorktree(prepared!.worktree!.id);
+        }
+      } else if (mode === "abort") {
+        expect(created?.runStarted).toBe(true);
+        await vi.waitFor(() => expect(projectCloneMocks.materialize).toHaveBeenCalledOnce());
+        const signal = rpcSourceTesting.get(runId)?.input.abortSignal;
+        expect(signal).toBeInstanceOf(AbortSignal);
+        expect(projectCloneMocks.materialize).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({ signal }),
+        );
+        expect(signal?.aborted).toBe(false);
+        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+
+        const aborted = await request<{ aborted: boolean; runIds: string[] }>(
+          "chat.abort",
+          { agentId: "main", sessionKey: key, runId },
           { ...controlUiClient, context },
         );
-        expect(startup.ok, JSON.stringify(startup.error)).toBe(true);
-        expect(startup.payload).toMatchObject({
-          messages: [],
-          pendingInputs: { total: 1, items: [{ runId, state: "queued" }] },
-        });
-        expect(created.payload).not.toHaveProperty("messageSeq");
-        const media = readPersistedMediaFacts(pending.items[0]!.message);
-        expect(media).toHaveLength(1);
-        expect(media?.[0]?.contentType).toBe("image/png");
-        expect(await fs.readFile(await resolveMediaReferenceLocalPath(media![0]!.url!))).toEqual(
-          Buffer.from(attachments![0]!.content, "base64"),
-        );
-      }
+        expect(aborted).toMatchObject({ aborted: true, runIds: [runId] });
+        expect(signal?.aborted).toBe(true);
+        expectChatEvent(broadcast, { runId, sessionKey: key, state: "aborted" });
 
-      materialization.resolve(project);
-      await settleWorkspaceRuns(context, storePath, key);
-      expect(projectCloneMocks.assertSelected).toHaveBeenCalled();
-      const error = broadcast.mock.calls.find(
-        ([event, payload]) => event === "chat" && payload.state === "error",
-      );
-      expect(error?.[1]).toBeUndefined();
-      expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
-      const transcript = loadTranscriptEventsSync(transcriptScope).map(asNullableRecord);
-      expect(
-        transcript.filter((event) => asNullableRecord(event?.message)?.role === "user"),
-      ).toHaveLength(1);
-      expect(transcript.at(-1)).toMatchObject({ message: { idempotencyKey: `${runId}:user` } });
-      expect(await listSessionPendingInputs(transcriptScope)).toEqual({ items: [], total: 0 });
-      if (image) {
-        expect(transcript.at(-1)?.id).toBe(pending.items[0]?.id);
-        const persistedMessage = expectDefined(
-          asNullableRecord(transcript.at(-1)?.message),
-          "persisted initial input",
-        );
-        expect(readPersistedMediaFacts(persistedMessage)).toEqual(
-          readPersistedMediaFacts(pending.items[0]!.message),
-        );
-      }
-      const prepared = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
-      expect(prepared).toMatchObject({
-        sessionId,
-        projectId: project.id,
-        ...(worktree
-          ? { worktree: { canonicalWorkspaceDir: projectRoot } }
-          : {
-              spawnedCwd: projectRoot,
-              sessionRoot: projectRoot,
-            }),
-      });
-      if (worktree) {
-        expect((await managedWorktrees.findLiveByOwner("session", key))?.baseRef).toBe("main");
-        expect(prepared?.spawnedCwd).not.toBe(projectRoot);
-        expect(await fs.readFile(path.join(prepared!.spawnedCwd!, "README.md"), "utf8")).toBe(
-          "project\n",
-        );
-        await managedWorktrees.remove({
-          id: prepared!.worktree!.id,
-          reason: "test-cleanup",
-          allowSnapshotLoss: true,
+        materialization.resolve(project);
+        await settleWorkspaceRuns(context, storePath, key);
+        expect(dedupe.get(`chat:${runId}`)).toMatchObject({
+          payload: { runId, summary: "aborted" },
         });
+        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+        expect(readEntry(storePath, key)).toMatchObject({
+          sessionId,
+          pendingProjectGitUrl: "https://github.com/openclaw/openclaw.git",
+        });
+        expect(readEntry(storePath, key)?.projectId).toBe(undefined);
+        expect(chatRunState!.runs.get(runId)?.abortMarker).toBeDefined();
+      } else {
+        expect(created).toMatchObject({ runStarted: true, runId: expect.any(String) });
+        const entryAfterCreation = readEntry(storePath, key);
+        const failureMessage =
+          "Git clone could not reach GitHub. Check the Gateway network connection and retry.";
+        materialization.reject(new ProjectCloneError("network", failureMessage));
+        await settleWorkspaceRuns(context, storePath, key);
+        expectChatEvent(broadcast, {
+          runId,
+          sessionKey: key,
+          state: "error",
+          errorMessage: expect.stringContaining(failureMessage),
+        });
+        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+        expect(readEntry(storePath, key)).toMatchObject({ sessionId });
+        expect(readEntry(storePath, key)?.status).not.toBe("running");
+        const entryAfterFailure = readEntry(storePath, key);
+        // The first chat pane subscribes only after create-and-navigate. Its history
+        // must recover the failure without receiving the already-emitted chat event.
+        for (const method of ["chat.startup", "chat.history"] as const) {
+          const history = await request(method, { sessionKey: key }, controlUiClient);
+          expect(history).toMatchObject({
+            sessionInfo: {
+              sessionId,
+              status: "failed",
+              hasActiveRun: false,
+              lastRunId: runId,
+              lastRunError: expect.stringContaining(failureMessage),
+            },
+            messages: [
+              expect.objectContaining({ role: "user" }),
+              expect.objectContaining({
+                role: "custom",
+                customType: "run-failed-before-reply",
+                display: true,
+                content: expect.stringContaining(failureMessage),
+              }),
+            ],
+          });
+        }
+
+        const retriedMaterialization = createDeferredCore<typeof project>();
+        projectCloneMocks.materialize.mockReturnValueOnce(retriedMaterialization.promise);
+        const restartedContext = { broadcast, dedupe: new Map() };
+
+        try {
+          const retried = await request<{ runId: string; status: string }>(
+            "chat.send",
+            {
+              sessionKey: key,
+              agentId: "main",
+              message: "Retry the remote project",
+              idempotencyKey: "remote-project-retry",
+            },
+            { ...controlUiClient, context: restartedContext },
+          );
+          expect(retried).toMatchObject({
+            runId: "remote-project-retry",
+            status: "started",
+          });
+          await vi.waitFor(() => expect(projectCloneMocks.materialize).toHaveBeenCalledTimes(2));
+          expect(readEntry(storePath, key)?.lastRunError).toBe(undefined);
+          expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+          for (const entry of [entryAfterCreation, entryAfterFailure, readEntry(storePath, key)]) {
+            expect(entry).toMatchObject({
+              sessionId,
+              pendingProjectGitUrl: "https://github.com/openclaw/openclaw.git",
+            });
+          }
+
+          retriedMaterialization.resolve(project);
+          await settleWorkspaceRuns(restartedContext, storePath, key);
+          const error = broadcast.mock.calls.find(
+            ([event, payload]) =>
+              event === "chat" &&
+              payload.runId === "remote-project-retry" &&
+              payload.state === "error",
+          );
+          expect(error?.[1]).toBeUndefined();
+          expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+          const preparedEntry = readEntry(storePath, key);
+          expectPreparedProject(preparedEntry, sessionId, project, projectRoot, worktree);
+          expect(preparedEntry).not.toHaveProperty("pendingProjectGitUrl");
+          expect(preparedEntry).not.toHaveProperty("pendingWorktree");
+          if (preparedEntry?.worktree) {
+            await removeWorktree(preparedEntry.worktree.id);
+          }
+        } finally {
+          retriedMaterialization.resolve(project);
+          await settleWorkspaceRuns(restartedContext, storePath, key, true);
+        }
       }
     } finally {
       materialization.resolve(project);
@@ -308,208 +474,6 @@ test.each([
     }
   },
 );
-
-test("chat.abort cancels remote worktree project preparation without late binding or agent dispatch", async () => {
-  const root = tempDirs.make("openclaw-session-remote-project-abort-");
-  const workspace = await initializeRepository(root, "workspace");
-  const projectRoot = await initializeRepository(root, "project");
-  testState.agentConfig = { workspace };
-  const { storePath } = await createSessionStoreDir();
-  const project = await registerProjectRegistry({ path: projectRoot, name: "Project" });
-  const materialization = createDeferredCore<typeof project>();
-  projectCloneMocks.materialize.mockReturnValueOnce(materialization.promise);
-  dispatchInboundMessageMock.mockResolvedValue({
-    queuedFinal: false,
-    counts: { block: 0, final: 0, tool: 0 },
-  });
-  const broadcast = vi.fn();
-  const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
-  const context = {
-    broadcast,
-    chatAbortControllers,
-    chatRunState: createChatRunState(),
-    dedupe: new Map(),
-  };
-
-  let key: string | undefined;
-  try {
-    const created = await createRemoteSession(
-      { worktree: true, worktreeName: "retry-worktree" },
-      context,
-    );
-
-    expect(created.ok, JSON.stringify(created.error)).toBe(true);
-    expect(created.payload?.runStarted).toBe(true);
-    const { runId, sessionId } = created.payload!;
-    key = created.payload!.key;
-    await vi.waitFor(() => expect(projectCloneMocks.materialize).toHaveBeenCalledOnce());
-    const signal = chatAbortControllers.get(runId)?.controller.signal;
-    expect(signal).toBeInstanceOf(AbortSignal);
-    expect(projectCloneMocks.materialize).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ signal }),
-    );
-    expect(signal?.aborted).toBe(false);
-    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-
-    const aborted = await directSessionReq<{ aborted: boolean; runIds: string[] }>(
-      "chat.abort",
-      { agentId: "main", sessionKey: key, runId },
-      { ...controlUiClient, context },
-    );
-
-    expect(aborted.ok, JSON.stringify(aborted.error)).toBe(true);
-    expect(aborted.payload).toMatchObject({ aborted: true, runIds: [runId] });
-    expect(signal?.aborted).toBe(true);
-    expect(broadcast).toHaveBeenCalledWith(
-      "chat",
-      expect.objectContaining({ runId, sessionKey: key, state: "aborted" }),
-      expect.anything(),
-    );
-
-    materialization.resolve(project);
-    await settleWorkspaceRuns(context, storePath, key);
-    expect(context.dedupe.get(`chat:${runId}`)).toMatchObject({
-      payload: { runId, summary: "aborted" },
-    });
-    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
-      sessionId,
-      pendingProjectGitUrl: "https://github.com/openclaw/openclaw.git",
-    });
-    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.projectId).toBe(
-      undefined,
-    );
-    expect(context.chatRunState.runs.get(runId)?.abortMarker).toBeDefined();
-  } finally {
-    materialization.resolve(project);
-    await settleWorkspaceRuns(context, storePath, key, true);
-  }
-});
-
-test("sessions.create retries a failed remote project worktree in the same session after Gateway restart", async () => {
-  const root = tempDirs.make("openclaw-session-remote-project-failure-");
-  const workspace = await initializeRepository(root, "workspace");
-  const projectRoot = await initializeRepository(root, "project");
-  testState.agentConfig = { workspace };
-  const { storePath } = await createSessionStoreDir();
-  const project = await registerProjectRegistry({ path: projectRoot, name: "Project" });
-  const materialization = createDeferredCore<never>();
-  projectCloneMocks.materialize.mockReturnValueOnce(materialization.promise);
-  dispatchInboundMessageMock.mockResolvedValue({
-    queuedFinal: false,
-    counts: { block: 0, final: 0, tool: 0 },
-  });
-  const broadcast = vi.fn();
-  const context = { broadcast, chatAbortControllers: new Map(), dedupe: new Map() };
-
-  const created = await createRemoteSession(
-    { worktree: true, worktreeName: "retry-worktree" },
-    context,
-  );
-
-  expect(created.ok, JSON.stringify(created.error)).toBe(true);
-  expect(created.payload).toMatchObject({ runStarted: true, runId: expect.any(String) });
-  const { key, runId, sessionId } = created.payload!;
-  const failureMessage =
-    "Git clone could not reach GitHub. Check the Gateway network connection and retry.";
-  materialization.reject(new ProjectCloneError("network", failureMessage));
-  await settleWorkspaceRuns(context, storePath, key);
-  expect(broadcast).toHaveBeenCalledWith(
-    "chat",
-    expect.objectContaining({
-      runId,
-      sessionKey: key,
-      state: "error",
-      errorMessage: expect.stringContaining(failureMessage),
-    }),
-    expect.anything(),
-  );
-  expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-  // The first chat pane subscribes only after create-and-navigate. Its history
-  // must recover the failure without receiving the already-emitted chat event.
-  for (const method of ["chat.startup", "chat.history"] as const) {
-    const history = await directSessionReq(method, { sessionKey: key }, controlUiClient);
-    expect(history.ok, JSON.stringify(history.error)).toBe(true);
-    expect(history.payload).toMatchObject({
-      sessionInfo: {
-        sessionId,
-        status: "failed",
-        hasActiveRun: false,
-        lastRunId: runId,
-        lastRunError: expect.stringContaining(failureMessage),
-      },
-      messages: [
-        expect.objectContaining({ role: "user" }),
-        expect.objectContaining({
-          role: "custom",
-          customType: "run-failed-before-reply",
-          display: true,
-          content: expect.stringContaining(failureMessage),
-        }),
-      ],
-    });
-  }
-
-  const retriedMaterialization = createDeferredCore<typeof project>();
-  projectCloneMocks.materialize.mockReturnValueOnce(retriedMaterialization.promise);
-  const restartedContext = { broadcast, chatAbortControllers: new Map(), dedupe: new Map() };
-
-  try {
-    const retried = await directSessionReq<{ runId: string; status: string }>(
-      "chat.send",
-      {
-        sessionKey: key,
-        agentId: "main",
-        message: "Retry the remote project",
-        idempotencyKey: "remote-project-retry",
-      },
-      { ...controlUiClient, context: restartedContext },
-    );
-
-    expect(retried.ok, JSON.stringify(retried.error)).toBe(true);
-    expect(retried.payload).toMatchObject({
-      runId: "remote-project-retry",
-      status: "started",
-    });
-    await vi.waitFor(() => expect(projectCloneMocks.materialize).toHaveBeenCalledTimes(2));
-    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.lastRunError).toBe(
-      undefined,
-    );
-    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
-      sessionId,
-      pendingProjectGitUrl: "https://github.com/openclaw/openclaw.git",
-    });
-
-    retriedMaterialization.resolve(project);
-    await settleWorkspaceRuns(restartedContext, storePath, key);
-    const error = broadcast.mock.calls.find(
-      ([event, payload]) =>
-        event === "chat" && payload.runId === "remote-project-retry" && payload.state === "error",
-    );
-    expect(error?.[1]).toBeUndefined();
-    expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
-    const preparedEntry = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
-    expect(preparedEntry).toMatchObject({
-      sessionId,
-      projectId: project.id,
-      worktree: { canonicalWorkspaceDir: projectRoot },
-    });
-    expect(preparedEntry).not.toHaveProperty("pendingProjectGitUrl");
-    expect(preparedEntry).not.toHaveProperty("pendingWorktree");
-    if (preparedEntry?.worktree) {
-      await managedWorktrees.remove({
-        id: preparedEntry.worktree.id,
-        reason: "test-cleanup",
-        allowSnapshotLoss: true,
-      });
-    }
-  } finally {
-    retriedMaterialization.resolve(project);
-    await settleWorkspaceRuns(restartedContext, storePath, key, true);
-  }
-});
 
 test.for([false, true])(
   "concurrent sends retain one bound worktree after deferred setup (abort first=%s)",
@@ -546,21 +510,26 @@ sendReceipt(process.argv[2], "started");
     );
     const context = {
       broadcast: vi.fn(),
-      chatAbortControllers: new Map(),
       chatRunState: createChatRunState(),
       dedupe: new Map(),
     };
     const options = { client: { connect: { scopes: ["operator.admin"] } } as never, context };
-    dispatchInboundMessageMock.mockResolvedValue({
-      queuedFinal: false,
-      counts: { block: 0, final: 0, tool: 0 },
-    });
+    mockDispatch();
     let key: string | undefined;
+    const waitForSetup = (marker: string) =>
+      withinTest(
+        Promise.race([
+          receipts.waitFor(marker, "started"),
+          // Admission can settle before socket delivery; confirm its durable marker.
+          Promise.resolve(
+            captureSessionControllerSettlement({ scope: storePath, identities: [key] }),
+          ).then(() => fs.access(marker)),
+        ]),
+        signal,
+      );
     try {
-      const created = await directSessionReq<{ key: string; runId: string; runStarted: boolean }>(
-        "sessions.create",
+      const created = await createSession(
         {
-          agentId: "main",
           message: "Start during setup",
           worktree: true,
           worktreeBaseRef: "main",
@@ -568,22 +537,16 @@ sendReceipt(process.argv[2], "started");
         },
         options,
       );
-      expect(created.ok, JSON.stringify(created.error)).toBe(true);
-      expect(created.payload?.runStarted).toBe(true);
-      key = created.payload!.key;
-      await withinTest(
-        setupStartedBeforeSettlement(
-          firstStarted,
-          getSessionWorkAdmissionRelease({ scope: storePath, identities: [key] }),
-        ),
-        signal,
-      );
+      expect(created?.runStarted).toBe(true);
+      key = created.key;
+      await waitForSetup(firstStarted);
       expect(await fs.readFile(starts, "utf8")).toBe("started\n");
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.pendingWorktree,
-      ).toMatchObject({ baseRef: "main", baseCommit: expect.any(String) });
-      const sent = await directSessionReq(
+      expect(readEntry(storePath, key)?.pendingWorktree).toMatchObject({
+        baseRef: "main",
+        baseCommit: expect.any(String),
+      });
+      await request(
         "chat.send",
         {
           agentId: "main",
@@ -593,34 +556,20 @@ sendReceipt(process.argv[2], "started");
         },
         options,
       );
-      expect(sent.ok, JSON.stringify(sent.error)).toBe(true);
       if (abortFirst) {
-        const aborted = await directSessionReq(
-          "chat.abort",
-          { sessionKey: key, runId: created.payload!.runId },
-          options,
-        );
-        expect(aborted.ok, JSON.stringify(aborted.error)).toBe(true);
-        await withinTest(
-          setupStartedBeforeSettlement(
-            secondStarted,
-            getSessionWorkAdmissionRelease({ scope: storePath, identities: [key] }),
-          ),
-          signal,
-        );
+        await request("chat.abort", { sessionKey: key, runId: created.runId }, options);
+        await waitForSetup(secondStarted);
         expect(await fs.readFile(starts, "utf8")).toBe("started\nstarted\n");
       }
       await fs.writeFile(release, "ready\n");
       await settleWorkspaceRuns(context, storePath, key);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(abortFirst ? 1 : 2);
-      const entry = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
+      const entry = readEntry(storePath, key);
       expect(entry).not.toHaveProperty("pendingWorktree");
       expect(entry?.worktree?.canonicalWorkspaceDir).toBe(workspace);
       const owned = await managedWorktrees.findLiveByOwner("session", key!);
       expect(owned?.id).toBe(entry?.worktree?.id);
-      await expect(fs.readFile(path.join(entry!.spawnedCwd!, "README.md"), "utf8")).resolves.toBe(
-        "workspace\n",
-      );
+      await expect(readReadme(entry!.spawnedCwd!)).resolves.toBe("workspace\n");
       expect(
         context.broadcast.mock.calls.filter(
           ([event, payload]) => event === "chat" && payload.state === "error",
@@ -629,14 +578,7 @@ sendReceipt(process.argv[2], "started");
     } finally {
       await fs.writeFile(release, "release setup\n");
       await settleWorkspaceRuns(context, storePath, key, true);
-      const owned = key ? await managedWorktrees.findLiveByOwner("session", key) : undefined;
-      if (owned) {
-        await managedWorktrees.remove({
-          id: owned.id,
-          reason: "test-cleanup",
-          allowSnapshotLoss: true,
-        });
-      }
+      await removeOwnedSessionWorktree(key);
     }
   },
 );
@@ -647,12 +589,7 @@ test("sessions.create rejects conflicting, unsupported, and invalid remote proje
   testState.agentConfig = { workspace };
   await createSessionStoreDir();
   const validRemote = "https://github.com/openclaw/openclaw.git";
-  const existing = await directSessionReq<{ key: string }>(
-    "sessions.create",
-    { agentId: "main", key: "agent:main:existing-project-session" },
-    controlUiClient,
-  );
-  expect(existing.ok, JSON.stringify(existing.error)).toBe(true);
+  const existing = await createSession({ key: "agent:main:existing-project-session" });
 
   for (const params of [
     { message: "Start", projectGitUrl: validRemote, projectId: "workspace:main" },
@@ -661,7 +598,7 @@ test("sessions.create rejects conflicting, unsupported, and invalid remote proje
     { message: "Start", projectGitUrl: "   " },
     { message: "Start", projectGitUrl: "file:///tmp/untrusted-project" },
     { message: "Start", projectGitUrl: "https://token@github.com/openclaw/openclaw.git" },
-    { key: existing.payload?.key, message: "Start", projectGitUrl: validRemote },
+    { key: existing?.key, message: "Start", projectGitUrl: validRemote },
   ]) {
     const created = await directSessionReq(
       "sessions.create",
@@ -682,23 +619,18 @@ test("chat.send visibly rejects corrupt persisted project intent without default
   const root = tempDirs.make("openclaw-session-remote-project-corrupt-");
   testState.agentConfig = { workspace: await initializeRepository(root, "workspace") };
   const { storePath } = await createSessionStoreDir();
-  const created = await directSessionReq<{ key: string }>(
-    "sessions.create",
-    { agentId: "main", key: "agent:main:corrupt-project-session" },
-    controlUiClient,
-  );
-  expect(created.ok, JSON.stringify(created.error)).toBe(true);
-  const sessionKey = created.payload!.key;
-  const entry = loadSessionEntry({ agentId: "main", sessionKey, storePath });
+  const created = await createSession({ key: "agent:main:corrupt-project-session" });
+  const sessionKey = created.key;
+  const entry = readEntry(storePath, sessionKey);
   expect(entry).toBeDefined();
   await replaceSessionEntry(
     { agentId: "main", sessionKey, storePath },
     { ...entry!, pendingProjectGitUrl: "https://token@github.com/openclaw/openclaw.git" },
   );
   const broadcast = vi.fn();
-  const context = { broadcast, chatAbortControllers: new Map<string, ChatAbortControllerEntry>() };
+  const context = { broadcast };
 
-  const sent = await directSessionReq(
+  await request(
     "chat.send",
     {
       agentId: "main",
@@ -708,100 +640,131 @@ test("chat.send visibly rejects corrupt persisted project intent without default
     },
     { ...controlUiClient, context },
   );
-
-  expect(sent.ok, JSON.stringify(sent.error)).toBe(true);
   await settleWorkspaceRuns(context, storePath, sessionKey);
-  expect(broadcast).toHaveBeenCalledWith(
-    "chat",
-    expect.objectContaining({
-      runId: "corrupt-project-intent",
-      sessionKey,
-      state: "error",
-      errorMessage: expect.stringContaining("Saved project repository is invalid"),
-    }),
-    expect.anything(),
-  );
+  expectChatEvent(broadcast, {
+    runId: "corrupt-project-intent",
+    sessionKey,
+    state: "error",
+    errorMessage: expect.stringContaining("Saved project repository is invalid"),
+  });
   expect(projectCloneMocks.materialize).not.toHaveBeenCalled();
   expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
 });
 
-test("sessions.create starts in a sandboxed workspace project through a workspace alias", async () => {
-  const root = tempDirs.make("openclaw-session-workspace-project-");
-  const workspace = path.join(root, "workspace");
-  const alias = path.join(root, "workspace-alias");
-  await fs.mkdir(workspace);
-  await fs.symlink(workspace, alias, directoryLinkType);
-  testState.agentConfig = { workspace: alias, sandbox: { mode: "all" } };
+test("sessions.create terminalizes remote project preparation outside a sandboxed agent workspace", async () => {
+  const root = tempDirs.make("openclaw-session-remote-project-sandbox-");
+  const workspace = await initializeRepository(root, "workspace");
+  const outside = await initializeRepository(root, "outside");
+  testState.agentConfig = { workspace, sandbox: { mode: "all" } };
   const { storePath } = await createSessionStoreDir();
-  const projectRoot = workspace;
+  const project = await registerProjectRegistry({ path: outside, name: "Outside" });
+  const materialization = createDeferredCore<typeof project>();
+  projectCloneMocks.materialize.mockReturnValueOnce(materialization.promise);
+  const broadcast = vi.fn();
+  const context = { broadcast };
 
-  const created = await directSessionReq<{
-    key: string;
-    entry?: { sessionRoot?: string; spawnedCwd?: string };
-  }>(
-    "sessions.create",
-    { agentId: "main", projectId: "workspace:main" },
-    { client: { connect: { scopes: ["operator.write"] } } as never },
-  );
+  let key: string | undefined;
+  try {
+    const created = await createRemoteSession(context, {
+      message: "Inspect the sandboxed project",
+    });
+    expect(created.runStarted).toBe(true);
+    const { runId } = created;
+    key = created.key;
+    await vi.waitFor(() => expect(projectCloneMocks.materialize).toHaveBeenCalledOnce());
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
 
-  expect(created.ok, JSON.stringify(created.error)).toBe(true);
-  expect(created.payload?.entry).toMatchObject({
-    sessionRoot: projectRoot,
-    spawnedCwd: projectRoot,
-  });
-  expect(loadSessionEntry({ sessionKey: created.payload!.key, storePath })).toMatchObject({
-    sessionRoot: projectRoot,
-    spawnedCwd: projectRoot,
-  });
+    materialization.resolve(project);
+    await settleWorkspaceRuns(context, storePath, key);
+    expectChatEvent(broadcast, {
+      runId,
+      sessionKey: key,
+      state: "error",
+      errorMessage: expect.stringContaining(
+        "sessions.create project is outside the sandboxed agent workspace",
+      ),
+    });
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    expect(readEntry(storePath, key)?.projectId).toBe(undefined);
+    expect(readEntry(storePath, key)?.status).not.toBe("running");
+  } finally {
+    materialization.resolve(project);
+    await settleWorkspaceRuns(context, storePath, key, true);
+  }
 });
 
+test.each(["workspace", "registered"])(
+  "sessions.create starts in a sandboxed %s project through a workspace alias",
+  async (kind) => {
+    const root = tempDirs.make("openclaw-session-workspace-project-");
+    const workspace = path.join(root, "workspace");
+    const alias = path.join(root, "workspace-alias");
+    await fs.mkdir(workspace);
+    await fs.symlink(workspace, alias, directoryLinkType);
+    testState.agentConfig = { workspace: alias, sandbox: { mode: "all" } };
+    const { storePath } = await createSessionStoreDir();
+    const projectRoot =
+      kind === "workspace" ? workspace : await initializeRepository(workspace, "project");
+    const projectId =
+      kind === "workspace"
+        ? "workspace:main"
+        : (await registerProjectRegistry({ path: projectRoot })).id;
+
+    const created = await createSession(
+      { projectId },
+      { client: { connect: { scopes: ["operator.write"] } } as never },
+    );
+    expect(created?.entry).toMatchObject({
+      sessionRoot: projectRoot,
+      spawnedCwd: projectRoot,
+    });
+    expect(loadSessionEntry({ sessionKey: created.key, storePath })).toMatchObject({
+      sessionRoot: projectRoot,
+      spawnedCwd: projectRoot,
+    });
+  },
+);
+
 test("sessions.create with an empty message preserves its owned checkout above the 100 cleanup target", async () => {
-  const state = await createOpenClawTestState({
-    layout: "state-only",
-    prefix: "openclaw-session-worktree-target-",
-  });
-  let sessionStoreDir: string | undefined;
-  try {
-    const workspace = await initializeRepository(state.root, "workspace");
-    const projectRoot = await initializeRepository(state.root, "project");
-    await requireGit(projectRoot, ["tag", "selected-base"]);
-    const baseCommit = await requireGit(projectRoot, ["rev-parse", "selected-base"]);
-    await fs.writeFile(path.join(projectRoot, "README.md"), "newer project head\n");
-    await requireGit(projectRoot, ["commit", "-am", "advance main beyond selected base"]);
-    testState.agentConfig = { workspace };
-    const { dir, storePath } = await createSessionStoreDir();
-    sessionStoreDir = dir;
-    const project = await registerProjectRegistry({ path: projectRoot, name: "Project" });
-    for (let index = 0; index < 100; index += 1) {
-      await materializeManagedWorktreeFixture({
+  await withSessionTestState(
+    { layout: "state-only", prefix: "openclaw-session-worktree-target-" },
+    async (state) => {
+      const workspace = await initializeRepository(state.root, "workspace");
+      const projectRoot = await initializeRepository(state.root, "project");
+      await requireGit(projectRoot, ["tag", "selected-base"]);
+      const baseCommit = await requireGit(projectRoot, ["rev-parse", "selected-base"]);
+      await fs.writeFile(path.join(projectRoot, "README.md"), "newer project head\n");
+      await requireGit(projectRoot, ["commit", "-am", "advance main beyond selected base"]);
+      testState.agentConfig = { workspace };
+      const { storePath } = await createSessionStoreDir();
+      const project = await registerProjectRegistry({ path: projectRoot, name: "Project" });
+      const kept = await materializeManagedWorktreeFixtures({
         env: state.env,
         stateDir: state.stateDir,
         repoRoot: workspace,
-        name: `kept-${index}`,
+        names: Array.from({ length: 100 }, (_, index) => `kept-${index}`),
         now: Date.now(),
       });
-    }
-    const kept = await managedWorktrees.listRegistryRecords();
-    const key = "agent:main:worktree-above-cleanup-target";
-    const scope = { agentId: "main", sessionKey: key, storePath };
-    const originalCreate = captureMethodCall("createWithOutcome")(ManagedWorktreeService.prototype);
-    const createSpy = vi
-      .spyOn(ManagedWorktreeService.prototype, "createWithOutcome")
-      .mockImplementationOnce(async function (this: ManagedWorktreeService, params) {
-        const outcome = await originalCreate(this, params);
-        const record = outcome.record;
-        // GC can run after allocation but before the session row is published.
-        expect(loadSessionEntry(scope)).toBeUndefined();
-        expect(
-          await managedWorktrees.gc(createManagedWorktreeOwnerPolicy(getRuntimeConfig())),
-        ).toMatchObject({ removed: [] });
-        expect(await managedWorktrees.findLiveByOwner("session", key)).toEqual(record);
-        expect(await fs.readFile(path.join(record.path, "README.md"), "utf8")).toBe("project\n");
-        return outcome;
-      });
-    const context = { chatAbortControllers: new Map<string, ChatAbortControllerEntry>() };
-    try {
-      const created = await directSessionReq<{
+      const key = "agent:main:worktree-above-cleanup-target";
+      const scope = { agentId: "main", sessionKey: key, storePath };
+      const originalCreate = captureMethodCall("createWithOutcome")(
+        ManagedWorktreeService.prototype,
+      );
+      using _ = vi
+        .spyOn(ManagedWorktreeService.prototype, "createWithOutcome")
+        .mockImplementationOnce(async function (this: ManagedWorktreeService, params) {
+          const outcome = await originalCreate(this, params);
+          const record = outcome.record;
+          // GC can run after allocation but before the session row is published.
+          expect(loadSessionEntry(scope)).toBeUndefined();
+          expect(
+            await managedWorktrees.gc(createManagedWorktreeOwnerPolicy(getRuntimeConfig())),
+          ).toMatchObject({ removed: [] });
+          expect(await managedWorktrees.findLiveByOwner("session", key)).toEqual(record);
+          expect(await readReadme(record.path)).toBe("project\n");
+          return outcome;
+        });
+      const created = await request<{
         key: string;
         runStarted: boolean;
         worktree: { id: string; path: string; branch: string };
@@ -817,9 +780,8 @@ test("sessions.create with an empty message preserves its owned checkout above t
         },
         controlUiClient,
       );
-      expect(created.ok, JSON.stringify(created.error)).toBe(true);
-      expect(created.payload).toMatchObject({ key, runStarted: false });
-      const worktree = created.payload!.worktree;
+      expect(created).toMatchObject({ key, runStarted: false });
+      const worktree = created.worktree;
       const original = expectDefined(loadSessionEntry(scope), "created project session");
       expect(original).toMatchObject({
         projectId: project.id,
@@ -838,53 +800,38 @@ test("sessions.create with an empty message preserves its owned checkout above t
       expect(getRegistryWorktree(process.env, worktree.id)).toBeDefined();
       expect(await requireGit(worktree.path, ["rev-parse", "HEAD"])).toBe(baseCommit);
       expect(await requireGit(worktree.path, ["branch", "--show-current"])).toBe(worktree.branch);
-      expect(await fs.readFile(path.join(worktree.path, "README.md"), "utf8")).toBe("project\n");
+      expect(await readReadme(worktree.path)).toBe("project\n");
       expect(await managedWorktrees.listRegistryRecords()).toHaveLength(101);
       for (const record of kept) {
         expect(getRegistryWorktree(process.env, record.id)).toEqual(record);
-        expect(await fs.readFile(path.join(record.path, "README.md"), "utf8")).toBe("workspace\n");
+        expect(await readReadme(record.path)).toBe("workspace\n");
       }
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-    } finally {
-      createSpy.mockRestore();
-      await settleWorkspaceRuns(context, storePath, key, true);
-    }
-  } finally {
-    await disposeSessionReadContexts();
-    if (sessionStoreDir) {
-      await closeOpenClawAgentDatabasesAsync(sessionStoreDir);
-    }
-    await closeOpenClawAgentDatabasesAsync(state.stateDir);
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    testState.agentConfig = undefined;
-    testState.sessionConfig = undefined;
-    await state.cleanup();
-  }
+    },
+  );
 });
 
-test("sessions.create rejects projectId combined with raw placement params", async () => {
-  for (const params of [
-    { projectId: "workspace:main", cwd: "/tmp/repo" },
-    { projectId: "workspace:main", execNode: "macbook" },
-  ]) {
-    const created = await directSessionReq("sessions.create", params);
-    expect(created).toMatchObject({
+test.each([
+  {
+    name: "projectId with raw placement",
+    params: [
+      { projectId: "workspace:main", cwd: "/tmp/repo" },
+      { projectId: "workspace:main", execNode: "macbook" },
+    ],
+    message: "sessions.create projectId cannot be combined with cwd or execNode",
+  },
+  {
+    name: "unknown project",
+    params: [{ projectId: "missing" }],
+    message: "unknown project id: missing",
+  },
+])("sessions.create rejects $name", async ({ params, message }) => {
+  for (const value of params) {
+    expect(await directSessionReq("sessions.create", value)).toMatchObject({
       ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        message: "sessions.create projectId cannot be combined with cwd or execNode",
-      },
+      error: { code: "INVALID_REQUEST", message },
     });
   }
-});
-
-test("sessions.create returns a typed error for an unknown project", async () => {
-  const created = await directSessionReq("sessions.create", { projectId: "missing" });
-  expect(created).toMatchObject({
-    ok: false,
-    error: { code: "INVALID_REQUEST", message: "unknown project id: missing" },
-  });
 });
 
 test("sessions.create reports an unavailable registered project with truthful recovery guidance", async () => {

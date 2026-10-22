@@ -13,7 +13,7 @@ import type {
   ManagedGatewayConfigReloaderHandle,
   ManagedGatewayConfigReloaderParams,
 } from "./server-reload-contracts.js";
-import { nextGatewayReloadGeneration } from "./server-reload-generation.js";
+import { beginGatewayReloadLifecycle } from "./server-reload-generation.js";
 import {
   captureConfigWriteListener,
   createConfigWriteListenerRef,
@@ -115,7 +115,7 @@ export function registerGatewayTargetedServiceReloadTests({
             modelsSettled = true;
             events.push("models-settled");
             if (outcome === "retired gateway") {
-              nextGatewayReloadGeneration();
+              beginGatewayReloadLifecycle();
             }
             if (outcome === "model failure" || outcome === "model recovery failure") {
               throw new Error("Model preparation failed");

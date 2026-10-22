@@ -5,7 +5,7 @@ import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js"
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createLifecycleEventBroadcastHandler } from "./server-session-events.js";
+import { createLifecycleEventBroadcastHandler } from "./server-session-lifecycle-events.js";
 import {
   drainSessionEventPublications,
   sessionEventPublicationRows,
@@ -101,7 +101,6 @@ it.each(["replacement", "reset"])(
     const handler = createLifecycleEventBroadcastHandler({
       broadcastToConnIds,
       sessionEventSubscribers: { getAll: () => new Set(["viewer"]) },
-      chatAbortControllers: new Map(),
       getSessionRowProjection: () => projection,
     });
     setImmediate(() => {
@@ -127,7 +126,11 @@ it.each(["replacement", "reset"])(
       "sessions.changed",
       expect.objectContaining({ sessionKey: keys[0], reason: "rename" }),
       new Set(["viewer"]),
-      { dropIfSlow: true, prepareSessionProjection: expect.any(Function) },
+      {
+        dropIfSlow: true,
+        sessionEventSubscriptionKeys: [keys[0]],
+        prepareSessionProjection: expect.any(Function),
+      },
     );
   },
 );
@@ -152,7 +155,6 @@ it("publishes lifecycle rows after their producer drains and before publication 
   const handler = createLifecycleEventBroadcastHandler({
     broadcastToConnIds,
     sessionEventSubscribers: { getAll: () => new Set(["viewer"]) },
-    chatAbortControllers: new Map(),
     getSessionRowProjection: () => projection,
   });
   const producer = new AsyncWorkScope();
@@ -177,7 +179,11 @@ it("publishes lifecycle rows after their producer drains and before publication 
       session: expect.objectContaining({ sessionId: "lifecycle-session", label: "Collector A" }),
     }),
     new Set(["viewer"]),
-    { dropIfSlow: true, prepareSessionProjection: expect.any(Function) },
+    {
+      dropIfSlow: true,
+      sessionEventSubscriptionKeys: [sessionKey],
+      prepareSessionProjection: expect.any(Function),
+    },
   );
   expect(order).toEqual(["publication", "drained"]);
 });

@@ -5,7 +5,6 @@ import {
   formatErrorMessage,
   PlatformMessageNotDispatchedError,
 } from "openclaw/plugin-sdk/error-runtime";
-import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import {
   readResponseTextPrefix,
@@ -106,26 +105,19 @@ function parseTwilioSuccessPayload(text: string): TwilioMessagePayload {
   };
 }
 
-function requestSearch(req: IncomingMessage): string {
-  return URL.parse(req.url ?? "/", "http://localhost")?.search ?? "";
-}
-
-function stripUrlFragment(url: string): string {
-  const hashIndex = url.indexOf("#");
-  return hashIndex === -1 ? url : url.slice(0, hashIndex);
-}
-
 export function resolveTwilioWebhookSignatureUrl(params: {
   req: IncomingMessage;
   publicWebhookUrl: string;
 }): string {
   // Twilio connection overrides live in the fragment but are excluded from its
   // signature input. Strip without URL reserialization so exact port/path bytes survive.
-  const signatureBaseUrl = stripUrlFragment(params.publicWebhookUrl);
+  const hashIndex = params.publicWebhookUrl.indexOf("#");
+  const signatureBaseUrl =
+    hashIndex === -1 ? params.publicWebhookUrl : params.publicWebhookUrl.slice(0, hashIndex);
   if (signatureBaseUrl.includes("?")) {
     return signatureBaseUrl;
   }
-  const search = requestSearch(params.req);
+  const search = URL.parse(params.req.url ?? "/", "http://localhost")?.search ?? "";
   if (!search) {
     return signatureBaseUrl;
   }
@@ -151,29 +143,6 @@ class TwilioSmsApiError extends Error {
   }
 }
 
-function parseTwilioFormBody(body: string): Record<string, string> {
-  const parsed = querystring.parse(body);
-  const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(parsed)) {
-    out[key] = firstString(value);
-  }
-  return out;
-}
-
-function computeTwilioSignature(params: {
-  url: string;
-  authToken: string;
-  form: Record<string, string>;
-}): string {
-  const data =
-    params.url +
-    Object.keys(params.form)
-      .toSorted()
-      .map((key) => `${key}${params.form[key] ?? ""}`)
-      .join("");
-  return createHmac("sha1", params.authToken).update(data).digest("base64");
-}
-
 export function verifyTwilioSignature(params: {
   signature: string | undefined;
   url: string;
@@ -183,13 +152,15 @@ export function verifyTwilioSignature(params: {
   if (!params.signature || !params.url || !params.authToken) {
     return false;
   }
+  const data =
+    params.url +
+    Object.keys(params.form)
+      .toSorted()
+      .map((key) => `${key}${params.form[key] ?? ""}`)
+      .join("");
   return safeEqualSecret(
     params.signature,
-    computeTwilioSignature({
-      url: params.url,
-      authToken: params.authToken,
-      form: params.form,
-    }),
+    createHmac("sha1", params.authToken).update(data).digest("base64"),
   );
 }
 
@@ -274,7 +245,12 @@ export async function readTwilioWebhookForm(req: IncomingMessage): Promise<Recor
     // Defer destruction so the webhook can answer 413 before the connection closes.
     destroyOnLimit: false,
   });
-  return parseTwilioFormBody(body);
+  const parsed = querystring.parse(body);
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(parsed)) {
+    out[key] = firstString(value);
+  }
+  return out;
 }
 
 export const TWIML_CONTENT_TYPE = "text/xml; charset=utf-8";
@@ -289,17 +265,13 @@ function basicAuthHeader(account: ResolvedSmsAccount): string {
   return `Basic ${Buffer.from(`${account.accountSid}:${account.authToken}`).toString("base64")}`;
 }
 
-function appendTruncatedResponseSuffix(text: string): string {
-  return `${text.trimEnd()}${TRUNCATED_RESPONSE_SUFFIX}`;
-}
-
 async function readTwilioApiResponseText(response: Response): Promise<string> {
   const maxBytes = response.ok
     ? TWILIO_API_SUCCESS_BODY_LIMIT_BYTES
     : TWILIO_API_ERROR_BODY_LIMIT_BYTES;
   if (!response.ok) {
     const prefix = await readResponseTextPrefix(response, maxBytes);
-    return prefix.truncated ? appendTruncatedResponseSuffix(prefix.text) : prefix.text;
+    return prefix.truncated ? `${prefix.text.trimEnd()}${TRUNCATED_RESPONSE_SUFFIX}` : prefix.text;
   }
 
   const body = await readResponseWithLimit(response, maxBytes, {
@@ -327,7 +299,6 @@ async function requestTwilioApi(params: {
   operation?: string;
   account: ResolvedSmsAccount;
   init?: Omit<RequestInit, "headers"> & { headers?: Record<string, string> };
-  fetchImpl?: typeof fetch;
   timeoutMs?: number;
 }): Promise<string> {
   const baseUrl =
@@ -345,38 +316,28 @@ async function requestTwilioApi(params: {
       authorization: basicAuthHeader(params.account),
     },
   } satisfies RequestInit;
-  let response: Response;
-  let release: (() => Promise<void>) | undefined;
-  const fetchImpl = params.fetchImpl;
-  if (fetchImpl) {
-    response = await captureEffectAuthority().initiate(() => {
+  let requestDispatched = false;
+  const { response, release } = await fetchWithSsrFGuard({
+    url: url.toString(),
+    init,
+    beforeRequest: () => {
+      if (requestDispatched) {
+        assertSmsCredentialOwnerAvailable(params.account);
+        return;
+      }
       assertTwilioRequestCredentialsAvailable(params.account);
-      return fetchImpl(url.toString(), init);
-    });
-  } else {
-    let requestDispatched = false;
-    ({ response, release } = await fetchWithSsrFGuard({
-      url: url.toString(),
-      init,
-      beforeRequest: () => {
-        if (requestDispatched) {
-          assertSmsCredentialOwnerAvailable(params.account);
-          return;
-        }
-        assertTwilioRequestCredentialsAvailable(params.account);
-        // A later callback means the preceding request returned a redirect response.
-        requestDispatched = true;
-      },
-      auditContext: "sms-twilio-api",
-      policy: {
-        allowedHostnames: [
-          params.api === "accounts" ? TWILIO_API_HOSTNAME : TWILIO_MESSAGING_HOSTNAME,
-        ],
-      },
-      requireHttps: true,
-      timeoutMs: params.timeoutMs ?? TWILIO_API_TIMEOUT_MS,
-    }));
-  }
+      // A later callback means the preceding request returned a redirect response.
+      requestDispatched = true;
+    },
+    auditContext: "sms-twilio-api",
+    policy: {
+      allowedHostnames: [
+        params.api === "accounts" ? TWILIO_API_HOSTNAME : TWILIO_MESSAGING_HOSTNAME,
+      ],
+    },
+    requireHttps: true,
+    timeoutMs: params.timeoutMs ?? TWILIO_API_TIMEOUT_MS,
+  });
   let ok: boolean;
   let status: number;
   let text: string;
@@ -384,9 +345,7 @@ async function requestTwilioApi(params: {
     ({ ok, status } = response);
     text = await readTwilioApiResponseText(response);
   } finally {
-    if (release) {
-      await release();
-    }
+    await release();
   }
   if (!ok) {
     throw new TwilioSmsApiError(status, text, params.operation);
@@ -396,7 +355,6 @@ async function requestTwilioApi(params: {
 
 function parseTwilioIncomingPhoneNumber(record: Record<string, unknown>) {
   return {
-    sid: firstTrimmedString(record.sid),
     phoneNumber: firstTrimmedString(record.phone_number ?? record.phoneNumber),
     smsUrl: firstTrimmedString(record.sms_url ?? record.smsUrl),
     smsMethod: firstTrimmedString(record.sms_method ?? record.smsMethod),
@@ -409,10 +367,7 @@ function parseTwilioMessageLogEntry(record: Record<string, unknown>) {
     sid: firstTrimmedString(record.sid),
     direction: firstTrimmedString(record.direction),
     status: firstTrimmedString(record.status),
-    to: firstTrimmedString(record.to),
-    from: firstTrimmedString(record.from),
     errorCode: firstStringish(record.error_code ?? record.errorCode).trim(),
-    body: firstString(record.body),
     dateCreated: firstTrimmedString(record.date_created ?? record.dateCreated),
     dateSent: firstTrimmedString(record.date_sent ?? record.dateSent),
   };
@@ -443,21 +398,16 @@ function parseTwilioListPayload<T>(
 
 export async function listTwilioIncomingPhoneNumbers(params: {
   account: ResolvedSmsAccount;
-  phoneNumber?: string;
-  fetchImpl?: typeof fetch;
+  phoneNumber: string;
   timeoutMs?: number;
 }): Promise<TwilioIncomingPhoneNumber[]> {
-  const query = new URLSearchParams();
-  if (params.phoneNumber) {
-    query.set("PhoneNumber", params.phoneNumber);
-  }
+  const query = new URLSearchParams({ PhoneNumber: params.phoneNumber });
   const text = await requestTwilioApi({
     account: params.account,
     path: "/IncomingPhoneNumbers.json",
     api: "accounts",
     query,
     operation: "phone-number lookup",
-    fetchImpl: params.fetchImpl,
     timeoutMs: params.timeoutMs,
   });
   return parseTwilioListPayload(text, "incoming_phone_numbers", parseTwilioIncomingPhoneNumber);
@@ -466,7 +416,6 @@ export async function listTwilioIncomingPhoneNumbers(params: {
 export async function retrieveTwilioMessagingService(params: {
   account: ResolvedSmsAccount;
   serviceSid: string;
-  fetchImpl?: typeof fetch;
   timeoutMs?: number;
 }): Promise<TwilioMessagingService> {
   const text = await requestTwilioApi({
@@ -474,7 +423,6 @@ export async function retrieveTwilioMessagingService(params: {
     path: `/Services/${encodeURIComponent(params.serviceSid)}`,
     api: "messaging",
     operation: "messaging-service lookup",
-    fetchImpl: params.fetchImpl,
     timeoutMs: params.timeoutMs,
   });
   const parsed = safeParseJson<unknown>(text);
@@ -486,27 +434,16 @@ export async function retrieveTwilioMessagingService(params: {
 
 export async function listTwilioMessages(params: {
   account: ResolvedSmsAccount;
-  to?: string;
-  from?: string;
-  pageSize?: number;
-  fetchImpl?: typeof fetch;
+  to: string;
   timeoutMs?: number;
 }): Promise<TwilioMessageLogEntry[]> {
-  const query = new URLSearchParams();
-  if (params.to) {
-    query.set("To", params.to);
-  }
-  if (params.from) {
-    query.set("From", params.from);
-  }
-  query.set("PageSize", String(params.pageSize ?? 5));
+  const query = new URLSearchParams({ To: params.to, PageSize: "3" });
   const text = await requestTwilioApi({
     account: params.account,
     path: "/Messages.json",
     api: "accounts",
     query,
     operation: "message lookup",
-    fetchImpl: params.fetchImpl,
     timeoutMs: params.timeoutMs,
   });
   return parseTwilioListPayload(text, "messages", parseTwilioMessageLogEntry);
@@ -517,7 +454,6 @@ export async function sendSmsViaTwilio(params: {
   to: string;
   text?: string;
   mediaUrls?: readonly string[];
-  fetchImpl?: typeof fetch;
   onPlatformSendDispatch?: () => Promise<void>;
 }): Promise<SmsSendResult> {
   assertSmsCredentialOwnerAvailable(params.account);
@@ -567,7 +503,6 @@ export async function sendSmsViaTwilio(params: {
     path: "/Messages.json",
     api: "accounts",
     init,
-    fetchImpl: params.fetchImpl,
   });
   const payload = parseTwilioSuccessPayload(text);
   const sid = payload.sid?.trim();

@@ -13,7 +13,6 @@ import {
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { normalizeSqliteNumber as normalizeNumber } from "../../infra/sqlite-number.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
-import { hashCronJobDefinition } from "../definition-hash.js";
 import { normalizeCronJobInput } from "../normalize.js";
 import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
 import { tryCronScheduleIdentity } from "../schedule-identity.js";
@@ -21,15 +20,18 @@ import {
   normalizeCronToolsAllowExecTarget,
   normalizeCronToolsAllowExecTargetRequirement,
   restoreCronPinnedExecGrant,
-  stripCronPinnedExecGrant,
 } from "../scheduled-tool-policy.js";
 import type { CronJobState, CronStoredJob, CronStoreFile } from "../types.js";
 import {
   CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE,
   hasCanonicalCronDeliveryMode,
-  decodeCronJobConfig,
-  deliveryToJson,
+  decodeCronJobConfig as decodeDeliveryConfig,
 } from "./delivery-codec.js";
+import {
+  decodeStoredCronJobConfig,
+  resolveCronJobGrantDefinitionRevision,
+  stripJobRuntimeFields,
+} from "./job-config-codec.js";
 import type {
   CronJobGenerationReadRow,
   CronJobInsert,
@@ -41,58 +43,11 @@ import {
   CRON_JOB_READ_COLUMNS,
   getCronStoreKysely,
 } from "./schema.js";
+import { serializeCronJobState } from "./state-codec.js";
 import type { LoadedCronStore } from "./types.js";
 
-function stripJobRuntimeFields(job: CronStoreFile["jobs"][number]): Record<string, unknown> {
-  const {
-    runtimeAuthority: _runtimeAuthority,
-    runtimeAuthorityRecoveryRequired: _runtimeAuthorityRecoveryRequired,
-    state: _state,
-    updatedAtMs: _updatedAtMs,
-    ...rest
-  } = job;
-  const payload = isRecord(rest.payload) ? rest.payload : undefined;
-  const toolsAllow = Array.isArray(payload?.toolsAllow)
-    ? payload.toolsAllow.filter((tool): tool is string => typeof tool === "string")
-    : undefined;
-  const storedToolsAllow = stripCronPinnedExecGrant({
-    toolsAllow,
-    requirement: rest.toolsAllowExecTargetRequirement,
-  });
-  // Runtime state and authority have separate owners; JSON is canonical for config.
-  return {
-    ...rest,
-    ...(payload && storedToolsAllow
-      ? { payload: { ...payload, toolsAllow: storedToolsAllow } }
-      : {}),
-    ...(rest.delivery && hasCanonicalCronDeliveryMode(rest.delivery)
-      ? { delivery: deliveryToJson(rest.delivery) }
-      : {}),
-    state: {},
-  };
-}
-
-export function resolveCronJobGrantDefinitionRevision(job: CronStoredJob): string {
-  // Match job_json: drop ordinary undefined fields after deliveryToJson has
-  // encoded meaningful explicit destination clears as null.
-  const storedDefinition = safeParseJsonRecord(JSON.stringify(stripJobRuntimeFields(job)));
-  if (!storedDefinition) {
-    throw new Error(`Cannot canonicalize cron job ${job.id} for grant revision`);
-  }
-  const { enabled: _enabled, state: _state, ...definition } = storedDefinition;
-  return hashCronJobDefinition(definition);
-}
-
-function serializeCronJobState(state: CronJobState): string {
-  return JSON.stringify({
-    ...state,
-    ...(state.lastRunStatus === undefined && state.lastStatus !== undefined
-      ? { lastRunStatus: state.lastStatus }
-      : {}),
-  });
-}
-
 function bindCronJobRow(storeKey: string, job: CronStoredJob, sortOrder: number): CronJobInsert {
+  const definition = stripJobRuntimeFields(job);
   return {
     store_key: storeKey,
     job_id: job.id,
@@ -103,8 +58,12 @@ function bindCronJobRow(storeKey: string, job: CronStoredJob, sortOrder: number)
     enabled: job.enabled ? 1 : 0,
     updated_at: job.updatedAtMs,
     agent_id: job.agentId ?? null,
-    payload_kind: job.payload.kind,
-    job_json: JSON.stringify(stripJobRuntimeFields(job)),
+    // The stored kind, which differs from the runtime kind for private command schedules.
+    payload_kind:
+      isRecord(definition.payload) && typeof definition.payload.kind === "string"
+        ? definition.payload.kind
+        : job.payload.kind,
+    job_json: JSON.stringify(definition),
     grant_definition_revision: resolveCronJobGrantDefinitionRevision(job),
     grant_definition_generation: 1,
     grant_definition_updated_at: job.updatedAtMs,
@@ -165,7 +124,15 @@ export function rowToCronJob(
   createdAtMsFallback?: number,
 ): CronStoredJob | null {
   const state = safeParseJsonRecord(row.state_json);
-  if (!state || getInvalidPersistedCronJobReason(jobJson)) {
+  const schedule = isRecord(jobJson.schedule) ? jobJson.schedule : undefined;
+  if (
+    !state ||
+    getInvalidPersistedCronJobReason(jobJson) ||
+    (schedule?.kind === "stream" && jobJson.streamSandbox !== undefined) ||
+    // Command schedules persist only as `pluginCommand`; a stored agentTurn copy is not trusted.
+    (jobJson.pluginCommand !== undefined &&
+      (!isRecord(jobJson.payload) || jobJson.payload.kind !== "pluginCommand"))
+  ) {
     return null;
   }
   const toolsAllowExecTarget = normalizeCronToolsAllowExecTarget(jobJson.toolsAllowExecTarget);
@@ -182,7 +149,7 @@ export function rowToCronJob(
     toolsAllowExecTarget: _rawToolsAllowExecTarget,
     toolsAllowExecTargetRequirement: _rawToolsAllowExecTargetRequirement,
     ...runtimeConfig
-  } = decodeCronJobConfig(jobJson);
+  } = decodeStoredCronJobConfig(jobJson);
   const payload = isRecord(runtimeConfig.payload) ? runtimeConfig.payload : undefined;
   const toolsAllow = Array.isArray(payload?.toolsAllow)
     ? payload.toolsAllow.filter((tool): tool is string => typeof tool === "string")
@@ -720,13 +687,13 @@ export function loadedCronStoreFromRows(
       invalidConfigRows.push({
         sourceIndex: index,
         reason: parsedJobJson ? "invalid-state" : "invalid-payload",
-        ...(parsedJobJson ? { job: decodeCronJobConfig(parsedJobJson) } : {}),
+        ...(parsedJobJson ? { job: decodeDeliveryConfig(parsedJobJson) } : {}),
         raw: { jobId: row.job_id, jobJson: row.job_json, stateJson: row.state_json },
       });
       continue;
     }
     const job = rowToCronJob(row, parsedJobJson, createdAtMsFallback);
-    const configJob = decodeCronJobConfig(parsedJobJson);
+    const configJob = decodeDeliveryConfig(parsedJobJson);
     const runtimeEntry = {
       updatedAtMs: normalizeNumber(row.runtime_updated_at_ms) ?? normalizeNumber(row.updated_at),
       scheduleIdentity: row.schedule_identity ?? undefined,

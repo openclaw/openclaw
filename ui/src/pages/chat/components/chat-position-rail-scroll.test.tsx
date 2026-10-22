@@ -1,14 +1,13 @@
 /* @vitest-environment jsdom */
 
-import { createMemo, createSignal } from "solid-js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { LitContent, solidContent } from "../../../lit/solid-content.tsx";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
 import { stubAnimationFrames } from "../chat-view.test-helpers.ts";
+import { TranscriptTestHost } from "../test-helpers/chat-transcript-native.tsx";
 import { ChatPositionRail } from "./chat-position-rail-solid.tsx";
 import { message, stubRailVisibility } from "./chat-position-rail.test-support.ts";
-import { ChatTranscriptController } from "./chat-transcript-controller.ts";
+import { createChatTranscript } from "./chat-transcript-controller.ts";
+import { TranscriptEndAnchor } from "./chat-transcript-end-anchor.ts";
 import {
   publishTranscriptScroll,
   subscribeTranscriptScroll,
@@ -21,309 +20,232 @@ import {
   type TestContentRow,
 } from "./chat-transcript.test-support.ts";
 
-type TranscriptHostController = {
-  hostConnected?(): void;
-  hostDisconnected?(): void;
-  hostUpdated?(): void;
-};
-
-class RailScrollTestHost extends HTMLElement {
-  readonly transcriptRoot = document.createElement("div");
-  renderTranscript: () => unknown = () => null;
-  isUpdatePending = false;
-  updateComplete = Promise.resolve(true);
-  private readonly controllers = new Set<TranscriptHostController>();
-  private view?: ReturnType<typeof mountSolid>;
-  private renderContent?: () => void;
-
-  addController(controller: TranscriptHostController) {
-    this.controllers.add(controller);
-  }
-
-  removeController(controller: TranscriptHostController) {
-    this.controllers.delete(controller);
-  }
-
-  connectedCallback() {
-    this.append(this.transcriptRoot);
-    for (const controller of this.controllers) {
-      controller.hostConnected?.();
-    }
-    this.view = mountSolid(
-      () => {
-        const [revision, setRevision] = createSignal(0);
-        const content = createMemo(() => {
-          revision();
-          return this.renderTranscript();
-        });
-        this.renderContent = () => {
-          setRevision((value) => value + 1);
-          flush();
-        };
-        return <LitContent value={content()} />;
-      },
-      { container: this.transcriptRoot },
-    );
-    this.requestUpdate();
-  }
-
-  disconnectedCallback() {
-    for (const controller of this.controllers) {
-      controller.hostDisconnected?.();
-    }
-    this.view?.unmount();
-    this.renderContent = undefined;
-  }
-
-  // Controller receipts coalesce into the next host commit, as they did under Lit.
-  requestUpdate() {
-    if (this.isUpdatePending) {
-      return;
-    }
-    this.isUpdatePending = true;
-    this.updateComplete = Promise.resolve().then(() => {
-      this.isUpdatePending = false;
-      this.performUpdate();
-      return true;
-    });
-  }
-
-  performUpdate() {
-    this.renderContent?.();
-    for (const controller of this.controllers) {
-      controller.hostUpdated?.();
-    }
-  }
+class RailScrollTestHost extends TranscriptTestHost {
+  override readonly transcript = createChatTranscript(() => "rail-notification", {
+    canFollowEnd: () => false,
+  });
 }
 
 customElements.define("rail-scroll-test-host", RailScrollTestHost);
 
-describe("conversation position rail scroll rendering", () => {
-  beforeEach(installTranscriptDomMocks);
-  afterEach(resetTranscriptTestDom);
+beforeEach(installTranscriptDomMocks);
+afterEach(resetTranscriptTestDom);
 
-  it("updates rail position without pane renders until a rendered scroll fact changes", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const flushFrame = stubAnimationFrames();
-    stubRailVisibility();
-    transcriptDomState.measuredRowHeight = 120;
-    const host = new RailScrollTestHost();
-    const container = host.transcriptRoot;
-    const performUpdate = vi.spyOn(host, "performUpdate");
-    const transcript = new ChatTranscriptController(host, () => "rail-notification", {
-      canFollowEnd: () => false,
+it("updates rail and end position without pane renders until the virtual range changes", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const flushFrame = stubAnimationFrames();
+  stubRailVisibility();
+  transcriptDomState.measuredRowHeight = 120;
+  const host = new RailScrollTestHost();
+  const container = host.transcriptRoot;
+  let renderedAt: number;
+  const recordViewport = vi.spyOn(TranscriptEndAnchor.prototype, "recordViewport");
+  const transcript = host.transcript;
+  const messageElements = transcript.renderSession(
+    "agent:main:rail-notification",
+    (session) => session.messageElements,
+  );
+  const rows: TestContentRow[] = Array.from({ length: 40 }, (_, index) => ({
+    kind: "content",
+    key: `row-${index}`,
+    content: (
+      <div
+        ref={messageElements.forKey(`row-${index}`)}
+        class="chat-bubble"
+        data-entry-id={`row-${index}`}
+      />
+    ),
+  }));
+  const ids = rows.map((row) => row.key);
+  const identityMap = () => new Map(ids.map((id) => [id, id]));
+  const positions = {
+    markers: ids.map((id, index) => ({
+      id,
+      anchorId: id,
+      role: "user" as const,
+      message: message(id, "user", `Checkpoint ${index}`, index + 1),
+    })),
+    markerIdsByMessageId: identityMap(),
+  };
+  container.className = "chat-thread";
+  const readHeight = vi.fn(() => 600);
+  const readContentHeight = vi.fn(() => 4800);
+  const readOffset = vi.spyOn(container, "scrollTop", "get");
+  Object.defineProperties(container, {
+    clientHeight: { configurable: true, get: readHeight },
+    scrollHeight: { configurable: true, get: readContentHeight },
+  });
+  const rail = document.createElement("div");
+  rail.style.display = "contents";
+  transcript.renderSession("agent:main:rail-notification", (session) => {
+    mountSolid(() => <ChatPositionRail positions={positions} transcript={session} />, {
+      container: rail,
     });
-    const rows: TestContentRow[] = Array.from({ length: 40 }, (_, index) => ({
-      kind: "content",
-      key: `row-${index}`,
-      content: (
-        <div class="chat-bubble" data-entry-id={`row-${index}`}>
-          {index}
-        </div>
-      ),
-    }));
-    const ids = rows.map((row) => row.key);
-    const positions = {
-      markers: ids.map((id, index) => ({
-        id,
-        anchorId: id,
-        role: "user" as const,
-        message: message(id, "user", `Checkpoint ${index}`, index + 1),
-      })),
-      markerIdsByMessageId: new Map(ids.map((id) => [id, id])),
-    };
-    container.className = "chat-thread";
-    const readHeight = vi.fn(() => 600);
-    const readContentHeight = vi.fn(() => 4800);
-    const readOffset = vi.spyOn(container, "scrollTop", "get");
-    Object.defineProperties(container, {
-      clientHeight: { configurable: true, get: readHeight },
-      scrollHeight: { configurable: true, get: readContentHeight },
+  });
+  const transcriptView = () =>
+    transcript.renderSession("agent:main:rail-notification", (session) => {
+      session.syncMessageRows(identityMap(), identityMap());
+      return session.render(
+        rows,
+        (row) => (row.kind === "content" ? row.content : null),
+        null,
+        false,
+        rail,
+      );
     });
-    const transcriptView = () =>
-      transcript.renderSession("agent:main:rail-notification", (session) => {
-        session.syncMessageRows(
-          new Map(ids.map((id) => [id, id])),
-          new Map(ids.map((id) => [id, id])),
-        );
-        return session.render(
-          rows,
-          (row) => (row.kind === "content" ? row.content : null),
-          null,
-          false,
-          solidContent(ChatPositionRail, { positions, transcript: session }),
-        );
-      });
-    host.renderTranscript = transcriptView;
-    const settleUpdates = async () => {
-      while (host.isUpdatePending) {
-        await host.updateComplete;
-      }
-    };
-    const scrollTo = (offset: number) => {
-      container.scrollTop = offset;
-      container.dispatchEvent(new Event("scroll"));
-    };
-    const offsets: number[] = [];
-    const stop = subscribeTranscriptScroll(container, (observation) => {
-      if (observation.type === "offset") {
-        offsets.push(observation.delta);
-      }
-    });
-    const current = () => container.querySelector<HTMLButtonElement>('[aria-current="true"]');
-    const tabStops = () => [
-      ...container.querySelectorAll<HTMLButtonElement>('.chat-position-rail [tabindex="0"]'),
-    ];
-    try {
-      document.body.append(host);
-      await settleUpdates();
-      const marks = container.querySelector<HTMLElement>(".chat-position-rail__marks")!;
-      const readRailHeight = vi.fn(() => 240);
-      Object.defineProperty(marks, "clientHeight", { configurable: true, get: readRailHeight });
-      const readRailOffset = vi.spyOn(marks, "scrollTop", "get");
-      const computedStyle = vi.spyOn(window, "getComputedStyle");
-      for (const observer of resizeObservers) {
-        observer.emitTarget(container, 800, 600);
-        observer.emitTarget(marks, 44, 240);
-      }
-      scrollTo(50);
-      await settleUpdates();
+  host.renderTranscript = transcriptView;
+  const settleUpdates = (frame = false) => {
+    if (frame) {
       flushFrame();
-      await settleUpdates();
-      flushFrame();
-      await settleUpdates();
-      expect(current()?.dataset.positionMarkerId).toBe("row-2");
-      expect(tabStops()).toEqual([current()]);
-      // A prior sibling commit can leave layout dirty in this checkpoint.
-      // Recording the render's scroll facts must consume already observed geometry.
-      readHeight.mockClear();
-      readContentHeight.mockClear();
-      readOffset.mockClear();
-      transcriptView();
-      expect(readHeight).not.toHaveBeenCalled();
-      expect(readContentHeight).not.toHaveBeenCalled();
-      expect(readOffset).not.toHaveBeenCalled();
-      performUpdate.mockClear();
-
-      const clearRailReads = () => {
-        readRailHeight.mockClear();
-        readRailOffset.mockClear();
-        computedStyle.mockClear();
-      };
-      const expectNoRailFrameReads = () => {
-        expect(readRailHeight).not.toHaveBeenCalled();
-        expect(readRailOffset).not.toHaveBeenCalled();
-        expect(computedStyle.mock.calls.filter(([element]) => element === marks)).toEqual([]);
-      };
-      // A stream commit can dirty the transcript without changing any markers.
-      rows[0]!.content = (
-        <div class="chat-bubble" data-entry-id="row-0">
-          Updated content
-        </div>
-      );
-      host.requestUpdate();
-      await settleUpdates();
-      clearRailReads();
-      flushFrame();
-      await settleUpdates();
-      expectNoRailFrameReads();
-      performUpdate.mockClear();
-
-      // Programmatic and resize receipts can follow DOM writes. Their readers
-      // must wait for observer delivery rather than moving the forced layout.
-      clearRailReads();
-      publishTranscriptScroll(container, {
-        type: "offset",
-        delta: 0,
-        scrolling: false,
-        touching: false,
-        programmatic: true,
-      });
-      publishTranscriptScroll(container, {
-        type: "resize",
-        viewport: { clientHeight: 600, scrollHeight: 4800, scrollTop: 50 },
-      });
-      expectNoRailFrameReads();
-
-      offsets.length = 0;
-      scrollTo(55);
-      expect(offsets).toEqual([5]);
-      clearRailReads();
-      flushFrame();
-      await settleUpdates();
-      expectNoRailFrameReads();
-      expect(performUpdate).not.toHaveBeenCalled();
-      expect(current()?.dataset.positionMarkerId).toBe("row-2");
-      expect(tabStops()).toEqual([current()]);
-
-      // Both viewports span rows 0–5. With no new intersections or pane render,
-      // the rail must still publish its midpoint crossing and keyboard entry.
-      scrollTo(70);
-      expect(offsets).toEqual([5, 15]);
-      flushFrame();
-      await settleUpdates();
-      expect(performUpdate).not.toHaveBeenCalled();
-      expect(current()?.dataset.positionMarkerId).toBe("row-3");
-      expect(tabStops()).toEqual([current()]);
-
-      container.dispatchEvent(new WheelEvent("wheel", { deltaY: 600 }));
-      await settleUpdates();
-      performUpdate.mockClear();
-      container.dispatchEvent(new Event("scrollend"));
-      await settleUpdates();
-      expect(performUpdate).not.toHaveBeenCalled();
-
-      // Stay within the final virtual range and the 8px follow threshold;
-      // crossing the precise 1px end boundary still needs an owner commit.
-      scrollTo(4198.5);
-      await settleUpdates();
-      flushFrame();
-      await settleUpdates();
-      flushFrame();
-      await settleUpdates();
-      performUpdate.mockClear();
-      scrollTo(4199.5);
-      await settleUpdates();
-      expect(performUpdate).toHaveBeenCalledTimes(1);
-      flushFrame();
-      await settleUpdates();
-      flushFrame();
-      await settleUpdates();
-      performUpdate.mockClear();
-      scrollTo(4199.75);
-      flushFrame();
-      await settleUpdates();
-      expect(performUpdate).not.toHaveBeenCalled();
-
-      // The physical end crosses row 35's boundary, so its new virtual range
-      // must commit even though the precise end fact is already rendered.
-      expect(container.querySelector<HTMLElement>(".chat-virtual-row")?.dataset.virtualRowKey).toBe(
-        "row-28",
-      );
-      scrollTo(4200);
-      await settleUpdates();
-      flushFrame();
-      await settleUpdates();
-      expect(performUpdate).toHaveBeenCalledTimes(1);
-      expect(container.querySelector<HTMLElement>(".chat-virtual-row")?.dataset.virtualRowKey).toBe(
-        "row-29",
-      );
-      expect(container.querySelector<HTMLElement>(".chat-virtual-block")?.style.transform).toBe(
-        "translateY(3480px)",
-      );
-      expect(current()?.dataset.positionMarkerId).toBe("row-39");
-      expect(tabStops()).toEqual([current()]);
-
-      host.remove();
-      performUpdate.mockClear();
-      scrollTo(70);
-      await settleUpdates();
-      expect(performUpdate).not.toHaveBeenCalled();
-    } finally {
-      stop();
-      host.remove();
-      vi.clearAllTimers();
-      vi.useRealTimers();
+    }
+    return host.settleUpdates();
+  };
+  const scrollTo = (offset: number) => {
+    container.scrollTop = offset;
+    container.dispatchEvent(new Event("scroll"));
+  };
+  const offsets: number[] = [];
+  const stop = subscribeTranscriptScroll(container, (observation) => {
+    if (observation.type === "offset") {
+      offsets.push(observation.delta);
     }
   });
+  const current = () => container.querySelector<HTMLButtonElement>('[aria-current="true"]');
+  const tabStops = () => [
+    ...container.querySelectorAll<HTMLButtonElement>('.chat-position-rail [tabindex="0"]'),
+  ];
+  const expectCurrent = (id: string) => {
+    expect(current()?.dataset.positionMarkerId).toBe(id);
+    expect(tabStops()).toEqual([current()]);
+  };
+  try {
+    document.body.append(host);
+    await settleUpdates();
+    const marks = container.querySelector<HTMLElement>(".chat-position-rail__marks")!;
+    const readRailHeight = vi.fn(() => 240);
+    Object.defineProperty(marks, "clientHeight", { configurable: true, get: readRailHeight });
+    const readRailOffset = vi.spyOn(marks, "scrollTop", "get");
+    const computedStyle = vi.spyOn(window, "getComputedStyle");
+    for (const observer of resizeObservers) {
+      observer.emitTarget(container, 800, 600);
+      observer.emitTarget(marks, 44, 240);
+    }
+    scrollTo(50);
+    await settleUpdates();
+    await settleUpdates(true);
+    await settleUpdates(true);
+    expectCurrent("row-2");
+    // Even after a dirty sibling commit, recording must use observed geometry.
+    readHeight.mockClear();
+    readContentHeight.mockClear();
+    readOffset.mockClear();
+    transcriptView();
+    expect(readHeight).not.toHaveBeenCalled();
+    expect(readContentHeight).not.toHaveBeenCalled();
+    expect(readOffset).not.toHaveBeenCalled();
+    renderedAt = host.committedRenders;
+    const clearRailReads = () => {
+      readRailHeight.mockClear();
+      readRailOffset.mockClear();
+      computedStyle.mockClear();
+    };
+    const expectNoRailFrameReads = () => {
+      expect(readRailHeight).not.toHaveBeenCalled();
+      expect(readRailOffset).not.toHaveBeenCalled();
+      expect(computedStyle.mock.calls.filter(([element]) => element === marks)).toEqual([]);
+    };
+    // A stream commit can dirty the transcript without changing any markers.
+    rows[0]!.content = (
+      <div ref={messageElements.forKey("row-0")} class="chat-bubble" data-entry-id="row-0">
+        Updated content
+      </div>
+    );
+    host.requestRender();
+    await settleUpdates();
+    clearRailReads();
+    await settleUpdates(true);
+    expectNoRailFrameReads();
+    renderedAt = host.committedRenders;
+
+    // Programmatic and resize receipts can follow DOM writes. Their readers
+    // must wait for observer delivery rather than moving the forced layout.
+    clearRailReads();
+    publishTranscriptScroll(container, {
+      type: "offset",
+      delta: 0,
+      scrolling: false,
+      touching: false,
+      programmatic: true,
+    });
+    publishTranscriptScroll(container, {
+      type: "resize",
+      viewport: { clientHeight: 600, scrollHeight: 4800, scrollTop: 50 },
+    });
+    expectNoRailFrameReads();
+    offsets.length = 0;
+    scrollTo(55);
+    expect(offsets).toEqual([5]);
+    clearRailReads();
+    await settleUpdates(true);
+    expectNoRailFrameReads();
+    expect(host.committedRenders).toBe(renderedAt);
+    expectCurrent("row-2");
+
+    // Both viewports span rows 0–5. With no new intersections or pane render,
+    // the rail must still publish its midpoint crossing and keyboard entry.
+    scrollTo(70);
+    expect(offsets).toEqual([5, 15]);
+    await settleUpdates(true);
+    expect(host.committedRenders).toBe(renderedAt);
+    expectCurrent("row-3");
+    container.dispatchEvent(new WheelEvent("wheel", { deltaY: 600 }));
+    await settleUpdates();
+    renderedAt = host.committedRenders;
+    container.dispatchEvent(new Event("scrollend"));
+    await settleUpdates();
+    expect(host.committedRenders).toBe(renderedAt);
+
+    // The precise end edge is recorded without committing the unchanged virtual range.
+    scrollTo(4198.5);
+    await settleUpdates();
+    await settleUpdates(true);
+    await settleUpdates(true);
+    expect(recordViewport.mock.results.at(-1)?.value).toBe(false);
+    renderedAt = host.committedRenders;
+    scrollTo(4199.5);
+    await settleUpdates();
+    expect(recordViewport.mock.results.at(-1)?.value).toBe(true);
+    expect(host.committedRenders).toBe(renderedAt);
+    await settleUpdates(true);
+    expectCurrent("row-39");
+    await settleUpdates(true);
+    renderedAt = host.committedRenders;
+    scrollTo(4199.75);
+    await settleUpdates(true);
+    expect(host.committedRenders).toBe(renderedAt);
+
+    // The physical end crosses row 35's boundary, so its new virtual range
+    // must commit even though the precise end fact is already recorded.
+    const firstRowBefore =
+      container.querySelector<HTMLElement>(".chat-virtual-row")?.dataset.virtualRowKey;
+    scrollTo(4200);
+    await settleUpdates();
+    await settleUpdates(true);
+    expect(host.committedRenders).toBe(renderedAt + 1);
+    expect(
+      container.querySelector<HTMLElement>(".chat-virtual-row")?.dataset.virtualRowKey,
+    ).not.toBe(firstRowBefore);
+    expect(container.querySelector('[data-virtual-row-key="row-35"]')).not.toBeNull();
+    expectCurrent("row-39");
+    host.remove();
+    renderedAt = host.committedRenders;
+    scrollTo(70);
+    await settleUpdates();
+    expect(host.committedRenders).toBe(renderedAt);
+  } finally {
+    stop();
+    host.remove();
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  }
 });

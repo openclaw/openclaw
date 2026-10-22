@@ -29,14 +29,13 @@ describe("exec safe bin trust", () => {
 
   it("builds trusted dirs from defaults and explicit extra dirs", () => {
     const dirs = getTrustedSafeBinDirs({
-      baseDirs: ["/usr/bin"],
       extraDirs: ["/custom/bin", "/alt/bin", "/custom/bin"],
     });
 
     expect(dirs.has(path.resolve("/usr/bin"))).toBe(true);
     expect(dirs.has(path.resolve("/custom/bin"))).toBe(true);
     expect(dirs.has(path.resolve("/alt/bin"))).toBe(true);
-    expect(dirs.size).toBe(3);
+    expect(dirs.size).toBe(4);
   });
 
   it("validates resolved paths using injected trusted dirs", () => {
@@ -73,7 +72,6 @@ describe("exec safe bin trust", () => {
       }
 
       const dirs = getTrustedSafeBinDirs({
-        baseDirs: [],
         extraDirs: [swapped],
       });
 
@@ -98,7 +96,6 @@ describe("exec safe bin trust", () => {
       }
 
       const dirs = getTrustedSafeBinDirs({
-        baseDirs: [],
         extraDirs: [trustedDir],
       });
 

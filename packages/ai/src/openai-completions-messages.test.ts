@@ -1,13 +1,15 @@
-import type { ChatCompletionContentPart } from "openai/resources/chat/completions.js";
 import { describe, expect, it } from "vitest";
 import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { convertMessages } from "./openai-completions-messages.js";
+import {
+  assistantMessage,
+  textBlock as text,
+  userMessage as user,
+} from "./provider-transport-parity.test-support.js";
 import type { ProviderContext, ProviderModel } from "./provider-types.js";
 import { resolveOpenAICompletionsCompat } from "./transports/openai-completions-compat.js";
-import type { AssistantMessage, Context, Model, UserMessage } from "./types.js";
-import { createZeroUsage } from "./usage.test-support.js";
+import type { AssistantMessage, Context, Model } from "./types.js";
 import {
-  SYSTEM_PROMPT_CACHE_BOUNDARY,
   SYSTEM_PROMPT_RELOCATABLE_BOUNDARY,
   SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END,
 } from "./utils/system-prompt-cache-boundary.js";
@@ -25,102 +27,117 @@ const model: Model<"openai-completions"> = {
   maxTokens: 4_096,
 };
 
-const emptyUsage = createZeroUsage();
+const imageModel: Model<"openai-completions"> = { ...model, input: ["text", "image"] };
+const image = (data = "aW1n") => ({ type: "image" as const, mimeType: "image/png", data });
+const tools = (name: string) => [{ name, description: name, parameters: { type: "object" } }];
+const runtimeNotice = (notice: string, timestamp: number) =>
+  user(`OpenClaw runtime context:\n${notice}`, { runtimeContext: {}, timestamp });
+function assistant(
+  content: AssistantMessage["content"],
+  overrides: Partial<AssistantMessage> = {},
+): AssistantMessage {
+  return assistantMessage(model, content, { stopReason: "toolUse", timestamp: 2, ...overrides });
+}
+function imageResult(callId: string, toolName: string, data: string[], timestamp = 2) {
+  return {
+    role: "toolResult" as const,
+    toolCallId: callId,
+    toolName,
+    content: data.map(image),
+    isError: false,
+    timestamp,
+  };
+}
+function expectedToolCall(id: string, name: string, args: string) {
+  return {
+    role: "assistant",
+    content: null,
+    tool_calls: [{ id, type: "function", function: { name, arguments: args } }],
+  };
+}
+function convert(
+  context: ProviderContext,
+  target: ProviderModel<"openai-completions"> = model,
+  options?: Parameters<typeof convertMessages>[3],
+) {
+  return convertMessages(target, context, resolveOpenAICompletionsCompat(target), options);
+}
+const marked = (facts: string) =>
+  `${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY}${facts}${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END}`;
+function runtimeContext(messages: Context["messages"], overrides: Partial<Context> = {}): Context {
+  return { messages, systemPrompt: `Stable prefix${marked("Runtime facts")}`, ...overrides };
+}
 
 describe("convertMessages assistant text replay", () => {
   it("serializes advertised video in ordered Chat Completions user content", () => {
-    const videoModel = {
+    const videoModel: ProviderModel<"openai-completions"> = {
       ...model,
       input: ["text", "image", "video"],
-    } as ProviderModel<"openai-completions">;
+    };
     const context: ProviderContext = {
       messages: [
         {
           role: "user",
+          timestamp: 1,
           content: [
-            { type: "text", text: "before" },
+            text("before"),
             { type: "image", mimeType: "image/png", data: "image" },
             { type: "video", mimeType: "video/mp4", data: "video" },
-            { type: "text", text: "after" },
+            text("after"),
           ],
-          timestamp: 1,
         },
       ],
     };
 
-    const converted = convertMessages(
-      videoModel as Model<"openai-completions">,
-      context as Context,
-      resolveOpenAICompletionsCompat(videoModel as Model<"openai-completions">),
-    );
+    const converted = convert(context, videoModel);
 
     expect(converted[0]?.content).toEqual([
-      { type: "text", text: "before" },
+      text("before"),
       { type: "image_url", image_url: { url: "data:image/png;base64,image" } },
       { type: "video_url", video_url: { url: "data:video/mp4;base64,video" } },
-      { type: "text", text: "after" },
+      text("after"),
     ]);
   });
 
   it.each([false, true])(
     "preserves interleaved text, thinking, and tool replay with thinking-as-text %s",
     (requiresThinkingAsText) => {
-      const assistant: AssistantMessage = {
-        role: "assistant",
-        api: model.api,
-        provider: model.provider,
-        model: model.id,
-        content: [
-          { type: "thinking", thinking: " \t", thinkingSignature: "reasoning_text" },
-          {
-            type: "thinking",
-            thinking: "reason\ud800",
-            thinkingSignature: "reasoning_content",
-          },
-          { type: "text", text: " \t" },
-          { type: "text", text: "first\ud800" },
-          { type: "text", text: "\udc00" },
-          {
-            type: "toolCall",
-            id: "call_lookup",
-            name: "lookup",
-            arguments: { query: "cats" },
-            thoughtSignature: '{"type":"reasoning.encrypted","data":"synthetic"}',
-          },
-          { type: "thinking", thinking: "next😀", thinkingSignature: "reasoning_text" },
-          { type: "text", text: "last😀" },
-        ],
-        usage: emptyUsage,
-        stopReason: "toolUse",
-        timestamp: 2,
-      };
+      const replay = assistant([
+        { type: "thinking", thinking: " \t", thinkingSignature: "reasoning_text" },
+        {
+          type: "thinking",
+          thinking: "reason\ud800",
+          thinkingSignature: "reasoning_content",
+        },
+        text(" \t"),
+        text("first\ud800"),
+        text("\udc00"),
+        {
+          type: "toolCall",
+          id: "call_lookup",
+          name: "lookup",
+          arguments: { query: "cats" },
+          thoughtSignature: '{"type":"reasoning.encrypted","data":"synthetic"}',
+        },
+        { type: "thinking", thinking: "next😀", thinkingSignature: "reasoning_text" },
+        text("last😀"),
+      ]);
       const converted = convertMessages(
         model,
         {
-          messages: [assistant, makeTextToolResult("call_lookup", "lookup", "found", false, 3)],
+          tools: tools("lookup"),
+          messages: [replay, makeTextToolResult("call_lookup", "lookup", "found", false, 3)],
         },
         { ...resolveOpenAICompletionsCompat(model), requiresThinkingAsText },
       );
 
       expect(converted).toEqual([
         {
-          role: "assistant",
+          ...expectedToolCall("call_lookup", "lookup", '{"query":"cats"}'),
           content: requiresThinkingAsText
-            ? [
-                { type: "text", text: "reason\n\nnext😀" },
-                { type: "text", text: "first" },
-                { type: "text", text: "" },
-                { type: "text", text: "last😀" },
-              ]
+            ? [text("reason\n\nnext😀"), text("first"), text(""), text("last😀")]
             : "first\n\nlast😀",
           ...(!requiresThinkingAsText && { reasoning_content: "reason\ud800\nnext😀" }),
-          tool_calls: [
-            {
-              id: "call_lookup",
-              type: "function",
-              function: { name: "lookup", arguments: '{"query":"cats"}' },
-            },
-          ],
           reasoning_details: [{ type: "reasoning.encrypted", data: "synthetic" }],
         },
         { role: "tool", content: "found", tool_call_id: "call_lookup" },
@@ -131,40 +148,21 @@ describe("convertMessages assistant text replay", () => {
   it("keeps paired OpenAI tool call ids UTF-16 safe when truncating", () => {
     const prefix = "a".repeat(39);
     const oversizedId = `${prefix}🐱`;
-    const targetModel: Model<"openai-completions"> = {
-      ...model,
-      id: "target-model",
-      provider: "openai",
-    };
-    const assistant: AssistantMessage = {
-      role: "assistant",
-      api: targetModel.api,
-      provider: targetModel.provider,
-      model: "source-model",
-      content: [{ type: "toolCall", id: oversizedId, name: "lookup", arguments: {} }],
-      usage: emptyUsage,
-      stopReason: "toolUse",
-      timestamp: 1,
-    };
+    const targetModel = { ...model, id: "target-model", provider: "openai" };
     const context: Context = {
+      tools: tools("lookup"),
       messages: [
-        assistant,
-        {
-          role: "toolResult",
-          toolCallId: oversizedId,
-          toolName: "lookup",
-          content: [{ type: "text", text: "ok" }],
-          isError: false,
-          timestamp: 2,
-        },
+        assistant([{ type: "toolCall", id: oversizedId, name: "lookup", arguments: {} }], {
+          api: targetModel.api,
+          provider: targetModel.provider,
+          model: "source-model",
+          timestamp: 1,
+        }),
+        makeTextToolResult(oversizedId, "lookup", "ok", false, 2),
       ],
     };
 
-    const converted = convertMessages(
-      targetModel,
-      context,
-      resolveOpenAICompletionsCompat(targetModel),
-    );
+    const converted = convert(context, targetModel);
     const assistantParam = converted.find((message) => message.role === "assistant");
     const toolParam = converted.find((message) => message.role === "tool");
     const normalizedAssistantId =
@@ -177,282 +175,122 @@ describe("convertMessages assistant text replay", () => {
   });
 });
 
-describe("convertMessages parallel tool-result image ownership", () => {
-  const imageModel: Model<"openai-completions"> = {
-    ...model,
-    input: ["text", "image"],
-  };
-
-  function makeToolCallAssistant(callIds: string[], toolNames: string[]): AssistantMessage {
-    return {
-      role: "assistant",
-      api: imageModel.api,
-      provider: imageModel.provider,
-      model: imageModel.id,
-      content: callIds.map((id, idx) => ({
-        type: "toolCall" as const,
-        id,
-        name: toolNames[idx] ?? id,
-        arguments: {},
-      })),
-      usage: emptyUsage,
-      stopReason: "toolUse",
-      timestamp: 1,
-    };
-  }
-
-  function makeImageToolResult(
-    callId: string,
-    toolName: string,
-    images: Array<{ mimeType: string; data: string }>,
-  ) {
-    return {
-      role: "toolResult" as const,
-      toolCallId: callId,
-      toolName,
-      content: images.map((img) => ({
-        type: "image" as const,
-        mimeType: img.mimeType,
-        data: img.data,
-      })),
-      isError: false,
-      timestamp: 2,
-    };
-  }
-
-  it.each([""])("counts every reply when labeling sparse images from tool %j", (toolName) => {
-    const prefix = "x".repeat(64);
-    const callIds: [string, string, string, string] = [
-      `${prefix}a`,
-      `${prefix}b`,
-      `${prefix}c`,
-      `${prefix}d`,
-    ];
-    const context: Context = {
-      messages: [
-        makeToolCallAssistant(
-          callIds,
-          callIds.map(() => toolName),
-        ),
+it("counts every reply when labeling sparse images from an unnamed tool", () => {
+  const toolName = "";
+  const prefix = "x".repeat(64);
+  const callIds: [string, string, string, string] = [
+    `${prefix}a`,
+    `${prefix}b`,
+    `${prefix}c`,
+    `${prefix}d`,
+  ];
+  const context: Context = {
+    tools: tools(toolName),
+    messages: [
+      assistant(
+        callIds.map((id) => ({ type: "toolCall", id, name: toolName, arguments: {} })),
         {
-          role: "toolResult",
-          toolCallId: callIds[0],
-          toolName,
-          content: [{ type: "text", text: "No image from this call" }],
-          isError: false,
-          timestamp: 2,
+          timestamp: 1,
         },
-        makeImageToolResult(callIds[1], toolName, [{ mimeType: "image/png", data: "AAAA" }]),
-        makeImageToolResult(callIds[2], toolName, []),
-        makeImageToolResult(callIds[3], toolName, [{ mimeType: "image/png", data: "BBBB" }]),
-      ],
-    };
-    const converted = convertMessages(
-      imageModel,
-      context,
-      resolveOpenAICompletionsCompat(imageModel),
-    );
+      ),
+      makeTextToolResult(callIds[0], toolName, "No image from this call", false, 2),
+      imageResult(callIds[1], toolName, ["AAAA"]),
+      imageResult(callIds[2], toolName, []),
+      imageResult(callIds[3], toolName, ["BBBB"]),
+    ],
+  };
+  const converted = convert(context, imageModel);
 
-    expect(
-      converted.filter((message) => message.role === "tool").map((message) => message.tool_call_id),
-    ).toEqual(callIds);
-    const nameSuffix = toolName ? ` (${toolName})` : "";
-    expect(converted.find((message) => message.role === "user")?.content).toEqual([
-      { type: "text", text: `Image(s) from tool result #2${nameSuffix}:` },
-      { type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } },
-      { type: "text", text: `Image(s) from tool result #4${nameSuffix}:` },
-      { type: "image_url", image_url: { url: "data:image/png;base64,BBBB" } },
-    ]);
-  });
+  expect(
+    converted.filter((message) => message.role === "tool").map((message) => message.tool_call_id),
+  ).toEqual(callIds);
+  expect(converted.find((message) => message.role === "user")?.content).toEqual([
+    text("Image(s) from tool result #2:"),
+    { type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } },
+    text("Image(s) from tool result #4:"),
+    { type: "image_url", image_url: { url: "data:image/png;base64,BBBB" } },
+  ]);
 });
 
 describe("convertMessages relocatable region", () => {
   const compat = () => resolveOpenAICompletionsCompat(model);
-  const marked = (facts: string) =>
-    `${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY}${facts}${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END}`;
-  const contextForSession = (sessionId: string): Context => ({
-    systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Reactions guidance${marked(`## Runtime\nRuntime: session=${sessionId}`)}`,
-    messages: [{ role: "user", content: "hi", timestamp: 1 }],
-  });
-
-  it.each([
-    {
-      name: "unsupported empty image",
-      content: [{ type: "image", mimeType: "image/png", data: "" }],
-    },
-  ] satisfies Array<{ name: string; content: UserMessage["content"] }>)(
-    "keeps Runtime in system content when the only user turn contains $name",
-    ({ content }) => {
-      const context: Context = {
-        systemPrompt: `Stable prefix${marked("Runtime facts")}`,
-        messages: [{ role: "user", content, timestamp: 1 }],
-      };
-      const cacheOptOutIndexes = new Set<number>();
-
-      const converted = convertMessages(model, context, compat(), { cacheOptOutIndexes });
-
-      expect(converted).toEqual([{ role: "system", content: "Stable prefix\nRuntime facts" }]);
-      expect(cacheOptOutIndexes.size).toBe(0);
-    },
-  );
-
-  it.each([
-    {
-      name: "unsupported image placeholder",
-      input: ["text"],
-      expectedImage: { type: "text", text: "(image omitted: model does not support images)" },
-    },
-  ] satisfies Array<{
-    name: string;
-    input: Model<"openai-completions">["input"];
-    expectedImage: ChatCompletionContentPart;
-  }>)(
-    "preserves the emitted $name and surrounding text on the carrier",
-    ({ input, expectedImage }) => {
-      const context: Context = {
-        systemPrompt: `Stable prefix${marked("Runtime facts")}`,
-        messages: [
-          {
-            role: "user",
-            content: [
-              { type: "text", text: "before" },
-              { type: "image", mimeType: "image/png", data: "aW1n" },
-              { type: "text", text: "after" },
-            ],
-            timestamp: 1,
-          },
-        ],
-      };
-
-      const converted = convertMessages({ ...model, input }, context, compat());
-
-      expect(converted).toEqual([
-        { role: "system", content: "Stable prefix" },
-        {
-          role: "user",
-          content: [
-            { type: "text", text: "before" },
-            expectedImage,
-            { type: "text", text: "after" },
-            { type: "text", text: "Runtime facts" },
-          ],
-        },
-      ]);
-    },
-  );
-
-  it("uses the first emitted tool-result image carrier and preserves later cache opt-outs", () => {
-    const imageModel: Model<"openai-completions"> = { ...model, input: ["text", "image"] };
-    const assistant: AssistantMessage = {
-      role: "assistant",
-      api: imageModel.api,
-      provider: imageModel.provider,
-      model: imageModel.id,
-      content: [
-        { type: "toolCall", id: "image_call", name: "read", arguments: { path: "image.png" } },
+  const system = { role: "system", content: "Stable prefix" };
+  const wireUser = (content: unknown) => ({ role: "user", content });
+  const wireImage = { type: "image_url", image_url: { url: "data:image/png;base64,aW1n" } };
+  it.each<
+    [
+      name: string,
+      input: Context,
+      target: Model<"openai-completions">,
+      expected: unknown[],
+      optOut?: number[],
+    ]
+  >([
+    [
+      "keeps Runtime in system content for an unsupported empty image",
+      runtimeContext([user([image("")])]),
+      model,
+      [{ role: "system", content: "Stable prefix\nRuntime facts" }],
+      [],
+    ],
+    [
+      "preserves the unsupported image placeholder and surrounding carrier text",
+      runtimeContext([user([text("before"), image(), text("after")])]),
+      model,
+      [
+        system,
+        wireUser([
+          text("before"),
+          text("(image omitted: model does not support images)"),
+          text("after"),
+          text("Runtime facts"),
+        ]),
       ],
-      usage: emptyUsage,
-      stopReason: "toolUse",
-      timestamp: 2,
-    };
-    const context: Context = {
-      systemPrompt: `Stable prefix${marked("Runtime facts")}`,
-      messages: [
-        { role: "user", content: [], timestamp: 1 },
-        assistant,
-        {
-          role: "toolResult",
-          toolCallId: "image_call",
-          toolName: "read",
-          content: [{ type: "image", mimeType: "image/png", data: "aW1n" }],
-          isError: false,
-          timestamp: 3,
-        },
-        {
-          role: "user",
-          content: "OpenClaw runtime context:\nlater context",
-          timestamp: 4,
-          runtimeContext: {},
-        },
-      ],
-    };
-    const cacheOptOutIndexes = new Set<number>();
-
-    const converted = convertMessages(imageModel, context, compat(), { cacheOptOutIndexes });
-
-    expect(converted).toEqual([
-      { role: "system", content: "Stable prefix" },
-      {
-        role: "assistant",
-        content: null,
-        tool_calls: [
-          {
-            id: "image_call",
-            type: "function",
-            function: { name: "read", arguments: '{"path":"image.png"}' },
-          },
+    ],
+    [
+      "uses the first tool-result image carrier and preserves later cache opt-outs",
+      runtimeContext(
+        [
+          user([]),
+          assistant([
+            { type: "toolCall", id: "image_call", name: "read", arguments: { path: "image.png" } },
+          ]),
+          imageResult("image_call", "read", ["aW1n"], 3),
+          runtimeNotice("later context", 4),
         ],
-      },
-      { role: "tool", tool_call_id: "image_call", content: "(see attached image)" },
-      {
-        role: "user",
-        content: [
-          { type: "text", text: "Image(s) from tool result #1 (read):" },
-          { type: "image_url", image_url: { url: "data:image/png;base64,aW1n" } },
-          { type: "text", text: "Runtime facts" },
-        ],
-      },
-      { role: "developer", content: "OpenClaw runtime context:\nlater context" },
-    ]);
-    expect(cacheOptOutIndexes).toEqual(new Set([3, 4]));
-  });
-
-  it("keeps mixed-media shipped carriers out of the prompt cache", () => {
-    const imageModel: Model<"openai-completions"> = { ...model, input: ["text", "image"] };
-    const legacyCarrier: UserMessage = {
-      role: "user",
-      content: [
-        { type: "text", text: "legacy plugin runtime context" },
-        { type: "image", mimeType: "image/png", data: "aW1n" },
-      ],
-      timestamp: 1,
-      runtimeContextCarrier: true,
-      runtimeContextCarrierRetained: false,
-    };
-    const cacheOptOutIndexes = new Set<number>();
-
-    const converted = convertMessages(
+        { tools: tools("read") },
+      ),
       imageModel,
-      { systemPrompt: "Stable prefix", messages: [legacyCarrier] },
-      compat(),
-      { cacheOptOutIndexes },
-    );
-
-    expect(converted).toEqual([
-      { role: "system", content: "Stable prefix" },
+      [
+        system,
+        expectedToolCall("image_call", "read", '{"path":"image.png"}'),
+        { role: "tool", tool_call_id: "image_call", content: "(see attached image)" },
+        wireUser([text("Image(s) from tool result #1 (read):"), wireImage, text("Runtime facts")]),
+        { role: "developer", content: "OpenClaw runtime context:\nlater context" },
+      ],
+      [3, 4],
+    ],
+    [
+      "keeps mixed-media shipped carriers out of the prompt cache",
       {
-        role: "user",
-        content: [
-          { type: "text", text: "legacy plugin runtime context" },
-          { type: "image_url", image_url: { url: "data:image/png;base64,aW1n" } },
+        systemPrompt: "Stable prefix",
+        messages: [
+          user([text("legacy plugin runtime context"), image()], {
+            runtimeContextCarrier: true,
+            runtimeContextCarrierRetained: false,
+          }),
         ],
       },
-    ]);
-    expect(cacheOptOutIndexes).toEqual(new Set([1]));
-  });
-
-  it("leaves the boundary in place when the caller preserves it", () => {
-    const converted = convertMessages(model, contextForSession("alpha"), compat(), {
-      preserveSystemPromptCacheBoundary: true,
-    });
-
-    expect(converted).toEqual([
-      {
-        role: "system",
-        content: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Reactions guidance\n## Runtime\nRuntime: session=alpha`,
-      },
-      { role: "user", content: "hi" },
-    ]);
+      imageModel,
+      [system, wireUser([text("legacy plugin runtime context"), wireImage])],
+      [1],
+    ],
+  ])("%s", (_name, input, target, expected, optOut) => {
+    const cacheOptOutIndexes = new Set<number>();
+    expect(convert(input, target, { cacheOptOutIndexes })).toEqual(expected);
+    if (optOut) {
+      expect(cacheOptOutIndexes).toEqual(new Set(optOut));
+    }
   });
 
   it.each([
@@ -465,25 +303,15 @@ describe("convertMessages relocatable region", () => {
       const noticeCompat = { ...compat(), supportsDeveloperRole };
       // Moving Runtime to the last user turn used to rewrite the earlier cached prefix.
       const toolResult = "X".repeat(30000);
-      const turn1: Context = {
+      const turn1 = runtimeContext([user("user1")], {
+        tools: tools("read"),
         systemPrompt: `Stable prefix${marked("Runtime: session=alpha")}`,
-        messages: [{ role: "user", content: "user1", timestamp: 1 }],
-      };
-      const assistant: AssistantMessage = {
-        role: "assistant",
-        api: model.api,
-        provider: model.provider,
-        model: model.id,
-        content: [{ type: "toolCall", id: "c1", name: "read", arguments: {} }],
-        usage: emptyUsage,
-        stopReason: "toolUse",
-        timestamp: 2,
-      };
+      });
       const withToolResult: Context = {
         ...turn1,
         messages: [
           ...turn1.messages,
-          assistant,
+          assistant([{ type: "toolCall", id: "c1", name: "read", arguments: {} }]),
           makeTextToolResult("c1", "read", toolResult, false, 3),
         ],
       };
@@ -491,13 +319,8 @@ describe("convertMessages relocatable region", () => {
         ...withToolResult,
         messages: [
           ...withToolResult.messages,
-          {
-            role: "user",
-            content: "OpenClaw runtime context:\nnotice",
-            runtimeContext: {},
-            timestamp: 4,
-          },
-          { role: "user", content: "user2", timestamp: 5 },
+          runtimeNotice("notice", 4),
+          user("user2", { timestamp: 5 }),
         ],
       };
 
@@ -511,11 +334,7 @@ describe("convertMessages relocatable region", () => {
 
       expect(beforeFollowUp).toEqual([
         ...first,
-        {
-          role: "assistant",
-          content: null,
-          tool_calls: [{ id: "c1", type: "function", function: { name: "read", arguments: "{}" } }],
-        },
+        expectedToolCall("c1", "read", "{}"),
         { role: "tool", tool_call_id: "c1", content: toolResult },
       ]);
       expect(JSON.stringify(afterFollowUp.slice(0, beforeFollowUp.length))).toBe(
@@ -538,10 +357,10 @@ describe("convertMessages relocatable region", () => {
     ].join("\n");
     const context: Context = {
       systemPrompt: `Stable prefix${marked("Runtime: session=alpha")}\n${notice}`,
-      messages: [{ role: "user", content: "hi", timestamp: 1 }],
+      messages: [user("hi")],
     };
 
-    const converted = convertMessages(model, context, compat());
+    const converted = convert(context);
 
     expect(converted[0]?.content).toContain("Inspect interrupted actions");
     expect(converted[1]?.content).not.toContain("Inspect interrupted actions");
@@ -570,13 +389,10 @@ describe("convertMessages relocatable region", () => {
       expectedSystem: "Stable prefix\nRuntime facts\nRetry guidance",
     },
   ])("retains all text at system authority for $name", ({ systemPrompt, expectedSystem }) => {
-    const context: Context = {
-      systemPrompt,
-      messages: [{ role: "user", content: "hi", timestamp: 1 }],
-    };
+    const context = runtimeContext([user("hi")], { systemPrompt });
     const cacheOptOutIndexes = new Set<number>();
 
-    const converted = convertMessages(model, context, compat(), { cacheOptOutIndexes });
+    const converted = convert(context, model, { cacheOptOutIndexes });
 
     expect(converted).toEqual([
       { role: "system", content: expectedSystem },

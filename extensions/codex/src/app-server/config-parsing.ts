@@ -75,6 +75,7 @@ const codexPluginEntryConfigSchema = z.strictObject({
   enabled: z.boolean().optional(),
   marketplaceName: z.string().regex(CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN).optional(),
   pluginName: z.string().trim().min(1).optional(),
+  read_only: z.boolean().optional(),
   allow_destructive_actions: codexPluginDestructivePolicySchema.optional(),
 });
 
@@ -232,16 +233,18 @@ export function readCodexPluginConfig(value: unknown): ParsedCodexPluginConfig {
 }
 
 export function isCodexSandboxExecServerEnabled(
-  pluginConfig?: unknown,
+  pluginConfig?: ParsedCodexPluginConfig,
   sandbox?: unknown,
 ): boolean {
   return (
     isCodexRemoteExecPlacementSandbox(sandbox) ||
-    readCodexPluginConfig(pluginConfig).appServer?.experimental?.sandboxExecServer === true
+    pluginConfig?.appServer?.experimental?.sandboxExecServer === true
   );
 }
 
-export function isCodexRemoteExecPlacementSandbox(sandbox: unknown): boolean {
+export function isCodexRemoteExecPlacementSandbox(
+  sandbox: unknown,
+): sandbox is { placementExecutionMode: "remote-exec" } {
   return (
     typeof sandbox === "object" &&
     sandbox !== null &&
@@ -253,8 +256,6 @@ export function isCodexRemoteExecPlacementSandbox(sandbox: unknown): boolean {
 export function isCodexPairedNodeRemoteExecPlacementSandbox(sandbox: unknown): boolean {
   return (
     isCodexRemoteExecPlacementSandbox(sandbox) &&
-    typeof sandbox === "object" &&
-    sandbox !== null &&
     "placementNodeId" in sandbox &&
     typeof sandbox.placementNodeId === "string" &&
     sandbox.placementNodeId.length > 0
@@ -282,8 +283,10 @@ export function assertCodexAppServerCommandHasNoInlineArgs(params: {
   );
 }
 
-export function resolveCodexPluginsPolicy(pluginConfig?: unknown): ResolvedCodexPluginsPolicy {
-  const config = readCodexPluginConfig(pluginConfig).codexPlugins;
+export function resolveCodexPluginsPolicy(
+  pluginConfig?: ParsedCodexPluginConfig,
+): ResolvedCodexPluginsPolicy {
+  const config = pluginConfig?.codexPlugins;
   const enabled = config?.enabled === true;
   const pluginPolicies = Object.entries(config?.plugins ?? {})
     .flatMap(([configKey, entry]): ResolvedCodexPluginPolicy[] => {
@@ -296,6 +299,7 @@ export function resolveCodexPluginsPolicy(pluginConfig?: unknown): ResolvedCodex
           marketplaceName: entry.marketplaceName,
           pluginName: entry.pluginName,
           enabled: enabled && entry.enabled !== false,
+          ...(entry.read_only === true ? { readOnly: true } : {}),
           ...resolveCodexPluginDestructivePolicy(
             entry.allow_destructive_actions ?? config?.allow_destructive_actions ?? true,
           ),

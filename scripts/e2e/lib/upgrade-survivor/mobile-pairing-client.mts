@@ -160,7 +160,7 @@ export const MOBILE_PAIRING_NODE_PERMISSIONS = Object.freeze({
   motion: false,
 });
 
-export const MOBILE_PAIRING_OPERATOR_CAPS = Object.freeze(["inline-widgets"]);
+const MOBILE_PAIRING_OPERATOR_CAPS = Object.freeze(["inline-widgets"]);
 export const MOBILE_PAIRING_APPROVAL_SCOPES = Object.freeze(["operator.pairing", "operator.admin"]);
 
 const GATEWAY_PROTOCOL_VERSION = 4;
@@ -189,7 +189,7 @@ function sha256(value: string | Buffer): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-export function buildDeviceAuthCompatibilityPayloadV2(params: {
+function buildDeviceAuthCompatibilityPayloadV2(params: {
   deviceId: string;
   clientId: string;
   clientMode: string;

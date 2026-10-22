@@ -117,7 +117,6 @@ describe("status update ledger evidence", () => {
     historical?: boolean;
     detail?: string;
   }>([
-    { name: "same version", historical: true },
     {
       name: "old healthy version after a failed swap",
       after: { version: "2026.9.6" },
@@ -244,13 +243,6 @@ describe("status update ledger evidence", () => {
       detail: "the update target is unknown",
     },
     {
-      name: "same version with an older build",
-      after: candidate,
-      server: previous,
-      detail:
-        "Gateway is still serving 2026.9.7 (build previous); the update to 2026.9.7 (build candidate) did not complete — run `openclaw update`.",
-    },
-    {
       name: "matching version and build",
       after: candidate,
       server: candidate,
@@ -265,7 +257,6 @@ describe("status update ledger evidence", () => {
       name: "unhealthy target version",
       healthy: false,
     },
-    { name: "unknown health", healthy: null },
   ])(
     "preserves the update verdict for $name",
     async ({
@@ -351,24 +342,8 @@ describe("status update ledger evidence", () => {
         "Last update run failed (preflight-no-good-commit) — Gateway is now serving 2026.9.4 (build 2026.9.4-rebuilt); recorded serving identity was build 2026.9.4-37ea9f110bad.",
     },
     {
-      name: "a changed Gateway after recovery observed an older serving version",
-      before: { version: "2026.10.1", buildId: "2026.10.1-3745fd3c29a4" },
-      verification: { versionMatch: false },
-      server: { version: "2026.10.1", buildId: "2026.10.1-3745fd3c29a4" },
-      history:
-        "Last update run failed (preflight-no-good-commit) — Gateway is now serving 2026.10.1; recorded serving identity was 2026.9.4.",
-    },
-    {
       name: "a Gateway already behind the installed package when the update failed",
       before: { version: "2026.10.1", buildId: "2026.10.1-3745fd3c29a4" },
-      verification: { versionMatch: false },
-      server: { version: "2026.9.4", buildId: "2026.9.4-37ea9f110bad" },
-      detail:
-        "Gateway is serving 2026.9.4 (build 2026.9.4-37ea9f110bad); the update target is unknown — run `openclaw update`.",
-    },
-    {
-      name: "a Gateway already behind the installed build of the same version",
-      before: { version: "2026.9.4", buildId: "2026.9.4-rebuilt" },
       verification: { versionMatch: false },
       server: { version: "2026.9.4", buildId: "2026.9.4-37ea9f110bad" },
       detail:
@@ -476,17 +451,6 @@ describe("status update ledger evidence", () => {
       expect(getUpdateRun(run.runId)).toEqual(saved);
     },
   );
-
-  it("does not replace an active update with a historical failure's current-health note", async () => {
-    recordRun({ status: "failed", reason: "post-update-failed" });
-    const active = createUpdateRun({ trigger: "cli", target: { kind: "git" } });
-    recordUpdateRunPhase(active.runId, "verifying");
-    const rows = await buildStatusUpdateRows(null, { localGatewayHealthy: true });
-    expect(rows[0]).toEqual({
-      Item: "Update run",
-      Value: "⬆️ OpenClaw update in progress: verifying.",
-    });
-  });
 
   it("reports a newer fetch failure using cached counts", async () => {
     recordRun({ status: "succeeded", steps: [{ step: "git fetch", status: "completed" }] });

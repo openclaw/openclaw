@@ -1,4 +1,5 @@
 /** Session construction for provider descriptors without importing the host provider registry. */
+export { measureTranscriptDeltaBytes } from "../realtime-transcription/transcript-bytes.js";
 export type { RealtimeTranscriptionProviderPlugin } from "../plugins/types.js";
 export type {
   RealtimeTranscriptionProviderConfig,

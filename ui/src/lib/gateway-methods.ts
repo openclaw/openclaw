@@ -42,13 +42,23 @@ export function canCallGatewayMethod(
   if (!snapshot?.client || snapshot.phase !== "connected") {
     return false;
   }
+  return canPresentGatewayMethod(snapshot, method, requiredScope, options);
+}
+
+/** Last-known advertisement and scopes for presentation only, never dispatch admission. */
+export function canPresentGatewayMethod(
+  snapshot: Pick<ApplicationGatewaySnapshot, "hello"> | null | undefined,
+  method: string,
+  requiredScope: GatewayMethodOperatorScope,
+  options: { requireAdvertisement?: boolean } = {},
+): boolean {
   if (
     options.requireAdvertisement !== false &&
-    isGatewayMethodAdvertised(snapshot, method) !== true
+    (!snapshot || isGatewayMethodAdvertised(snapshot, method) !== true)
   ) {
     return false;
   }
-  const auth = snapshot.hello?.auth;
+  const auth = snapshot?.hello?.auth;
   if (!auth || !Array.isArray(auth.scopes)) {
     return false;
   }

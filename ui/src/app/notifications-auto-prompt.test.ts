@@ -31,6 +31,7 @@ afterEach(() => {
 function createContext(
   overrides: {
     supported?: boolean;
+    canManage?: boolean;
     permission?: NotificationPermission | "unsupported";
     subscription?: AutoPromptContext["webPush"]["snapshot"]["subscription"];
     loading?: boolean;
@@ -48,6 +49,8 @@ function createContext(
     webPush: {
       snapshot: {
         supported: overrides.supported ?? true,
+        canManage: overrides.canManage ?? true,
+        canReadPreferences: true,
         permission: overrides.permission ?? "default",
         subscription: overrides.subscription ?? "unknown",
         loading: overrides.loading ?? false,
@@ -73,17 +76,18 @@ describe("notification auto-prompt", () => {
     expect(storage.getItem(STORAGE_KEY)).toBe("1");
   });
 
-  it.each([["loading", { loading: true }]])(
-    "does not enable web push when it is %s",
-    (_name, overrides) => {
-      const { context, enable } = createContext(overrides);
+  it.each([
+    ["loading", { loading: true }],
+    ["Gateway access denied", { canManage: false }],
+  ])("does not enable web push when it is %s", (_name, overrides) => {
+    const { context, enable } = createContext(overrides);
 
-      autoPromptNotificationsOnSend(context);
+    autoPromptNotificationsOnSend(context);
 
-      expect(enable).not.toHaveBeenCalled();
-      expect(storage.getItem(STORAGE_KEY)).toBeNull();
-    },
-  );
+    expect(enable).not.toHaveBeenCalled();
+    expect(browserRequestPermission).not.toHaveBeenCalled();
+    expect(storage.getItem(STORAGE_KEY)).toBeNull();
+  });
 
   it("prefers the native permission flow when permission is not determined", () => {
     const { context, enable, requestPermission } = createContext({

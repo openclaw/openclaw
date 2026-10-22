@@ -1,112 +1,88 @@
 /* @vitest-environment jsdom */
-import { render, nothing } from "lit";
-import { afterEach, expect, it, onTestFinished } from "vitest";
-import { flush } from "../../test-helpers/solid-settle.ts";
+
+import { afterEach, expect, it } from "vitest";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createComposerContainer,
   createComposerProps,
   resetComposerFixture,
+  renderComposerInto,
 } from "./chat-composer.test-support.ts";
-import { renderChatComposer } from "./components/chat-composer-render.test-support.ts";
 
 afterEach(() => resetComposerFixture());
 
-it("keeps the context popover open and its usage link focused during live usage refreshes", () => {
-  let current = createComposerProps({
+function usageProps(refreshed = false) {
+  const [provider, displayName, plan, usedPercent, revision] = refreshed
+    ? (["anthropic", "Claude", "Max", 61, 2] as const)
+    : (["openai", "OpenAI", "Plus", 21, 1] as const);
+  return createComposerProps({
     selectedSession: {
       key: "main",
       kind: "direct",
-      updatedAt: 1,
-      totalTokens: 1_000,
+      updatedAt: revision,
+      totalTokens: refreshed ? 190_000 : 1_000,
       contextTokens: 200_000,
-      modelProvider: "openai",
+      modelProvider: provider,
+      ...(refreshed ? { inputTokens: 9_000, outputTokens: 400 } : {}),
     },
     providerUsage: {
-      basePath: "/control",
+      basePath: refreshed ? "/updated" : "/control",
       modelAuthStatusResult: {
-        ts: 1,
+        ts: revision,
         providers: [
           {
-            provider: "openai",
-            displayName: "OpenAI",
+            provider,
+            displayName,
             status: "ok",
-            profiles: [{ profileId: "openai:oauth", type: "oauth", status: "ok" }],
+            profiles: [{ profileId: `${provider}:oauth`, type: "oauth", status: "ok" }],
             usage: {
-              providerId: "openai",
-              plan: "Plus",
-              windows: [{ label: "Week", usedPercent: 21 }],
+              providerId: provider,
+              plan,
+              windows: [{ label: "Week", usedPercent }],
             },
           },
         ],
       },
     },
   });
-  const view = { container: document.body.appendChild(createComposerContainer()) };
-  onTestFinished(() => {
-    render(nothing, view.container);
-  });
-  render(renderChatComposer(current), view.container);
-  const details = view.container.querySelector<HTMLDetailsElement>(".context-usage details");
-  const usageLink = view.container.querySelector<HTMLAnchorElement>("[data-chat-provider-usage]");
-  if (!details || !usageLink) {
-    throw new Error("Expected the composer's context usage popover and provider link");
-  }
-  details.open = true;
+}
+
+it("keeps the context popover open and its usage link focused during live usage refreshes", async () => {
+  const props = usageProps();
+  const container = document.body.appendChild(createComposerContainer());
+  renderComposerInto(container, props);
+  const query = container.querySelector.bind(container);
+  const details = query<HTMLDetailsElement>(".context-usage details")!;
+  expect(details).not.toBeNull();
+  expect(details.querySelector(".context-usage__popover")).toBeNull();
+  details.querySelector("summary")!.click();
+  await waitForSolid(() =>
+    expect(details.querySelector("[popover]")?.matches(":popover-open")).toBe(true),
+  );
+  const usageLink = query<HTMLAnchorElement>("[data-chat-provider-usage]")!;
   usageLink.focus();
   expect(document.activeElement).toBe(usageLink);
 
-  current = {
-    ...current,
-    selectedSession: {
-      key: "main",
-      kind: "direct",
-      updatedAt: 2,
-      totalTokens: 190_000,
-      contextTokens: 200_000,
-      inputTokens: 9_000,
-      outputTokens: 400,
-      modelProvider: "anthropic",
-    },
-    providerUsage: {
-      basePath: "/updated",
-      modelAuthStatusResult: {
-        ts: 2,
-        providers: [
-          {
-            provider: "anthropic",
-            displayName: "Claude",
-            status: "ok",
-            profiles: [{ profileId: "anthropic:oauth", type: "oauth", status: "ok" }],
-            usage: {
-              providerId: "anthropic",
-              plan: "Max",
-              windows: [{ label: "Week", usedPercent: 61 }],
-            },
-          },
-        ],
-      },
-    },
-  };
-  render(renderChatComposer(current), view.container);
+  const current = usageProps(true);
+  renderComposerInto(container, {
+    ...props,
+    selectedSession: current.selectedSession,
+    providerUsage: current.providerUsage,
+  });
   flush();
 
-  expect(view.container.querySelector(".context-usage details")).toBe(details);
+  expect(query(".context-usage details")).toBe(details);
   expect(details.open).toBe(true);
-  expect(view.container.querySelector("[data-chat-provider-usage]")).toBe(usageLink);
+  expect(query("[data-chat-provider-usage]")).toBe(usageLink);
   expect(document.activeElement).toBe(usageLink);
   expect(usageLink.getAttribute("href")).toBe("/updated/usage");
   expect(usageLink.textContent).toContain("Max");
-  expect(view.container.querySelector(".context-usage__context-value")?.textContent).toContain(
-    "190k / 200k",
-  );
-  expect(view.container.querySelector(".context-ring")?.classList).toContain(
-    "context-ring--warning",
-  );
-  expect(
-    view.container.querySelector(".context-usage__limit-bar")?.getAttribute("aria-valuenow"),
-  ).toBe("61");
-  expect(view.container.querySelector(".context-usage__provenance")?.textContent).toContain(
-    "Claude",
-  );
-  expect(view.container.querySelector(".context-usage__stats")?.textContent).toContain("9k");
+  expect(query(".context-usage__context-value")?.textContent).toContain("190k / 200k");
+  expect(query(".context-ring")?.classList).toContain("context-ring--warning");
+  expect(query(".context-usage__limit-bar")?.getAttribute("aria-valuenow")).toBe("61");
+  expect(query(".context-usage__provenance")?.textContent).toContain("Claude");
+  expect(query(".context-usage__stats")?.textContent).toContain("9k");
+  details.querySelector("summary")!.click();
+  flush();
+  expect(details.querySelector(".context-usage__popover")).toBeNull();
 });

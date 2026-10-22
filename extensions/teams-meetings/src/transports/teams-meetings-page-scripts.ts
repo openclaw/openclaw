@@ -4,8 +4,20 @@ import { teamsMeetingStatusCall } from "./teams-meetings-status-call-source.js";
 import { teamsMeetingStatusPrelude } from "./teams-meetings-status-prejoin-source.js";
 import { normalizeTeamsMeetingUrlForReuse } from "./teams-meetings-urls.js";
 
-function pageIdentityFunctionSource(): string {
-  return `const meetingIdentity = (rawUrl) => {
+export const teamsMeetingPageScripts = MeetingPlatformAdapter.createPageScripts({
+  platform: {
+    audioOutputElementIdPrefix: "openclaw-teams-audio-output-",
+    manualActionReasonPrefix: "teams",
+    displayName: "Teams",
+    globals: {
+      audioOutputs: "__openclawTeamsAudioOutputs",
+      captionArchive: "__openclawTeamsCaptionArchive",
+      captions: "__openclawTeamsCaptions",
+      meeting: "__openclawTeamsMeeting",
+    },
+  },
+  normalizeUrl: normalizeTeamsMeetingUrlForReuse,
+  pageIdentitySource: () => `const meetingIdentity = (rawUrl) => {
     try {
       const parsed = new URL(rawUrl);
       const host = parsed.hostname.toLowerCase();
@@ -31,7 +43,7 @@ function pageIdentityFunctionSource(): string {
               ? JSON.parse(atob(coordinates))
               : undefined;
             if (decoded && typeof decoded === "object") lightMeeting = decoded;
-          } catch {}
+          } catch { /* Invalid external coordinates do not identify a meeting. */ }
         }
         const match = parsed.pathname.match(/^\\/meet\\/([^/]+)\\/?$/i) || launcherMatch ||
           (typeof lightMeeting?.meetingCode === "string"
@@ -48,13 +60,11 @@ function pageIdentityFunctionSource(): string {
           ? "teams-consumer:" + code.toLowerCase() + ":p:" + encodeURIComponent(passcode || "")
           : undefined;
       }
-    } catch {}
+    } catch { /* Invalid external URLs do not identify a meeting. */ }
     return undefined;
-  };`;
-}
-
-function teamsMeetingToggleStateFunctionSource(): string {
-  return `(input) => {
+  };`,
+  selectors: TEAMS_MEETING_SELECTORS,
+  toggleStateFunction: () => `(input) => {
     const pressed = String(input?.ariaPressed || "").toLowerCase();
     if (pressed === "true") return "on";
     if (pressed === "false") return "off";
@@ -75,25 +85,7 @@ function teamsMeetingToggleStateFunctionSource(): string {
     if (/\\b(?:microphone|mic) (?:is |currently )?(?:off|muted|disabled)\\b/.test(value)) return "off";
     if (/\\b(?:microphone|mic) (?:is |currently )?(?:on|unmuted|enabled)\\b/.test(value)) return "on";
     return undefined;
-  }`;
-}
-
-export const teamsMeetingPageScripts = MeetingPlatformAdapter.createPageScripts({
-  platform: {
-    audioOutputElementIdPrefix: "openclaw-teams-audio-output-",
-    manualActionReasonPrefix: "teams",
-    displayName: "Teams",
-    globals: {
-      audioOutputs: "__openclawTeamsAudioOutputs",
-      captionArchive: "__openclawTeamsCaptionArchive",
-      captions: "__openclawTeamsCaptions",
-      meeting: "__openclawTeamsMeeting",
-    },
-  },
-  normalizeUrl: normalizeTeamsMeetingUrlForReuse,
-  pageIdentitySource: pageIdentityFunctionSource,
-  selectors: TEAMS_MEETING_SELECTORS,
-  toggleStateFunction: teamsMeetingToggleStateFunctionSource,
+  }`,
   statusPrelude: teamsMeetingStatusPrelude,
   statusCall: teamsMeetingStatusCall,
   leave: {

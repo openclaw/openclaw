@@ -1,5 +1,4 @@
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
-// Shared type contracts for outbound planning, queueing, and transport.
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OutboundReplyFacts, RenderedMessageBatchPlan } from "../../channels/message/types.js";
 import type {

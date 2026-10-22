@@ -1,10 +1,5 @@
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentToolResult } from "../../../packages/agent-core/src/types.js";
-import {
-  HEARTBEAT_RESPONSE_TOOL_NAME,
-  normalizeHeartbeatToolResponse,
-  type HeartbeatToolResponse,
-} from "../../auto-reply/heartbeat-tool-response.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
@@ -13,11 +8,7 @@ import {
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
 } from "../embedded-agent-tool-media.js";
-import {
-  isToolResultError,
-  resolveToolResultFailureKind,
-  type ToolResultFailureKind,
-} from "../tool-result-error.js";
+import { resolveToolResultFailureKind, type ToolResultFailureKind } from "../tool-result-error.js";
 
 export function recordAgentHarnessToolResultTelemetry(params: {
   toolName: string;
@@ -42,12 +33,6 @@ export function recordAgentHarnessToolResultTelemetry(params: {
 }): MessagingToolSend | MessagingToolSourceReplyPayload | undefined {
   if (!params.isError && params.toolName === "cron" && isCronAddAction(params.args)) {
     params.telemetry.successfulCronAdds = (params.telemetry.successfulCronAdds ?? 0) + 1;
-  }
-  if (!params.isError && params.toolName === HEARTBEAT_RESPONSE_TOOL_NAME) {
-    const response = normalizeHeartbeatToolResponse(params.result?.details);
-    if (response) {
-      params.telemetry.heartbeatToolResponse = response;
-    }
   }
   // Only a live invocation may accept new media; committed effects remain evidence.
   if (!params.isError && params.result && !params.signal.aborted) {
@@ -149,7 +134,7 @@ export function resolveAgentHarnessToolResultPresentation(params: {
       : params.result;
   return {
     result,
-    isError: params.executionIsError || isToolResultError(params.result),
+    isError: params.executionIsError || presentationFailureKind !== undefined,
     failureKind,
   };
 }
@@ -257,7 +242,6 @@ export type AgentHarnessToolResultTelemetry = AgentHarnessMessagingDeliveryFacts
       )
     >;
     successfulCronAdds?: number;
-    heartbeatToolResponse?: HeartbeatToolResponse;
   };
 
 function readFirstString(record: Record<string, unknown>, keys: string[]): string | undefined {
@@ -273,7 +257,7 @@ function readFirstString(record: Record<string, unknown>, keys: string[]): strin
   return undefined;
 }
 
-function isCronAddAction(args: Record<string, unknown>): boolean {
+export function isCronAddAction(args: Record<string, unknown>): boolean {
   const action = args.action;
   return typeof action === "string" && action.trim().toLowerCase() === "add";
 }

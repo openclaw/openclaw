@@ -55,7 +55,10 @@ type ParentDependencies = {
   assertAdmissionCurrent?: (params: NativeParentRegistration) => void;
   runtime: Pick<NativeSubagentMonitorRuntime, "captureAgentHarnessCompletionCustody">;
   assignments: Pick<CodexNativeSubagentAssignmentInventory, "restore" | "drain">;
-  submissions: Pick<CodexNativeSubagentSubmissionOwner, "restore" | "bind" | "drain">;
+  submissions: Pick<
+    CodexNativeSubagentSubmissionOwner,
+    "restore" | "bind" | "drain" | "observeHookAcknowledgement" | "settleWrites"
+  >;
   closes: Pick<CodexNativeSubagentCloseOwner, "bind" | "prune" | "settlements">;
   deliverDetached: (state: ParentState) => void;
   drainAdmissions: (state: ParentState, owner: ParentOwner, turnId: string) => void;
@@ -261,11 +264,29 @@ export async function registerNativeSubagentParent(
   }
   const ready = dependencies.submissions
     .restore(state, owner)
-    .then(() => dependencies.assignments.restore(state, owner));
+    .then(() => dependencies.submissions.drain(registeredState))
+    .then(() => dependencies.assignments.restore(state, owner))
+    // Recovery can enqueue binding writes; settle them before the caller's effect guard.
+    .then(() => dependencies.assignments.drain(registeredState));
   let registered = true;
   let settlement: Promise<void> | undefined;
   return {
     ready,
+    observeSubmissionAcknowledgement: async (receipt, assertCurrent) => {
+      assertCurrent();
+      if (!registered || !isCurrent() || registeredState.owners.get(ownerKey) !== owner) {
+        throw new Error("Codex native submission parent registration is no longer current");
+      }
+      // Native children inherit this hook command, but their receipts belong to their own sender.
+      if (receipt.senderThreadId && receipt.senderThreadId !== parentThreadId) {
+        return;
+      }
+      if (owner.turnId && owner.turnId !== receipt.parentTurnId) {
+        throw new Error("Codex native submission parent registration is no longer current");
+      }
+      dependencies.submissions.observeHookAcknowledgement(registeredState, receipt, owner);
+      await dependencies.submissions.settleWrites(registeredState);
+    },
     bindTurn: (turnIdInput, mapping) => {
       const turnId = turnIdInput.trim();
       if (!turnId || dependencies.states.get(parentThreadId) !== registeredState) {

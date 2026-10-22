@@ -1,18 +1,38 @@
 import type { Selectable, Updateable } from "kysely";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { assertWorktreePersistentExecutionCurrentInDatabase } from "../../agents/worktrees/run-lease-store.kernel.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
+import { getAdmittedSqlSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import { getOpenClawStateFeatureSchemaSql } from "../../state/openclaw-state-feature-schema.js";
-import { localWorkspacePublication } from "./local-workspace-publication.js";
+import type { LocalWorkspaceManifestRecord } from "./local-workspace-manifest-tree.js";
 
 const table = "local_workspace_projections";
+const nodes = "local_workspace_manifest_nodes";
 export type LocalWorkspaceProjection = Selectable<DB[typeof table]>;
+export type LocalWorkspaceManifestMutation = {
+  records: LocalWorkspaceManifestRecord[];
+  removed: string[];
+  previousRoot: string | null;
+  resultingRoot: string;
+  replace?: boolean;
+};
 export type LocalWorkspaceMutation =
   | { kind: "create"; row: Omit<LocalWorkspaceProjection, "revision"> }
-  | { kind: "update"; revision: number; patch: Updateable<DB[typeof table]> }
+  | {
+      kind: "update";
+      revision: number;
+      patch: Updateable<DB[typeof table]>;
+      manifest?: LocalWorkspaceManifestMutation;
+    }
   | { kind: "delete"; revision: number };
-const query = (db: EngineConnection) => getNodeSqliteKysely<Pick<DB, typeof table>>(db);
+const query = (db: EngineConnection) =>
+  getNodeSqliteKysely<Pick<DB, typeof table | typeof nodes>>(db);
 
 export function readLocalWorkspaceProjectionInDatabase(db: EngineConnection, id: string) {
   return tableExists(db, table)
@@ -44,7 +64,7 @@ export function mutateLocalWorkspaceProjection(
         db,
         query(db)
           .selectFrom(table)
-          .select("revision")
+          .select(["revision", "baseline_ref"])
           .$if(mutation.kind === "delete", (builder) =>
             builder.select((eb) =>
               eb
@@ -74,17 +94,13 @@ export function mutateLocalWorkspaceProjection(
       // First-use additive admission preserves the existing numeric schema version.
       db.exec(getOpenClawStateFeatureSchemaSql(table)); // sqlite-allow-raw -- Canonical first-use schema admission.
     }
-    const created = executeSqliteQueryTakeFirstSync(
+    return executeSqliteQueryTakeFirstSync(
       db,
       query(db)
         .insertInto(table)
         .values({ ...mutation.row, revision: 0 })
-        .returningAll(),
+        .returning(["worktree_id", "revision"]),
     );
-    if (created) {
-      localWorkspacePublication.stagePostimages(db, [created]);
-    }
-    return created;
   }
   if (!current || current.revision !== mutation.revision) {
     throw new Error("Local workspace binding changed");
@@ -97,24 +113,124 @@ export function mutateLocalWorkspaceProjection(
       db,
       query(db).deleteFrom(table).where("worktree_id", "=", id).returning("worktree_id"),
     );
-    localWorkspacePublication.stageDeletions(db, [id]);
     return undefined;
   }
-  const updated = executeSqliteQueryTakeFirstSync(
+  if (mutation.manifest) {
+    const { records, removed, previousRoot, replace } = mutation.manifest;
+    if (current.baseline_ref !== previousRoot) {
+      throw new Error("Local workspace manifest baseline changed");
+    }
+    if (replace) {
+      executeSqliteQuerySync(db, query(db).deleteFrom(nodes).where("worktree_id", "=", id));
+    } else {
+      for (let offset = 0; offset < removed.length; offset += 500) {
+        executeSqliteQuerySync(
+          db,
+          query(db)
+            .deleteFrom(nodes)
+            .where("worktree_id", "=", id)
+            .where("path", "in", removed.slice(offset, offset + 500)),
+        );
+      }
+    }
+    for (let offset = 0; offset < records.length; offset += 500) {
+      executeSqliteQuerySync(
+        db,
+        query(db)
+          .insertInto(nodes)
+          .values(
+            records.slice(offset, offset + 500).map((record) => ({
+              worktree_id: id,
+              path: record.node.path,
+              node_json: JSON.stringify(record),
+            })),
+          )
+          .onConflict((conflict) =>
+            conflict.columns(["worktree_id", "path"]).doUpdateSet((eb) => ({
+              node_json: eb.ref("excluded.node_json"),
+            })),
+          ),
+      );
+    }
+  }
+  return executeSqliteQueryTakeFirstSync(
     db,
     query(db)
       .updateTable(table)
-      .set({ ...mutation.patch, worktree_id: id, revision: current.revision + 1 })
+      .set({
+        ...mutation.patch,
+        ...(mutation.manifest
+          ? { baseline_ref: mutation.manifest.resultingRoot, baseline_json: null }
+          : {}),
+        worktree_id: id,
+        revision: current.revision + 1,
+      })
       .where("worktree_id", "=", id)
-      .returningAll(),
+      .returning(["worktree_id", "revision"]),
   );
-  if (updated) {
-    localWorkspacePublication.stagePostimages(db, [updated]);
+}
+
+export function readLocalWorkspaceProjectionByPathInDatabase(
+  db: EngineConnection,
+  projectionPath: string,
+): LocalWorkspaceProjection | null {
+  if (!getAdmittedSqlSchemaFacts(db)) {
+    throw new Error("Local workspace lookup requires admitted schema facts.");
   }
-  return updated;
+  if (!tableExists(db, table)) {
+    return null;
+  }
+  return (
+    executeSqliteQueryTakeFirstSync(
+      db,
+      query(db).selectFrom(table).selectAll().where("projection_path", "=", projectionPath),
+    ) ?? null
+  );
+}
+
+/** Called by execution admission inside the shared worker transaction, never a host-thread lookup. */
+export function assertLocalWorkspacePersistentExecutionCurrentInDatabase(
+  db: EngineConnection,
+  expected: {
+    workspaceDir: string;
+    agentId: string;
+    sessionKey: string;
+    sessionId: string;
+    lifecycleRevision?: string;
+  },
+): void {
+  const row = readLocalWorkspaceProjectionByPathInDatabase(db, expected.workspaceDir);
+  if (
+    !row ||
+    row.agent_id !== expected.agentId ||
+    row.session_key !== expected.sessionKey ||
+    row.session_id !== expected.sessionId ||
+    row.lifecycle_revision !== (expected.lifecycleRevision ?? null)
+  ) {
+    throw new Error(
+      "Managed sandbox projection ownership changed; persistent execution must stop.",
+    );
+  }
+  assertWorktreePersistentExecutionCurrentInDatabase(db, row.worktree_id);
 }
 
 export const localWorkspaceReadOperations = {
+  "localWorkspace.reviewBase": (input: { id: string }, db: EngineConnection) => ({
+    type: "localWorkspace.reviewBase" as const,
+    row: tableExists(db, table)
+      ? executeSqliteQueryTakeFirstSync(
+          db,
+          query(db)
+            .selectFrom(table)
+            .select(["worktree_id", "agent_id", "session_key", "session_id", "base_commit"])
+            .where("worktree_id", "=", input.id),
+        )
+      : undefined,
+  }),
+  "localWorkspace.byProjectionPath": (input: { projectionPath: string }, db: EngineConnection) => ({
+    type: "localWorkspace.byProjectionPath" as const,
+    projection: readLocalWorkspaceProjectionByPathInDatabase(db, input.projectionPath),
+  }),
   "localWorkspace.exists": (input: { id: string }, db: EngineConnection) => ({
     type: "localWorkspace.exists" as const,
     exists: hasLocalWorkspaceProjectionInDatabase(db, input.id),

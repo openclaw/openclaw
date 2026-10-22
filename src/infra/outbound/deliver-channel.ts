@@ -258,8 +258,19 @@ function createPluginHandler(
     : undefined;
   const sendMessage = async <TContext extends ChannelMessageSendAttemptContext>(
     ctx: TContext,
-    send: (ctx: TContext) => Promise<ChannelMessageSendResult>,
+    send: ((ctx: TContext) => Promise<ChannelMessageSendResult>) | undefined,
+    fallback: (
+      ctx: Omit<TContext, "onDeliveryResult"> & {
+        onDeliveryResult: typeof params.onDeliveryResult;
+      },
+    ) => Promise<OutboundDeliveryResult>,
   ): Promise<OutboundDeliveryResult> => {
+    assertUnknownSendReconciliationKind(ctx.kind);
+    if (!send) {
+      return dispatchToAdapter(ctx, () =>
+        fallback({ ...ctx, onDeliveryResult: params.onDeliveryResult }),
+      );
+    }
     if (!messageLifecycle) {
       return normalizeChannelMessageSendResult(
         params.channel,
@@ -329,6 +340,10 @@ function createPluginHandler(
       overrides && "formatting" in overrides
         ? { ...baseCtx.formatting, ...overrides.formatting }
         : baseCtx.formatting,
+  });
+  const resolveMessageCtx = (overrides?: OutboundMessageSendOverrides) => ({
+    ...resolveCtx(overrides),
+    onDeliveryResult: onMessageDeliveryResult,
   });
   return {
     chunker,
@@ -438,23 +453,18 @@ function createPluginHandler(
       : undefined,
     sendPayload:
       messagePayload || outbound?.sendPayload
-        ? async (payload, overrides) => {
-            const payloadCtx = {
-              ...resolveCtx(overrides),
-              kind: "payload" as const satisfies ChannelMessageSendAttemptKind,
-              text: payload.text ?? "",
-              mediaUrl: payload.mediaUrl,
-              payload,
-            };
-            assertUnknownSendReconciliationKind("payload");
-            if (messagePayload) {
-              return sendMessage(
-                { ...payloadCtx, onDeliveryResult: onMessageDeliveryResult },
-                messagePayload,
-              );
-            }
-            return dispatchToAdapter(payloadCtx, () => outbound!.sendPayload!(payloadCtx));
-          }
+        ? (payload, overrides) =>
+            sendMessage(
+              {
+                ...resolveMessageCtx(overrides),
+                kind: "payload",
+                text: payload.text ?? "",
+                mediaUrl: payload.mediaUrl,
+                payload,
+              },
+              messagePayload,
+              (ctx) => outbound!.sendPayload!(ctx),
+            )
         : undefined,
     sendFormattedText: outbound?.sendFormattedText
       ? async (text, overrides) => {
@@ -481,41 +491,20 @@ function createPluginHandler(
           );
         }
       : undefined,
-    sendText: async (text, overrides) => {
-      const textCtx = {
-        ...resolveCtx(overrides),
-        kind: "text" as const satisfies ChannelMessageSendAttemptKind,
-        text,
-      };
-      assertUnknownSendReconciliationKind("text");
-      if (messageText) {
-        return sendMessage({ ...textCtx, onDeliveryResult: onMessageDeliveryResult }, messageText);
-      }
-      return dispatchToAdapter(textCtx, () => sendText!(textCtx));
-    },
+    sendText: (text, overrides) =>
+      sendMessage({ ...resolveMessageCtx(overrides), kind: "text", text }, messageText, sendText!),
     buildTargetRef: (overrides?: OutboundMessageSendOverrides): ChannelOutboundTargetRef => ({
       channel: params.channel,
       to: params.to,
       accountId: params.accountId ?? undefined,
       threadId: overrides?.threadId ?? baseCtx.threadId,
     }),
-    sendMedia: async (caption, mediaUrl, overrides) => {
-      const mediaCtx = {
-        ...resolveCtx(overrides),
-        kind: "media" as const satisfies ChannelMessageSendAttemptKind,
-        text: caption,
-        mediaUrl,
-      };
-      assertUnknownSendReconciliationKind("media");
-      if (messageMedia) {
-        return sendMessage(
-          { ...mediaCtx, onDeliveryResult: onMessageDeliveryResult },
-          messageMedia,
-        );
-      }
-      const send = sendMedia ?? sendText!;
-      return dispatchToAdapter(mediaCtx, () => send(mediaCtx));
-    },
+    sendMedia: (caption, mediaUrl, overrides) =>
+      sendMessage(
+        { ...resolveMessageCtx(overrides), kind: "media", text: caption, mediaUrl },
+        messageMedia,
+        sendMedia ?? sendText!,
+      ),
   };
 }
 

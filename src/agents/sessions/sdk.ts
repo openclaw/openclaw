@@ -5,12 +5,12 @@ import {
   SessionTranscriptWriterClaimReboundError,
   withSessionMetadataPublication,
   withSessionTranscriptWriteAssertion,
-  type SessionMetadataChange,
   type SessionMetadataCommit,
 } from "../../config/sessions/transcript-write-context.js";
 import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { Message, Model } from "../../llm/types.js";
 import { sanitizeCompactionReplayMessages } from "../compaction-replay.js";
+import { applyLocalNoAuthHeaders } from "../model-auth-markers.js";
 import { resolveProviderRequestPolicy } from "../provider-attribution.js";
 import {
   Agent,
@@ -28,9 +28,9 @@ import { AgentSession } from "./agent-session.js";
 import type { ExtensionRunner } from "./extensions/index.js";
 import { convertToLlm } from "./messages.js";
 import { getModelRegistryRuntime } from "./model-registry-runtime.js";
-import { withSessionManagerAppend } from "./session-manager-append-admission.js";
 import { sessionManagerReadInitialContext } from "./session-manager-current-turn.js";
 import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
+import { sessionManagerAppendInitialMetadata } from "./session-manager-metadata.js";
 import type { SettingsManager } from "./settings-manager.js";
 import { isInstallTelemetryEnabled } from "./telemetry.js";
 
@@ -150,6 +150,47 @@ function getAttributionHeaders(
   return undefined;
 }
 
+// Fork replay retains this transport after disposal; never capture the session's options or scope.
+function createSessionStreamFn(
+  modelRegistry: CreateAgentSessionOptions["modelRegistry"],
+  settingsManager: SettingsManager,
+  thinkingExplicit: boolean | undefined,
+): NonNullable<AgentOptions["streamFn"]> {
+  const modelRegistryRuntime = getModelRegistryRuntime(modelRegistry);
+  const streamFn: NonNullable<AgentOptions["streamFn"]> = async (
+    modelResult,
+    context,
+    optionsLocal,
+  ) => {
+    const auth = await modelRegistry.getApiKeyAndHeaders(modelResult);
+    if (!auth.ok) {
+      throw new Error(auth.error);
+    }
+    // Isolated session streams bypass the process-default stream facade.
+    await import("../ai-transport-runtime-host.js");
+    optionsLocal?.signal?.throwIfAborted();
+    const providerRetrySettings = settingsManager.getProviderRetrySettings();
+    const attributionHeaders = getAttributionHeaders(modelResult, settingsManager);
+    const providerOptions = {
+      ...optionsLocal,
+      openclawThinkingExplicit: thinkingExplicit,
+      apiKey: auth.apiKey,
+      timeoutMs: optionsLocal?.timeoutMs ?? providerRetrySettings.timeoutMs,
+      maxRetryDelayMs: optionsLocal?.maxRetryDelayMs ?? providerRetrySettings.maxRetryDelayMs,
+      headers: applyLocalNoAuthHeaders(
+        modelResult.api,
+        auth.apiKey,
+        attributionHeaders || auth.headers || optionsLocal?.headers
+          ? { ...attributionHeaders, ...auth.headers, ...optionsLocal?.headers }
+          : undefined,
+      ),
+    };
+    return modelRegistryRuntime.llmRuntime.streamSimple(modelResult, context, providerOptions);
+  };
+  bindStreamLlmRuntime(streamFn, modelRegistryRuntime.llmRuntime);
+  return streamFn;
+}
+
 export async function createAgentSession(
   options: CreateAgentSessionOptions,
 ): Promise<{ session: AgentSession }> {
@@ -216,7 +257,6 @@ export async function createAgentSession(
       ? await options.withSessionWriteSettlement(run)
       : await run();
 
-  const modelRegistryRuntime = getModelRegistryRuntime(modelRegistry);
   const agent: Agent = new Agent({
     initialState: {
       systemPrompt: options.systemPrompt,
@@ -225,29 +265,7 @@ export async function createAgentSession(
       tools: [],
     },
     convertToLlm: convertToLlmWithBlockImages,
-    streamFn: async (modelResult, context, optionsLocal) => {
-      const auth = await modelRegistry.getApiKeyAndHeaders(modelResult);
-      if (!auth.ok) {
-        throw new Error(auth.error);
-      }
-      // Isolated session streams bypass the process-default stream facade.
-      await import("../ai-transport-runtime-host.js");
-      optionsLocal?.signal?.throwIfAborted();
-      const providerRetrySettings = settingsManager.getProviderRetrySettings();
-      const attributionHeaders = getAttributionHeaders(modelResult, settingsManager);
-      const providerOptions = {
-        ...optionsLocal,
-        openclawThinkingExplicit: options.thinkingExplicit,
-        apiKey: auth.apiKey,
-        timeoutMs: optionsLocal?.timeoutMs ?? providerRetrySettings.timeoutMs,
-        maxRetryDelayMs: optionsLocal?.maxRetryDelayMs ?? providerRetrySettings.maxRetryDelayMs,
-        headers:
-          attributionHeaders || auth.headers || optionsLocal?.headers
-            ? { ...attributionHeaders, ...auth.headers, ...optionsLocal?.headers }
-            : undefined,
-      };
-      return modelRegistryRuntime.llmRuntime.streamSimple(modelResult, context, providerOptions);
-    },
+    streamFn: createSessionStreamFn(modelRegistry, settingsManager, options.thinkingExplicit),
     onPayload: async (payload) => {
       const runner = extensionRunnerRef.current;
       if (!runner?.hasHandlers("before_provider_request")) {
@@ -288,42 +306,30 @@ export async function createAgentSession(
     maxRetryDelayMs: settingsManager.getProviderRetrySettings().maxRetryDelayMs,
   });
   setInternalBeforeToolBatch(agent, options.beforeToolBatch);
-  if (agent.streamFn) {
-    bindStreamLlmRuntime(agent.streamFn, modelRegistryRuntime.llmRuntime);
-  }
 
   let metadataCommit: SessionMetadataCommit | undefined;
-  const appendInitialMetadata = (change: SessionMetadataChange, append: () => Promise<string>) =>
-    withSessionMetadataPublication(
-      sessionManager,
-      change,
-      (commit) => {
-        metadataCommit = commit;
-      },
-      append,
-    );
   const initializeMetadata = () => {
     // Prepared history needs no write permit when its initial metadata already exists.
     // Otherwise restoration waits behind unrelated writes, including reclamation.
     if (hasExistingSession && hasThinkingEntry) {
       return Promise.resolve();
     }
-    return withSessionManagerAppend(sessionManager, async () => {
-      assertInitialSessionCurrent();
-      if (!hasExistingSession) {
-        await appendInitialMetadata(
-          { type: "model_change", provider: model.provider, modelId: model.id },
-          () => sessionManager.appendModelChange(model.provider, model.id),
-        );
-        assertInitialSessionCurrent();
-      }
-      await appendInitialMetadata({ type: "thinking_level_change", thinkingLevel }, () =>
-        sessionManager.appendThinkingLevelChange(thinkingLevel),
-      );
-      if (hasExistingSession) {
-        assertInitialSessionCurrent();
-      }
-    });
+    assertInitialSessionCurrent();
+    return withSessionMetadataPublication(
+      sessionManager,
+      { type: "thinking_level_change", thinkingLevel },
+      (commit) => {
+        metadataCommit = commit;
+      },
+      () =>
+        hasExistingSession
+          ? sessionManager.appendThinkingLevelChange(thinkingLevel)
+          : sessionManager[sessionManagerAppendInitialMetadata](
+              model.provider,
+              model.id,
+              thinkingLevel,
+            ),
+    );
   };
   try {
     await (initialTarget

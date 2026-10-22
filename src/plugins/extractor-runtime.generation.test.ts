@@ -3,12 +3,13 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { extractDocumentContent } from "../media/document-extractors.runtime.js";
+import { extractPdfContent } from "../media/pdf-extract.js";
 import { extractReadableContent } from "../web-fetch/content-extractors.runtime.js";
 import { withPluginMetadataSnapshotScope } from "./current-plugin-metadata-snapshot.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { finalizePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -38,9 +39,8 @@ describe.each([
     factory: "createFixtureDocumentExtractor",
     contract: "documentExtractors",
     extract: (config?: OpenClawConfig) =>
-      extractDocumentContent({
+      extractPdfContent({
         buffer: Buffer.from("fixture"),
-        mimeType: "application/pdf",
         maxPages: 1,
         maxPixels: 100,
         minTextChars: 1,
@@ -98,21 +98,19 @@ exports.${factory} = () => ({
         empty: finalizePluginMetadataSnapshot(createPluginMetadataSnapshotFixture()),
       }));
 
-      await withPluginMetadataSnapshotScope(
-        available,
-        async () => {
-          await expect(extract(config)).resolves.toMatchObject({ text: "fixture result" });
-          await withPluginMetadataSnapshotScope(
-            empty,
-            async () => {
-              await expect(extract(config)).resolves.toBeNull();
-            },
-            options,
-          );
-          await expect(extract(config)).resolves.toMatchObject({ text: "fixture result" });
-        },
-        options,
-      );
+      const inSnapshot = (snapshot: PluginMetadataSnapshot, run: () => Promise<void>) =>
+        withPluginMetadataSnapshotScope(snapshot, run, options);
+      await inSnapshot(available, async () => {
+        await expect(extract(config)).resolves.toMatchObject({ text: "fixture result" });
+        await inSnapshot(empty, async () => {
+          if (contract === "documentExtractors") {
+            await expect(extract(config)).rejects.toThrow("PDF extraction disabled or unavailable");
+          } else {
+            await expect(extract(config)).resolves.toBeNull();
+          }
+        });
+        await expect(extract(config)).resolves.toMatchObject({ text: "fixture result" });
+      });
       expect(fs.readFileSync(events, "utf8")).toBe("evaluated\nextracted\nextracted\n");
     },
   );

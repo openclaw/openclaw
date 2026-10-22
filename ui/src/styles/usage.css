@@ -106,7 +106,8 @@
 
 .provider-usage-card__id,
 .provider-usage-reset,
-.provider-usage-summary {
+.provider-usage-summary,
+.usage-creators-table thead {
   color: var(--muted);
   font-size: 11px;
 }
@@ -126,7 +127,8 @@
 }
 
 .provider-usage-window__meta strong,
-.provider-usage-billing-row strong {
+.provider-usage-billing-row strong,
+.provider-cost-breakdown > div strong {
   color: var(--text-strong);
   font-variant-numeric: tabular-nums;
 }
@@ -249,11 +251,6 @@
   white-space: nowrap;
 }
 
-.provider-cost-breakdown > div strong {
-  color: var(--text-strong);
-  font-variant-numeric: tabular-nums;
-}
-
 .usage-header {
   position: relative;
   overflow: visible;
@@ -287,7 +284,14 @@
   border-top: 1px solid var(--border);
 }
 
-.usage-header-metrics .usage-pin-btn {
+.usage-header-actions,
+.session-detail-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.usage-header-actions {
   margin-left: auto;
 }
 
@@ -342,7 +346,9 @@
 
 .usage-presets,
 .usage-date-range,
-.usage-query-actions {
+.usage-query-actions,
+.usage-filter-trigger > .oc-menu-item__label,
+.legend-item {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -417,7 +423,16 @@
 .context-weight-desc,
 .timeseries-summary,
 .session-log-meta,
-.session-logs-header-count {
+.session-logs-header-count,
+.usage-daypart-label,
+.usage-hour-labels,
+.usage-hour-legend,
+.context-breakdown-more,
+.usage-lineage-note,
+.session-detail-indicator,
+.session-log-tools summary,
+.legend-item,
+.usage-creators-more > summary {
   color: var(--muted);
   font-size: 12px;
 }
@@ -492,6 +507,10 @@
   justify-content: flex-end;
 }
 
+.usage-query-count {
+  margin-left: auto;
+}
+
 .usage-filter-row {
   display: flex;
   flex-wrap: wrap;
@@ -530,12 +549,6 @@
 .usage-filter-trigger:hover {
   border-color: var(--border-strong);
   background: var(--bg-hover);
-}
-
-.usage-filter-trigger > .oc-menu-item__label {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
 }
 
 .usage-filter-trigger[aria-expanded="true"] {
@@ -591,7 +604,8 @@
 
 .usage-query-chips,
 .usage-query-suggestions,
-.usage-badges {
+.usage-badges,
+.session-log-tools-list {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
@@ -666,8 +680,6 @@
 }
 
 .usage-empty-state {
-  display: grid;
-  gap: 12px;
   justify-items: start;
 }
 
@@ -703,7 +715,8 @@
 .session-summary-grid,
 .usage-insights-grid,
 .usage-mosaic-grid,
-.context-breakdown-grid {
+.context-breakdown-grid,
+.session-logs-list {
   display: grid;
   gap: 10px;
 }
@@ -785,7 +798,8 @@
 .usage-summary-sub,
 .session-summary-meta,
 .usage-list-sub,
-.usage-error-sub {
+.usage-error-sub,
+.cost-window-range-label {
   font-size: 12px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
@@ -835,8 +849,6 @@
 }
 
 .usage-insight-card {
-  display: grid;
-  gap: 12px;
   align-content: start;
   min-height: 0;
   padding: 14px;
@@ -857,8 +869,10 @@
   grid-column: 1 / -1;
 }
 
+/* Fixed width: identity names arrive with the data and must not move the controls beside it. */
 .usage-creator-filter {
-  max-width: min(100%, 260px);
+  width: 260px;
+  max-width: 100%;
 }
 
 .usage-creators {
@@ -890,11 +904,6 @@
 .usage-creators-table th:last-child,
 .usage-creators-table td:last-child {
   padding-right: 0;
-}
-
-.usage-creators-table thead {
-  color: var(--muted);
-  font-size: 11px;
 }
 
 .usage-creators-table thead th {
@@ -959,8 +968,6 @@
 
 .usage-creators-more > summary {
   padding-block: 12px 4px;
-  color: var(--muted);
-  font-size: 12px;
 }
 
 .usage-heatmap {
@@ -1021,11 +1028,6 @@
   background: color-mix(in srgb, var(--accent) 75%, var(--panel));
 }
 
-.usage-heatmap__cell--l4 {
-  fill: var(--accent);
-  background: var(--accent);
-}
-
 .usage-list,
 .usage-error-list,
 .context-breakdown-list {
@@ -1080,11 +1082,6 @@
   font-weight: 700;
   color: var(--danger);
   font-variant-numeric: tabular-nums;
-}
-
-.usage-mosaic {
-  display: grid;
-  gap: 12px;
 }
 
 .daily-chart-header,
@@ -1149,12 +1146,6 @@
   align-content: space-between;
 }
 
-.usage-daypart-label,
-.usage-hour-labels {
-  font-size: 12px;
-  color: var(--muted);
-}
-
 .usage-daypart-value {
   font-size: 15px;
   font-weight: 700;
@@ -1203,8 +1194,6 @@
   display: flex;
   justify-content: space-between;
   gap: 8px;
-  font-size: 12px;
-  color: var(--muted);
 }
 
 .usage-grid {
@@ -1272,12 +1261,6 @@
   gap: 8px 16px;
 }
 
-.cost-window-range-label {
-  color: var(--muted);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-
 .cost-window-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr));
@@ -1321,6 +1304,9 @@
   font-variant-numeric: tabular-nums;
 }
 
+.usage-empty-state,
+.usage-insight-card,
+.usage-mosaic,
 .daily-chart-compact,
 .cost-breakdown,
 .sessions-card,
@@ -1491,14 +1477,6 @@
   gap: 8px 12px;
 }
 
-.legend-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--muted);
-}
-
 .legend-dot,
 .cost-segment,
 .context-segment,
@@ -1515,6 +1493,7 @@
   border-radius: var(--radius-full);
 }
 
+.usage-heatmap__cell--l4,
 .cost-segment.usage-token-output,
 .legend-dot.usage-token-output,
 .ts-bar.usage-token-output,
@@ -1695,35 +1674,18 @@
   color: var(--text-strong);
 }
 
-.usage-more-sessions {
-  padding: 8px;
-  text-align: center;
-  font-size: 12px;
-  color: var(--muted);
-}
-
 .sessions-selected-group {
   display: grid;
   gap: 6px;
   margin-top: 10px;
 }
 
-.session-detail-header-left {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
 .session-detail-indicator {
   display: inline-flex;
   margin-left: 8px;
-  color: var(--muted);
-  font-size: 12px;
 }
 
 .usage-lineage-note {
-  color: var(--muted);
-  font-size: 12px;
   margin-top: -6px;
 }
 
@@ -1821,11 +1783,6 @@
   background: var(--bg);
 }
 
-.context-breakdown-more {
-  font-size: 12px;
-  color: var(--muted);
-}
-
 .session-logs-header {
   align-items: flex-start;
 }
@@ -1860,11 +1817,6 @@
   border: 0;
   background: transparent;
   color: var(--text);
-}
-
-.session-logs-list {
-  display: grid;
-  gap: 10px;
 }
 
 .session-log-entry {
@@ -1905,15 +1857,7 @@
 }
 
 .session-log-tools summary {
-  font-size: 12px;
   font-weight: 600;
-  color: var(--muted);
-}
-
-.session-log-tools-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
 }
 
 .session-log-tools-pill {
@@ -1968,8 +1912,16 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
+  /* A fixed grid: placeholder and loaded values take the same rows. */
   .usage-header-metrics {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 12px 20px;
+  }
+
+  .usage-header-actions {
+    grid-column: 1 / -1;
+    margin-left: 0;
   }
 }
 
@@ -1978,10 +1930,6 @@
   .session-summary-grid,
   .usage-loading-grid {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .usage-header-metrics .usage-pin-btn {
-    margin-left: 0;
   }
 }
 

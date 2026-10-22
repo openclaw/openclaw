@@ -21,6 +21,8 @@ export type SpawnedRunMetadata = {
 };
 
 export type SpawnedToolContext = DelegatedToolPolicyContext & {
+  /** Host-verified current requester, used only to scope Git credit from main. */
+  gitContributorProfileId?: string;
   agentGroupId?: string | null;
   agentGroupChannel?: string | null;
   agentGroupSpace?: string | null;

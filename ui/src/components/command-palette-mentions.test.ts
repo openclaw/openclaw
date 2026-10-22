@@ -1,15 +1,19 @@
 /* @vitest-environment jsdom */
 import type { UsersMentionableResult } from "@openclaw/gateway-protocol";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createWebPushCapability } from "../app/web-push.ts";
 import { requestSessionCreate } from "../lib/sessions/create.ts";
 import * as toast from "../lib/toast.ts";
 import { createDraftFixture } from "../pages/new-session/draft-submission-flow.test-support.ts";
-import { createApplicationGateway } from "../test-helpers/application-context.ts";
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
-import { mountPalette } from "./command-palette.test-support.ts";
+import {
+  mountPalette,
+  openPalette,
+  prepareDraftContext,
+  pressKey,
+} from "./command-palette.test-support.ts";
 import "./command-palette.tsx";
 
 const people: UsersMentionableResult = {
@@ -45,9 +49,13 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function mount(createdSessionKey = "agent:main:dashboard:mentioned") {
+async function mount(
+  createdSessionKey = "agent:main:dashboard:mentioned",
+  scopes = ["operator.read", "operator.write"],
+) {
   const directory = vi.fn(async (): Promise<UsersMentionableResult> => people);
   const fixture = createDraftFixture({
+    scopes,
     request: async (method) => {
       if (method === "users.mentionable") {
         return directory();
@@ -62,41 +70,16 @@ async function mount(createdSessionKey = "agent:main:dashboard:mentioned") {
   Object.assign(context.gateway.snapshot, {
     selfUser: { id: "sender", identity: { type: "profile", id: "sender" } },
   });
-  const connection = createApplicationGateway(context.gateway.snapshot);
-  Object.assign(connection.gateway, {
-    connectionRevision: 1,
-    connection: context.gateway.connection,
-    setSessionKey: context.gateway.setSessionKey,
-  });
-  const webPush = createWebPushCapability(connection.gateway);
-  onTestFinished(() => webPush.dispose());
-  Object.assign(context, {
-    gateway: connection.gateway,
-    webPush,
-    agentIdentity: {
-      subscribe: () => () => {},
-      ensure: vi.fn(async () => {}),
-      get: () => undefined,
-    },
-    navigate: vi.fn(),
-  });
-  for (const capability of [
-    context.agentSelection,
-    context.agents,
-    context.sessions,
-    context.config,
-  ]) {
+  const publish = prepareDraftContext(context);
+  for (const capability of [context.agents, context.sessions, context.config]) {
     Object.assign(capability, { subscribe: () => () => {} });
   }
-  Object.assign(context.agents.state, { connected: true, client: context.gateway.snapshot.client });
-  Object.assign(context.sessions, { list: vi.fn(async () => null) });
   vi.mocked(context.sessions.createResult).mockImplementation((params) =>
     requestSessionCreate(context.gateway.snapshot.client!, params),
   );
-  const { palette, provider } = await mountPalette(context);
+  const { palette, provider, query } = await mountPalette(context);
   const getInput = () => palette.querySelector<HTMLTextAreaElement>(".cmd-palette__input")!;
-  palette.openPalette();
-  await palette.updateComplete;
+  await openPalette(palette);
   getInput().focus();
   const edit = async (options: {
     start: number;
@@ -125,13 +108,7 @@ async function mount(createdSessionKey = "agent:main:dashboard:mentioned") {
   const replace = (text: string, inputType = "insertText") =>
     edit({ start: 0, end: getInput().value.length, text, inputType });
   const key = async (pressedKey: string, extra: KeyboardEventInit = {}) => {
-    const event = new KeyboardEvent("keydown", {
-      bubbles: true,
-      cancelable: true,
-      key: pressedKey,
-      ...extra,
-    });
-    getInput().dispatchEvent(event);
+    const event = pressKey(getInput(), pressedKey, { cancelable: true, ...extra });
     await palette.updateComplete;
     return event;
   };
@@ -140,8 +117,20 @@ async function mount(createdSessionKey = "agent:main:dashboard:mentioned") {
     await vi.advanceTimersByTimeAsync(150);
     await palette.updateComplete;
   };
+  const choose = async (keyName?: string) => {
+    await search();
+    if (keyName) {
+      await key(keyName);
+    }
+    await key("Enter");
+  };
   const menu = () => palette.querySelector(".mention-menu");
   const recipients = () => [...palette.querySelectorAll(".composer-context-strip__person")];
+  const select = async (start: number, end: number) => {
+    getInput().setSelectionRange(start, end);
+    getInput().dispatchEvent(new Event("select", { bubbles: true }));
+    await palette.updateComplete;
+  };
   const send = async () => {
     await vi.advanceTimersByTimeAsync(0);
     await key("Enter", { ctrlKey: true });
@@ -165,16 +154,28 @@ async function mount(createdSessionKey = "agent:main:dashboard:mentioned") {
     replace,
     key,
     search,
+    choose,
     menu,
     recipients,
     send,
-    publish: () => connection.publish(context.gateway.snapshot),
+    select,
+    query,
+    publish,
+    expectCreate: (params: object) =>
+      expect(fixture.request).toHaveBeenCalledWith(
+        "sessions.create",
+        expect.objectContaining(params),
+        expect.objectContaining({ timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS }),
+      ),
   };
 }
 
 describe("command palette people mentions", () => {
-  it("selects one, two, and repeated references and carries real first-message metadata", async () => {
-    const f = await mount();
+  it.each([
+    { role: "operator", scopes: ["operator.read", "operator.write"] },
+    { role: "guest", scopes: ["operator.sessions.write"] },
+  ])("carries selected people into the first message for a $role", async ({ scopes }) => {
+    const f = await mount(undefined, scopes);
     await f.search("  🙂 @");
     expect(f.input.getAttribute("aria-controls")).toBe(f.menu()?.id);
     expect(f.input.getAttribute("aria-haspopup")).toBe("listbox");
@@ -189,9 +190,7 @@ describe("command palette people mentions", () => {
     await f.key("End");
     await f.key("Tab");
     expect(f.recipients()).toHaveLength(2);
-    await f.search();
-    await f.key("ArrowDown");
-    await f.key("Enter");
+    await f.choose("ArrowDown");
     expect(f.recipients()).toHaveLength(2);
     expect(f.context.sessions.createResult).not.toHaveBeenCalled();
     const expected = [
@@ -200,10 +199,7 @@ describe("command palette people mentions", () => {
       { profileId: "alex-two", start: 24, end: 29 },
     ];
     await f.send();
-    expect(f.request).toHaveBeenCalledWith(
-      "sessions.create",
-      expect.objectContaining({ message: "🙂 @Alex @Jordan Rivera @Alex", mentions: expected }),
-    );
+    f.expectCreate({ message: "🙂 @Alex @Jordan Rivera @Alex", mentions: expected });
     const retained = f.context.chatSubmissions.readInitial(
       "agent:main:dashboard:mentioned",
       f.context.gateway.snapshot.client,
@@ -221,11 +217,8 @@ describe("command palette people mentions", () => {
     "preserves recipient identity after deleting %s",
     async (change) => {
       const f = await mount();
-      await f.search();
-      await f.key("Enter");
-      await f.search();
-      await f.key(change === "same-name token" ? "ArrowDown" : "End");
-      await f.key("Enter");
+      await f.choose();
+      await f.choose(change === "same-name token" ? "ArrowDown" : "End");
       await f.edit({
         start: change === "same-name token" ? 0 : 3,
         end: change === "same-name token" ? 6 : 4,
@@ -243,19 +236,16 @@ describe("command palette people mentions", () => {
         expect(f.input.value).toBe("Review @Alex @Jordan Rivera  tail");
         expect(f.input.selectionStart).toBe(28);
         await f.send();
-        expect(f.request).toHaveBeenCalledWith(
-          "sessions.create",
-          expect.objectContaining({
-            mentions: [
-              { profileId: "alex-two", start: 7, end: 12 },
-              { profileId: "jordan", start: 13, end: 27 },
-            ],
-          }),
-        );
+        f.expectCreate({
+          mentions: [
+            { profileId: "alex-two", start: 7, end: 12 },
+            { profileId: "jordan", start: 13, end: 27 },
+          ],
+        });
       } else {
         const value = f.input.value;
         vi.mocked(f.context.sessions.list).mockClear();
-        f.palette.querySelector<HTMLButtonElement>('button[aria-label="Remove mention"]')!.click();
+        f.query<HTMLButtonElement>('button[aria-label="Remove mention"]')!.click();
         await f.palette.updateComplete;
         expect(f.input.value).toBe(value);
         expect(f.recipients()).toHaveLength(0);
@@ -272,24 +262,26 @@ describe("command palette people mentions", () => {
 
   it("keeps name selections but closes when the selection leaves the invocation", async () => {
     const f = await mount();
+    const searchSessions = vi.mocked(f.context.sessions.list);
+    searchSessions.mockClear();
     await f.append("Review @");
     await f.search("Al");
     expect(f.directoryParams()).toEqual([{ agentId: "main", query: "Al" }]);
     expect(f.menu()).not.toBeNull();
-    f.input.setSelectionRange(8, 10);
-    f.input.dispatchEvent(new Event("select", { bubbles: true }));
-    await f.palette.updateComplete;
+    await vi.advanceTimersByTimeAsync(200);
+    expect(searchSessions).not.toHaveBeenCalled();
+    await f.select(8, 10);
     expect(f.menu()).not.toBeNull();
-    f.input.setSelectionRange(0, 0);
-    f.input.dispatchEvent(new Event("select", { bubbles: true }));
-    await f.palette.updateComplete;
+    await f.select(0, 0);
     expect(f.menu()).toBeNull();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(searchSessions).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ search: "Review @Al" }),
+    );
     await f.replace("Review @Jo");
     await vi.advanceTimersByTimeAsync(150);
     expect(f.menu()).not.toBeNull();
-    f.input.setSelectionRange(7, 10);
-    f.input.dispatchEvent(new Event("select", { bubbles: true }));
-    await f.palette.updateComplete;
+    await f.select(7, 10);
     expect(f.menu()).toBeNull();
     expect(f.recipients()).toHaveLength(0);
   });
@@ -310,10 +302,7 @@ describe("command palette people mentions", () => {
         expect(f.directory).not.toHaveBeenCalled();
       }
       await f.send();
-      expect(f.request).toHaveBeenCalledWith(
-        "sessions.create",
-        expect.objectContaining({ message }),
-      );
+      f.expectCreate({ message });
       const create = f.request.mock.calls.find(([method]) => method === "sessions.create")?.[1];
       expect(create).not.toHaveProperty("mentions");
       expect(f.palette.isOpen).toBe(false);
@@ -354,7 +343,7 @@ describe("command palette people mentions", () => {
     f.directory.mockRejectedValueOnce(new Error("unavailable"));
     await f.replace("@Alex");
     await vi.advanceTimersByTimeAsync(150);
-    const retry = f.palette.querySelector<HTMLButtonElement>(".mention-menu__retry")!;
+    const retry = f.query<HTMLButtonElement>(".mention-menu__retry")!;
     expect(retry.textContent?.trim()).toBe("Retry");
     expect((await f.key("Tab")).defaultPrevented).toBe(false);
     retry.click();
@@ -368,46 +357,32 @@ describe("command palette people mentions", () => {
       key: "agent:main:dashboard:rejected",
       initialRun: { status: "rejected", error: "First turn rejected" },
     });
-    await f.search();
-    await f.key("Enter");
+    await f.choose();
     await f.send();
-    expect(f.palette.querySelector('[role="alert"]')?.textContent).toContain("First turn rejected");
+    expect(f.query('[role="alert"]')?.textContent).toContain("First turn rejected");
     expect(f.recipients()).toHaveLength(1);
     await f.key("Escape");
     f.palette.openPalette();
     await f.palette.updateComplete;
     expect(f.recipients()).toHaveLength(1);
-    const input = f.palette.querySelector<HTMLTextAreaElement>("textarea")!;
-    input.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "Enter",
-        ctrlKey: true,
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
+    pressKey(f.input, "Enter", { ctrlKey: true, cancelable: true });
     await vi.advanceTimersByTimeAsync(0);
     expect(f.context.sessions.createResult).toHaveBeenCalledOnce();
   });
 
   it("locks recipients while submitting and never sends twice", async () => {
     const f = await mount();
-    let finish!: (value: Awaited<ReturnType<typeof requestSessionCreate>>) => void;
-    vi.mocked(f.context.sessions.createResult).mockReturnValueOnce(
-      new Promise((resolve) => {
-        finish = resolve;
-      }),
-    );
-    await f.search();
-    await f.key("Enter");
+    const pending = createDeferred<Awaited<ReturnType<typeof requestSessionCreate>>>();
+    vi.mocked(f.context.sessions.createResult).mockReturnValueOnce(pending.promise);
+    await f.choose();
     await f.send();
     expect(f.input.disabled).toBe(true);
-    expect(f.palette.querySelector(".cmd-palette__mentions")?.hasAttribute("inert")).toBe(true);
-    f.palette.querySelector<HTMLButtonElement>('button[aria-label="Remove mention"]')!.click();
+    expect(f.query(".cmd-palette__mentions")?.hasAttribute("inert")).toBe(true);
+    f.query<HTMLButtonElement>('button[aria-label="Remove mention"]')!.click();
     await f.send();
     expect(f.context.sessions.createResult).toHaveBeenCalledOnce();
     expect(f.recipients()).toHaveLength(1);
-    finish({
+    pending.resolve({
       key: "agent:main:dashboard:mentioned",
       initialRun: { status: "started", runId: "mention-run" },
     });
@@ -415,7 +390,7 @@ describe("command palette people mentions", () => {
     expect(f.palette.isOpen).toBe(false);
   });
 
-  it.each(["anonymous", "read-only", "offline"])(
+  it.each(["anonymous", "read-only", "session-read-only", "offline", "create-unavailable"])(
     "does not query a directory for %s operators",
     async (mode) => {
       const f = await mount();
@@ -423,6 +398,12 @@ describe("command palette people mentions", () => {
         Object.assign(f.context.gateway.snapshot, { selfUser: undefined });
       } else if (mode === "read-only") {
         Object.assign(f.context.gateway.snapshot.hello!.auth!, { scopes: ["operator.read"] });
+      } else if (mode === "session-read-only") {
+        Object.assign(f.context.gateway.snapshot.hello!.auth!, {
+          scopes: ["operator.sessions.read"],
+        });
+      } else if (mode === "create-unavailable") {
+        f.context.gateway.snapshot.hello!.features!.methods = [];
       } else {
         f.context.gateway.snapshot.phase = "reconnecting";
       }
@@ -443,7 +424,10 @@ describe("command palette people mentions", () => {
     "keeps a new visible invocation authoritative after %s",
     async (change) => {
       const destination = change === "destination" ? "reviewer" : "main";
-      const f = await mount(`agent:${destination}:dashboard:mentioned`);
+      const f = await mount(
+        `agent:${destination}:dashboard:mentioned`,
+        change === "destination" ? ["operator.sessions.write"] : undefined,
+      );
       const foreground = "agent:main:dashboard:foreground";
       f.context.gateway.snapshot.sessionKey = foreground;
       if (change === "destination") {
@@ -471,13 +455,11 @@ describe("command palette people mentions", () => {
         f.palette.remove();
         f.provider.append(f.palette);
       } else if (change === "destination") {
-        f.palette.querySelector<HTMLButtonElement>(".palette-session-settings__trigger")!.click();
+        f.query<HTMLButtonElement>(".palette-session-settings__trigger")!.click();
         await waitForSolid(() =>
-          expect(
-            f.palette.querySelector(".palette-session-settings")?.matches(":popover-open"),
-          ).toBe(true),
+          expect(f.query(".palette-session-settings")?.matches(":popover-open")).toBe(true),
         );
-        const agent = f.palette.querySelector("openclaw-agent-select")!;
+        const agent = f.query("openclaw-agent-select")!;
         await agent.updateComplete;
         expect(agent.value).toBe("main");
         for (const item of agent.querySelectorAll<HTMLElement>("[role='menuitemradio']")) {
@@ -538,14 +520,11 @@ describe("command palette people mentions", () => {
       await f.key("Enter");
       expect(f.input.value).toBe("@New Person ");
       await f.send();
-      expect(f.request).toHaveBeenCalledWith(
-        "sessions.create",
-        expect.objectContaining({
-          agentId: destination,
-          message: "@New Person",
-          mentions: [{ profileId: "new-person", start: 0, end: 11 }],
-        }),
-      );
+      f.expectCreate({
+        agentId: destination,
+        message: "@New Person",
+        mentions: [{ profileId: "new-person", start: 0, end: 11 }],
+      });
       expect(f.context.gateway.snapshot.sessionKey).toBe(foreground);
       expect(f.context.agentSelection.state.selectedId).toBe("main");
     },

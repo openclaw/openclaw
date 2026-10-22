@@ -1,3 +1,4 @@
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { visibleSessionMatches } from "../../lib/sessions/navigation.ts";
@@ -6,7 +7,10 @@ import {
   readSessionChangedEvent,
   reconcileSessionHistory,
 } from "../../lib/sessions/reconcile.ts";
-import type { SessionRowObservation } from "../../lib/sessions/session-capability.ts";
+import type {
+  SessionCapability,
+  SessionRowObservation,
+} from "../../lib/sessions/session-capability.ts";
 import {
   areUiSessionKeysEquivalent,
   parseAgentSessionKey,
@@ -23,16 +27,70 @@ import { resolveChatAgentId } from "./chat-state-route.ts";
 import { getChatSessionProjection } from "./history-merge.ts";
 import { replayPendingChatAbort } from "./run-lifecycle.ts";
 
+function createSessionObservationRefresh(
+  sessions: Pick<SessionCapability, "describe" | "canonicalListRevision">,
+  target: { key: string; agentId: string },
+  client: GatewayBrowserClient,
+  current: () => boolean,
+  observation: () => SessionRowObservation | null,
+  retryAfterList = false,
+) {
+  let reading: Promise<void> | null = null;
+  let pending = false;
+  let failedListRevision: number | undefined;
+  const refresh = () => {
+    if (!current()) {
+      return;
+    }
+    pending = true;
+    const selected = observation();
+    if (reading || !selected?.isCurrent()) {
+      return;
+    }
+    pending = false;
+    failedListRevision = undefined;
+    const reconcile = selected.captureReconcile();
+    reading = sessions
+      .describe(target, { client })
+      .then(({ session }) => {
+        if (current()) {
+          reconcile(session ?? undefined);
+        }
+      })
+      .catch(() => {
+        failedListRevision = sessions.canonicalListRevision;
+      })
+      .finally(() => {
+        reading = null;
+        if (pending) {
+          refresh();
+        }
+      });
+  };
+  return {
+    refresh,
+    retryFailedRead: () => {
+      if (
+        failedListRevision !== undefined &&
+        (!retryAfterList || sessions.canonicalListRevision > failedListRevision)
+      ) {
+        refresh();
+      }
+    },
+  };
+}
+
 function applyObservedChatSessionRow(
   state: ChatPageHost,
   row: GatewaySessionRow | null,
-  observedSessionId: string | null = null,
-) {
+  observedSessionId: string | null,
+  retireSessionMutations: () => void,
+): void {
   const selectedAgentId = resolveChatAgentId(state);
   if (!row) {
     const result = state.sessionsResult;
     if (!result || state.sessionsResultAgentId !== selectedAgentId) {
-      return false;
+      return;
     }
     const sessions = result.sessions.filter(
       (candidate) =>
@@ -40,13 +98,14 @@ function applyObservedChatSessionRow(
         (observedSessionId !== null && candidate.sessionId !== observedSessionId),
     );
     if (sessions.length === result.sessions.length) {
-      return false;
+      return;
     }
+    retireSessionMutations();
     state.sessionsResult = { ...result, sessions, count: sessions.length };
-    return true;
+    return;
   }
   if (!visibleSessionMatches(state, row.key, row.agentId ?? selectedAgentId)) {
-    return false;
+    return;
   }
   const current = state.sessionsResultAgentId === selectedAgentId ? state.sessionsResult : null;
   const existing = row.sessionId
@@ -82,23 +141,38 @@ function applyObservedChatSessionRow(
   if (row.providerReview) {
     holdProviderReviewQueuedInputs(state, row.key, row.agentId ?? selectedAgentId);
     if (
-      state.realtimeTalkSession ||
-      state.realtimeTalkActive ||
-      state.realtimeTalkUseSystemDefault
+      state.realtimeTalk.snapshot.realtimeTalkSession ||
+      state.realtimeTalk.snapshot.realtimeTalkActive ||
+      state.realtimeTalk.snapshot.realtimeTalkUseSystemDefault
     ) {
       stopChatRealtimeTalk(state, { preserveConversation: true });
     }
   }
-  if (result === state.sessionsResult && state.sessionsResultAgentId === selectedAgentId) {
-    return false;
+  const previous = current?.sessions.find((candidate) =>
+    visibleSessionMatches(state, candidate.key, candidate.agentId),
+  );
+  if (previous && previous.sessionId !== row.sessionId) {
+    // Release pending header presentation before publishing a replacement incarnation.
+    retireSessionMutations();
   }
   state.sessionsResult = result;
   state.sessionsResultAgentId = selectedAgentId;
-  return true;
 }
 
 export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation {
+  private publishParentRow?: () => void;
+  readonly parentSession = {
+    read: () => this.observedParentSessionRow(),
+    subscribe: (listener: () => void) => {
+      this.publishParentRow = listener;
+      return () => {
+        this.publishParentRow = undefined;
+      };
+    },
+  };
+
   private sessionObservation: {
+    retryFailedRead: () => void;
     matchesPane: () => boolean;
     observation: SessionRowObservation | null;
   } | null = null;
@@ -108,6 +182,14 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
     matchesPane: () => boolean;
     observation: SessionRowObservation | null;
   } | null = null;
+
+  protected resumeConfirmedRouteWork(routeResolutionChanged?: boolean): void {
+    const state = this.state;
+    if (!routeResolutionChanged || this.routeResolutionPending || !state) {
+      return;
+    }
+    void resumeStoredChatOutboxes(state);
+  }
 
   protected observedParentSessionRow(): GatewaySessionRow | null {
     const binding = this.parentSessionObservation;
@@ -120,6 +202,9 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
     const previous = this.parentSessionObservation;
     this.parentSessionObservation = null;
     previous?.observation?.dispose();
+    if (previous) {
+      this.publishParentRow?.();
+    }
   }
 
   private synchronizeParentSessionObservation() {
@@ -147,16 +232,8 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
       return;
     }
     const agentId = parseAgentSessionKey(key)?.agentId ?? resolveChatAgentId(state);
-    let failedListRevision: number | undefined;
     const binding: NonNullable<ChatPaneSessionObservation["parentSessionObservation"]> = {
-      retryFailedRead: () => {
-        if (
-          failedListRevision !== undefined &&
-          sessions.canonicalListRevision > failedListRevision
-        ) {
-          refresh();
-        }
-      },
+      retryFailedRead: () => refresh.retryFailedRead(),
       matchesPane: () =>
         this.state === state &&
         state.connected &&
@@ -166,30 +243,14 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
       observation: null,
     };
     const current = () => this.parentSessionObservation === binding && binding.matchesPane();
-    let reading: Promise<void> | null = null;
-    const refresh = () => {
-      if (reading || !current()) {
-        return;
-      }
-      failedListRevision = undefined;
-      reading = (async () => {
-        const observation = binding.observation;
-        if (observation?.isCurrent()) {
-          const reconcile = observation.captureReconcile();
-          const { session } = await sessions.describe({ key, agentId }, { client });
-          if (current()) {
-            reconcile(session ?? undefined);
-          }
-        }
-      })()
-        .catch(() => {
-          // Unrelated metadata publications must not retry a failed descriptor.
-          failedListRevision = sessions.canonicalListRevision;
-        })
-        .finally(() => {
-          reading = null;
-        });
-    };
+    const refresh = createSessionObservationRefresh(
+      sessions,
+      { key, agentId },
+      client,
+      current,
+      () => binding.observation,
+      true,
+    );
     this.parentSessionObservation = binding;
     binding.observation = sessions.observeRow(
       { key, agentId },
@@ -197,7 +258,7 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
         if (!current()) {
           return;
         }
-        this.requestUpdate();
+        this.publishParentRow?.();
         if (
           !notification?.eventPending &&
           binding.observation &&
@@ -207,7 +268,7 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
         }
       },
       {
-        onInvalidate: refresh,
+        onInvalidate: refresh.refresh,
         onEvent: () => {
           if (current() && !binding.observation?.isCurrent()) {
             this.synchronizeParentSessionObservation();
@@ -218,7 +279,8 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
     if (!current()) {
       binding.observation.dispose();
     } else {
-      refresh();
+      this.publishParentRow?.();
+      refresh.refresh();
     }
   }
 
@@ -250,6 +312,7 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
     const agentId = resolveChatAgentId(state);
     const previous = this.sessionObservation;
     if (previous?.matchesPane() && previous.observation?.isCurrent()) {
+      previous.retryFailedRead();
       this.synchronizeParentSessionObservation();
       return;
     }
@@ -265,6 +328,7 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
         : null;
     this.retireSessionObservation();
     const binding: NonNullable<ChatPaneSessionObservation["sessionObservation"]> = {
+      retryFailedRead: () => refreshRunner.retryFailedRead(),
       matchesPane: () =>
         this.state === state &&
         state.sessionKey === key &&
@@ -275,6 +339,13 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
     };
     const ownsPaneScope = () => state.connected && binding.matchesPane();
     const ownsPane = () => this.sessionObservation === binding && ownsPaneScope();
+    const refreshRunner = createSessionObservationRefresh(
+      sessions,
+      { key, agentId },
+      scope.client,
+      ownsPane,
+      () => binding.observation,
+    );
     this.sessionObservation = binding;
     binding.observation = sessions.observeRow(
       { key, agentId },
@@ -289,12 +360,12 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
           ) {
             state.pendingAbort = null;
           }
-          if (applyObservedChatSessionRow(state, row, binding.observation?.sessionId)) {
-            this.requestUpdate();
-          }
+          applyObservedChatSessionRow(state, row, binding.observation?.sessionId ?? null, () =>
+            this.retireHeaderSessionMutations(),
+          );
           this.synchronizeParentSessionObservation();
           if (state.pendingAbort) {
-            void replayPendingChatAbort(state).finally(() => state.requestUpdate?.());
+            void replayPendingChatAbort(state);
           }
         }
         // Apply the retired row first so deletion cannot survive the replacement binding.
@@ -312,13 +383,10 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
           if (ownsPane()) {
             if (reason === "runner-availability") {
               this.activeSessionResources.invalidate();
-              this.requestUpdate();
+              refreshRunner.refresh();
               return;
             }
-            this.activeSessionResources.reconcileObservation({
-              requestUpdate: () => this.requestUpdate(),
-              updated: () => this.updateComplete,
-            });
+            this.activeSessionResources.reconcileObservation();
           }
         },
         onEvent: (event, result) => {
@@ -421,7 +489,12 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
       binding.observation?.hasObserved &&
       binding.observation?.isCurrent()
     ) {
-      applyObservedChatSessionRow(state, binding.observation.row, binding.observation.sessionId);
+      applyObservedChatSessionRow(
+        state,
+        binding.observation.row,
+        binding.observation.sessionId,
+        () => this.retireHeaderSessionMutations(),
+      );
       this.synchronizeParentSessionObservation();
     }
   }

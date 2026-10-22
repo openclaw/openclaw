@@ -57,6 +57,7 @@ const OPTIONAL_LIVE_SHARD_FILE_ENVS = new Map([
     ["OPENCLAW_LIVE_OPENAI_COMPACTION"],
   ],
   ["src/agents/subagents/announce/subagent-announce.live.test.ts", ["OPENCLAW_LIVE_SUBAGENT_E2E"]],
+  ["test/gateway-agentsapi.live.test.ts", ["OPENCLAW_LIVE_AGENTS_API"]],
   [
     "src/agents/subagents/announce/subagent-continuation.live.test.ts",
     ["OPENCLAW_LIVE_SUBAGENT_E2E"],
@@ -495,7 +496,7 @@ export function resolveLiveShardPreparation(files: string[]): LiveShardPreparati
   if (
     files.some(isSourceGatewayLiveTest) ||
     files.some((file) => file.startsWith("test/e2e/qa-lab/runtime/")) ||
-    files.includes("src/infra/heartbeat-runner.live.test.ts") ||
+    files.includes("src/infra/session-event-wake.live.test.ts") ||
     files.includes("src/agents/tools/image-tool.providers.live.test.ts") ||
     files.includes("extensions/openai/openai.live.test.ts")
   ) {

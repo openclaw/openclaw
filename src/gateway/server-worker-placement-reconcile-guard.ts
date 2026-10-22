@@ -36,11 +36,18 @@ export function installWorkerPlacementReconcileGuard(params: {
   isStopping: () => boolean;
 }) {
   return params.environments.installReconcileEnvironmentGuard(
-    async (environmentId, reconcileEnvironmentCore) => {
+    async (environmentId, reconcileEnvironmentCore, signal) => {
       if (params.isStopping()) {
         return;
       }
-      const owner = await params.placements.readEnvironmentOwner(environmentId);
+      const owner = await params.placements
+        .readEnvironmentOwner(environmentId, signal)
+        .catch((error: unknown) => {
+          if (!signal.aborted || !params.isStopping()) {
+            throw error;
+          }
+          return undefined;
+        });
       if (params.isStopping()) {
         return;
       }
@@ -50,7 +57,7 @@ export function installWorkerPlacementReconcileGuard(params: {
         return;
       }
       if (owner?.state === "provisioning") {
-        await params.dispatch.resumeProvisioning(owner, reconcileEnvironmentCore);
+        await params.dispatch.resumeProvisioning(owner, reconcileEnvironmentCore, signal);
         return;
       }
       const environment = params.environments.get(environmentId);

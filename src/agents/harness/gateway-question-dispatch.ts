@@ -27,7 +27,7 @@ type QuestionDispatchAuthority =
   | { kind: "unscoped" }
   | {
       kind: "source-bound";
-      /** @deprecated For preparation, await assertCurrentAsync; keep the final effect assertion. Sync preparation is supported through 2026-12-31. */
+      /** @deprecated For preparation, await assertCurrentAsync; keep the final effect assertion. Sync preparation is supported through 2026-12-31. Removal in the first January 2027 stable release. */
       assertCurrent: () => void;
       assertCurrentAsync?: () => Promise<void>;
     };

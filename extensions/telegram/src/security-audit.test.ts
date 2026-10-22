@@ -1,4 +1,3 @@
-// Telegram tests cover security audit plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import type { ResolvedTelegramAccount } from "./accounts.js";
@@ -12,131 +11,53 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
   readChannelAllowFromStore: readChannelAllowFromStoreMock,
 }));
 
-function createTelegramAccount(
-  config: NonNullable<NonNullable<OpenClawConfig["channels"]>["telegram"]>,
-): ResolvedTelegramAccount {
-  return {
+function audit(config: ResolvedTelegramAccount["config"], commands?: OpenClawConfig["commands"]) {
+  const account: ResolvedTelegramAccount = {
     accountId: "default",
     enabled: true,
     token: "t",
     tokenSource: "config",
     tokenStatus: "available",
-    config,
+    config: { enabled: true, botToken: "t", groupPolicy: "allowlist", ...config },
   };
-}
-
-function getTelegramConfig(cfg: OpenClawConfig) {
-  const config = cfg.channels?.telegram;
-  if (!config) {
-    throw new Error("expected telegram config");
-  }
-  return config;
-}
-
-function expectFindingSeverity(
-  findings: Awaited<ReturnType<typeof collectTelegramSecurityAuditFindings>>,
-  checkId: string,
-  severity: string,
-): void {
-  const finding = findings.find((entry) => entry.checkId === checkId);
-  expect(finding?.severity).toBe(severity);
+  return collectTelegramSecurityAuditFindings({
+    cfg: { channels: { telegram: account.config }, commands },
+    account,
+    accountId: "default",
+  });
 }
 
 describe("Telegram security audit findings", () => {
   beforeEach(() => {
-    readChannelAllowFromStoreMock.mockReset();
-    readChannelAllowFromStoreMock.mockResolvedValue([]);
+    readChannelAllowFromStoreMock.mockReset().mockResolvedValue([]);
   });
 
-  it("flags group commands without a sender allowlist", async () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        telegram: {
-          enabled: true,
-          botToken: "t",
-          groupPolicy: "allowlist",
-          groups: { "-100123": {} },
-        },
-      },
-    };
-
-    const findings = await collectTelegramSecurityAuditFindings({
-      cfg,
-      account: createTelegramAccount(getTelegramConfig(cfg)),
-      accountId: "default",
-    });
-
-    expectFindingSeverity(findings, "channels.telegram.groups.allowFrom.missing", "critical");
+  it.each<[ResolvedTelegramAccount["config"], string, string]>([
+    [{ groups: { "-100123": {} } }, "groups.allowFrom.missing", "critical"],
+    [
+      { groups: { "-100123": {} }, groupAllowFrom: ["@TrustedOperator"] },
+      "allowFrom.invalid_entries",
+      "warn",
+    ],
+  ])("audits group policy %j", async (config, suffix, severity) => {
+    const findings = await audit(config);
+    expect(
+      findings.find(({ checkId }) => checkId === `channels.telegram.${suffix}`)?.severity,
+    ).toBe(severity);
   });
 
-  it("warns when allowFrom entries are non-numeric legacy @username configs", async () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        telegram: {
-          enabled: true,
-          botToken: "t",
-          groupPolicy: "allowlist",
-          groupAllowFrom: ["@TrustedOperator"],
-          groups: { "-100123": {} },
-        },
-      },
-    };
-
-    const findings = await collectTelegramSecurityAuditFindings({
-      cfg,
-      account: createTelegramAccount(getTelegramConfig(cfg)),
-      accountId: "default",
-    });
-
-    expectFindingSeverity(findings, "channels.telegram.allowFrom.invalid_entries", "warn");
-  });
-
-  it("warns about invalid DM allowFrom entries even when groups are not enabled", async () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        telegram: {
-          enabled: true,
-          botToken: "t",
-          dmPolicy: "allowlist",
-          allowFrom: ["@TrustedOperator"],
-          groupPolicy: "allowlist",
-        },
-      },
-    };
-
-    const findings = await collectTelegramSecurityAuditFindings({
-      cfg,
-      account: createTelegramAccount(getTelegramConfig(cfg)),
-      accountId: "default",
-    });
-
-    expect(findings).toHaveLength(1);
-    expectFindingSeverity(findings, "channels.telegram.allowFrom.invalid_entries", "warn");
-    expect(readChannelAllowFromStoreMock).not.toHaveBeenCalled();
-  });
-
-  it("warns about invalid DM allowFrom entries when text commands are disabled", async () => {
-    const cfg: OpenClawConfig = {
-      commands: { text: false },
-      channels: {
-        telegram: {
-          enabled: true,
-          botToken: "t",
-          dmPolicy: "allowlist",
-          allowFrom: ["@TrustedOperator"],
-          groupPolicy: "allowlist",
-        },
-      },
-    };
-
-    const findings = await collectTelegramSecurityAuditFindings({
-      cfg,
-      account: createTelegramAccount(getTelegramConfig(cfg)),
-      accountId: "default",
-    });
-
-    expect(findings).toHaveLength(1);
-    expectFindingSeverity(findings, "channels.telegram.allowFrom.invalid_entries", "warn");
-    expect(readChannelAllowFromStoreMock).not.toHaveBeenCalled();
-  });
+  it.each([undefined, { text: false }])(
+    "warns about invalid DM entries (commands=%j)",
+    async (commands) => {
+      const findings = await audit(
+        { dmPolicy: "allowlist", allowFrom: ["@TrustedOperator"] },
+        commands,
+      );
+      expect(findings).toHaveLength(1);
+      expect(findings).toMatchObject([
+        { checkId: "channels.telegram.allowFrom.invalid_entries", severity: "warn" },
+      ]);
+      expect(readChannelAllowFromStoreMock).not.toHaveBeenCalled();
+    },
+  );
 });

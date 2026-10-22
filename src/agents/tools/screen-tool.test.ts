@@ -1,10 +1,12 @@
 import { Value } from "typebox/value";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { UiCommandResultSchema } from "../../../packages/gateway-protocol/src/schema/ui-command.js";
-import { compactToolOutputHint } from "../tool-schema-hints.js";
+import * as gateway from "./in-process-gateway.js";
 import type { InProcessGatewayCaller } from "./in-process-gateway.js";
 import { createScreenTool } from "./screen-tool.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 function createGatewayRecorder() {
   const calls: Array<[string, Record<string, unknown>]> = [];
@@ -15,18 +17,25 @@ function createGatewayRecorder() {
     calls.push([method, params]);
     return { ok: true } as T;
   };
-  return { callGateway, calls };
+  vi.spyOn(gateway, "callInProcessGatewayTool").mockImplementation(callGateway);
+  return { calls };
 }
 
 describe("screen tool", () => {
   it("declares the exact ui.command result contract", async () => {
-    const { callGateway } = createGatewayRecorder();
-    const tool = createScreenTool({ callGateway });
+    createGatewayRecorder();
+    const tool = createScreenTool();
     const result = await tool.execute("contract", { action: "sidebar_show" });
 
     expect(tool.outputSchema).toBe(UiCommandResultSchema);
     expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
-    expect(compactToolOutputHint(tool.outputSchema)).toBe("{ ok: boolean }");
+    expect(
+      Value.Check(tool.outputSchema!, {
+        ok: true,
+        delivery: "dispatched",
+        presentation: { portalId: "app", status: "blocked", reason: "remote-ingress-required" },
+      }),
+    ).toBe(true);
   });
 
   it("uses a flat action enum and requires the UI capability", () => {
@@ -55,10 +64,9 @@ describe("screen tool", () => {
     ["portal_hide", { kind: "panel", panel: "portal", open: false }],
     ["navigate", { kind: "navigate", sessionKey: "agent:main:main" }],
   ])("maps %s to a UI command", async (action, command) => {
-    const { callGateway, calls } = createGatewayRecorder();
+    const { calls } = createGatewayRecorder();
     const tool = createScreenTool({
       agentSessionKey: "agent:main:main",
-      callGateway,
     });
 
     await tool.execute("call", { action });
@@ -67,8 +75,8 @@ describe("screen tool", () => {
   });
 
   it.each(["terminal_show", "browser_show"])("passes dock for %s", async (action) => {
-    const { callGateway, calls } = createGatewayRecorder();
-    const tool = createScreenTool({ callGateway });
+    const { calls } = createGatewayRecorder();
+    const tool = createScreenTool();
 
     await tool.execute("call", { action, dock: "right" });
 
@@ -94,8 +102,8 @@ describe("screen tool", () => {
   ] as const)(
     "opens %s with %s in the selected conversation's right sidebar",
     async (action, targetKey, panel) => {
-      const { callGateway, calls } = createGatewayRecorder();
-      const tool = createScreenTool({ agentSessionKey: "agent:main:current", callGateway });
+      const { calls } = createGatewayRecorder();
+      const tool = createScreenTool({ agentSessionKey: "agent:main:current" });
 
       await tool.execute("show", {
         action,

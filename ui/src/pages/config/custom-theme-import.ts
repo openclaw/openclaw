@@ -138,15 +138,12 @@ async function readJsonResponseWithLimit(response: Response): Promise<unknown> {
   }
 }
 
-export async function importCustomThemeFromUrl(
-  input: string,
-  fetchImpl: typeof fetch = fetch,
-): Promise<ImportedCustomTheme> {
+export async function importCustomThemeFromUrl(input: string): Promise<ImportedCustomTheme> {
   const resolution = normalizeTweakcnThemeUrl(input);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TWEAKCN_FETCH_TIMEOUT_MS);
   try {
-    const response = await fetchImpl(resolution.fetchUrl, {
+    const response = await fetch(resolution.fetchUrl, {
       headers: { accept: "application/json" },
       redirect: "error",
       signal: controller.signal,

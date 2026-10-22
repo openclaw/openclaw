@@ -1,4 +1,5 @@
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { attachAgentListProjection } from "./agent-list-projection.js";
 import {
   applyCompactionDefaults,
   applyContextPruningDefaults,
@@ -9,6 +10,7 @@ import {
 } from "./defaults.js";
 import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
 import { normalizeConfigPaths } from "./normalize-paths.js";
+import { captureConfigResolutionFactsThroughRewrite } from "./resolution-facts.js";
 import { normalizeTalkConfig } from "./talk.js";
 import type { OpenClawConfig, ResolvedSourceConfig, RuntimeConfig } from "./types.js";
 
@@ -33,6 +35,7 @@ export function materializeRuntimeConfig(
     loadManifestRegistry?: () => Pick<PluginManifestRegistry, "plugins"> | undefined;
   } = {},
 ): RuntimeConfig {
+  const carryResolutionFacts = captureConfigResolutionFactsThroughRewrite(config);
   let next = applyMessageDefaults(config);
   next = applySessionDefaults(next);
   next = applyAgentDefaults(next);
@@ -45,5 +48,6 @@ export function materializeRuntimeConfig(
   next = normalizeTalkConfig(next);
   normalizeConfigPaths(next, options);
   normalizeExecSafeBinProfilesInConfig(next);
-  return asRuntimeConfig(next);
+  carryResolutionFacts(next);
+  return asRuntimeConfig(next.agents?.entries ? attachAgentListProjection(next) : next);
 }

@@ -41,7 +41,7 @@ scenario:
       promptSnippet: Anthropic thinking error QA check
       prompt: "Anthropic thinking error QA check: read QA_KICKOFF_TASK.md, then answer with exactly ANTHROPIC-THINKING-ERROR-RECOVERED-OK."
       expectedReply: ANTHROPIC-THINKING-ERROR-RECOVERED-OK
-      visibleAnswerRetryNeedle: The previous attempt did not produce a user-visible answer.
+      visibleAnswerRetryNeedle: Continue from the current state
 
 flow:
   steps:

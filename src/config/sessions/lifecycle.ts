@@ -95,7 +95,7 @@ export function resolveTerminalMainSessionTranscriptRegistryCheck(
   if (registryTimestampMs === undefined) {
     return undefined;
   }
-  const sessionId = typeof params.entry.sessionId === "string" ? params.entry.sessionId.trim() : "";
+  const sessionId = params.entry.sessionId.trim();
   if (!sessionId) {
     return undefined;
   }

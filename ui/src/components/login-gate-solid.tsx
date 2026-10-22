@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, For, onCleanup, Show, untrack } from "solid-js";
+import { action, createMemo, createOptimistic, createSignal, For, onSettled, Show } from "solid-js";
 import type { ThemeBranding, ThemeMascot } from "../../../packages/gateway-protocol/src/theme.ts";
 import { normalizeBasePath } from "../app-route-paths.ts";
 import { canReloadControlUiDocument } from "../app/document-reload-guard.ts";
@@ -8,11 +8,13 @@ import { retryStaleChunkReloadWhenReachable } from "../app/stale-chunk-reload.ts
 import { currentThemeBranding } from "../app/theme-branding.ts";
 import { registerLoginEnglish } from "../i18n/locales/en-login.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
-import "../lib/toast-host.ts";
+import "../lib/toast-host.tsx";
 import { formatGatewayHost } from "../lib/gateway-host.ts";
 import { classifyGatewaySecret } from "../lib/gateway-secret-shape.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { listen } from "../lib/reactive/listener.ts";
+import { useVisiblePoll } from "../lib/reactive/visible-poll.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import type { JSX as SolidJSX } from "../types/solid-elements.d.ts";
 import {
   type LoginFailureFeedback,
@@ -20,9 +22,9 @@ import {
   type LoginFailureStep,
   resolveLoginFailureFeedback,
 } from "./login-gate-feedback.ts";
-import { CopyButton } from "./solid/copy-button.tsx";
+import { ConnectCommand } from "./solid/connect-command.tsx";
 import { Icon, type IconName } from "./solid/icon.tsx";
-import "./theme-brand-icon.ts";
+import { ThemeBrandIcon } from "./theme-brand-icon.tsx";
 import "./tooltip.ts";
 
 registerEnglishCatalog(registerLoginEnglish);
@@ -50,38 +52,6 @@ const STATUS_ICONS: Record<LoginFailureFeedback["tone"], IconName> = {
   warn: "clock",
   danger: "shieldAlert",
 };
-
-function ConnectCommand(props: { command: string; variant?: "hero" }) {
-  const copyCommand = (event: { currentTarget: HTMLElement }) => {
-    event.currentTarget.querySelector<HTMLButtonElement>(".chat-copy-btn")?.click();
-  };
-  return (
-    <openclaw-tooltip prop:content={t("connection.help.copyCommand")}>
-      <div
-        class={["login-gate__command", { "login-gate__command--hero": props.variant === "hero" }]}
-        role="button"
-        tabindex={0}
-        aria-label={t("connection.help.copyCommandAria", { command: props.command })}
-        onClick={(event) => {
-          if (!(event.target instanceof Element && event.target.closest(".chat-copy-btn"))) {
-            copyCommand(event);
-          }
-        }}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            copyCommand(event);
-          }
-        }}
-      >
-        <code translate="no">{props.command}</code>
-        {props.command && (
-          <CopyButton text={props.command} idleLabel={t("connection.help.copyCommand")} />
-        )}
-      </div>
-    </openclaw-tooltip>
-  );
-}
 
 function FailureStep(props: { step: LoginFailureStep }) {
   const segments = createMemo(() => {
@@ -313,18 +283,18 @@ function StatusBody(
       )}
       <div class="login-gate__actions">
         <Show when={props.feedback.refreshAction}>
-          {(action) => (
+          {(refreshAction) => (
             <button
               type="button"
               class="btn primary login-gate__failure-refresh"
               disabled={props.refreshState === "pending"}
-              onClick={props.onRefresh}
+              onClick={() => props.onRefresh()}
             >
               {props.refreshState === "pending"
                 ? t("common.refreshing")
                 : props.refreshState === "failed"
                   ? t("common.retry")
-                  : action().label}
+                  : refreshAction().label}
             </button>
           )}
         </Show>
@@ -399,20 +369,57 @@ function FormBody(props: ViewProps & { feedback: LoginFailureFeedback | null }) 
   );
 }
 
-function LoginGateContent(props: {
-  model: LoginGateProps;
-  host: LoginGateElement;
-}): SolidJSX.Element {
-  const host = untrack(() => props.host);
+function LoginGateContent(
+  props: {
+    model: LoginGateProps;
+  },
+  host: LoginGateElement,
+): SolidJSX.Element {
   host.style.display = "contents";
-  const [refreshState, setRefreshState] = createSignal<RefreshState>("idle");
+  const refreshIdentity = createMemo(
+    () =>
+      [
+        props.model.lastError,
+        props.model.lastErrorCode,
+        props.model.lastErrorAuthReason,
+        props.model.gatewayUrl,
+        props.model.resourceBasePath,
+        props.model.secret,
+        props.model.connected,
+        Boolean(props.model.reconnectPending),
+      ] as const,
+    { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
+  );
+  // A committed identity change retires feedback; unrelated renders preserve a pending attempt.
+  const [refreshFailed, setRefreshFailed] = createSignal(() => {
+    refreshIdentity();
+    return false;
+  });
+  const [refreshing, setRefreshing] = createOptimistic(false);
+  const refreshState = (): RefreshState =>
+    refreshing() ? "pending" : refreshFailed() ? "failed" : "idle";
   const [now, setNow] = createSignal(Date.now());
-  let refreshAttempt: { props: LoginGateProps } | undefined;
-  const cancelRefresh = () => {
-    refreshAttempt = undefined;
-    setRefreshState("idle");
+  useVisiblePoll(1_000, () => setNow(Date.now()), {
+    enabled: () =>
+      Boolean(props.model.reconnectPending) &&
+      props.model.lastErrorCode === "GATEWAY_BUSY" &&
+      (props.model.reconnectAt ?? 0) > now(),
+    immediate: true,
+  });
+  type RefreshAttempt = {
+    props: LoginGateProps;
+    retired: ReturnType<typeof Promise.withResolvers<void>>;
   };
-  const ownsRefresh = (attempt: { props: LoginGateProps }) => {
+  let refreshAttempt: RefreshAttempt | undefined;
+  const retireRefresh = () => {
+    refreshAttempt?.retired.resolve();
+    refreshAttempt = undefined;
+  };
+  const cancelRefresh = () => {
+    retireRefresh();
+    setRefreshFailed(false);
+  };
+  const ownsRefresh = (attempt: RefreshAttempt) => {
     const current = host.props;
     return (
       refreshAttempt === attempt &&
@@ -433,50 +440,47 @@ function LoginGateContent(props: {
     );
   };
   const feedback = createMemo(() => resolveLoginFailureFeedback(props.model));
-  createEffect(
-    () => props.model,
-    () => {
+  onSettled(() => {
+    const stopDisconnect = listen(host, "login-gate-disconnect", cancelRefresh);
+    const stopChange = listen(host, "login-gate-props-change", () => {
+      // Release the action before Solid commits the replacement connection props.
       if (refreshAttempt && !ownsRefresh(refreshAttempt)) {
-        cancelRefresh();
+        retireRefresh();
       }
-    },
-  );
-  createEffect(
-    () =>
-      props.model.reconnectPending &&
-      props.model.lastErrorCode === "GATEWAY_BUSY" &&
-      (props.model.reconnectAt ?? 0) > now(),
-    (running) => {
-      if (!running) {
-        return undefined;
+    });
+    return () => {
+      retireRefresh();
+      stopDisconnect();
+      stopChange();
+    };
+  });
+  const presentRefresh = action(function* (
+    attempt: RefreshAttempt,
+    pending: Promise<boolean>,
+  ): Generator<Promise<boolean | void>, void, boolean | void> {
+    try {
+      if (ownsRefresh(attempt)) {
+        setRefreshFailed(false);
+        setRefreshing(true);
       }
-      let timer: ReturnType<typeof setInterval> | undefined;
-      const update = () => {
-        if (timer !== undefined) {
-          clearInterval(timer);
-        }
-        timer = undefined;
-        if (document.visibilityState !== "hidden") {
-          setNow(Date.now());
-          timer = setInterval(() => setNow(Date.now()), 1000);
-        }
-      };
-      update();
-      document.addEventListener("visibilitychange", update);
-      return () => {
-        if (timer !== undefined) {
-          clearInterval(timer);
-        }
-        document.removeEventListener("visibilitychange", update);
-      };
-    },
-  );
-  host.addEventListener("login-gate-disconnect", cancelRefresh);
-  onCleanup(() => {
-    cancelRefresh();
-    host.removeEventListener("login-gate-disconnect", cancelRefresh);
+      const reloaded = yield Promise.race([pending, attempt.retired.promise]);
+      if (ownsRefresh(attempt) && !reloaded) {
+        setRefreshFailed(true);
+      }
+    } catch {
+      if (ownsRefresh(attempt)) {
+        setRefreshFailed(true);
+      }
+    } finally {
+      if (refreshAttempt === attempt) {
+        retireRefresh();
+      }
+    }
   });
   const refreshPage = async () => {
+    if (refreshAttempt && !ownsRefresh(refreshAttempt)) {
+      retireRefresh();
+    }
     const current = host.props;
     if (
       !current ||
@@ -489,29 +493,15 @@ function LoginGateContent(props: {
     ) {
       return;
     }
-    const attempt = { props: current };
+    const attempt = {
+      props: current,
+      retired: Promise.withResolvers<void>(),
+    };
     refreshAttempt = attempt;
-    setRefreshState("pending");
-    try {
-      const reloaded = await retryStaleChunkReloadWhenReachable({
-        canReload: () => ownsRefresh(attempt),
-      });
-      if (ownsRefresh(attempt) && !reloaded) {
-        setRefreshState("failed");
-      }
-    } catch {
-      if (ownsRefresh(attempt)) {
-        setRefreshState("failed");
-      }
-    } finally {
-      if (refreshAttempt === attempt) {
-        if (!ownsRefresh(attempt)) {
-          cancelRefresh();
-        } else {
-          refreshAttempt = undefined;
-        }
-      }
-    }
+    const pending = retryStaleChunkReloadWhenReachable({
+      canReload: () => ownsRefresh(attempt),
+    });
+    return presentRefresh(attempt, pending);
   };
   const branding = () => props.model.branding ?? currentThemeBranding();
   const brandIcon = () =>
@@ -540,7 +530,7 @@ function LoginGateContent(props: {
           ) : (
             <span class="login-gate__logo login-gate__logo--neutral" aria-hidden="true">
               {branding().brandIcon !== "claw" && branding().brandIcon !== "mark" ? (
-                <openclaw-theme-brand-icon prop:branding={branding()} aria-hidden="true" />
+                <ThemeBrandIcon branding={branding()} aria-hidden="true" />
               ) : (
                 <Icon name="mark" />
               )}
@@ -584,11 +574,23 @@ function LoginGateContent(props: {
 export const LoginGate = defineSolidBridge<BridgeProps>(
   "openclaw-login-gate",
   (props, host) => (
-    <Show when={props.props}>{(model) => <LoginGateContent model={model()} host={host} />}</Show>
+    <Show when={props.props}>
+      {(model) =>
+        LoginGateContent(
+          {
+            get model() {
+              return model();
+            },
+          },
+          host,
+        )
+      }
+    </Show>
   ),
   {
     properties: { props: { default: undefined, attribute: false } },
     disconnected: (host) => host.dispatchEvent(new Event("login-gate-disconnect")),
+    propertyChanged: (host) => host.dispatchEvent(new Event("login-gate-props-change")),
   },
 );
 

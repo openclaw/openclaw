@@ -10,6 +10,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 export const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 const preparedArchives = new Map<string, Buffer>();
 let fixturePnpm: string | undefined;
+const sha256File = (file: string) => createHash("sha256").update(readFileSync(file)).digest("hex");
 
 function writeJson(file: string, value: unknown) {
   mkdirSync(path.dirname(file), { recursive: true });
@@ -41,26 +42,29 @@ export function setupFixture(
   const artifactRoot = path.resolve(".artifacts");
   mkdirSync(artifactRoot, { recursive: true });
   const root = realpathSync(makeTempDir("docker-harness-", artifactRoot));
-  const target = path.join(root, "frozen pnpm target");
-  mkdirSync(target);
-  const harness = mode === "local" ? target : path.join(target, ".release-harness");
+  const fixture = {
+    root,
+    target: path.join(root, "frozen pnpm target"),
+    marker: path.join(root, "calls.jsonl"),
+    poison: path.join(root, "target-ran"),
+    toolchainMarker: path.join(root, "toolchains.jsonl"),
+    tarball: path.join(root, "frozen candidate.tgz"),
+    registry: path.join(root, "frozen registry"),
+    pinnedPnpm: path.join(root, "pinned '$& pnpm wrapper"),
+  };
+  mkdirSync(fixture.target);
+  const harness = mode === "local" ? fixture.target : path.join(fixture.target, ".release-harness");
   const selectedHarness =
     mode === "override" ? path.join(root, "operator's $& pnpm harness") : harness;
   copyDockerSchedulerHarness(harness);
-  if (selectedHarness !== harness) {
-    mkdirSync(selectedHarness, { recursive: true });
-  }
-  const marker = path.join(root, "calls.jsonl");
-  const poison = path.join(root, "target-ran");
-  const toolchainMarker = path.join(root, "toolchains.jsonl");
+  mkdirSync(selectedHarness, { recursive: true });
   const version = "2026.8.1";
   const packageDir = path.join(root, "packed", "package");
-  const tarball = path.join(root, "frozen candidate.tgz");
-  writePackageArchive(packageDir, tarball, { name: "openclaw", version });
-  const sha256 = createHash("sha256").update(readFileSync(tarball)).digest("hex");
+  writePackageArchive(packageDir, fixture.tarball, { name: "openclaw", version });
+  const sha256 = sha256File(fixture.tarball);
   const trustedScript = `
 const fs = require('node:fs');
-fs.appendFileSync(${JSON.stringify(marker)}, JSON.stringify({
+fs.appendFileSync(${JSON.stringify(fixture.marker)}, JSON.stringify({
   lane: process.env.OPENCLAW_DOCKER_ALL_LANE_NAME,
   cwd: process.cwd(),
   phase: process.argv[2],
@@ -78,9 +82,9 @@ fs.appendFileSync(${JSON.stringify(marker)}, JSON.stringify({
   tools: process.env.OPENCLAW_DOCKER_CLI_TOOLS_DIR,
 }) + '\\n');
 `;
-  const poisonedScript = `require('node:fs').writeFileSync(${JSON.stringify(poison)}, 'old harness'); process.exit(47);`;
+  const poisonedScript = `require('node:fs').writeFileSync(${JSON.stringify(fixture.poison)}, 'old harness'); process.exit(47);`;
   for (const [dir, script] of [
-    [target, poisonedScript],
+    [fixture.target, poisonedScript],
     [selectedHarness, trustedScript],
   ] as const) {
     const scriptsDir = path.join(dir, "scripts");
@@ -99,11 +103,9 @@ fs.appendFileSync(${JSON.stringify(marker)}, JSON.stringify({
     writeJson(path.join(dir, "package.json"), {
       name: "openclaw",
       version,
-      ...(corepack && {
-        packageManager: dir === selectedHarness ? "pnpm@11.22.0" : "pnpm@12.0.0",
-      }),
+      ...(corepack && { packageManager: dir === selectedHarness ? "pnpm@11.22.0" : "pnpm@12.0.0" }),
       scripts:
-        dir === target && missingTargetScript
+        dir === fixture.target && missingTargetScript
           ? {}
           : {
               "test:docker:gateway-network": "node marker.cjs",
@@ -117,22 +119,16 @@ fs.appendFileSync(${JSON.stringify(marker)}, JSON.stringify({
     // Keep pnpm in this miniature workspace, away from the host repo's toolchain pin.
     writeFileSync(path.join(dir, "pnpm-workspace.yaml"), "packages: []\n");
   }
-  execFileSync("git", ["init", "-q"], { cwd: target });
-  execFileSync("git", ["add", "package.json"], { cwd: target });
-  execFileSync(
-    "git",
-    ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "candidate"],
-    { cwd: target },
-  );
-  const selectedSha = execFileSync("git", ["rev-parse", "HEAD"], {
-    cwd: target,
-    encoding: "utf8",
-  }).trim();
-  const registry = path.join(root, "frozen registry");
-  mkdirSync(registry);
-  const pluginTarball = path.join(registry, "codex.tgz");
+  const git = (...args: string[]) =>
+    execFileSync("git", args, { cwd: fixture.target, encoding: "utf8" }).trim();
+  git("init", "-q");
+  git("add", "package.json");
+  git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "candidate");
+  const selectedSha = git("rev-parse", "HEAD");
+  mkdirSync(fixture.registry);
+  const pluginTarball = path.join(fixture.registry, "codex.tgz");
   writePackageArchive(packageDir, pluginTarball, { name: "@openclaw/codex", version });
-  const registryManifest = path.join(registry, "prepublish-plugin-registry.json");
+  const registryManifest = path.join(fixture.registry, "prepublish-plugin-registry.json");
   writeJson(registryManifest, {
     schema: "openclaw.prepublish-plugin-registry/v1",
     schemaVersion: 1,
@@ -143,20 +139,17 @@ fs.appendFileSync(${JSON.stringify(marker)}, JSON.stringify({
         name: "@openclaw/codex",
         version,
         tarball: "codex.tgz",
-        sha256: createHash("sha256").update(readFileSync(pluginTarball)).digest("hex"),
+        sha256: sha256File(pluginTarball),
       },
     ],
   });
-  const registrySha256 = createHash("sha256").update(readFileSync(registryManifest)).digest("hex");
+  const registrySha256 = sha256File(registryManifest);
   const pnpm = (fixturePnpm ??= execFileSync("bash", ["-c", "command -v pnpm"], {
     encoding: "utf8",
   }).trim());
-  const pinnedPnpm = path.join(root, "pinned '$& pnpm wrapper");
-  // Corepack Engine.executePackageManagerRequest resolves findProjectSpec(cwd)
-  // before runVersion forwards argv. pnpm then checks its effective project's pin.
-  // Model only that offline boundary; package scripts still execute as real children.
+  // Model Corepack selecting the cwd pin before --dir; execute package scripts as real children.
   writeFileSync(
-    pinnedPnpm,
+    fixture.pinnedPnpm,
     corepack
       ? `#!/usr/bin/env node
 import fs from 'node:fs';
@@ -167,7 +160,7 @@ const selected = manifest(process.cwd()).packageManager;
 const args = process.argv.slice(2);
 const cwd = args[0] === '--dir' ? args.splice(0, 2)[1] : process.cwd();
 const project = manifest(cwd);
-fs.appendFileSync(${JSON.stringify(toolchainMarker)}, JSON.stringify({ cwd: process.cwd(), selected, required: project.packageManager }) + '\\n');
+fs.appendFileSync(${JSON.stringify(fixture.toolchainMarker)}, JSON.stringify({ cwd: process.cwd(), selected, required: project.packageManager }) + '\\n');
 if (selected !== project.packageManager) {
   console.error('ERR_PNPM_BAD_PM_VERSION: Corepack selected ' + selected + ' before --dir; project requires ' + project.packageManager);
   process.exit(1);
@@ -177,20 +170,6 @@ process.exit(result.status ?? 1);
 `
       : `#!/usr/bin/env bash\nexec ${quote(pnpm)} "$@"\n`,
   );
-  chmodSync(pinnedPnpm, 0o755);
-  return {
-    root,
-    target,
-    harness,
-    selectedHarness,
-    marker,
-    poison,
-    tarball,
-    sha256,
-    selectedSha,
-    pinnedPnpm,
-    registry,
-    registrySha256,
-    toolchainMarker,
-  };
+  chmodSync(fixture.pinnedPnpm, 0o755);
+  return { ...fixture, harness, selectedHarness, sha256, selectedSha, registrySha256 };
 }

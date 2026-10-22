@@ -1,13 +1,12 @@
-import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   CommandProcessCleanupError,
   hasCommandProcessCleanupError,
+  readCommandProcessFailure,
 } from "../process/exec-result.js";
 import type { SpawnResult } from "../process/exec.js";
-import { normalizeGitPathForFilesystem, type GitCommandOptions } from "./git-exec.js";
-import { clearStaleGitRemoteRefLocks } from "./git-ref-lock-repair.js";
+import type { GitCommandOptions } from "./git-exec.js";
 
 const log = createSubsystemLogger("git/repair");
 const REPAIR_TIMEOUT_MS = 300_000;
@@ -179,18 +178,6 @@ export async function withGitRepositoryRepair<T extends FetchResult>(params: {
       params.canonicalTracking ||
       (await run(["config", "--get-all", "remote.origin.fetch"])).trim() ===
         "+refs/heads/*:refs/remotes/origin/*";
-    const commonDirectory = path.resolve(
-      params.cwd,
-      normalizeGitPathForFilesystem((await run(["rev-parse", "--git-common-dir"])).trim()),
-    );
-    const cleared = await clearStaleGitRemoteRefLocks({
-      commonDirectory,
-      refs: [...new Set([...tracking, ...remoteRefs])],
-      assertCurrent: () => {
-        remainingBudget();
-      },
-      signal: params.signal,
-    });
     // A remapped tracking name need not equal its upstream branch name.
     const obsolete =
       canonicalTracking && params.pruneTracking !== false
@@ -261,12 +248,15 @@ export async function withGitRepositoryRepair<T extends FetchResult>(params: {
     }
     params.onRepaired?.(protectedRefs);
     log.warn(
-      `Git repository repaired for ${params.cwd}: fetched ${missing.length} missing tips, pruned ${obsolete.length} obsolete tracking refs, cleared ${cleared} stale ref locks`,
+      `Git repository repaired for ${params.cwd}: fetched ${missing.length} missing tips, pruned ${obsolete.length} obsolete tracking refs`,
     );
     return retried;
   } catch (error) {
     if (hasCommandProcessCleanupError(error)) {
       throw error;
+    }
+    if (readCommandProcessFailure(error)?.cleanup === "uncertain") {
+      throw new CommandProcessCleanupError({ cause: error });
     }
     assertCurrent();
     log.warn(

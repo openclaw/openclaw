@@ -239,7 +239,7 @@ export function openSharedStateSqliteWorkerStore<Operations extends SqliteWorker
       { ...options, input: undefined },
       stateContext,
       assertCurrent,
-      lifecycle,
+      { ...lifecycle, sharedState: true },
     ),
   ).then((store) => {
     if (store) {

@@ -1,6 +1,11 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, describe, expect, it } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
-import { createMainThreadStallMonitor, runWithMainThreadTask } from "./main-thread-stall.js";
+import {
+  createMainThreadStallMonitor,
+  getMainThreadTaskName,
+  runWithMainThreadTask,
+} from "./main-thread-stall.js";
 
 const monitors: ReturnType<typeof createMainThreadStallMonitor>[] = [];
 afterEach(() => {
@@ -17,6 +22,21 @@ function fixture() {
 }
 
 describe("main-thread stall attribution", () => {
+  it("reports callbacks at the 250 ms boundary, excluding shorter work and async waits", async () => {
+    const { monitor, elapse } = fixture();
+    runWithMainThreadTask("scheduler:short", () => elapse(249));
+    await runWithMainThreadTask("gateway:rpc:sessions.list", async () => {
+      elapse(250);
+      await Promise.resolve();
+      elapse(5_000);
+    });
+    expect(monitor.drain()).toEqual({
+      stalls: [{ elapsedMs: 250, task: "gateway:rpc:sessions.list", taskMs: 250 }],
+      dropped: 0,
+      delayMaxMs: 250,
+    });
+  });
+
   it("records one stall naming the blocking nested task, then consumes it once", () => {
     const { monitor, elapse } = fixture();
     runWithMainThreadTask("maintenance", () => {
@@ -32,27 +52,46 @@ describe("main-thread stall attribution", () => {
     expect(monitor.drain()).toEqual({ stalls: [], dropped: 0, delayMaxMs: 0 });
   });
 
-  // Bun does not implement async_hooks before/after hooks for Promise continuations.
-  it.skipIf(process.versions.bun)(
-    "ignores time awaiting I/O and attributes a blocking continuation to its named owner",
-    async () => {
-      const { monitor, elapse } = fixture();
-      const ready = createDeferredCore();
-      const operation = runWithMainThreadTask("maintenance:resume", async () => {
-        await ready.promise;
-        elapse(1_200);
-      });
-      elapse(5_000);
-      expect(monitor.drain()).toEqual({ stalls: [], dropped: 0, delayMaxMs: 0 });
+  it("returns the original promise without observing its continuations", async () => {
+    const { monitor, elapse } = fixture();
+    const ready = createDeferredCore();
+    const operation = ready.promise.then(() => elapse(1_200));
+    expect(runWithMainThreadTask("maintenance:resume", () => operation)).toBe(operation);
+    elapse(5_000);
+    ready.resolve();
+    await operation;
+    expect(monitor.drain()).toEqual({ stalls: [], dropped: 0, delayMaxMs: 0 });
+  });
+
+  it("keeps overlapping callers across waits and synchronous owner-context reentry", async () => {
+    const { monitor, elapse } = fixture();
+    const ownerContext = AsyncLocalStorage.snapshot();
+    const ready = createDeferredCore();
+    const first = runWithMainThreadTask("gateway:rpc:sessions.list", async () => {
+      await ready.promise;
+      runWithMainThreadTask(
+        getMainThreadTaskName()!,
+        () => {
+          ownerContext(() => {
+            expect(getMainThreadTaskName()).toBe("gateway:rpc:sessions.list");
+            elapse(300);
+          });
+        },
+        "session-rows:select",
+      );
+    });
+    await runWithMainThreadTask("scheduler:maintenance:refresh", async () => {
+      await Promise.resolve();
+      runWithMainThreadTask(getMainThreadTaskName()!, () => elapse(400), "agent-roster");
       ready.resolve();
-      await operation;
-      expect(monitor.drain()).toEqual({
-        stalls: [{ elapsedMs: 1_200, task: "maintenance:resume", taskMs: 1_200 }],
-        dropped: 0,
-        delayMaxMs: 1_200,
-      });
-    },
-  );
+    });
+    await first;
+    expect(getMainThreadTaskName()).toBeUndefined();
+    expect(monitor.drain().stalls).toEqual([
+      { elapsedMs: 400, task: "scheduler:maintenance:refresh:agent-roster", taskMs: 400 },
+      { elapsedMs: 300, task: "gateway:rpc:sessions.list:session-rows:select", taskMs: 300 },
+    ]);
+  });
 
   it("starts a fresh observation when reset interrupts an active callback", () => {
     const { monitor, elapse } = fixture();
@@ -77,35 +116,4 @@ describe("main-thread stall attribution", () => {
     runWithMainThreadTask("maintenance", () => elapse(1_001));
     expect(monitor.drain()).toEqual({ stalls: [], dropped: 0, delayMaxMs: 0 });
   });
-
-  // Bun does not implement async_hooks before/after hooks for Promise continuations.
-  it.skipIf(process.versions.bun).each(["sync", "resolved", "rejected"] as const)(
-    "expires a %s task before its detached work runs",
-    async (completion) => {
-      const { monitor, elapse } = fixture();
-      const ready = createDeferredCore();
-      let detached: Promise<void> | undefined;
-      const result = runWithMainThreadTask("plugins.runtime-post-bind", () => {
-        detached = ready.promise.then(() => {
-          elapse(1_700);
-        });
-        if (completion === "sync") {
-          return undefined;
-        }
-        return completion === "resolved" ? Promise.resolve() : Promise.reject(new Error("load"));
-      });
-      if (completion === "rejected") {
-        await expect(result).rejects.toThrow("load");
-      } else {
-        await result;
-      }
-      ready.resolve();
-      await detached;
-      expect(monitor.drain()).toEqual({
-        stalls: [{ elapsedMs: 1_700, task: "unattributed", taskMs: 1_700 }],
-        dropped: 0,
-        delayMaxMs: 1_700,
-      });
-    },
-  );
 });

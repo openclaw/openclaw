@@ -1,6 +1,7 @@
 import fsSync from "node:fs";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import * as sessionDirs from "../agents/session-dirs.js";
 import * as runtimePaths from "../config/paths.js";
 import type { InternalSessionEntry } from "../config/sessions.js";
@@ -28,16 +29,27 @@ import {
   getSessionRowProjection,
 } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
+import type { SessionsListResult } from "./session-utils.types.js";
 import { rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
 import {
   directSessionReq,
   getGatewayConfigModule,
+  sessionStoreEntry,
   setupGatewaySessionsTestHarness,
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, openClient, withSessionTestState } =
   setupGatewaySessionsTestHarness();
+
+const agentStorePath = (stateDir: string, agentId = "{agentId}") =>
+  path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
+function configureStores(stateDir: string, agents: NonNullable<typeof testState.agentsConfig>) {
+  testState.sessionStorePath = undefined;
+  testState.sessionConfig = { store: agentStorePath(stateDir) };
+  testState.agentsConfig = agents;
+  return agentStorePath(stateDir);
+}
 
 test.each([false, true])(
   "nested state cleanup joins suite ACP reads (disposal fails=%s)",
@@ -58,8 +70,7 @@ test.each([false, true])(
         }
         return close(...args);
       });
-    let restoreRead: (() => void) | undefined;
-    let restoreJoin: (() => void) | undefined;
+    const restore: Array<() => void> = [];
     const disposalFailure = new Error("synthetic read-context disposal failure");
     const disposal = disposalFails
       ? vi.spyOn(readContexts, "disposeSessionReadContexts").mockRejectedValueOnce(disposalFailure)
@@ -69,9 +80,6 @@ test.each([false, true])(
       const fixtureSignal = getAsyncWorkSignal();
       ensureProfileForEmail("nested-state-reader@example.test");
       const { storePath } = await createSessionStoreDir();
-      await writeSessionStore({
-        entries: { main: { sessionId: "nested-state-reader", updatedAt: 1 } },
-      });
       const runtime = getGatewayRecoveryRuntime();
       const projection = getSessionRowProjection(runtime && getGatewayContextResolver(runtime)?.());
       if (!projection) {
@@ -96,16 +104,25 @@ test.each([false, true])(
           }
           return read(...args);
         });
-      restoreRead = () => reads.mockRestore();
+      restore.push(() => reads.mockRestore());
+      // The shared suite retains ACP absence by session key across these cases.
+      // Seed a fresh key after interception so its receipt cannot bypass the held read.
+      await writeSessionStore({
+        entries: {
+          [`agent:main:nested-state-reader-${disposalFails}`]: sessionStoreEntry(
+            `nested-state-reader-${disposalFails}`,
+            { updatedAt: 1 },
+          ),
+        },
+      });
       sessionChanges.emit({ all: true, scope: { storePath }, factsInvalidated: true });
       preparing = projection.ensureMaterialized();
       void preparing.catch(() => {});
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         entered.promise,
-        preparing.then(() => {
-          throw new Error("Suite projection completed without its ACP metadata read");
-        }),
-      ]);
+        preparing,
+        "Suite projection completed without its ACP metadata read",
+      );
       const ensure = projection.ensureMaterialized;
       const join = vi.spyOn(projection, "ensureMaterialized").mockImplementation(() => {
         if (closing) {
@@ -113,17 +130,16 @@ test.each([false, true])(
         }
         return ensure();
       });
-      restoreJoin = () => join.mockRestore();
+      restore.push(() => join.mockRestore());
       closing = true;
     });
     void fixture.catch(() => {});
     try {
-      const first = await Promise.race([
+      const first = await awaitGateBeforeSettlement(
         boundary.promise,
-        fixture.then(() => {
-          throw new Error("Fixture completed without joining or closing its database");
-        }),
-      ]);
+        fixture,
+        "Fixture completed without joining or closing its database",
+      );
       expect(first).toBe("joined");
       release.resolve();
       await expect(preparing).resolves.toBeUndefined();
@@ -135,8 +151,9 @@ test.each([false, true])(
     } finally {
       release.resolve();
       await Promise.allSettled([preparing, fixture]);
-      restoreRead?.();
-      restoreJoin?.();
+      for (const reset of restore) {
+        reset();
+      }
       closeSpy.mockRestore();
       disposal?.mockRestore();
     }
@@ -145,10 +162,7 @@ test.each([false, true])(
 
 test("sessions.list reads completed models from each physical agent store", async () => {
   const { dir: stateDir } = await createSessionStoreDir();
-  testState.sessionStorePath = undefined;
-  const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json");
-  testState.sessionConfig = { store: storeTemplate };
-  testState.agentsConfig = { entries: { main: {}, ops: {} } };
+  const storeTemplate = configureStores(stateDir, { entries: { main: {}, ops: {} } });
   for (const agentId of ["main", "ops"]) {
     const sessionId = `session-${agentId}`;
     const sessionKey = `agent:${agentId}:main`;
@@ -199,10 +213,8 @@ test("sessions.list reads completed models from each physical agent store", asyn
         projection.snapshot({ agentId: "main", key: "agent:main:main" }).row?.activeModel,
       ).toBe("claude-sonnet-4-6"),
     );
-    const listed = await directSessionReq<{
-      path: string;
-      sessions: Array<{ key: string; activeModelProvider?: string; activeModel?: string }>;
-    }>("sessions.list", {}, { context: bindSessionRowProjection({}, () => projection) });
+    const context = bindSessionRowProjection({}, () => projection);
+    const listed = await directSessionReq<SessionsListResult>("sessions.list", {}, { context });
     expect(listed).toMatchObject({ ok: true, payload: { path: "(multiple)" } });
     expect(listed.payload?.sessions.find((row) => row.key === "agent:main:main")).toMatchObject({
       activeModelProvider: "anthropic",
@@ -224,26 +236,16 @@ test.runIf(process.platform !== "win32")(
   "requested-agent path projection collapses physical store aliases",
   async () => {
     const { dir: stateDir } = await createSessionStoreDir();
-    testState.sessionStorePath = undefined;
     const aliasStateDir = `${stateDir}-alias`;
     fsSync.symlinkSync(stateDir, aliasStateDir, "dir");
     try {
-      const realStore = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
-      const aliasTemplate = path.join(
-        aliasStateDir,
-        "agents",
-        "{agentId}",
-        "sessions",
-        "sessions.json",
-      );
-      testState.sessionConfig = {
-        store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
-      };
-      testState.agentsConfig = { entries: { main: {} } };
+      const realStore = agentStorePath(stateDir, "main");
+      const aliasTemplate = agentStorePath(aliasStateDir);
+      configureStores(stateDir, { entries: { main: {} } });
       await writeSessionStore({
         agentId: "main",
         entries: {
-          "agent:main:main": { sessionId: "alias-main", updatedAt: 10 },
+          "agent:main:main": sessionStoreEntry("alias-main", { updatedAt: 10 }),
         },
         storePath: realStore,
       });
@@ -251,10 +253,7 @@ test.runIf(process.platform !== "win32")(
       const { clearRuntimeConfigSnapshot, getRuntimeConfig } = await getGatewayConfigModule();
       clearRuntimeConfigSnapshot();
       getRuntimeConfig();
-      const listed = await directSessionReq<{
-        path: string;
-        sessions: Array<{ key: string }>;
-      }>("sessions.list", {
+      const listed = await directSessionReq<SessionsListResult>("sessions.list", {
         agentId: "main",
       });
 
@@ -275,14 +274,14 @@ test.runIf(process.platform !== "win32")(
 
 test("configured-only parent-owned stores keep lineage children without directory discovery", async () => {
   const { dir: stateDir } = await createSessionStoreDir();
-  testState.sessionStorePath = undefined;
   await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-    const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json");
+    const storeTemplate = configureStores(stateDir, {
+      ownership: "explicit",
+      entries: { ops: {} },
+    });
     const storePath = storeTemplate.replace("{agentId}", "ops");
     const mainKey = "agent:ops:main";
     const childKey = "agent:codex:subagent:fixed-child";
-    testState.sessionConfig = { store: storeTemplate };
-    testState.agentsConfig = { ownership: "explicit", entries: { ops: {} } };
     testState.agentConfig = { sessionStore: { agentId: "ops" } };
     await writeSessionStore({
       agentId: "ops",
@@ -329,30 +328,26 @@ test("resolves and patches main alias to default agent main key", async () => {
     agentId: "ops",
     mainKey: "work",
     entries: {
-      main: {
-        sessionId: "sess-ops-main",
-        updatedAt: Date.now(),
-      },
+      main: sessionStoreEntry("sess-ops-main"),
     },
   });
 
   const { ws } = await openClient();
   try {
-    const resolved = await rpcReq<{ ok: true; key: string }>(ws, "sessions.resolve", {
-      key: "main",
-    });
-    expect(resolved.ok, JSON.stringify(resolved)).toBe(true);
-    expect(resolved.payload?.key).toBe("agent:ops:work");
+    const resolved = await rpcReq<{ key: string }>(ws, "sessions.resolve", { key: "main" });
+    expect(resolved).toMatchObject({ ok: true, payload: { key: "agent:ops:work" } });
 
     const patched = await rpcReq<{ ok: true; key: string; path: string }>(ws, "sessions.patch", {
       key: "main",
       thinkingLevel: "medium",
     });
-    expect(patched.ok).toBe(true);
-    expect(patched.payload?.key).toBe("agent:ops:work");
-    expect(patched.payload?.path).toBe(
-      resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "ops" }).path,
-    );
+    expect(patched).toMatchObject({
+      ok: true,
+      payload: {
+        key: "agent:ops:work",
+        path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "ops" }).path,
+      },
+    });
 
     expect(
       loadSessionEntry({ agentId: "ops", sessionKey: "agent:ops:work", storePath })?.thinkingLevel,

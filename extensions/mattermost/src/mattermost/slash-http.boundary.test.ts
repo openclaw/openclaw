@@ -1,7 +1,9 @@
-import { createServer, request, type IncomingMessage, type ServerResponse } from "node:http";
+import { request, type IncomingMessage, type ServerResponse } from "node:http";
 import { connect, type Socket } from "node:net";
+import { text } from "node:stream/consumers";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setMattermostRuntime } from "../runtime.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
@@ -27,9 +29,7 @@ const TOKEN = "boundary-token";
 function createRuntime(dispatch: ReturnType<typeof vi.fn>) {
   return {
     channel: {
-      commands: {
-        shouldHandleTextCommands: () => true,
-      },
+      commands: { shouldHandleTextCommands: () => true },
       inbound: { dispatch, ingress: createPluginRuntimeMock().channel.inbound.ingress },
       pairing: {
         readAllowFromStore: async () => [],
@@ -69,7 +69,7 @@ function openHeldRequest(params: {
     endedByServer: false,
     closedByServer: false,
   };
-  const chunks: Buffer[] = [];
+  let responseHead = "";
   held.socket.on("connect", () => {
     held.socket.write(
       [
@@ -85,18 +85,12 @@ function openHeldRequest(params: {
     );
   });
   held.socket.on("data", (chunk: Buffer) => {
-    chunks.push(chunk);
-    const match = Buffer.concat(chunks)
-      .toString("latin1")
-      .match(/^HTTP\/1\.1 (\d{3})/u);
+    responseHead += chunk.toString("latin1");
+    const match = responseHead.match(/^HTTP\/1\.1 (\d{3})/u);
     held.statusCode = match ? Number(match[1]) : undefined;
   });
-  held.socket.on("end", () => {
-    held.endedByServer = true;
-  });
-  held.socket.on("close", () => {
-    held.closedByServer = true;
-  });
+  held.socket.on("end", () => (held.endedByServer = true));
+  held.socket.on("close", () => (held.closedByServer = true));
   held.socket.on("error", () => {});
   return held;
 }
@@ -107,7 +101,7 @@ async function postForm(params: {
   localAddress: string;
   authorization?: string;
 }): Promise<{ statusCode: number; body: string }> {
-  return await new Promise((resolve, reject) => {
+  const response = await new Promise<IncomingMessage>((resolve, reject) => {
     const req = request(
       {
         host: "127.0.0.1",
@@ -122,20 +116,12 @@ async function postForm(params: {
           ...(params.authorization ? { authorization: params.authorization } : {}),
         },
       },
-      (res) => {
-        const chunks: Buffer[] = [];
-        res.on("data", (chunk: Buffer) => chunks.push(chunk));
-        res.on("end", () => {
-          resolve({
-            statusCode: res.statusCode ?? 0,
-            body: Buffer.concat(chunks).toString("utf8"),
-          });
-        });
-      },
+      resolve,
     );
     req.on("error", reject);
     req.end(params.body);
   });
+  return { statusCode: response.statusCode ?? 0, body: await text(response) };
 }
 
 type Boundary = {
@@ -156,8 +142,8 @@ type Boundary = {
 };
 
 async function withBoundary(runBoundary: (boundary: Boundary) => Promise<void>) {
-  const routes = new Map<string, SlashRouteHandler>();
-  const registrations: Array<{ path: string; auth: string | undefined }> = [];
+  const registerHttpRoute =
+    vi.fn<(route: { path: string; auth?: string; handler: SlashRouteHandler }) => void>();
   const dispatch = vi.fn(async (_params: unknown) => undefined);
   const runtime = createRuntime(dispatch);
   const currentCommands = new Map<string, MattermostRegisteredCommand>();
@@ -165,36 +151,27 @@ async function withBoundary(runBoundary: (boundary: Boundary) => Promise<void>) 
   const errors: unknown[] = [];
   const channelRequests = vi.fn();
   let channelGate: Promise<void> = Promise.resolve();
-  const registerHttpRoute = (route: {
-    path: string;
-    auth?: string;
-    handler: SlashRouteHandler;
-  }) => {
-    registrations.push({ path: route.path, auth: route.auth });
-    routes.set(route.path, route.handler);
-  };
-
   setMattermostRuntime(runtime as never);
   registerSlashCommandRoute({
     config: {
-      channels: {
-        mattermost: {
-          commands: { native: true, callbackPath: CALLBACK_PATH },
-        },
-      },
+      channels: { mattermost: { commands: { native: true, callbackPath: CALLBACK_PATH } } },
     },
     logger: { warn() {} },
     registerHttpRoute,
   } as never);
 
-  expect(registrations).toContainEqual({ path: CALLBACK_PATH, auth: "plugin" });
-  const slashRoute = routes.get(CALLBACK_PATH);
+  expect(registerHttpRoute).toHaveBeenCalledWith(
+    expect.objectContaining({ path: CALLBACK_PATH, auth: "plugin" }),
+  );
+  const slashRoute = registerHttpRoute.mock.calls.find(
+    ([route]) => route.path === CALLBACK_PATH,
+  )?.[0].handler;
   if (!slashRoute) {
     throw new Error("expected Mattermost to register its slash route");
   }
 
   const callbackSourceAddresses: string[] = [];
-  const server = createServer((req, res) => {
+  const handleRequest = (req: IncomingMessage, res: ServerResponse) => {
     if (req.url?.startsWith("/api/v4/commands/")) {
       const command = currentCommands.get(req.url.slice("/api/v4/commands/".length));
       res.setHeader("content-type", "application/json");
@@ -251,116 +228,97 @@ async function withBoundary(runBoundary: (boundary: Boundary) => Promise<void>) 
     }
     res.statusCode = 404;
     res.end("Not Found");
-  });
-
-  const sockets = new Set<Socket>();
-  server.on("connection", (socket) => {
-    sockets.add(socket);
-    socket.once("close", () => sockets.delete(socket));
-  });
+  };
 
   try {
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => {
-        server.removeListener("error", reject);
-        resolve();
+    await withServer(handleRequest, async (baseUrl) => {
+      const address = { port: Number(new URL(baseUrl).port) };
+      const callbackUrl = `${baseUrl}${CALLBACK_PATH}`;
+
+      const account: ResolvedMattermostAccount = {
+        accountId: "default",
+        enabled: true,
+        botToken: "bot-token",
+        botTokenSource: "config",
+        baseUrl,
+        baseUrlSource: "config",
+        streamingMode: "partial",
+        config: {
+          groupPolicy: "open",
+          network: { dangerouslyAllowPrivateNetwork: true },
+        },
+      };
+      const command: MattermostRegisteredCommand = {
+        id: "command-1",
+        teamId: "team-1",
+        trigger: "oc_status",
+        token: TOKEN,
+        url: callbackUrl,
+        managed: false,
+      };
+      const commandB = {
+        ...command,
+        id: "command-2",
+        trigger: "oc_help",
+        token: "boundary-token-b",
+      };
+      currentCommands.set(command.id, command);
+      currentCommands.set(commandB.id, commandB);
+      activateSlashCommands({
+        account,
+        registeredCommands: [command, commandB],
+        api: { cfg: {}, runtime: { log() {}, error() {}, exit() {} } },
+      });
+
+      const bodyFor = (selected = command) =>
+        new URLSearchParams({
+          token: selected.token,
+          team_id: "team-1",
+          channel_id: "channel-1",
+          user_id: "user-1",
+          user_name: "boundary-user",
+          command: `/${selected.trigger}`,
+          text: "hello",
+          trigger_id: "trigger-1",
+        }).toString();
+
+      const validBody = bodyFor();
+      await runBoundary({
+        address,
+        account,
+        command,
+        commandB,
+        currentCommands,
+        runtime,
+        dispatch,
+        errors,
+        routeRuns,
+        callbackSourceAddresses,
+        validBody,
+        post: (selected = command) =>
+          postForm({
+            port: address.port,
+            localAddress: "127.0.0.1",
+            authorization: `Token ${selected.token}`,
+            body: bodyFor(selected),
+          }),
+        channelRequests,
+        holdChannel: (gate: Promise<void>) => {
+          channelGate = gate;
+        },
       });
     });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected the Mattermost boundary server to have a TCP address");
-    }
-    const callbackUrl = `http://127.0.0.1:${address.port}${CALLBACK_PATH}`;
-
-    const account: ResolvedMattermostAccount = {
-      accountId: "default",
-      enabled: true,
-      botToken: "bot-token",
-      botTokenSource: "config",
-      baseUrl: `http://127.0.0.1:${address.port}`,
-      baseUrlSource: "config",
-      streamingMode: "partial",
-      config: {
-        groupPolicy: "open",
-        network: { dangerouslyAllowPrivateNetwork: true },
-      },
-    };
-    const command: MattermostRegisteredCommand = {
-      id: "command-1",
-      teamId: "team-1",
-      trigger: "oc_status",
-      token: TOKEN,
-      url: callbackUrl,
-      managed: false,
-    };
-    const commandB = { ...command, id: "command-2", trigger: "oc_help", token: "boundary-token-b" };
-    currentCommands.set(command.id, command);
-    currentCommands.set(commandB.id, commandB);
-    activateSlashCommands({
-      account,
-      commandTokens: [TOKEN, commandB.token],
-      registeredCommands: [command, commandB],
-      api: { cfg: {}, runtime: { log() {}, error() {}, exit() {} } },
-    });
-
-    const bodyFor = (selected = command) =>
-      new URLSearchParams({
-        token: selected.token,
-        team_id: "team-1",
-        channel_id: "channel-1",
-        user_id: "user-1",
-        user_name: "boundary-user",
-        command: `/${selected.trigger}`,
-        text: "hello",
-        trigger_id: "trigger-1",
-      }).toString();
-
-    const validBody = bodyFor();
-    await runBoundary({
-      address,
-      account,
-      command,
-      commandB,
-      currentCommands,
-      runtime,
-      dispatch,
-      errors,
-      routeRuns,
-      callbackSourceAddresses,
-      validBody,
-      post: (selected = command) =>
-        postForm({
-          port: address.port,
-          localAddress: "127.0.0.1",
-          authorization: `Token ${selected.token}`,
-          body: bodyFor(selected),
-        }),
-      channelRequests,
-      holdChannel: (gate: Promise<void>) => {
-        channelGate = gate;
-      },
-    });
   } finally {
-    for (const socket of sockets) {
-      socket.destroy();
-    }
-    server.closeAllConnections();
     await Promise.all(routeRuns);
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
   }
 }
 
 async function fillCredentialPool(boundary: Boundary): Promise<HeldRequest[]> {
   const seen = boundary.callbackSourceAddresses.length;
-  const held = Array.from({ length: 8 }, () =>
-    openHeldRequest({
-      port: boundary.address.port,
-      localAddress: "127.0.0.1",
-      authorization: `Token ${TOKEN}`,
-    }),
+  const held = holdPool(
+    boundary.address.port,
+    () => "127.0.0.1",
+    () => `Token ${TOKEN}`,
   );
   await vi.waitFor(() => expect(boundary.callbackSourceAddresses).toHaveLength(seen + 8));
   expect(held.every((entry) => entry.statusCode === undefined)).toBe(true);
@@ -369,15 +327,34 @@ async function fillCredentialPool(boundary: Boundary): Promise<HeldRequest[]> {
 }
 
 async function expectCredentialOverflow(boundary: Boundary) {
-  const response = await boundary.post();
-  expect(response.statusCode).toBe(429);
+  expect((await boundary.post()).statusCode).toBe(429);
 }
 
-async function drainCredentialPool(held: HeldRequest[]) {
+function holdPool(
+  port: number,
+  address: (index: number) => string,
+  authorization: (index: number) => string | undefined = () => undefined,
+) {
+  return Array.from({ length: 8 }, (_, index) =>
+    openHeldRequest({ port, localAddress: address(index), authorization: authorization(index) }),
+  );
+}
+
+function expectProcessing(response: Awaited<ReturnType<typeof postForm>>) {
+  expect(response).toEqual({
+    statusCode: 200,
+    body: JSON.stringify({ response_type: "ephemeral", text: "Processing..." }),
+  });
+}
+
+async function drainCredentialPool(held: HeldRequest[], timeout = 1_000) {
   for (const entry of held) {
     entry.socket.write("x");
   }
-  await vi.waitFor(() => expect(held.map((entry) => entry.statusCode)).toEqual(Array(8).fill(400)));
+  await vi.waitFor(
+    () => expect(held.map((entry) => entry.statusCode)).toEqual(Array(8).fill(400)),
+    { timeout },
+  );
 }
 
 describe("Mattermost slash HTTP boundary", () => {
@@ -387,62 +364,38 @@ describe("Mattermost slash HTTP boundary", () => {
 
   it("reserves authenticated capacity and bounds each pre-authentication pool at eight", async () => {
     await withBoundary(async ({ address, callbackSourceAddresses, validBody, dispatch }) => {
-      const sharedHeld = Array.from({ length: 8 }, (_, index) =>
-        openHeldRequest({
-          port: address.port,
-          localAddress: `127.0.0.${index + 2}`,
-          authorization:
-            index === 6 ? "Token wrong-token" : index === 7 ? `Bearer ${TOKEN}` : undefined,
-        }),
+      const sharedHeld = holdPool(
+        address.port,
+        (index) => `127.0.0.${index + 2}`,
+        (index) =>
+          index === 6 ? "Token wrong-token" : index === 7 ? `Bearer ${TOKEN}` : undefined,
       );
-      await vi.waitFor(
-        () => {
-          expect(callbackSourceAddresses).toHaveLength(8);
-        },
-        { timeout: 3_000 },
-      );
+      await vi.waitFor(() => expect(callbackSourceAddresses).toHaveLength(8), { timeout: 3_000 });
       expect(sharedHeld.every((entry) => entry.statusCode === undefined)).toBe(true);
 
-      const sharedOverflow = openHeldRequest({
-        port: address.port,
-        localAddress: "127.0.0.10",
-      });
+      const sharedOverflow = openHeldRequest({ port: address.port, localAddress: "127.0.0.10" });
       await vi.waitFor(() => expect(sharedOverflow.statusCode).toBe(429), { timeout: 3_000 });
       await vi.waitFor(
-        () => {
-          expect(sharedOverflow.endedByServer && sharedOverflow.closedByServer).toBe(true);
-        },
+        () => expect(sharedOverflow.endedByServer && sharedOverflow.closedByServer).toBe(true),
         { timeout: 3_000 },
       );
 
-      const valid = await postForm({
-        port: address.port,
-        body: validBody,
-        localAddress: "127.0.0.11",
-        authorization: `Token ${TOKEN}`,
-      });
-      expect(valid).toEqual({
-        statusCode: 200,
-        body: JSON.stringify({ response_type: "ephemeral", text: "Processing..." }),
-      });
-      await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
-
-      for (const entry of sharedHeld) {
-        entry.socket.write("x");
-      }
-      await vi.waitFor(
-        () => {
-          expect(sharedHeld.every((entry) => entry.statusCode === 400)).toBe(true);
-        },
-        { timeout: 3_000 },
-      );
-
-      const authenticatedHeld = Array.from({ length: 8 }, (_, index) =>
-        openHeldRequest({
+      expectProcessing(
+        await postForm({
           port: address.port,
-          localAddress: `127.0.0.${index + 21}`,
+          body: validBody,
+          localAddress: "127.0.0.11",
           authorization: `Token ${TOKEN}`,
         }),
+      );
+      await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
+
+      await drainCredentialPool(sharedHeld, 3_000);
+
+      const authenticatedHeld = holdPool(
+        address.port,
+        (index) => `127.0.0.${index + 21}`,
+        () => `Token ${TOKEN}`,
       );
       await vi.waitFor(() => expect(callbackSourceAddresses).toHaveLength(18), { timeout: 3_000 });
       expect(authenticatedHeld.every((entry) => entry.statusCode === undefined)).toBe(true);
@@ -461,13 +414,7 @@ describe("Mattermost slash HTTP boundary", () => {
         localAddress: "127.0.0.30",
       });
       expect(recovered.statusCode).toBe(400);
-      for (const entry of authenticatedHeld) {
-        entry.socket.write("x");
-      }
-      await vi.waitFor(
-        () => expect(authenticatedHeld.every((entry) => entry.statusCode === 400)).toBe(true),
-        { timeout: 3_000 },
-      );
+      await drainCredentialPool(authenticatedHeld, 3_000);
 
       expect(new Set(callbackSourceAddresses).size).toBe(callbackSourceAddresses.length);
       expect(dispatch.mock.calls[0]?.[0]).toMatchObject({
@@ -486,14 +433,9 @@ describe("Mattermost slash HTTP boundary", () => {
       const { command, commandB, currentCommands, dispatch } = boundary;
       currentCommands.delete(command.id);
       // Upstream changes leave the activation token snapshot intact until restart.
-      const oldA = await boundary.post();
-      expect(oldA.statusCode).toBe(401);
+      expect((await boundary.post()).statusCode).toBe(401);
       const held = await fillCredentialPool(boundary);
-      const result = await boundary.post(commandB);
-      expect(result).toEqual({
-        statusCode: 200,
-        body: JSON.stringify({ response_type: "ephemeral", text: "Processing..." }),
-      });
+      expectProcessing(await boundary.post(commandB));
       await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
       await drainCredentialPool(held);
     });

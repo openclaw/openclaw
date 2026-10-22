@@ -63,7 +63,8 @@ export function backfillMemoryChunkProvenance(db: DatabaseSync): void {
   const backfill = () => {
     // Materialize indexed missing IDs before touching wide chunk payloads.
     // CROSS JOIN keeps that empty-set check ahead of the chunk-table lookup.
-    db.exec(`
+    const changedSources = db
+      .prepare(`
       WITH missing AS MATERIALIZED (${missingChunkIdsSql}),
       affected AS MATERIALIZED (
         SELECT chunk.path, chunk.source
@@ -77,8 +78,10 @@ export function backfillMemoryChunkProvenance(db: DatabaseSync): void {
         FROM affected
         WHERE affected.path = memory_index_sources.path
           AND affected.source IS memory_index_sources.source
-      );
-
+      )
+    `)
+      .run().changes;
+    db.exec(`
       WITH missing AS MATERIALIZED (${missingChunkIdsSql})
       INSERT OR IGNORE INTO ${MEMORY_INDEX_CHUNK_PROVENANCE_TABLE} (
         chunk_id, origin_class, session_kind, observed_at
@@ -87,6 +90,9 @@ export function backfillMemoryChunkProvenance(db: DatabaseSync): void {
       FROM missing
       JOIN memory_index_chunks AS chunk ON chunk.id = missing.id;
     `);
+    if (changedSources > 0) {
+      db.exec("UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1");
+    }
   };
   if (db.isTransaction) {
     backfill();

@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
+  requireNativeSqliteDatabase,
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawStateDatabaseAsync,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -34,11 +35,42 @@ import {
 } from "./memory-session-tombstones.js";
 import { applyShortTermPromotions } from "./short-term-promotion-apply.js";
 import { readPhaseSignalStore, readShortTermStore } from "./short-term-promotion-store.js";
-import type { ShortTermLockEntry } from "./short-term-promotion-types.js";
+import type { PromotionCandidate, ShortTermLockEntry } from "./short-term-promotion-types.js";
 import { normalizeShortTermRecallStore } from "./short-term-promotion-utils.js";
 
 const MEMORY_CORE_PLUGIN_ID = "memory-core";
 const MEMORY_CORE_TEST_AGENT_ID = "memory-core-test";
+
+export function createPromotionCandidateForTest(
+  params: Pick<PromotionCandidate, "path" | "snippet"> & Partial<PromotionCandidate>,
+): PromotionCandidate {
+  return {
+    key: `memory:${params.path}:1:1`,
+    startLine: 1,
+    endLine: 1,
+    source: "memory",
+    recallCount: 3,
+    signalCount: 3,
+    avgScore: 0.95,
+    maxScore: 0.95,
+    uniqueQueries: 2,
+    firstRecalledAt: "2026-04-01T00:00:00.000Z",
+    lastRecalledAt: "2026-04-02T00:00:00.000Z",
+    ageDays: 0,
+    score: 0.95,
+    recallDays: ["2026-04-01", "2026-04-02"],
+    conceptTags: [],
+    components: {
+      frequency: 1,
+      relevance: 1,
+      diversity: 1,
+      recency: 1,
+      consolidation: 1,
+      conceptual: 1,
+    },
+    ...params,
+  };
+}
 
 export function readMemoryForgetTombstonesForTest(params: { agentId: string }) {
   const { db } = openOpenClawAgentDatabase(params);
@@ -62,7 +94,7 @@ export function createDreamingCompletion(
 export function seedMemoryForgetTombstones(
   params: Parameters<typeof recordMemorySessionTombstonesInDatabase>[1],
 ): number {
-  const { db } = openOpenClawAgentDatabase({ agentId: params.agentId });
+  const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: params.agentId }).db);
   ensureMemorySessionTombstones(db);
   return recordMemorySessionTombstonesInDatabase(db, params);
 }
@@ -120,33 +152,38 @@ export function resetMemoryCoreDreamingStateForTests(): void {
   });
 }
 
-async function writeRawShortTermStore(params: {
-  workspaceDir: string;
-  raw: unknown;
-  namespace: string;
-  metaKey: "recall" | "phase";
-}): Promise<void> {
-  const record = asOptionalRecord(params.raw);
+async function writeRawShortTermStore(
+  workspaceDir: string,
+  raw: unknown,
+  metaKey: "recall" | "phase",
+): Promise<void> {
+  const record = asOptionalRecord(raw);
   const entries = asOptionalRecord(record?.entries);
+  const updatedAt = record?.updatedAt;
   await Promise.all([
     writeMemoryCoreWorkspaceEntries({
-      namespace: params.namespace,
-      workspaceDir: params.workspaceDir,
+      namespace:
+        metaKey === "recall" ? SHORT_TERM_RECALL_NAMESPACE : SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
+      workspaceDir,
       entries: entries ? Object.entries(entries).map(([key, value]) => ({ key, value })) : [],
     }),
     writeMemoryCoreWorkspaceEntry({
       namespace: SHORT_TERM_META_NAMESPACE,
-      workspaceDir: params.workspaceDir,
-      key: params.metaKey,
+      workspaceDir,
+      key: metaKey,
       value: {
         updatedAt:
-          typeof record?.updatedAt === "string" && record.updatedAt.trim()
-            ? record.updatedAt
-            : new Date().toISOString(),
+          typeof updatedAt === "string" && updatedAt.trim() ? updatedAt : new Date().toISOString(),
       },
     }),
   ]);
 }
+
+const shortTermLocks = () =>
+  openMemoryCoreStateStore<ShortTermLockEntry>({
+    namespace: SHORT_TERM_LOCK_NAMESPACE,
+    maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
+  });
 
 export const shortTermTestState = {
   SHORT_TERM_RECALL_MAX_ENTRIES: 512,
@@ -159,30 +196,14 @@ export const shortTermTestState = {
   },
   readPhaseSignalStore,
   writeRawRecallStore: (workspaceDir: string, raw: unknown) =>
-    writeRawShortTermStore({
-      workspaceDir,
-      raw,
-      namespace: SHORT_TERM_RECALL_NAMESPACE,
-      metaKey: "recall",
-    }),
+    writeRawShortTermStore(workspaceDir, raw, "recall"),
   writeRawPhaseSignalStore: (workspaceDir: string, raw: unknown) =>
-    writeRawShortTermStore({
-      workspaceDir,
-      raw,
-      namespace: SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
-      metaKey: "phase",
-    }),
+    writeRawShortTermStore(workspaceDir, raw, "phase"),
   async writeShortTermLock(workspaceDir: string, entry: ShortTermLockEntry) {
-    await openMemoryCoreStateStore<ShortTermLockEntry>({
-      namespace: SHORT_TERM_LOCK_NAMESPACE,
-      maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
-    }).register(memoryCoreWorkspaceStateKey(workspaceDir), entry);
+    await shortTermLocks().register(memoryCoreWorkspaceStateKey(workspaceDir), entry);
   },
   async deleteShortTermLock(workspaceDir: string) {
-    await openMemoryCoreStateStore<ShortTermLockEntry>({
-      namespace: SHORT_TERM_LOCK_NAMESPACE,
-      maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
-    }).delete(memoryCoreWorkspaceStateKey(workspaceDir));
+    await shortTermLocks().delete(memoryCoreWorkspaceStateKey(workspaceDir));
   },
 };
 
@@ -193,7 +214,6 @@ export const dreamingTestState = {
 
 export function createMemoryCoreTestHarness() {
   let fixtureRoot = "";
-  let caseId = 0;
 
   beforeAll(async () => {
     await configureMemoryCoreDreamingStateForTests();
@@ -215,13 +235,7 @@ export function createMemoryCoreTestHarness() {
     resetMemoryCoreDreamingStateForTests();
   });
 
-  async function createTempWorkspace(prefix: string): Promise<string> {
-    const workspaceDir = path.join(fixtureRoot, `${prefix}${caseId++}`);
-    await fs.mkdir(workspaceDir, { recursive: true });
-    return workspaceDir;
-  }
-
   return {
-    createTempWorkspace,
+    createTempWorkspace: (prefix: string) => fs.mkdtemp(path.join(fixtureRoot, prefix)),
   };
 }

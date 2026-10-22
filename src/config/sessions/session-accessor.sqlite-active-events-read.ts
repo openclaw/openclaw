@@ -136,16 +136,25 @@ export function readSessionTranscriptBoundedMessageTailPageFromProjection(
   const endExclusive = Math.max(0, totalMessages - offset);
   const start = Math.max(0, endExclusive - maxMessages);
   const scannedMessages = endExclusive - start;
+  const metadata =
+    scannedMessages > 0 && maxBytes > 0
+      ? Array.from(iterateVisibleMessageMetadata(projection, start, endExclusive))
+      : [];
   const oversized = options.oversizedMessageCheck;
   const checked = oversized
     ? {
-        hasOversizedMessages: hasOversizedVisibleMessages(
-          projection,
-          oversized.includeEarlier ? 0 : start,
-          endExclusive,
-          maxBytes,
-          oversized.roles,
-        ),
+        hasOversizedMessages:
+          // Page metadata includes the JSONL newline; the probe compares raw payload bytes.
+          (oversized.includeEarlier ||
+            maxBytes === 0 ||
+            metadata.some((row) => row.serialized_bytes > maxBytes)) &&
+          hasOversizedVisibleMessages(
+            projection,
+            oversized.includeEarlier ? 0 : start,
+            endExclusive,
+            maxBytes,
+            oversized.roles,
+          ),
       }
     : {};
   if (scannedMessages === 0 || maxBytes === 0) {
@@ -160,7 +169,6 @@ export function readSessionTranscriptBoundedMessageTailPageFromProjection(
       totalMessages,
     };
   }
-  const metadata = Array.from(iterateVisibleMessageMetadata(projection, start, endExclusive));
   if (metadata.length !== scannedMessages) {
     throw new Error("Active transcript bounded message page is incomplete");
   }

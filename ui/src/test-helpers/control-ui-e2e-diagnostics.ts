@@ -5,12 +5,23 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ConsoleMessage, Frame, Page, Request } from "playwright";
 import { agentRouteFromPath, isRouteId, pathForRoute } from "../app-route-paths.ts";
 import type { ControlUiReadiness } from "../app/control-ui-readiness.ts";
+import type { TooltipElement } from "../components/tooltip.ts";
 import { createControlUiE2eArtifactDir } from "./control-ui-e2e-artifacts.ts";
+import type { ControlUiMockGateway } from "./control-ui-e2e-contract.ts";
 import { captureControlUiE2eRendererStall } from "./control-ui-e2e-renderer-stall.ts";
 
 const CONTROL_UI_E2E_DIAGNOSTIC_RING_LIMIT = 200;
 const controlUiE2ePageDiagnostics = new WeakMap<Page, ControlUiE2eDiagnosticEvent[]>();
 const controlUiE2eUnhandledRejectionPages = new WeakSet<Page>();
+const controlUiE2eFailureFacts = new WeakMap<Page, Record<string, boolean | number | null>>();
+
+/** Callers supply fixed diagnostic keys and scalar facts, never user content or identifiers. */
+export function recordControlUiE2eFailureFacts(
+  page: Page,
+  facts: Record<string, boolean | number | null>,
+): void {
+  controlUiE2eFailureFacts.set(page, { ...controlUiE2eFailureFacts.get(page), ...facts });
+}
 type ControlUiE2ePageLifecycle = {
   registeredAt: string;
   firstCrashAt: string | null;
@@ -53,53 +64,37 @@ export function installControlUiE2ePageDiagnosticRing(page: Page): ControlUiE2eD
     lifecycle.firstBrowserDisconnectAt ??= new Date().toISOString();
   };
   const events: ControlUiE2eDiagnosticEvent[] = [];
-  const push = (event: ControlUiE2eDiagnosticEvent) => {
-    events.push(event);
+  const push = (
+    source: ControlUiE2eDiagnosticEvent["source"],
+    details: ControlUiE2eDiagnosticEvent["details"],
+  ) => {
+    events.push({ at: new Date().toISOString(), source, details });
     if (events.length > CONTROL_UI_E2E_DIAGNOSTIC_RING_LIMIT) {
       events.splice(0, events.length - CONTROL_UI_E2E_DIAGNOSTIC_RING_LIMIT);
     }
   };
-  const onConsole = (message: ConsoleMessage) => {
-    push({
-      at: new Date().toISOString(),
-      details: {
-        location: message.location(),
-        text: message.text(),
-        type: message.type(),
-      },
-      source: "console",
+  const onConsole = (message: ConsoleMessage) =>
+    push("console", {
+      location: message.location(),
+      text: message.text(),
+      type: message.type(),
     });
-  };
-  const onPageError = (error: Error) => {
-    push({
-      at: new Date().toISOString(),
-      details: { message: error.message, name: error.name, stack: error.stack ?? null },
-      source: "pageerror",
+  const onPageError = (error: Error) =>
+    push("pageerror", { message: error.message, name: error.name, stack: error.stack ?? null });
+  const onRequestFailed = (request: Request) =>
+    push("requestfailed", {
+      errorText: request.failure()?.errorText ?? null,
+      method: request.method(),
+      resourceType: request.resourceType(),
+      url: request.url(),
     });
-  };
-  const onRequestFailed = (request: Request) => {
-    push({
-      at: new Date().toISOString(),
-      details: {
-        errorText: request.failure()?.errorText ?? null,
-        method: request.method(),
-        resourceType: request.resourceType(),
-        url: request.url(),
-      },
-      source: "requestfailed",
-    });
-  };
   const onFrameNavigated = (frame: Frame) => {
     // Main-frame navigations order boot/reload sequences in failure reports;
     // subframes are noise.
     if (frame !== page.mainFrame()) {
       return;
     }
-    push({
-      at: new Date().toISOString(),
-      details: { url: frame.url() },
-      source: "framenavigated",
-    });
+    push("framenavigated", { url: frame.url() });
   };
   page.on("console", onConsole);
   page.on("framenavigated", onFrameNavigated);
@@ -129,13 +124,11 @@ export async function installControlUiE2eUnhandledRejectionRing(page: Page): Pro
   }
   controlUiE2eUnhandledRejectionPages.add(page);
   await page.addInitScript(() => {
+    type Rejection = { at: string; reason: unknown };
     const windowWithDiagnostics = window as Window & {
-      __OPENCLAW_CONTROL_UI_E2E_UNHANDLED_REJECTIONS__?: Array<{
-        at: string;
-        reason: unknown;
-      }>;
+      __OPENCLAW_CONTROL_UI_E2E_UNHANDLED_REJECTIONS__?: Rejection[];
     };
-    const events: Array<{ at: string; reason: unknown }> = [];
+    const events: Rejection[] = [];
     windowWithDiagnostics["__OPENCLAW_CONTROL_UI_E2E_UNHANDLED_REJECTIONS__"] = events;
     window.addEventListener("unhandledrejection", (event) => {
       let reason: unknown;
@@ -229,23 +222,22 @@ type ControlUiE2eFailureDiagnosticsOptions = {
   label: string;
   pageErrors?: string[];
   pageEvents?: ControlUiE2eDiagnosticEvent[];
-  modelResponses?: { list?: unknown; authStatus?: unknown };
+  modelResponses?: { list?: unknown; snapshot?: unknown; authStatus?: unknown };
 };
 
 function summarizeRecordedModelResponses(
   responses: NonNullable<ControlUiE2eFailureDiagnosticsOptions["modelResponses"]>,
 ) {
+  const array = (value: unknown): readonly unknown[] | undefined =>
+    Array.isArray(value) ? value : undefined;
+  const count = (value: readonly unknown[] | undefined) => value?.length ?? null;
   const list = asOptionalRecord(responses.list);
   const auth = asOptionalRecord(responses.authStatus);
-  const catalog = asOptionalRecord(list?.payload);
+  const snapshot = asOptionalRecord(responses.snapshot);
   const health = asOptionalRecord(auth?.payload);
-  const models = Array.isArray(catalog?.models) ? catalog.models : undefined;
-  const profiles = Array.isArray(health?.providers)
-    ? health.providers.flatMap((provider) => {
-        const record = asOptionalRecord(provider);
-        return Array.isArray(record?.profiles) ? record.profiles : [];
-      })
-    : undefined;
+  const profiles = array(health?.providers)?.flatMap(
+    (provider) => array(asOptionalRecord(provider)?.profiles) ?? [],
+  );
   const statusCounts = (entries: unknown, allowed: string[]) => {
     if (!Array.isArray(entries)) {
       return null;
@@ -260,37 +252,38 @@ function summarizeRecordedModelResponses(
       ]),
     );
   };
+  const catalogCounts = (payload: unknown) => {
+    const catalog = asOptionalRecord(payload);
+    const models = array(catalog?.models);
+    const availability = models?.map((model) => asOptionalRecord(model)?.available);
+    return {
+      models: count(models),
+      available: count(availability?.filter((value) => value === true)),
+      unavailable: count(availability?.filter((value) => value === false)),
+      unknownAvailability: count(availability?.filter((value) => typeof value !== "boolean")),
+      pendingProviders: count(array(catalog?.pendingProviders)),
+      providerOutcomes: statusCounts(catalog?.providerOutcomes, [
+        "ready",
+        "auth-rejected",
+        "unavailable",
+      ]),
+    };
+  };
   return {
     listSeen: responses.list !== undefined,
     listOk: typeof list?.ok === "boolean" ? list.ok : null,
-    models: models?.length ?? null,
-    available:
-      models?.filter((model) => asOptionalRecord(model)?.available === true).length ?? null,
-    unavailable:
-      models?.filter((model) => asOptionalRecord(model)?.available === false).length ?? null,
-    unknownAvailability:
-      models?.filter((model) => typeof asOptionalRecord(model)?.available !== "boolean").length ??
-      null,
-    pendingProviders: Array.isArray(catalog?.pendingProviders)
-      ? catalog.pendingProviders.length
-      : null,
-    providerOutcomes: statusCounts(catalog?.providerOutcomes, [
-      "ready",
-      "auth-rejected",
-      "unavailable",
-    ]),
+    ...catalogCounts(list?.payload),
+    snapshot: {
+      seen: responses.snapshot !== undefined,
+      ...catalogCounts(asOptionalRecord(snapshot?.payload)?.catalog),
+    },
     authSeen: responses.authStatus !== undefined,
     authOk: typeof auth?.ok === "boolean" ? auth.ok : null,
     profiles: statusCounts(profiles, ["ok", "expiring", "expired", "missing", "static"]),
   };
 }
 
-/**
- * Capture a screenshot plus a browser/app-state report for a failed E2E wait.
- * Wired into mock-Gateway request timeouts automatically; boot/readiness waits
- * in individual tests should call this from their failure path so CI artifacts
- * explain stalls instead of surfacing all-null poll snapshots.
- */
+/** Capture failed waits; mock request timeouts call this automatically, readiness waits explicitly. */
 export async function captureControlUiE2eFailureDiagnostics(
   page: Page,
   options: ControlUiE2eFailureDiagnosticsOptions,
@@ -308,8 +301,6 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
     error,
     label,
     pageErrors = [],
-    // The mock-Gateway installer keeps a per-page diagnostic ring; default to
-    // it so ad-hoc test callers get console/navigation history for free.
     pageEvents = controlUiE2ePageDiagnostics.get(page) ?? [],
     modelResponses,
   }: ControlUiE2eFailureDiagnosticsOptions,
@@ -336,25 +327,26 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
           return String(value);
         }
       };
-      type MockGateway = {
-        requests?: unknown[];
-        socketStates?: () => Array<{ readyState: number; state: string; url: string }>;
-        socketUrls?: () => string[];
-      };
       const windowState = window as Window & {
         __OPENCLAW_CONTROL_UI_E2E_LONG_FRAMES__?: () => unknown[];
         __OPENCLAW_CONTROL_UI_E2E_UNHANDLED_REJECTIONS__?: unknown[];
-        openclawControlUiE2eGateway?: MockGateway;
+        openclawControlUiE2eGateway?: Partial<
+          Pick<ControlUiMockGateway, "requests" | "socketStates" | "socketUrls">
+        >;
       };
-      const app = document.querySelector("openclaw-app");
-      const shell = document.querySelector("openclaw-app-shell");
-      const runInspector = document.querySelector("#activity-run-panel");
+      const query = (selector: string, root: ParentNode | null = document) =>
+        root?.querySelector<HTMLElement>(selector) ?? null;
+      const queryAll = (selector: string) => [...document.querySelectorAll(selector)];
+      const app = query("openclaw-app");
+      const shell = query("openclaw-app-shell");
+      const runInspector = query("#activity-run-panel");
       const diagnostics: ReturnType<ControlUiReadiness["hook"]["diagnostics"]> | undefined =
         window.openclawControlUi?.diagnostics();
+      const readiness = window.openclawControlUi?.snapshot();
       const agentsState = diagnostics?.roster;
       const gatewaySnapshot = diagnostics?.gateway;
       const customElementCounts: Record<string, number> = {};
-      for (const element of document.querySelectorAll("*")) {
+      for (const element of queryAll("*")) {
         const name = element.localName;
         if (!name.includes("-")) {
           continue;
@@ -369,51 +361,71 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
           ? (agentsState.agentsList as { agents?: unknown })
           : null;
       const send = document.querySelector<HTMLButtonElement>(".chat-send-btn--send");
+      const stop = document.querySelector<HTMLButtonElement>(".chat-send-btn--stop");
+      // Structural facts identify keyboard/overlay ownership without exposing content or IDs.
+      const describeElement = (element: Element | null) =>
+        element
+          ? {
+              kind:
+                element instanceof HTMLTextAreaElement
+                  ? "textarea"
+                  : element instanceof HTMLButtonElement
+                    ? "button"
+                    : element instanceof HTMLInputElement
+                      ? "input"
+                      : element === document.body
+                        ? "body"
+                        : "other",
+              inComposer: Boolean(element.closest(".agent-chat__input")),
+              isStop: element === stop,
+              isSend: element === send,
+            }
+          : null;
+      const openTooltips = [...document.querySelectorAll<TooltipElement>("openclaw-tooltip[open]")];
       const sendLabel = send?.getAttribute("aria-label");
       // Submit-disabled labels can contain server errors. Only known static UI copy
       // may reach CI logs; private reports retain the existing detailed state.
       const safeValue = (value: unknown, allowed: string[]) =>
         allowed.find((entry) => entry === value) ?? "unknown";
-      const agentPage = document.querySelector("openclaw-agents-page");
-      const selectedAgent = agentPage ? Reflect.get(agentPage, "agentsSelectedId") : undefined;
-      const fileList = agentPage ? Reflect.get(agentPage, "agentFilesList") : undefined;
+      const nullableBoolean = (value: unknown) => (typeof value === "boolean" ? value : null);
+      const agentPage = query("openclaw-agents-page");
+      const agentProperty = (key: string) => (agentPage ? Reflect.get(agentPage, key) : undefined);
+      const selectedAgent = agentProperty("agentsSelectedId");
+      const fileList = agentProperty("agentFilesList");
       const fileEditor = document.querySelector<HTMLTextAreaElement>(".agent-file-textarea");
       const agentPath = window.location.pathname.match(
         /^\/settings\/agents\/([^/]+)\/(overview|files|tools|skills|channels|cron)$/u,
       );
-      const groupMode = document.querySelector<HTMLElement>(
-        "wa-dropdown.session-group-defaults__mode-dropdown",
-      );
-      const groupMenu = groupMode?.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
-      const groupPopup = groupMode?.shadowRoot?.querySelector<HTMLElement>("wa-popup");
-      const groupPopupSurface =
-        groupPopup?.shadowRoot?.querySelector<HTMLElement>('[part="popup"]');
-      const groupFolderPicker = document.querySelector<HTMLElement>(
-        "wa-popover.session-group-defaults__folder-popover",
-      );
+      const groupElement = (part: string, root: ParentNode | null = document) =>
+        query(`.session-group-defaults__${part}`, root);
+      const groupMode = groupElement("mode-dropdown");
+      const groupMenu = groupElement("mode-menu", groupMode);
+      const groupFolderPicker = groupElement("folder-popover");
       return {
         failureSummary: {
+          readiness: readiness
+            ? {
+                generation: readiness.generation,
+                booted: readiness.booted,
+                gatewayPhase: readiness.gatewayPhase,
+                routeReady: readiness.routeReady,
+                rosterReady: readiness.rosterReady,
+                ready: readiness.ready,
+                settlementFailed: diagnostics?.settlementError != null,
+              }
+            : null,
           sessionGroupDefaults: groupMode
             ? {
-                open: Reflect.get(groupMode, "open") === true,
+                open: groupMenu?.matches(":popover-open") ?? false,
                 expanded: safeValue(
-                  groupMode.querySelector('[slot="trigger"]')?.getAttribute("aria-expanded"),
+                  groupElement("mode-trigger", groupMode)?.getAttribute("aria-expanded"),
                   ["true", "false"],
                 ),
                 menuInert: groupMenu?.inert ?? null,
                 menuVisible: groupMenu?.checkVisibility({ visibilityProperty: true }) ?? null,
-                popupActive: groupPopup ? Reflect.get(groupPopup, "active") === true : null,
-                nativePopupOpen: groupPopupSurface?.matches(":popover-open") ?? null,
-                folderPickerOpen: groupFolderPicker
-                  ? Reflect.get(groupFolderPicker, "open") === true
-                  : null,
-                folderDialogOpen:
-                  groupFolderPicker?.shadowRoot?.querySelector<HTMLDialogElement>("dialog")?.open ??
-                  null,
+                folderPickerOpen: groupFolderPicker?.matches(":popover-open") ?? null,
                 items: ["local", "worktree"].map((value) => {
-                  const item = groupMode.querySelector<HTMLElement>(
-                    `wa-dropdown-item[value="${value}"]`,
-                  );
+                  const item = query(`[data-environment-mode="${value}"]`, groupMode);
                   return {
                     value,
                     present: Boolean(item),
@@ -424,12 +436,12 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
                     ]),
                     visible: item?.checkVisibility({ visibilityProperty: true }) ?? null,
                     rectCount: item?.getClientRects().length ?? 0,
-                    iconCount: item?.querySelectorAll('[slot="icon"]').length ?? 0,
+                    iconCount: item?.querySelectorAll(".oc-menu-item__icon").length ?? 0,
                   };
                 }),
               }
             : null,
-          canvasWidgets: [...document.querySelectorAll("openclaw-canvas-widget-view")]
+          canvasWidgets: queryAll("openclaw-canvas-widget-view")
             .slice(0, 8)
             .map((widget) => ({
               loading: Boolean(widget.querySelector(".skeleton")),
@@ -442,7 +454,7 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
             selectedAgentPresent: typeof selectedAgent === "string" && selectedAgent.length > 0,
             selectionMatchesPath: agentPath ? selectedAgent === agentPath[1] : null,
             listMatchesSelection: fileList ? fileList.agentId === selectedAgent : null,
-            panel: safeValue(agentPage ? Reflect.get(agentPage, "agentsPanel") : undefined, [
+            panel: safeValue(agentProperty("agentsPanel"), [
               "overview",
               "files",
               "tools",
@@ -450,20 +462,17 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
               "channels",
               "cron",
             ]),
-            activeFile: safeValue(
-              agentPage ? Reflect.get(agentPage, "agentFileActive") : undefined,
-              [
-                "AGENTS.md",
-                "SOUL.md",
-                "USER.md",
-                "BOOTSTRAP.md",
-                "MEMORY.md",
-                "IDENTITY.md",
-                "TOOLS.md",
-                "HEARTBEAT.md",
-              ],
-            ),
-            loading: agentPage ? Reflect.get(agentPage, "agentFilesLoading") === true : null,
+            activeFile: safeValue(agentProperty("agentFileActive"), [
+              "AGENTS.md",
+              "SOUL.md",
+              "USER.md",
+              "BOOTSTRAP.md",
+              "MEMORY.md",
+              "IDENTITY.md",
+              "TOOLS.md",
+              "HEARTBEAT.md",
+            ]),
+            loading: agentPage ? agentProperty("agentFilesLoading") === true : null,
             editorPresent: Boolean(fileEditor),
             editorLength: fileEditor?.value.length ?? null,
             editorDisabled: fileEditor?.disabled ?? null,
@@ -482,10 +491,9 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
             "starting",
             "reload-required",
           ]),
-          connected: typeof agentsState?.connected === "boolean" ? agentsState.connected : null,
+          connected: nullableBoolean(agentsState?.connected),
           roster: {
-            loading:
-              typeof agentsState?.agentsLoading === "boolean" ? agentsState.agentsLoading : null,
+            loading: nullableBoolean(agentsState?.agentsLoading),
             count: Array.isArray(roster?.agents) ? roster.agents.length : null,
             errorPresent: Boolean(agentsState?.agentsError),
           },
@@ -495,9 +503,7 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
             "interactive",
             "complete",
           ]),
-          providerStatuses: [
-            ...document.querySelectorAll(".model-providers__head .settings-status"),
-          ]
+          providerStatuses: queryAll(".model-providers__head .settings-status")
             .slice(0, 8)
             .map((badge) => {
               const text = badge.textContent?.trim();
@@ -506,11 +512,33 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
                 length: text?.length ?? 0,
               };
             }),
+          activeElement: describeElement(document.activeElement),
+          tooltips: {
+            openCount: openTooltips.length,
+            entries: openTooltips.slice(0, 8).map((tooltip) => {
+              const trigger =
+                tooltip.anchor ?? tooltip.querySelector("button, input, textarea, [tabindex]");
+              return {
+                trigger: describeElement(trigger),
+                hovered: tooltip.matches(":hover") || (trigger?.matches(":hover") ?? false),
+                containsFocus:
+                  tooltip.contains(document.activeElement) ||
+                  (trigger?.contains(document.activeElement) ?? false),
+              };
+            }),
+          },
           composer: textarea
             ? {
                 draftLength: textarea.value.length,
                 nonempty: textarea.value.length > 0,
                 disabled: textarea.disabled,
+                stop: stop
+                  ? {
+                      visible: stop.checkVisibility({ visibilityProperty: true }),
+                      disabled: stop.disabled,
+                      focused: stop === document.activeElement,
+                    }
+                  : null,
                 send: send
                   ? {
                       label: safeValue(sendLabel, [
@@ -533,9 +561,7 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
           hasApp: Boolean(app),
           hasShell: Boolean(shell),
           readyState: document.readyState,
-          // A stalled or failed bundle fetch shows as a script src with no
-          // matching completed resource entry (resource timing only records
-          // finished requests).
+          // Resource timing omits stalled fetches; compare it with the script sources.
           completedResources: performance
             .getEntriesByType("resource")
             .filter((entry) => /\.(?:js|css)(?:\?|$)/u.test(entry.name))
@@ -588,18 +614,16 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
     }
     frameDepthCounts[depth] = (frameDepthCounts[depth] ?? 0) + 1;
   }
+  const failureKind =
+    new Map([
+      ["TimeoutError", "timeout"],
+      ["AssertionError", "assertion"],
+      ["AbortError", "abort"],
+      ["Error", "error"],
+    ]).get(error.name) ?? "unknown";
   const publicSummary = {
     schemaVersion: 1,
-    failureKind:
-      error.name === "TimeoutError"
-        ? "timeout"
-        : error.name === "AssertionError"
-          ? "assertion"
-          : error.name === "AbortError"
-            ? "abort"
-            : error.name === "Error"
-              ? "error"
-              : "unknown",
+    failureKind,
     browser: summary,
     hostBeforeRead,
     lifecycle: controlUiE2ePageLifecycles.get(page) ?? null,
@@ -607,6 +631,7 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
     rendererStall: await captureControlUiE2eRendererStall(page, rendererRead),
     models,
     gatewayRpc: controlUiRpcDiagnostics.get(page) ?? [],
+    scenarioFacts: controlUiE2eFailureFacts.get(page) ?? null,
     frameDepthCounts,
     route: {
       pathname: knownRoute ? pathForRoute(knownRoute) : null,

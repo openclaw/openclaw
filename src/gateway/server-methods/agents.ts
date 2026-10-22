@@ -6,12 +6,9 @@ import {
   validateAgentsDeleteParams,
   validateAgentsUpdateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { validateAgentIdInput } from "../../agents/agent-create.js";
 import { AgentSharedStoreOwnerError } from "../../agents/agent-delete-databases.js";
-import {
-  formatSharedAuthStoreOwnerDeleteError,
-  isInheritedAuthStoreOwner,
-} from "../../agents/agent-delete-safety.js";
-import { resolveAgentWorkspaceDir, tryResolveSoleAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import {
   createAgentIdentityConfig,
   normalizeIdentityForFile,
@@ -29,13 +26,20 @@ import {
   attachRuntimeConfigWriteApplication,
   createRuntimeConfigWriteApplication,
 } from "../../config/runtime-write-application.js";
-import { captureGatewayRootWorkAdmissionContinuationScope } from "../../process/gateway-work-admission.js";
+import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  captureGatewayRootWorkAdmissionContinuationScope,
+  runWithGatewayDetachedWorkContinuation,
+} from "../../process/gateway-work-admission.js";
 import { normalizeAgentIdStrict } from "../../routing/session-key.js";
-import { readAgentDeletionJournalAsync } from "../../state/agent-deletion-journal.js";
 import { resolveUserPath } from "../../utils.js";
+import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { reviveAgentDatabasesAfterConfigCommit } from "../server-reload-agent-databases.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
+import { startSlowRequestDiagnostics } from "../slow-request-diagnostics.js";
 import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
+import { agentAvatarGenerateHandler } from "./agents-avatar.js";
 import {
   AgentConfigPreconditionError,
   AgentModelSelectionError,
@@ -45,17 +49,19 @@ import {
   updateAgentConfigEntry,
   validateAgentModelSelectionUpdate,
 } from "./agents-config-mutations.js";
-import {
-  AgentSharedAuthStoreOwnerError,
-  agentOwnsSharedAuthStore,
-  deleteGatewayAgent,
-} from "./agents-delete.js";
+import { AgentSharedAuthStoreOwnerError, deleteGatewayAgent } from "./agents-delete.js";
 import {
   agentFileHandlers,
   buildIdentityMarkdownOrRespondUnsafe,
   writeWorkspaceFileOrRespond,
 } from "./agents-files.js";
 import { agentListHandler } from "./agents-list.js";
+import {
+  prepareAgentOnboarding,
+  completeAgentOnboarding,
+  startAgentOnboardingConversation,
+  type PreparedAgentOnboarding,
+} from "./agents-onboarding.js";
 import {
   captureLocalStateMutationGuard,
   localStateOwnerChangedError,
@@ -74,28 +80,36 @@ function createAgentConfigApplication(respond: RespondFn) {
   return {
     attach: <T extends object>(options: T) =>
       attachRuntimeConfigWriteApplication(options, application),
-    confirm: async () => {
+    confirm: async (onUnconfirmed?: (message: string) => void) => {
       const outcome = application.claimed ? await application.result : "unclaimed";
       if (outcome === "applied") {
         return true;
       }
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          `Agent configuration was saved but its application to the active Gateway was not confirmed (${outcome}); run config.get, then apply the saved config or restart the Gateway.`,
-        ),
-      );
+      const message = `Agent configuration was saved but its application to the active Gateway was not confirmed (${outcome}); run config.get, then apply the saved config or restart the Gateway.`;
+      if (onUnconfirmed) {
+        onUnconfirmed(message);
+      } else {
+        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message));
+      }
       return false;
     },
   };
 }
 
 export const agentsHandlers: GatewayRequestHandlers = {
+  "agents.avatar.generate": agentAvatarGenerateHandler,
   "agents.list": agentListHandler,
   "agents.create": async (options) => {
     const { params, respond, client, context } = options;
+    using diagnostics = startSlowRequestDiagnostics<
+      | "preflight"
+      | "inference"
+      | "persistAgent"
+      | "reviveDatabases"
+      | "applyConfig"
+      | "createChat"
+      | "response"
+    >(context.logGateway, "slow agent create", "agents.create", "preflight");
     if (!assertValidParams(params, validateAgentsCreateParams, "agents.create", respond)) {
       return;
     }
@@ -109,16 +123,39 @@ export const agentsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, localStateOwnerChangedError(error));
       return;
     }
+    let preparation: PreparedAgentOnboarding | undefined;
+    if (params.onboarding) {
+      const identity = validateAgentIdInput(params.agentId ?? params.name, {
+        displayName: params.name,
+      });
+      if (!identity.ok) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, identity.message));
+        return;
+      }
+      try {
+        diagnostics?.mark("inference");
+        preparation = await prepareAgentOnboarding(options, identity.agentId, params);
+      } catch (error) {
+        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
+        return;
+      }
+    }
     const application = createAgentConfigApplication(respond);
     try {
+      diagnostics?.mark("persistAgent");
       const result = await createAgentConfigEntry(
         {
           name: params.name,
+          ...(params.agentId ? { entry: { id: params.agentId, name: params.name } } : {}),
           workspace: params.workspace,
           model: params.model,
           emoji: params.emoji,
           avatar: params.avatar,
-          beforePersistentApply: assertOwnerCurrent,
+          beforePersistentApply: () => {
+            assertOwnerCurrent?.();
+            preparation?.assertCurrent();
+          },
+          ...(preparation ? { expectedConfigHash: preparation.expectedConfigHash } : {}),
           assertIdentityInputAllowed: captureGatewayClientUploadCommitGuard({
             method: "agents.create",
             requestParams: params,
@@ -132,12 +169,59 @@ export const agentsHandlers: GatewayRequestHandlers = {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, result.message));
         return;
       }
+      diagnostics?.mark("reviveDatabases");
       await reviveAgentDatabasesAfterConfigCommit([result.agentId], (message) =>
         context.logGateway.warn(message),
       );
-      if (!(await application.confirm())) {
+      diagnostics?.mark("applyConfig");
+      let applicationError: string | undefined;
+      const applied = await application.confirm(
+        preparation
+          ? (message) => {
+              applicationError = message;
+            }
+          : undefined,
+      );
+      if (!applied && !preparation) {
         return;
       }
+      if (applied) {
+        diagnostics?.mark("createChat");
+      }
+      let onboarding = preparation
+        ? applicationError
+          ? {
+              status: "error" as const,
+              sessionKey: resolveAgentMainSessionKey({
+                cfg: context.getRuntimeConfig(),
+                agentId: result.agentId,
+              }),
+              error: applicationError,
+            }
+          : await completeAgentOnboarding(options, result.agentId, result.name)
+        : undefined;
+      let onboardingOperatorAuthority:
+        | Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>
+        | undefined;
+      if (onboarding?.status === "completed" && client) {
+        try {
+          onboardingOperatorAuthority = await captureGatewayOperatorRunAuthority({
+            client,
+            context,
+            hasCurrentClientAuthority: options.hasCurrentClientAuthority,
+          });
+          if (!onboardingOperatorAuthority) {
+            throw new Error("Could not retain operator authority for the agent's first turn.");
+          }
+        } catch (error) {
+          onboarding = {
+            status: "error",
+            sessionKey: onboarding.sessionKey,
+            error: formatErrorMessage(error),
+          };
+        }
+      }
+      diagnostics?.mark("response");
       respond(
         true,
         {
@@ -147,9 +231,40 @@ export const agentsHandlers: GatewayRequestHandlers = {
           workspace: result.workspace,
           agentDir: result.agentDir,
           ...(result.model ? { model: result.model } : {}),
+          ...(onboarding ? { onboarding } : {}),
         },
         undefined,
       );
+      if (onboarding?.status === "completed" && (!client || onboardingOperatorAuthority)) {
+        const onboardingOptions =
+          client && onboardingOperatorAuthority
+            ? {
+                ...options,
+                client: {
+                  ...client,
+                  internal: {
+                    ...client.internal,
+                    operatorRunAuthority: onboardingOperatorAuthority.authority,
+                  },
+                },
+              }
+            : options;
+        void runWithGatewayDetachedWorkContinuation(async () => {
+          try {
+            await startAgentOnboardingConversation(
+              onboardingOptions,
+              result.agentId,
+              onboarding.sessionKey,
+            );
+          } finally {
+            onboardingOperatorAuthority?.release();
+          }
+        }, "agents:create-onboarding").catch((error: unknown) => {
+          context.logGateway.warn(
+            `could not start onboarding for agent ${result.agentId}: ${formatErrorMessage(error)}`,
+          );
+        });
+      }
     } catch (error) {
       if (error instanceof SessionMutationAuthorizationChangedError) {
         respond(false, undefined, error.error);
@@ -314,51 +429,12 @@ export const agentsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const cfg = context.getRuntimeConfig();
     const normalized = normalizeAgentIdStrict(params.agentId);
     if (!normalized.ok) {
       respondAgentNotFound(respond, params.agentId);
       return;
     }
     const agentId = normalized.value;
-    if (await agentOwnsSharedAuthStore(cfg, agentId)) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, formatSharedAuthStoreOwnerDeleteError(agentId)),
-      );
-      return;
-    }
-    const existingJournal = await readAgentDeletionJournalAsync(agentId);
-    if (
-      !isConfiguredAgent(cfg, agentId) &&
-      (!existingJournal || existingJournal.cleanupCompleted)
-    ) {
-      respondAgentNotFound(respond, agentId);
-      return;
-    }
-    if (agentId === tryResolveSoleAgentId(cfg)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `Agent "${agentId}" is the only configured agent and cannot be deleted.`,
-        ),
-      );
-      return;
-    }
-    if (isInheritedAuthStoreOwner(cfg, agentId)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `Agent "${agentId}" owns inherited credentials through agents.defaults.authInheritance.agentId and cannot be deleted. Relocate those credentials, then re-point or remove that binding before retrying.`,
-        ),
-      );
-      return;
-    }
 
     const requestedDeleteFiles = params.deleteFiles ?? true;
     const application = createAgentConfigApplication(respond);
@@ -395,7 +471,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
         return;
       }
       if (error instanceof AgentConfigPreconditionError) {
-        respondAgentNotFound(respond, agentId);
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
         return;
       }
       throw error;

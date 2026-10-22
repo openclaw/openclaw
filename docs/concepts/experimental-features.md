@@ -25,6 +25,7 @@ Custom plugin UI flag below controls user-installed native browser code only.
 | Codex harness    | `plugins.entries.codex.config.appServer.experimental.sandboxExecServer` | You want native Codex app-server 0.143.0 or newer to target an OpenClaw sandbox-backed exec-server instead of disabling Code Mode | [Codex harness reference](/plugins/codex-harness-reference#sandboxed-native-execution) |
 | Code Mode        | `tools.codeMode.enabled`                                                | You want compact code-orchestrated access to a hidden OpenClaw tool catalog                                                       | [Code Mode](/tools/code-mode)                                                          |
 | Cloud workers    | `cloudWorkers.desktop`                                                  | You want to watch or control desktop-capable cloud worker environments from the Control UI                                        | [Cloud Worker Desktop](/gateway/cloud-workers#desktop-interactive)                     |
+| Claws            | `gateway.controlUi.experimental.claws`                                  | You want to explore and add official ClawHub agents from the Control UI                                                           | [Claws](/cli/claws)                                                                    |
 | Custom plugin UI | `gateway.controlUi.experimental.customPlugins`                          | You want trusted user-installed plugins to add native Control UI views or replace built-in views                                  | [Feature plugins](/plugins/feature-plugins#enable-custom-plugin-ui)                    |
 | Host Desktop     | `desktop.host.enabled`                                                  | You want to watch or control the Gateway host through its VNC or Screen Sharing server                                            | [Desktop](/gateway/configuration-reference#desktop)                                    |
 | Advisor          | `plugins.entries.advisor.enabled`                                       | You want an advisor model to periodically check a conversation's agent work and give the agent one short correction               | [Advisor](#advisor)                                                                    |
@@ -37,8 +38,8 @@ Open **Settings → Labs** to manage experiments that have a
 Control UI switch. Enabling or disabling a lab patches the saved Gateway
 config immediately without restarting the Gateway.
 
-Labs includes Speech bubbles, Decision assistance, Advisor, Code Mode, Tool Search for all models, Custom
-plugin UI, Host Desktop, and Cloud Worker Desktop. Under the default reload mode, custom
+Labs includes Speech bubbles, Decision assistance, Advisor, Code Mode, Tool Search for all models,
+Claws, Custom plugin UI, Host Desktop, and Cloud Worker Desktop. Under the default reload mode, custom
 plugin views and desktop availability update in connected Control UI pages.
 Code Mode and Tool Search changes take effect for future agent runs.
 Reload browser tabs after disabling Custom plugin UI to clear plugin JavaScript
@@ -50,6 +51,13 @@ Custom plugin UI is off by default. Enabled bundled plugins, including
 Workboard, retain their native UI with the setting off. Backend APIs and
 ordinary plugins remain available, and installing or approving a plugin
 artifact does not enable the lab.
+
+Claws is off by default. Turning it on permits official starter discovery and
+Add in Agents, Gateway catalog/Add methods, and local CLI Add. Add creates an
+ordinary agent and installs its requirements; repeating Add creates another
+agent. Turning the switch off blocks new Add operations, but existing agents
+continue running. Local project authoring and inspection do not require the
+switch. An Add already admitted before the switch changes can finish safely.
 
 Code Mode remains disabled until you turn on its Labs switch or explicitly set
 `tools.codeMode` to `true` or `"auto"`. The Labs switch writes `"auto"`, so it
@@ -206,13 +214,11 @@ approvals remain action requests, while a conversational acknowledgment can omit
 optional tools on later turns. It uses the existing host tool policy, preserves
 already-required tools without granting denied tools, and keeps submitted schemas,
 discovery, and callability aligned.
-Each subsequent turn starts from its own normal tool baseline. Opt-out does not
-withdraw a restriction from an already-dispatched Decision evaluation. Changed
-model selection still prevents applying an awaited restriction and is rechecked
-at foreground primary-model dispatch after awaited preparation. That change
-withdraws only the optional restriction and restores the current permitted tool
-surface while retaining independent hook caps and required tools. No historical
-transcript is rewritten and no native thread is recreated.
+Each subsequent turn starts from its own normal tool baseline. Opt-out or a changed
+Decision model does not withdraw a restriction from an already-dispatched
+evaluation. Those settings apply to the next evaluation; live permissions still
+govern the current turn. No historical transcript is rewritten and no native
+thread is recreated.
 
 With DEBUG logging enabled for the embedded runner, a safe record at the first
 foreground primary dispatch reports decision status/reason, decision latency,
@@ -229,20 +235,16 @@ record; existing logging and trace-correlation controls apply.
 
 ## Advisor
 
-Advisor is an experimental bundled plugin that is off by default. During
-user-directed work, it reviews a fork of the conversation on the session's own
-model and looks for the most costly avoidable problem: work drifting beyond
-what you asked, an earlier correction being ignored, repeated or stalled tool
-calls, or claims that the tool results do not support. When it finds one, it
-steers the active run with one short correction. If the run cannot accept
-steering, the correction becomes hidden context on the next turn. When it finds
-nothing, nothing happens.
+Advisor is an experimental bundled plugin that is off by default. It watches
+user-directed work and steps in while the agent goes off course: repeating
+failing steps, waiting on finished work, working around a blocker it could fix,
+drifting beyond what you asked, or claiming results the tools do not show.
 
-Reviews judge waste against your request. User-requested repetition, waiting,
-polling, verification, ordering, and timing are not waste. A correction must offer
-a cheaper next step that still satisfies the whole request, fixing the cause and
-resuming work when possible rather than reporting a recoverable blocker. When
-uncertain, the advisor leaves the agent's approach unchanged.
+A review forks the conversation on the session's own model and asks whether the
+agent is on track. When it is not, Advisor steers the active run with one short
+correction, which the agent sees before its next step under the run's own
+permissions. If the run already ended, the correction is dropped. When the agent
+is on track, nothing happens.
 
 Turn it on in **Settings → Agents & Tools → Labs → Advisor**. Its **Configure**
 button opens the plugin's settings page (**Settings → Plugins → Advisor**), where
@@ -261,62 +263,31 @@ you set the options below. Or use config:
 }
 ```
 
-- `everyToolCalls` (default `10`, range `0`–`1000`): mark a review due after this
-  many tool calls start in a conversation, including commands still running in
-  the background.
-- `everyMinutes` (default `20`, range `0`–`1440`): mark a review due after this
-  many minutes of accumulated agent run time from the lifecycle start event,
-  checked as tools start or finish and when a run ends. Time before that start
-  does not count.
+- `everyToolCalls` (default `10`, range `0`–`1000`): review after this many tool
+  calls in a conversation.
+- `everyMinutes` (default `20`, range `0`–`1440`): review after this many minutes
+  of work in a run, checked when a tool starts.
+- `reviewInstructions` (optional, up to 4,000 characters): replaces the built-in
+  definition of "off course". Changes apply to the next review.
 
-Reviews always use the session's own model; there is no separate model setting.
-
-A due review waits until all started tool calls have authoritative completion
-events, or the run ends or errors. Built-in runs settle on tool results; Codex
-runs settle on native item completion and recorded raw tool outputs, including
-outer function/custom-code calls. Completed child commands do not settle an
-enclosing call. Early dynamic tool results are not a safe boundary. Verification
-checks the same condition again before its fork.
-A stalled call never forces a review: Advisor waits for completion or run end,
-without a timer bypass. A call without a result may still be running; the fixed
-review contract forbids treating it as failed or aborted. Run end/error clears
-pending tool IDs and allows one due review even when no next model call occurs.
-
-Both counters restart after each review completes, including a failed review.
-Set a trigger to `0` to turn it off. With both at `0`, no reviews run. Changes apply
-without restarting the Gateway.
+Set both triggers to `0` to turn reviews off.
 
 Behavior and limits:
 
-- Reviews run in the background without delaying the triggering hook. They
-  never ask for approval or grant the agent new permissions.
-- Only user-triggered runs count. Manual compaction, heartbeat, cron, memory-flush,
-  overflow, side-question, and missing or unrecognized triggers are ignored.
-  Admission uses the history-free `before_agent_reply` hook without claiming the
-  reply; tool and time accounting begins at the lifecycle start.
-- Each conversation has at most one review in flight. A failed review is logged
-  and the next review waits a full interval. Session reset, plugin disable, and
-  service stop cancel pending reviews.
-- Review replies use a first-line `NO_CHANGE` or `CORRECTION` decision.
-  `NO_CHANGE` never starts verification or steering, even with commentary.
-  Draft corrections receive a second same-session review: only an `APPROVE`
-  response with a valid final body reaches the agent. `REJECT`, malformed
-  replies, verification errors, and timeouts never steer. Failures log one
-  bounded warning. Each reply is limited to 2,000 characters and each correction
-  to 120 words. The two stages share a 120-second deadline.
-- A correction first attempts active-run steering. If steering is unavailable,
-  it is queued for the next turn and expires after 24 hours. It is labeled as
-  advice that the agent must check before acting.
-- Each review uses the session's context, model, and credentials for one draft
-  call and, only when it proposes a correction, one verification call. Neither
-  fork can execute tools, persist conversation messages, or send replies.
-  On Codex, the forks preserve the session's prompt and tool definitions for
-  prompt-cache reuse.
+- Only user-triggered runs are reviewed. Heartbeat, cron and other automatic
+  runs are not.
+- A due review waits until every running tool call has its result, so the fork
+  never sees a missing or synthetic tool outcome. A stalled call delays the
+  review rather than forcing it.
+- Each conversation has at most one review in flight. The run ending, a new user
+  message, session reset, plugin disable, or service stop cancels it.
+- Reviews use the session's model, context and credentials. The fork cannot run
+  tools or send replies. Corrections are labeled as advice the agent must check
+  before acting.
 - Advisor needs conversation access and prompt injection permission through
   `plugins.entries.advisor.hooks`, which trusted plugins have by default.
-- Gateway info logs record each stage's input, cache-read, cache-write, and output
-  tokens and elapsed time, plus whether its correction was steered or queued.
-- Counters live in memory, so they restart when the Gateway restarts.
+- Gateway info logs record review token usage and whether a correction steered
+  the run.
 
 ## Local model lean mode
 

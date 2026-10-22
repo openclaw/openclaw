@@ -4,6 +4,7 @@ import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasGatewayServiceStopUnsafeError } from "../daemon/service-inspection-error.js";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { ExecApprovalsMigrationRequiredError } from "../infra/exec-approvals-migration-gate.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
 import type { GatewayOwnerLeaseIdentity } from "../infra/gateway-owner-lease.types.js";
@@ -91,9 +92,6 @@ export async function readDoctorGatewayOwnerLease(
   if (!reply) {
     return undefined;
   }
-  if (!reply.ok || reply.type !== "gatewayOwnerLease.read") {
-    throw new Error("Unexpected Doctor Gateway owner lease read result");
-  }
   // The recorded process may have exited while the reader and its private snapshot settled.
   return reply.lease
     ? {
@@ -161,19 +159,27 @@ export async function assertDoctorMaintenanceReady(
   assertSessionStoreMigrationComplete({ cfg, env, operation: "doctor" });
   const { assertOpenClawDatabasesReady } = await import("../state/openclaw-database-preflight.js");
   const { resolveConfiguredAgentDatabaseTargets } = await import("../config/sessions/targets.js");
-  await assertOpenClawDatabasesReady({
-    env,
-    config: cfg,
-    operation: "doctor",
-    onDeferredSchemaPublication: (publication) => {
-      schemaPublicationDeferred = true;
-      log(publication.message);
-    },
-    onVerified: (schemas) => {
-      refusedDatabasePaths = schemas.agentRefusals?.flatMap((refusal) => refusal.paths) ?? [];
-    },
-    configuredAgentDatabaseTargets: resolveConfiguredAgentDatabaseTargets(cfg, { env }),
-  });
+  try {
+    await assertOpenClawDatabasesReady({
+      env,
+      config: cfg,
+      operation: "doctor",
+      onDeferredSchemaPublication: (publication) => {
+        schemaPublicationDeferred = true;
+        log(publication.message);
+      },
+      onVerified: (schemas) => {
+        refusedDatabasePaths = schemas.agentRefusals?.flatMap((refusal) => refusal.paths) ?? [];
+      },
+      configuredAgentDatabaseTargets: resolveConfiguredAgentDatabaseTargets(cfg, { env }),
+    });
+  } catch (error) {
+    throw new DoctorMaintenanceRefusalError(
+      formatErrorMessage(error),
+      { kind: "data-at-risk", reason: "incomplete-migration" },
+      { cause: error },
+    );
+  }
   const { assertConfiguredWorkspaceStateReady } = await import("../agents/workspace-state-dirs.js");
   await assertConfiguredWorkspaceStateReady({ cfg, operation: "doctor" });
   const { assertNoPendingLegacyExecApprovals } =

@@ -13,7 +13,7 @@ import type { ClawHubRecommendation } from "../../../../src/shared/clawhub-recom
 import type { RunFailureNotice } from "../../../../src/shared/run-failure-notice.js";
 import type { SkillWorkshopChangeNotice } from "../../../../src/shared/skill-workshop-change-notice.js";
 import type { BrowserTabTarget } from "../../components/browser/browser-target.ts";
-import type { toolIcons } from "../../components/icons-tools.ts";
+import type { toolIconData } from "../../components/icon-data-tools.ts";
 import type { SenderIdentity } from "./sender-label.ts";
 
 export type { HumanMention };
@@ -224,13 +224,16 @@ export type ChatItem =
       key: string;
       text: string;
       timestamp: number;
-      icon?: keyof typeof toolIcons;
+      icon?: keyof typeof toolIconData;
       label?: string;
       startsTurn?: true;
       boundaryId?: string;
       tone?: "danger";
+      /** Informational source-owned event eligible for timeline folding. */
+      systemEvent?: "info" | "delivery-warning";
       /** Collapse the body behind a disclosure; the label line stays visible. */
       collapsedBody?: true;
+      showTimestamp?: true;
       /** Structural only: separates a handed-off run from its resumption. Never rendered. */
       handoffBoundary?: true;
       /** A background skill review's changes; rendered as a native row instead of `text`. */
@@ -243,8 +246,9 @@ export type ChatItem =
       key: string;
       compaction?: "active" | "complete";
       compactionId?: string;
+      systemEvent?: "info";
       label: string;
-      icon?: keyof typeof toolIcons;
+      icon?: keyof typeof toolIconData;
       metric?: string;
       description?: string;
       timestamp: number;
@@ -278,6 +282,13 @@ export type ChatItem =
     }
   | { kind: "question"; key: string; questionId: string; startedAt: number };
 
+export type SystemEventItem = Extract<ChatItem, { kind: "notice" | "divider" }>;
+export type SystemEventGroup = {
+  kind: "system-event-group";
+  key: string;
+  events: SystemEventItem[];
+};
+
 export type ChatStreamSegment = {
   /** Input observed when live commentary first arrived; omitted for history replay. */
   afterUserSendId?: string;
@@ -290,11 +301,13 @@ export type ChatStreamSegment = {
   itemId?: string;
 };
 
-export function streamSegmentHasItemId(segment: { itemId?: unknown }): boolean {
-  return typeof segment.itemId === "string" && segment.itemId.trim().length > 0;
+export function streamSegmentHasItemId(segment: Pick<ChatStreamSegment, "itemId">): boolean {
+  return Boolean(segment.itemId?.trim());
 }
 
-export function streamSegmentUsesAccumulatedText(segment: { itemId?: unknown }): boolean {
+export function streamSegmentUsesAccumulatedText(
+  segment: Pick<ChatStreamSegment, "itemId">,
+): boolean {
   return !streamSegmentHasItemId(segment);
 }
 

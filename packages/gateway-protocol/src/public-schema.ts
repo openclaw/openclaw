@@ -5,6 +5,7 @@ export * from "./schema/sessions-provider-review.js";
 export * from "./schema/human-mentions.js";
 export * from "./schema/presence.js";
 export * from "./schema/claws.js";
+export * from "./schema/claw-drafts.js";
 export * from "./public-schema-push.js";
 export * from "./public-schema-users.js";
 export * from "./public-schema-plugins.js";
@@ -146,6 +147,7 @@ export {
   NodePendingEnqueueParamsSchema,
   NodePendingEnqueueResultSchema,
   SessionsListParamsSchema,
+  SessionsSubscribeParamsSchema,
   SessionCatalogCapabilitiesSchema,
   SessionCatalogDescriptorSchema,
   SessionCatalogPullRequestSummarySchema,
@@ -186,6 +188,8 @@ export {
   SessionFilePreviewKindSchema,
   SessionFileRelevanceSchema,
   SessionsFilesGetParamsSchema,
+  SessionsFilesDownloadParamsSchema,
+  SessionsFilesDownloadResultSchema,
   SessionsFilesGetResultSchema,
   SessionsFilesAssetsParamsSchema,
   SessionsFilesAssetsResultSchema,
@@ -378,6 +382,8 @@ export {
   SystemAgentSetupActivateStartResultSchema,
   SystemAgentSetupAuthStartParamsSchema,
   SystemAgentSetupAuthStartResultSchema,
+  SystemAgentSetupRuntimeStartParamsSchema,
+  SystemAgentSetupRuntimeStartResultSchema,
   WizardStartParamsSchema,
   McpAuthLoginParamsSchema,
   WizardNextParamsSchema,
@@ -443,6 +449,8 @@ export {
   AgentsCreateResultSchema,
   AgentsUpdateParamsSchema,
   AgentsUpdateResultSchema,
+  AgentsAvatarGenerateParamsSchema,
+  AgentsAvatarGenerateResultSchema,
   AgentsDeleteParamsSchema,
   AgentsDeleteResultSchema,
   AgentsFilesListParamsSchema,
@@ -526,6 +534,8 @@ export {
   SkillsWorkshopUndoResultSchema,
   SkillsSecurityVerdictsParamsSchema,
   SkillsSecurityVerdictsResultSchema,
+  SkillsFileGetParamsSchema,
+  SkillsFileGetResultSchema,
   SkillsSkillCardParamsSchema,
   SkillsSkillCardResultSchema,
   SkillsUploadBeginParamsSchema,
@@ -595,6 +605,8 @@ export {
   SessionApprovalReplaySchema,
   ExecApprovalsGetParamsSchema,
   ExecApprovalsSetParamsSchema,
+  ExecApprovalsNativeCommitParamsSchema,
+  ExecApprovalsNativeRequestSchema,
   ExecApprovalGetParamsSchema,
   ExecApprovalRequestParamsSchema,
   ExecApprovalResolveParamsSchema,
@@ -623,6 +635,8 @@ export {
   ChatInjectParamsSchema,
   ChatToolTitlesParamsSchema,
   ChatToolTitlesResultSchema,
+  ChatPredictParamsSchema,
+  ChatPredictResultSchema,
   UpdateRunParamsSchema,
   UpdateRunRecordSchema,
   UpdateRunResultSchema,
@@ -634,6 +648,8 @@ export {
   TickEventSchema,
   ShutdownEventSchema,
   ProjectRecentSchema,
+  ProjectsCheckoutOptionsParamsSchema,
+  ProjectsCheckoutOptionsResultSchema,
   ProjectsListParamsSchema,
   ProjectsListResultSchema,
   ProjectsRegisterParamsSchema,

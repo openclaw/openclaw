@@ -1,4 +1,3 @@
-// Filesystem session transcript helpers.
 // Resolves, archives, and cleans up transcript files owned by Gateway sessions.
 import fs from "node:fs";
 import path from "node:path";
@@ -379,17 +378,15 @@ export async function cleanupArchivedSessionTranscripts(opts: {
   directories: string[];
   rules: SessionArchiveCleanupRule[];
   nowMs?: number;
-}): Promise<{ removed: number; scanned: number }> {
+}): Promise<void> {
   const rules = opts.rules.filter(
     (rule) => Number.isFinite(rule.olderThanMs) && rule.olderThanMs >= 0,
   );
   if (rules.length === 0) {
-    return { removed: 0, scanned: 0 };
+    return;
   }
   const now = opts.nowMs ?? Date.now();
   const directories = uniqueStrings(opts.directories.map((dir) => path.resolve(dir)));
-  let removed = 0;
-  let scanned = 0;
 
   for (const dir of directories) {
     const entries = await ignoreMissingArchivePath(() => fs.promises.readdir(dir), []);
@@ -399,18 +396,11 @@ export async function cleanupArchivedSessionTranscripts(opts: {
         if (timestamp == null) {
           continue;
         }
-        scanned += 1;
         if (now - timestamp > rule.olderThanMs) {
           const fullPath = path.join(dir, entry);
           const stat = await ignoreMissingArchivePath(() => fs.promises.stat(fullPath), null);
           if (stat?.isFile()) {
-            const removedFile = await ignoreMissingArchivePath(async () => {
-              await fs.promises.rm(fullPath);
-              return true;
-            }, false);
-            if (removedFile) {
-              removed += 1;
-            }
+            await ignoreMissingArchivePath(() => fs.promises.rm(fullPath), undefined);
           }
         }
         // An archive name carries exactly one `.{reason}.{timestamp}` suffix,
@@ -419,6 +409,4 @@ export async function cleanupArchivedSessionTranscripts(opts: {
       }
     }
   }
-
-  return { removed, scanned };
 }

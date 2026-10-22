@@ -1,153 +1,135 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { dailyEntry } from "./usage-chart.test-support.ts";
 import {
   cacheSnapshot,
+  changeUsageControl,
   cleanupUsagePageTest,
-  createPage,
   focusDocument,
-  preloadUsage,
+  loadUsagePage,
+  queryUsagePage,
+  settleUsageTimers,
+  textOf,
+  type TestUsagePage,
 } from "./usage-page.test-support.ts";
+import { texts } from "./view-render.test-support.ts";
 
 afterEach(cleanupUsagePageTest);
-
-it.each([
-  {
-    cache: "fresh" as const,
-    filtered: false,
-    selectedLabels: ["May 1", "May 2", "May 3", "May 4"],
-  },
-  { cache: "partial" as const, filtered: false, selectedLabels: ["May 2", "May 4"] },
-  { cache: "partial" as const, filtered: true, selectedLabels: ["May 2", "May 4"] },
-])(
-  "selects the displayed calendar range with Shift-click for a $cache report (filtered: $filtered)",
-  async ({ cache, filtered, selectedLabels }) => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-05-04T12:00:00Z"));
-    focusDocument();
-    const snapshot = cacheSnapshot(cache);
-    const daily = [
-      dailyEntry("2026-05-04", 900),
-      ...(filtered ? [dailyEntry("2026-05-03", 500)] : []),
-      dailyEntry("2026-05-02", 100),
-    ];
-    const totalTokens = daily.reduce((sum, day) => sum + day.totalTokens, 0);
-    const result = {
-      ...snapshot.result,
-      startDate: "2026-05-01",
-      endDate: "2026-05-04",
-      totals: { ...snapshot.result.totals, input: totalTokens, totalTokens },
-      sessions: daily.map((day) => ({
-        key: `agent:main:${day.date}`,
-        label: day.date === "2026-05-03" ? "Excluded session" : `Usage on ${day.date}`,
-        agentId: "main",
-        usage: {
-          ...day,
-          activityDates: [day.date],
-          dailyBreakdown: [{ ...day, tokens: day.totalTokens, cost: day.totalCost }],
-        },
-      })),
-      aggregates: { ...snapshot.result.aggregates, costDaily: daily },
-    };
-    const request = vi.fn(async (method: string) =>
-      method === "sessions.usage" ? result : { providers: [] },
-    );
-    const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
-    await preloadUsage(page);
-    const startDate = page.querySelector<HTMLInputElement>('input[aria-label="Start date"]')!;
-    startDate.value = "2026-05-01";
-    startDate.dispatchEvent(new Event("change", { bubbles: true }));
-    await vi.advanceTimersByTimeAsync(400);
-    await page.updateComplete;
-
-    if (filtered) {
-      const query = page.querySelector<HTMLInputElement>(".usage-query-input")!;
-      query.value = 'label:"Usage on"';
-      query.dispatchEvent(new Event("input", { bubbles: true }));
-      query.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
-      await vi.advanceTimersByTimeAsync(0);
-      await page.updateComplete;
-    }
-
-    const bars = () => [...page.querySelectorAll<HTMLElement>(".daily-bar-wrapper")];
-    expect(bars().map((bar) => bar.querySelector(".daily-bar-label")?.textContent)).toEqual(
-      selectedLabels,
-    );
-    expect(bars().map((bar) => bar.getAttribute("aria-label"))).toEqual(
-      cache === "fresh"
-        ? [
-            "May 1, 2026: 0 tokens, $0.00",
-            "May 2, 2026: 100 tokens, $0.00",
-            "May 3, 2026: 0 tokens, $0.00",
-            "May 4, 2026: 900 tokens, $0.00",
-          ]
-        : ["May 2, 2026: 100 tokens, $0.00", "May 4, 2026: 900 tokens, $0.00"],
-    );
-    expect(page.querySelectorAll(".daily-bar--empty")).toHaveLength(cache === "fresh" ? 2 : 0);
-    expect(page.querySelector(".daily-chart-range")?.textContent).toContain("May 1, 2026");
-    bars()[0]!.click();
-    await vi.advanceTimersByTimeAsync(0);
-    await page.updateComplete;
-    bars()
-      .at(-1)!
-      .dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
-    await vi.advanceTimersByTimeAsync(0);
-    await page.updateComplete;
-
-    expect(
-      bars()
-        .filter((bar) => bar.getAttribute("aria-pressed") === "true")
-        .map((bar) => bar.querySelector(".daily-bar-label")?.textContent),
-    ).toEqual(selectedLabels);
-    expect(page.querySelector(".filter-chip-label")?.textContent).toBe(
-      `Days: ${selectedLabels.length} days`,
-    );
-    expect(page.querySelector(".usage-metric-badge strong")?.textContent).toBe("1.0K");
-    expect(
-      [...page.querySelectorAll(".session-bar-title")].map((row) => row.textContent).toSorted(),
-    ).toEqual(["Usage on 2026-05-02", "Usage on 2026-05-04"]);
-  },
-);
-
-it("keeps the same calendar interactive while day totals are pending", async () => {
+beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-05-04T12:00:00Z"));
   focusDocument();
-  const snapshot = cacheSnapshot("fresh");
-  const daily = [dailyEntry("2026-05-02", 100), dailyEntry("2026-05-04", 900)];
+});
+
+async function loadCalendar(
+  cache: "fresh" | "partial",
+  daily: ReturnType<typeof dailyEntry>[],
+  pending = false,
+) {
+  const { result: base } = cacheSnapshot(cache);
+  const totalTokens = daily.reduce((sum, day) => sum + day.totalTokens, 0);
   const result = {
-    ...snapshot.result,
-    totals: { ...snapshot.result.totals, totalTokens: 1000 },
+    ...base,
+    ...(!pending ? { startDate: "2026-05-01", endDate: "2026-05-04" } : {}),
+    totals: { ...base.totals, totalTokens, ...(!pending ? { input: totalTokens } : {}) },
     sessions: daily.map((day) => ({
       key: `agent:main:${day.date}`,
+      label: pending
+        ? undefined
+        : day.date === "2026-05-03"
+          ? "Excluded session"
+          : `Usage on ${day.date}`,
+      agentId: pending ? undefined : "main",
       usage: {
         ...day,
         activityDates: [day.date],
         dailyBreakdown: [{ ...day, tokens: day.totalTokens, cost: day.totalCost }],
       },
     })),
-    aggregates: { ...snapshot.result.aggregates, costDaily: daily },
+    aggregates: { ...base.aggregates, costDaily: daily },
   };
   const unresolved = new Promise<never>(() => {});
-  const request = vi.fn(async (method: string, params?: Record<string, unknown>) =>
-    method === "sessions.usage"
-      ? Array.isArray(params?.selectedDays)
-        ? unresolved
-        : result
-      : { providers: [] },
+  const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+    if (method !== "sessions.usage") {
+      return { providers: [] };
+    }
+    return pending && Array.isArray(params?.selectedDays) ? unresolved : result;
+  });
+  return { ...(await loadUsagePage(request)), request };
+}
+const barsIn = (page: TestUsagePage) => [
+  ...page.querySelectorAll<HTMLElement>(".daily-bar-wrapper"),
+];
+const labelOf = (bar: HTMLElement) => textOf(bar, ".daily-bar-label");
+const shiftClick = (bar: HTMLElement) =>
+  bar.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
+
+it.each<["fresh" | "partial", boolean, string[]]>([
+  ["fresh", false, ["May 1", "May 2", "May 3", "May 4"]],
+  ["partial", false, ["May 2", "May 4"]],
+  ["partial", true, ["May 2", "May 4"]],
+])(
+  "selects the displayed calendar range with Shift-click for %s (filtered: %s)",
+  async (cache, filtered, selectedLabels) => {
+    const daily = [
+      dailyEntry("2026-05-04", 900),
+      ...(filtered ? [dailyEntry("2026-05-03", 500)] : []),
+      dailyEntry("2026-05-02", 100),
+    ];
+    const { page } = await loadCalendar(cache, daily);
+    changeUsageControl(
+      page.querySelector<HTMLInputElement>('input[aria-label="Start date"]')!,
+      "2026-05-01",
+    );
+    await settleUsageTimers(page, 400);
+
+    if (filtered) {
+      await queryUsagePage(page, 'label:"Usage on"');
+      await settleUsageTimers(page);
+    }
+
+    const bars = () => barsIn(page);
+    expect(bars().map(labelOf)).toEqual(selectedLabels);
+    const amounts = cache === "fresh" ? [0, 100, 0, 900] : [100, 900];
+    expect(bars().map((bar) => bar.getAttribute("aria-label"))).toEqual(
+      selectedLabels.map((label, index) => `${label}, 2026: ${amounts[index]} tokens, $0.00`),
+    );
+    expect(page.querySelectorAll(".daily-bar--empty")).toHaveLength(cache === "fresh" ? 2 : 0);
+    expect(textOf(page, ".daily-chart-range")).toContain("May 1, 2026");
+    bars()[0]!.click();
+    await settleUsageTimers(page);
+    shiftClick(bars().at(-1)!);
+    await settleUsageTimers(page);
+
+    expect(
+      bars()
+        .filter((bar) => bar.getAttribute("aria-pressed") === "true")
+        .map(labelOf),
+    ).toEqual(selectedLabels);
+    expect(textOf(page, ".filter-chip-label")).toBe(`Days: ${selectedLabels.length} days`);
+    expect(textOf(page, ".usage-metric-badge strong")).toBe("1.0K");
+    expect(texts(page.element, ".session-bar-title", false).toSorted()).toEqual([
+      "Usage on 2026-05-02",
+      "Usage on 2026-05-04",
+    ]);
+  },
+);
+
+it("keeps the same calendar interactive while day totals are pending", async () => {
+  const { page, request } = await loadCalendar(
+    "fresh",
+    [dailyEntry("2026-05-02", 100), dailyEntry("2026-05-04", 900)],
+    true,
   );
-  const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
-  await preloadUsage(page);
-  const bars = () => [...page.querySelectorAll<HTMLElement>(".daily-bar-wrapper")];
+  const bars = () => barsIn(page);
   const first = bars()[0]!;
   const last = bars().at(-1)!;
   first.click();
   await page.updateComplete;
-  expect(page.querySelector(".usage-metric-badge")).toBeNull();
+  expect(texts(page.element, ".usage-metric-badge strong", false)).toEqual(["—", "—", "—"]);
   expect(bars()).toContain(last);
-  last.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
+  shiftClick(last);
   await page.updateComplete;
   const days = request.mock.calls.findLast(([method]) => method === "sessions.usage")?.[1]
     ?.selectedDays;

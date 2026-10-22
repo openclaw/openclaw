@@ -1,8 +1,10 @@
 import type { SessionEntry } from "../config/sessions/types.js";
+import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
 
 export function buildSessionCreateLifecycleTargets({
   target,
+  targetSessionId,
   targetLifecycleIdentities,
   canonicalParentSessionKey,
   parentSessionEntry,
@@ -10,6 +12,7 @@ export function buildSessionCreateLifecycleTargets({
   holdParentLifecycle,
 }: {
   target: GatewaySessionStoreTarget;
+  targetSessionId: string | undefined;
   targetLifecycleIdentities: string[];
   canonicalParentSessionKey: string | undefined;
   parentSessionEntry: SessionEntry | undefined;
@@ -17,10 +20,13 @@ export function buildSessionCreateLifecycleTargets({
   holdParentLifecycle: boolean;
 }) {
   const lifecycleTargets = [
-    {
-      scope: target.storePath,
-      identities: targetLifecycleIdentities,
-    },
+    captureSessionTarget({
+      storeScope: target.storePath,
+      sessionKey: target.canonicalKey,
+      aliases: targetLifecycleIdentities,
+      agentId: target.agentId,
+      incarnation: targetSessionId,
+    }),
   ];
   if (
     canonicalParentSessionKey &&
@@ -28,10 +34,15 @@ export function buildSessionCreateLifecycleTargets({
     parentSessionTarget &&
     holdParentLifecycle
   ) {
-    lifecycleTargets.push({
-      scope: parentSessionTarget.storePath,
-      identities: [canonicalParentSessionKey, parentSessionEntry.sessionId],
-    });
+    lifecycleTargets.push(
+      captureSessionTarget({
+        storeScope: parentSessionTarget.storePath,
+        sessionKey: canonicalParentSessionKey,
+        aliases: parentSessionTarget.storeKeys,
+        incarnation: parentSessionEntry.sessionId,
+        agentId: parentSessionTarget.agentId,
+      }),
+    );
   }
   return lifecycleTargets;
 }

@@ -1,7 +1,32 @@
 /** Read JSON object members without normalizing number spelling or compound values. */
 export function readJsonObjectMembers(json: string): Map<string, string> {
   JSON.parse(json);
-  const tokens = json.match(/"(?:[^"\\]|\\[\s\S])*"|[{}[\],:]|[^\s{}[\],:]+/gu) ?? [];
+  const tokens: string[] = [];
+  // Avoid regexp backtracking over long strings. Scan validated JSON once,
+  // preserving the raw tokens used by SQLite-compatible field projection.
+  for (let offset = 0; offset < json.length;) {
+    const character = json[offset]!;
+    if (/\s/u.test(character)) {
+      offset++;
+      continue;
+    }
+    const start = offset++;
+    if (character === '"') {
+      while (offset < json.length) {
+        const next = json[offset++];
+        if (next === "\\") {
+          offset++;
+        } else if (next === '"') {
+          break;
+        }
+      }
+    } else if (!"{}[],:".includes(character)) {
+      while (offset < json.length && !/[\s{}[\],:]/u.test(json[offset]!)) {
+        offset++;
+      }
+    }
+    tokens.push(json.slice(start, offset));
+  }
   const members = new Map<string, string>();
   if (tokens[0] !== "{") {
     return members;

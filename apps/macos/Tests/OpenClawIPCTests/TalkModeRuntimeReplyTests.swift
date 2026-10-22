@@ -354,7 +354,7 @@ private func makeTalkReplyFixture(
         sessionBox: WebSocketSessionBox(session: socketSession))
     let live = TalkModeRuntime.Dependencies.live
     let dependencies = TalkModeRuntime.Dependencies(
-        permissions: .init(supported: { false }, granted: { false }, ensure: { _ in false }),
+        permissions: .init(granted: { false }, ensure: { _ in false }),
         audioCapture: live.audioCapture,
         pcmPlayer: live.pcmPlayer,
         selectedSession: { TalkReplyWire.sessionKey },

@@ -234,6 +234,15 @@ Other balance failures include guidance for checking the server or its access pe
     configured `false`, keeping reasoning out of the answer even when its
     visibility is disabled.
 
+    If a model marked `reasoning: false` still returns thought fields, OpenClaw
+    keeps them hidden and reports a content-free warning once per model and
+    session in the Gateway log. `openclaw status` and `openclaw doctor` show a
+    hint for recent observations. Set `reasoning: true` on that model under
+    `models.providers.<provider>.models`, or choose a non-thinking model.
+    A response containing only suppressed reasoning fails with this guidance;
+    a token-limit stop also explains that no answer was reached. Increasing the
+    output budget may be necessary for a thinking model to finish its answer.
+
   </Accordion>
 
   <Accordion title="Reasoning models">
@@ -256,6 +265,14 @@ Other balance failures include guidance for checking the server or its access pe
     [memory search](/concepts/memory). It uses the configured Ollama base URL
     and API key, calls `/api/embed`, and batches multiple memory chunks into
     one `input` request when possible.
+
+    For rootless Podman, a configured Ollama provider at
+    `http://host.containers.internal:11434` can resolve to a canonical IPv4
+    link-local host gateway such as `169.254.1.2`. Memory embeddings allow this
+    exact provider origin, including a remote override that matches it. Other
+    hostnames, cloud metadata addresses, and IPv6-encoded link-local addresses
+    keep their existing restrictions. These requests reject cross-origin
+    redirects, including changes to the scheme or port.
 
     When `proxy.enabled=true`, embedding requests to the exact host-local
     loopback origin derived from the configured `baseUrl` use OpenClaw's

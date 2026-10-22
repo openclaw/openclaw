@@ -107,7 +107,7 @@ Four-layer defense model:
 3. Docker isolation: `DOCKER-USER` iptables chain prevents external port exposure
 4. Systemd hardening: `NoNewPrivileges`, `PrivateTmp`, unprivileged user
 
-Verify your external attack surface:
+Check which ports are publicly reachable:
 
 ```bash
 nmap -p- YOUR_SERVER_IP
@@ -161,7 +161,7 @@ cd openclaw-ansible
 ./run-playbook.sh
 ```
 
-This is idempotent and safe to run multiple times.
+You can run this multiple times without duplicating its effects.
 
 ## Troubleshooting
 

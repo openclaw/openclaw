@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import type { TranscriptsGetResult } from "@openclaw/gateway-protocol";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -6,117 +7,135 @@ import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { meetingEntry } from "../../test-helpers/transcripts.test-support.ts";
 import { button, meetingPage, mount } from "./meetings-page.test-support.tsx";
 
+const waitForText = (page: Element, text: string) =>
+  waitForSolid(() => expect(page.textContent).toContain(text));
+let detail: TranscriptsGetResult;
+const summarize = vi.fn<() => Promise<typeof meetingPage>>();
+const request = vi.fn(async (method: string) =>
+  method === "transcripts.list"
+    ? { sessions: [detail.session], nextCursor: null }
+    : method === "transcripts.summarize"
+      ? summarize()
+      : detail,
+);
+beforeEach(() => {
+  detail = { ...meetingPage, summary: undefined };
+  summarize.mockReset();
+});
+
 afterEach(() => {
   document.body.replaceChildren();
   vi.useRealTimers();
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
 });
 
-describe("meeting summary generation", () => {
-  it("generates missing notes on open, keeps failures visible without retry loops, and retries explicitly", async () => {
-    vi.useFakeTimers();
-    const pending = deferred<typeof meetingPage>();
-    let generated = false;
-    let attempts = 0;
-    const missing = {
-      ...meetingPage,
-      summary: undefined,
-      session: { ...meetingEntry, hasSummary: false },
-    };
-    const request = vi.fn(async (method: string) => {
-      if (method === "transcripts.list") {
-        return { sessions: [meetingEntry], nextCursor: null };
-      }
-      if (method === "transcripts.summarize") {
-        if (++attempts === 1) {
-          return pending.promise;
-        }
-        generated = true;
-      }
-      return generated ? meetingPage : missing;
-    });
-    const { page } = mount(request, "?selector=meeting");
-    await waitForSolid(() => expect(page.textContent).toContain("Generating meeting summary"));
-    await vi.advanceTimersByTimeAsync(9_000);
-    expect(attempts).toBe(1);
-    pending.reject(new Error("Summary provider unavailable"));
-    await waitForSolid(() => expect(page.textContent).toContain("Summary provider unavailable"));
-    await vi.advanceTimersByTimeAsync(9_000);
-    expect(attempts).toBe(1);
-    button(page.querySelector(".transcripts-summary")!, "Retry").click();
-    await waitForSolid(() => expect(page.textContent).toContain("Reader layout discussed."));
-    await vi.advanceTimersByTimeAsync(15_000);
-    expect(attempts).toBe(2);
-    expect(page.textContent).not.toContain("Summary provider unavailable");
+it("generates on open, holds failures without retry loops, and retries explicitly", async () => {
+  vi.useFakeTimers();
+  const pending = deferred<typeof meetingPage>();
+  detail.session = { ...meetingEntry, hasSummary: false };
+  summarize
+    .mockReturnValueOnce(pending.promise)
+    .mockImplementation(async () => (detail = meetingPage));
+  const { page } = mount(request, "?selector=meeting");
+  await waitForText(page, "Generating meeting summary");
+  await vi.advanceTimersByTimeAsync(9_000);
+  expect(summarize).toHaveBeenCalledTimes(1);
+  pending.reject(new Error("Summary provider unavailable"));
+  await waitForText(page, "Summary provider unavailable");
+  await vi.advanceTimersByTimeAsync(9_000);
+  expect(summarize).toHaveBeenCalledTimes(1);
+  button(page.querySelector(".transcripts-summary")!, "Retry").click();
+  await waitForText(page, "Reader layout discussed.");
+  await vi.advanceTimersByTimeAsync(15_000);
+  expect(summarize).toHaveBeenCalledTimes(2);
+  expect(page.textContent).not.toContain("Summary provider unavailable");
+});
+
+it("finishes replacement notes while a cancelled summary request remains unresolved", async () => {
+  const retired = deferred<typeof meetingPage>();
+  const replacement = deferred<typeof meetingPage>();
+  summarize.mockReturnValueOnce(retired.promise).mockReturnValueOnce(replacement.promise);
+  const { page, setSearch } = mount(request, "?selector=old");
+  await waitForText(page, "Generating meeting summary");
+
+  setSearch("?selector=new");
+  await waitForSolid(() => expect(summarize).toHaveBeenCalledTimes(2));
+  replacement.resolve({
+    ...meetingPage,
+    summary: { ...meetingPage.summary, markdown: "Current meeting notes" },
   });
+  await waitForText(page, "Current meeting notes");
+  expect(page.textContent).not.toContain("Generating meeting summary");
 
-  it.each(["read-only", "silent", "saved"])(
-    "does not generate notes for a %s meeting reader",
-    async (kind) => {
-      const detail = {
-        ...meetingPage,
-        summary: kind === "saved" ? meetingPage.summary : undefined,
-        session: { ...meetingEntry, utteranceCount: kind === "silent" ? 0 : 2 },
-      };
-      const request = vi.fn(async (method: string) =>
-        method === "transcripts.list" ? { sessions: [detail.session], nextCursor: null } : detail,
-      );
-      const { page } = mount(
-        request,
-        "?selector=meeting",
-        kind === "read-only" ? ["operator.read"] : ["operator.admin"],
-      );
-      await waitForSolid(() => expect(page.querySelector(".transcripts-summary")).not.toBeNull());
-      expect(request.mock.calls.some(([method]) => method === "transcripts.summarize")).toBe(false);
-      expect(page.textContent).toContain(
-        kind === "saved"
-          ? "Reader layout discussed."
-          : kind === "silent"
-            ? "No speech captured"
-            : "No summary is available yet.",
-      );
-    },
-  );
+  retired.resolve({
+    ...meetingPage,
+    summary: { ...meetingPage.summary, markdown: "Retired meeting notes" },
+  });
+  await retired.promise;
+  flush();
+  expect(page.textContent).toContain("Current meeting notes");
+  expect(page.textContent).not.toContain("Retired meeting notes");
+});
 
-  it.each(["selection", "client", "authorization"])(
-    "ignores summary generation after the %s changes",
-    async (replacement) => {
-      const pending = deferred<typeof meetingPage>();
-      let replaced = false;
-      const request = vi.fn(async (method: string) => {
-        if (method === "transcripts.list") {
-          return { sessions: [], nextCursor: null };
-        }
-        if (method === "transcripts.summarize") {
-          return pending.promise;
-        }
-        return replaced ? meetingPage : { ...meetingPage, summary: undefined };
-      });
-      const { page, setSearch, snapshot, notify } = mount(request, "?selector=old");
-      await waitForSolid(() => expect(page.textContent).toContain("Generating meeting summary"));
-      replaced = true;
-      if (replacement === "selection") {
-        setSearch("?selector=new");
-      } else if (replacement === "client") {
-        snapshot.client = { request } as unknown as GatewayBrowserClient;
-        notify();
-      } else {
-        snapshot.hello = {
-          ...snapshot.hello,
-          auth: { role: "operator", scopes: ["operator.read"] },
-        } as ApplicationGatewaySnapshot["hello"];
-        notify();
-      }
-      await waitForSolid(() => expect(page.textContent).toContain("Reader layout discussed."));
-      pending.resolve({
-        ...meetingPage,
-        summary: { ...meetingPage.summary, markdown: "Late private notes" },
-      });
-      await pending.promise;
-      flush();
-      expect(page.textContent).not.toContain("Late private notes");
-      expect(page.textContent).toContain("Reader layout discussed.");
-    },
-  );
+it.each([
+  ["read-only", "No summary is available yet."],
+  ["silent", "No speech captured"],
+  ["saved", "Reader layout discussed."],
+])("does not generate notes for a %s reader", async (kind, expected) => {
+  detail.summary = kind === "saved" ? meetingPage.summary : undefined;
+  detail.session = { ...meetingEntry, utteranceCount: kind === "silent" ? 0 : 2 };
+  const scopes = kind === "read-only" ? ["operator.read"] : ["operator.admin"];
+  const { page } = mount(request, "?selector=meeting", scopes);
+  await waitForSolid(() => expect(page.querySelector(".transcripts-summary")).not.toBeNull());
+  expect(summarize).not.toHaveBeenCalled();
+  expect(page.textContent).toContain(expected);
+});
+
+it.each(["selection", "client", "authorization"])("fences replaced %s", async (replacement) => {
+  const pending = deferred<typeof meetingPage>();
+  summarize.mockReturnValue(pending.promise);
+  const { page, setSearch, snapshot, notify } = mount(request, "?selector=old");
+  await waitForText(page, "Generating meeting summary");
+  detail = meetingPage;
+  if (replacement === "selection") {
+    setSearch("?selector=new");
+  } else if (replacement === "client") {
+    snapshot.client = { request } as unknown as GatewayBrowserClient;
+    notify();
+  } else {
+    snapshot.hello = {
+      auth: { role: "operator", scopes: ["operator.read"] },
+    } as ApplicationGatewaySnapshot["hello"];
+    notify();
+  }
+  await waitForText(page, "Reader layout discussed.");
+  const late = { ...meetingPage.summary, markdown: "Late private notes" };
+  pending.resolve({ ...meetingPage, summary: late });
+  await pending.promise;
+  flush();
+  expect(page.textContent).not.toContain("Late private notes");
+  expect(page.textContent).toContain("Reader layout discussed.");
+});
+
+it("keeps same-meeting tab navigation responsive while generating a summary", async () => {
+  const pending = deferred<typeof meetingPage>();
+  summarize.mockReturnValue(pending.promise);
+  const { page, unmount } = mount(request, "?selector=meeting");
+  try {
+    await waitForText(page, "Generating meeting summary");
+    button(page, "Transcript").click();
+    await waitForSolid(() =>
+      expect(page.querySelector("#transcript-reader-tab-text")?.getAttribute("aria-selected")).toBe(
+        "true",
+      ),
+    );
+    expect(page.textContent).toContain("Keep the reader quiet and readable.");
+    button(page, "Summary").click();
+    await waitForText(page, "Generating meeting summary");
+    expect(summarize).toHaveBeenCalledTimes(1);
+    pending.resolve(meetingPage);
+    await waitForText(page, "Reader layout discussed.");
+  } finally {
+    unmount();
+    pending.resolve(meetingPage);
+  }
 });

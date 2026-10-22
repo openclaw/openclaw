@@ -2,9 +2,9 @@
 import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
-import { formatRawAssistantErrorForUi } from "../agents/embedded-agent-helpers.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
 import type { FallbackNoticeState } from "../status/fallback-notice-state.js";
 import type { RuntimeFallbackAttempt } from "./reply/agent-runner-execution.types.js";
 
@@ -59,7 +59,7 @@ function formatFallbackAttemptReason(attempt: RuntimeFallbackAttempt): string {
   const code = attempt.code?.trim();
   return (
     code ||
-    (typeof attempt.status === "number"
+    (attempt.status !== undefined
       ? `HTTP ${attempt.status}`
       : truncateFallbackReasonPart(attempt.error || "error"))
   );

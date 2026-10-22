@@ -1,5 +1,16 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show } from "solid-js";
+import {
+  action,
+  createMemo,
+  createOptimistic,
+  Errored,
+  isPending,
+  latest,
+  Loading,
+  onSettled,
+  refresh,
+  Show,
+} from "solid-js";
 import type {
   WebPushDevicePreferences,
   WebPushNotificationPreferences,
@@ -10,23 +21,24 @@ import {
   SettingsPage,
   SettingsRow,
   SettingsStatus,
-  SettingsToggleRow,
   SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
-import { formatUiExternalText } from "../../lib/format-error.ts";
+import { formatUiError, formatUiExternalText, UserFacingError } from "../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { resolveTimezoneSuggestions } from "../../lib/timezone-suggestions.ts";
-import { SettingsSectionHeader } from "./settings-section-header.tsx";
-import { SettingsSelectRow } from "./settings-select-row.tsx";
 import { COMMUNICATION_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
 import type { ConfigProps } from "./view-types.ts";
+import {
+  DeviceNotificationPreferences,
+  UserNotificationPreferences,
+} from "./web-push-preferences.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
 
 export type NotificationsSectionProps = Pick<
   ConfigProps,
   | "connected"
+  | "presentationRetired"
   | "nativeNotifications"
   | "onNativeNotificationsRequestPermission"
   | "onNativeNotificationsSendTest"
@@ -37,295 +49,6 @@ export type NotificationsSectionProps = Pick<
   | "onWebPushSetUserPreferences"
   | "onWebPushSetDevicePreferences"
 >;
-
-const WEB_PUSH_CATEGORIES = [
-  ["approvalRequested", () => t("configView.notifications.approvalRequested")],
-  ["agentFinished", () => t("configView.notifications.agentFinished")],
-  ["agentQuestion", () => t("configView.notifications.agentQuestion")],
-  ["humanMentioned", () => t("configView.notifications.humanMentioned")],
-  ["scheduledTaskFailed", () => t("configView.notifications.scheduledTaskFailed")],
-] as const;
-
-function minutesToTime(value: number): string {
-  return `${String(Math.floor(value / 60)).padStart(2, "0")}:${String(value % 60).padStart(2, "0")}`;
-}
-
-function timeToMinutes(value: string, fallback: number): number {
-  const match = /^(\d{2}):(\d{2})$/u.exec(value);
-  return match ? Number(match[1]) * 60 + Number(match[2]) : fallback;
-}
-
-type DetailLevel = WebPushNotificationPreferences["detailLevel"];
-function detailLevel(value: string): DetailLevel {
-  return value === "identified" || value === "detailed" ? value : "private";
-}
-
-type InheritChoice = "inherit" | "on" | "off";
-type QuietHoursWindow = WebPushNotificationPreferences["quietHours"];
-function detailLevelOptions(): Array<{ value: DetailLevel; label: string }> {
-  return [
-    { value: "private", label: t("configView.notifications.private") },
-    { value: "identified", label: t("configView.notifications.namesOnly") },
-    { value: "detailed", label: t("configView.notifications.detailed") },
-  ];
-}
-function inheritChoiceOptions(
-  inheritLabel: string,
-): Array<{ value: InheritChoice; label: string }> {
-  return [
-    { value: "inherit", label: inheritLabel },
-    { value: "on", label: t("configForm.enumOn") },
-    { value: "off", label: t("configForm.enumOff") },
-  ];
-}
-
-function QuietHoursWindowRows(props: {
-  quietHours: QuietHoursWindow;
-  onChange: (value: QuietHoursWindow) => void;
-}) {
-  return (
-    <div class="settings-subrows quiet-hours-window">
-      <SettingsRow
-        title={t("configView.notifications.quietHoursWindow")}
-        control={
-          <For
-            each={
-              [
-                ["startMinute", "quietHoursStart"],
-                ["endMinute", "quietHoursEnd"],
-              ] as const
-            }
-            keyed={(entry) => entry[0]}
-          >
-            {(entry, index) => (
-              <>
-                {index() > 0 && (
-                  <span class="settings-row__value" aria-hidden="true">
-                    –
-                  </span>
-                )}
-                <input
-                  type="time"
-                  class="settings-input"
-                  aria-label={t(`configView.notifications.${entry()[1]}`)}
-                  value={minutesToTime(props.quietHours[entry()[0]])}
-                  onChange={(event) =>
-                    props.onChange({
-                      ...props.quietHours,
-                      [entry()[0]]: timeToMinutes(
-                        event.currentTarget.value,
-                        props.quietHours[entry()[0]],
-                      ),
-                    })
-                  }
-                />
-              </>
-            )}
-          </For>
-        }
-      />
-      <SettingsSelectRow
-        title={t("configView.notifications.timeZone")}
-        value={props.quietHours.timeZone}
-        options={resolveTimezoneSuggestions([props.quietHours.timeZone]).map((value) => ({
-          value,
-          label: value.replaceAll("_", " "),
-        }))}
-        onChange={(timeZone) => props.onChange({ ...props.quietHours, timeZone })}
-      />
-    </div>
-  );
-}
-
-function AgentIdsRow(props: { agentIds: string[]; onChange: (value: string[]) => void }) {
-  return (
-    <SettingsRow
-      title={t("configView.notifications.onlyAgents")}
-      control={
-        <input
-          type="text"
-          class="settings-input"
-          aria-label={t("configView.notifications.onlyAgents")}
-          value={props.agentIds.join(", ")}
-          onChange={(event) =>
-            props.onChange(
-              event.currentTarget.value
-                .split(",")
-                .map((entry) => entry.trim())
-                .filter(Boolean),
-            )
-          }
-        />
-      }
-    />
-  );
-}
-
-function UserNotificationPreferences(props: {
-  preferences: WebPushNotificationPreferences;
-  onChange: (value: WebPushNotificationPreferences) => void;
-}) {
-  const patch = (next: Partial<WebPushNotificationPreferences>) =>
-    props.onChange({ ...props.preferences, ...next });
-  return (
-    <section class="settings-section">
-      <SettingsSectionHeader title={t("configView.notifications.accountDefaults")} />
-      <div class="settings-group">
-        <For each={WEB_PUSH_CATEGORIES} keyed={(entry) => entry[0]}>
-          {(entry) => (
-            <SettingsToggleRow
-              title={entry()[1]()}
-              checked={props.preferences.categories[entry()[0]] === true}
-              onChange={(checked) =>
-                patch({ categories: { ...props.preferences.categories, [entry()[0]]: checked } })
-              }
-            />
-          )}
-        </For>
-        <SettingsSelectRow
-          title={t("configView.notifications.lockScreenDetail")}
-          description={t("configView.notifications.lockScreenDetailHint")}
-          value={props.preferences.detailLevel}
-          options={detailLevelOptions()}
-          onChange={(value) => patch({ detailLevel: detailLevel(value) })}
-        />
-        <SettingsToggleRow
-          title={t("configView.notifications.quietHours")}
-          checked={props.preferences.quietHours.enabled}
-          onChange={(enabled) =>
-            patch({ quietHours: { ...props.preferences.quietHours, enabled } })
-          }
-        />
-        <Show when={props.preferences.quietHours.enabled}>
-          <QuietHoursWindowRows
-            quietHours={props.preferences.quietHours}
-            onChange={(quietHours) => patch({ quietHours })}
-          />
-        </Show>
-        <AgentIdsRow
-          agentIds={props.preferences.agentIds}
-          onChange={(agentIds) => patch({ agentIds })}
-        />
-      </div>
-    </section>
-  );
-}
-
-function DeviceNotificationPreferences(props: {
-  preferences: WebPushDevicePreferences;
-  onChange: (value: WebPushDevicePreferences) => void;
-}) {
-  const patch = (next: Partial<WebPushDevicePreferences>) =>
-    props.onChange({ ...props.preferences, ...next });
-  return (
-    <section class="settings-section">
-      <SettingsSectionHeader title={t("configView.notifications.installedApp")} />
-      <div class="settings-group">
-        <SettingsToggleRow
-          title={t("configView.notifications.deliverDevice")}
-          checked={props.preferences.enabled}
-          onChange={(enabled) => patch({ enabled })}
-        />
-        <SettingsRow
-          title={t("configView.notifications.notificationLabel")}
-          control={
-            <input
-              type="text"
-              class="settings-input"
-              aria-label={t("configView.notifications.notificationLabel")}
-              maxlength={80}
-              value={props.preferences.label}
-              onChange={(event) => patch({ label: event.currentTarget.value })}
-            />
-          }
-        />
-        <SettingsSelectRow
-          title={t("configView.notifications.lockScreenDetail")}
-          value={props.preferences.detailLevel ?? "inherit"}
-          options={[
-            { value: "inherit", label: t("configView.notifications.inheritDetail") },
-            ...detailLevelOptions(),
-          ]}
-          onChange={(value) =>
-            patch({ detailLevel: value === "inherit" ? undefined : detailLevel(value) })
-          }
-        />
-        <SettingsSelectRow
-          title={t("configView.notifications.quietHours")}
-          value={
-            props.preferences.quietHours === undefined
-              ? "inherit"
-              : props.preferences.quietHours.enabled
-                ? "on"
-                : "off"
-          }
-          options={inheritChoiceOptions(t("configView.notifications.inheritQuietHours"))}
-          onChange={(value) =>
-            patch({
-              quietHours:
-                value === "inherit"
-                  ? undefined
-                  : {
-                      enabled: value === "on",
-                      startMinute: props.preferences.quietHours?.startMinute ?? 22 * 60,
-                      endMinute: props.preferences.quietHours?.endMinute ?? 7 * 60,
-                      timeZone: props.preferences.quietHours?.timeZone ?? "UTC",
-                    },
-            })
-          }
-        />
-        <Show
-          when={props.preferences.quietHours?.enabled ? props.preferences.quietHours : undefined}
-        >
-          {(quietHours) => (
-            <QuietHoursWindowRows
-              quietHours={quietHours()}
-              onChange={(value) => patch({ quietHours: value })}
-            />
-          )}
-        </Show>
-        <SettingsSelectRow
-          title={t("configView.notifications.onlyAgents")}
-          value={props.preferences.agentIds === undefined ? "inherit" : "override"}
-          options={[
-            { value: "inherit", label: t("configView.notifications.inherit") },
-            { value: "override", label: t("configView.notifications.overrideAgents") },
-          ]}
-          onChange={(value) => patch({ agentIds: value === "inherit" ? undefined : [] })}
-        />
-        <Show when={props.preferences.agentIds}>
-          {(agentIds) => (
-            <AgentIdsRow agentIds={agentIds()} onChange={(value) => patch({ agentIds: value })} />
-          )}
-        </Show>
-        <For each={WEB_PUSH_CATEGORIES} keyed={(entry) => entry[0]}>
-          {(entry) => (
-            <SettingsSelectRow
-              title={entry()[1]()}
-              value={
-                props.preferences.categories?.[entry()[0]] === undefined
-                  ? "inherit"
-                  : props.preferences.categories?.[entry()[0]]
-                    ? "on"
-                    : "off"
-              }
-              options={inheritChoiceOptions(t("configView.notifications.inherit"))}
-              onChange={(value) => {
-                const categories = { ...props.preferences.categories };
-                if (value === "inherit") {
-                  delete categories[entry()[0]];
-                } else {
-                  categories[entry()[0]] = value === "on";
-                }
-                patch({ categories });
-              }}
-            />
-          )}
-        </For>
-      </div>
-    </section>
-  );
-}
 
 function nativeNotificationsStatus(permission: NativeNotificationsPermission | "unknown"): {
   kind: "ok" | "danger" | "accent" | "muted";
@@ -377,15 +100,44 @@ function NotificationSection(props: {
   );
 }
 
+const NativeTestStatus = (props: { state: "pending" | "sent" | "error"; message?: string }) => (
+  <SettingsRow
+    title={t("configView.notifications.testOutcome")}
+    description={props.message}
+    control={
+      <SettingsStatus
+        kind={props.state === "pending" ? "accent" : props.state === "sent" ? "ok" : "danger"}
+        label={t(
+          props.state === "pending"
+            ? "configView.notifications.sendingTest"
+            : props.state === "sent"
+              ? "configView.notifications.testQueued"
+              : "configView.notifications.testFailed",
+        )}
+      />
+    }
+  />
+);
+
 function NativeNotificationSection(props: {
   native: NonNullable<NotificationsSectionProps["nativeNotifications"]>;
   actions: NotificationsSectionProps;
 }) {
   const status = () => nativeNotificationsStatus(props.native.permission);
-  const testPending = () => props.native.test?.state === "pending";
-  const testDescription = () => {
-    const test = props.native.test;
-    return test?.state === "error" ? test.message : undefined;
+  const [sending, setSending] = createOptimistic(false);
+  const testPending = () => sending() || props.native.test?.state === "pending";
+  const presentTest = action(function* (pending: Promise<unknown> | void, retired: Promise<void>) {
+    if (retired === props.actions.presentationRetired()) {
+      setSending(true);
+    }
+    yield Promise.race([pending, retired]);
+  });
+  const sendTest = async () => {
+    const retired = props.actions.presentationRetired();
+    const pending = props.actions.onNativeNotificationsSendTest?.();
+    // Let the synchronous owner's pending outcome publish before joining its transition.
+    await Promise.resolve();
+    return presentTest(pending, retired);
   };
   return (
     <NotificationSection
@@ -405,11 +157,7 @@ function NativeNotificationSection(props: {
       >
         <NotificationActions>
           {props.native.permission === "granted" ? (
-            <button
-              class="btn primary"
-              disabled={testPending()}
-              onClick={() => props.actions.onNativeNotificationsSendTest?.()}
-            >
+            <button class="btn primary" disabled={testPending()} onClick={() => void sendTest()}>
               <Icon name={testPending() ? "loader" : "send"} />
               {testPending()
                 ? t("configView.notifications.sendingTest")
@@ -417,7 +165,7 @@ function NativeNotificationSection(props: {
             </button>
           ) : (
             <button
-              class={props.native.permission === "notDetermined" ? "btn primary" : "btn"}
+              class={["btn", { primary: props.native.permission === "notDetermined" }]}
               onClick={() => props.actions.onNativeNotificationsRequestPermission?.()}
             >
               {t(
@@ -432,25 +180,32 @@ function NativeNotificationSection(props: {
       <Show when={props.native.permission === "denied"}>
         <BlockedNotifications description={t("configView.notifications.nativeBlockedHint")} />
       </Show>
-      <Show when={props.native.test}>
-        {(test) => (
-          <SettingsRow
-            title={t("configView.notifications.testOutcome")}
-            description={testDescription()}
-            control={
-              <SettingsStatus
-                kind={testPending() ? "accent" : test().state === "sent" ? "ok" : "danger"}
-                label={t(
-                  testPending()
-                    ? "configView.notifications.sendingTest"
-                    : test().state === "sent"
-                      ? "configView.notifications.testQueued"
-                      : "configView.notifications.testFailed",
-                )}
-              />
-            }
-          />
-        )}
+      <Show
+        when={testPending()}
+        fallback={
+          <Show when={props.native.test} keyed>
+            {(test) => {
+              // A new attempt retires the old error region without replacing the send control.
+              const outcome = createMemo(() => {
+                if (test.state === "error") {
+                  throw new UserFacingError(test.message);
+                }
+                return test.state;
+              });
+              return (
+                <Errored
+                  fallback={(error) => (
+                    <NativeTestStatus state="error" message={formatUiError(error())} />
+                  )}
+                >
+                  <NativeTestStatus state={outcome()} />
+                </Errored>
+              );
+            }}
+          </Show>
+        }
+      >
+        <NativeTestStatus state="pending" />
       </Show>
     </NotificationSection>
   );
@@ -460,7 +215,48 @@ function WebPushSection(props: {
   push: NonNullable<NotificationsSectionProps["webPush"]>;
   actions: NotificationsSectionProps;
 }) {
+  const read = createMemo(() => props.push.read);
+  const authoritativePreferences = createMemo(() => {
+    read();
+    return props.push.preferences;
+  });
+  const [preferences, setPreferences] = createOptimistic(() => authoritativePreferences());
+  const [saving, setSaving] = createOptimistic(false, { equals: false });
+  const commandOutcome = createMemo(() => props.push.command);
+  const present = action(function* (
+    completion: Promise<void>,
+    edit?:
+      | { scope: "user"; value: WebPushNotificationPreferences }
+      | { scope: "device"; value: WebPushDevicePreferences },
+  ) {
+    setSaving(true);
+    if (edit) {
+      setPreferences((previous) =>
+        previous ? { ...previous, [edit.scope]: edit.value } : previous,
+      );
+    }
+    yield completion;
+    void refresh(authoritativePreferences);
+  });
+  const submit = (
+    completion: Promise<void> | undefined,
+    edit?:
+      | { scope: "user"; value: WebPushNotificationPreferences }
+      | { scope: "device"; value: WebPushDevicePreferences },
+  ) => {
+    // Admission, including a browser permission prompt, stays in the event tick.
+    if (completion) {
+      onSettled(() => {
+        void present(completion, edit).catch(() => {});
+      });
+    }
+  };
+  const busy = () => saving() || props.push.loading;
   const registered = () => props.push.subscription === "registered";
+  const hasSubscription = () =>
+    registered() ||
+    props.push.subscription === "vapid-mismatch" ||
+    props.push.subscription === "local";
   const permissionLabel = () =>
     t(
       props.push.permission === "granted"
@@ -477,24 +273,28 @@ function WebPushSection(props: {
         ? "configView.notifications.subscribed"
         : props.push.subscription === "unknown"
           ? "configView.notifications.checking"
-          : "configView.notifications.notSubscribed",
+          : props.push.subscription === "local"
+            ? "configView.notifications.localSubscription"
+            : "configView.notifications.notSubscribed",
     );
   const statusLabel = () =>
     t(
       !props.push.supported
         ? "configView.notifications.unsupported"
-        : props.push.permission === "denied"
-          ? "configView.notifications.blocked"
-          : registered()
-            ? "configView.notifications.subscribed"
-            : props.push.subscription === "vapid-mismatch"
-              ? "configView.notifications.unavailable"
-              : props.push.subscription === "unknown"
-                ? "configView.notifications.checking"
-                : "configView.notifications.ready",
+        : !props.push.canManage
+          ? "configView.notifications.unavailable"
+          : props.push.permission === "denied"
+            ? "configView.notifications.blocked"
+            : registered()
+              ? "configView.notifications.subscribed"
+              : props.push.subscription === "vapid-mismatch"
+                ? "configView.notifications.unavailable"
+                : props.push.subscription === "unknown"
+                  ? "configView.notifications.checking"
+                  : "configView.notifications.ready",
     );
   const statusKind = () =>
-    !props.push.supported
+    !props.push.supported || !props.push.canManage
       ? "muted"
       : props.push.permission === "denied" || props.push.subscription === "vapid-mismatch"
         ? "danger"
@@ -534,42 +334,63 @@ function WebPushSection(props: {
             <SettingsStatus kind={registered() ? "ok" : "muted"} label={subscriptionLabel()} />
           }
         />
-        <Show when={props.push.supported && props.push.permission !== "denied"}>
+        <Show when={props.push.supported && !props.push.canManage}>
+          <SettingsRow
+            title={t("configView.notifications.gatewayAccess")}
+            description={t(
+              props.actions.connected
+                ? "configView.notifications.gatewayAccessRequired"
+                : "configView.notifications.gatewayDisconnected",
+            )}
+            control={
+              <SettingsStatus kind="muted" label={t("configView.notifications.unavailable")} />
+            }
+          />
+        </Show>
+        <Show
+          when={
+            props.push.supported &&
+            props.push.permission !== "denied" &&
+            (props.push.canManage || hasSubscription())
+          }
+        >
           <NotificationActions>
-            {registered() || props.push.subscription === "vapid-mismatch" ? (
+            {hasSubscription() ? (
               <>
                 <button
                   class="btn"
-                  disabled={props.push.loading || !props.actions.connected}
-                  onClick={() => props.actions.onWebPushUnsubscribe?.()}
+                  disabled={busy() || !props.actions.connected}
+                  onClick={() => submit(props.actions.onWebPushUnsubscribe?.())}
                 >
                   <Icon name="x" /> {t("configView.notifications.unsubscribe")}
                 </button>
-                <Show when={registered()}>
+                <Show when={registered() && props.push.canManage}>
                   <button
                     class="btn primary"
-                    disabled={props.push.loading || !props.actions.connected}
-                    onClick={() => props.actions.onWebPushTest?.()}
+                    disabled={busy() || !props.actions.connected}
+                    onClick={() => submit(props.actions.onWebPushTest?.())}
                   >
                     <Icon name="send" /> {t("configView.notifications.sendTest")}
                   </button>
                 </Show>
               </>
             ) : (
-              <button
-                class="btn primary"
-                disabled={props.push.loading || !props.actions.connected}
-                onClick={() => props.actions.onWebPushSubscribe?.()}
-              >
-                <Show when={props.push.loading}>
-                  <Icon name="loader" />
-                </Show>
-                {t(
-                  props.push.loading
-                    ? "configView.notifications.subscribing"
-                    : "configView.notifications.enable",
-                )}
-              </button>
+              <Show when={props.push.canManage}>
+                <button
+                  class="btn primary"
+                  disabled={busy() || !props.actions.connected}
+                  onClick={() => submit(props.actions.onWebPushSubscribe?.())}
+                >
+                  <Show when={busy()}>
+                    <Icon name="loader" />
+                  </Show>
+                  {t(
+                    busy()
+                      ? "configView.notifications.subscribing"
+                      : "configView.notifications.enable",
+                  )}
+                </button>
+              </Show>
             )}
           </NotificationActions>
         </Show>
@@ -583,23 +404,60 @@ function WebPushSection(props: {
             </div>
           </div>
         </Show>
+        <Errored
+          fallback={(error) => (
+            <div class="settings-row">
+              <div class="settings-row__text">
+                <span class="cfg-field__error">{formatUiError(error())}</span>
+              </div>
+            </div>
+          )}
+        >
+          <Loading on={props.push.command} fallback={null}>
+            {(commandOutcome(), null)}
+          </Loading>
+        </Errored>
       </NotificationSection>
-      <Show when={registered() ? props.push.preferences : undefined}>
-        {(preferences) => (
-          <div class="settings-stack" inert={props.push.loading}>
-            <Show when={preferences().durableIdentity}>
-              <UserNotificationPreferences
-                preferences={preferences().user}
-                onChange={(value) => props.actions.onWebPushSetUserPreferences?.(value)}
-              />
-            </Show>
-            <DeviceNotificationPreferences
-              preferences={preferences().device}
-              onChange={(value) => props.actions.onWebPushSetDevicePreferences?.(value)}
-            />
+      <Errored
+        fallback={(error) => (
+          <div class="settings-row">
+            <div class="settings-row__text">
+              <span class="cfg-field__error">{formatUiError(error())}</span>
+            </div>
           </div>
         )}
-      </Show>
+      >
+        <Loading on={props.push.read} fallback={null}>
+          <Show when={props.push.canReadPreferences ? latest(preferences) : (read(), undefined)}>
+            {(current) => (
+              <div class="settings-stack" inert={busy() || isPending(authoritativePreferences)}>
+                <Show when={current().durableIdentity}>
+                  <UserNotificationPreferences
+                    disabled={!props.push.canManage || !props.actions.connected}
+                    preferences={current().user}
+                    onChange={(value) =>
+                      submit(props.actions.onWebPushSetUserPreferences?.(value), {
+                        scope: "user",
+                        value,
+                      })
+                    }
+                  />
+                </Show>
+                <DeviceNotificationPreferences
+                  disabled={!props.push.canManage || !props.actions.connected}
+                  preferences={current().device}
+                  onChange={(value) =>
+                    submit(props.actions.onWebPushSetDevicePreferences?.(value), {
+                      scope: "device",
+                      value,
+                    })
+                  }
+                />
+              </div>
+            )}
+          </Show>
+        </Loading>
+      </Errored>
     </>
   );
 }

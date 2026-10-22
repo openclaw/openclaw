@@ -53,9 +53,14 @@ export async function startGatewayRestartProvider(signal: AbortSignal) {
     const executionTool =
       Array.isArray(body.tools) &&
       body.tools.some((tool) => isRecord(tool) && tool.name === "exec");
+    const currentInput = JSON.stringify(
+      input.slice(input.findLastIndex((item) => isRecord(item) && item.role === "assistant") + 1),
+    );
     const recoveryRequest =
-      recovering && text.includes("Your previous turn was interrupted by a gateway restart");
-    if (!executionTool && !recoveryRequest) {
+      recovering &&
+      currentInput.includes("Your previous turn was interrupted by a gateway restart");
+    const completionRequest = recovering && currentInput.includes("Exec lost (");
+    if (!executionTool && !recoveryRequest && !completionRequest) {
       const reply = "Synthetic restart handoff session";
       if (body.stream === false) {
         response.writeHead(200, { "content-type": "application/json" });
@@ -91,14 +96,17 @@ export async function startGatewayRestartProvider(signal: AbortSignal) {
     }
     const index = Number(marker);
     if (recovering) {
-      if (!recoveryRequest) {
+      if (!recoveryRequest && !completionRequest) {
         throw new Error("Successor execution request lost its restart recovery context");
       }
       await withinTest(recoveryReleased.promise, signal);
+      const kind = recoveryRequest ? "recovered" : "exec_lost";
       writeOpenAiResponsesText(response, {
-        text: `RESTART_HANDOFF_RESUMED_${index}`,
-        messageId: `msg_recovered_${index}`,
-        responseId: `resp_recovered_${index}`,
+        text: recoveryRequest
+          ? `RESTART_HANDOFF_RESUMED_${index}`
+          : `RESTART_HANDOFF_EXEC_LOST_${index}`,
+        messageId: `msg_${kind}_${index}`,
+        responseId: `resp_${kind}_${index}`,
       });
       return;
     }

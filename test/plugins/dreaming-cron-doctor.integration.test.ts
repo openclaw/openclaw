@@ -208,7 +208,6 @@ function createPausedCronService(fixture: Fixture) {
     log: logger,
     nowMs: () => 1_800_000_000_200,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     onEvent(event) {
       if (event.action === "added" || event.action === "updated" || event.action === "removed") {
@@ -229,25 +228,32 @@ async function runRegisteredDreamingService(
 ) {
   const registry = createEmptyPluginRegistry();
   const starts: Array<{ mock: { results: Array<{ value: unknown }> } }> = [];
-  memoryCore.register(
-    createTestPluginApi({
-      id: "memory-core",
-      config,
-      logger,
-      runtime: createPluginRuntimeMock({ config: { current: () => config } }),
-      registerService(service) {
-        // Boot-path starts log failures instead of rejecting; observe them here.
-        starts.push(vi.spyOn(service, "start"));
-        registry.services.push({
-          pluginId: "memory-core",
-          origin: "bundled",
-          source: "memory-core/index.ts",
-          id: service.id,
-          service,
-        });
-      },
-    }),
-  );
+  const backgroundTasks: Promise<unknown>[] = [];
+  const api = createTestPluginApi({
+    id: "memory-core",
+    config,
+    logger,
+    runtime: createPluginRuntimeMock({ config: { current: () => config } }),
+    registerService(service) {
+      // Boot-path starts log failures instead of rejecting; observe them here.
+      starts.push(vi.spyOn(service, "start"));
+      registry.services.push({
+        pluginId: "memory-core",
+        origin: "bundled",
+        source: "memory-core/index.ts",
+        id: service.id,
+        service,
+      });
+    },
+  });
+  api.lifecycle.runInBackgroundContext = (run) => {
+    const result = run();
+    if (result instanceof Promise) {
+      backgroundTasks.push(result);
+    }
+    return result;
+  };
+  memoryCore.register(api);
   if (!registry.services.some(({ id }) => id === "memory-core-dreaming")) {
     throw new Error("Memory Core did not register its dreaming service");
   }
@@ -267,6 +273,7 @@ async function runRegisteredDreamingService(
       starts.flatMap(({ mock }) => mock.results.map(({ value }) => value)),
     );
     expect(settled.filter(({ status }) => status === "rejected")).toEqual([]);
+    await Promise.all(backgroundTasks);
     expect(logger.error).not.toHaveBeenCalled();
   } finally {
     await services?.stop({ strict: true });

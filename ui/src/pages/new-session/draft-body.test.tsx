@@ -29,6 +29,7 @@ it.each([
       onOpenImage={() => {}}
     />
   ));
+  await vi.dynamicImportSettled();
   await waitForSolid(() => {
     const group = container.querySelector(".chat-group.user");
     const avatar = group?.querySelector(
@@ -38,6 +39,8 @@ it.each([
     );
     expect(avatar?.getAttribute("src")).toBe(avatarUrl);
     expect(group?.classList.contains("chat-group--with-footer")).toBe(true);
+    // Chat reserves the footer row on every user turn, so the preview must too.
+    expect(group?.querySelector(":scope > .chat-group-footer")).not.toBeNull();
     expect(group?.closest(".chat-thread--direct") !== null).toBe(placement === "footer");
   });
 });
@@ -82,7 +85,10 @@ it("replaces startup progress with an actionable completion while retaining the 
       onOpenImage={() => {}}
     />
   ));
-  expect(container.querySelector(".chat-working-indicator")).not.toBeNull();
+  await vi.dynamicImportSettled();
+  await waitForSolid(() =>
+    expect(container.querySelector(".chat-working-indicator")).not.toBeNull(),
+  );
   expect(container.querySelector("textarea")).not.toBeNull();
   setCompletion({ label: "Session ready", onOpen: open });
   await waitForSolid(() => {

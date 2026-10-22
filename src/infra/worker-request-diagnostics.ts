@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { runWithAsyncStore } from "../shared/async-store.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { hasInternalDiagnosticEventInterest } from "./diagnostic-event-listener-presence.js";
 import { emitTrustedDiagnosticEvent } from "./diagnostic-events.js";
@@ -32,13 +33,19 @@ export function withSqliteWorkerReservationObservation<T>(
   observation: SqliteWorkerReservationObservation,
   run: () => T,
 ): T {
-  return reservations.run(observation, run);
+  return runWithAsyncStore(reservations, observation, run);
 }
 
 const detailedTiming = isDiagnosticFlagEnabled("sqlite.worker-timing");
 
 // Exact owner commands only: SDK callers may supply private suffixes.
 const coreCommands = new Set([
+  "devicePairing.lookup",
+  "devicePairing.list",
+  "devicePairing.updateMetadata",
+  "devicePairing.updatePresence",
+  "devicePairing.verifyToken",
+  "devicePairing.ensureToken",
   "session.actor.read",
   "session.actor.acceptInput",
   "session.actor.adoptRun",
@@ -56,7 +63,6 @@ const coreCommands = new Set([
   "session.lifecycle.project",
   "session.maintenance.metadata",
   "session.maintenance.prepare",
-  "session.maintenance.release",
   "session.maintenance.finalize",
   "session.maintenance.size",
   "session.rowTranscript.backfill",
@@ -162,7 +168,7 @@ export function trackWorkerRequest(
   const enqueuedAt = performance.now();
   const timing: DiagnosticWorkerRequestFields["timing"] =
     kind === "sqlite_writer" &&
-    (detailedTiming || hasInternalDiagnosticEventInterest("worker.request"))
+    (detailedTiming || hasInternalDiagnosticEventInterest("worker.request", true))
       ? { enqueued: enqueuedAt }
       : undefined;
   let startedAt: number | undefined;
@@ -171,7 +177,7 @@ export function trackWorkerRequest(
     phase: DiagnosticWorkerRequestFields["phase"],
     durations: Pick<DiagnosticWorkerRequestFields, "queueWaitMs" | "durationMs"> = {},
   ) => {
-    if (!hasInternalDiagnosticEventInterest("worker.request")) {
+    if (!hasInternalDiagnosticEventInterest("worker.request", true)) {
       return;
     }
     emitTrustedDiagnosticEvent({

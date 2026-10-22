@@ -21,17 +21,16 @@ struct ExecHostTransportProofTests {
             try #require(URL(fileURLWithPath: value).resolvingSymlinksInPath().path == root
                 .appendingPathComponent("home").path)
         }
-        try #require(ExecApprovalsStore.databaseURL().resolvingSymlinksInPath().path ==
-            ExecApprovalsSQLiteStore.databaseURL(stateDirectoryURL: state).resolvingSymlinksInPath().path)
+        try #require(ExecApprovalsStore.stateDirURL().resolvingSymlinksInPath().path == state.path)
         let socketPath = root.appendingPathComponent("native.sock").path
         let token = "exec-host-native-proof-token"
-        try ExecApprovalsSQLiteStore.write(
+        try await ExecApprovalsSocketTestSupport.seedPolicy(
             ExecApprovalsFile(
                 version: 1,
                 socket: ExecApprovalsSocketConfig(path: socketPath, token: token),
                 defaults: ExecApprovalsDefaults(security: .full, ask: .off, autoAllowSkills: false),
                 agents: ["denied": ExecApprovalsAgent(security: .deny, ask: .off)]),
-            stateDirectoryURL: state)
+            in: state)
 
         let server = ExecApprovalsSocketServer(
             socketPath: socketPath,

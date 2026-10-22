@@ -45,7 +45,6 @@ export async function syncMatrixOwnProfile(params: {
   displayName?: string | null;
   avatarUrl?: string | null;
   avatarPath?: string | null;
-  avatarMaxBytes?: number;
   loadAvatarFromUrl?: (url: string, maxBytes: number) => Promise<MatrixProfileLoadResult>;
   loadAvatarFromPath?: (path: string, maxBytes: number) => Promise<MatrixProfileLoadResult>;
 }): Promise<MatrixProfileSyncResult> {
@@ -66,10 +65,7 @@ export async function syncMatrixOwnProfile(params: {
           : "Matrix avatar URL conversion requires a media loader.",
       );
     }
-    const media = await loadAvatar(
-      avatarSource,
-      params.avatarMaxBytes ?? MATRIX_PROFILE_AVATAR_MAX_BYTES,
-    );
+    const media = await loadAvatar(avatarSource, MATRIX_PROFILE_AVATAR_MAX_BYTES);
     desiredAvatarUrl = await params.client.uploadContent(
       media.buffer,
       media.contentType,

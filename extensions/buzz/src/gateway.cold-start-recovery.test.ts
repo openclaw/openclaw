@@ -121,6 +121,13 @@ vi.mock("./inbound.js", () => ({
   handleBuzzInbound: inboundMocks.handleBuzzInbound,
 }));
 
+// Reconnect scenarios wait on produced state; the real 1-1.2s backoff would spend
+// most of waitForSettled's budget before the reconnect even starts.
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
+  computeBackoff: () => 0,
+}));
+
 import { startBuzzGatewayAccount } from "./gateway.js";
 import { openBuzzRecoveryWatermarkStore, resolveBuzzRecoverySince } from "./recovery-watermark.js";
 import { setBuzzRuntime } from "./runtime.js";

@@ -1,6 +1,5 @@
-import path from "node:path";
 import { expect, it } from "vitest";
-import type { CronJob } from "../api/types.ts";
+import { createCronJob, cronJobsListResponse } from "../lib/cron/cron.test-support.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   defaultControlUiFeatureMethods,
@@ -11,19 +10,11 @@ import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Inbox dismissal clarity" });
-const failedJob: CronJob = {
-  id: "release-digest",
+const failedJob = createCronJob("release-digest", "Release digest", {
   agentId: "main",
-  name: "Release digest",
-  enabled: true,
-  createdAtMs: 0,
-  updatedAtMs: 0,
   schedule: { kind: "every", everyMs: 60_000 },
-  sessionTarget: "isolated",
-  wakeMode: "now",
-  payload: { kind: "agentTurn", message: "Synthetic digest" },
   state: { lastRunStatus: "error", lastError: "Provider request failed" },
-};
+});
 
 suite.define(() => {
   it.each([1280, 390])("dismisses notifications, not approvals or work, at %ipx", async (width) => {
@@ -50,13 +41,10 @@ suite.define(() => {
             },
             "models.authStatus": { providers: [], ts: 1 },
             "cron.list": {
+              ...cronJobsListResponse(),
               jobs: [compactCronJobFixture(failedJob)],
-              snapshotRevision: "dismissal-fixture",
               total: 1,
-              offset: 0,
-              limit: 50,
-              hasMore: false,
-              nextOffset: null,
+              snapshotRevision: "dismissal-fixture",
             },
             "mentions.list": {
               gatewayInstanceId: "e2e-gateway-boot",
@@ -96,25 +84,23 @@ suite.define(() => {
         const mention = panel.locator('[data-mention-id="mention-review"]');
         const update = panel.locator('[data-attention-kind="updateAvailable"]');
         const approval = panel.locator('[data-approval-id="approval-pending"]');
-        await automation.waitFor();
-        await mention.waitFor();
-        await update.waitFor();
-        await approval.waitFor();
-        expect(await mention.locator("summary .sidebar-issues-panel__entity").textContent()).toBe(
-          "Release review",
-        );
-        expect(await mention.locator("summary .sidebar-issues-panel__state").textContent()).toBe(
-          "Riley mentioned you",
-        );
+        for (const item of [automation, mention, update, approval]) {
+          await item.waitFor();
+        }
+        expect(
+          await mention
+            .locator("summary .sidebar-issues-panel__entity, summary .sidebar-issues-panel__state")
+            .allTextContents(),
+        ).toEqual(["Release review", "Riley mentioned you"]);
         for (const notification of [mention, update]) {
           const summary = notification.locator("summary");
           const body = notification.locator(".sidebar-issues-panel__body");
-          expect(await notification.locator("details").getAttribute("open")).toBeNull();
-          expect(await summary.locator(".sidebar-issues-panel__state-row time").isVisible()).toBe(
-            true,
-          );
-          expect(await summary.locator(".sidebar-issues-panel__chevron").isVisible()).toBe(true);
-          expect(await body.isVisible()).toBe(false);
+          expect({
+            open: await notification.locator("details").getAttribute("open"),
+            time: await summary.locator(".sidebar-issues-panel__state-row time").isVisible(),
+            chevron: await summary.locator(".sidebar-issues-panel__chevron").isVisible(),
+            body: await body.isVisible(),
+          }).toEqual({ open: null, time: true, chevron: true, body: false });
           await summary.click();
           await body.waitFor({ state: "visible" });
           if (notification === mention) {
@@ -126,24 +112,16 @@ suite.define(() => {
           await summary.click();
           await body.waitFor({ state: "hidden" });
         }
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          await page.screenshot({
-            path: path.join(suite.artifactDir, `inbox-${width}.png`),
-            animations: "disabled",
-          });
+        for (const [item, name] of [
+          [automation, "Dismiss Release digest"],
+          [mention, "Dismiss Release review"],
+        ] as const) {
+          expect(
+            (
+              await item.getByRole("button", { name, exact: item === mention }).textContent()
+            )?.trim(),
+          ).toBe("");
         }
-        expect(
-          (
-            await automation.getByRole("button", { name: "Dismiss Release digest" }).textContent()
-          )?.trim(),
-        ).toBe("");
-        expect(
-          (
-            await mention
-              .getByRole("button", { name: "Dismiss Release review", exact: true })
-              .textContent()
-          )?.trim(),
-        ).toBe("");
         expect(await panel.locator(".sidebar-issues-panel__dismiss-help").count()).toBe(0);
         await update.getByRole("button", { name: /^Dismiss .*OpenClaw updated/ }).click();
         await update.waitFor({ state: "hidden" });
@@ -162,9 +140,9 @@ suite.define(() => {
           (await gateway.getRequests("mentions.dismiss")).map((request) => request.params),
         ).toEqual([{ ids: ["mention-review"] }]);
         expect(await approval.count()).toBe(1);
-        expect(await gateway.getRequests("exec.approval.resolve")).toHaveLength(0);
-        expect(await gateway.getRequests("cron.update")).toHaveLength(0);
-        expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
+        for (const method of ["exec.approval.resolve", "cron.update", "chat.abort"]) {
+          expect(await gateway.getRequests(method), method).toHaveLength(0);
+        }
       },
     );
   });

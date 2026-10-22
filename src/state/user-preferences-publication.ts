@@ -37,7 +37,7 @@ export function publishUserPreferencesChange(db: EngineConnection): void {
   const commit = () => {
     current.revision = {};
   };
-  if (!stageSqliteTransactionState(db, { stage: () => {}, rollback: () => {}, commit })) {
+  if (!stageSqliteTransactionState(db, { commit })) {
     commit();
   }
 }

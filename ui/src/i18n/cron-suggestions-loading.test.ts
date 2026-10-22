@@ -11,10 +11,14 @@ it("keeps automation starters out of startup and registers fallback before prefi
   });
   expect(manager.t("tabs.cron")).toBe("Automations");
   expect(manager.t("cron.suggestions.title")).toBe("cron.suggestions.title");
+  expect(manager.t("cron.form.createTask")).toBe("cron.form.createTask");
+  // Shared payload validation stays readable before the lazy editor loads.
+  expect(manager.t("cron.errors.agentMessageRequiredShort")).toBe("Agent message required.");
 
   await manager.setLocale("de");
   const { CRON_SUGGESTIONS, suggestionFormPatch } = await import("../pages/cron/suggestions.ts");
   expect(manager.t("cron.suggestions.title")).toBe("Starter-Automatisierungen");
+  expect(manager.t("cron.form.createTask")).toBe("Create automation");
   expect(manager.t("cron.suggestions.schedules.weekdayMornings")).toBe("Weekdays at 9:00 AM");
   expect(manager.t("tabs.cron")).toBe("Automations");
   for (const idea of CRON_SUGGESTIONS) {

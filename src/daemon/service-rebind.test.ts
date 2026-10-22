@@ -6,105 +6,116 @@ import {
   fingerprintGatewayServiceDefinition,
   withGatewayServiceRebindCapture,
 } from "./service-rebind.js";
-import type { GatewayServiceCommandConfig } from "./service-types.js";
 
-it.each([
-  { scenario: "failed-after-write", pinned: false },
-  { scenario: "mismatch", pinned: false },
-  { scenario: "revoked", pinned: false },
-  { scenario: "success", pinned: true },
-  { scenario: "pin-raced", pinned: true },
-  { scenario: "pre-write", pinned: true },
-  { scenario: "compensated", pinned: true },
-])(
-  "records only admitted rebind evidence: $scenario (pinned=$pinned)",
-  async ({ scenario, pinned }) => {
-    const original: GatewayServiceCommandConfig = {
-      programArguments: ["/nodeA", "/A/openclaw.mjs"],
-    };
-    let command = original;
-    const before = await fingerprintGatewayServiceDefinition(original);
-    const originalPin = "a".repeat(64);
-    let pin = scenario === "pin-raced" ? "c".repeat(64) : originalPin;
-    const failure = new Error(
-      scenario === "pre-write" ? "pre-write refused" : "native load failed",
-    );
-    const mutate = vi.fn(async () => {
-      if (scenario === "pre-write") {
-        throw failure;
+it("retains both the operation and final rebind observation failures", async () => {
+  const command = { programArguments: ["/node", "/openclaw.mjs"] };
+  const before = await fingerprintGatewayServiceDefinition(command);
+  const operationFailure = new Error("native operation failed");
+  const cleanupFailure = new Error("final authority revoked");
+  await withGatewayServiceRebindCapture(before, async () => {
+    let retired = false;
+    const assertCurrent = () => {
+      if (retired) {
+        throw cleanupFailure;
       }
+    };
+    const work = settleGatewayServiceRebind(assertCurrent, async () => {
+      await captureGatewayServiceRebind(
+        async () => command,
+        assertCurrent,
+        async () => {},
+      );
+      retired = true;
+      throw operationFailure;
+    });
+    await expect(work).rejects.toMatchObject({
+      message: "Service rebind settlement could not be verified.",
+      errors: [operationFailure, cleanupFailure],
+      cause: cleanupFailure,
+    });
+    expect(currentGatewayServiceRebindReceipt()).toBeUndefined();
+  });
+});
+
+it.each<[string, boolean, string?]>([
+  ["failed-after-write", false],
+  ["mismatch", false, "definition changed"],
+  ["revoked", false, "owner revoked"],
+  ["success", true],
+  ["pin-raced", true, "runtime intent changed"],
+  ["pre-write", true],
+  ["compensated", true],
+])("records admitted rebind evidence: %s (pinned=%s)", async (scenario, pinned, refusal) => {
+  const original = { programArguments: ["/nodeA", "/A/openclaw.mjs"] };
+  let command = original;
+  const before = await fingerprintGatewayServiceDefinition(original);
+  const originalPin = "a".repeat(64);
+  let pin = scenario === "pin-raced" ? "c".repeat(64) : originalPin;
+  const failure = new Error(scenario === "pre-write" ? "pre-write refused" : "native load failed");
+  const expectReceipt = async (mutated = true) => {
+    expect(currentGatewayServiceRebindReceipt()).toEqual({
+      before,
+      after: await fingerprintGatewayServiceDefinition(command),
+      ...(mutated ? { mutated: true } : {}),
+      ...(pinned ? { runtimePinBefore: originalPin, runtimePinAfter: pin } : {}),
+    });
+  };
+  const mutate = vi.fn(async () => {
+    if (scenario !== "pre-write") {
       command = { programArguments: ["/nodeB", "/B/openclaw.mjs"] };
       pin = "b".repeat(64);
-      if (scenario === "failed-after-write" || scenario === "compensated") {
-        throw failure;
+    }
+    if (scenario !== "success") {
+      throw failure;
+    }
+  });
+  const assertCurrent = () => {
+    if (scenario === "revoked") {
+      throw new Error("owner revoked");
+    }
+  };
+  await withGatewayServiceRebindCapture(
+    before,
+    async () => {
+      if (scenario === "mismatch") {
+        command.programArguments.push("--foreign");
       }
-    });
-    const assertCurrent = () => {
-      if (scenario === "revoked") {
-        throw new Error("owner revoked");
-      }
-    };
-    await withGatewayServiceRebindCapture(
-      before,
-      async () => {
-        if (scenario === "mismatch") {
-          command.programArguments.push("--foreign");
-        }
-        const capture = () =>
-          captureGatewayServiceRebind(
-            async () => command,
-            assertCurrent,
-            mutate,
-            pinned ? () => pin : undefined,
-          );
-        const operation =
-          scenario === "compensated"
-            ? settleGatewayServiceRebind(assertCurrent, async () => {
-                try {
-                  await capture();
-                } catch (error) {
-                  expect(currentGatewayServiceRebindReceipt()).toEqual({
-                    before,
-                    after: await fingerprintGatewayServiceDefinition(command),
-                    mutated: true,
-                    runtimePinBefore: originalPin,
-                    runtimePinAfter: "b".repeat(64),
-                  });
-                  expect(currentGatewayServiceRebindReceipt()?.after).not.toBe(before);
-                  command = original;
-                  pin = originalPin;
-                  throw error;
-                }
-              })
-            : capture();
+      const capture = () =>
+        captureGatewayServiceRebind(
+          async () => command,
+          assertCurrent,
+          mutate,
+          pinned ? () => pin : undefined,
+        );
+      const operation =
+        scenario === "compensated"
+          ? settleGatewayServiceRebind(assertCurrent, async () => {
+              try {
+                await capture();
+              } catch (error) {
+                await expectReceipt();
+                expect(currentGatewayServiceRebindReceipt()?.after).not.toBe(before);
+                command = original;
+                pin = originalPin;
+                throw error;
+              }
+            })
+          : capture();
+      if (refusal) {
+        await expect(operation).rejects.toThrow(refusal);
+        expect(currentGatewayServiceRebindReceipt()).toBeUndefined();
+        expect(mutate).not.toHaveBeenCalled();
+      } else {
         if (scenario === "success") {
           await operation;
-        } else if (["failed-after-write", "pre-write", "compensated"].includes(scenario)) {
+        } else {
           await expect(operation).rejects.toBe(failure);
-        } else {
-          await expect(operation).rejects.toThrow(
-            scenario === "revoked"
-              ? "owner revoked"
-              : scenario === "pin-raced"
-                ? "runtime intent changed"
-                : "definition changed",
-          );
         }
-        if (["mismatch", "revoked", "pin-raced"].includes(scenario)) {
-          expect(currentGatewayServiceRebindReceipt()).toBeUndefined();
-          expect(mutate).not.toHaveBeenCalled();
-        } else {
-          expect(currentGatewayServiceRebindReceipt()).toEqual({
-            before,
-            after: await fingerprintGatewayServiceDefinition(command),
-            ...(scenario === "pre-write" ? {} : { mutated: true }),
-            ...(pinned ? { runtimePinBefore: originalPin, runtimePinAfter: pin } : {}),
-          });
-          expect(mutate).toHaveBeenCalledOnce();
-        }
-      },
-      pinned ? originalPin : undefined,
-    );
-    expect(currentGatewayServiceRebindReceipt()).toBeUndefined();
-  },
-);
+        await expectReceipt(scenario !== "pre-write");
+        expect(mutate).toHaveBeenCalledOnce();
+      }
+    },
+    pinned ? originalPin : undefined,
+  );
+  expect(currentGatewayServiceRebindReceipt()).toBeUndefined();
+});

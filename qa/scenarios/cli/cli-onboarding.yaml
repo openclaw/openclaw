@@ -24,7 +24,6 @@ scenario:
   codeRefs:
     - src/commands/onboard.ts
     - src/commands/onboard-non-interactive.ts
-    - src/commands/onboard-non-interactive/remote.ts
     - src/commands/onboard-non-interactive/local/auth-choice.ts
     - src/commands/onboard-non-interactive/local/gateway-config.ts
     - src/commands/configure.commands.ts

@@ -511,10 +511,12 @@ export function collectWorkerDeployArtifactErrors(params: CliBootstrapCheckParam
       if (stats.isSymbolicLink() || !stats.isFile()) {
         return [`Worker deploy artifact ${relativeEntrypoint} must be a regular file.`];
       }
-      sources.push({
-        relativeEntrypoint,
-        source: fsImpl.readFileSync(entrypoint, "utf8"),
-      });
+      if (entrypoint.endsWith(".mjs")) {
+        sources.push({
+          relativeEntrypoint,
+          source: fsImpl.readFileSync(entrypoint, "utf8"),
+        });
+      }
     } catch {
       return [`Worker deploy artifact ${relativeEntrypoint} is missing. Run pnpm build first.`];
     }

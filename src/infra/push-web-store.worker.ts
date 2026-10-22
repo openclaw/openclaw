@@ -57,8 +57,6 @@ export const webPushOperations = {
     input: Input<typeof store.deleteWebPushSubscriptionIfCurrentInDatabase>,
     { open },
   ) => store.deleteWebPushSubscriptionIfCurrentInDatabase({ ...input, database: open() }),
-  "webPush.readPersistedVapidKeyPair": (_input: undefined, { stateOptions }) =>
-    store.readPersistedVapidKeyPairInDatabase(stateOptions()),
   "webPush.insertVapidKeyPairIfAbsent": (
     input: Input<typeof store.insertVapidKeyPairIfAbsentInDatabase>,
     { open },

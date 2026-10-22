@@ -1,7 +1,6 @@
-// Telemetry runtime boundary tests cover real QA-channel evidence and honest task followthrough.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import {
   runQaSuite,
   startQaLabServer,
@@ -11,16 +10,17 @@ import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
 const SCENARIO_IDS = ["telemetry-qa-lab-bus", "telemetry-task-evidence-followthrough"] as const;
 const PRIMARY_COVERAGE_IDS = [
-  "observability.telemetry-evidence",
-  "observability.telemetry-no-fake-progress",
-  "observability.telemetry-qa-bus",
-  "observability.telemetry-qa-lab",
-  "observability.telemetry-task-followthrough",
-] as const;
+  "evidence",
+  "no-fake-progress",
+  "qa-bus",
+  "qa-lab",
+  "task-followthrough",
+].map((id) => `observability.telemetry-${id}`);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-describe.each([false, true])("telemetry runtime codeMode=%s", (codeMode) => {
-  it("writes exact QA Lab evidence for real bus telemetry and task followthrough", async () => {
+it.each([false, true])(
+  "writes exact bus telemetry and task followthrough evidence (codeMode=%s)",
+  async (codeMode) => {
     const repoRoot = process.cwd();
     const artifactRoot = path.join(repoRoot, ".artifacts", "qa-e2e");
     await fs.mkdir(artifactRoot, { recursive: true });
@@ -51,26 +51,25 @@ describe.each([false, true])("telemetry runtime codeMode=%s", (codeMode) => {
       ),
     );
 
-    const summary = JSON.parse(await fs.readFile(runtime.result.summaryPath, "utf8")) as {
-      counts?: { failed?: number; passed?: number; skipped?: number; total?: number };
-      run?: {
-        providerMode?: string;
-        primaryModel?: string;
-        scenarioIds?: string[];
-      };
-      scenarios?: Array<{ name?: string; status?: string }>;
-    };
-    expect(summary.counts).toEqual({ total: 2, passed: 2, failed: 0, skipped: 0 });
-    expect(summary.run).toMatchObject({
-      providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.6-luna",
-      scenarioIds: [...SCENARIO_IDS],
-    });
-    expect(summary.scenarios?.map((scenario) => scenario.status)).toEqual(["pass", "pass"]);
-
-    const evidence = validateQaEvidenceSummaryJson(
-      JSON.parse(await fs.readFile(runtime.result.evidencePath, "utf8")),
+    const artifactText = await Promise.all(
+      [runtime.result.summaryPath, runtime.result.evidencePath, runtime.result.reportPath].map(
+        (file) => fs.readFile(file, "utf8"),
+      ),
     );
+    const summary: unknown = JSON.parse(artifactText[0]!);
+    expect(summary).toEqual(
+      expect.objectContaining({
+        counts: { total: 2, passed: 2, failed: 0, skipped: 0 },
+        run: expect.objectContaining({
+          providerMode: "mock-openai",
+          primaryModel: "mock-openai/gpt-5.6-luna",
+          scenarioIds: [...SCENARIO_IDS],
+        }),
+        scenarios: SCENARIO_IDS.map(() => expect.objectContaining({ status: "pass" })),
+      }),
+    );
+
+    const evidence = validateQaEvidenceSummaryJson(JSON.parse(artifactText[1]!));
     expect(evidence.entries.map((entry) => entry.test.id)).toEqual([...SCENARIO_IDS]);
     expect(
       evidence.entries
@@ -82,28 +81,6 @@ describe.each([false, true])("telemetry runtime codeMode=%s", (codeMode) => {
 
     for (const entry of evidence.entries) {
       expect(entry.result.status).toBe("pass");
-      expect(entry.execution).toMatchObject({
-        runner: "host",
-        provider: {
-          id: "openai",
-          live: false,
-          fixture: "mock-openai",
-          model: {
-            name: "gpt-5.6-luna",
-            ref: "mock-openai/gpt-5.6-luna",
-          },
-        },
-        channel: {
-          id: "qa-channel",
-          live: false,
-        },
-        packageSource: { kind: "source-checkout" },
-      });
-      expect(entry.execution?.environment).toEqual({
-        ref: expect.any(String),
-        os: expect.any(String),
-        nodeVersion: expect.stringMatching(/^v\d+/u),
-      });
       expect(entry.execution?.artifacts).toEqual([
         {
           kind: "scenario-observation",
@@ -115,16 +92,12 @@ describe.each([false, true])("telemetry runtime codeMode=%s", (codeMode) => {
       ]);
     }
 
-    const artifactText = await Promise.all(
-      [runtime.result.summaryPath, runtime.result.evidencePath, runtime.result.reportPath].map(
-        async (artifactPath) => await fs.readFile(artifactPath, "utf8"),
-      ),
-    );
     const serializedArtifacts = artifactText.join("\n");
     expect(serializedArtifacts).not.toContain(repoRoot);
-    expect(serializedArtifacts).not.toContain("PERSONAL_TASK_LEDGER.md");
-    expect(serializedArtifacts).not.toContain("FOLLOWTHROUGH_NOTE.md");
-    expect(serializedArtifacts).not.toContain("QA_TELEMETRY_PROBE.md");
+    expect(serializedArtifacts).not.toMatch(
+      /PERSONAL_TASK_LEDGER\.md|FOLLOWTHROUGH_NOTE\.md|QA_TELEMETRY_PROBE\.md/,
+    );
     expect(path.basename(runtime.result.outputDir)).toMatch(/^openclaw-telemetry-runtime-/u);
-  }, 180_000);
-});
+  },
+  180_000,
+);

@@ -7,10 +7,12 @@ import {
 } from "@zag-js/menu";
 import { isPointInPolygon } from "@zag-js/rect-utils";
 import { VanillaMachine, normalizeProps } from "@zag-js/vanilla";
-import { createEffect, createSignal, onSettled, untrack } from "solid-js";
+import { createEffect, createSignal, onCleanup, onSettled } from "solid-js";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import type { Overlay } from "../overlay-lifecycle.ts";
 import { containsComposed } from "../overlay-registry.ts";
+import { revealInScrollRegion } from "../scroll-state.ts";
 
 // Focus events use bubbling DOM names; all other listener names stay canonical.
 const normalize = (props: object) => {
@@ -44,6 +46,8 @@ const normalizer: Parameters<typeof connect>[1] = {
 export type MenuBinding = {
   service: MenuService;
   read(): Api;
+  itemRef(): (element: HTMLElement) => void;
+  items(): HTMLElement[];
   pointerDelta(x: number): number;
   item(
     value: string,
@@ -53,7 +57,7 @@ export type MenuBinding = {
     label?: string,
   ): Record<string, unknown>;
   trigger(parentBinding?: MenuBinding, disabled?: boolean): Record<string, unknown>;
-  content(): Record<string, unknown>;
+  content(): Record<string, unknown> & { onKeyDown(event: KeyboardEvent): void };
   keydown(event: KeyboardEvent): void;
 };
 
@@ -62,9 +66,14 @@ export type MenuNavigationOptions = {
   surface?: "menu" | "listbox";
   /** Searchable lists keep focus in their input while Zag moves the highlight. */
   focus?: "item" | "retain";
+  pointerFocus?: () => "menu" | "trigger";
   items?: () => readonly { value: string; disabled?: boolean }[];
   value?: () => string | null;
 };
+
+// Embedded menu triggers opt in explicitly; submenu items keep their native roving focus.
+export const MENU_FORM_CONTROL_SELECTOR =
+  ':is(input, textarea, select, [data-form-control], button, a[href]):not([role^="menuitem"]):not([aria-haspopup="menu"]:not([data-form-control]))';
 
 export function useMenuMachine(
   overlay: Overlay,
@@ -74,17 +83,34 @@ export function useMenuMachine(
   options: MenuNavigationOptions = {},
 ): MenuBinding {
   let lastPointerX: number | undefined;
+  let lastPointerY: number | undefined;
   let focusFromKeyboard = false;
+  // Retained-focus lists reveal keyboard, opening, and catalog highlights. A pointer
+  // highlight is already under the cursor; revealing a clipped edge row would fight
+  // an in-progress wheel or trackpad scroll.
+  let pointerHighlight = false;
+  const itemNodes = new Set<HTMLElement>();
   const ownsTarget = (target: HTMLElement) =>
-    options.surface === "listbox"
+    ![...overlay.children].some((child) => child.open && containsComposed(child.surface, target)) &&
+    (options.surface === "listbox"
       ? overlay.surface.contains(target)
-      : target.closest('[role="menu"]') === overlay.surface;
+      : target.closest('[role="menu"]') === overlay.surface);
+  const items = () =>
+    [...itemNodes]
+      .filter((item) => item.isConnected && ownsTarget(item))
+      .toSorted((left, right) =>
+        left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+      );
   const focusItem = (service: MenuService) => {
     if (!overlay.open) {
       return;
     }
     const id = service.computed("highlightedId");
-    const node = id ? service.scope.getById(id) : undefined;
+    const rows = items();
+    const node = id ? rows.find((item) => item.id === id) : undefined;
+    if (node && options.focus === "retain" && !pointerHighlight) {
+      revealInScrollRegion(overlay.surface, node);
+    }
     const active = service.scope.getActiveElement();
     if (
       active instanceof HTMLElement &&
@@ -93,10 +119,8 @@ export function useMenuMachine(
     ) {
       return;
     }
-    for (const item of overlay.surface.querySelectorAll<HTMLElement>("[data-menu-item]")) {
-      if (ownsTarget(item)) {
-        item.tabIndex = options.focus !== "retain" && item === node ? 0 : -1;
-      }
+    for (const item of rows) {
+      item.tabIndex = options.focus !== "retain" && item === node ? 0 : -1;
     }
     if (
       node &&
@@ -112,6 +136,16 @@ export function useMenuMachine(
   const computed = machine.computed!;
   const adapted: typeof machine = {
     ...machine,
+    // The overlay subscription below owns controlled visibility. Keep the
+    // remaining Zag watchers without dispatching each open change twice.
+    watch({ track, action, context }) {
+      track([() => context.get("isSubmenu")], () => action(["setSubmenuPlacement"]));
+      track([() => context.hash("anchorPoint")], () => {
+        if (context.get("anchorPoint")) {
+          action(["reposition"]);
+        }
+      });
+    },
     computed: {
       ...computed,
       highlightedId(params) {
@@ -121,11 +155,8 @@ export function useMenuMachine(
             ? null
             : `${params.scope.id}:${value}`
           : // Submenu triggers keep the caller's logical value and their own DOM id.
-            ((value == null
-              ? null
-              : params.scope.query(
-                  `[data-menu-item="${CSS.escape(overlay.id)}"][data-value="${CSS.escape(value)}"]`,
-                )?.id) ?? computed.highlightedId(params));
+            ((value == null ? null : items().find((item) => item.dataset.value === value)?.id) ??
+              computed.highlightedId(params));
       },
     },
     implementations: {
@@ -136,22 +167,32 @@ export function useMenuMachine(
         trackPositioning() {},
         trackInteractOutside() {},
         scrollToHighlightedItem() {},
-        // A fixed 100 ms close defeats slow diagonal travel inside the safe polygon.
-        // Pointer movement and MENU_POINTERENTER already settle this live branch.
-        waitForCloseDelay() {},
+        waitForCloseDelay(params) {
+          const wait = () =>
+            // SAFETY: the pinned menu effect returns its timer cleanup; Zag's shared type also permits watch effects.
+            machine.implementations!.effects!.waitForCloseDelay!(params) as VoidFunction;
+          let cancel = wait();
+          const keepMoving = () => {
+            cancel();
+            cancel = wait();
+          };
+          const doc = params.scope.getDoc();
+          // Keep slow diagonal travel alive, then let Zag settle a stopped pointer.
+          const stopMoving = listen(doc, "pointermove", keepMoving);
+          return () => {
+            stopMoving();
+            cancel();
+          };
+        },
       },
       actions: {
         ...machine.implementations?.actions,
         highlightFirstItem(params) {
           // Keep Zag's queued opening focus aligned with the overlay's initial row.
           if (options.surface !== "listbox" && params.event.type !== "HOME") {
-            const initial = [
-              ...overlay.surface.querySelectorAll<HTMLElement>(
-                "[data-initial-focus][data-menu-item]",
-              ),
-            ].find(
+            const initial = items().find(
               (item) =>
-                ownsTarget(item) &&
+                item.hasAttribute("data-initial-focus") &&
                 !item.matches(":disabled") &&
                 item.getAttribute("aria-disabled") !== "true",
             );
@@ -193,6 +234,8 @@ export function useMenuMachine(
         focusTrigger() {},
         focusMenu() {},
         focusParentMenu() {},
+        // The overlay owns sibling admission without moving focus during pointer travel.
+        closeSiblingMenus() {},
         setIntentPolygon(params) {
           const trigger = overlay.trigger;
           if (!trigger) {
@@ -216,18 +259,22 @@ export function useMenuMachine(
       const root = surface?.getRootNode();
       return root instanceof ShadowRoot ? root : (surface?.ownerDocument ?? document);
     },
-    dir: untrack(direction),
+    dir: "ltr",
     open: false,
     loopFocus: true,
     closeOnSelect: false,
     "aria-label": overlay.id,
     onOpenChange({ open }) {
+      // Keyboard entry must focus a submenu that pointer hover already opened.
+      if (open && overlay.open && focusFromKeyboard) {
+        focusItem(service.service);
+      }
       const restore = !open && containsComposed(overlay.surface, service.scope.getActiveElement());
-      // Native sibling dismissal must not leave focus behind in the retired branch.
+      // A retired sibling can still own focus through its return trigger.
       const handoff =
         open &&
         [...(overlay.parent?.children ?? [])].some(
-          (sibling) => sibling !== overlay && sibling.open && sibling.containsFocus(),
+          (sibling) => sibling !== overlay && sibling.containsFocus(),
         );
       if (
         !overlay.request(
@@ -238,36 +285,44 @@ export function useMenuMachine(
         service.send({ type: overlay.open ? "CONTROLLED.OPEN" : "CONTROLLED.CLOSE" });
       }
     },
-    onSelect: ({ value }) => onSelect(value),
     // Zag's default link click is not cancelable; native click keeps selection vetoable.
     navigate: ({ node }) => queueMicrotask(() => node.click()),
   };
-  const service = new VanillaMachine(adapted, props);
-  createEffect(direction, (dir) => service.updateProps({ ...props, dir, open: overlay.open }));
+  // Keep one current input snapshot. Vanilla updateProps retains every prior
+  // source, making each subsequent prop read replay the whole update history.
+  const service = new VanillaMachine(adapted, () => props);
   const [revision, setRevision] = createSignal(0);
   const read = () => {
     revision();
     return connect(service.service, normalizer);
   };
   onSettled(() => {
+    props.dir = direction();
+    // Machine transitions move roving focus synchronously; markup follows through the revision.
     const unsubscribe = service.subscribe((state) => {
       setRevision((n) => n + 1);
       focusItem(state);
     });
     const stopOpen = overlay.subscribe((open) => {
-      service.updateProps({ ...props, dir: untrack(direction), open });
-      if (!open) {
-        service.send({ type: "CONTROLLED.CLOSE" });
-      } else if (options.items) {
-        untrack(() => {
-          const enabled = options.items!().filter((item) => !item.disabled);
-          service.send({
-            type: "HIGHLIGHTED.SET",
-            value:
-              enabled.find((item) => item.value === options.value?.())?.value ??
-              enabled[0]?.value ??
-              null,
-          });
+      props.dir = direction();
+      props.open = open;
+      // Deliver the same controlled transition as the menu open-prop watcher,
+      // preserving the event that selected keyboard opening/closing behavior.
+      service.send({
+        type: open ? "CONTROLLED.OPEN" : "CONTROLLED.CLOSE",
+        previousEvent: service.service.event,
+      });
+      if (open) {
+        pointerHighlight = false;
+      }
+      if (open && options.items) {
+        const enabled = options.items().filter((item) => !item.disabled);
+        service.send({
+          type: "HIGHLIGHTED.SET",
+          value:
+            enabled.find((item) => item.value === options.value?.())?.value ??
+            enabled[0]?.value ??
+            null,
         });
       }
     });
@@ -287,21 +342,29 @@ export function useMenuMachine(
       }
     };
   });
+  // Synchronize Zag's imperative direction and highlight with the current inputs.
   createEffect(
-    () => [options.items?.(), read().highlightedValue, options.value?.()] as const,
-    ([items, _highlighted, selected]) => {
-      if (!items) {
+    () => [direction(), options.items?.(), read(), options.value?.()] as const,
+    ([dir, catalog, api, selected]) => {
+      if (props.dir !== dir) {
+        props.dir = dir;
+        setRevision((n) => n + 1);
+      }
+      if (!catalog) {
         return;
       }
-      const enabled = items.filter((item) => !item.disabled);
-      const api = untrack(read);
+      const enabled = catalog.filter((item) => !item.disabled);
       if (!enabled.some((item) => item.value === api.highlightedValue)) {
         const next =
           enabled.find((item) => item.value === selected)?.value ?? enabled[0]?.value ?? null;
         if (api.highlightedValue !== next) {
           // Zag queues send(); a stale catalog correction must not replace a later opening choice.
+          pointerHighlight = false;
           service.service.context.set("highlightedValue", next);
         }
+      }
+      if (options.focus === "retain") {
+        focusItem(service.service);
       }
     },
   );
@@ -309,13 +372,23 @@ export function useMenuMachine(
     if (event.defaultPrevented || event.isComposing || !overlay.open) {
       return;
     }
+    pointerHighlight = false;
     const editing =
       event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement;
+    const fromButton =
+      options.surface !== "listbox" &&
+      event.target instanceof HTMLButtonElement &&
+      event.target.matches(MENU_FORM_CONTROL_SELECTOR) &&
+      !event.target.closest('[role^="menuitem"]');
     const type =
       event.key === "ArrowDown"
-        ? "ARROW_DOWN"
+        ? fromButton
+          ? "HOME"
+          : "ARROW_DOWN"
         : event.key === "ArrowUp"
-          ? "ARROW_UP"
+          ? fromButton
+            ? "END"
+            : "ARROW_UP"
           : event.key === "Home"
             ? "HOME"
             : event.key === "End"
@@ -359,6 +432,22 @@ export function useMenuMachine(
   return {
     service: service.service,
     read,
+    items,
+    itemRef() {
+      let item: HTMLElement | undefined;
+      onCleanup(() => {
+        if (item) {
+          itemNodes.delete(item);
+        }
+      });
+      return (element) => {
+        if (item) {
+          itemNodes.delete(item);
+        }
+        item = element;
+        itemNodes.add(element);
+      };
+    },
     keydown,
     pointerDelta(x) {
       const delta = lastPointerX === undefined ? 0 : x - lastPointerX;
@@ -386,17 +475,24 @@ export function useMenuMachine(
       return {
         ...result,
         onClick: (event: MouseEvent) => {
-          if (event.currentTarget instanceof HTMLAnchorElement) {
-            if (disabled) {
-              event.preventDefault();
+          if (disabled || !overlay.open) {
+            event.preventDefault();
+            return;
+          }
+          const anchor = event.currentTarget;
+          if (anchor instanceof HTMLAnchorElement) {
+            if (
+              !shouldHandleNavigationClick(event) ||
+              (anchor.target !== "" && anchor.target !== "_self") ||
+              anchor.hasAttribute("download")
+            ) {
               return;
             }
-            if (!shouldHandleNavigationClick(event)) {
-              return;
-            }
+            // The cancelable selection event decides whether native navigation proceeds.
             event.preventDefault();
           }
-          result.onClick?.(event);
+          // Deliver the action before a queued render can retire its menu owner.
+          onSelect(value);
         },
         onContextMenu: (event: MouseEvent) => {
           if (event.currentTarget instanceof HTMLAnchorElement) {
@@ -404,10 +500,12 @@ export function useMenuMachine(
           }
         },
         onPointerMove: (event: PointerEvent) => {
-          if (event.movementX === 0 && event.movementY === 0) {
+          // WebKit can report zero movement offsets for a real mouse move.
+          if (event.clientX === lastPointerX && event.clientY === lastPointerY) {
             return;
           }
           focusFromKeyboard = false;
+          pointerHighlight = true;
           result.onPointerMove?.(event);
         },
         tabIndex: options.focus !== "retain" && api.highlightedValue === value ? 0 : -1,
@@ -431,8 +529,16 @@ export function useMenuMachine(
           if (disabled) {
             return;
           }
-          focusFromKeyboard = true;
-          result.onClick?.(event);
+          focusFromKeyboard = event.detail === 0 || options.pointerFocus?.() !== "trigger";
+          if (!focusFromKeyboard) {
+            overlay.trigger?.focus({ preventScroll: true });
+          }
+          if (parentBinding && !event.defaultPrevented) {
+            // Zag ignores TRIGGER_CLICK while its submenu hover delay is pending.
+            api.setOpen(true);
+          } else {
+            result.onClick?.(event);
+          }
         },
         onKeyDown: (e: KeyboardEvent) => {
           if (disabled || e.key === "Escape") {
@@ -475,12 +581,8 @@ export function useMenuMachine(
           }
           const item = parentBinding.read().getItemProps({ value: trigger.id });
           item.onPointerMove?.(event);
-          // The document pointer listener releases the old child's corridor lock.
-          // Decide child opening after that same event, rather than dropping it.
+          // Parent highlighting stays corridor-protected; the child owns its hover delay.
           queueMicrotask(() => {
-            if (parent?.refs.get("pointerRoutingLocked")) {
-              return;
-            }
             service.send({ type: "TRIGGER_POINTERMOVE", target, point });
           });
         },
@@ -500,10 +602,16 @@ export function useMenuMachine(
         tabIndex: -1,
         onPointerMove: (event: PointerEvent) => {
           lastPointerX = event.clientX;
+          lastPointerY = event.clientY;
         },
         onKeyDown: (e: KeyboardEvent) => {
           const target = e.target;
-          if (!(target instanceof HTMLElement) || !ownsTarget(target)) {
+          if (
+            e.defaultPrevented ||
+            e.isComposing ||
+            !(target instanceof HTMLElement) ||
+            !ownsTarget(target)
+          ) {
             return;
           }
           if (options.surface === "listbox") {
@@ -511,13 +619,39 @@ export function useMenuMachine(
             return;
           }
           if (e.key === "Escape") {
-            overlay.keydown(e);
+            // A child can keep focus on its parent trigger; the registry owns deepest Escape.
+            if (![...overlay.children].some((child) => child.open)) {
+              overlay.keydown(e);
+            }
             return;
           }
-          if (e.key === "Tab" || target.matches("input,textarea,select,[data-form-control]")) {
+          if (
+            target.matches("input[data-search]") &&
+            (e.key === "ArrowDown" || e.key === "Enter")
+          ) {
+            const first = items().find(
+              (item) =>
+                !item.matches(":disabled") &&
+                item.getAttribute("aria-disabled") !== "true" &&
+                Boolean(target.compareDocumentPosition(item) & Node.DOCUMENT_POSITION_FOLLOWING),
+            );
+            e.preventDefault();
+            first?.focus({ preventScroll: true });
+            return;
+          }
+          if (
+            target instanceof HTMLButtonElement &&
+            target.matches(MENU_FORM_CONTROL_SELECTOR) &&
+            (e.key === "ArrowDown" || e.key === "ArrowUp")
+          ) {
+            keydown(e);
+            return;
+          }
+          if (e.key === "Tab" || target.matches(MENU_FORM_CONTROL_SELECTOR)) {
             return;
           }
           focusFromKeyboard = true;
+          pointerHighlight = false;
           const value = target.dataset.value;
           if (value && value !== read().highlightedValue) {
             read().setHighlightedValue(value);

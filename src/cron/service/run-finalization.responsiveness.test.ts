@@ -10,6 +10,7 @@ import {
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { SqliteWorkerRequest } from "../../infra/sqlite-worker-contract.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerOperations } from "../../state/openclaw-state-worker-contract.js";
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
 import * as workerStore from "../../state/openclaw-state-worker-store.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -46,14 +47,10 @@ async function whileContended<T>(
   try {
     await holder.ready;
     pending = action();
-    void pending.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
+    const markSettled = () => {
+      settled = true;
+    };
+    void pending.then(markSettled, markSettled);
     await Promise.race([
       posted.promise,
       pending.then(() => {
@@ -85,49 +82,43 @@ it("keeps Gateway events responsive through request, activation and cancellation
     job.payload = { kind: "command", argv: ["echo", "synthetic"] };
     await saveCronStore(storeKey, { version: 1, jobs: [job] });
     const context = captureOpenClawStateWorkerContext();
+    const contended = <K extends keyof OpenClawStateWorkerOperations>(
+      type: K,
+      input: OpenClawStateWorkerOperations[K]["input"],
+    ) =>
+      whileContended(context.admission.databasePath, type, () =>
+        executeOpenClawStateWorker(context, { type, input }),
+      );
     await executeOpenClawStateWorker(context, { type: "cron.initializeRunReceipts", input: {} });
     const receiptId = createCronScheduledRunId(storeKey, job.id, now);
-    const request = await whileContended(context.admission.databasePath, "cron.requestRuns", () =>
-      executeOpenClawStateWorker(context, {
-        type: "cron.requestRuns",
-        input: {
-          storeKey,
-          nowMs: now,
-          defaultAgentId: "main",
-          requests: [
-            {
-              jobId: job.id,
-              receiptId,
-              configRevision: resolveCronJobConfigRevision(job),
-              scheduledSlotMs: now,
-              mode: "scheduled",
-            },
-          ],
+    const request = await contended("cron.requestRuns", {
+      storeKey,
+      nowMs: now,
+      defaultAgentId: "main",
+      requests: [
+        {
+          jobId: job.id,
+          receiptId,
+          configRevision: resolveCronJobConfigRevision(job),
+          scheduledSlotMs: now,
+          mode: "scheduled",
         },
-      }),
-    );
+      ],
+    });
     expect(request.accepted).toHaveLength(1);
-    const active = await whileContended(context.admission.databasePath, "cron.drainQueue", () =>
-      executeOpenClawStateWorker(context, {
-        type: "cron.drainQueue",
-        input: { storeKey, nowMs: now + 1, maxConcurrentRuns: 1, requests: [] },
-      }),
-    );
+    const active = await contended("cron.drainQueue", {
+      storeKey,
+      nowMs: now + 1,
+      maxConcurrentRuns: 1,
+      requests: [],
+    });
     expect(active.launches).toHaveLength(1);
-    const cancelled = await whileContended(
-      context.admission.databasePath,
-      "cron.cancelRequests",
-      () =>
-        executeOpenClawStateWorker(context, {
-          type: "cron.cancelRequests",
-          input: {
-            storeKey,
-            nowMs: now + 2,
-            receiptIds: [receiptId],
-            reason: "synthetic cancellation",
-          },
-        }),
-    );
+    const cancelled = await contended("cron.cancelRequests", {
+      storeKey,
+      nowMs: now + 2,
+      receiptIds: [receiptId],
+      reason: "synthetic cancellation",
+    });
     expect(cancelled.skipped).toHaveLength(1);
   });
 });

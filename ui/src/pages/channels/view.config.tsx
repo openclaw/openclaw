@@ -32,10 +32,13 @@ export function ChannelConfig(params: { channelId: string; props: ChannelsProps 
   const value = createMemo(
     () => resolveChannelConfigValue(params.props.config.configForm ?? {}, params.channelId) ?? {},
   );
-  const extraFields = createMemo(() => EXTRA_CHANNEL_FIELDS.filter((field) => field in value()));
+  const extraFields = () => EXTRA_CHANNEL_FIELDS.filter((field) => field in value());
   const unsupported = createMemo(() => new Set(analysis().unsupportedPaths));
   const disabled = createMemo(
-    () => params.props.config.configSaving || params.props.config.configSchemaLoading,
+    () =>
+      params.props.mutationBusy?.config ||
+      params.props.config.configSaving ||
+      params.props.config.configSchemaLoading,
   );
   return (
     <Show
@@ -104,12 +107,20 @@ export function ChannelConfig(params: { channelId: string; props: ChannelsProps 
         <div class="settings-row__control">
           <button
             class="btn primary"
-            disabled={disabled() || !params.props.config.configFormDirty}
+            disabled={
+              !params.props.channels.connected || disabled() || !params.props.config.configFormDirty
+            }
             onClick={() => params.props.onConfigSave()}
           >
-            {params.props.config.configSaving ? t("common.saving") : t("common.save")}
+            {params.props.mutationBusy?.config || params.props.config.configSaving
+              ? t("common.saving")
+              : t("common.save")}
           </button>
-          <button class="btn" disabled={disabled()} onClick={() => params.props.onConfigReload()}>
+          <button
+            class="btn"
+            disabled={!params.props.channels.connected || disabled()}
+            onClick={() => params.props.onConfigReload()}
+          >
             {t("common.reload")}
           </button>
         </div>

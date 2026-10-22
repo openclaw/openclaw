@@ -4,6 +4,7 @@ import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import { getCurrentSessionControllerOwner } from "../../../sessions/session-controller.context.js";
 import type { EmbeddedRunTrigger } from "../../run-trigger.js";
 import { mergeForcedEmbeddedAttemptToolsAllow } from "./attempt-tool-construction-plan.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
@@ -31,6 +32,10 @@ type AttemptToolRunFacts = Pick<
   | "senderUsername"
   | "senderE164"
   | "senderIsOwner"
+  | "gitContributorProfileId"
+  | "requesterOrigin"
+  | "operatorProfileId"
+  | "conversationId"
   | "scheduledToolPolicy"
   | "approvalReviewerDeviceId"
   | "currentChannelId"
@@ -52,7 +57,6 @@ export function buildEmbeddedAttemptToolRunContext(
     thinkLevel?: ThinkLevel;
     thinkingExplicit?: boolean;
     trigger?: EmbeddedRunTrigger;
-    continuesConversation?: boolean;
     jobId?: string;
     memoryFlushWritePath?: string;
     memoryFlushTools?: RunEmbeddedAgentParams["memoryFlushTools"];
@@ -63,10 +67,18 @@ export function buildEmbeddedAttemptToolRunContext(
     conversationToolPolicy?: GroupToolPolicyConfig;
     trace?: DiagnosticTraceContext;
     currentInboundAudio?: boolean;
+    sessionId?: string;
+    sessionKey?: string;
     replyOperation?: { readonly acceptedSteeredInboundAudio: boolean };
   },
 ) {
-  const { currentInboundAudio, replyOperation } = params;
+  const { currentInboundAudio } = params;
+  const currentOwner = getCurrentSessionControllerOwner();
+  const replyOperation =
+    params.replyOperation ??
+    (currentOwner?.sessionId === params.sessionId && currentOwner?.key === params.sessionKey
+      ? currentOwner
+      : undefined);
   // Collector output is mandatory result transport, even on a narrowed tool surface.
   const runtimeToolAllowlist = mergeForcedEmbeddedAttemptToolsAllow(params.toolsAllow, {
     forceMessageTool: params.forceMessageTool,
@@ -94,6 +106,10 @@ export function buildEmbeddedAttemptToolRunContext(
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
     senderIsOwner: params.senderIsOwner,
+    gitContributorProfileId: params.gitContributorProfileId,
+    requesterOrigin: params.requesterOrigin,
+    operatorProfileId: params.operatorProfileId,
+    conversationId: params.conversationId,
     scheduledToolPolicy: params.scheduledToolPolicy,
     approvalReviewerDeviceId: params.approvalReviewerDeviceId,
     currentChannelId: params.currentChannelId,
@@ -111,7 +127,6 @@ export function buildEmbeddedAttemptToolRunContext(
       ? { provider: params.model.provider, model: params.model.id }
       : undefined,
     trigger: params.trigger,
-    continuesConversation: params.continuesConversation,
     jobId: params.jobId,
     memoryFlushWritePath: params.memoryFlushWritePath,
     memoryFlushTools: params.memoryFlushTools,

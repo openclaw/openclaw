@@ -1,3 +1,4 @@
+import { deserialize, serialize } from "node:v8";
 import { getAiTransportHost } from "@openclaw/ai";
 import {
   independentResponsesRequest,
@@ -9,6 +10,7 @@ import { isCredentialFieldName, preparedRequestSuffix } from "@openclaw/ai/inter
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { withGuardedFetchRequestAuthority } from "../../infra/net/fetch-request-authority.js";
 import type { Message, Model } from "../../llm/types.js";
+import { isPlainData } from "../../shared/immutable-data.js";
 import { collectTextContentBlocks } from "../content-blocks.js";
 import type { StreamFn } from "../runtime/index.js";
 import { normalizeUsage, type NormalizedUsage } from "../usage.js";
@@ -24,9 +26,9 @@ type SessionForkAuthority = { active: boolean; capture: object };
 type Snapshot = EmbeddedSessionForkIdentity & {
   metadata: Buffer;
   options: StreamOptions;
-  publications: Message[];
+  publications: (Buffer | Message)[];
   streamFn: StreamFn;
-  payload: Buffer;
+  payload: Blob;
   expires: number;
   bytes: number;
   expiryTimer: NodeJS.Timeout;
@@ -98,8 +100,11 @@ export function recordEmbeddedSessionForkMessage(
     return;
   }
   try {
-    const completed = structuredClone(message);
-    const bytes = Buffer.byteLength(JSON.stringify(completed));
+    // Provider plugins can consume opaque cloneable details that V8 cannot encode.
+    const completed = isPlainData(message) ? serialize(message) : structuredClone(message);
+    const bytes = Buffer.isBuffer(completed)
+      ? completed.length
+      : Buffer.byteLength(JSON.stringify(completed));
     snapshot.publications.push(completed);
     snapshot.bytes += bytes;
     retainedBytes += bytes;
@@ -116,8 +121,12 @@ export function wrapStreamFnWithSessionFork(
   identity: EmbeddedSessionForkIdentity,
 ): StreamFn {
   return (model, context, options) => {
-    // A transport without a payload boundary must not leave the previous turn replayable.
-    forgetSnapshot(identity.sessionId);
+    // A new run or transport cannot reuse old prepared data. Within the same run,
+    // keep the last committed request until its replacement finishes preparing.
+    const previous = snapshots.get(identity.sessionId);
+    if (previous && (previous.runId !== identity.runId || previous.streamFn !== streamFn)) {
+      forgetSnapshot(identity.sessionId);
+    }
     if (!captures.has(identity.sessionId) && captures.size >= MAX_ENTRIES) {
       const oldest = captures.keys().next().value;
       if (oldest !== undefined) {
@@ -147,7 +156,7 @@ export function wrapStreamFnWithSessionFork(
         Reflect.deleteProperty(savedOptions, key);
       }
     }
-    const save = (savedPayload: Uint8Array) => {
+    const save = (savedPayload: Blob) => {
       if (!authority.active || authority.capture !== capture) {
         return;
       }
@@ -170,7 +179,7 @@ export function wrapStreamFnWithSessionFork(
         return;
       }
       const bytes =
-        savedPayload.byteLength + metadata.length + Buffer.byteLength(JSON.stringify(savedOptions));
+        savedPayload.size + metadata.length + Buffer.byteLength(JSON.stringify(savedOptions));
       forgetSnapshot(identity.sessionId);
       if (bytes <= MAX_BYTES) {
         snapshots.set(identity.sessionId, {
@@ -178,11 +187,7 @@ export function wrapStreamFnWithSessionFork(
           metadata,
           options: savedOptions,
           publications: [],
-          payload: Buffer.from(
-            savedPayload.buffer,
-            savedPayload.byteOffset,
-            savedPayload.byteLength,
-          ),
+          payload: savedPayload,
           streamFn,
           authority,
           bytes,
@@ -203,22 +208,26 @@ export function wrapStreamFnWithSessionFork(
       onPayload: async (payload, payloadModel) => {
         const replacement = await onPayload?.(payload, payloadModel);
         const finalPayload = replacement === undefined ? payload : replacement;
-        preparedPayload = finalPayload;
         // Native ChatGPT, Anthropic, and custom transports do not use the encoded-body boundary.
-        if (isRecord(finalPayload) && !modelRequestBodyState(capturedOptions).enabled) {
-          save(Buffer.from(JSON.stringify(finalPayload)));
+        if (modelRequestBodyState(capturedOptions).enabled) {
+          preparedPayload = finalPayload;
+        } else if (isRecord(finalPayload)) {
+          save(new Blob([JSON.stringify(finalPayload)]));
         }
         return finalPayload;
       },
     };
-    modelRequestBodyState(capturedOptions).onEncoded = (encoded, payload) => {
+    modelRequestBodyState(capturedOptions).onEncoded = (body, payload) => {
       if (!isRecord(payload)) {
         return;
       }
       // HTTP continuations send only a suffix; an independent fork still needs the full prefix.
-      save(
-        payload.previous_response_id ? Buffer.from(JSON.stringify(preparedPayload)) : encoded.body,
-      );
+      // Suffix-only retries reuse the captured prefix; a rebuilt request calls onPayload again.
+      if (payload.previous_response_id && preparedPayload === undefined) {
+        return;
+      }
+      save(payload.previous_response_id ? new Blob([JSON.stringify(preparedPayload)]) : body);
+      preparedPayload = undefined;
     };
     return streamFn(model, context, capturedOptions);
   };
@@ -241,6 +250,13 @@ function stripNewCacheMarkers(value: unknown): unknown {
   );
 }
 
+const FORK_TOOL_CHOICE_SHAPES = new Map<Model["api"], "object" | "string">([
+  ["anthropic-messages", "object"],
+  ["openai-responses", "string"],
+  ["openai-chatgpt-responses", "string"],
+  ["openai-completions", "string"],
+]);
+
 /** Replay prepared payload data, never the parent's one-shot admission hooks or tool executor. */
 export async function runEmbeddedSessionFork(params: {
   sessionId: string;
@@ -252,16 +268,10 @@ export async function runEmbeddedSessionFork(params: {
   assertCurrent: () => void;
   onUsage?: (usage: NormalizedUsage | undefined) => void;
 }): Promise<string> {
-  switch (params.model.api) {
-    case "openai-responses":
-    case "openai-chatgpt-responses":
-    case "openai-completions":
-    case "anthropic-messages":
-      break;
-    default:
-      throw new Error(
-        `Session forks do not support provider API ${params.model.api}. Use OpenAI Responses, Chat Completions, or Anthropic Messages.`,
-      );
+  if (!FORK_TOOL_CHOICE_SHAPES.has(params.model.api)) {
+    throw new Error(
+      `Session forks do not support provider API ${params.model.api}. Use OpenAI Responses, Chat Completions, or Anthropic Messages.`,
+    );
   }
   prune();
   const snapshot = snapshots.get(params.sessionId);
@@ -293,9 +303,11 @@ export async function runEmbeddedSessionFork(params: {
   }
   const context: Parameters<StreamFn>[1] = {
     tools: metadata.tools,
-    messages: structuredClone(snapshot.publications),
+    messages: snapshot.publications.map((data): Message =>
+      Buffer.isBuffer(data) ? deserialize(data) : structuredClone(data),
+    ),
   };
-  const parentPayload: unknown = JSON.parse(snapshot.payload.toString("utf8"));
+  const parentPayload: unknown = JSON.parse(await snapshot.payload.text());
   if (!isRecord(parentPayload)) {
     throw new Error("Cache-parity session fork requires an object provider request.");
   }
@@ -389,17 +401,11 @@ export async function runEmbeddedSessionFork(params: {
         if (Array.isArray(replay.tools) && replay.tools.length > 0) {
           // Keep schemas/cache breakpoints, but prevent provider-hosted execution.
           // Anthropic invalidates its messages cache when tool_choice changes.
-          if (model.api === "anthropic-messages") {
-            replay.tool_choice = { type: "none" };
-          } else if (
-            model.api === "openai-responses" ||
-            model.api === "openai-chatgpt-responses" ||
-            model.api === "openai-completions"
-          ) {
-            replay.tool_choice = "none";
-          } else {
+          const toolChoiceShape = FORK_TOOL_CHOICE_SHAPES.get(model.api);
+          if (!toolChoiceShape) {
             throw new Error("Session fork cannot disable hosted tools for this provider API.");
           }
+          replay.tool_choice = toolChoiceShape === "object" ? { type: "none" } : "none";
         }
         return replay;
       },

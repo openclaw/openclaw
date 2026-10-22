@@ -146,7 +146,9 @@ function authorizeWrite(mode, options) {
     workflowPath:
       mode === "finalize-core"
         ? ".github/workflows/openclaw-release-publish.yml"
-        : ".github/workflows/linux-app-release.yml",
+        : mode === "publish"
+          ? ".github/workflows/linux-app-release.yml"
+          : ".github/workflows/linux-app-mirror.yml",
     workflowEvent: mode === "publish" ? "workflow_run" : "workflow_dispatch",
     runStatePolicy: "active",
     ...(runGh ? { runGh } : {}),
@@ -570,8 +572,15 @@ function publishedManifest(github, bytes, publicKey) {
   );
   // Core consumes the publisher's verified immutable asset IDs, not a claimed signature field.
   // GitHub replacement creates a new ID. Check its digest too when the API supplies one.
+  // Linux updater assets are permanent; a non-Linux companion built by the same
+  // workflow may be withdrawn by deleting it, but a present one must still match.
+  const names = bundleNames(manifest.version);
+  const linuxAssets = new Set([names.appimage, names.deb, names.checksums]);
   for (const entry of proof.assets) {
     const current = asset(release, entry.name);
+    if (!current && !linuxAssets.has(entry.name)) {
+      continue;
+    }
     assert(
       current &&
         current.id === entry.id &&

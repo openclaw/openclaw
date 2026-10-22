@@ -37,6 +37,7 @@ it("admits real producer plugin host, dependency and basename links without trav
     await fs.symlink(candidate, path.join(modules, "openclaw"), "dir");
     await fs.symlink(modules, path.join(plugin, "node_modules"), "dir");
     const config: OpenClawConfig = {
+      agents: { entries: { main: {} } },
       plugins: {
         installs: { example: { source: "path", sourcePath: locator, installPath: locator } },
       },
@@ -50,6 +51,7 @@ it("admits real producer plugin host, dependency and basename links without trav
       env: source.env,
     });
     try {
+      await rehearsal.prepareRuntime(() => {});
       const params = {
         ...rehearsal,
         env: { ...rehearsal.env, OPENCLAW_UPDATE_IN_PROGRESS: "0" },

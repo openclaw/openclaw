@@ -4,12 +4,11 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { OpenClawPluginApi, PluginRuntime } from "../runtime-api.js";
 
 const createFeishuToolClientMock = vi.hoisted(() => vi.fn());
-const resolveAnyEnabledFeishuToolsConfigMock = vi.hoisted(() => vi.fn());
 const cleanupAmbientCommentTypingReactionMock = vi.hoisted(() => vi.fn(async () => false));
 
-vi.mock("./tool-account.js", () => ({
+vi.mock("./tool-account.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./tool-account.js")>()),
   createFeishuToolClient: createFeishuToolClientMock,
-  resolveAnyEnabledFeishuToolsConfig: resolveAnyEnabledFeishuToolsConfigMock,
 }));
 
 vi.mock("./comment-reaction.js", () => ({
@@ -219,15 +218,6 @@ describe("registerFeishuDriveTools", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    resolveAnyEnabledFeishuToolsConfigMock.mockReturnValue({
-      doc: false,
-      chat: false,
-      wiki: false,
-      drive: true,
-      perm: false,
-      scopes: false,
-      bitable: false,
-    });
     createFeishuToolClientMock.mockReturnValue({
       request: requestMock,
     });
@@ -472,35 +462,42 @@ describe("registerFeishuDriveTools", () => {
     });
   });
 
-  it("falls back to root lookup when the metadata scope is missing", async () => {
-    const batchQuery = vi.fn().mockRejectedValue({
-      response: {
+  it.each(["thrown", "fulfilled"])(
+    "falls back to root lookup when metadata scope failure is %s",
+    async (mode) => {
+      const failure = {
+        code: 99991672,
+        msg: "permission denied: drive:drive.metadata:readonly",
+      };
+      const batchQuery =
+        mode === "fulfilled"
+          ? vi.fn().mockResolvedValue(failure)
+          : vi.fn().mockRejectedValue({
+              response: {
+                data: failure,
+              },
+            });
+      const listFiles = vi.fn().mockResolvedValue({
+        code: 0,
         data: {
-          code: 99991672,
-          msg: "permission denied: drive:drive.metadata:readonly",
+          files: [{ token: "doc_1", name: "Project Plan", type: "docx" }],
         },
-      },
-    });
-    const listFiles = vi.fn().mockResolvedValue({
-      code: 0,
-      data: {
-        files: [{ token: "doc_1", name: "Project Plan", type: "docx" }],
-      },
-    });
-    createFeishuToolClientMock.mockReturnValue({
-      drive: { file: { list: listFiles }, meta: { batchQuery } },
-    });
-    const tool = buildDriveTool();
+      });
+      createFeishuToolClientMock.mockReturnValue({
+        drive: { file: { list: listFiles }, meta: { batchQuery } },
+      });
+      const tool = buildDriveTool();
 
-    const result = await tool.execute("call-info-missing-scope", {
-      action: "info",
-      file_token: "doc_1",
-      type: "docx",
-    });
+      const result = await tool.execute("call-info-missing-scope", {
+        action: "info",
+        file_token: "doc_1",
+        type: "docx",
+      });
 
-    expect(listFiles).toHaveBeenCalledWith({ params: {} });
-    expect(result.details).toMatchObject({ token: "doc_1", name: "Project Plan", type: "docx" });
-  });
+      expect(listFiles).toHaveBeenCalledWith({ params: {} });
+      expect(result.details).toMatchObject({ token: "doc_1", name: "Project Plan", type: "docx" });
+    },
+  );
 
   it("normalizes folder pagination and suppresses it for root listings", async () => {
     const listFiles = vi.fn().mockResolvedValue({ code: 0, data: { files: [] } });

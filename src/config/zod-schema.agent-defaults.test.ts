@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "./types.openclaw.js";
 import { validateConfigObject } from "./validation.js";
 import { AgentDefaultsSchema } from "./zod-schema.agent-defaults.js";
 import { AgentEntrySchema } from "./zod-schema.agent-runtime.js";
@@ -9,17 +10,12 @@ type SchemaParseResult = {
 };
 
 function expectSchemaFailurePath(result: SchemaParseResult, prefix: string): void {
-  expect(result.success).toBe(false);
-  if (result.success || !result.error) {
-    throw new Error(`Expected schema validation to fail at ${prefix}.`);
-  }
-  expect(
-    result.error.issues.some(({ path }) => {
-      const value = path.join(".");
-      return value === prefix || value.startsWith(`${prefix}.`);
-    }),
-  ).toBe(true);
+  assert(!result.success && result.error, `Expected schema validation to fail at ${prefix}.`);
+  const paths = result.error.issues.map(({ path }) => path.join("."));
+  expect(paths.some((value) => value === prefix || value.startsWith(`${prefix}.`))).toBe(true);
 }
+
+const validateAgents = (agents: OpenClawConfig["agents"]) => validateConfigObject({ agents });
 
 describe("agent defaults schema", () => {
   it("accepts bounded explicit picker runtimes only on exact model refs", () => {
@@ -43,21 +39,15 @@ describe("agent defaults schema", () => {
   });
 
   it("preserves separate run directories through config validation and list projection", () => {
-    const result = validateConfigObject({
-      agents: {
-        defaults: { workspace: "/agent-workspace", cwd: "/default-repo" },
-        entries: { worker: { cwd: "/agent-repo" } },
-      },
+    const result = validateAgents({
+      defaults: { workspace: "/agent-workspace", cwd: "/default-repo" },
+      entries: { worker: { cwd: "/agent-repo" } },
     });
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      throw new Error(JSON.stringify(result.issues));
-    }
-    expect(result.config.agents?.defaults).toMatchObject({
-      workspace: "/agent-workspace",
-      cwd: "/default-repo",
+    assert(result.ok);
+    expect(result.config.agents).toMatchObject({
+      defaults: { workspace: "/agent-workspace", cwd: "/default-repo" },
+      entries: { worker: { cwd: "/agent-repo" } },
     });
-    expect(result.config.agents?.entries?.worker?.cwd).toBe("/agent-repo");
     expect(Object.getOwnPropertyDescriptor(result.config.agents, "list")).toMatchObject({
       enumerable: false,
       value: [{ id: "worker", cwd: "/agent-repo" }],
@@ -65,24 +55,22 @@ describe("agent defaults schema", () => {
   });
 
   it("accepts exact refs, nested wildcards, configured aliases, and compat selectors", () => {
-    const result = validateConfigObject({
-      agents: {
-        entries: { main: {} },
-        defaults: {
-          models: {
-            "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
-            "openrouter/openai/gpt-oss-120b:free": {},
-          },
-          modelPolicy: {
-            allow: [
-              "openai/gpt-5.6-sol",
-              "provider/a/b/c/d/e/f",
-              "clawrouter/anthropic/*",
-              "provider/a/b/c/d/*",
-              "sonnet",
-              "openrouter:free",
-            ],
-          },
+    const result = validateAgents({
+      entries: { main: {} },
+      defaults: {
+        models: {
+          "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+          "openrouter/openai/gpt-oss-120b:free": {},
+        },
+        modelPolicy: {
+          allow: [
+            "openai/gpt-5.6-sol",
+            "provider/a/b/c/d/e/f",
+            "clawrouter/anthropic/*",
+            "provider/a/b/c/d/*",
+            "sonnet",
+            "openrouter:free",
+          ],
         },
       },
     });
@@ -90,48 +78,32 @@ describe("agent defaults schema", () => {
   });
 
   it("reports keyed per-agent policy paths", () => {
-    const result = validateConfigObject({
-      agents: {
-        ownership: "explicit",
-        entries: {
-          main: {},
-          runner: { modelPolicy: { allow: ["not-a-model-ref"] } },
-        },
+    const result = validateAgents({
+      ownership: "explicit",
+      entries: {
+        main: {},
+        runner: { modelPolicy: { allow: ["not-a-model-ref"] } },
       },
     });
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.issues).toContainEqual(
-        expect.objectContaining({ path: "agents.entries.runner.modelPolicy.allow.0" }),
-      );
-    }
+    assert(!result.ok);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({ path: "agents.entries.runner.modelPolicy.allow.0" }),
+    );
   });
 
   it("rejects unsafe byte-size strings in compaction defaults", () => {
     const unsafe = String(Number.MAX_SAFE_INTEGER + 1);
-    expect(
-      AgentDefaultsSchema.safeParse({ compaction: { maxActiveTranscriptBytes: unsafe } }).success,
-    ).toBe(false);
-    expect(
-      AgentDefaultsSchema.safeParse({
-        compaction: { memoryFlush: { forceFlushTranscriptBytes: unsafe } },
-      }).success,
-    ).toBe(false);
+    for (const compaction of [
+      { maxActiveTranscriptBytes: unsafe },
+      { memoryFlush: { forceFlushTranscriptBytes: unsafe } },
+    ]) {
+      expect(AgentDefaultsSchema.safeParse({ compaction }).success).toBe(false);
+    }
   });
 
-  it("rejects invalid heartbeat activeHours without an explicit cadence", () => {
-    expectSchemaFailurePath(
-      AgentDefaultsSchema.safeParse({
-        heartbeat: { activeHours: { start: "99:99", end: "17:00" } },
-      }),
-      "heartbeat.activeHours.start",
-    );
-    expectSchemaFailurePath(
-      AgentEntrySchema.safeParse({
-        id: "ops",
-        heartbeat: { activeHours: { start: "09:00", end: "not-a-time" } },
-      }),
-      "heartbeat.activeHours.end",
-    );
+  it("rejects retired heartbeat config at both runtime agent scopes", () => {
+    const heartbeat = { every: "30m", target: "owner" };
+    expect(AgentDefaultsSchema.safeParse({ heartbeat }).success).toBe(false);
+    expect(AgentEntrySchema.safeParse({ id: "ops", heartbeat }).success).toBe(false);
   });
 });

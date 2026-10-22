@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { hasErrnoCode } from "../infra/errors.js";
+import { ignoreMissingPath } from "../infra/errno.js";
 import { overwriteFileHandle } from "../infra/file-descriptor.js";
 import {
   captureAgentToolSourceExecutionGuard,
@@ -14,10 +14,7 @@ async function openHostFileForUpdate(resolved: string) {
     // Rollback requires the original bytes; unreadable files must fail before mutation.
     return existing.isFile() ? await fs.open(resolved, "r+") : undefined;
   } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
+    return ignoreMissingPath(error);
   }
 }
 

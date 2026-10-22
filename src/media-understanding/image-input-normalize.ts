@@ -7,7 +7,7 @@ import { ImageOptimizationLimitError } from "../media/image-optimization-error.j
 import { normalizeInputImageBuffer } from "../media/input-files.js";
 import { readImageMetadataFromHeader } from "../media/media-services.js";
 import { effectiveImageBytesCap, optimizeImageBufferForWebMedia } from "../media/web-media.js";
-import { DEFAULT_MAX_BYTES } from "./defaults.constants.js";
+import { MEDIA_CAPABILITY_DEFAULTS } from "./defaults.constants.js";
 
 const HEIC_MIME_RE = /^image\/hei[cf](?:-sequence)?$/i;
 const HEIC_EXT_RE = /\.(heic|heif)$/i;
@@ -31,7 +31,7 @@ export async function normalizeImageDescriptionInput(params: {
     mimeType: sourceMime,
     limits: {
       allowedMimes: new Set([sourceMime, "image/heic", "image/heif", "image/jpeg"]),
-      maxBytes: params.maxBytes ?? DEFAULT_MAX_BYTES.image,
+      maxBytes: params.maxBytes ?? MEDIA_CAPABILITY_DEFAULTS.image.maxBytes,
     },
   });
   return {
@@ -52,7 +52,7 @@ export async function optimizeImageDescriptionInput(params: {
   agentDir?: string;
   workspaceDir?: string;
 }): Promise<{ buffer: Buffer; fileName?: string; mime?: string }> {
-  const maxBytes = params.maxBytes ?? DEFAULT_MAX_BYTES.image;
+  const maxBytes = params.maxBytes ?? MEDIA_CAPABILITY_DEFAULTS.image.maxBytes;
   const modelPolicy = await resolveImageCompressionModelPolicy(params);
   const imageCompression = { imageCount: 1, models: [modelPolicy] };
   const effectiveMaxBytes = effectiveImageBytesCap(maxBytes, imageCompression) ?? maxBytes;

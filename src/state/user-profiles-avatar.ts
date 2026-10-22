@@ -215,7 +215,7 @@ export function createProfileAvatarReader(
         ...snapshot,
         isCurrent,
         loadBytes() {
-          if (!isCurrent()) {
+          if (!isCurrent() || !snapshot.avatar) {
             return Promise.resolve(undefined);
           }
           return (bytes ??= readBytes().then(
@@ -237,10 +237,10 @@ export function createProfileAvatarReader(
       };
       if (
         row &&
-        snapshot.avatar &&
         snapshot.profile?.id === row.id &&
-        snapshot.avatar.sha256 === row.avatar_sha256 &&
-        snapshot.avatar.mime === row.avatar_mime
+        (snapshot.avatar
+          ? snapshot.avatar.sha256 === row.avatar_sha256 && snapshot.avatar.mime === row.avatar_mime
+          : row.has_avatar === 0)
       ) {
         cacheAvatar(row, prepared);
       }

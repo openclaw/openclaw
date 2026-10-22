@@ -1,4 +1,3 @@
-// Imessage tests cover accounts plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -13,27 +12,24 @@ import {
   resolveIMessageDuplicateSourceOwner,
 } from "./accounts.js";
 
-describe("resolveIMessageAccount", () => {
-  it("resolves independent enabled and configured state for explicitly enabled named account", () => {
-    expect(
-      resolveIMessageAccount({
-        cfg: { channels: { imessage: { accounts: { work: { enabled: true } } } } },
-        accountId: "work",
-      }),
-    ).toMatchObject({ accountId: "work", enabled: true, configured: true });
-  });
+function config(accounts: Record<string, IMessageAccountConfig>, cliPath?: string) {
+  return { channels: { imessage: { accounts, ...(cliPath ? { cliPath } : {}) } } };
+}
 
+function sourceOwner(cfg: ReturnType<typeof config>, accountId: string) {
+  return resolveIMessageDuplicateSourceOwner({
+    cfg,
+    account: resolveIMessageAccount({ cfg, accountId }),
+  });
+}
+
+function remote(remoteHost: string): IMessageAccountConfig {
+  return { cliPath: "/usr/local/bin/imsg-ssh", dbPath: "/Users/bot/Messages/chat.db", remoteHost };
+}
+
+describe("resolveIMessageAccount", () => {
   it("preserves top-level default account when named accounts are configured", () => {
-    const cfg = {
-      channels: {
-        imessage: {
-          cliPath: "/usr/local/bin/imsg",
-          accounts: {
-            work: { enabled: false },
-          },
-        },
-      },
-    } as never;
+    const cfg = config({ work: { enabled: false } }, "/usr/local/bin/imsg");
 
     expect(listIMessageAccountIds(cfg)).toEqual(["default", "work"]);
     expect(resolveDefaultIMessageAccountId(cfg)).toBe("default");
@@ -43,90 +39,33 @@ describe("resolveIMessageAccount", () => {
 
 describe("iMessage duplicate-source watcher ownership", () => {
   it("assigns one watcher and doctor warning for a home-relative default database", () => {
-    const cfg = {
-      channels: {
-        imessage: {
-          accounts: {
-            primary: { cliPath: "imsg" },
-            secondary: { dbPath: "~/Library/Messages/chat.db" },
-          },
-        },
-      },
-    } as never;
-
-    expect(
-      resolveIMessageDuplicateSourceOwner({
-        cfg,
-        account: resolveIMessageAccount({ cfg, accountId: "primary" }),
-      }),
-    ).toBeUndefined();
-    expect(
-      resolveIMessageDuplicateSourceOwner({
-        cfg,
-        account: resolveIMessageAccount({ cfg, accountId: "secondary" }),
-      }),
-    ).toBe("primary");
+    const cfg = config({
+      primary: { cliPath: "imsg" },
+      secondary: { dbPath: "~/Library/Messages/chat.db" },
+    });
+    expect(sourceOwner(cfg, "primary")).toBeUndefined();
+    expect(sourceOwner(cfg, "secondary")).toBe("primary");
     expect(collectIMessageDuplicateAccountSourceWarnings({ cfg })).toHaveLength(1);
   });
 
   it.each([
-    {
-      name: "different remote hosts behind the same wrapper",
-      first: {
-        cliPath: "/usr/local/bin/imsg-ssh",
-        dbPath: "/Users/bot/Messages/chat.db",
-        remoteHost: "bot@primary.example",
-      },
-      second: {
-        cliPath: "/usr/local/bin/imsg-ssh",
-        dbPath: "/Users/bot/Messages/chat.db",
-        remoteHost: "bot@secondary.example",
-      },
-    },
-    {
-      name: "an explicitly remote and a local default binary",
-      first: { cliPath: "imsg" },
-      second: { cliPath: "imsg", remoteHost: "bot@remote.example" },
-    },
-  ])("preserves independent watchers for $name", ({ first, second }) => {
-    const cfg = {
-      channels: {
-        imessage: {
-          accounts: {
-            primary: first,
-            secondary: second,
-          },
-        },
-      },
-    } as never;
-
-    for (const accountId of ["primary", "secondary"]) {
-      expect(
-        resolveIMessageDuplicateSourceOwner({
-          cfg,
-          account: resolveIMessageAccount({ cfg, accountId }),
-        }),
-      ).toBeUndefined();
-    }
-    expect(collectIMessageDuplicateAccountSourceWarnings({ cfg })).toEqual([]);
+    [remote("bot@primary.example"), remote("bot@secondary.example")],
+    [{ cliPath: "imsg" }, { cliPath: "imsg", remoteHost: "bot@remote.example" }],
+  ])("preserves independent watchers for %j / %j", (primary, secondary) => {
+    const cfg = config({ primary, secondary });
+    expect({
+      owners: [sourceOwner(cfg, "primary"), sourceOwner(cfg, "secondary")],
+      warnings: collectIMessageDuplicateAccountSourceWarnings({ cfg }),
+    }).toEqual({ owners: [undefined, undefined], warnings: [] });
   });
 
   it("never lets an unconfigured account own or warn for the only startable watcher", () => {
-    const cfg = {
-      channels: {
-        imessage: {
-          accounts: {
-            primary: {},
-            secondary: { enabled: true, cliPath: "imsg" },
-          },
-        },
-      },
-    } as never;
+    const cfg = config({ primary: {}, secondary: { enabled: true } });
     const unconfigured = resolveIMessageAccount({ cfg, accountId: "primary" });
     const configured = resolveIMessageAccount({ cfg, accountId: "secondary" });
 
     expect(unconfigured).toMatchObject({ enabled: true, configured: false });
-    expect(configured).toMatchObject({ enabled: true, configured: true });
+    expect(configured).toMatchObject({ accountId: "secondary", enabled: true, configured: true });
     expect(resolveIMessageDuplicateSourceOwner({ cfg, account: unconfigured })).toBeUndefined();
     expect(resolveIMessageDuplicateSourceOwner({ cfg, account: configured })).toBeUndefined();
     expect(collectIMessageDuplicateAccountSourceWarnings({ cfg })).toEqual([]);
@@ -156,16 +95,10 @@ describe("iMessage local database account ownership", () => {
   });
 
   function hasExclusiveDatabase(otherAccounts: Record<string, IMessageAccountConfig>) {
-    const cfg = {
-      channels: {
-        imessage: {
-          accounts: {
-            work: { cliPath: fixture.cliPath, dbPath: fixture.firstDbPath },
-            ...otherAccounts,
-          },
-        },
-      },
-    };
+    const cfg = config({
+      work: { cliPath: fixture.cliPath, dbPath: fixture.firstDbPath },
+      ...otherAccounts,
+    });
     return hasExclusiveIMessageLocalDatabase({
       cfg,
       account: resolveIMessageAccount({ cfg, accountId: "work" }),

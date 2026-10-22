@@ -1,4 +1,3 @@
-import { vi } from "vitest";
 import type { MSTeamsApp } from "./sdk.js";
 
 type MockAppOptions = {
@@ -14,22 +13,20 @@ export function createMockApp(opts?: MockAppOptions): MSTeamsApp {
       const text = (activity as Record<string, unknown>)?.text;
       return { id: typeof text === "string" ? `id:${text}` : "created" };
     });
-  const apiServiceUrl = "https://smba.trafficmanager.net/amer";
-  return {
-    client: { request: vi.fn() },
-    api: {
-      serviceUrl: apiServiceUrl,
-      conversations: {
-        activities: (conversationId: string) => {
-          opts?.onClientCreated?.(apiServiceUrl, conversationId);
-          return {
-            create: async (activity: unknown) => {
-              opts?.onReference?.({ serviceUrl: apiServiceUrl, ...(activity as object) });
-              return createFn(activity);
-            },
-          };
-        },
+  const createApi = (apiServiceUrl: string): unknown => ({
+    serviceUrl: apiServiceUrl,
+    fromServiceUrl: ({ serviceUrl }: { serviceUrl: string }) => createApi(serviceUrl),
+    conversations: {
+      activities: (conversationId: string) => {
+        opts?.onClientCreated?.(apiServiceUrl, conversationId);
+        return {
+          create: async (activity: unknown) => {
+            opts?.onReference?.({ serviceUrl: apiServiceUrl, ...(activity as object) });
+            return createFn(activity);
+          },
+        };
       },
     },
-  } as unknown as MSTeamsApp;
+  });
+  return { api: createApi("https://smba.trafficmanager.net/amer") } as unknown as MSTeamsApp;
 }

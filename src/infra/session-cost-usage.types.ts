@@ -71,6 +71,7 @@ export type CostUsageSummary = {
     pendingFiles: number;
     staleFiles: number;
     refreshedAt?: number;
+    partial?: { reason: "aggregate-boundary"; message: string };
   };
 };
 

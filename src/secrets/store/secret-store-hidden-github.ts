@@ -17,6 +17,7 @@ import { assertSecretStoreValueLength } from "./secret-store-value.js";
 export async function writeHiddenGitHubSecretRecord(params: {
   name: string;
   value: string;
+  expectedValue?: string;
   updatedBy?: string | null;
   database?: OpenClawStateDatabaseOptions;
 }): Promise<void> {
@@ -30,6 +31,7 @@ export async function writeHiddenGitHubSecretRecord(params: {
         input: {
           name: params.name,
           value: params.value,
+          expectedValue: params.expectedValue,
           updatedBy: params.updatedBy,
           now: Date.now(),
         },
@@ -44,10 +46,9 @@ export async function writeHiddenGitHubSecretRecord(params: {
 /** Reads one exact live hidden GitHub authorization record. */
 export async function readHiddenGitHubSecretRecord(params: {
   name: string;
-  database?: OpenClawStateDatabaseOptions;
 }): Promise<string | undefined> {
   assertHiddenGitHubSecretRecordName(params.name);
-  const context = captureOpenClawStateReadWorkerContext(params.database);
+  const context = captureOpenClawStateReadWorkerContext();
   const value = await runOpenClawStateWorkerOperation(
     context,
     (scope) =>
@@ -66,10 +67,9 @@ export async function readHiddenGitHubSecretRecord(params: {
 /** Lists each live hidden authorization record in one owner snapshot. */
 export async function listHiddenGitHubSecretRecords(params: {
   prefix: HiddenGitHubStorePrefix;
-  database?: OpenClawStateDatabaseOptions;
 }): Promise<Array<{ name: string; value: string }>> {
   hiddenGitHubStoreKindFromPrefix(params.prefix);
-  const context = captureOpenClawStateReadWorkerContext(params.database);
+  const context = captureOpenClawStateReadWorkerContext();
   const rows =
     (await runOpenClawStateWorkerOperation(
       context,
@@ -87,12 +87,9 @@ export async function listHiddenGitHubSecretRecords(params: {
 }
 
 /** Hard-deletes one exact hidden GitHub authorization record. */
-export async function deleteHiddenGitHubSecretRecord(params: {
-  name: string;
-  database?: OpenClawStateDatabaseOptions;
-}): Promise<void> {
+export async function deleteHiddenGitHubSecretRecord(params: { name: string }): Promise<void> {
   assertHiddenGitHubSecretRecordName(params.name);
-  const context = captureOpenClawStateWorkerContext(params.database);
+  const context = captureOpenClawStateWorkerContext();
   await observeSecretStoreMutation(
     runOpenClawStateWorkerOperation(context, (scope) =>
       scope.execute({

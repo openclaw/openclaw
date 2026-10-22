@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -10,6 +10,9 @@ import {
   installShortSessionResolver,
   sessionRouteListResult,
 } from "./route-resolution.test-support.ts";
+
+const shortName = "cached-conversation-12345678";
+const location = (pathname: string) => ({ pathname, search: "", hash: "" });
 
 function warmRoute(scope: "per-sender" | "global" = "per-sender", mainKey = "workspace") {
   const fixture = createSessionRouteContext();
@@ -33,17 +36,20 @@ function warmRoute(scope: "per-sender" | "global" = "per-sender", mainKey = "wor
   return {
     ...fixture,
     cache,
+    seed: (rows: GatewaySessionRow[]) => {
+      context.sessions.state.result = sessionRouteListResult(rows);
+      context.sessions.state.resultCached = true;
+    },
     waiting: waiting.promise,
+    load: (pathname: string, signal = new AbortController().signal) => {
+      const face = pathname.startsWith("/dashboard/") ? "dashboard" : "chat";
+      return loadChatRoute(context, location(pathname), face, signal);
+    },
     connect(this: void) {
       context.gateway.snapshot.phase = "connected";
       context.gateway.snapshot.client = connectedClient;
-      Object.assign(context.gateway.snapshot, {
-        hello: {
-          snapshot: {
-            sessionDefaults: { defaultAgentId: "roboclaw", mainKey: "workspace", scope },
-          },
-        },
-      });
+      const sessionDefaults = { defaultAgentId: "roboclaw", mainKey: "workspace", scope };
+      Object.assign(context.gateway.snapshot, { hello: { snapshot: { sessionDefaults } } });
       for (const listener of listeners) {
         listener(context.gateway.snapshot);
       }
@@ -57,160 +63,97 @@ function warmRoute(scope: "per-sender" | "global" = "per-sender", mainKey = "wor
   };
 }
 
-describe("cached session route startup", () => {
-  it("settles the cached roster before presenting an exact dashboard route", async () => {
-    const { context, cache, request } = warmRoute();
+it.each(["exact", "literal", "short", "title"] as const)(
+  "loads cached %s without Gateway discovery",
+  async (mode) => {
+    const { context, seed, cache, request, waiting, load } = warmRoute();
+    const exact = mode === "exact";
+    const literal = mode === "literal";
+    const dashboardId = "12345678-90ab-cdef-1234-567890abcdef";
     const row = createSessionRouteRow({
-      key: "agent:roboclaw:dashboard:12345678-90ab-cdef-1234-567890abcdef",
-      displayName: "Cached dashboard",
+      ...(exact ? { key: `agent:roboclaw:dashboard:${dashboardId}` } : {}),
+      ...(literal ? { key: "agent:roboclaw:thread" } : {}),
+      displayName: exact ? "Cached dashboard" : "Cached conversation",
     });
-    const complete = vi.fn();
-    const pending = loadChatRoute(
-      context,
-      {
-        pathname: "/chat/roboclaw/dashboard/12345678-90ab-cdef-1234-567890abcdef",
-        search: "",
-        hash: "",
-      },
-      "chat",
-      new AbortController().signal,
-    ).then(complete);
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(complete).not.toHaveBeenCalled();
-    context.sessions.state.result = sessionRouteListResult([row]);
-    context.sessions.state.resultCached = true;
-    cache.resolve();
-    await pending;
-    expect(complete).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: "session", sessionKey: row.key }),
-    );
-    expect(request).not.toHaveBeenCalled();
-  });
-
-  it("resolves a global-scope literal route once hello makes its defaults authoritative", async () => {
-    const { context, connect, installResolver, waiting } = warmRoute("global");
-    const row = createSessionRouteRow({ key: "agent:roboclaw:thread" });
-    const request = installResolver([row]);
+    const suffix = {
+      exact: `dashboard/${dashboardId}`,
+      literal: "thread",
+      short: shortName,
+      title: "cached-conversation",
+    }[mode];
+    if (literal) {
+      seed([row]);
+    }
+    const controller = new AbortController();
     const completed = vi.fn();
-    const pending = loadChatRoute(
-      context,
-      { pathname: "/chat/roboclaw/thread", search: "", hash: "" },
-      "chat",
-      new AbortController().signal,
-    ).then(completed);
-
-    await waiting;
-    expect(completed).not.toHaveBeenCalled();
-    connect();
-    await pending;
-    expect(completed).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: "session", sessionKey: row.key }),
-    );
-    expect(request).toHaveBeenCalledOnce();
-  });
-
-  it.each([
-    "/chat/roboclaw/cached-conversation-12345678",
-    "/dashboard/roboclaw/cached-conversation-12345678",
-    "/chat/roboclaw/cached-conversation",
-    "/dashboard/roboclaw/cached-conversation",
-  ])(
-    "resolves cached %s before requesting a Gateway client without agent discovery",
-    async (pathname) => {
-      const { context, cache, request, waiting } = warmRoute();
-      const row = createSessionRouteRow({ displayName: "Cached conversation" });
-      const controller = new AbortController();
-      const pending = loadChatRoute(
-        context,
-        { pathname, search: "", hash: "" },
-        pathname.startsWith("/dashboard/") ? "dashboard" : "chat",
-        controller.signal,
-      );
-      context.sessions.state.result = sessionRouteListResult([row]);
-      context.sessions.state.resultCached = true;
-      cache.resolve();
-      try {
-        expect(
-          await Promise.race([pending, waiting.then(() => "waiting for Gateway")]),
-        ).toMatchObject({
-          kind: "session",
-          sessionKey: row.key,
-          sessionResolutionFromCache: true,
-        });
-        expect(context.agents.state.agentsList).toBeNull();
-        expect(request).not.toHaveBeenCalled();
-      } finally {
-        controller.abort();
-        await pending.catch(() => undefined);
+    const pending = load(`/chat/roboclaw/${suffix}`, controller.signal).then((result) => {
+      completed(result);
+      return result;
+    });
+    try {
+      if (exact) {
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(completed).not.toHaveBeenCalled();
       }
-    },
-  );
-
-  it("keeps a configured main key that resembles a short link literal before hello", () => {
-    const { context } = warmRoute("per-sender", "cached-conversation-12345678");
-    expect(
-      sessionRouteTargetFromLocation(context, {
-        pathname: "/chat/roboclaw/cached-conversation-12345678",
-        search: "",
-        hash: "",
-      })?.target,
-    ).toMatchObject({
-      kind: "literal",
-      sessionKey: "agent:roboclaw:cached-conversation-12345678",
-    });
-  });
-
-  it("uses cached routing defaults for a known literal key", async () => {
-    const { context, request, cache } = warmRoute();
-    const sessionKey = "agent:roboclaw:thread";
-    context.sessions.state.result = sessionRouteListResult([
-      createSessionRouteRow({ key: sessionKey, displayName: "Cached conversation" }),
-    ]);
-    context.sessions.state.resultCached = true;
-    const pending = loadChatRoute(
-      context,
-      { pathname: "/chat/roboclaw/thread", search: "", hash: "" },
-      "chat",
-      new AbortController().signal,
-    );
-    cache.resolve();
-    expect(context.sessions.state.result?.sessions[0]?.displayName).toBe("Cached conversation");
-    expect(request).not.toHaveBeenCalled();
-    expect(await pending).toMatchObject({ kind: "session", sessionKey });
-    expect(request).not.toHaveBeenCalled();
-  });
-
-  it("keeps missing cached short resolution on the Gateway path", async () => {
-    const { context, cache, connect, installResolver, waiting } = warmRoute();
-    const row = createSessionRouteRow({ displayName: "Cached conversation" });
-    context.sessions.state.result = sessionRouteListResult([]);
-    context.sessions.state.resultCached = true;
-    const request = installResolver([row]);
-    cache.resolve();
-    const completed = vi.fn();
-    const pending = loadChatRoute(
-      context,
-      {
-        pathname: "/chat/roboclaw/cached-conversation-12345678",
-        search: "",
-        hash: "",
-      },
-      "chat",
-      new AbortController().signal,
-    ).then(completed);
-
-    await waiting;
-    expect(completed).not.toHaveBeenCalled();
-    expect(request).not.toHaveBeenCalled();
-    connect();
-    await pending;
-    expect(completed).toHaveBeenCalledWith(
-      expect.objectContaining({
+      if (!literal) {
+        seed([row]);
+      }
+      cache.resolve();
+      if (literal) {
+        expect(context.sessions.state.result?.sessions[0]?.displayName).toBe("Cached conversation");
+        expect(request).not.toHaveBeenCalled();
+      }
+      expect(
+        await Promise.race([pending, waiting.then(() => "waiting for Gateway")]),
+      ).toMatchObject({
         kind: "session",
         sessionKey: row.key,
-      }),
+        ...(!exact && !literal ? { sessionResolutionFromCache: "roster" } : {}),
+      });
+      expect(context.agents.state.agentsList).toBeNull();
+      expect(request).not.toHaveBeenCalled();
+    } finally {
+      controller.abort();
+      await pending.catch(() => undefined);
+    }
+  },
+);
+
+it("keeps a configured main key that resembles a short link literal before hello", () => {
+  const { context } = warmRoute("per-sender", shortName);
+  expect(
+    sessionRouteTargetFromLocation(context, location(`/chat/roboclaw/${shortName}`))?.target,
+  ).toMatchObject({ kind: "literal", sessionKey: "agent:roboclaw:cached-conversation-12345678" });
+});
+
+it.each(["global literal", "uncached short"] as const)(
+  "waits for Gateway resolution: %s",
+  async (route) => {
+    const literal = route === "global literal";
+    const { seed, cache, connect, installResolver, waiting, load } = warmRoute(
+      literal ? "global" : "per-sender",
+    );
+    const row = createSessionRouteRow(
+      literal ? { key: "agent:roboclaw:thread" } : { displayName: "Cached conversation" },
+    );
+    if (!literal) {
+      seed([]);
+    }
+    const request = installResolver([row]);
+    if (!literal) {
+      cache.resolve();
+    }
+    const completed = vi.fn();
+    const pending = load(`/chat/roboclaw/${literal ? "thread" : shortName}`).then(completed);
+    await waiting;
+    expect(completed).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
+    connect();
+    await pending;
+    expect(completed).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "session", sessionKey: row.key }),
     );
     expect(request).toHaveBeenCalledOnce();
-  });
-});
+  },
+);

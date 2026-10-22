@@ -9,11 +9,14 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   executeExistingOpenClawStateRead,
+  getActiveOpenClawStateDatabaseReadSnapshot,
   withExistingOpenClawStateDatabaseReadOnly,
-  withExistingOpenClawStateDatabaseCurrentReadOnly,
 } from "../../state/openclaw-state-db-readonly.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
   buildAcpDatabaseSessionKey,
+  readPublishedAcpSessionRows,
   resolveReadableAcpSessionRow,
   selectAcpSessionRowForStoreEntry,
 } from "./session-meta-keys.js";
@@ -51,39 +54,50 @@ export async function readAcpSessionMetaForEntries(
         }
       : undefined,
   }));
+  const database = {
+    env: params.env,
+    path: params.databasePath ?? resolveOpenClawStateSqlitePath(params.env),
+  };
+  const context =
+    options.current || !getActiveOpenClawStateDatabaseReadSnapshot(database)
+      ? captureOpenClawStateReadWorkerContext(database)
+      : undefined;
+  if (context) {
+    const published = readPublishedAcpSessionRows(database.path, entries);
+    if (published) {
+      options.signal?.throwIfAborted();
+      context.maintenanceScope?.assertAdmission();
+      context.admission.assertCurrent();
+      return published.map((row) => (row ? rowToAcpSessionMeta(row) : null));
+    }
+  }
   const result = await executeExistingOpenClawStateRead(
-    { env: params.env, path: params.databasePath },
+    database,
     {
       type: "acpSessions.metadata",
       entries,
     },
-    options,
+    { ...options, context },
   );
   if (result === undefined) {
     return entries.map(() => null);
   }
-  if (result.ok && result.type === "acpSessions.metadata") {
-    return result.rows.map((row) => (row ? rowToAcpSessionMeta(row) : null));
-  }
-  throw new Error("Unexpected ACP session metadata read result");
+  return result.rows.map((row) => (row ? rowToAcpSessionMeta(row) : null));
 }
 
 /** Read metadata for an already selected entry without loading its session row again. */
-export async function readAcpSessionMetaForEntryAsync(
-  params: {
-    sessionKey: string;
-    agentId?: string;
-    cfg?: OpenClawConfig;
-    entry: AcpSessionEntryBinding | undefined;
-    env?: NodeJS.ProcessEnv;
-    databasePath?: string;
-  },
-  options: { current?: true; signal?: AbortSignal } = {},
-): Promise<SessionAcpMeta | undefined> {
+export async function readAcpSessionMetaForEntryAsync(params: {
+  sessionKey: string;
+  agentId?: string;
+  cfg?: OpenClawConfig;
+  entry: AcpSessionEntryBinding | undefined;
+  env?: NodeJS.ProcessEnv;
+  databasePath?: string;
+}): Promise<SessionAcpMeta | undefined> {
   if (!params.sessionKey.trim()) {
     return undefined;
   }
-  const [metadata] = await readAcpSessionMetaForEntries({ ...params, entries: [params] }, options);
+  const [metadata] = await readAcpSessionMetaForEntries({ ...params, entries: [params] });
   return metadata ?? undefined;
 }
 
@@ -111,24 +125,13 @@ export function rowToAcpSessionMeta(
 }
 
 export function readAcpSessionMetaForEntry(
-  params: {
-    sessionKey: string;
-    agentId?: string;
-    cfg?: OpenClawConfig;
-    entry: AcpSessionEntryBinding | undefined;
-    env?: NodeJS.ProcessEnv;
-    databasePath?: string;
-  },
-  options: { current?: true } = {},
+  params: Parameters<typeof readAcpSessionMetaForEntryAsync>[0],
 ): SessionAcpMeta | undefined {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
     return undefined;
   }
-  const read = options.current
-    ? withExistingOpenClawStateDatabaseCurrentReadOnly
-    : withExistingOpenClawStateDatabaseReadOnly;
-  const row = read(
+  const row = withExistingOpenClawStateDatabaseReadOnly(
     ({ db }) =>
       resolveReadableAcpSessionRow({
         row: selectAcpSessionRowForStoreEntry(db, sessionKey, params.agentId, params.entry),

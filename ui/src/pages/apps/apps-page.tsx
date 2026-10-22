@@ -1,35 +1,36 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { createEffect, createMemo, createSignal, Show } from "solid-js";
-import { titleForRoute } from "../../app-navigation.ts";
+import { createMemo, Errored, lazy, Loading, Show } from "solid-js";
 import { ensureCustomElementDefined } from "../../app/lazy-custom-element.ts";
 import { isNativeWebChromeHost } from "../../app/native-web-chrome.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
-import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { McpAppCatalog } from "../../components/mcp-app-catalog.tsx";
 import type { McpAppOpenDetail } from "../../components/mcp-app-launch.ts";
+import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerMcpAppEnglish } from "../../i18n/locales/en-mcp-app.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { createMcpAppCatalog } from "../../lib/mcp-app-catalog.ts";
 import { mcpAppRouteFromSearch, resolveMcpAppRouteServer } from "../../lib/mcp-app-route.ts";
 import { projectAgentSelection, projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { useMcpAppCatalog } from "../../lib/reactive/mcp-app-catalog.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { buildMacGatewayLaunchUrl } from "./gateway-launch.ts";
 import { Apps } from "./view.tsx";
 
 registerEnglishCatalog(registerMcpAppEnglish);
 
-type AppsPageProps = { appSearch: string };
+const DiscoveryStatus = lazy(() => import("../../components/mcp-app-discovery-status.tsx"));
+
+type AppsPageProps = { appSearch?: string };
 type AppLaunch = { key: string; detail?: McpAppOpenDetail };
 
-function AppsPageContent(props: AppsPageProps) {
+export function AppsPage(props: AppsPageProps) {
   const context = useApplication();
   const gateway = projectGateway(context.gateway);
   const selection = projectAgentSelection(context.agentSelection);
-  const appRoute = createMemo(() => mcpAppRouteFromSearch(props.appSearch));
-  const catalog = useMcpAppCatalog(
+  const appSearch = createMemo(() => props.appSearch ?? "");
+  const appRoute = createMemo(() => mcpAppRouteFromSearch(appSearch()));
+  const catalog = createMcpAppCatalog(
     context,
     () => ({
       sessionKey: appRoute() ? gateway.read().snapshot.sessionKey : "",
@@ -37,42 +38,26 @@ function AppsPageContent(props: AppsPageProps) {
     }),
     () => true,
   );
-  const [conversationError, setConversationError] = createSignal<string | null>(null, {
-    ownedWrite: true,
-  });
-  const [retry, setRetry] = createSignal(0);
-  createEffect(
-    () => [appRoute(), retry()] as const,
-    ([route]) => {
-      if (!route) {
-        return undefined;
-      }
-      let current = true;
-      setConversationError(null);
-      void ensureCustomElementDefined(
+  const conversationReady = createMemo(async () => {
+    if (appRoute()) {
+      await ensureCustomElementDefined(
         "openclaw-chat-pane",
         () => import("../chat/route-entry.ts"),
-      ).catch((error: unknown) => {
-        if (current) {
-          setConversationError(formatUiError(error));
-        }
-      });
-      return () => {
-        current = false;
-      };
-    },
-  );
+      );
+    }
+    return null;
+  });
   const launch = createMemo((previous: AppLaunch | undefined): AppLaunch => {
     const state = gateway.read();
     const agentId = selection.read().state.selectedId ?? undefined;
     const key = JSON.stringify([
-      props.appSearch,
+      appSearch(),
       state.snapshot.sessionKey,
       agentId,
       state.connectionRevision,
     ]);
     const route = appRoute();
-    const discovered = catalog();
+    const discovered = catalog.snapshot();
     if (
       previous?.key === key &&
       previous.detail &&
@@ -83,7 +68,7 @@ function AppsPageContent(props: AppsPageProps) {
     if (!route) {
       return { key };
     }
-    const search = new URLSearchParams(props.appSearch);
+    const search = new URLSearchParams(appSearch());
     const settings = search.get("settings") === "1";
     const server = resolveMcpAppRouteServer(discovered.servers, route, settings);
     const entrypoint =
@@ -133,14 +118,8 @@ function AppsPageContent(props: AppsPageProps) {
         )
       : null;
   return (
-    <>
-      <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
-        <section class="content-header">
-          <div>
-            <div class="page-title">{titleForRoute("apps")}</div>
-          </div>
-        </section>
-      </ShellLayoutBoundary>
+    <openclaw-apps-page>
+      <HubPageHeader active="apps" wide docsUrl="https://docs.openclaw.ai/platforms" />
       <Show
         when={appRoute()}
         fallback={
@@ -159,19 +138,29 @@ function AppsPageContent(props: AppsPageProps) {
         <button class="btn" onClick={() => context.navigate("apps")}>
           {t("mcpApp.close")}
         </button>
-        <Show
-          when={conversationError()}
-          fallback={
+        <Errored
+          fallback={(error, reset) => (
+            <>
+              <p role="alert">{formatUiError(error())}</p>
+              <button class="btn" onClick={() => reset()}>
+                {t("mcpApp.retry")}
+              </button>
+            </>
+          )}
+        >
+          <Loading on={appRoute()} fallback={<p role="status">{t("mcpApp.loading")}</p>}>
+            {conversationReady()}
             <Show
               when={paneKey()}
               keyed
               fallback={
-                <Show
-                  when={catalog().loading}
-                  fallback={<p role="alert">{catalog().error ?? t("mcpApp.invalidLink")}</p>}
-                >
-                  <p role="status">{t("mcpApp.loading")}</p>
-                </Show>
+                <Loading fallback={<p role="status">{t("mcpApp.loading")}</p>}>
+                  <DiscoveryStatus
+                    request={catalog.request()}
+                    emptyMessage={t("mcpApp.invalidLink")}
+                    emptyRole="alert"
+                  />
+                </Loading>
               }
             >
               <openclaw-chat-pane
@@ -183,22 +172,9 @@ function AppsPageContent(props: AppsPageProps) {
                 prop:mcpAppLaunch={launch().detail}
               />
             </Show>
-          }
-        >
-          {(error) => (
-            <>
-              <p role="alert">{error()}</p>
-              <button class="btn" onClick={() => setRetry((value) => value + 1)}>
-                {t("mcpApp.retry")}
-              </button>
-            </>
-          )}
-        </Show>
+          </Loading>
+        </Errored>
       </Show>
-    </>
+    </openclaw-apps-page>
   );
 }
-
-export const AppsPage = defineSolidBridge("openclaw-apps-page", AppsPageContent, {
-  properties: { appSearch: { default: "", attribute: false } },
-});

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { ChannelIngressDispatchLifecycle } from "./ingress-drain-lifecycle.js";
 import { createChannelIngressDrain } from "./ingress-drain.js";
@@ -9,6 +10,55 @@ import {
 } from "./ingress-drain.test-helpers.js";
 
 describe("channel ingress drain lanes", () => {
+  it("keeps a competing lane head ahead of its tail while dispatching other lanes", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createTestIngressQueue(stateDir);
+      await queue.enqueue("head", { text: "same" }, { laneKey: "same", receivedAt: 1 });
+      await queue.enqueue("tail", { text: "same" }, { laneKey: "same", receivedAt: 2 });
+      await queue.enqueue("other", { text: "other" }, { laneKey: "old-lane", receivedAt: 3 });
+      const listUnsettled = queue.listUnsettled!.bind(queue);
+      const competing: { claim: Awaited<ReturnType<typeof queue.claim>> } = { claim: null };
+      const listing = vi.spyOn(queue, "listUnsettled").mockImplementationOnce(async () => {
+        const snapshot = await listUnsettled();
+        competing.claim = await queue.claim("head", { ownerId: "competing-owner" });
+        return snapshot;
+      });
+      const dispatches: string[] = [];
+      const drain = createChannelIngressDrain<Payload>({
+        queue,
+        deriveLaneKey: (record) => record.payload.text,
+        reconcileStoredLaneKey: (_record, stored) => stored === "old-lane",
+        dispatchClaimedEvent: (event) => {
+          dispatches.push(event.id);
+          return { kind: "deferred" };
+        },
+      });
+      try {
+        expect(await drain.drainOnce()).toEqual({ started: 1 });
+        await drain.waitForIdle();
+        const competitor = competing.claim;
+        if (!competitor) {
+          throw new Error("Expected competing claim");
+        }
+        expect(dispatches).toEqual(["other"]);
+        expect(await queue.listClaims()).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ id: "head", claim: competitor.claim }),
+            expect.objectContaining({ id: "other", laneKey: "other" }),
+          ]),
+        );
+        expect((await queue.listPending()).map((row) => row.id)).toEqual(["tail"]);
+        await queue.complete(competitor);
+        expect(await drain.drainOnce()).toEqual({ started: 1 });
+        await drain.waitForIdle();
+        expect(dispatches).toEqual(["other", "tail"]);
+      } finally {
+        drain.dispose();
+        listing.mockRestore();
+      }
+    });
+  });
+
   it.each<{
     orderBy: "received" | "id";
     coherentSnapshot: boolean;
@@ -276,6 +326,107 @@ describe("channel ingress drain lanes", () => {
       }
     });
   });
+
+  it.each([
+    { failureOrder: "before deferral", releaseOutcome: "committed" },
+    { failureOrder: "after deferral", releaseOutcome: "committed" },
+    { failureOrder: "after deferral", releaseOutcome: "unknown" },
+  ] as const)(
+    "keeps a failed lane head ahead of its tail when release is $releaseOutcome ($failureOrder)",
+    async ({ failureOrder, releaseOutcome }) => {
+      await withTempState(async (stateDir) => {
+        let clock = 10_000;
+        const queue = createTestIngressQueue(stateDir, { now: () => clock });
+        await queue.enqueue("head", { text: "head" }, { laneKey: "same", receivedAt: 1 });
+        await queue.enqueue("tail", { text: "tail" }, { laneKey: "same", receivedAt: 2 });
+        const releaseStarted = createDeferredCore();
+        const finishRelease = createDeferredCore();
+        const releaseFailure = new SqliteWorkerError(
+          "Synthetic lost release outcome",
+          "outcome-unknown",
+        );
+        const release = queue.release.bind(queue);
+        const heldRelease = vi.spyOn(queue, "release").mockImplementationOnce(async (...args) => {
+          releaseStarted.resolve();
+          await finishRelease.promise;
+          if (releaseOutcome === "unknown") {
+            throw releaseFailure;
+          }
+          return await release(...args);
+        });
+        let failure: Promise<void> | undefined;
+        let settlementError: unknown;
+        const dispatches: string[] = [];
+        const drain = createChannelIngressDrain<Payload>({
+          queue,
+          now: () => clock,
+          deferredLaneOccupancy: "release",
+          retryPolicy: { baseMs: 1_000, maxMs: 1_000 },
+          dispatchClaimedEvent: async (event, lifecycle) => {
+            dispatches.push(event.id);
+            if (event.id === "head" && !failure) {
+              if (failureOrder === "after deferral") {
+                lifecycle.onDeferred();
+              }
+              if (!lifecycle.onFailed) {
+                throw new Error("Expected the deferred failure lifecycle");
+              }
+              failure = Promise.resolve(lifecycle.onFailed(new Error("retry head"))).catch(
+                (error: unknown) => {
+                  settlementError = error;
+                },
+              );
+              await releaseStarted.promise;
+              return { kind: "deferred" };
+            }
+            await lifecycle.onAdopted();
+            return { kind: "completed" };
+          },
+        });
+        try {
+          expect(await drain.drainOnce()).toEqual({ started: 1 });
+          await drain.waitForIdle();
+          await queue.enqueue("other", { text: "other" }, { laneKey: "other", receivedAt: 3 });
+          await drain.drainOnce();
+          await drain.waitForIdle();
+          expect(dispatches).toEqual(["head", "other"]);
+
+          finishRelease.resolve();
+          await failure;
+          if (releaseOutcome === "unknown") {
+            expect(settlementError).toBe(releaseFailure);
+            await drain.drainOnce();
+            await drain.waitForIdle();
+            expect(dispatches).toEqual(["head", "other"]);
+            expect(await queue.listClaims()).toMatchObject([{ id: "head" }]);
+            expect(await queue.listPending()).toMatchObject([{ id: "tail", attempts: 0 }]);
+            return;
+          }
+          expect(settlementError).toBeUndefined();
+          expect(await queue.listPending()).toMatchObject([
+            { id: "head", attempts: 1, lastError: "retry head" },
+            { id: "tail", attempts: 0 },
+          ]);
+          expect(await drain.drainOnce()).toEqual({ started: 0 });
+
+          clock += 1_000;
+          expect(await drain.drainOnce()).toEqual({ started: 1 });
+          await drain.waitForIdle();
+          expect(await drain.drainOnce()).toEqual({ started: 1 });
+          await drain.waitForIdle();
+          expect(dispatches).toEqual(["head", "other", "head", "tail"]);
+          expect(await queue.listPending()).toEqual([]);
+          expect(await queue.listClaims()).toEqual([]);
+        } finally {
+          finishRelease.resolve();
+          await failure;
+          await drain.waitForIdle();
+          drain.dispose();
+          heldRelease.mockRestore();
+        }
+      });
+    },
+  );
 
   it("never claims a retry-delayed event whose lane head settled after the drain snapshot", async () => {
     await withTempState(async (stateDir) => {

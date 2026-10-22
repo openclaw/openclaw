@@ -1,5 +1,4 @@
-// Tests plugin activation boundaries during root package startup.
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { normalizeModelRef } from "./agents/model-ref-shared.js";
 import { isStaticallyChannelConfigured } from "./config/channel-configured-shared.js";
 
@@ -11,53 +10,26 @@ const testModelIdNormalization = {
         "gemini-3-pro-preview": "gemini-3.1-pro-preview",
       },
     },
-    xai: {
-      aliases: {
-        "grok-4-fast-reasoning": "grok-4-fast",
-      },
-    },
+    xai: { aliases: { "grok-4-fast-reasoning": "grok-4-fast" } },
   },
 };
 
 const loadBundledPluginPublicSurfaceModuleSyncCore = vi.hoisted(() => vi.fn());
 
-const loadPluginManifestRegistryForPluginRegistry = vi.hoisted(() =>
-  vi.fn(() => ({
-    diagnostics: [],
-    plugins: [
-      {
-        id: "test-channel-fixture",
-        channels: ["discord", "irc", "slack", "telegram"],
-        providers: [],
-        cliBackends: [],
-        packageChannel: {
-          id: "discord",
-          configuredState: { env: { anyOf: ["DISCORD_BOT_TOKEN"] } },
-        },
-        modelIdNormalization: testModelIdNormalization,
-        skills: [],
-        hooks: [],
-        origin: "bundled",
-        rootDir: "/tmp/openclaw-test-channel-fixture",
-        source: "bundled",
-        manifestPath: "/tmp/openclaw-test-channel-fixture/openclaw.plugin.json",
-      },
-    ],
-  })),
-);
+const loadPluginManifestRegistryForPluginRegistry = vi.hoisted(() => vi.fn());
+const channelEnvs = vi.hoisted((): Record<string, NodeJS.ProcessEnv> => ({
+  telegram: { TELEGRAM_BOT_TOKEN: "token" },
+  discord: { DISCORD_BOT_TOKEN: "token" },
+  slack: { SLACK_BOT_TOKEN: "xoxb-test" },
+  irc: { IRC_HOST: "irc.example.com", IRC_NICK: "openclaw" },
+}));
 
-const facadeMockHelpers = vi.hoisted(() => {
-  const createLazyFacadeObjectValue = <T extends object>(load: () => T): T =>
-    new Proxy(
-      {},
-      {
-        get(_target, property, receiver) {
-          return Reflect.get(load(), property, receiver);
-        },
-      },
-    ) as T;
-  return { createLazyFacadeObjectValue };
-});
+const facadeMockHelpers = vi.hoisted(() => ({
+  createLazyFacadeObjectValue: <T extends object>(load: () => T): T =>
+    new Proxy({} as T, {
+      get: (_target, property, receiver) => Reflect.get(load(), property, receiver),
+    }),
+}));
 
 vi.mock("./plugins/plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry,
@@ -68,16 +40,9 @@ vi.mock("./plugins/plugin-registry.js", () => ({
   }),
 }));
 
+// mock-isolation: Keep channel environment lookup independent of runtime plugin discovery.
 vi.mock("./secrets/channel-env-vars.js", () => ({
-  getChannelEnvVars: (channelId: string) => {
-    const varsByChannel: Record<string, string[]> = {
-      discord: ["DISCORD_BOT_TOKEN"],
-      irc: ["IRC_HOST", "IRC_NICK"],
-      slack: ["SLACK_BOT_TOKEN"],
-      telegram: ["TELEGRAM_BOT_TOKEN"],
-    };
-    return varsByChannel[channelId] ?? [];
-  },
+  getChannelEnvVars: (channelId: string) => Object.keys(channelEnvs[channelId] ?? {}),
 }));
 
 vi.mock("./plugin-sdk/facade-loader.js", () => ({
@@ -99,38 +64,24 @@ vi.mock("./plugin-sdk/facade-runtime.js", () => ({
     loadBundledPluginPublicSurfaceModuleSyncCore,
 }));
 
-describe("plugin activation boundary", () => {
-  it("keeps generic channel and model-normalization boundaries cold", () => {
-    loadBundledPluginPublicSurfaceModuleSyncCore.mockReset();
+it("keeps generic channel and model-normalization boundaries cold", () => {
+  loadBundledPluginPublicSurfaceModuleSyncCore.mockReset();
 
-    expect(isStaticallyChannelConfigured({}, "telegram", { TELEGRAM_BOT_TOKEN: "token" })).toBe(
-      true,
-    );
-    expect(isStaticallyChannelConfigured({}, "discord", { DISCORD_BOT_TOKEN: "token" })).toBe(true);
-    expect(isStaticallyChannelConfigured({}, "slack", { SLACK_BOT_TOKEN: "xoxb-test" })).toBe(true);
-    expect(
-      isStaticallyChannelConfigured({}, "irc", {
-        IRC_HOST: "irc.example.com",
-        IRC_NICK: "openclaw",
-      }),
-    ).toBe(true);
-    expect(isStaticallyChannelConfigured({}, "whatsapp", {})).toBe(false);
-    const staticNormalize = {
-      allowPluginNormalization: false,
-      manifestPlugins: [{ modelIdNormalization: testModelIdNormalization }],
-    };
-    expect(normalizeModelRef("google", "gemini-3.1-pro", staticNormalize)).toEqual({
-      provider: "google",
-      model: "gemini-3.1-pro-preview",
-    });
-    expect(normalizeModelRef("google", "gemini-3-pro-preview", staticNormalize)).toEqual({
-      provider: "google",
-      model: "gemini-3.1-pro-preview",
-    });
-    expect(normalizeModelRef("xai", "grok-4-fast-reasoning", staticNormalize)).toEqual({
-      provider: "xai",
-      model: "grok-4-fast",
-    });
-    expect(loadBundledPluginPublicSurfaceModuleSyncCore).not.toHaveBeenCalled();
-  });
+  for (const [channel, env] of Object.entries(channelEnvs)) {
+    expect(isStaticallyChannelConfigured({}, channel, env)).toBe(true);
+  }
+  expect(isStaticallyChannelConfigured({}, "whatsapp", {})).toBe(false);
+  const staticNormalize = {
+    allowPluginNormalization: false,
+    manifestPlugins: [{ modelIdNormalization: testModelIdNormalization }],
+  };
+  for (const [provider, input, model] of [
+    ["google", "gemini-3.1-pro", "gemini-3.1-pro-preview"],
+    ["google", "gemini-3-pro-preview", "gemini-3.1-pro-preview"],
+    ["xai", "grok-4-fast-reasoning", "grok-4-fast"],
+  ] as const) {
+    expect(normalizeModelRef(provider, input, staticNormalize)).toEqual({ provider, model });
+  }
+  expect(loadBundledPluginPublicSurfaceModuleSyncCore).not.toHaveBeenCalled();
+  expect(loadPluginManifestRegistryForPluginRegistry).not.toHaveBeenCalled();
 });

@@ -13,6 +13,11 @@ OpenClaw handles failures in two stages:
 1. **Auth-profile rotation** within the current provider.
 2. **Model fallback** to the next model in `agents.defaults.model.fallbacks`.
 
+Turn usage includes completed model candidates even when their answer is discarded
+during fallback. Costs retain each candidate's price; if any completed candidate's
+price is unavailable, the total cost stays unknown. The final selected model and
+its last-call usage still determine the reported model and context-window usage.
+
 Before rotating profiles or changing models, the runner attempts bounded
 same-model recovery for temporary rate limits and provider failures. It continues
 the existing transcript, preserving partial output and completed work. The agent
@@ -20,17 +25,28 @@ is instructed to inspect interrupted actions before deciding whether to repeat
 them. A retry status shows the wait and attempt count. Cancellation remains
 available. No additional configuration is required.
 
-An explicit organization-wide tokens-per-minute (TPM) exhaustion skips same-model
-backoff and auth-profile rotation when another configured candidate remains and the
-attempt is safe to replay. Auth-profile-backed credentials use the existing model cooldown,
-starting at 30 seconds, before another primary check. Other models on the same
-provider remain eligible. Generic 429 throttles, request limits, server errors,
-and connection failures keep bounded same-model recovery. The last configured
-candidate retains same-model recovery. If all later candidates are skipped by
-policy, authentication, or cooldown checks, the turn reports the exhausted chain
-instead of returning to the TPM-limited model. Inline provider keys still retry
-the primary on later turns; their existing cooldown policy covers auth and billing
-failures rather than model rate limits.
+Explicit organization-wide tokens-per-minute (TPM) exhaustion uses the same bounded
+recovery policy. Embedded model calls and direct completions share a process-local
+admission gate: requests using the affected provider endpoint and account wait for
+the provider's retry floor before being sent. This includes streamed rate-limit
+errors. `Retry-After` and exhausted quota reset headers are honored by the provider
+error parser. A full-refill reset is not a minimum wait when the bucket still has
+tokens and the provider supplies a shorter retry hint.
+
+During recovery, interactive turns take priority over subagents and background
+work such as reviews and titles. Queued requests resume one at a time with
+100–250 ms of jitter between admissions. The status reads **Waiting for rate
+limit**; cancellation, run deadlines, retry budgets, and configured delay caps
+still apply. The gate does not retry requests itself. A fallback model using the
+same account shares its wait instead of immediately hitting the same limit.
+
+Accounts share a gate when their explicit organization header or observed provider
+error identifies the same organization. Until then, credentials are scoped
+separately; requests without an account identity cannot be coordinated. State is
+in memory and expires one minute after the latest retry floor. Successful traffic
+does not extend recovery pacing. This does not coordinate other Gateway
+processes or native harness transports such as the Codex app-server, which retain
+their own transport and retry policies.
 
 An output-token limit is separate from a transient provider outage. The embedded
 runtime permits at most one continuation for a truncated Responses tool call or
@@ -58,6 +74,11 @@ Local transcript write conflicts do not retry the model, rotate accounts, or
 trigger model fallback. The transcript owner rereads the current revision and
 retries an eligible append once. A repeated conflict is reported as a local
 error; an older reply cannot overwrite or bypass a newer user turn.
+
+Session-state changes before prompt admission also stop model fallback. If the
+persisted user turn changes or the session reader is no longer current, OpenClaw
+preserves the session-state error for the session's retry owner or reports it to
+the caller. These errors do not produce an `unknown` provider-failure notice.
 
 Thinking-level recovery applies only when the provider identifies a reasoning or
 thinking parameter. Model/account restrictions and unrelated unsupported options
@@ -89,11 +110,26 @@ policy. OpenClaw does not retry them with thinking disabled.
 
 Fallback execution is turn-local. The reply runner persists only fallback notice state so `/status` and transition notices can distinguish the selected model from the model that answered. It does not persist the fallback as the next turn's model selection.
 
+A fallback that only relays a completed task result cannot start new delegated work.
+A verified requester continuation after its child tasks settle is different: on
+the built-in and plugin harness paths, it retains the requester's authorized
+session tools so unfinished work can continue. The live settlement owner and
+persisted child lineage must still match; an active Goal or completion message
+alone does not grant that exception. The exception is host-mediated: native
+collaboration stays disabled because it does not carry the settlement owner’s
+final-effect authority check. Existing tool restrictions and Stop still apply.
+CLI backends that cannot enforce settlement authority keep the report-only restriction.
+
 Sessions placed on an OpenClaw cloud worker keep the OpenClaw runtime when
 automatic model selection advances to a fallback. The configured provider,
 model, and auth-profile fallback rules still apply. Explicit session or
 configured runtime choices remain strict: an incompatible runtime reports a
 placement error and requires a compatible destination before retrying.
+
+When a failed cloud-worker candidate has already committed output, its fallback
+continues from that output, including completed tool results. The worker starts
+from the matching transcript leaf. Unrelated transcript changes still retain the
+admission fence and can reject the worker's commit rather than overwrite history.
 
 When configured fallback stops because the agent run reaches a final timeout or
 the idle-timeout cost-runaway breaker returns a terminal error, the
@@ -272,11 +308,19 @@ Use a user-pinned profile to make one account/key the durable first preference f
 
 ## Cooldowns
 
-When a profile fails due to auth or rate-limit errors, OpenClaw marks it in cooldown and moves to the next profile. A timeout that looks like rate limiting counts as such a failure.
+When a profile fails due to auth or rate-limit errors, OpenClaw moves to the next profile. Auth failures put the profile in cooldown. A timeout that looks like rate limiting counts as a rate-limit failure.
+
+OpenClaw does not invent rate-limit cooldowns. A rate-limited profile enters cooldown only when the provider says how long to wait, and the cooldown lasts exactly that long. Provider timing comes from `retry-after-ms`, `Retry-After` (seconds or an HTTP date), retry text such as OpenAI's `Please try again in 6s` or Gemini's `Please retry in 32s`, or Google `RetryInfo.retryDelay`, read from the full error body. When the provider sends no explicit retry instruction, the reset time of an exhausted bucket applies instead: OpenAI `x-ratelimit-reset-*` or Anthropic `anthropic-ratelimit-*-reset`. Without any provider timing, the profile stays available for the next turn; the current turn still rotates to another profile or model. Repeated or concurrent rate limits never lengthen a cooldown. A later provider deadline extends it, and an earlier one cannot shorten it. Provider-reported usage-window resets, such as Codex subscription limits, remain separate blocks. Rate-limit cooldowns left by older releases' local backoff are released on upgrade.
+
+Same-model rate-limit retries also record the failed profile before waiting, using the same provider timing. Later runs see that cooldown through normal profile selection and status. A quota probe that finds capacity available adds no delay of its own. Model-scoped cooldowns still allow other models on the same profile. After a rate limit, an automatic session fallback returns to an earlier profile in an explicit `auth.order` as soon as that profile is usable again; a successful request clears its rate-limit record.
+
+After bounded recovery, a model-silent or request timeout records profile cooldown only when an authorized replacement profile is selected or a model fallback is configured; otherwise the profile stays available for the next turn.
 
 A provider plugin can declare `managesOwnAvailability: true` in `openclaw.plugin.json` when its upstream gateway owns capacity recovery. This applies to the plugin's declared providers and skips only rate-limit and overload cooldowns (`rate_limit` and `overloaded`). OpenRouter and Kilo Gateway use this declaration. Billing, authentication, permanent credential failures, and provider-reported subscription blocks remain enforced. Routing and auth status use the same policy, including before the provider runtime loads. There is no user configuration setting.
 
 CLI-backed runtimes settle profile health only after their resume, fork, and fresh-session recovery attempts finish. A terminal credential failure cools down the exact selected profile before model fallback. A successful run clears stale failure state. Transcript, format, context, pre-provider timeout, and ambient CLI failures without a selected profile do not change shared profile health.
+
+A delayed WHAM failure check cannot reinstate an exhaustion block after a newer successful request with the same credential.
 
 <AccordionGroup>
   <Accordion title="What lands in the rate-limit / timeout bucket">
@@ -308,7 +352,7 @@ CLI-backed runtimes settle profile health only after their resume, fork, and fre
   </Accordion>
 </AccordionGroup>
 
-Regular (non-billing, non-auth-permanent) cooldowns scale with the profile's recent error count:
+Other cooldowns, apart from rate limits, billing and permanent auth failures, scale with the profile's recent error count:
 
 - 1st failure: 30 seconds
 - 2nd failure: 1 minute
@@ -381,9 +425,9 @@ Provider-busy signals such as `ModelNotReadyException` land in the overloaded bu
 
 `agents.defaults.timeoutSeconds` and run-specific model timeouts apply to each model candidate attempt. When an attempt times out, the next configured fallback receives its own full budget, so total elapsed time can exceed the setting. Progress does not renew an attempt's budget. User cancellation stops the entire fallback chain, and an independent outer deadline, such as the cron scheduler's deadline, still applies. See [Agent timeouts](/concepts/agent-loop#timeouts).
 
-The failover controller owns OpenClaw's transient recovery budget. Rate limits receive up to **10 total attempts per consecutive outage** before auth-profile rotation or model fallback. Jittered exponential waits cap at 30 seconds, while provider `retry-after` and `retry-after-ms` hints remain minimum waits even beyond that cap. Other transient failures retain eight retries and a 90-second window for consecutive outages. A completed successful model response resets that window, the retry count, and backoff; partial output and tool activity alone do not. Existing per-attempt timeouts and any independent outer deadline remain authoritative. Once that budget or window is exhausted, recovery proceeds to eligible auth-profile rotation, configured model fallback, or a visible error. Continuations preserve the transcript instead of replaying the original user request. Recovery and any fallback winner remain turn-local.
+The failover controller owns OpenClaw's transient recovery budget. Rate limits receive up to **10 total attempts per consecutive outage** before auth-profile rotation or model fallback. A rate limit with provider timing waits exactly that long, even beyond the 30-second backoff cap. Without provider timing, it uses jittered exponential waits capped at 30 seconds. For other transient failures, provider `retry-after` and `retry-after-ms` hints remain minimum waits. Other transient failures retain eight retries and a 90-second window for consecutive outages. A completed successful model response resets that window, the retry count, and backoff; partial output and tool activity alone do not. Existing per-attempt timeouts and any independent outer deadline remain authoritative. Once that budget or window is exhausted, recovery proceeds to eligible auth-profile rotation, configured model fallback, or a visible error. Continuations preserve the transcript instead of replaying the original user request. Recovery and any fallback winner remain turn-local.
 
-The embedded runtime's existing session setting `retry.provider.maxRetries` overrides its recovery retry budget. `0` disables retries, and rate limits remain capped at 10 total attempts per consecutive outage. It is not an `openclaw.json` key and does not change a native harness's internal request retries. Native harnesses may finish their own request retries before OpenClaw starts continuation recovery. The reply runner does not add another whole-turn replay loop. See [Retry policy](/concepts/retry) for pacing and exclusions.
+The existing session setting `retry.provider.maxRetries` overrides OpenClaw's continuation retry count for the embedded runtime and participating local Codex, Copilot, and Muse runs. `0` disables these retries, and rate limits remain capped at 10 total attempts per consecutive outage. An omitted setting preserves the harness's existing retry count or OpenClaw's default. Remote/container execution and harnesses without an admitted local settings scope keep their existing budgets. This is not an `openclaw.json` key; it does not change native request retries, delays, or timeouts. The embedded-only `retry.provider.maxRetryDelayMs` and `timeoutMs` settings keep their existing scope. Native harnesses may finish their own request retries before OpenClaw starts continuation recovery. The reply runner does not add another whole-turn replay loop, and a zero retry count still permits tool-free finalization of completed work. See [Retry policy](/concepts/retry) for settings precedence, pacing, and exclusions.
 
 While waiting, the Control UI shows one transient **Retrying… n/10** indicator for rate limits. Retried failures do not become persisted assistant messages. Terminal failure retains one error. History hides recovered empty or reasoning-only errors without rewriting stored transcripts.
 

@@ -5,7 +5,6 @@ import { runUtf8CommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CodexAppServerStartOptions } from "./app-server/config.js";
 import { resolveManagedCodexAppServerStartOptions } from "./app-server/managed-binary.js";
 import { probeCodexWorkspaceWriteSandbox } from "./workspace-write-sandbox-probe.js";
 
@@ -40,15 +39,16 @@ const success: SpawnResult = {
   termination: "exit",
 };
 
-function config(appServer: Record<string, unknown> = {}): OpenClawConfig {
+function config(appServer: Record<string, unknown> = {}, codex = true): OpenClawConfig {
+  const model = codex ? "openai/gpt-5.6-sol" : "anthropic/claude-opus-4-7";
   return {
     agents: {
       defaults: {
-        model: { primary: "openai/gpt-5.6-sol" },
-        models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
+        model: { primary: model },
+        models: { [model]: { agentRuntime: { id: codex ? "codex" : "openclaw" } } },
       },
     },
-    plugins: { entries: { codex: { enabled: true, config: { appServer } } } },
+    ...(codex ? { plugins: { entries: { codex: { enabled: true, config: { appServer } } } } } : {}),
   };
 }
 
@@ -69,60 +69,47 @@ describe("Codex workspace-write sandbox probe", () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
-  function probe(cfg = config(), env: NodeJS.ProcessEnv = {}) {
-    return probeCodexWorkspaceWriteSandbox({ cfg, env, pluginRoot: "/plugin" });
+  async function probe(cfg = config(), env: NodeJS.ProcessEnv = {}) {
+    const result = await probeCodexWorkspaceWriteSandbox({ cfg, env, pluginRoot: "/plugin" });
+    expect(await fs.readdir(root)).toEqual([]);
+    return result;
   }
 
-  it.each([
-    "loopback: Failed RTM_NEWADDR: Operation not permitted",
-    "loopback: Failed RTM_NEWLINK: Operation not permitted",
-    "setting up uid map: Permission denied",
-    "No permissions to create a new namespace",
-  ])("recognizes bwrap denial: %s", async (message) => {
-    const denial = `bwrap: ${message}`;
-    runner.mockResolvedValue({ ...success, code: 1, stderr: `other output\n ${denial} \n` });
-    expect(await probe()).toEqual({
-      status: "denied",
-      command: `/managed/codex sandbox -c 'sandbox_mode="workspace-write"' -c sandbox_workspace_write.network_access=false -- true`,
-      denial,
+  it.each<[string | Partial<SpawnResult>, string]>([
+    ["loopback: Failed RTM_NEWADDR: Operation not permitted", ""],
+    ["loopback: Failed RTM_NEWLINK: Operation not permitted", ""],
+    ["setting up uid map: Permission denied", ""],
+    ["No permissions to create a new namespace", ""],
+    [
+      { code: 1, stderr: "wrapper: bwrap: loopback: Failed RTM_NEWADDR: denied" },
+      "without a recognized bwrap denial",
+    ],
+    [
+      { termination: "timeout", stderr: "bwrap: loopback: Failed RTM_NEWADDR: denied" },
+      "timed out after 20000 ms",
+    ],
+    [{ code: null, termination: "signal", signal: "SIGKILL" }, "SIGKILL"],
+    [{ outputLimitExceeded: true }, "capture limit"],
+  ])("classifies sandbox outcome %j", async (result, reason) => {
+    const denial = typeof result === "string" ? `bwrap: ${result}` : undefined;
+    runner.mockResolvedValue({
+      ...success,
+      ...(typeof result === "string" ? { code: 1, stderr: `other output\n ${denial} \n` } : result),
     });
-    expect(await fs.readdir(root)).toEqual([]);
+    expect(await probe()).toEqual({
+      command: `/managed/codex sandbox -c 'sandbox_mode="workspace-write"' -c sandbox_workspace_write.network_access=false -- true`,
+      ...(denial
+        ? { status: "denied", denial }
+        : {
+            status: "inconclusive",
+            reason: expect.stringContaining(reason),
+          }),
+    });
   });
-
-  it.each([
-    {
-      label: "non-bwrap output",
-      result: { code: 1, stderr: "wrapper: bwrap: loopback: Failed RTM_NEWADDR: denied" },
-      reason: "without a recognized bwrap denial",
-    },
-    {
-      label: "timeout despite a denial line",
-      result: { termination: "timeout", stderr: "bwrap: loopback: Failed RTM_NEWADDR: denied" },
-      reason: "timed out after 20000 ms",
-    },
-    {
-      label: "signal",
-      result: { code: null, termination: "signal", signal: "SIGKILL" },
-      reason: "SIGKILL",
-    },
-    { label: "output limit", result: { outputLimitExceeded: true }, reason: "capture limit" },
-  ] satisfies { label: string; result: Partial<SpawnResult>; reason: string }[])(
-    "does not diagnose namespace policy for $label",
-    async ({ result, reason }) => {
-      runner.mockResolvedValue({ ...success, ...result });
-      expect(await probe()).toEqual({
-        status: "inconclusive",
-        command: expect.stringContaining("/managed/codex sandbox"),
-        reason: expect.stringContaining(reason),
-      });
-      expect(await fs.readdir(root)).toEqual([]);
-    },
-  );
 
   it("reports spawn errors without throwing and removes its temporary state", async () => {
     runner.mockRejectedValueOnce(new Error("spawn ENOENT"));
     expect(await probe()).toMatchObject({ status: "inconclusive", reason: "spawn ENOENT" });
-    expect(await fs.readdir(root)).toEqual([]);
   });
 
   it("uses the stdio launcher and environment with a disposable home and writable sibling cwd", async () => {
@@ -166,7 +153,6 @@ describe("Codex workspace-write sandbox probe", () => {
       status: "ok",
       command: `${process.execPath} '/managed path/codex/bin/codex.js' sandbox -c 'sandbox_mode="workspace-write"' -c sandbox_workspace_write.network_access=false -- true`,
     });
-    expect(await fs.readdir(root)).toEqual([]);
   });
 
   it.each([
@@ -185,40 +171,31 @@ describe("Codex workspace-write sandbox probe", () => {
     },
   );
 
-  it.each(["websocket", "proxy", "non-linux", "no-runtime", "desktop"])(
-    "skips %s",
-    async (kind) => {
-      let cfg = config();
-      if (kind === "proxy") {
-        cfg = config({
-          command: "/custom/codex",
-          args: ["app-server", "proxy", "--sock", "/run/codex.sock"],
-        });
-      } else if (kind === "websocket") {
-        cfg = config({ transport: "websocket", url: "ws://localhost:4500" });
-      } else if (kind === "non-linux") {
-        vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-      } else if (kind === "no-runtime") {
-        cfg = {
-          agents: {
-            defaults: {
-              model: { primary: "anthropic/claude-opus-4-7" },
-              models: { "anthropic/claude-opus-4-7": { agentRuntime: { id: "openclaw" } } },
-            },
-          },
-        };
-      } else {
-        resolveStart.mockImplementation(async (start: CodexAppServerStartOptions) => ({
-          ...start,
-          command: "/Applications/ChatGPT.app/Contents/Resources/codex",
-          commandSource: "resolved-managed",
-        }));
-      }
-      expect(await probe(cfg)).toMatchObject({ status: "skipped", reason: expect.any(String) });
-      expect(runner).not.toHaveBeenCalled();
-      expect(await fs.readdir(root)).toEqual([]);
-    },
-  );
+  it.each([
+    [
+      "proxy",
+      config({
+        command: "/custom/codex",
+        args: ["app-server", "proxy", "--sock", "/run/codex.sock"],
+      }),
+    ],
+    ["websocket", config({ transport: "websocket", url: "ws://localhost:4500" })],
+    ["non-linux", config()],
+    ["no-runtime", config({}, false)],
+    ["desktop", config()],
+  ] satisfies [string, OpenClawConfig][])("skips %s", async (kind, cfg) => {
+    if (kind === "non-linux") {
+      vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    } else if (kind === "desktop") {
+      resolveStart.mockImplementation(async (start) => ({
+        ...start,
+        command: "/Applications/ChatGPT.app/Contents/Resources/codex",
+        commandSource: "resolved-managed",
+      }));
+    }
+    expect(await probe(cfg)).toMatchObject({ status: "skipped", reason: expect.any(String) });
+    expect(runner).not.toHaveBeenCalled();
+  });
 
   it("reports an unresolvable configured runtime as unverified without throwing", async () => {
     resolveStart.mockRejectedValueOnce(new Error("managed launcher missing"));

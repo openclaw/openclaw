@@ -7,9 +7,6 @@ import { renderLineCard } from "./rich-messages.js";
 import { pushMessagesLine, replyMessageLine } from "./send.js";
 import { buildTemplateMessageFromPayload } from "./template-messages.js";
 
-vi.mock("openclaw/plugin-sdk/plugin-config-runtime", () => ({
-  requireRuntimeConfig: (cfg: unknown) => cfg,
-}));
 vi.mock("./accounts.js", () => ({
   resolveLineAccount: () => ({ accountId: "default" }),
 }));
@@ -533,7 +530,6 @@ describe("LINE card shape on the actual push and reply wire", () => {
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
     });
-    vi.doUnmock("openclaw/plugin-sdk/plugin-config-runtime");
     vi.doUnmock("./accounts.js");
     vi.doUnmock("./channel-access-token.js");
     vi.doUnmock("openclaw/plugin-sdk/channel-activity-runtime");

@@ -7,6 +7,7 @@ import {
   createPluginManifestRecordFixture,
   createPluginMetadataSnapshotFixture,
 } from "../../plugins/plugin-metadata.test-support.js";
+import { createAuthProfileImportResult } from "./auth-profile-repair.test-support.js";
 import { mocks } from "./repair-sequencing-mocks.test-support.js";
 import { runDoctorRepairSequence } from "./repair-sequencing.js";
 import { registerSharedRuntimeReaderDoctorTests } from "./repair-sequencing.shared-runtime.test-support.js";
@@ -50,13 +51,9 @@ describe("doctor repair sequencing", () => {
       warnings: [],
     });
     mocks.collectOpenAICodexAuthProfileStoreIdMap.mockReturnValue(new Map());
-    mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mockResolvedValue({
-      detected: [],
-      migratedProfileIds: new Set<string>(),
-      blockedProfileIds: new Set<string>(),
-      changes: [],
-      warnings: [],
-    });
+    mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mockResolvedValue(
+      createAuthProfileImportResult(),
+    );
     mocks.maybeRepairOpenAICodexAuthConfig.mockImplementation((cfg: OpenClawConfig) => ({
       changes: [],
       config: cfg,
@@ -315,14 +312,11 @@ describe("doctor repair sequencing", () => {
     });
     mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mockImplementationOnce(async () => {
       events.push("sqlite-migration");
-      return {
+      return createAuthProfileImportResult({
         detected: ["auth-profiles.json"],
-        migratedProfileIds: new Set<string>(),
-        blockedProfileIds: new Set<string>(),
         changes: ["Migrated auth profile JSON into SQLite."],
         configChanged: true,
-        warnings: [],
-      };
+      });
     });
     mocks.maybeRepairStaleConfiguredAuthOrders.mockImplementationOnce(({ cfg }) => {
       events.push("stale-auth-order");
@@ -350,13 +344,11 @@ describe("doctor repair sequencing", () => {
   });
 
   it("reports receipt-owned OpenAI auth-provider migration as an auth repair", async () => {
-    mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mockResolvedValueOnce({
-      detected: [],
-      changes: ["Migrated OpenAI Codex auth-provider profile openai-codex."],
-      migratedProfileIds: new Set<string>(),
-      blockedProfileIds: new Set<string>(),
-      warnings: [],
-    });
+    mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mockResolvedValueOnce(
+      createAuthProfileImportResult({
+        changes: ["Migrated OpenAI Codex auth-provider profile openai-codex."],
+      }),
+    );
 
     const result = await runDoctorRepairSequence({
       state: {
@@ -503,13 +495,7 @@ describe("doctor repair sequencing", () => {
     let authMigrated = false;
     mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mockImplementationOnce(async () => {
       authMigrated = true;
-      return {
-        detected: [],
-        migratedProfileIds: new Set<string>(),
-        blockedProfileIds: new Set<string>(),
-        changes: [],
-        warnings: [],
-      };
+      return createAuthProfileImportResult({});
     });
     mocks.repairMissingConfiguredPluginInstalls.mockImplementationOnce(async () => {
       mistralInstalled = true;
@@ -785,16 +771,7 @@ describe("doctor repair sequencing", () => {
     const { repairStaleAgentModelRefs: repairStaleAgentModelRefsActual } = await vi.importActual<
       typeof import("./shared/stale-agent-model-ref-repair.js")
     >("./shared/stale-agent-model-ref-repair.js");
-    mocks.repairStaleAgentModelRefs.mockImplementationOnce(
-      (
-        cfg: OpenClawConfig,
-        options: NonNullable<Parameters<typeof repairStaleAgentModelRefsActual>[1]>,
-      ) =>
-        repairStaleAgentModelRefsActual(cfg, {
-          ...options,
-          persistedProviderIdsByAgentId: new Map([["main", new Set()]]),
-        }),
-    );
+    mocks.repairStaleAgentModelRefs.mockImplementationOnce(repairStaleAgentModelRefsActual);
     const pluginMetadataSnapshotState = {
       current: staleSnapshot,
     };

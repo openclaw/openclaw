@@ -14,12 +14,10 @@ import {
   pluginCommandSupportsChannel,
   projectPluginCommandNativeMetadata,
 } from "./plugin-command-metadata.js";
-import {
-  listRegisteredPluginCommands,
-  resolveSelectedPluginCommandRegistry,
-} from "./plugin-command-registry.js";
+import { listRegisteredPluginCommands } from "./plugin-command-registry.js";
 import { isPluginRegistryRetired } from "./registry-lifecycle.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
+import { getPluginRegistryForContext } from "./runtime/gateway-request-scope.js";
 import type { PluginCommandContext, PluginCommandResult } from "./types.js";
 
 export { PLUGIN_COMMAND_DISPATCH };
@@ -55,6 +53,13 @@ export type PluginCommandDispatchContext = Readonly<{
   diagnosticsPreviewOnly?: PluginCommandContext["diagnosticsPreviewOnly"];
   diagnosticsPrivateRouted?: PluginCommandContext["diagnosticsPrivateRouted"];
   runtimeContext?: {
+    /** Host-only factory, bound to the command invocation before the reader is exposed. */
+    createModels?: (params: {
+      signal: AbortSignal;
+      assertCurrent: () => void;
+    }) => NonNullable<PluginCommandContext["runtimeContext"]>["models"];
+    /** Core-only factory; requester authority is captured by the dispatch owner. */
+    createSubagents?: import("./runtime/native-subagent-context.js").NativeSubagentCommandFactory;
     compactCurrent?: (
       signal?: AbortSignal,
       assertOwnerCurrent?: () => void,
@@ -185,16 +190,48 @@ export async function executePluginCommandDispatch(
   });
 }
 
+/** Core-only cron adapter: no ambient completion, agent fallback or chat-error conversion. */
+export async function executeScheduledPluginCommandDispatch(
+  dispatch: PluginCommandDispatch,
+  context: PluginCommandDispatchContext & { abortSignal: AbortSignal },
+): Promise<PluginCommandResult> {
+  context.abortSignal.throwIfAborted();
+  context.assertOwnerCurrent?.();
+  const selected = dispatchSelections.get(dispatch);
+  if (
+    !selected ||
+    selected.selection.availability !== "loaded" ||
+    isPluginRegistryRetired(selected.registry) ||
+    selected.channel !== normalizeOptionalLowercaseString(context.channel) ||
+    selected.selection.command.requireAuth !== true ||
+    !selected.selection.command.runtimeCapabilities?.includes("subagents")
+  ) {
+    throw new Error("Scheduled command selection is no longer eligible.");
+  }
+  const { executeRegisteredPluginCommand } = await import("./plugin-command-execution.js");
+  context.abortSignal.throwIfAborted();
+  context.assertOwnerCurrent?.();
+  return await executeRegisteredPluginCommand(
+    selected.registry,
+    {
+      ...context,
+      command: selected.selection.command,
+      args: selected.selection.args,
+    },
+    { abortSignal: context.abortSignal },
+  );
+}
+
 /** Creates one command runtime bound permanently to the current scoped registry generation. */
 export function createPluginCommandRuntime(): PluginCommandRuntime {
-  const registry = resolveSelectedPluginCommandRegistry();
+  const registry = getPluginRegistryForContext();
   if (!registry) {
     throw new Error("Plugin command runtime requires an active or request-scoped registry.");
   }
-  const state: PluginCommandRuntimeState = Object.freeze({
+  const state: PluginCommandRuntimeState = {
     registry,
-    commands: Object.freeze(listRegisteredPluginCommands(registry)),
-  });
+    commands: listRegisteredPluginCommands(registry),
+  };
 
   const assertCurrent = () => {
     if (isPluginRegistryRetired(state.registry)) {
@@ -271,7 +308,7 @@ export function matchPluginCommandInvocation(
     if (plugin?.status !== "error" || !plugin.enabled) {
       return null;
     }
-    return Object.freeze({
+    return {
       dispatch: createSelectedPluginCommandDispatch(
         state,
         { availability: "manifest-only", plugin },
@@ -279,10 +316,10 @@ export function matchPluginCommandInvocation(
       ),
       acceptsArgs: true,
       requireAuth: true,
-    });
+    };
   }
   const metadata = projectPluginCommandNativeMetadata(match.command, provider);
-  return Object.freeze({
+  return {
     dispatch: createSelectedPluginCommandDispatch(
       state,
       { availability: "loaded", command: match.command, args: match.args },
@@ -291,5 +328,5 @@ export function matchPluginCommandInvocation(
     acceptsArgs: metadata.acceptsArgs,
     requireAuth: metadata.requireAuth,
     ...(metadata.progressMessage ? { progressMessage: metadata.progressMessage } : {}),
-  });
+  };
 }

@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { writeJsonWithoutCharset } from "openclaw/plugin-sdk/http-response-runtime";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import {
   WEBHOOK_RATE_LIMIT_DEFAULTS,
@@ -37,8 +38,7 @@ function writeWebhookError(res: ServerResponse, status: number, error: string): 
   if (res.headersSent) {
     return;
   }
-  res.writeHead(status, { "Content-Type": "application/json" });
-  res.end(JSON.stringify({ error }));
+  writeJsonWithoutCharset(res, status, { error });
 }
 
 async function rejectWebhookRequest(

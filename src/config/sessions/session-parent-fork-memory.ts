@@ -98,8 +98,8 @@ export function forkMemorySessionEntryFromParent(
             type: "session.parentFork.commit",
             input: {
               kind: "entry",
-              params: structuredClone(data),
-              patch: patch && structuredClone(patch),
+              params: data,
+              patch,
             },
           },
           {

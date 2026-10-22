@@ -20,25 +20,16 @@ type TlonHistoryEntry = {
   author: string;
   content: string;
   timestamp: number;
-  id?: string;
 };
 
 function createHistoryEntryFromMemo(params: {
   memo?: Record<string, unknown> | null;
-  seal?: Record<string, unknown> | null;
-  fallbackId?: unknown;
 }): TlonHistoryEntry {
-  const { memo, seal, fallbackId } = params;
+  const { memo } = params;
   return {
     author: typeof memo?.author === "string" ? memo.author : "unknown",
     content: extractMessageText(memo?.content || []),
     timestamp: typeof memo?.sent === "number" ? memo.sent : Date.now(),
-    id:
-      typeof seal?.id === "string"
-        ? seal.id
-        : typeof fallbackId === "string"
-          ? fallbackId
-          : undefined,
   };
 }
 
@@ -70,9 +61,8 @@ async function fetchChannelHistory(
         const replyPost = asRecord(itemRecord?.["r-post"]);
         const replyPostSet = asRecord(replyPost?.set);
         const essay = asRecord(itemRecord?.essay) ?? asRecord(replyPostSet?.essay);
-        const seal = asRecord(itemRecord?.seal) ?? asRecord(replyPostSet?.seal);
 
-        return createHistoryEntryFromMemo({ memo: essay, seal });
+        return createHistoryEntryFromMemo({ memo: essay });
       })
       .filter((msg) => msg.content);
 
@@ -185,9 +175,8 @@ export async function fetchThreadHistory(
         const replyRecord = asRecord(itemRecord?.["r-reply"]);
         const replySet = asRecord(replyRecord?.set);
         const memo = asRecord(itemRecord?.memo) ?? asRecord(replySet?.memo) ?? itemRecord;
-        const seal = asRecord(itemRecord?.seal) ?? asRecord(replySet?.seal);
 
-        return createHistoryEntryFromMemo({ memo, seal, fallbackId: itemRecord?.id });
+        return createHistoryEntryFromMemo({ memo });
       })
       .filter((msg) => msg.content);
 
@@ -211,8 +200,7 @@ export async function fetchThreadHistory(
           .map((reply: unknown) => {
             const replyRecord = asRecord(reply);
             const memo = asRecord(replyRecord?.memo);
-            const seal = asRecord(replyRecord?.seal);
-            return createHistoryEntryFromMemo({ memo, seal });
+            return createHistoryEntryFromMemo({ memo });
           })
           .filter((msg: TlonHistoryEntry) => msg.content);
 

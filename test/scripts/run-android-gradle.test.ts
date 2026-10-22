@@ -1,8 +1,7 @@
-import { spawn } from "node:child_process";
-import fs from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
+import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -12,6 +11,7 @@ import {
   shouldSkipLinuxArmAndroidGradle,
   splitAndroidGradleArgs,
 } from "../../scripts/run-android-gradle.mts";
+import { isProcessAlive, waitForDead } from "../helpers/process-wait.js";
 import { withinTest } from "../helpers/promise.js";
 
 const posixIt = process.platform === "win32" ? it.skip : it;
@@ -49,55 +49,56 @@ describe("run-android-gradle", () => {
     );
   });
 
-  describe("resolveAndroidSdkEnv", () => {
-    const macSdk = path.join("/Users/dev", "Library", "Android", "sdk");
-    const linuxSdk = path.join("/home/dev", "Android", "Sdk");
+  posixIt(
+    "reports an unavailable proof prerequisite without starting Gradle or counting tests",
+    () => {
+      const result = spawnSync(
+        process.execPath,
+        ["scripts/run-android-gradle.mts", "--proof", ":wear-shared:testDebugUnitTest"],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            JAVA_HOME: "/openclaw-missing-proof-jdk",
+            OPENCLAW_ANDROID_GRADLE_ALLOW_LINUX_ARM: "1",
+          },
+        },
+      );
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        "prerequisite failure; Gradle was not started and no tests executed",
+      );
+      expect(result.stderr).toContain("JAVA_HOME");
+      expect(result.stderr).not.toContain("Gradle failed after prerequisite checks");
+    },
+  );
 
-    it("keeps env untouched when ANDROID_HOME or ANDROID_SDK_ROOT is set", () => {
-      const env = { ANDROID_HOME: "/opt/sdk" };
-      expect(resolveAndroidSdkEnv({ env, existsSync: () => true })).toBe(env);
-      const rootEnv = { ANDROID_SDK_ROOT: "/opt/sdk" };
-      expect(resolveAndroidSdkEnv({ env: rootEnv, existsSync: () => true })).toBe(rootEnv);
-    });
+  it.each([
+    ["darwin", "/Users/dev", "Library/Android/sdk"],
+    ["linux", "/home/dev", "Android/Sdk"],
+    ["linux", "/home/dev", ".android-sdk"],
+  ] as const)("discovers the %s SDK at %s/%s", (platform, homeDir, suffix) => {
+    const sdk = path.join(homeDir, suffix);
+    expect(
+      resolveAndroidSdkEnv({ env: {}, platform, homeDir, existsSync: (p) => p === sdk }),
+    ).toEqual({ ANDROID_HOME: sdk });
+  });
 
-    it("keeps env untouched when local.properties exists", () => {
-      const env = {};
-      const result = resolveAndroidSdkEnv({
+  it.each([
+    [{ ANDROID_HOME: "/opt/sdk" }, "any"],
+    [{ ANDROID_SDK_ROOT: "/opt/sdk" }, "any"],
+    [{}, "local.properties"],
+    [{}, "none"],
+  ] as const)("preserves explicit or unavailable SDK env %j (%s)", (env, existing) => {
+    expect(
+      resolveAndroidSdkEnv({
         env,
-        existsSync: (p: string) => p.endsWith("local.properties"),
         homeDir: "/Users/dev",
         platform: "darwin",
-      });
-      expect(result).toBe(env);
-    });
-
-    it("falls back to the Android Studio default SDK path per platform", () => {
-      const darwin = resolveAndroidSdkEnv({
-        env: {},
-        existsSync: (p: string) => p === macSdk,
-        homeDir: "/Users/dev",
-        platform: "darwin",
-      });
-      expect(darwin.ANDROID_HOME).toBe(macSdk);
-      const linux = resolveAndroidSdkEnv({
-        env: {},
-        existsSync: (p: string) => p === linuxSdk,
-        homeDir: "/home/dev",
-        platform: "linux",
-      });
-      expect(linux.ANDROID_HOME).toBe(linuxSdk);
-    });
-
-    it("keeps env untouched when no default SDK install exists", () => {
-      const env = {};
-      const result = resolveAndroidSdkEnv({
-        env,
-        existsSync: () => false,
-        homeDir: "/Users/dev",
-        platform: "darwin",
-      });
-      expect(result).toBe(env);
-    });
+        existsSync: (p) =>
+          existing === "any" || (existing === "local.properties" && p.endsWith(existing)),
+      }),
+    ).toBe(env);
   });
 
   posixIt(
@@ -141,28 +142,26 @@ process.exitCode = await run(
         const processTree = await withinTest(processTreeReady, signal);
         childPid = processTree.childPid;
         descendantPid = processTree.descendantPid;
-        expect(Number.isInteger(childPid)).toBe(true);
-        expect(Number.isInteger(descendantPid)).toBe(true);
-        expect(isProcessAlive(childPid)).toBe(true);
-        expect(isProcessAlive(descendantPid)).toBe(true);
+        for (const pid of [childPid, descendantPid]) {
+          expect({ integer: Number.isInteger(pid), alive: isProcessAlive(pid) }).toEqual({
+            integer: true,
+            alive: true,
+          });
+        }
 
         process.kill(runnerPid, "SIGTERM");
         const result = await withinTest(closed, signal);
         // The owner joins the tree, but Darwin may still expose a reaping descendant's PID.
-        await waitForProcessGone(descendantPid, signal);
+        await waitForDead(descendantPid, signal);
 
         expect(isProcessAlive(childPid)).toBe(false);
         expect(isProcessAlive(descendantPid)).toBe(false);
         expect(result).toEqual({ code: 143, signal: null });
       } finally {
-        if (isProcessAlive(runnerPid)) {
-          process.kill(runnerPid, "SIGKILL");
-        }
-        if (childPid && isProcessAlive(childPid)) {
-          process.kill(childPid, "SIGKILL");
-        }
-        if (descendantPid && isProcessAlive(descendantPid)) {
-          process.kill(descendantPid, "SIGKILL");
+        for (const pid of [runnerPid, childPid, descendantPid]) {
+          if (pid && isProcessAlive(pid)) {
+            process.kill(pid, "SIGKILL");
+          }
         }
         await closed;
       }
@@ -193,48 +192,17 @@ async function readProcessTree(child: ReturnType<typeof spawn>): Promise<{
   childPid: number;
   descendantPid: number;
 }> {
-  const stdout = child.stdout;
-  if (!stdout) {
+  if (!child.stdout) {
     throw new Error("expected child process stdout");
   }
-  stdout.setEncoding("utf8");
-  return await new Promise((resolve, reject) => {
-    let output = "";
-    const cleanup = () => {
-      stdout.off("data", onData);
-      child.off("close", onClose);
-    };
-    const onClose = (code: number | null, signal: NodeJS.Signals | null) => {
-      cleanup();
-      reject(new Error(`runner closed before reporting its process tree (${code}, ${signal})`));
-    };
-    const onData = (chunk: string) => {
-      output += chunk;
-      const newline = output.indexOf("\n");
-      if (newline === -1) {
-        return;
-      }
-      cleanup();
-      try {
-        resolve(JSON.parse(output.slice(0, newline)));
-      } catch (error) {
-        reject(
-          error instanceof Error ? error : new Error("invalid process tree", { cause: error }),
-        );
-      }
-    };
-    stdout.on("data", onData);
-    child.once("close", onClose);
-  });
-}
-
-async function waitForProcessGone(pid: number, signal: AbortSignal): Promise<void> {
-  while (isProcessAlive(pid)) {
-    await delay(5, undefined, { signal }).catch((error: unknown) => {
-      throw new Error(`timed out waiting for condition: process ${pid} is still alive`, {
-        cause: error,
-      });
-    });
+  const lines = createInterface({ input: child.stdout });
+  try {
+    for await (const line of lines) {
+      return JSON.parse(line);
+    }
+    throw new Error("runner closed before reporting its process tree");
+  } finally {
+    lines.close();
   }
 }
 
@@ -242,21 +210,4 @@ async function waitForClose(child: ReturnType<typeof spawn>) {
   return await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
     child.once("close", (code, signal) => resolve({ code, signal }));
   });
-}
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-  } catch {
-    return false;
-  }
-  if (process.platform !== "linux") {
-    return true;
-  }
-  try {
-    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
-    return stat.charAt(stat.lastIndexOf(")") + 2) !== "Z";
-  } catch {
-    return false;
-  }
 }

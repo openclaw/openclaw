@@ -1,13 +1,13 @@
 import { ErrorCodes, GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../format-error.ts";
+import { sessionListAgentMatcher } from "./session-list-query.ts";
 import type {
   SessionConnectionOwner,
   SessionConnectionScope,
   SessionRefreshOutcome,
   SessionState,
-} from "./session-capability.ts";
-import { sessionListAgentMatcher } from "./session-list-query.ts";
+} from "./session-types.ts";
 
 type Host = {
   connection: SessionConnectionOwner;
@@ -58,7 +58,7 @@ export function createSessionMutationRefresh(host: Host) {
     // A scoped read cannot acquire error ownership by later selecting its agent.
     // A replacement foreground snapshot retires this warning, not row reconciliation.
     const foreground = host.readState();
-    const ownsForeground = sessionListAgentMatcher(agentId)(foreground.agentId ?? undefined);
+    const ownsForeground = sessionListAgentMatcher(agentId)(foreground.agentId);
     const isErrorCurrent = () => {
       const current = host.readState();
       return (

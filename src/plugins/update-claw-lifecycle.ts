@@ -1,5 +1,4 @@
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
-import { markClawPackageIndependentlyOwned } from "../state/claw-package-adoption.js";
 import { withClawPackageLifecycleLease } from "../state/claw-package-lifecycle-lease.js";
 
 type ClawHubInstallRecord = {
@@ -34,11 +33,6 @@ export async function runPluginUpdateWithClawHubLease<T>(params: {
     return await withClawPackageLifecycleLease(
       { kind: "plugin", source: "clawhub", ref: params.clawhubPackage },
       async () => {
-        await markClawPackageIndependentlyOwned({
-          kind: "plugin",
-          source: "clawhub",
-          ref: params.clawhubPackage!,
-        });
         params.beforePersistentEffect?.();
         return await params.run();
       },

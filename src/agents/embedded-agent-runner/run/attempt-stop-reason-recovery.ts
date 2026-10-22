@@ -90,9 +90,8 @@ function wrapStreamHandleUnhandledStopReason(
 
         try {
           const result = await streamIterator.next();
-          if (!result.done && result.value && typeof result.value === "object") {
-            const event = result.value as { error?: unknown };
-            patchUnhandledStopReasonInAssistantMessage(event.error);
+          if (!result.done && result.value.type === "error") {
+            patchUnhandledStopReasonInAssistantMessage(result.value.error);
           }
           return result;
         } catch (err) {

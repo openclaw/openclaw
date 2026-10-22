@@ -13,14 +13,14 @@ The shared primitives (menu, popover, tooltip, dialog, tabs) land with the overl
   - `popover="auto"` supplies native light dismiss, which **cannot honor a close veto**.
   - Vetoable surfaces (anything that can refuse to close: unsaved input, pending confirmation) use `popover="manual"`, with light dismiss owned by the overlay lifecycle owner.
   - Use `auto` only where nothing can veto. Never run competing native and library dismissal owners.
-- **Dialogs:** native `<dialog>` under the existing modal policy (`modal-dialog.ts`: focus entry and return, cancellation, native occlusion leases). Restore focus **synchronously** when the target isn't inside an inert subtree; defer only while inertness is still pending, and drop the deferred restore if the owner disconnects, the target is removed, or newer focus took over. Restoring into an inert subtree drops focus to `body` (Chromium, caught by the Workboard E2E); deferring unconditionally broke synchronous callers (markdown table dialogs).
+- **Dialogs:** native `<dialog>` under the existing modal policy (`modal-dialog.tsx`: focus entry and return, cancellation, native occlusion leases). Restore focus **synchronously** when the target isn't inside an inert subtree; defer only while inertness is still pending, and drop the deferred restore if the owner disconnects, the target is removed, or newer focus took over. Restoring into an inert subtree drops focus to `body` (Chromium, caught by the Workboard E2E); deferring unconditionally broke synchronous callers (markdown table dialogs).
   The `openclaw-modal-dialog` host publishes `overlay-show`, `overlay-after-show`, `overlay-hide`, and `overlay-after-hide`. Before-transition events preserve cancellation; user dismissal also publishes `modal-cancel`. Its light-DOM adapter owns lifecycle dispatch so capture listeners see one host event per phase, with focus settled before completion notifications. Consumers should filter for their modal as the event target so nested overlays cannot complete a parent transition.
 - **Menus:** the shared Solid `<Menu>` on Zag state machines (`@zag-js/menu`, `@zag-js/vanilla`, `@zag-js/rect-utils` at the pinned version) with OpenClaw's own Solid binding and **roving item focus**. Zag highlights with `aria-activedescendant` by default; OpenClaw needs real focus on items for embedded search fields and controls. Never hand-roll a keyboard model.
 - **Native occlusion** (`ui/src/lib/native-overlay-occlusion.ts`) still owns overlap with native views: the top layer doesn't cover native views in the macOS app.
 
 ## One lifecycle owner per surface
 
-Every past Web Awesome patch fixed the same root cause: several asynchronous paths each acted as the visibility/focus owner. The overlay lifecycle owner is one accepted-open authority:
+Historical Web Awesome patches exposed the same root cause: several asynchronous paths each acted as the visibility/focus owner. The overlay lifecycle owner is one accepted-open authority:
 
 - Phases: opening → open → closing → hidden.
 - Cancellation is decided **before** listeners, inertness, occlusion, or focus change.
@@ -31,7 +31,7 @@ Preserve:
 - prompt usable-state focus, and focus the user moved since
 - native Tab exit, and deepest-only nested Escape
 - vetoed transitions, and synchronous rollback of rejected controlled values
-- sibling-submenu switching that keeps parent navigation (the Web Awesome #135629 bug class)
+- sibling-submenu switching that keeps parent navigation (the historical #135629 bug class)
 
 ## Proving overlay changes
 

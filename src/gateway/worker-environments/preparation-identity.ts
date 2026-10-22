@@ -1,11 +1,11 @@
-import { createHash } from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { NODE_WORKER_WORKSPACE_PREPARE_COMMAND } from "../../infra/node-commands.js";
 import type { WorkerProfile } from "../../plugins/types.js";
-import { EnvironmentRecipeSchema, type EnvironmentRecipe } from "./environment-recipe.js";
+import type { EnvironmentRecipe } from "./environment-recipe.js";
 import {
-  WorkerPreparationArtifactsSchema,
   WorkerPreparationTargetSchema,
+  type WorkerEmptyPreparationIdentity,
   type WorkerPreparationArtifacts,
   type WorkerProjectPreparationIdentity,
 } from "./preparation-identity.schema.js";
@@ -13,8 +13,14 @@ import type { WorkerProjectSnapshot } from "./workspace-git-base.js";
 
 export type WorkerProviderPreparedIntent = {
   providerId: string;
-  profileSnapshot: WorkerProfile;
-  preparationKey?: string;
+  profileSnapshot: WorkerProfile &
+    (
+      | {
+          project?: WorkerProjectSnapshot & { preparation?: WorkerProjectPreparationIdentity };
+          runtimePreparation?: never;
+        }
+      | { project?: never; runtimePreparation: WorkerEmptyPreparationIdentity }
+    );
 };
 
 export function createWorkerPreparationIdentity(params: {
@@ -29,14 +35,16 @@ export function createWorkerPreparationIdentity(params: {
   runSetupScript?: boolean;
   recipe?: EnvironmentRecipe;
 }): WorkerProjectPreparationIdentity {
-  const artifacts = WorkerPreparationArtifactsSchema.parse(params.artifacts);
-  artifacts.enabledPluginIds = [...new Set(artifacts.enabledPluginIds)].toSorted();
-  artifacts.protocolFeatures = [...new Set(artifacts.protocolFeatures)].toSorted();
+  const artifacts = {
+    ...params.artifacts,
+    enabledPluginIds: [...new Set(params.artifacts.enabledPluginIds)].toSorted(),
+    protocolFeatures: [...new Set(params.artifacts.protocolFeatures)].toSorted(),
+  };
   // Skipping an executable recipe owns a separate cache; absent recipes do no setup.
   const facts = {
     contractVersion: 2 as const,
     ...(params.setupRecipe ? { setupRecipe: params.setupRecipe } : {}),
-    ...(params.recipe ? { recipe: EnvironmentRecipeSchema.parse(params.recipe) } : {}),
+    ...(params.recipe ? { recipe: params.recipe } : {}),
     ...(params.setupRecipe && params.runSetupScript === false
       ? { runSetupScript: false as const }
       : {}),
@@ -65,8 +73,7 @@ export function createWorkerPreparationIdentity(params: {
     project: params.project ? { key: params.project.key } : { source: "empty" },
     workspaceProtocol: NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
   };
-  const digest = (value: unknown) =>
-    createHash("sha256").update(stableStringify(value)).digest("hex");
+  const digest = (value: unknown) => sha256Hex(stableStringify(value));
   // Ready workers still bind exact runtime, profile and commit facts; reusable
   // disks only need compatible setup and boot inputs.
   return {

@@ -79,6 +79,22 @@ type Request = {
   params: Record<string, unknown>;
   socket: WebSocket;
 };
+const operation = { profileId: PROFILE_ID, connectId: "operation-one" };
+const pendingInput = { status: "pending", step: inputStep };
+const rpc = (method: string, params: Request["params"] = {}) => ({ method, params });
+const authRpc = (method: string, params: Request["params"] = operation) =>
+  rpc(`users.authConnect.${method}`, params);
+const requestData = (requests: Request[]) =>
+  requests.map(({ method, params }) => ({ method, params }));
+const methods = (requests: Request[]) => requests.map(({ method }) => method);
+const printed = (output: ReturnType<typeof runtime>) =>
+  JSON.stringify([output.log.mock.calls, output.error.mock.calls, output.writeJson.mock.calls]);
+const login = (port: string, output = runtime(), json = false) =>
+  modelsAccountsLoginCommand({ port, provider: "openai", json }, output);
+function expectNoPrompt() {
+  expect(mocks.password).not.toHaveBeenCalled();
+  expect(mocks.openUrl).not.toHaveBeenCalled();
+}
 
 async function withGateway(
   respond: (request: Request) => unknown,
@@ -188,6 +204,13 @@ function runtime() {
 function expectJsonOutput(output: ReturnType<typeof runtime>, payload: unknown): void {
   expect(output.writeJson.mock.calls.map(([value]) => value)).toEqual([payload]);
 }
+function expectLoginOutput(
+  output: ReturnType<typeof runtime>,
+  result: UsersAuthConnectStatusResult,
+  provider = "openai",
+) {
+  expectJsonOutput(output, { profileId: PROFILE_ID, provider, ...result });
+}
 
 function expectPersonalContext(output: ReturnType<typeof runtime>, url: string): void {
   const diagnostics = output.error.mock.calls.map(([line]) => String(line)).join("\n");
@@ -201,6 +224,21 @@ function startResult(): UsersAuthConnectStartResult {
     connectId: "operation-one",
     expiresAtMs: Date.now() + 60_000,
   };
+}
+
+function withAuthGateway(
+  handlers: Partial<
+    Record<"catalog" | "start" | "status" | "answer" | "cancel", (request: Request) => unknown>
+  >,
+  run: Parameters<typeof withGateway>[1],
+) {
+  const responses: Record<string, ((request: Request) => unknown) | undefined> = {
+    "users.authConnect.start": startResult,
+    ...Object.fromEntries(
+      Object.entries(handlers).map(([method, handler]) => [`users.authConnect.${method}`, handler]),
+    ),
+  };
+  return withGateway((request) => responses[request.method]?.(request), run);
 }
 
 function waitForPromptAbort(): void {
@@ -259,18 +297,18 @@ describe("personal model account CLI over an identified Gateway connection", () 
       ({ method }) => (method === "users.listModelAccounts" ? page : undefined),
       async ({ port, url, requests, connections }) => {
         await modelsAccountsListCommand({ port, cursor: "previous-account", json: true }, output);
-        expect(requests.map(({ method, params }) => ({ method, params }))).toEqual([
-          { method: "users.self", params: {} },
-          { method: "users.listModelAccounts", params: { cursor: "previous-account" } },
+        expect(requestData(requests)).toEqual([
+          rpc("users.self"),
+          rpc("users.listModelAccounts", { cursor: "previous-account" }),
         ]);
         expectJsonOutput(output, page);
         expectPersonalContext(output, url);
         expect(output.log).not.toHaveBeenCalled();
         expect(connections).toHaveLength(1);
-        expect(connections[0]?.params.device).toEqual(
-          expect.objectContaining({ nonce: "test-nonce" }),
-        );
-        expect(connections[0]?.params.scopes).toEqual(["operator.read"]);
+        expect(connections[0]?.params).toMatchObject({
+          device: { nonce: "test-nonce" },
+          scopes: ["operator.read"],
+        });
       },
     );
   });
@@ -286,10 +324,7 @@ describe("personal model account CLI over an identified Gateway connection", () 
       ({ method }) => (method === "users.listModelAccounts" ? page : undefined),
       async ({ url, requests, connections, upgradeHeaders }) => {
         await modelsAccountsListCommand({ url, json: true }, output);
-        expect(requests.map(({ method }) => method)).toEqual([
-          "users.self",
-          "users.listModelAccounts",
-        ]);
+        expect(methods(requests)).toEqual(["users.self", "users.listModelAccounts"]);
         expect(connections).toHaveLength(1);
         expect(connections[0]?.params.auth).toBeUndefined();
         expect(upgradeHeaders[0]?.["x-edge-auth"]).toBeUndefined();
@@ -346,12 +381,7 @@ describe("personal model account CLI over an identified Gateway connection", () 
         (request) => (request.method === method ? { links: connected.links } : undefined),
         async ({ port, url, requests, connections }) => {
           await run(port, output);
-          expect(
-            requests.map(({ method: rpc, params: args }) => ({ method: rpc, params: args })),
-          ).toEqual([
-            { method: "users.self", params: {} },
-            { method, params },
-          ]);
+          expect(requestData(requests)).toEqual([rpc("users.self"), rpc(method, params)]);
           expect(connections).toHaveLength(1);
           expectPersonalContext(output, url);
           expect(output.log).toHaveBeenCalledWith(expect.stringContaining(note));
@@ -360,27 +390,19 @@ describe("personal model account CLI over an identified Gateway connection", () 
     },
   );
 
-  it.each([{ action: "login" }])(
-    "guides an unidentified person through $action without prompting for provider credentials",
-    async ({ action }) => {
-      const output = runtime();
-      await withGateway(
-        () => {
-          throw new Error("unidentified");
-        },
-        async ({ port, requests }) => {
-          await expect(
-            action === "login"
-              ? modelsAccountsLoginCommand({ port, provider: "openai" }, output)
-              : modelsAccountsListCommand({ port }, output),
-          ).rejects.toThrow("require a signed-in person");
-          expect(requests.map((request) => request.method)).toEqual(["users.self"]);
-          expect(mocks.password).not.toHaveBeenCalled();
-          expect(mocks.openUrl).not.toHaveBeenCalled();
-        },
-      );
-    },
-  );
+  it("guides an unidentified person through login without prompting for provider credentials", async () => {
+    const output = runtime();
+    await withGateway(
+      () => {
+        throw new Error("unidentified");
+      },
+      async ({ port, requests }) => {
+        await expect(login(port, output)).rejects.toThrow("require a signed-in person");
+        expect(methods(requests)).toEqual(["users.self"]);
+        expectNoPrompt();
+      },
+    );
+  });
 
   it("uses Gateway provider/method choices and sends a hidden API key only as the exact step answer", async () => {
     const apiKey = "synthetic-personal-api-key";
@@ -404,23 +426,14 @@ describe("personal model account CLI over an identified Gateway connection", () 
       ],
     } satisfies UsersAuthConnectCatalogResult;
     mocks.autocomplete.mockResolvedValueOnce("xai").mockResolvedValueOnce("api-key");
-    await withGateway(
-      ({ method }) => {
-        if (method === "users.authConnect.catalog") {
-          return choices;
-        }
-        if (method === "users.authConnect.start") {
-          return startResult();
-        }
-        if (method === "users.authConnect.status") {
-          return { status: "pending", step: keyStep };
-        }
-        if (method === "users.authConnect.answer") {
-          return ++answers === 1
+    await withAuthGateway(
+      {
+        catalog: () => choices,
+        status: () => ({ status: "pending", step: keyStep }),
+        answer: () =>
+          ++answers === 1
             ? { status: "pending", step: keyStep, error: validationError }
-            : { status: "connected", authProfileId: ACCOUNT_ID, links: [] };
-        }
-        return undefined;
+            : { status: "connected", authProfileId: ACCOUNT_ID, links: [] },
       },
       async ({ port, url, requests, connections }) => {
         mocks.password.mockImplementation(async () => {
@@ -428,106 +441,65 @@ describe("personal model account CLI over an identified Gateway connection", () 
           return answers === 0 ? invalidKey : apiKey;
         });
         await modelsAccountsLoginCommand({ port, json: true }, output);
-        expect(requests.map(({ method, params }) => ({ method, params }))).toEqual([
-          { method: "users.self", params: {} },
-          { method: "users.authConnect.catalog", params: { profileId: PROFILE_ID } },
-          {
-            method: "users.authConnect.start",
-            params: { profileId: PROFILE_ID, provider: "xai", method: "api-key" },
-          },
-          {
-            method: "users.authConnect.status",
-            params: { profileId: PROFILE_ID, connectId: "operation-one" },
-          },
-          {
-            method: "users.authConnect.answer",
-            params: {
-              profileId: PROFILE_ID,
-              connectId: "operation-one",
-              stepId: "api-key",
-              value: invalidKey,
-            },
-          },
-          {
-            method: "users.authConnect.answer",
-            params: {
-              profileId: PROFILE_ID,
-              connectId: "operation-one",
-              stepId: "api-key",
-              value: apiKey,
-            },
-          },
+        expect(requestData(requests)).toEqual([
+          rpc("users.self"),
+          authRpc("catalog", { profileId: PROFILE_ID }),
+          authRpc("start", { profileId: PROFILE_ID, provider: "xai", method: "api-key" }),
+          authRpc("status"),
+          authRpc("answer", { ...operation, stepId: "api-key", value: invalidKey }),
+          authRpc("answer", { ...operation, stepId: "api-key", value: apiKey }),
         ]);
         expect(connections).toHaveLength(1);
-        expect(mocks.autocomplete).toHaveBeenCalledTimes(2);
-        expect(mocks.autocomplete).toHaveBeenNthCalledWith(
-          1,
-          expect.objectContaining({
-            options: [
-              expect.objectContaining({ value: "openai" }),
-              expect.objectContaining({ value: "xai" }),
-            ],
+        expect(
+          mocks.autocomplete.mock.calls.map(([prompt]) => {
+            if (!Array.isArray(prompt.options)) {
+              throw new Error("Expected static login choices");
+            }
+            return prompt.options.map(({ value }) => value);
           }),
-        );
-        expect(mocks.autocomplete).toHaveBeenNthCalledWith(
-          2,
-          expect.objectContaining({
-            options: [
-              expect.objectContaining({ value: "api-key" }),
-              expect.objectContaining({ value: "device-code" }),
-            ],
-          }),
-        );
+        ).toEqual([
+          ["openai", "xai"],
+          ["api-key", "device-code"],
+        ]);
         expect(mocks.password).toHaveBeenCalledTimes(2);
         expect(mocks.password).toHaveBeenCalledWith(
           expect.objectContaining({ output: process.stderr, signal: expect.any(AbortSignal) }),
         );
         expect(output.error).toHaveBeenCalledWith(validationError);
-        expectJsonOutput(output, {
-          profileId: PROFILE_ID,
-          provider: "xai",
-          status: "connected",
-          authProfileId: ACCOUNT_ID,
-          links: [],
-        });
-        const printed = JSON.stringify([
-          output.log.mock.calls,
-          output.error.mock.calls,
-          output.writeJson.mock.calls,
-        ]);
-        expect(printed).not.toContain(apiKey);
-        expect(printed).not.toContain(invalidKey);
+        expectLoginOutput(
+          output,
+          {
+            status: "connected",
+            authProfileId: ACCOUNT_ID,
+            links: [],
+          },
+          "xai",
+        );
+        expect(printed(output)).not.toContain(apiKey);
+        expect(printed(output)).not.toContain(invalidKey);
       },
     );
   });
 
-  it.each([{ provider: "openai", method: "missing", error: "Unknown sign-in method" }])(
-    "rejects an unavailable catalog selection before starting: $error",
-    async ({ provider, method, error }) => {
-      await withGateway(
-        () => undefined,
-        async ({ port, requests }) => {
-          await expect(
-            modelsAccountsLoginCommand({ port, provider, method }, runtime()),
-          ).rejects.toThrow(error);
-          expect(requests.map((request) => request.method)).toEqual([
-            "users.self",
-            "users.authConnect.catalog",
-          ]);
-          expect(mocks.password).not.toHaveBeenCalled();
-          expect(mocks.openUrl).not.toHaveBeenCalled();
-        },
-      );
-    },
-  );
+  it("rejects an unavailable catalog selection before starting: Unknown sign-in method", async () => {
+    await withGateway(
+      () => undefined,
+      async ({ port, requests }) => {
+        await expect(
+          modelsAccountsLoginCommand({ port, provider: "openai", method: "missing" }, runtime()),
+        ).rejects.toThrow("Unknown sign-in method");
+        expect(methods(requests)).toEqual(["users.self", "users.authConnect.catalog"]);
+        expectNoPrompt();
+      },
+    );
+  });
 
   it("rejects non-TTY sign-in without consuming input", async () => {
     Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: false });
     await expect(modelsAccountsLoginCommand({ provider: "openai" }, runtime())).rejects.toThrow(
       "requires an interactive terminal",
     );
-    expect(mocks.password).not.toHaveBeenCalled();
-    expect(mocks.openUrl).not.toHaveBeenCalled();
+    expectNoPrompt();
   });
 
   it("renders the latest device progress snapshot and opens each destination once without acknowledging the code", async () => {
@@ -562,12 +534,9 @@ describe("personal model account CLI over an identified Gateway connection", () 
     let renderedProgress = "";
     let inputStepId: string | undefined;
     try {
-      await withGateway(
-        async ({ method, params }) => {
-          if (method === "users.authConnect.start") {
-            return startResult();
-          }
-          if (method === "users.authConnect.status") {
+      await withAuthGateway(
+        {
+          status: async () => {
             await progressUpdated.promise;
             polls += 1;
             if (polls === 3) {
@@ -583,19 +552,18 @@ describe("personal model account CLI over an identified Gateway connection", () 
               inputStepId = step.id;
             }
             return { status: "pending", step: sanitizeWizardStepForClient(step) };
-          }
-          if (method === "users.authConnect.answer") {
+          },
+          answer: async ({ params }) => {
             if (typeof params.stepId !== "string") {
               throw new Error("Expected an exact wizard step ID.");
             }
             await session.answer(params.stepId, params.value);
             await session.whenSettled();
             return connected;
-          }
-          return undefined;
+          },
         },
         async ({ port, requests, connections }) => {
-          await modelsAccountsLoginCommand({ port, provider: "openai", json: true }, output);
+          await login(port, output, true);
           expect(session.getStatus()).toBe("done");
           expect(inputStepId).toEqual(expect.any(String));
           expect(connections).toHaveLength(1);
@@ -606,37 +574,26 @@ describe("personal model account CLI over an identified Gateway connection", () 
               .map(({ params }) => params),
           ).toEqual([
             {
-              profileId: PROFILE_ID,
-              connectId: "operation-one",
+              ...operation,
               stepId: inputStepId,
               value: redirectInput,
             },
           ]);
-          expect(mocks.openUrl).toHaveBeenCalledTimes(2);
-          expect(mocks.openUrl).toHaveBeenNthCalledWith(1, verificationUrl);
-          expect(mocks.openUrl).toHaveBeenNthCalledWith(2, inputStep.externalUrl);
-          expect(renderedProgress).toContain(verificationUrl);
-          expect(renderedProgress).toContain(`Code: ${code}`);
-          expect(renderedProgress).toContain("Code expires in 15 minutes.");
-          expect(renderedProgress).toContain(
+          expect(mocks.openUrl.mock.calls).toEqual([[verificationUrl], [inputStep.externalUrl]]);
+          for (const message of [
+            verificationUrl,
+            `Code: ${code}`,
+            "Code expires in 15 minutes.",
             "Enter this one-time code on the provider's sign-in page.",
-          );
-          expect(renderedProgress).toContain(DEVICE_CODE_PHISHING_WARNING);
-          expect(renderedProgress).toContain("Waiting for provider approval");
+            DEVICE_CODE_PHISHING_WARNING,
+            "Waiting for provider approval",
+          ]) {
+            expect(renderedProgress).toContain(message);
+          }
           expect(renderedProgress).not.toContain("Waiting for the initial provider poll");
           expect(requests.some(({ method }) => method === "users.authConnect.cancel")).toBe(false);
-          expectJsonOutput(output, {
-            profileId: PROFILE_ID,
-            provider: "openai",
-            ...connected,
-          });
-          expect(
-            JSON.stringify([
-              output.log.mock.calls,
-              output.error.mock.calls,
-              output.writeJson.mock.calls,
-            ]),
-          ).not.toContain("synthetic-private-code");
+          expectLoginOutput(output, connected);
+          expect(printed(output)).not.toContain("synthetic-private-code");
         },
       );
     } finally {
@@ -646,78 +603,47 @@ describe("personal model account CLI over an identified Gateway connection", () 
     }
   });
 
-  it.each([
-    {
-      result: { status: "failed", reason: "exchange" } satisfies UsersAuthConnectStatusResult,
-      exitCode: 1,
-    },
-  ])(
-    "finishes from the authoritative $result.status status and closes the prompt",
-    async ({ result, exitCode }) => {
-      waitForPromptAbort();
-      const output = runtime();
-      let polls = 0;
-      await withGateway(
-        ({ method }) =>
-          method === "users.authConnect.start"
-            ? startResult()
-            : method === "users.authConnect.status"
-              ? ++polls === 1
-                ? { status: "pending", step: inputStep }
-                : result
-              : undefined,
-        async ({ port, requests }) => {
-          const command = modelsAccountsLoginCommand(
-            { port, provider: "openai", json: true },
-            output,
-          );
-          if (exitCode) {
-            await expect(command).rejects.toMatchObject({ code: exitCode });
-          } else {
-            await command;
-          }
-          expect(mocks.password.mock.calls[0]?.[0].signal?.aborted).toBe(true);
-          expect(
-            requests.some(
-              ({ method }) =>
-                method === "users.authConnect.answer" || method === "users.authConnect.cancel",
-            ),
-          ).toBe(false);
-          expectJsonOutput(output, {
-            profileId: PROFILE_ID,
-            provider: "openai",
-            ...result,
-          });
-        },
-      );
-    },
-  );
+  it("finishes from the authoritative failed status and closes the prompt", async () => {
+    const result = {
+      status: "failed",
+      reason: "exchange",
+    } satisfies UsersAuthConnectStatusResult;
+    waitForPromptAbort();
+    const output = runtime();
+    let polls = 0;
+    await withAuthGateway(
+      { status: () => (++polls === 1 ? pendingInput : result) },
+      async ({ port, requests }) => {
+        await expect(login(port, output, true)).rejects.toMatchObject({ code: 1 });
+        expect(mocks.password.mock.calls[0]?.[0].signal?.aborted).toBe(true);
+        expect(
+          requests.some(
+            ({ method }) =>
+              method === "users.authConnect.answer" || method === "users.authConnect.cancel",
+          ),
+        ).toBe(false);
+        expectLoginOutput(output, result);
+      },
+    );
+  });
 
   it("waits for exact cancellation acknowledgment before closing the initiating socket", async () => {
     mocks.password.mockResolvedValue(CANCEL_SYMBOL);
     const received = createDeferredCore<Request>();
     const acknowledged = createDeferredCore<UsersAuthConnectStatusResult>();
     const output = runtime();
-    await withGateway(
-      (request) => {
-        if (request.method === "users.authConnect.start") {
-          return startResult();
-        }
-        if (request.method === "users.authConnect.status") {
-          return { status: "pending", step: inputStep };
-        }
-        if (request.method === "users.authConnect.cancel") {
+    await withAuthGateway(
+      {
+        status: () => pendingInput,
+        cancel: (request) => {
           received.resolve(request);
           return acknowledged.promise;
-        }
-        return undefined;
+        },
       },
       async ({ port, connections }) => {
-        const command = expect(
-          modelsAccountsLoginCommand({ port, provider: "openai" }, output),
-        ).rejects.toMatchObject({ code: 130 });
+        const command = expect(login(port, output)).rejects.toMatchObject({ code: 130 });
         const request = await received.promise;
-        expect(request.params).toEqual({ profileId: PROFILE_ID, connectId: "operation-one" });
+        expect(request.params).toEqual(operation);
         expect(request.socket.readyState).toBe(WebSocket.OPEN);
         expect(output.log).not.toHaveBeenCalled();
         acknowledged.resolve({ status: "cancelled" });
@@ -731,21 +657,16 @@ describe("personal model account CLI over an identified Gateway connection", () 
     const started = createDeferredCore();
     const response = createDeferredCore<UsersAuthConnectStartResult>();
     const onSignal = vi.spyOn(process, "once");
-    await withGateway(
-      ({ method }) => {
-        if (method === "users.authConnect.start") {
+    await withAuthGateway(
+      {
+        start: () => {
           started.resolve();
           return response.promise;
-        }
-        if (method === "users.authConnect.cancel") {
-          return { status: "cancelled" };
-        }
-        return undefined;
+        },
+        cancel: () => ({ status: "cancelled" }),
       },
       async ({ port, requests, connections }) => {
-        const command = expect(
-          modelsAccountsLoginCommand({ port, provider: "openai" }, runtime()),
-        ).rejects.toMatchObject({ code: 130 });
+        const command = expect(login(port)).rejects.toMatchObject({ code: 130 });
         await started.promise;
         const interrupt = onSignal.mock.calls.find(([event]) => event === "SIGINT")?.[1];
         if (!interrupt) {
@@ -754,19 +675,15 @@ describe("personal model account CLI over an identified Gateway connection", () 
         interrupt("SIGINT");
         response.resolve(startResult());
         await command;
-        expect(requests.map(({ method }) => method)).toEqual([
+        expect(methods(requests)).toEqual([
           "users.self",
           "users.authConnect.catalog",
           "users.authConnect.start",
           "users.authConnect.cancel",
         ]);
-        expect(requests.at(-1)?.params).toEqual({
-          profileId: PROFILE_ID,
-          connectId: "operation-one",
-        });
+        expect(requests.at(-1)?.params).toEqual(operation);
         expect(connections).toHaveLength(1);
-        expect(mocks.password).not.toHaveBeenCalled();
-        expect(mocks.openUrl).not.toHaveBeenCalled();
+        expectNoPrompt();
       },
     );
   });
@@ -774,23 +691,18 @@ describe("personal model account CLI over an identified Gateway connection", () 
   it("stops on connection loss and never carries the operation to another socket", async () => {
     waitForPromptAbort();
     let polls = 0;
-    await withGateway(
-      ({ method, socket }) => {
-        if (method === "users.authConnect.start") {
-          return startResult();
-        }
-        if (method === "users.authConnect.status") {
+    await withAuthGateway(
+      {
+        status: ({ socket }) => {
           if (++polls === 1) {
-            return { status: "pending", step: inputStep };
+            return pendingInput;
           }
           socket.close(1001, "gone");
-        }
-        return undefined;
+          return undefined;
+        },
       },
       async ({ port, requests, connections }) => {
-        await expect(
-          modelsAccountsLoginCommand({ port, provider: "openai" }, runtime()),
-        ).rejects.toThrow("Could not confirm sign-in cancellation");
+        await expect(login(port)).rejects.toThrow("Could not confirm sign-in cancellation");
         expect(connections).toHaveLength(1);
         expect(new Set(requests.map(({ socket }) => socket)).size).toBe(1);
         expect(mocks.password.mock.calls[0]?.[0].signal?.aborted).toBe(true);

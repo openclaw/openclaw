@@ -5,15 +5,22 @@ import type {
   EmbeddingInput,
   EmbeddingProviderCallOptions,
 } from "openclaw/plugin-sdk/embedding-providers";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import { loadSqliteVecExtension } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  loadSqliteVecExtension,
+  type MemoryExtraPath,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { clearEmbeddingProviders as clearRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  requireNativeSqliteDatabase,
+  openOpenClawAgentDatabase,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
 import {
@@ -30,7 +37,7 @@ type ManagerConfig = Parameters<GetMemorySearchManager>[0]["cfg"];
 type ManagerResult = Awaited<ReturnType<GetMemorySearchManager>>;
 
 type ManagerIndexFixtureConfig = {
-  extraPaths?: string[];
+  extraPaths?: MemoryExtraPath[];
   sources?: Array<"memory" | "sessions">;
   sessionMemory?: boolean;
   rememberAcrossConversations?: boolean;
@@ -51,117 +58,66 @@ type ManagerIndexFixtureConfig = {
   minScore?: number;
 };
 
-type ProviderCall = {
-  provider?: string;
-  model?: string;
-  outputDimensionality?: number;
+type ProviderCall = Pick<ManagerIndexFixtureConfig, "provider" | "model" | "outputDimensionality">;
+
+type SessionTranscript = {
+  messages: Array<{
+    content: string;
+    role: "assistant" | "user";
+    senderIsOwner?: boolean;
+    timestamp: number | string;
+  }>;
+  sessionId: string;
+  sessionKey?: string;
 };
 
-type ProviderControls = {
-  beforeEmbedBatch: (() => Promise<void>) | null;
-  beforeEmbedQuery: ((options?: EmbeddingProviderCallOptions) => Promise<void>) | null;
-  embedQueryCalls: number;
-  embeddedQueryTexts: string[];
-  embedBatchCalls: number;
-  embeddedBatchTexts: string[];
-  embedBatchPermanentFailure: Error | null;
-  embedBatchInputCalls: number;
-  embeddedBatchInputs: EmbeddingInput[][];
-  providerRuntimeBatchCalls: string[][];
-  providerRuntimeBatchGate: Promise<void> | null;
-  providerRuntimeBatchEntered: ((activeCalls: number, texts: readonly string[]) => void) | null;
-  providerRuntimeBatchErrors: unknown[];
-  providerRuntimeBatchFailuresRemaining: number;
-  providerRuntimeActiveBatchCalls: number;
-  providerRuntimeMaxActiveBatchCalls: number;
-  providerCloseCalls: number;
-  providerCloseFailuresRemaining: number;
-  providerCloseFailure: unknown;
-  providerCreationFailure: string | null;
-  providerNullResult: string | null;
-  providerCloseGate: Promise<void> | null;
-  providerInitGate: Promise<void> | null;
-  providerCalls: ProviderCall[];
-  forceNoProvider: boolean;
-  identityAlias: {
-    provider: string;
-    canonicalModel: string;
-    cacheModel: string;
+const { providerState, resetProviderState } = vi.hoisted(() => {
+  const defaults = () => ({
+    beforeEmbedBatch: null as (() => Promise<void>) | null,
+    beforeEmbedQuery: null as ((options?: EmbeddingProviderCallOptions) => Promise<void>) | null,
+    embedQueryCalls: 0,
+    embeddedQueryTexts: [] as string[],
+    embedBatchCalls: 0,
+    embeddedBatchTexts: [] as string[],
+    embedBatchPermanentFailure: null as Error | null,
+    embedBatchInputCalls: 0,
+    embeddedBatchInputs: [] as EmbeddingInput[][],
+    providerRuntimeBatchCalls: [] as string[][],
+    providerRuntimeBatchGate: null as Promise<void> | null,
+    providerRuntimeBatchEntered: null as
+      | ((activeCalls: number, texts: readonly string[]) => void)
+      | null,
+    providerRuntimeBatchErrors: [] as unknown[],
+    providerRuntimeBatchFailuresRemaining: 0,
+    providerRuntimeActiveBatchCalls: 0,
+    providerRuntimeMaxActiveBatchCalls: 0,
+    providerCloseCalls: 0,
+    providerCloseFailuresRemaining: 0,
+    providerCloseFailure: new Error("provider close failed") as unknown,
+    providerCreationFailure: null as string | null,
+    providerNullResult: null as string | null,
+    providerCloseGate: null as Promise<void> | null,
+    providerInitGate: null as Promise<void> | null,
+    providerCalls: [] as ProviderCall[],
+    forceNoProvider: false,
+  });
+  const initialState = {
+    ...defaults(),
+    identityAlias: {
+      provider: "identity-alias-test",
+      canonicalModel: "hf:fixture/default-model.gguf",
+      cacheModel: "/fixture/cache/default-model.gguf",
+    },
   };
-  createLocalWorkerExitError: () => Error;
-};
-
-export type ManagerIndexFixture = {
-  paths: {
-    readonly root: string;
-    readonly stateDir: string;
-    readonly workspace: string;
-    readonly memory: string;
+  return {
+    providerState: initialState,
+    resetProviderState: () => Object.assign(initialState, defaults()),
   };
-  provider: ProviderControls;
-  createConfig: (params: ManagerIndexFixtureConfig) => ManagerConfig;
-  requireManager: (result: ManagerResult, missingMessage?: string) => MemoryIndexManager;
-  trackManager: (manager: MemoryIndexManager) => void;
-  resetManager: (manager: MemoryIndexManager) => Promise<void>;
-  getPersistentManager: (cfg: ManagerConfig) => Promise<MemoryIndexManager>;
-  getFreshManager: (
-    cfg: ManagerConfig,
-    purpose?: "default" | "status" | "cli",
-    inspectSources?: boolean,
-  ) => Promise<MemoryIndexManager>;
-  getFtsSessionManager: () => Promise<MemoryIndexManager | null>;
-  seedSessionTranscript: (params: {
-    messages: Array<{
-      content: string;
-      role: "assistant" | "user";
-      senderIsOwner?: boolean;
-      timestamp: number | string;
-    }>;
-    sessionId: string;
-    sessionKey?: string;
-  }) => Promise<void>;
-};
-
-const providerState = vi.hoisted(() => ({
-  beforeEmbedBatch: null as ProviderControls["beforeEmbedBatch"],
-  beforeEmbedQuery: null as ProviderControls["beforeEmbedQuery"],
-  embedQueryCalls: 0,
-  embeddedQueryTexts: [] as string[],
-  embedBatchCalls: 0,
-  embeddedBatchTexts: [] as string[],
-  embedBatchPermanentFailure: null as Error | null,
-  embedBatchInputCalls: 0,
-  embeddedBatchInputs: [] as EmbeddingInput[][],
-  providerRuntimeBatchCalls: [] as string[][],
-  providerRuntimeBatchGate: null as Promise<void> | null,
-  providerRuntimeBatchEntered: null as
-    | ((activeCalls: number, texts: readonly string[]) => void)
-    | null,
-  providerRuntimeBatchErrors: [] as unknown[],
-  providerRuntimeBatchFailuresRemaining: 0,
-  providerRuntimeActiveBatchCalls: 0,
-  providerRuntimeMaxActiveBatchCalls: 0,
-  providerCloseCalls: 0,
-  providerCloseFailuresRemaining: 0,
-  providerCloseFailure: new Error("provider close failed") as unknown,
-  providerCreationFailure: null as string | null,
-  providerNullResult: null as string | null,
-  providerCloseGate: null as Promise<void> | null,
-  providerInitGate: null as Promise<void> | null,
-  providerCalls: [] as ProviderCall[],
-  forceNoProvider: false,
-  identityAlias: {
-    provider: "identity-alias-test",
-    canonicalModel: "hf:fixture/default-model.gguf",
-    cacheModel: "/fixture/cache/default-model.gguf",
-  },
-}));
+});
 
 vi.setConfig({ testTimeout: 240_000 });
 
-afterAll(() => {
-  vi.resetConfig();
-});
+afterAll(() => vi.resetConfig());
 
 function createLocalWorkerExitError(): Error {
   return Object.assign(new Error("Local embedding worker exited unexpectedly (exit code 134)"), {
@@ -175,16 +131,21 @@ vi.mock("./embeddings.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./embeddings.js")>();
   const embedText = (text: string) => {
     const lower = text.toLowerCase();
-    const alpha = lower.split("alpha").length - 1;
-    const beta = lower.split("beta").length - 1;
-    const image = lower.split("image").length - 1;
-    const audio = lower.split("audio").length - 1;
-    return [alpha, beta, image, audio];
+    return ["alpha", "beta", "image", "audio"].map((token) => lower.split(token).length - 1);
   };
   const resolveFallbackModel = (providerId: string, fallbackSourceModel: string) =>
     providerId === "gemini" || providerId === "fallback-provider"
       ? `${providerId}-embed`
       : fallbackSourceModel;
+  const aliasIdentity = () => {
+    const { provider, canonicalModel, cacheModel } = providerState.identityAlias;
+    const key = (model: string) => ({ provider, model });
+    return {
+      provider: { id: provider, model: canonicalModel },
+      cacheKeyData: key(canonicalModel),
+      aliases: [{ model: cacheModel, cacheKeyData: key(cacheModel) }],
+    };
+  };
   return {
     ...actual,
     resolveEmbeddingProviderFallbackModel: resolveFallbackModel,
@@ -194,25 +155,7 @@ vi.mock("./embeddings.js", async (importOriginal) => {
       options: Parameters<typeof actual.resolveEmbeddingProviderIndexIdentity>[0],
     ) =>
       options.provider === providerState.identityAlias.provider
-        ? {
-            provider: {
-              id: providerState.identityAlias.provider,
-              model: providerState.identityAlias.canonicalModel,
-            },
-            cacheKeyData: {
-              provider: providerState.identityAlias.provider,
-              model: providerState.identityAlias.canonicalModel,
-            },
-            aliases: [
-              {
-                model: providerState.identityAlias.cacheModel,
-                cacheKeyData: {
-                  provider: providerState.identityAlias.provider,
-                  model: providerState.identityAlias.cacheModel,
-                },
-              },
-            ],
-          }
+        ? aliasIdentity()
         : {
             provider: {
               id: options.config.models?.providers?.[options.provider]?.api ?? options.provider,
@@ -259,6 +202,56 @@ vi.mock("./embeddings.js", async (importOriginal) => {
           requestedModel === providerState.identityAlias.cacheModel)
           ? providerState.identityAlias.canonicalModel
           : requestedModel;
+      const runtime =
+        providerId === providerState.identityAlias.provider
+          ? {
+              id: providerId,
+              cacheKeyData: aliasIdentity().cacheKeyData,
+              indexIdentityAliases: aliasIdentity().aliases,
+            }
+          : providerId === "batch-test" || providerId === "batch-wide-test"
+            ? {
+                id: providerId,
+                ...(providerId === "batch-wide-test" ? { sourceWideBatchEmbed: true } : {}),
+                batchEmbed: async (batch: { chunks: Array<{ text: string }> }) => {
+                  const texts = batch.chunks.map((chunk) => chunk.text);
+                  providerState.providerRuntimeActiveBatchCalls += 1;
+                  providerState.providerRuntimeMaxActiveBatchCalls = Math.max(
+                    providerState.providerRuntimeMaxActiveBatchCalls,
+                    providerState.providerRuntimeActiveBatchCalls,
+                  );
+                  try {
+                    providerState.providerRuntimeBatchEntered?.(
+                      providerState.providerRuntimeActiveBatchCalls,
+                      texts,
+                    );
+                    await providerState.providerRuntimeBatchGate;
+                    providerState.providerRuntimeBatchCalls.push(texts);
+                    if (providerState.providerRuntimeBatchErrors.length > 0) {
+                      throw providerState.providerRuntimeBatchErrors.shift();
+                    }
+                    if (providerState.providerRuntimeBatchFailuresRemaining > 0) {
+                      providerState.providerRuntimeBatchFailuresRemaining -= 1;
+                      throw new Error("provider runtime batch failed");
+                    }
+                    return texts.map(embedText);
+                  } finally {
+                    providerState.providerRuntimeActiveBatchCalls -= 1;
+                  }
+                },
+              }
+            : providerId === "gemini" || providerId === "fallback-provider"
+              ? {
+                  id: providerId,
+                  cacheKeyData: {
+                    provider: providerId,
+                    baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+                    model,
+                    outputDimensionality: options.outputDimensionality,
+                    headers: [],
+                  },
+                }
+              : undefined;
       return {
         requestedProvider: options.provider ?? "openai",
         provider: {
@@ -315,73 +308,7 @@ vi.mock("./embeddings.js", async (importOriginal) => {
             return texts.map(embedText);
           },
         },
-        ...(providerId === providerState.identityAlias.provider
-          ? {
-              runtime: {
-                id: providerId,
-                cacheKeyData: {
-                  provider: providerId,
-                  model: providerState.identityAlias.canonicalModel,
-                },
-                indexIdentityAliases: [
-                  {
-                    model: providerState.identityAlias.cacheModel,
-                    cacheKeyData: {
-                      provider: providerId,
-                      model: providerState.identityAlias.cacheModel,
-                    },
-                  },
-                ],
-              },
-            }
-          : providerId === "batch-test" || providerId === "batch-wide-test"
-            ? {
-                runtime: {
-                  id: providerId,
-                  ...(providerId === "batch-wide-test" ? { sourceWideBatchEmbed: true } : {}),
-                  batchEmbed: async (batch: { chunks: Array<{ text: string }> }) => {
-                    providerState.providerRuntimeActiveBatchCalls += 1;
-                    providerState.providerRuntimeMaxActiveBatchCalls = Math.max(
-                      providerState.providerRuntimeMaxActiveBatchCalls,
-                      providerState.providerRuntimeActiveBatchCalls,
-                    );
-                    try {
-                      providerState.providerRuntimeBatchEntered?.(
-                        providerState.providerRuntimeActiveBatchCalls,
-                        batch.chunks.map((chunk) => chunk.text),
-                      );
-                      await providerState.providerRuntimeBatchGate;
-                      providerState.providerRuntimeBatchCalls.push(
-                        batch.chunks.map((chunk) => chunk.text),
-                      );
-                      if (providerState.providerRuntimeBatchErrors.length > 0) {
-                        throw providerState.providerRuntimeBatchErrors.shift();
-                      }
-                      if (providerState.providerRuntimeBatchFailuresRemaining > 0) {
-                        providerState.providerRuntimeBatchFailuresRemaining -= 1;
-                        throw new Error("provider runtime batch failed");
-                      }
-                      return batch.chunks.map((chunk) => embedText(chunk.text));
-                    } finally {
-                      providerState.providerRuntimeActiveBatchCalls -= 1;
-                    }
-                  },
-                },
-              }
-            : providerId === "gemini" || providerId === "fallback-provider"
-              ? {
-                  runtime: {
-                    id: providerId,
-                    cacheKeyData: {
-                      provider: providerId,
-                      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-                      model,
-                      outputDimensionality: options.outputDimensionality,
-                      headers: [],
-                    },
-                  },
-                }
-              : {}),
+        ...(runtime ? { runtime } : {}),
       };
     },
   };
@@ -390,11 +317,8 @@ vi.mock("./embeddings.js", async (importOriginal) => {
 export function createManagerIndexFixture(deps: {
   getMemorySearchManager: GetMemorySearchManager;
   closeAllMemorySearchManagers: typeof import("./index.js").closeAllMemorySearchManagers;
-}): ManagerIndexFixture {
+}) {
   const provider = Object.assign(providerState, { createLocalWorkerExitError });
-  let root = "";
-  let workspace = "";
-  let memory = "";
   let state: OpenClawTestState;
   let workerState: OpenClawTestState | undefined;
   const managers = new Set<MemoryIndexManager>();
@@ -448,20 +372,14 @@ export function createManagerIndexFixture(deps: {
             params.rememberAcrossConversations ?? params.sessionMemory ?? false,
         },
       },
-      agents: {
-        defaults: { workspace },
-        entries: { main: {} },
-      },
+      agents: { defaults: { workspace: state.workspaceDir }, entries: { main: {} } },
       models: params.providerAliases ? { providers: params.providerAliases } : undefined,
     } as OpenClawConfig);
     setRuntimeConfigSnapshot(cfg);
     return cfg;
   };
 
-  const requireManager = (
-    result: ManagerResult,
-    missingMessage = "manager missing",
-  ): MemoryIndexManager => {
+  const requireManager = (result: ManagerResult, missingMessage = "manager missing") => {
     if (!result.manager) {
       throw new Error(result.error ?? missingMessage);
     }
@@ -470,20 +388,6 @@ export function createManagerIndexFixture(deps: {
 
   const trackManager = (manager: MemoryIndexManager): void => {
     managers.add(manager);
-  };
-
-  const getPersistentManager = async (cfg: ManagerConfig): Promise<MemoryIndexManager> => {
-    setRuntimeConfigSnapshot(cfg);
-    const manager = requireManager(
-      await deps.getMemorySearchManager({
-        runInBackgroundContext: runInMemoryTestBackgroundContext,
-        cfg,
-        agentId: "main",
-      }),
-    );
-    trackManager(manager);
-    await resetManager(manager);
-    return manager;
   };
 
   const getFreshManager = async (
@@ -505,24 +409,27 @@ export function createManagerIndexFixture(deps: {
     return manager;
   };
 
-  const seedSessionTranscript: ManagerIndexFixture["seedSessionTranscript"] = async (params) => {
+  const getPersistentManager = async (cfg: ManagerConfig): Promise<MemoryIndexManager> => {
+    const manager = await getFreshManager(cfg);
+    await resetManager(manager);
+    return manager;
+  };
+
+  const seedSessionTranscript = async (params: SessionTranscript): Promise<void> => {
     const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
     const storePath = path.join(sessionsDir, "sessions.json");
     const sessionKey = params.sessionKey ?? `agent:main:memory:${params.sessionId}`;
     const updatedAt = Date.now();
+    const target = { agentId: "main", sessionKey, storePath };
     await fs.mkdir(sessionsDir, { recursive: true });
     await upsertSessionEntry({
-      agentId: "main",
-      sessionKey,
-      storePath,
+      ...target,
       entry: { sessionId: params.sessionId, updatedAt },
     });
     for (const message of params.messages) {
       await appendSessionTranscriptMessageByIdentity({
-        agentId: "main",
+        ...target,
         sessionId: params.sessionId,
-        sessionKey,
-        storePath,
         message: {
           role: message.role,
           timestamp: message.timestamp,
@@ -533,7 +440,7 @@ export function createManagerIndexFixture(deps: {
     }
   };
 
-  const getFtsSessionManager: ManagerIndexFixture["getFtsSessionManager"] = async () => {
+  const getFtsSessionManager = async (): Promise<MemoryIndexManager | null> => {
     providerState.forceNoProvider = true;
     const cfg = createConfig({
       provider: "none",
@@ -541,15 +448,7 @@ export function createManagerIndexFixture(deps: {
       sessionMemory: true,
       minScore: 0,
     });
-    const manager = requireManager(
-      await deps.getMemorySearchManager({
-        runInBackgroundContext: runInMemoryTestBackgroundContext,
-        cfg,
-        agentId: "main",
-      }),
-    );
-    trackManager(manager);
-    await resetManager(manager);
+    const manager = await getPersistentManager(cfg);
     return manager.status().fts?.available ? manager : null;
   };
 
@@ -577,47 +476,19 @@ export function createManagerIndexFixture(deps: {
     managers.clear();
   });
 
-  afterAll(async () => {
-    await workerState?.cleanup();
-  });
+  afterAll(() => workerState?.cleanup());
 
   beforeEach(async () => {
     vi.useRealTimers();
     clearRegistry();
-    providerState.beforeEmbedQuery = null;
-    providerState.beforeEmbedBatch = null;
-    providerState.embedQueryCalls = 0;
-    providerState.embeddedQueryTexts = [];
-    providerState.embedBatchCalls = 0;
-    providerState.embeddedBatchTexts = [];
-    providerState.embedBatchPermanentFailure = null;
-    providerState.embedBatchInputCalls = 0;
-    providerState.embeddedBatchInputs = [];
-    providerState.providerRuntimeBatchCalls = [];
-    providerState.providerRuntimeBatchGate = null;
-    providerState.providerRuntimeBatchEntered = null;
-    providerState.providerRuntimeBatchErrors = [];
-    providerState.providerRuntimeBatchFailuresRemaining = 0;
-    providerState.providerRuntimeActiveBatchCalls = 0;
-    providerState.providerRuntimeMaxActiveBatchCalls = 0;
-    providerState.providerCloseCalls = 0;
-    providerState.providerCloseFailuresRemaining = 0;
-    providerState.providerCloseFailure = new Error("provider close failed");
-    providerState.providerCreationFailure = null;
-    providerState.providerNullResult = null;
-    providerState.providerCloseGate = null;
-    providerState.providerInitGate = null;
-    providerState.providerCalls = [];
-    providerState.forceNoProvider = false;
+    resetProviderState();
 
     state = await createOpenClawTestState({
       prefix: "openclaw-mem-fixtures-",
       layout: "state-only",
     });
-    root = state.root;
-    workspace = state.workspaceDir;
     createConfig({});
-    memory = path.join(workspace, "memory");
+    const memory = path.join(state.workspaceDir, "memory");
     await fs.mkdir(memory, { recursive: true });
     await configureMemoryCoreDreamingStateForTests();
     await fs.writeFile(
@@ -629,16 +500,16 @@ export function createManagerIndexFixture(deps: {
   return {
     paths: {
       get root() {
-        return root;
+        return state.root;
       },
       get stateDir() {
         return state.stateDir;
       },
       get workspace() {
-        return workspace;
+        return state.workspaceDir;
       },
       get memory() {
-        return memory;
+        return path.join(state.workspaceDir, "memory");
       },
     },
     provider,
@@ -659,7 +530,9 @@ export function memoryIndexFixtureWriter(manager: MemoryIndexManager): DatabaseS
   if (!databasePath) {
     throw new Error("Memory index fixture has no database path");
   }
-  return openOpenClawAgentDatabase({ agentId: "main", path: databasePath }).db;
+  return requireNativeSqliteDatabase(
+    openOpenClawAgentDatabase({ agentId: "main", path: databasePath }).db,
+  );
 }
 
 export function countMemoryIndexFtsMatches(databasePath: string, marker: string): number {
@@ -675,6 +548,20 @@ export function countMemoryIndexFtsMatches(databasePath: string, marker: string)
   } finally {
     observer.close();
   }
+}
+
+export function holdMemoryTestOperation<T>(value: () => T) {
+  const entered = createDeferred<void>();
+  const gate = createDeferred<void>();
+  return {
+    entered: entered.promise,
+    release: () => gate.resolve(),
+    run: async () => {
+      entered.resolve();
+      await gate.promise;
+      return value();
+    },
+  };
 }
 
 export function readPublishedSessionIndex(

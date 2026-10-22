@@ -9,32 +9,29 @@ import {
 import { createSessionEventRefreshCoordinator } from "./event-refresh-coordinator.ts";
 import { appendSessionResults } from "./reconcile.ts";
 import type {
-  SessionConnectionOwner,
-  SessionGateway,
-  SessionListScope,
-  SessionListSnapshot,
-  SessionState,
-} from "./session-capability.ts";
-import type {
   ManagedSessionList,
   ManagedSessionListRefresh,
   ObservedSessionList,
 } from "./session-list-query.ts";
+import { sessionListReadNeedsEventRefresh } from "./session-list-query.ts";
 import {
   normalizeManagedSessionListQuery,
   requestSessionListParams,
   sessionListQueryKey,
 } from "./session-requests.ts";
 import type { createSessionRosterObservations } from "./session-roster-observations.ts";
+import type {
+  SessionConnectionOwner,
+  SessionGateway,
+  SessionListScope,
+  SessionListSnapshot,
+  SessionState,
+} from "./session-types.ts";
 
 export function getManagedSessionList(
   lists: Map<string, ManagedSessionList>,
   scope: SessionListScope,
-  refresh: (
-    entry: ManagedSessionList,
-    isCurrent: () => boolean,
-    immediate: boolean,
-  ) => Promise<void>,
+  refresh: (entry: ManagedSessionList, isCurrent: () => boolean) => Promise<void>,
 ): ManagedSessionList {
   const key = sessionListQueryKey(scope);
   const current = lists.get(key);
@@ -56,7 +53,7 @@ export function getManagedSessionList(
     listeners: new Set(),
     coordinator: createSessionEventRefreshCoordinator({
       active: false,
-      refresh: (isCurrent, immediate) => refresh(entry, isCurrent, immediate),
+      refresh: (isCurrent) => refresh(entry, isCurrent),
     }),
     pending: null,
     queued: null,
@@ -108,7 +105,7 @@ export function createSessionManagedListRefresh(
     managedLists: ReadonlyMap<string, ManagedSessionList>;
     observations: Pick<
       ReturnType<typeof createSessionRosterObservations>,
-      "accept" | "stageObservedRows" | "mergeRows"
+      "accept" | "stageObservedRows" | "mergeRows" | "rowRevision"
     >;
     nextRevision: () => number;
     isPageActive: () => boolean;
@@ -133,7 +130,7 @@ export function createSessionManagedListRefresh(
         (!refresh.background || !entry.queued || entry.queued.background)
       ) {
         entry.readGeneration += 1;
-        entry.queued = { ...refresh, immediate: refresh.immediate || entry.queued?.immediate };
+        entry.queued = refresh;
       }
       return entry.pending;
     }
@@ -219,6 +216,18 @@ export function createSessionManagedListRefresh(
             observed && next.append && requestParams.offset && previous
               ? appendSessionResults(previous, observed)
               : observed;
+          if (
+            sessionListReadNeedsEventRefresh(
+              previous,
+              result,
+              nextResult,
+              issuedRevision,
+              entry.scope,
+              observations.rowRevision,
+            )
+          ) {
+            entry.coordinator.schedule();
+          }
           const appending = Boolean(next.append && requestParams.offset && previous);
           const receivedKeys = new Set(appending ? entry.receivedKeys : []);
           for (const row of response.sessions) {
@@ -318,7 +327,7 @@ export function createSessionManagedListRefresh(
         entry.pending = null;
         if (entry.queued?.background && isCurrent() && isPageActive()) {
           // Release this request's admission before scheduling its automatic successor.
-          entry.coordinator.schedule(entry.queued.immediate);
+          entry.coordinator.schedule();
         }
       }
     });
@@ -335,7 +344,7 @@ export function createSessionManagedListRefresh(
       return refreshManagedList(entry, refresh);
     }
     if (!entry.queued || (refresh.invalidated && entry.queued.background)) {
-      entry.queued = { ...refresh, immediate: refresh.immediate || entry.queued?.immediate };
+      entry.queued = refresh;
     }
     return host.background(entry, async () => {
       if (isCurrent() && managedLists.get(entry.key) === entry && entry.listeners.size > 0) {

@@ -115,7 +115,7 @@ of this skill; initial generation must never overwrite them.
    exact base/target SHA snapshot under the worktree's git metadata. Iterative
    rewrites at the same target avoid repeated network discovery. Use
    `--refresh-github-snapshot` after suspect API data, `--github-snapshot
-<path>` for an explicit artifact, or `--no-github-snapshot` for a live-only
+   <path>` for an explicit artifact, or `--no-github-snapshot` for a live-only
    audit. GitHub release bodies are always read live.
    Explicit `CI #`, `CI run #`, `Actions run #`, and `workflow run #` references
    in active source are classified separately only when issue/PR resolution
@@ -316,6 +316,9 @@ of this skill; initial generation must never overwrite them.
   ```
 - verify each beta page with its exact beta version, captured base and target;
   verify stable and extended-stable with their own source section and range.
+  Extended-stable verification also requires
+  `--regular-stable-version <current-regular-stable-version>` so the canonical
+  release notice is checked against its immutable regular-stable context.
   Never compare multiple beta pages against one cumulative stable section.
   A `### Release verification` tail is permitted; other body drift fails.
 - `scripts/render-github-release-notes.mts` is the canonical release-body

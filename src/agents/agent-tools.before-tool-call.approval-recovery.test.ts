@@ -8,6 +8,8 @@ import {
 } from "../infra/agent-run-registry.js";
 import { recoverStuckDiagnosticSession } from "../logging/diagnostic-stuck-session-recovery.runtime.js";
 import { resetDiagnosticStateForTest } from "../logging/diagnostic.test-support.js";
+import type { ReplyOperation } from "../sessions/session-controller.contracts.js";
+import type { SessionControllerWatchdogAttempt } from "../sessions/session-controller.watchdog.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   getAdmittedRunDelegatedAuthority,
@@ -15,12 +17,12 @@ import {
   type PreparedAgentRunAdmission,
 } from "./admitted-run-context.js";
 import { resolveBeforeToolCallApprovalOutcome } from "./agent-tools.before-tool-call.approval.js";
+import type { EmbeddedAgentQueueHandle } from "./embedded-agent-runner/runs.js";
 import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-  type EmbeddedAgentQueueHandle,
-} from "./embedded-agent-runner/runs.js";
-import { testing as embeddedRunTesting } from "./embedded-agent-runner/runs.test-support.js";
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+  testing as embeddedRunTesting,
+} from "./embedded-agent-runner/runs.test-support.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -45,6 +47,8 @@ const abort = vi.fn();
 let handle: EmbeddedAgentQueueHandle;
 let admission: PreparedAgentRunAdmission;
 let authority: AgentRunDelegatedAuthority;
+let operation: ReplyOperation;
+let watchdogAttempt: SessionControllerWatchdogAttempt;
 
 beforeEach(async () => {
   vi.useFakeTimers();
@@ -64,7 +68,7 @@ beforeEach(async () => {
     releaseAgentRunDelegatedAuthority(authority);
     clearActiveEmbeddedRun(ref.sessionId, handle, ref.sessionKey);
   });
-  await withGatewayToolCallerIdentity(
+  operation = await withGatewayToolCallerIdentity(
     createAdmittedGatewayToolCallerIdentity({
       admittedRunContext: admitted,
       agentId: "main",
@@ -72,9 +76,13 @@ beforeEach(async () => {
     }),
     () => setActiveEmbeddedRun(ref.sessionId, handle, ref.sessionKey),
   );
+  watchdogAttempt = operation.watchdog.attachAttempt({
+    assertCurrent: () => operation.abortSignal.throwIfAborted(),
+  });
 });
 
 afterEach(() => {
+  clearActiveEmbeddedRun(ref.sessionId, handle, ref.sessionKey);
   resetDiagnosticStateForTest();
   admission.close();
   releaseAgentRunDelegatedAuthority(authority);
@@ -89,7 +97,7 @@ function requestApproval(timeoutMs: number, signal?: AbortSignal) {
   const decision = createDeferred<{ id: string; decision: unknown }>();
   mockCallGatewayTool.mockImplementation(async (method, _options, _params, extra) => {
     if (method === "plugin.approval.request") {
-      return { id: "approval-1", status: "accepted" };
+      return { id: "approval-1", status: "accepted", expiresAtMs: Date.now() + timeoutMs };
     }
     if (method === "plugin.approval.waitDecision") {
       // Like the real client, the wait rejects as soon as the run's signal aborts.
@@ -126,6 +134,7 @@ function requestApproval(timeoutMs: number, signal?: AbortSignal) {
       sessionKey: ref.sessionKey,
       sessionId: ref.sessionId,
       runId: ref.runId,
+      watchdogAttempt,
     },
     ...(signal ? { signal } : {}),
     baseParams: { action: "add" },
@@ -136,6 +145,7 @@ function requestApproval(timeoutMs: number, signal?: AbortSignal) {
 function recover() {
   return recoverStuckDiagnosticSession({
     ...ref,
+    operation,
     ageMs: 364_000,
     queueDepth: 0,
     allowActiveAbort: true,
@@ -151,15 +161,19 @@ it("keeps the run alive while a plugin approval is pending, then lets the approv
     await vi.advanceTimersByTimeAsync(420_000);
     await expect(recover()).resolves.toMatchObject({
       status: "skipped",
-      reason: "human_input_wait",
+      reason: "active_reply_work",
     });
+    expect(operation.watchdog.decide()).toMatchObject({ action: "observe", reason: "approval" });
     expect(abort).not.toHaveBeenCalled();
 
     decision.resolve({ id: "approval-1", decision: "allow-once" });
     await expect(outcome).resolves.toMatchObject({ blocked: false });
+    expect(operation.watchdog.decide().reason).not.toBe("approval");
 
     // The decision ends the wait: a run that then stays hung is recovered again.
+    vi.setSystemTime(Math.max(Date.now(), operation.watchdog.snapshot().semanticDeadlineAtMs));
     await recover();
+    await operation.ownerSettlement;
     expect(abort).toHaveBeenCalledTimes(1);
   });
 });
@@ -168,11 +182,15 @@ it("stops protecting the run once the approval window has passed", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const { outcome } = requestApproval(120_000);
     await vi.advanceTimersByTimeAsync(0);
-    await expect(recover()).resolves.toMatchObject({ reason: "human_input_wait" });
+    await expect(recover()).resolves.toMatchObject({ reason: "active_reply_work" });
+    expect(operation.watchdog.decide()).toMatchObject({ action: "observe", reason: "approval" });
 
     // A Gateway that never answers cannot hold the run past timeout + grace.
     await vi.advanceTimersByTimeAsync(120_000 + GATEWAY_GRACE_MS + 1);
+    expect(operation.watchdog.decide().reason).not.toBe("approval");
+    vi.setSystemTime(Math.max(Date.now(), operation.watchdog.snapshot().semanticDeadlineAtMs));
     await recover();
+    await operation.ownerSettlement;
     expect(abort).toHaveBeenCalledTimes(1);
     void outcome.catch(() => {});
   });
@@ -185,8 +203,11 @@ it("does not protect a run whose approval wait was cancelled", async () => {
     await vi.advanceTimersByTimeAsync(0);
     controller.abort();
     await expect(outcome).resolves.toMatchObject({ blocked: true });
+    expect(operation.watchdog.decide().reason).not.toBe("approval");
 
+    vi.setSystemTime(Math.max(Date.now(), operation.watchdog.snapshot().semanticDeadlineAtMs));
     await recover();
+    await operation.ownerSettlement;
     expect(abort).toHaveBeenCalledTimes(1);
   });
 });

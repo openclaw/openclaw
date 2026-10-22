@@ -1,15 +1,16 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { GatewayBrowserClient } from "../api/gateway.ts";
+import { captureI18nStateForTesting } from "../i18n/lib/translate.test-support.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
-import * as gatewayStore from "./gateway-store.ts";
 import { resetServerUiPrefsSync } from "./server-prefs.ts";
 import { loadSettings, persistSessionToken } from "./settings.ts";
 
 let runtime: ApplicationRuntime | undefined;
 const originalUrl = window.location.href;
 beforeEach(() => {
+  onTestFinished(captureI18nStateForTesting());
   vi.useFakeTimers();
   vi.stubGlobal("localStorage", createStorageMock());
   vi.stubGlobal("sessionStorage", createStorageMock());
@@ -17,21 +18,7 @@ beforeEach(() => {
     "fetch",
     vi.fn(async () => Response.json({})),
   );
-  const createGateway = gatewayStore.createApplicationGateway;
-  vi.spyOn(gatewayStore, "createApplicationGateway").mockImplementation(
-    (settings, password, bootstrap, _factory, options) =>
-      createGateway(
-        settings,
-        password,
-        bootstrap,
-        (opts) => {
-          const client = new GatewayBrowserClient(opts);
-          vi.spyOn(client, "start").mockImplementation(() => {});
-          return client;
-        },
-        options,
-      ),
-  );
+  vi.spyOn(GatewayBrowserClient.prototype, "start").mockImplementation(() => {});
   resetServerUiPrefsSync();
   document.documentElement.setAttribute(
     CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE,
@@ -45,7 +32,7 @@ beforeEach(() => {
         entries: {
           "ui.theme": "claw",
           "ui.themeMode": "light",
-          "ui.railShortcuts": ["route:agents-home"],
+          "ui.railShortcuts": ["route:sessions"],
         },
       },
     }),
@@ -71,7 +58,7 @@ it("uses the viewer's document preferences before hello without loading editable
     theme: "claw",
     themeMode: "light",
     locale: "de",
-    sidebarEntries: ["route:agents-home"],
+    sidebarEntries: ["route:sessions"],
   });
   expect(document.documentElement.dataset.themeMode).toBe("light");
   expect(runtime.context.runtimeConfig.state.configSnapshot).toBeNull();

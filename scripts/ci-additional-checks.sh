@@ -52,11 +52,6 @@ for check_group in "${check_groups[@]}"; do
       else
         run_check "lint:tmp:sqlite-transaction-boundary" pnpm run lint:tmp:sqlite-transaction-boundary
       fi
-      if ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["lint:tmp:session-transcript-reader-boundary"] ? 0 : 1);'; then
-        echo "[skip] session transcript reader boundary script is not present in package.json"
-      else
-        run_check "lint:tmp:session-transcript-reader-boundary" pnpm run lint:tmp:session-transcript-reader-boundary
-      fi
       ;;
     sqlite-session-schema-baseline)
       if ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["sqlite:sessions-schema:check"] ? 0 : 1);'; then

@@ -1,17 +1,23 @@
-/**
- * Unit coverage for adapting runtime and client-hosted tools.
- * Exercises result coercion, error wrapping, client delegation, and conflict
- * detection at the ToolDefinition boundary.
- */
+/** Runtime/client tool coercion, delegation, and conflicts at the definition boundary. */
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
-import { withTestTimeout } from "../../test/helpers/promise.js";
 import {
-  createClientToolNameConflictError,
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+  withTestTimeout,
+} from "../../test/helpers/promise.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
+import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+} from "./admitted-run-context.js";
+import {
   findClientToolNameConflicts,
   isClientToolNameConflictError,
   toClientToolDefinitions,
@@ -21,20 +27,59 @@ import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.j
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { validateScriptFileForShellBleed } from "./bash-tools.exec-script-preflight.js";
 import type { ClientToolDefinition } from "./embedded-agent-runner/run/params.js";
+import {
+  attachInternalToolExecutionPreparer,
+  getInternalToolExecutionPreparer,
+} from "./runtime/internal-hooks.js";
 import { wrapToolDefinition } from "./sessions/tools/tool-definition-wrapper.js";
 import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
+import { ToolInputError } from "./tools/common.js";
+import {
+  createAdmittedGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "./tools/gateway-caller-context.js";
 
 type ToolExecute = ReturnType<typeof toToolDefinitions>[number]["execute"];
 const extensionContext = {} as Parameters<ToolExecute>[4];
-const CLIENT_TOOL_NAME_CONFLICT_PREFIX = "client tool name conflict:";
+const querySchema = () => ({ type: "object", properties: { query: { type: "string" } } });
+const receipt = (text: string) => ({ content: [{ type: "text" as const, text }], details: {} });
 
-async function executeTool(tool: AgentTool, callId: string) {
-  const defs = toToolDefinitions([tool]);
-  const def = defs[0];
-  if (!def) {
-    throw new Error("missing tool definition");
-  }
-  return await def.execute(callId, {}, undefined, undefined, extensionContext);
+function executeDefinition(
+  def: ReturnType<typeof toToolDefinitions>[number] | undefined,
+  callId: string,
+  params?: unknown,
+) {
+  return expectDefined(def, "tool definition").execute(
+    callId,
+    params,
+    undefined,
+    undefined,
+    extensionContext,
+  );
+}
+
+function executeTool(tool: AgentTool, callId: string, params: unknown = {}) {
+  return executeDefinition(toToolDefinitions([tool])[0], callId, params);
+}
+function toolFixture(name: string, execute: AgentTool["execute"]): AgentTool {
+  return { name, label: name, description: name, parameters: Type.Object({}), execute };
+}
+function executeExec(
+  options: Parameters<typeof createExecTool>[0],
+  callId: string,
+  params: unknown = {},
+) {
+  return executeTool(createExecTool(options), callId, params);
+}
+
+function sandboxOptions(validateWorkdir: (workdir: string) => Promise<string>) {
+  return {
+    containerName: "remote-sandbox-workdir-test",
+    workspaceDir: process.cwd(),
+    containerWorkdir: "/remote/workspace",
+    workdirValidation: "backend" as const,
+    validateWorkdir,
+  };
 }
 
 describe("agent tool definition adapter", () => {
@@ -50,15 +95,9 @@ describe("agent tool definition adapter", () => {
       "Accessibility and Screen Recording required. Do not retry until the user confirms.";
     const cause = Object.assign(new Error(message), { details: { permissionMissing } });
     const result = await executeTool(
-      {
-        name: "nodes",
-        label: "Nodes",
-        description: "Node commands",
-        parameters: Type.Object({}),
-        execute: async () => {
-          throw new Error(message, { cause });
-        },
-      },
+      toolFixture("nodes", async () => {
+        throw new Error(message, { cause });
+      }),
       "permission-call",
     );
     expect(result.details).toEqual({
@@ -73,26 +112,15 @@ describe("agent tool definition adapter", () => {
     async (route) => {
       const caller = new AbortController();
       const run = new AbortController();
-      const partial = {
-        content: [{ type: "text" as const, text: "partial receipt" }],
-        details: {},
-      };
-      const result = { content: [{ type: "text" as const, text: "final receipt" }], details: {} };
+      const partial = receipt("partial receipt");
+      const result = receipt("final receipt");
       const onUpdate = vi.fn();
       const execute = vi.fn<AgentTool["execute"]>(async (_id, _args, _signal, update) => {
         update?.(partial);
         return result;
       });
       const [definition] = toToolDefinitions(
-        [
-          {
-            name: "receipt",
-            label: "Receipt",
-            description: "Receipt",
-            parameters: Type.Object({}),
-            execute,
-          },
-        ],
+        [toolFixture("receipt", execute)],
         undefined,
         route === "composed" ? run.signal : undefined,
       );
@@ -108,8 +136,7 @@ describe("agent tool definition adapter", () => {
         );
         expect(execute).toHaveBeenCalledOnce();
         const call = expectDefined(execute.mock.calls[0], "receipt invocation");
-        expect(call[0]).toBe("receipt-call");
-        expect(call[1]).toEqual({});
+        expect(call.slice(0, 2)).toEqual(["receipt-call", {}]);
         expect(call[3]).toBe(onUpdate);
         expect(onUpdate).toHaveBeenCalledExactlyOnceWith(partial);
         expect(onUpdate.mock.calls[0]?.[0]).toBe(partial);
@@ -122,7 +149,7 @@ describe("agent tool definition adapter", () => {
 
         const reason = new Error("operator cancelled receipt");
         (route === "composed" ? run : caller).abort(reason);
-        expect(call[2]?.aborted).toBe(true);
+        expect(call[2]).toMatchObject({ aborted: true, reason });
         expect(call[2]?.reason).toBe(reason);
         await expect(
           withTestTimeout(invoke("cancelled-receipt"), 2_000, "cancelled receipt did not settle"),
@@ -136,77 +163,142 @@ describe("agent tool definition adapter", () => {
     10_000,
   );
 
-  it("preserves exec deny before prepared workdir failures", async () => {
-    const tool = createExecTool({
-      security: "deny",
-      ask: "off",
-    });
-    const [definition] = toToolDefinitions([tool]);
-    const missingWorkdir = path.join(os.tmpdir(), `openclaw-missing-denied-cwd-${Date.now()}`);
+  it.for([
+    { route: "ordinary", owner: "live" },
+    { route: "ordinary", owner: "closed" },
+    { route: "ordinary", owner: "replaced" },
+    { route: "prepared", owner: "live" },
+    { route: "prepared", owner: "closed" },
+    { route: "prepared", owner: "replaced" },
+  ] as const)(
+    "checks the retained $route invocation owner before file I/O ($owner)",
+    async ({ route, owner }, { signal }) => {
+      await withTestDir({ prefix: "openclaw-adapter-authority-" }, async (dir) => {
+        const runId = `adapter-${route}-${owner}`;
+        const prepareAdmission = () =>
+          prepareAgentRunAdmission({
+            cfg: {},
+            operationalRunInstance: createOperationalRunInstanceRef(runId),
+            facts: {
+              runId,
+              agentId: "main",
+              ingress: { kind: "system", boundary: "adapter-tool", state: "present" },
+            },
+          });
+        const admission = prepareAdmission();
+        let replacement: ReturnType<typeof prepareAdmission> | undefined;
+        const entered = createDeferred();
+        const release = createDeferred();
+        const file = path.join(dir, "protected-effect.txt");
+        const write = async () => {
+          await fs.writeFile(file, "written by the admitted invocation");
+          return receipt("written");
+        };
+        const source = {
+          ...toolFixture("fixture_write", write),
+          prepareBeforeToolCallParams: async (params: unknown) => {
+            entered.resolve();
+            await release.promise;
+            return params;
+          },
+        };
+        if (route === "prepared") {
+          attachInternalToolExecutionPreparer(source, async ({ args }) => {
+            entered.resolve();
+            await release.promise;
+            return { kind: "ready", args, execute: write, dispose() {} };
+          });
+        }
+        let execution: ReturnType<typeof executeDefinition> | undefined;
+        try {
+          const caller = expectDefined(
+            createAdmittedGatewayToolCallerIdentity({
+              admittedRunContext: await admission.admit("embedded"),
+              agentId: "main",
+              sessionKey: `agent:main:${runId}`,
+            }),
+            "admitted tool caller",
+          );
+          const definition = expectDefined(toToolDefinitions([source])[0], "adapted tool");
+          execution = withGatewayToolCallerIdentity(caller, async () => {
+            if (route === "ordinary") {
+              return executeDefinition(definition, runId, {});
+            }
+            const prepare = expectDefined(
+              getInternalToolExecutionPreparer(definition),
+              "adapted native preparer",
+            );
+            const prepared = await prepare({ toolCallId: runId, args: {} });
+            try {
+              if (prepared.kind !== "ready") {
+                throw new Error("Tool preparation did not reach executable work");
+              }
+              return await prepared.execute();
+            } finally {
+              prepared.dispose();
+            }
+          });
+          await withinTest(
+            awaitGateBeforeSettlement(entered.promise, execution, "Tool skipped preparation"),
+            signal,
+          );
+          if (owner === "closed") {
+            admission.close();
+          } else if (owner === "replaced") {
+            replacement = prepareAdmission();
+            await replacement.admit("embedded");
+          }
+          release.resolve();
+          const result = await withinTest(execution, signal);
+          if (owner === "live") {
+            expect(result).toEqual(receipt("written"));
+            expect(await fs.readFile(file, "utf8")).toBe("written by the admitted invocation");
+          } else {
+            expect(result.details).toMatchObject({
+              status: "error",
+              error: expect.stringContaining("authority is no longer active"),
+            });
+            expect(await fs.readdir(dir)).toEqual([]);
+          }
+        } finally {
+          admission.close();
+          replacement?.close();
+          release.resolve();
+          await execution?.catch(() => undefined);
+        }
+      });
+    },
+  );
 
-    const existing = await expectDefined(definition, "definition test invariant").execute(
-      "call-denied-existing-cwd",
-      {
-        command: "echo denied",
-        workdir: process.cwd(),
-      },
-      undefined,
-      undefined,
-      extensionContext,
-    );
-    const missing = await expectDefined(definition, "definition test invariant").execute(
-      "call-denied-missing-cwd",
-      {
-        command: "echo denied",
-        workdir: missingWorkdir,
-      },
-      undefined,
-      undefined,
-      extensionContext,
-    );
-
-    const expected = {
-      status: "error",
-      error: "exec denied: host=gateway security=deny",
-    };
-    expect(existing.details).toMatchObject(expected);
-    expect(missing.details).toMatchObject(expected);
-    expect(JSON.stringify(missing)).not.toContain("unavailable or not a directory");
-  });
-
-  it("does not validate backend sandbox workdirs before exec deny", async () => {
-    const validateWorkdir = vi.fn(async (workdir: string) => workdir);
-    const tool = createExecTool({
-      host: "sandbox",
-      security: "deny",
-      ask: "off",
-      sandbox: {
-        containerName: "remote-sandbox-workdir-test",
-        workspaceDir: process.cwd(),
-        containerWorkdir: "/remote/workspace",
-        workdirValidation: "backend",
-        validateWorkdir,
-      },
-    });
-    const [definition] = toToolDefinitions([tool]);
-
-    const result = await expectDefined(definition, "definition test invariant").execute(
-      "call-denied-backend-cwd",
-      {
-        command: "echo denied",
-        workdir: "/remote/workspace/generated",
-      },
-      undefined,
-      undefined,
-      extensionContext,
-    );
-
-    expect(result.details).toMatchObject({
-      status: "error",
-      error: "exec denied: host=sandbox security=deny",
-    });
-    expect(validateWorkdir).not.toHaveBeenCalled();
-  });
+  it.each(["existing", "missing", "backend"] as const)(
+    "denies exec before validating the %s workdir",
+    async (kind) => {
+      const validateWorkdir = vi.fn(async (workdir: string) => workdir);
+      const backend = kind === "backend";
+      const workdir = backend
+        ? "/remote/workspace/generated"
+        : kind === "existing"
+          ? process.cwd()
+          : path.join(os.tmpdir(), `openclaw-missing-denied-cwd-${Date.now()}`);
+      const result = await executeExec(
+        {
+          security: "deny",
+          ask: "off",
+          ...(backend
+            ? ({ host: "sandbox", sandbox: sandboxOptions(validateWorkdir) } as const)
+            : {}),
+        },
+        `call-denied-${kind}-cwd`,
+        { command: "echo denied", workdir },
+      );
+      expect(result.details).toMatchObject({
+        status: "error",
+        error: `exec denied: host=${backend ? "sandbox" : "gateway"} security=deny`,
+      });
+      expect(validateWorkdir).not.toHaveBeenCalled();
+      expect(JSON.stringify(result)).not.toContain("unavailable or not a directory");
+    },
+  );
 
   it("preserves no-start evidence when presenting a script-preflight refusal", async () => {
     const parameters = Type.Object({ command: Type.String(), workdir: Type.String() });
@@ -220,15 +312,8 @@ describe("agent tool definition adapter", () => {
         return { content: [], details: {} };
       },
     };
-    const [definition] = toToolDefinitions([tool]);
     const args = { command: "cat bad.py | python", workdir: process.cwd() };
-    const result = await expectDefined(definition, "exec definition").execute(
-      "call-preflight-refused",
-      args,
-      undefined,
-      undefined,
-      extensionContext,
-    );
+    const result = await executeTool(tool, "call-preflight-refused", args);
 
     expect(result.details).toMatchObject({
       status: "error",
@@ -247,185 +332,111 @@ describe("agent tool definition adapter", () => {
     });
   });
 
-  it("does not throw WeakMap errors when preparing malformed exec params", async () => {
-    const tool = createExecTool({
-      security: "full",
-      ask: "off",
-    });
-    const [definition] = toToolDefinitions([tool]);
-
-    const result = await expectDefined(definition, "definition test invariant").execute(
-      "call-malformed-exec-params",
-      "not-an-object",
-      undefined,
-      undefined,
-      extensionContext,
-    );
-
-    expect(result.details).toMatchObject({
-      status: "error",
-      error: "Provide a command to start.",
-    });
-  });
-
-  it("reports malformed exec params when elevated logging is enabled", async () => {
-    const tool = createExecTool({
-      security: "full",
-      ask: "off",
-      elevated: { enabled: true, allowed: true, defaultLevel: "on" },
-    });
-    const [definition] = toToolDefinitions([tool]);
-
-    const result = await expectDefined(definition, "definition test invariant").execute(
-      "call-malformed-elevated-exec-params",
-      {},
-      undefined,
-      undefined,
-      extensionContext,
-    );
-
-    expect(result.details).toMatchObject({
-      status: "error",
-      error: "Provide a command to start.",
-    });
-  });
-
-  it("does not validate backend sandbox workdirs before malformed exec params fail", async () => {
-    const validateWorkdir = vi.fn(async (workdir: string) => workdir);
-    const tool = createExecTool({
-      host: "sandbox",
-      security: "full",
-      ask: "off",
-      sandbox: {
-        containerName: "remote-sandbox-workdir-test",
-        workspaceDir: process.cwd(),
-        containerWorkdir: "/remote/workspace",
-        workdirValidation: "backend",
-        validateWorkdir,
-      },
-    });
-    const [definition] = toToolDefinitions([tool]);
-
-    const result = await expectDefined(definition, "definition test invariant").execute(
-      "call-malformed-backend-sandbox-exec-params",
-      {
-        workdir: "/remote/workspace/generated",
-      },
-      undefined,
-      undefined,
-      extensionContext,
-    );
-
-    expect(result.details).toMatchObject({
-      status: "error",
-      error: "Provide a command to start.",
-    });
-    expect(validateWorkdir).not.toHaveBeenCalled();
-  });
-
-  it("coerces details-only tool results to include content", async () => {
-    const tool = {
-      name: "memory_query",
-      label: "Memory Query",
-      description: "returns details only",
-      parameters: Type.Object({}),
-      execute: (async () => ({
-        details: {
-          hits: [{ id: "a1", score: 0.9 }],
+  it.each([
+    { kind: "non-object", params: "not-an-object" },
+    { kind: "elevated", params: {} },
+    { kind: "backend-workdir", params: { workdir: "/remote/workspace/generated" } },
+  ] as const)(
+    "rejects malformed $kind exec params before workdir validation",
+    async ({ kind, params }) => {
+      const validateWorkdir = vi.fn(async (workdir: string) => workdir);
+      const result = await executeExec(
+        {
+          security: "full",
+          ask: "off",
+          ...(kind === "backend-workdir"
+            ? ({ host: "sandbox", sandbox: sandboxOptions(validateWorkdir) } as const)
+            : {}),
+          ...(kind === "elevated"
+            ? ({ elevated: { enabled: true, allowed: true, defaultLevel: "on" } } as const)
+            : {}),
         },
-      })) as unknown as AgentTool["execute"],
-    } satisfies AgentTool;
+        `call-malformed-${kind}`,
+        params,
+      );
+      expect(result.details).toMatchObject({
+        status: "error",
+        error: "Provide a command to start.",
+      });
+      if (kind === "backend-workdir") {
+        expect(validateWorkdir).not.toHaveBeenCalled();
+      }
+    },
+  );
 
-    const result = await executeTool(tool, "call3");
-    expect(result.details).toEqual({
-      hits: [{ id: "a1", score: 0.9 }],
-    });
-    expect(result.content[0]?.type).toBe("text");
-    expect((result.content[0] as { text?: string }).text).toContain('"hits"');
-  });
-
-  it("coerces non-standard object results to include content", async () => {
-    const tool = {
-      name: "memory_query_raw",
-      label: "Memory Query Raw",
-      description: "returns plain object",
-      parameters: Type.Object({}),
-      execute: (async () => ({
-        count: 2,
-        ids: ["m1", "m2"],
-      })) as unknown as AgentTool["execute"],
-    } satisfies AgentTool;
-
-    const result = await executeTool(tool, "call4");
-    expect(result.details).toEqual({
-      count: 2,
-      ids: ["m1", "m2"],
-    });
-    expect(result.content[0]?.type).toBe("text");
-    expect((result.content[0] as { text?: string }).text).toContain('"count"');
+  it.each([
+    { name: "details-only", details: { hits: [{ id: "a1", score: 0.9 }] }, key: '"hits"' },
+    { name: "plain object", details: { count: 2, ids: ["m1", "m2"] }, key: '"count"' },
+  ])("coerces $name results to text content", async ({ name, details, key }) => {
+    const value = structuredClone(name === "details-only" ? { details } : details);
+    const tool = toolFixture(
+      "memory_query",
+      (async () => value) as unknown as AgentTool["execute"],
+    );
+    const result = await executeTool(tool, "coerce-result");
+    expect(result.details).toEqual(details);
+    expect(result.content[0]).toMatchObject({ type: "text", text: expect.stringContaining(key) });
   });
 
   it("does not re-run hook preparation for an already wrapped tool", async () => {
     const prepareBeforeToolCallParams = vi.fn((params: unknown) => params);
-    const execute = vi.fn(async () => ({
-      content: [{ type: "text" as const, text: "done" }],
-      details: {},
-    }));
-    const tool = {
-      name: "wrapped_tool",
-      label: "Wrapped Tool",
-      description: "already owns hook execution",
-      parameters: Type.Object({}),
-      prepareBeforeToolCallParams,
-      execute,
-    } as AgentTool & {
-      prepareBeforeToolCallParams: typeof prepareBeforeToolCallParams;
-    };
+    const execute = vi.fn(async () => receipt("done"));
+    const tool = { ...toolFixture("wrapped_tool", execute), prepareBeforeToolCallParams };
     const hookContext = { agentId: "agent-main", sessionId: "session-wrapped-tool" };
     const wrappedTool = wrapToolWithBeforeToolCallHook(tool, hookContext);
-    const [definition] = toToolDefinitions([wrappedTool], hookContext);
-    if (!definition) {
-      throw new Error("missing wrapped tool definition");
-    }
-
-    await definition.execute("call-wrapped", {}, undefined, undefined, extensionContext);
+    await executeDefinition(toToolDefinitions([wrappedTool], hookContext)[0], "call-wrapped", {});
 
     expect(prepareBeforeToolCallParams).toHaveBeenCalledOnce();
     expect(execute).toHaveBeenCalledOnce();
   });
 });
 
-// ---------------------------------------------------------------------------
-// toClientToolDefinitions – streaming tool-call argument coercion (#57009)
-// ---------------------------------------------------------------------------
-
-function makeClientTool(name: string): ClientToolDefinition {
-  return {
-    type: "function",
-    function: {
-      name,
-      description: `${name} tool`,
-      parameters: { type: "object", properties: { query: { type: "string" } } },
-    },
-  };
+function makeClientTool(
+  name: string,
+  parameters: ClientToolDefinition["function"]["parameters"] = querySchema(),
+): ClientToolDefinition {
+  return { type: "function", function: { name, description: `${name} tool`, parameters } };
 }
 
-async function executeClientTool(params: unknown): Promise<{
-  calledWith: Record<string, unknown> | undefined;
-  result: Awaited<ReturnType<ToolExecute>>;
-}> {
+async function executeClientTool(params: unknown) {
   let captured: Record<string, unknown> | undefined;
   const [def] = toClientToolDefinitions([makeClientTool("search")], (_name, p) => {
     captured = p;
   });
-  if (!def) {
-    throw new Error("missing client tool definition");
-  }
-  const result = await def.execute("call-c1", params, undefined, undefined, extensionContext);
+  const result = await executeDefinition(def, "call-c1", params);
   return { calledWith: captured, result };
 }
 
 describe("toClientToolDefinitions – param coercion", () => {
+  it("preserves input-error cancellation after client execution preparation", async () => {
+    const controller = new AbortController();
+    const reason = new ToolInputError("client tool cancelled");
+    const recorder = { reserve: vi.fn(), complete: vi.fn(), discard: vi.fn() };
+    const definition = expectDefined(
+      toClientToolDefinitions([makeClientTool("search")], recorder)[0],
+      "client tool definition",
+    );
+    const prepare = expectDefined(getInternalToolExecutionPreparer(definition), "client preparer");
+    const prepared = await prepare({
+      toolCallId: "cancelled-client-call",
+      args: { query: "example" },
+      signal: controller.signal,
+    });
+    expect(prepared.kind).toBe("ready");
+    if (prepared.kind !== "ready") {
+      throw new Error("Client call did not reach preparation");
+    }
+    try {
+      controller.abort(reason);
+      await expect(prepared.execute()).rejects.toBe(reason);
+      expect(recorder.reserve).toHaveBeenCalledWith("cancelled-client-call", "search");
+      expect(recorder.discard).toHaveBeenCalledWith("cancelled-client-call", "search");
+      expect(recorder.complete).not.toHaveBeenCalled();
+    } finally {
+      prepared.dispose();
+    }
+  });
+
   it.each(["not-json", "42"])(
     "returns a visible error instead of dispatching malformed client arguments: %s",
     async (params) => {
@@ -445,49 +456,28 @@ describe("toClientToolDefinitions – param coercion", () => {
     expect(calledWith).toStrictEqual({});
   });
 
-  it.each([""])(
-    "rejects missing required client arguments without reserving a completed call: %s",
-    async (params) => {
-      const clientTool = makeClientTool("search");
-      clientTool.function.parameters = {
-        type: "object",
-        properties: { query: { type: "string" } },
-        required: ["query"],
-      };
-      const reserve = vi.fn();
-      const complete = vi.fn();
-      const discard = vi.fn();
-      const [definition] = toClientToolDefinitions([clientTool], { reserve, complete, discard });
-      const result = await expectDefined(definition, "client tool definition").execute(
-        "call-required-client-args",
-        params,
-        undefined,
-        undefined,
-        extensionContext,
-      );
+  it("rejects missing required client arguments without completing the call", async () => {
+    const clientTool = makeClientTool("search", { ...querySchema(), required: ["query"] });
+    const reserve = vi.fn();
+    const complete = vi.fn();
+    const discard = vi.fn();
+    const [definition] = toClientToolDefinitions([clientTool], { reserve, complete, discard });
+    const result = await executeDefinition(definition, "call-required-client-args", "");
 
-      expect(result.details).toMatchObject({
-        status: "error",
-        error: expect.stringContaining("query"),
-      });
-      expect(result.terminate).not.toBe(true);
-      expect(complete).not.toHaveBeenCalled();
-      expect(discard).toHaveBeenCalledWith("call-required-client-args", "search");
-    },
-  );
+    expect(result.details).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("query"),
+    });
+    expect(result.terminate).not.toBe(true);
+    expect(complete).not.toHaveBeenCalled();
+    expect(discard).toHaveBeenCalledWith("call-required-client-args", "search");
+  });
 
   it("keeps absent arguments valid for a parameterless client tool", async () => {
-    const clientTool = makeClientTool("ping");
-    clientTool.function.parameters = { type: "object", properties: {} };
+    const clientTool = makeClientTool("ping", { type: "object", properties: {} });
     const complete = vi.fn();
     const [definition] = toClientToolDefinitions([clientTool], { complete });
-    const result = await expectDefined(definition, "client tool definition").execute(
-      "call-parameterless-client-tool",
-      undefined,
-      undefined,
-      undefined,
-      extensionContext,
-    );
+    const result = await executeDefinition(definition, "call-parameterless-client-tool");
 
     expect(complete).toHaveBeenCalledWith("call-parameterless-client-tool", "ping", {});
     expect(result.terminate).toBe(true);
@@ -512,9 +502,8 @@ describe("client tool name conflict checks", () => {
     ).toEqual(["Bash", "grep"]);
   });
 
-  it("wraps conflict errors with a stable prefix", () => {
-    const err = createClientToolNameConflictError(["exec", "Web_Search"]);
-    expect(err.message).toBe(`${CLIENT_TOOL_NAME_CONFLICT_PREFIX} exec, Web_Search`);
+  it("recognizes conflict errors by their stable prefix", () => {
+    const err = new Error("client tool name conflict: exec, Web_Search");
     expect(isClientToolNameConflictError(err)).toBe(true);
     expect(isClientToolNameConflictError(new Error("other failure"))).toBe(false);
   });

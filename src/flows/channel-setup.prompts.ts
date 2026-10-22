@@ -154,12 +154,11 @@ export async function maybeConfigureDmPolicies(params: {
   selection: ChannelChoice[];
   prompter: WizardPrompter;
   accountIdsByChannel?: Map<ChannelChoice, string>;
-  resolveAdapter?: (channel: ChannelChoice) => ChannelSetupWizardAdapter | undefined;
+  resolveAdapter: (channel: ChannelChoice) => ChannelSetupWizardAdapter | undefined;
 }): Promise<OpenClawConfig> {
   const { selection, prompter, accountIdsByChannel } = params;
-  const resolve = params.resolveAdapter ?? (() => undefined);
   const dmPolicies = selection
-    .map((channel) => resolve(channel)?.dmPolicy)
+    .map((channel) => params.resolveAdapter(channel)?.dmPolicy)
     .filter((policy) => policy !== undefined);
   if (dmPolicies.length === 0) {
     return params.cfg;

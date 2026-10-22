@@ -1,5 +1,3 @@
-// Covers plugin-dispatched message actions, target resolution, dry-run behavior,
-// and plugin tool-result extraction.
 import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -26,123 +24,107 @@ import {
   readLastPluginCall,
   readMockCallArg,
   readRecordField,
-  expectRecordFields,
   createEnabledMessageActionConfig,
 } from "./message-action-runner.test-helpers.js";
 
-describe("runMessageAction plugin dispatch", () => {
-  beforeEach(() => {
-    resetMessageActionRunnerMocks();
+type ActionInput = Parameters<typeof runMessageAction>[0];
+function runAction(
+  channel: string,
+  action: ActionInput["action"],
+  params: Record<string, unknown>,
+  input: Partial<ActionInput> = {},
+) {
+  return runMessageAction({
+    cfg: createEnabledMessageActionConfig(channel),
+    action,
+    params: { channel, ...params },
+    dryRun: false,
+    ...input,
   });
+}
+
+beforeEach(resetMessageActionRunnerMocks);
+afterEach(() => {
+  setActivePluginRegistry(createTestRegistry([]));
+  vi.clearAllMocks();
+  vi.unstubAllEnvs();
+});
+
+describe("runMessageAction plugin dispatch", () => {
   describe("alias-based plugin action dispatch", () => {
     const { handleAction } = useActionHubPluginFixture();
     it("dispatches messageId/chatId-based plugin actions through the shared runner", async () => {
       const resolveAgentRuntimeIdentityToken = vi.fn(async () => "unused-agent-runtime-token");
-      await runMessageAction({
-        cfg: createEnabledMessageActionConfig("actionhub"),
-        action: "pin",
-        params: {
-          channel: "actionhub",
-          messageId: "om_123",
+      await runAction(
+        "actionhub",
+        "pin",
+        { messageId: "om_123" },
+        {
+          gateway: {
+            resolveAgentRuntimeIdentityToken,
+            clientName: "gateway-client",
+            mode: "backend",
+          },
+          conversationReadOrigin: "direct-operator",
         },
-        gateway: {
-          resolveAgentRuntimeIdentityToken,
-          clientName: "gateway-client",
-          mode: "backend",
-        },
-        conversationReadOrigin: "direct-operator",
-        dryRun: false,
-      });
+      );
 
-      await runMessageAction({
-        cfg: createEnabledMessageActionConfig("actionhub"),
-        action: "list-pins",
-        params: {
-          channel: "actionhub",
-          chatId: "oc_123",
+      await runAction(
+        "actionhub",
+        "list-pins",
+        { chatId: "oc_123" },
+        {
+          conversationReadOrigin: "direct-operator",
         },
-        conversationReadOrigin: "direct-operator",
-        dryRun: false,
-      });
+      );
 
       const pinCall = readPluginCall(handleAction, 0);
-      expectRecordFields(
-        pinCall,
-        { action: "pin", conversationReadOrigin: "direct-operator" },
-        "pin call",
-      );
-      expectRecordFields(
-        readRecordField(pinCall, "params", "pin call params"),
-        { messageId: "om_123" },
-        "pin call params",
-      );
+      expect(pinCall).toMatchObject({ action: "pin", conversationReadOrigin: "direct-operator" });
+      expect(pinCall).toMatchObject({ params: { messageId: "om_123" } });
       const listPinsCall = readPluginCall(handleAction, 1);
-      expectRecordFields(listPinsCall, { action: "list-pins" }, "list pins call");
-      expectRecordFields(
-        readRecordField(listPinsCall, "params", "list pins call params"),
-        { chatId: "oc_123" },
-        "list pins call params",
-      );
+      expect(listPinsCall).toMatchObject({ action: "list-pins" });
+      expect(listPinsCall).toMatchObject({ params: { chatId: "oc_123" } });
       expect(resolveAgentRuntimeIdentityToken).not.toHaveBeenCalled();
     });
 
     it("routes execution context ids into plugin handleAction", async () => {
       const stateDir = path.join("/tmp", "openclaw-plugin-dispatch-media-roots");
       const expectedWorkspaceRoot = path.resolve(stateDir, "workspace-alpha");
+      const context = {
+        requesterAccountId: "ops",
+        requesterSenderId: "trusted-user",
+        conversationReadOrigin: "direct-operator" as const,
+        sessionKey: "agent:alpha:main",
+        sessionId: "session-123",
+        agentId: "alpha",
+        inboundEventKind: "room_event" as const,
+        toolContext: {
+          currentChannelId: "oc_123",
+          currentChannelProvider: "actionhub",
+          currentThreadTs: "thread-456",
+          currentMessageId: "msg-789",
+        },
+      };
 
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        await runMessageAction({
-          cfg: createEnabledMessageActionConfig("actionhub"),
-          action: "pin",
-          params: {
-            channel: "actionhub",
-            messageId: "om_123",
+        await runAction(
+          "actionhub",
+          "pin",
+          { messageId: "om_123" },
+          {
+            defaultAccountId: "ops",
+            ...context,
+            toolContext: { ...context.toolContext },
           },
-          defaultAccountId: "ops",
-          requesterAccountId: "ops",
-          requesterSenderId: "trusted-user",
-          conversationReadOrigin: "direct-operator",
-          sessionKey: "agent:alpha:main",
-          sessionId: "session-123",
-          agentId: "alpha",
-          inboundEventKind: "room_event",
-          toolContext: {
-            currentChannelId: "oc_123",
-            currentChannelProvider: "actionhub",
-            currentThreadTs: "thread-456",
-            currentMessageId: "msg-789",
-          },
-          dryRun: false,
-        });
+        );
 
         const call = readLastPluginCall(handleAction);
-        expectRecordFields(
-          call,
-          {
-            action: "pin",
-            accountId: "ops",
-            requesterAccountId: "ops",
-            requesterSenderId: "trusted-user",
-            conversationReadOrigin: "direct-operator",
-            sessionKey: "agent:alpha:main",
-            sessionId: "session-123",
-            inboundEventKind: "room_event",
-            agentId: "alpha",
-          },
-          "plugin action call",
-        );
-        expect(Array.isArray(call.mediaLocalRoots)).toBe(true);
-        expect((call.mediaLocalRoots as unknown[]).includes(expectedWorkspaceRoot)).toBe(true);
-        expectRecordFields(
-          readRecordField(call, "toolContext", "plugin tool context"),
-          {
-            currentChannelId: "oc_123",
-            currentChannelProvider: "actionhub",
-            currentThreadTs: "thread-456",
-            currentMessageId: "msg-789",
-          },
-          "plugin tool context",
-        );
+        expect(call).toMatchObject({
+          action: "pin",
+          accountId: "ops",
+          ...context,
+          mediaLocalRoots: expect.arrayContaining([expectedWorkspaceRoot]),
+        });
       });
     });
   });
@@ -172,130 +154,74 @@ describe("runMessageAction plugin dispatch", () => {
         },
       });
 
-    afterEach(() => {
-      setActivePluginRegistry(createTestRegistry([]));
-      vi.clearAllMocks();
-    });
-
-    it("applies auto threadId before gateway plugin dispatch", async () => {
-      setTestPlugin(createThreadedPlugin("gateway"), "forumchat");
-      mocks.callGatewayLeastPrivilege.mockResolvedValue({ ok: true });
-
-      await runMessageAction({
+    function runThreadedAction(
+      action: "sticker" | "download-file",
+      params: Record<string, unknown>,
+      gateway = true,
+    ) {
+      setTestPlugin(createThreadedPlugin(gateway ? "gateway" : "local"), "forumchat");
+      if (gateway) {
+        mocks.callGatewayLeastPrivilege.mockResolvedValue({ ok: true });
+      }
+      return runAction("forumchat", action, params, {
         cfg,
-        action: "sticker",
-        params: {
-          channel: "forumchat",
-          target: "forum:123",
-          stickerName: "wave",
-        },
+        conversationReadOrigin: action === "download-file" ? "direct-operator" : undefined,
         toolContext: {
           currentChannelProvider: "forumchat",
           currentChannelId: "forum:123",
           currentThreadTs: "42",
         },
-        gateway: { clientName: "cli", mode: "cli" },
-        dryRun: false,
+        gateway: gateway ? { clientName: "cli", mode: "cli" } : undefined,
       });
+    }
 
-      const dispatchedParams = readRecordField(
-        readRecordField(
-          readMockCallArg(mocks.callGatewayLeastPrivilege, "gateway call"),
-          "params",
-          "gateway call params",
-        ),
+    function gatewayActionParams() {
+      const call = readMockCallArg(mocks.callGatewayLeastPrivilege, "gateway call");
+      return readRecordField(
+        readRecordField(call, "params", "gateway call params"),
         "params",
         "gateway action params",
       );
-      expectRecordFields(
-        dispatchedParams,
-        { to: "forum:123", threadId: "42" },
-        "gateway action params",
-      );
+    }
+
+    it("applies auto threadId before gateway plugin dispatch", async () => {
+      await runThreadedAction("sticker", { target: "forum:123", stickerName: "wave" });
+
+      const dispatchedParams = gatewayActionParams();
+      expect(dispatchedParams).toMatchObject({ to: "forum:123", threadId: "42" });
       expect(handleAction).not.toHaveBeenCalled();
     });
 
     it("does not add an implicit thread scope to download-file before gateway dispatch", async () => {
-      setTestPlugin(createThreadedPlugin("gateway"), "forumchat");
-      mocks.callGatewayLeastPrivilege.mockResolvedValue({ ok: true });
+      await runThreadedAction("download-file", { channelId: "forum:123", fileId: "F123" });
 
-      await runMessageAction({
-        cfg,
-        action: "download-file",
-        conversationReadOrigin: "direct-operator",
-        params: {
-          channel: "forumchat",
-          channelId: "forum:123",
-          fileId: "F123",
-        },
-        toolContext: {
-          currentChannelProvider: "forumchat",
-          currentChannelId: "forum:123",
-          currentThreadTs: "42",
-        },
-        gateway: { clientName: "cli", mode: "cli" },
-        dryRun: false,
-      });
-
-      const dispatchedParams = readRecordField(
-        readRecordField(
-          readMockCallArg(mocks.callGatewayLeastPrivilege, "gateway call"),
-          "params",
-          "gateway call params",
-        ),
-        "params",
-        "gateway action params",
-      );
+      const dispatchedParams = gatewayActionParams();
       expect(dispatchedParams.threadId).toBeUndefined();
-      expectRecordFields(
-        dispatchedParams,
-        { channelId: "forum:123", fileId: "F123" },
-        "gateway download-file params",
-      );
+      expect(dispatchedParams).toMatchObject({ channelId: "forum:123", fileId: "F123" });
     });
 
     it("preserves an explicit download-file thread scope", async () => {
-      setTestPlugin(createThreadedPlugin("local"), "forumchat");
-
-      await runMessageAction({
-        cfg,
-        action: "download-file",
-        conversationReadOrigin: "direct-operator",
-        params: {
-          channel: "forumchat",
-          channelId: "forum:123",
-          fileId: "F123",
-          threadId: "99",
-        },
-        toolContext: {
-          currentChannelProvider: "forumchat",
-          currentChannelId: "forum:123",
-          currentThreadTs: "42",
-        },
-        dryRun: false,
-      });
-
-      expectRecordFields(
-        readRecordField(readFirstPluginCall(handleAction), "params", "plugin params"),
+      await runThreadedAction(
+        "download-file",
         { channelId: "forum:123", fileId: "F123", threadId: "99" },
-        "local download-file params",
+        false,
       );
+
+      expect(
+        readRecordField(readFirstPluginCall(handleAction), "params", "plugin params"),
+      ).toMatchObject({ channelId: "forum:123", fileId: "F123", threadId: "99" });
     });
   });
   describe("poll plugin forwarding", () => {
-    const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
-      jsonResult({
-        ok: true,
-        forwarded: {
-          to: params.to ?? null,
-          pollQuestion: params.pollQuestion ?? null,
-          pollOption: params.pollOption ?? null,
-          pollDurationSeconds: params.pollDurationSeconds ?? null,
-          pollPublic: params.pollPublic ?? null,
-          threadId: params.threadId ?? null,
-        },
-      }),
-    );
+    const pollFields = {
+      pollQuestion: "Lunch?",
+      pollOption: ["Pizza", "Sushi"],
+      pollDurationSeconds: 120,
+      pollPublic: true,
+      threadId: "42",
+    };
+    const expectedParams = { to: "pollchat:123", ...pollFields };
+    const handleAction = vi.fn(async () => jsonResult({ ok: true }));
 
     const pollChatPlugin = createPollForwardingPlugin({
       pluginId: "pollchat",
@@ -309,70 +235,23 @@ describe("runMessageAction plugin dispatch", () => {
       handleAction.mockClear();
     });
 
-    afterEach(() => {
-      setActivePluginRegistry(createTestRegistry([]));
-      vi.clearAllMocks();
-    });
     it("forwards poll params through plugin dispatch", async () => {
-      const result = await runMessageAction({
-        cfg: {
-          channels: {
-            pollchat: {
-              botToken: "tok",
-            },
-          },
-        } as OpenClawConfig,
-        action: "poll",
-        params: {
-          channel: "pollchat",
-          target: "pollchat:123",
-          pollQuestion: "Lunch?",
-          pollOption: ["Pizza", "Sushi"],
-          pollDurationSeconds: 120,
-          pollPublic: true,
-          threadId: "42",
+      const result = await runAction(
+        "pollchat",
+        "poll",
+        { target: "pollchat:123", ...pollFields, pollOption: [...pollFields.pollOption] },
+        {
+          cfg: { channels: { pollchat: { botToken: "tok" } } } as OpenClawConfig,
         },
-        dryRun: false,
-      });
+      );
 
-      expect(result.kind).toBe("poll");
-      expect(result.handledBy).toBe("plugin");
-      const pluginCall = readFirstPluginCall(handleAction);
-      expectRecordFields(
-        pluginCall,
-        {
-          action: "poll",
-          channel: "pollchat",
-        },
-        "plugin call",
-      );
-      expectRecordFields(
-        readRecordField(pluginCall, "params", "plugin params"),
-        {
-          to: "pollchat:123",
-          pollQuestion: "Lunch?",
-          pollOption: ["Pizza", "Sushi"],
-          pollDurationSeconds: 120,
-          pollPublic: true,
-          threadId: "42",
-        },
-        "plugin params",
-      );
-      expectRecordFields(
-        readRecordField(result, "payload", "result payload"),
-        {
-          ok: true,
-          forwarded: {
-            to: "pollchat:123",
-            pollQuestion: "Lunch?",
-            pollOption: ["Pizza", "Sushi"],
-            pollDurationSeconds: 120,
-            pollPublic: true,
-            threadId: "42",
-          },
-        },
-        "result payload",
-      );
+      expect(result).toMatchObject({ kind: "poll", handledBy: "plugin" });
+      expect(readFirstPluginCall(handleAction)).toMatchObject({
+        action: "poll",
+        channel: "pollchat",
+        params: expectedParams,
+      });
+      expect(result.payload).toMatchObject({ ok: true });
     });
   });
 });
@@ -413,194 +292,88 @@ function registerPolicyPlugin(id = "policydest", accountIds?: string[]) {
   return handleAction;
 }
 
+function senderReadPolicy(key: string, access: "allow" | "deny" = "deny") {
+  return { groups: { ops: { toolsBySender: { [key]: { [access]: ["read"] } } } } };
+}
+
+function runHostMediaAction(
+  channel: string,
+  policy: Record<string, unknown>,
+  input: Partial<ActionInput> = {},
+  params: Record<string, unknown> = {},
+) {
+  return runAction(
+    channel,
+    "send",
+    { target: "oc_123", message: "hello", media: "/tmp/host.png", ...params },
+    {
+      cfg: {
+        tools: { allow: ["read"] },
+        channels: { [channel]: { enabled: true }, ...policy },
+      } as OpenClawConfig,
+      ...input,
+    },
+  );
+}
+
 describe("runMessageAction host-media authority", () => {
-  beforeEach(() => {
-    resetMessageActionRunnerMocks();
+  it.each([
+    ["session channel", "id:trusted-user", "requesterSenderId", "trusted-user"],
+    ["username", "username:alice_u", "requesterSenderUsername", "alice_u"],
+  ] as const)("uses requester %s policy for host-media reads", async (_name, key, field, value) => {
+    const handleAction = registerPolicyPlugin();
+    await runHostMediaAction(
+      "policydest",
+      { requestchat: senderReadPolicy(key) },
+      {
+        [field]: value,
+        sessionKey: "agent:alpha:requestchat:group:ops",
+      },
+    );
+    expect(readMediaAccess(readFirstPluginCall(handleAction)).readFile).toBeUndefined();
   });
-  describe("alias-based plugin action dispatch", () => {
-    afterEach(() => {
-      setActivePluginRegistry(createTestRegistry([]));
-      vi.clearAllMocks();
-      vi.unstubAllEnvs();
-    });
-    it("uses requester session channel policy for host-media reads", async () => {
-      const handlePolicyCheckedAction = registerPolicyPlugin();
 
-      await runMessageAction({
-        cfg: {
-          tools: { allow: ["read"] },
-          channels: {
-            policydest: {
-              enabled: true,
-            },
-            requestchat: {
-              groups: {
-                ops: {
-                  toolsBySender: {
-                    "id:trusted-user": {
-                      deny: ["read"],
-                    },
-                  },
-                },
-              },
-            },
+  it.each([
+    {
+      name: "requester account differing from destination",
+      channel: "policydest",
+      account: "destination",
+      policy: {
+        requestchat: {
+          accounts: {
+            source: senderReadPolicy("id:trusted-user"),
+            destination: senderReadPolicy("id:trusted-user", "allow"),
           },
-        } as OpenClawConfig,
-        action: "send",
-        params: {
-          channel: "policydest",
-          target: "oc_123",
-          message: "hello",
-          media: "/tmp/host.png",
         },
-        requesterSenderId: "trusted-user",
-        sessionKey: "agent:alpha:requestchat:group:ops",
-        dryRun: false,
-      });
-
-      const mediaAccess = readMediaAccess(readFirstPluginCall(handlePolicyCheckedAction));
-      expect(mediaAccess.readFile).toBeUndefined();
-    });
-
-    it("uses requester username policy for host-media reads", async () => {
-      const handlePolicyCheckedAction = registerPolicyPlugin();
-
-      await runMessageAction({
-        cfg: {
-          tools: { allow: ["read"] },
-          channels: {
-            policydest: {
-              enabled: true,
-            },
-            requestchat: {
-              groups: {
-                ops: {
-                  toolsBySender: {
-                    "username:alice_u": {
-                      deny: ["read"],
-                    },
-                  },
-                },
-              },
-            },
-          },
-        } as OpenClawConfig,
-        action: "send",
-        params: {
-          channel: "policydest",
-          target: "oc_123",
-          message: "hello",
-          media: "/tmp/host.png",
-        },
-        requesterSenderUsername: "alice_u",
-        sessionKey: "agent:alpha:requestchat:group:ops",
-        dryRun: false,
-      });
-
-      const mediaAccess = readMediaAccess(readFirstPluginCall(handlePolicyCheckedAction));
-      expect(mediaAccess.readFile).toBeUndefined();
-    });
-
-    it("uses requester account policy for host-media reads when destination account differs", async () => {
-      const handlePolicyCheckedAction = registerPolicyPlugin("policydest", ["destination"]);
-
-      await runMessageAction({
-        cfg: {
-          tools: { allow: ["read"] },
-          channels: {
-            policydest: {
-              enabled: true,
-            },
-            requestchat: {
-              accounts: {
-                source: {
-                  groups: {
-                    ops: {
-                      toolsBySender: {
-                        "id:trusted-user": {
-                          deny: ["read"],
-                        },
-                      },
-                    },
-                  },
-                },
-                destination: {
-                  groups: {
-                    ops: {
-                      toolsBySender: {
-                        "id:trusted-user": {
-                          allow: ["read"],
-                        },
-                      },
-                    },
-                  },
-                },
-              },
-            },
-          },
-        } as OpenClawConfig,
-        action: "send",
-        params: {
-          channel: "policydest",
-          accountId: "destination",
-          target: "oc_123",
-          message: "hello",
-          media: "/tmp/host.png",
-        },
-        requesterAccountId: "source",
-        requesterSenderId: "trusted-user",
-        sessionKey: "agent:alpha:requestchat:group:ops",
-        dryRun: false,
-      });
-
-      const pluginCall = readFirstPluginCall(handlePolicyCheckedAction);
-      expect(pluginCall.accountId).toBe("destination");
-      const mediaAccess = readMediaAccess(pluginCall);
-      expect(mediaAccess.readFile).toBeUndefined();
-    });
-
-    it("falls back to the resolved account policy when requester account is unavailable", async () => {
-      const handlePolicyCheckedAction = registerPolicyPlugin("policychat", ["source"]);
-
-      await runMessageAction({
-        cfg: {
-          tools: { allow: ["read"] },
-          channels: {
-            policychat: {
-              enabled: true,
-              accounts: {
-                source: {
-                  groups: {
-                    ops: {
-                      toolsBySender: {
-                        "id:trusted-user": {
-                          deny: ["read"],
-                        },
-                      },
-                    },
-                  },
-                },
-              },
-            },
-          },
-        } as OpenClawConfig,
-        action: "send",
-        params: {
-          channel: "policychat",
-          accountId: "source",
-          target: "group:ops",
-          message: "hello",
-          media: "/tmp/host.png",
-        },
-        requesterSenderId: "trusted-user",
-        sessionKey: "agent:alpha:policychat:group:ops",
-        dryRun: false,
-      });
-
-      const pluginCall = readFirstPluginCall(handlePolicyCheckedAction);
-      expect(pluginCall.accountId).toBe("source");
-      const mediaAccess = readMediaAccess(pluginCall);
-      expect(mediaAccess.readFile).toBeUndefined();
-    });
-  });
+      },
+      requesterAccountId: "source",
+      sessionKey: "agent:alpha:requestchat:group:ops",
+      target: "oc_123",
+    },
+    {
+      name: "resolved account when requester is unavailable",
+      channel: "policychat",
+      account: "source",
+      policy: {
+        policychat: { enabled: true, accounts: { source: senderReadPolicy("id:trusted-user") } },
+      },
+      requesterAccountId: undefined,
+      sessionKey: "agent:alpha:policychat:group:ops",
+      target: "group:ops",
+    },
+  ])(
+    "uses $name policy for host-media reads",
+    async ({ channel, account, policy, requesterAccountId, sessionKey, target }) => {
+      const handleAction = registerPolicyPlugin(channel, [account]);
+      await runHostMediaAction(
+        channel,
+        policy,
+        { requesterAccountId, requesterSenderId: "trusted-user", sessionKey },
+        { accountId: account, target },
+      );
+      const call = readFirstPluginCall(handleAction);
+      expect(call.accountId).toBe(account);
+      expect(readMediaAccess(call).readFile).toBeUndefined();
+    },
+  );
 });

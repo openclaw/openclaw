@@ -43,13 +43,13 @@ async function redactConfigCommandInput(text: string): Promise<string> {
   if (!path.ok) {
     return `${name} set ${REDACTED_SENTINEL}`;
   }
-  const [{ redactConfigObject }, { loadGatewayRuntimeConfigSchema }] = await Promise.all([
+  const [{ redactConfigObject }, { loadGatewayConfigRedactionHints }] = await Promise.all([
     import("../redact-snapshot.js"),
     import("../runtime-schema.js"),
   ]);
   const preview: Record<string, unknown> = {};
   setConfigValueAtPath(preview, path.path, command.value);
-  const redacted = redactConfigObject(preview, loadGatewayRuntimeConfigSchema().uiHints);
+  const redacted = redactConfigObject(preview, loadGatewayConfigRedactionHints());
   return `${name} set ${command.path}=${JSON.stringify(getConfigValueAtPath(redacted, path.path))}`;
 }
 

@@ -19,6 +19,7 @@ import {
   resetDiagnosticRunActivityForTest,
   startDiagnosticRunActivityTracking,
 } from "../../../logging/diagnostic-run-activity.js";
+import { resetDiagnosticSessionStateForTest } from "../../../logging/diagnostic-session-state.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -27,6 +28,7 @@ import { createHookRunnerWithRegistry } from "../../../plugins/hooks.test-fixtur
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
+import { log } from "../logger.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -42,6 +44,19 @@ function wrap(
     nextCallId: () => "call-1",
     ...context,
   });
+}
+function completedStream(
+  content: NonNullable<Parameters<typeof makeAssistantMessageFixture>[0]>["content"] = [],
+) {
+  const stream = createAssistantMessageEventStream();
+  stream.end(
+    makeAssistantMessageFixture({
+      stopReason: "stop",
+      errorMessage: undefined,
+      content,
+    }),
+  );
+  return stream;
 }
 async function drain(stream: AsyncIterable<unknown>) {
   for await (const _ of stream) {
@@ -87,9 +102,60 @@ function hooks() {
   return { started, ended };
 }
 
+async function completeSuppressedReasoning(params: {
+  stopReason?: "stop" | "error";
+  iterate?: boolean;
+  sessionId?: string | null;
+  sessionKey?: string;
+  model?: string;
+  suppressed?: boolean;
+}) {
+  const stopReason = params.stopReason ?? "stop";
+  const message = makeAssistantMessageFixture({
+    // The host must attribute the observation to its admitted model, not wire metadata.
+    provider: "wire-provider",
+    model: "wire-model",
+    stopReason,
+    content: stopReason === "stop" ? [{ type: "text", text: "Visible answer" }] : [],
+    diagnostics:
+      params.suppressed === false ? [] : [{ type: "reasoning_suppressed", timestamp: 1 }],
+  });
+  const source: StreamFn = () => {
+    const stream = createAssistantMessageEventStream();
+    if (params.iterate) {
+      stream.push(
+        stopReason === "error"
+          ? { type: "error", reason: "error", error: message }
+          : { type: "done", reason: "stop", message },
+      );
+    }
+    stream.end(message);
+    return stream;
+  };
+  const model = makeProviderModelFixture({
+    api: "ollama",
+    provider: "ollama",
+    id: params.model ?? "qwen3:4b",
+    baseUrl: "http://localhost:11434",
+  });
+  const stream = await wrap(source, {
+    ...(params.sessionId === null ? {} : { sessionId: params.sessionId ?? "session-1" }),
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    provider: model.provider,
+    model: model.id,
+  })(model, { messages: [] });
+  if (params.iterate) {
+    for await (const _ of stream) {
+      // Consume the same terminal that result() observes below.
+    }
+  }
+  expect(await stream.result()).toEqual(message);
+}
+
 describe("model diagnostic lifecycle", () => {
   beforeEach(() => {
     resetDiagnosticEventsForTest();
+    resetDiagnosticSessionStateForTest();
     resetDiagnosticRunActivityForTest();
     startDiagnosticRunActivityTracking();
     resetGlobalHookRunner();
@@ -97,6 +163,7 @@ describe("model diagnostic lifecycle", () => {
   afterEach(() => {
     flushDiagnosticsTimeline();
     resetDiagnosticEventsForTest();
+    resetDiagnosticSessionStateForTest();
     resetGlobalHookRunner();
     resetDiagnosticRunActivityForTest();
     vi.restoreAllMocks();
@@ -109,7 +176,6 @@ describe("model diagnostic lifecycle", () => {
     "iterator factory failure",
     "result rejection",
     "resolved stream setup failure",
-    "EOF without result",
   ] as const)(
     "finishes request activity once after %s without admitting cache usage",
     async (kind) => {
@@ -127,6 +193,7 @@ describe("model diagnostic lifecycle", () => {
         }
         if (kind === "iterator failure") {
           return {
+            result: async () => makeAssistantMessageFixture(),
             [Symbol.asyncIterator]() {
               return {
                 async next() {
@@ -138,6 +205,7 @@ describe("model diagnostic lifecycle", () => {
         }
         if (kind === "iterator factory failure") {
           return {
+            result: async () => makeAssistantMessageFixture(),
             [Symbol.asyncIterator]() {
               throw failure;
             },
@@ -158,7 +226,7 @@ describe("model diagnostic lifecycle", () => {
             },
           });
         }
-        return (async function* () {})();
+        throw new Error("Unexpected stream fixture");
       };
       const wrapped = wrap(source as unknown as StreamFn, context);
       let caught: unknown;
@@ -171,7 +239,7 @@ describe("model diagnostic lifecycle", () => {
       } catch (error) {
         caught = error;
       }
-      expect(caught).toBe(kind === "EOF without result" ? undefined : failure);
+      expect(caught).toBe(failure);
       expect(onFinished).toHaveBeenCalledExactlyOnceWith("call-1");
       expect(onTerminal).not.toHaveBeenCalled();
       expect(onSucceeded).not.toHaveBeenCalled();
@@ -305,12 +373,8 @@ describe("model diagnostic lifecycle", () => {
         stream: true,
         input: [{ role: "user", content: "private preparation fixture" }],
       });
-      expect(new TextDecoder().decode(request.body)).toContain("private preparation fixture");
-      const source = createAssistantMessageEventStream();
-      source.end(
-        makeAssistantMessageFixture({ stopReason: "stop", content: [], errorMessage: undefined }),
-      );
-      return source;
+      expect(await request.body.text()).toContain("private preparation fixture");
+      return completedStream();
     });
     const events = await timeline(async () => {
       const response = await wrapped(
@@ -346,17 +410,30 @@ describe("model diagnostic lifecycle", () => {
         }
       }
     }
-    const wrapped = wrap((() => stream()) as unknown as StreamFn, {
-      config: {
-        diagnostics: {
-          get flags() {
-            return readFlags();
+    const wrapped = wrap(
+      (() =>
+        Object.assign(stream(), {
+          result: async () =>
+            makeAssistantMessageFixture({
+              stopReason: "stop",
+              errorMessage: undefined,
+              content: [],
+            }),
+        })) as unknown as StreamFn,
+      {
+        config: {
+          diagnostics: {
+            get flags() {
+              return readFlags();
+            },
           },
         },
       },
-    });
+    );
     const events = await timeline(async () => {
-      await drain(await wrapped({} as never, { messages: [] }));
+      const response = await wrapped({} as never, { messages: [] });
+      await drain(response);
+      await response.result();
     });
     expect(events.map((event) => event.name)).toEqual([
       "provider.request.started",
@@ -379,13 +456,13 @@ describe("model diagnostic lifecycle", () => {
   it("records legacy HTTP metadata without inferring provider acceptance", async () => {
     const onResponse = vi.fn(async () => undefined);
     const response = { status: 200, headers: { "x-request-id": "req-1" } };
-    const wrapped = wrap(((
-      model: Parameters<StreamFn>[0],
-      _context: Parameters<StreamFn>[1],
-      options: Parameters<StreamFn>[2],
-    ) => options?.onResponse?.(response, model)) as unknown as StreamFn);
+    const wrapped = wrap(async (model, _context, options) => {
+      await options?.onResponse?.(response, model);
+      return completedStream();
+    });
     const events = await timeline(async () => {
-      await wrapped({} as never, {} as never, { onResponse });
+      const stream = await wrapped({} as never, {} as never, { onResponse });
+      await stream.result();
     });
     expect(onResponse).toHaveBeenCalledWith(response, {});
     expect(events.filter((event) => event.type === "provider.request")).toMatchObject([
@@ -394,13 +471,13 @@ describe("model diagnostic lifecycle", () => {
   });
 
   it("records SDK acceptance without HTTP metadata", async () => {
-    const wrapped = wrap(((
-      _model: Parameters<StreamFn>[0],
-      _context: Parameters<StreamFn>[1],
-      options: Parameters<StreamFn>[2],
-    ) => notifyProviderStreamOpened({ options, cancelStream: vi.fn() })) as unknown as StreamFn);
+    const wrapped = wrap((_model, _context, options) => {
+      void notifyProviderStreamOpened({ options, cancelStream: vi.fn() });
+      return completedStream();
+    });
     const events = await timeline(async () => {
-      await wrapped({} as never, {} as never, {});
+      const stream = await wrapped({} as never, {} as never, {});
+      await stream.result();
     });
     expect(events.filter((event) => event.type === "provider.request")).toMatchObject([
       {
@@ -434,12 +511,13 @@ describe("model diagnostic lifecycle", () => {
       registerDiagnosticTracePropagationBridge({
         resolveTraceContext: () => (resolved ? trace : undefined),
       });
-      const source = vi.fn<StreamFn>();
+      const source = vi.fn<StreamFn>().mockImplementation(() => completedStream());
       const caller = {
         headers: { "X-Custom": "kept", TraceParent: "untrusted" },
         sessionId: "provider-session",
       };
-      await wrap(source)({} as never, {} as never, caller);
+      const response = await wrap(source)({} as never, {} as never, caller);
+      await response.result();
       expect(source.mock.calls[0]?.[2]).toMatchObject({
         sessionId: "provider-session",
         requestId: "call-1",
@@ -469,12 +547,18 @@ describe("model diagnostic lifecycle", () => {
     };
     const events = await collect(async () => {
       await drain(
-        await wrap((() => stream()) as unknown as StreamFn, {
-          sessionKey: "session-key",
-          sessionId: "session-id",
-          transport: "http",
-          ...budget,
-        })({} as never, {} as never),
+        await wrap(
+          (() =>
+            Object.assign(stream(), {
+              result: async () => makeAssistantMessageFixture({ errorMessage: secret }),
+            })) as unknown as StreamFn,
+          {
+            sessionKey: "session-key",
+            sessionId: "session-id",
+            transport: "http",
+            ...budget,
+          },
+        )({} as never, {} as never),
       );
     });
     expect(events.map((event) => event.type)).toEqual(["model.call.started", "model.call.error"]);
@@ -496,5 +580,54 @@ describe("model diagnostic lifecycle", () => {
     expect(Object.isFrozen(started.mock.calls[0]?.[1])).toBe(true);
     expect(Object.isFrozen(started.mock.calls[0]?.[1].trace)).toBe(true);
     expect(JSON.stringify([started.mock.calls, ended.mock.calls])).not.toContain(secret);
+  });
+});
+
+describe("suppressed reasoning diagnostics", () => {
+  beforeEach(() => resetDiagnosticSessionStateForTest());
+  afterEach(() => {
+    resetDiagnosticSessionStateForTest();
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    { stopReason: "stop" as const, iterate: false },
+    { stopReason: "error" as const, iterate: true },
+  ])("warns once per model/session for suppressed reasoning ($stopReason)", async (mode) => {
+    const warning = vi.spyOn(log, "warn").mockImplementation(() => {});
+    await completeSuppressedReasoning({ ...mode, suppressed: false });
+    expect(warning).not.toHaveBeenCalled();
+    await completeSuppressedReasoning({
+      ...mode,
+      sessionId: null,
+      sessionKey: "agent:main:reasoning-fixture",
+    });
+    await completeSuppressedReasoning({ ...mode, sessionKey: "agent:main:reasoning-fixture" });
+    expect(warning).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining(
+        '"ollama/qwen3:4b" emitted reasoning while configured reasoning: false',
+      ),
+    );
+    expect(warning.mock.calls[0]?.[0]).toContain("Set reasoning: true");
+    expect(warning.mock.calls[0]?.[0]).toContain("non-thinking model");
+    expect(warning.mock.calls[0]?.[0]).not.toContain("wire-model");
+
+    await completeSuppressedReasoning({ ...mode, model: "qwen3:8b" });
+    await completeSuppressedReasoning({
+      ...mode,
+      sessionId: "session-2",
+      sessionKey: "agent:main:reasoning-fixture",
+    });
+    expect(warning).toHaveBeenCalledTimes(3);
+  });
+
+  it("bounds per-session observations without forgetting already warned models", async () => {
+    const warning = vi.spyOn(log, "warn").mockImplementation(() => {});
+    for (let index = 0; index < 20; index += 1) {
+      await completeSuppressedReasoning({ model: `fixture-${index}` });
+    }
+    expect(warning).toHaveBeenCalledTimes(16);
+    await completeSuppressedReasoning({ model: "fixture-0" });
+    expect(warning).toHaveBeenCalledTimes(16);
   });
 });

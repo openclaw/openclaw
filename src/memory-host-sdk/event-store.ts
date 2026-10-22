@@ -285,6 +285,7 @@ export async function registerMemoryHostEvent(params: {
 export async function listStoredMemoryHostEvents(params: {
   workspaceDir: string;
   limit?: number;
+  type?: MemoryHostEventRecord["type"];
   env?: NodeJS.ProcessEnv;
 }): Promise<PersistedMemoryHostEvent[]> {
   const limit = Number.isFinite(params.limit)
@@ -304,6 +305,7 @@ export async function listStoredMemoryHostEvents(params: {
     keyEndExclusive: `${workspacePrefix}:event;`,
     limit,
     order: "desc",
+    ...(params.type ? { valueFilter: { path: "$.event.type", equals: params.type } } : {}),
     ...(params.env ? { env: params.env } : {}),
   };
   const pluginState = await import("../plugin-state/plugin-state-store.js");

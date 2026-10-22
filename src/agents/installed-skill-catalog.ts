@@ -183,8 +183,6 @@ export async function searchInstalledSkills(
         );
         index = await build;
       }
-      assertCatalogCurrent(skills, signal);
-      assertBodyReadable(canReadInstructions);
     }
   }
   // Tool-intent expansions (web, cron, etc.) do not belong to skill matching.
@@ -197,7 +195,6 @@ export async function searchInstalledSkills(
     scores.set(skills[value]!, score * 2);
   }
   if (includeBodies && index) {
-    assertBodyReadable(canReadInstructions);
     for (const { value, score } of scoreLexical(index.bodies, terms)) {
       const skill = index.skills[value]!;
       scores.set(skill, (scores.get(skill) ?? 0) + score);

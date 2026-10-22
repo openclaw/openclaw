@@ -21,6 +21,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { createBuildSmokeEnv } from "./lib/build-smoke-env.mts";
 import { reportLimitViolations } from "./lib/check-limits.mts";
 import { parsePositiveNumber } from "./lib/numeric-options.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
@@ -322,11 +323,7 @@ function buildBenchEnv(homeDir = tmpHome) {
     throw new Error("temporary home is not initialized");
   }
   const env = {
-    HOME: homeDir,
-    USERPROFILE: homeDir,
-    XDG_CONFIG_HOME: path.join(homeDir, ".config"),
-    XDG_DATA_HOME: path.join(homeDir, ".local", "share"),
-    XDG_CACHE_HOME: path.join(homeDir, ".cache"),
+    ...createBuildSmokeEnv(homeDir, {}),
     PATH: process.env.PATH ?? "",
     TMPDIR: tmpDir,
     TEMP: tmpDir,

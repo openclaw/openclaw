@@ -28,13 +28,9 @@ export function writeStoredComposerSession(
     delete store.sessions[storeSessionKey];
     return;
   }
+  const { queue: _queue, updatedAt: _updatedAt, ...draft } = session ?? {};
   store.sessions[storeSessionKey] = {
-    ...(session?.awaitingDefaults ? { awaitingDefaults: true } : {}),
-    ...(session?.draft ? { draft: session.draft } : {}),
-    ...(session?.draftMentions ? { draftMentions: session.draftMentions } : {}),
-    ...(session?.goalMode ? { goalMode: session.goalMode } : {}),
-    ...(session?.replyTarget ? { replyTarget: session.replyTarget } : {}),
-    ...(session?.draftRevision !== undefined ? { draftRevision: session.draftRevision } : {}),
+    ...draft,
     ...(queue.length ? { queue } : {}),
     updatedAt: Date.now(),
   };

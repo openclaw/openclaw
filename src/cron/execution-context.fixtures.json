@@ -1,0 +1,1730 @@
+[
+  {
+    "job": {
+      "id": "fixture-job-1",
+      "agentId": "main",
+      "name": "fixture 1",
+      "enabled": true,
+      "createdAtMs": 0,
+      "updatedAtMs": 0,
+      "schedule": {
+        "kind": "every",
+        "everyMs": 60000
+      },
+      "sessionTarget": "isolated",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "fixture",
+        "toolsAllow": [
+          "*"
+        ]
+      },
+      "delivery": {
+        "mode": "none"
+      },
+      "state": {},
+      "scheduledToolPolicy": {
+        "version": 1,
+        "mode": "trusted"
+      }
+    },
+    "expected": {
+      "status": "ready",
+      "principal": "operator",
+      "placement": "detached",
+      "labels": {
+        "admissionSource": "equal",
+        "ownerEmbedded": "equal",
+        "automations": "equal",
+        "board": "equal",
+        "eventTarget": "equal",
+        "memory": "equal",
+        "workspace": "equal",
+        "sandbox": "equal"
+      }
+    }
+  },
+  {
+    "job": {
+      "id": "fixture-job-2",
+      "agentId": "main",
+      "name": "fixture 2",
+      "enabled": false,
+      "createdAtMs": 0,
+      "updatedAtMs": 0,
+      "schedule": {
+        "kind": "every",
+        "everyMs": 60000
+      },
+      "sessionTarget": "isolated",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "fixture",
+        "toolsAllow": [
+          "*"
+        ]
+      },
+      "delivery": {
+        "mode": "none"
+      },
+      "state": {},
+      "scheduledToolPolicy": {
+        "version": 1,
+        "mode": "trusted"
+      }
+    },
+    "expected": {
+      "status": "ready",
+      "principal": "operator",
+      "placement": "detached",
+      "labels": {
+        "admissionSource": "equal",
+        "ownerEmbedded": "equal",
+        "automations": "equal",
+        "board": "equal",
+        "eventTarget": "equal",
+        "memory": "equal",
+        "workspace": "equal",
+        "sandbox": "equal"
+      }
+    }
+  },
+  {
+    "job": {
+      "id": "fixture-job-3",
+      "agentId": "main",
+      "name": "fixture 3",
+      "enabled": false,
+      "createdAtMs": 0,
+      "updatedAtMs": 0,
+      "schedule": {
+        "kind": "every",
+        "everyMs": 60000
+      },
+      "sessionTarget": "isolated",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "fixture",
+        "toolsAllow": [
+          "read",
+          "automations"
+        ],
+        "toolsAllowIsDefault": true
+      },
+      "delivery": {
+        "mode": "none"
+      },
+      "state": {},
+      "owner": {
+        "agentId": "main",
+        "sessionKey": "agent:main:dashboard:session-1",
+        "accountId": "default"
+      },
+      "scheduledToolPolicy": {
+        "version": 1,
+        "mode": "account",
+        "ownerSessionKey": "agent:main:dashboard:session-1",
+        "ownerAccountId": "default"
+      },
+      "createdActor": {
+        "type": "human",
+        "source": "profile",
+        "id": "profile-1"
+      },
+      "toolsAllowProvenance": {
+        "version": 1,
+        "source": "final-executable-surface",
+        "callerOrigin": {
+          "kind": "external",
+          "channel": "webchat"
+        }
+      }
+    },
+    "expected": {
+      "status": "ready",
+      "principal": "unbound-parent",
+      "placement": "detached",
+      "labels": {
+        "admissionSource": "equal",
+        "ownerEmbedded": "equal",
+        "automations": "equal",
+        "board": "equal",
+        "eventTarget": "equal",
+        "memory": "equal",
+        "workspace": "equal",
+        "sandbox": "equal"
+      }
+    }
+  },
+  {
+    "job": {
+      "id": "fixture-job-4",
+      "agentId": "main",
+      "name": "fixture 4",
+      "enabled": false,
+      "createdAtMs": 0,
+      "updatedAtMs": 0,
+      "schedule": {
+        "kind": "every",
+        "everyMs": 60000
+      },
+      "sessionTarget": "session:agent:main:dashboard:session-1",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "fixture",
+        "toolsAllow": [
+          "read",
+          "automations"
+        ],
+        "toolsAllowIsDefault": true
+      },
+      "delivery": {
+        "mode": "none"
+      },
+      "state": {},
+      "owner": {
+        "agentId": "main",
+        "sessionKey": "agent:main:dashboard:session-2",
+        "accountId": "default"
+      },
+      "scheduledToolPolicy": {
+        "version": 1,
+        "mode": "account",
+        "ownerSessionKey": "agent:main:dashboard:session-2",
+        "ownerAccountId": "default"
+      },
+      "createdActor": {
+        "type": "human",
+        "source": "profile",
+        "id": "profile-1"
+      },
+      "toolsAllowProvenance": {
+        "version": 1,
+        "source": "final-executable-surface",
+        "callerOrigin": {
+          "kind": "external",
+          "channel": "webchat"
+        }
+      }
+    },
+    "expected": {
+      "status": "ready",
+      "principal": "unbound-parent",
+      "placement": "in-session",
+      "labels": {
+        "admissionSource": "equal",
+        "ownerEmbedded": "equal",
+        "automations": "equal",
+        "board": "equal",
+        "eventTarget": "equal",
+        "memory": "equal",
+        "workspace": "equal",
+        "sandbox": "equal"
+      }
+    }
+  },
+  {
+    "job": {
+      "id": "fixture-job-5",
+      "agentId": "main",
+      "name": "fixture 5",
+      "enabled": false,
+      "createdAtMs": 0,
+      "updatedAtMs": 0,
+      "schedule": {
+        "kind": "every",
+        "everyMs": 60000
+      },
+      "sessionTarget": "isolated",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "fixture",
+        "toolsAllow": [
+          "read",
+          "automations"
+        ],
+        "toolsAllowIsDefault": true
+      },
+      "delivery": {
+        "mode": "none"
+      },
+      "state": {},
+      "owner": {
+        "agentId": "main",
+        "sessionKey": "agent:main:dashboard:session-1",
+        "accountId": "default"
+      },
+      "scheduledToolPolicy": {
+        "version": 1,
+        "mode": "account",
+        "ownerSessionKey": "agent:main:dashboard:session-1",
+        "ownerAccountId": "default"
+      },
+      "toolsAllowProvenance": {
+        "version": 1,
+        "source": "final-executable-surface",
+        "callerOrigin": {
+          "kind": "external",
+          "channel": "webchat"
+        }
+      }
+    },
+    "expected": {
+      "status": "ready",
+      "principal": "unbound-parent",
+      "placement": "detached",
+      "labels": {
+        "admissionSource": "equal",
+        "ownerEmbedded": "equal",
+        "automations": "equal",
+        "board": "equal",
+        "eventTarget": "equal",
+        "memory": "equal",
+        "workspace": "equal",
+        "sandbox": "equal"
+      }
+    }
+  },
+  {
+    "job": {
+      "id": "fixture-job-6",
+      "agentId": "main",
+      "name": "fixture 6",
+      "enabled": false,
+      "createdAtMs": 0,
+      "updatedAtMs": 0,
+      "schedule": {
+        "kind": "every",
+        "everyMs": 60000
+      },
+      "sessionTarget": "isolated",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "fixture",
+        "toolsAllow": [
+          "read",
+          "automations"
+        ]
+      },
+      "delivery": {
+        "mode": "none"
+      },
+      "state": {},
+      "owner": {
+        "agentId": "main",
+        "sessionKey": "agent:main:dashboard:session-1",
+        "accountId": "default"
+      },
+      "scheduledToolPolicy": {
+        "version": 1,
+        "mode": "account",
+        "ownerSessionKey": "agent:main:dashboard:session-1",
+        "ownerAccountId": "default"
+      },
+      "createdActor": {
+        "type": "human",
+        "source": "profile",
+        "id": "profile-1"
+      }
+    },
+    "expected": {
+      "status": "ready",
+      "principal": "unbound-parent",
+      "placement": "detached",
+      "labels": {
+        "admissionSource": "equal",
+        "ownerEmbedded": "equal",
+        "automations": "equal",
+        "board": "equal",
+        "eventTarget": "equal",
+        "memory": "equal",
+        "workspace": "equal",
+        "sandbox": "equal"
+      }
+    }
+  },
+  {
+    "job": {
+      "id": "fixture-job-7",
+      "agentId": "main",
+      "name": "fixture 7",
+      "enabled": false,
+      "createdAtMs": 0,
+      "updatedAtMs": 0,
+      "schedule": {
+        "kind": "every",
+        "everyMs": 60000
+      },
+      "sessionTarget": "isolated",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "fixture",
+        "toolsAllow": [
+          "read"
+        ]
+      },
+      "delivery": {
+        "mode": "none"
+      },
+      "state": {},
+      "scheduledToolPolicy": {
+        "version": 1,
+        "mode": "trusted"
+      }
+    },
+    "expected": {
+      "status": "ready",
+      "principal": "operator",
+      "placement": "detached",
+      "labels": {
+        "admissionSource": "equal",
+        "ownerEmbedded": "equal",
+        "automations": "equal",
+        "board": "equal",
+        "eventTarget": "equal",
+        "memory": "equal",
+        "workspace": "equal",
+        "sandbox": "equal"
+      }
+    }
+  },
+  {
+    "job": {
+      "id": "fixture-job-8",
+      "agentId": "main",
+      "name": "fixture 8",
+      "enabled": true,
+      "createdAtMs": 0,
+      "updatedAtMs": 0,
+      "schedule": {
+        "kind": "every",
+        "everyMs": 60000
+      },
+      "sessionTarget": "isolated",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "fixture",
+        "toolsAllow": [
+          "read",
+          "automations"
+        ],
+        "toolsAllowIsDefault": true
+      },
+      "delivery": {
+        "mode": "none"
+      },
+      "state": {},
+      "owner": {
+        "agentId": "main",
+        "sessionKey": "agent:main:dashboard:session-1",
+        "accountId": "default"
+      },
+      "scheduledToolPolicy": {
+        "version": 1,
+        "mode": "account",
+        "ownerSessionKey": "agent:main:dashboard:session-1",
+        "ownerAccountId": "default"
+      },
+      "createdActor": {
+        "type": "human",
+        "source": "profile",
+        "id": "profile-1"
+      },
+      "inferenceBinding": {
+        "version": 1,
+        "provider": "openai",
+        "profileId": "provider:profile",
+        "authorizationId": "authorization",
+        "authRequirement": "api-key",
+        "source": "auto"
+      }
+    },
+    "expected": {
+      "status": "ready",
+      "principal": "unbound-parent",
+      "placement": "detached",
+      "labels": {
+        "admissionSource": "equal",
+        "ownerEmbedded": "equal",
+        "automations": "equal",
+        "board": "equal",
+        "eventTarget": "equal",
+        "memory": "equal",
+        "workspace": "equal",
+        "sandbox": "equal"
+      }
+    }
+  },
+  {
+    "job": {
+      "id": "fixture-job-9",
+      "agentId": "main",
+      "name": "fixture 9",
+      "enabled": false,
+      "createdAtMs": 0,
+      "updatedAtMs": 0,
+      "schedule": {
+        "kind": "every",
+        "everyMs": 60000
+      },
+      "sessionTarget": "isolated",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "fixture",
+        "toolsAllow": [
+          "*"
+        ]
+      },
+      "delivery": {
+        "mode": "none"
+      },
+      "state": {},
+      "scheduledToolPolicy": {
+        "version": 1,
+        "mode": "trusted"
+      },
+      "inferenceBinding": {
+        "version": 1,
+        "provider": "openai",
+        "profileId": "provider:profile",
+        "authorizationId": "authorization",
+        "authRequirement": "api-key",
+        "source": "auto"
+      }
+    },
+    "expected": {
+      "status": "ready",
+      "principal": "operator",
+      "placement": "detached",
+      "labels": {
+        "admissionSource": "equal",
+        "ownerEmbedded": "equal",
+        "automations": "equal",
+        "board": "equal",
+        "eventTarget": "equal",
+        "memory": "equal",
+        "workspace": "equal",
+        "sandbox": "equal"
+      }
+    }
+  },
+  {
+    "job": {
+      "id": "fixture-job-10",
+      "agentId": "main",
+      "name": "fixture 10",
+      "enabled": false,
+      "createdAtMs": 0,
+      "updatedAtMs": 0,
+      "schedule": {
+        "kind": "every",
+        "everyMs": 60000
+      },
+      "sessionTarget": "session:agent:main:dashboard:session-1",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "fixture",
+        "toolsAllow": [
+          "read",
+          "automations"
+        ]
+      },
+      "delivery": {
+        "mode": "none"
+      },
+      "state": {},
+      "scheduledToolPolicy": {
+        "version": 1,
+        "mode": "trusted"
+      }
+    },
+    "expected": {
+      "status": "ready",
+      "principal": "operator",
+      "placement": "in-session",
+      "labels": {
+        "admissionSource": "equal",
+        "ownerEmbedded": "equal",
+        "automations": "equal",
+        "board": "equal",
+        "eventTarget": "equal",
+        "memory": "equal",
+        "workspace": "equal",
+        "sandbox": "equal"
+      }
+    }
+  },
+  {
+    "job": {
+      "id": "fixture-job-11",
+      "agentId": "main",
+      "name": "fixture 11",
+      "enabled": false,
+      "createdAtMs": 0,
+      "updatedAtMs": 0,
+      "schedule": {
+        "kind": "every",
+        "everyMs": 60000
+      },
+      "sessionTarget": "session:agent:main:dashboard:session-1",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "fixture",
+        "toolsAllow": [
+          "read"
+        ]
+      },
+      "delivery": {
+        "mode": "none"
+      },
+      "state": {},
+      "scheduledToolPolicy": {
+        "version": 1,
+        "mode": "trusted"
+      }
+    },
+    "expected": {
+      "status": "ready",
+      "principal": "operator",
+      "placement": "in-session",
+      "labels": {
+        "admissionSource": "equal",
+        "ownerEmbedded": "equal",
+        "automations": "equal",
+        "board": "equal",
+        "eventTarget": "equal",
+        "memory": "equal",
+        "workspace": "equal",
+        "sandbox": "equal"
+      }
+    }
+  },
+  {
+    "job": {
+      "id": "fixture-job-12",
+      "agentId": "main",
+      "name": "fixture 12",
+      "enabled": false,
+      "createdAtMs": 0,
+      "updatedAtMs": 0,
+      "schedule": {
+        "kind": "every",
+        "everyMs": 60000
+      },
+      "sessionTarget": "session:agent:main:dashboard:session-1",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "fixture",
+        "toolsAllow": [
+          "*"
+        ]
+      },
+      "delivery": {
+        "mode": "none"
+      },
+      "state": {},
+      "scheduledToolPolicy": {
+        "version": 1,
+        "mode": "trusted"
+      }
+    },
+    "expected": {
+      "status": "ready",
+      "principal": "operator",
+      "placement": "in-session",
+      "labels": {
+        "admissionSource": "equal",
+        "ownerEmbedded": "equal",
+        "automations": "equal",
+        "board": "equal",
+        "eventTarget": "equal",
+        "memory": "equal",
+        "workspace": "equal",
+        "sandbox": "equal"
+      }
+    }
+  },
+  {
+    "job": {
+      "id": "fixture-job-13",
+      "agentId": "main",
+      "name": "fixture 13",
+      "enabled": false,
+      "createdAtMs": 0,
+      "updatedAtMs": 0,
+      "schedule": {
+        "kind": "every",
+        "everyMs": 60000
+      },
+      "sessionTarget": "session:agent:main:dashboard:session-1",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "fixture",
+        "toolsAllow": [
+          "*"
+        ]
+      },
+      "delivery": {
+        "mode": "none"
+      },
+      "state": {},
+      "scheduledToolPolicy": {
+        "version": 1,
+        "mode": "trusted"
+      },
+      "inferenceBinding": {
+        "version": 1,
+        "provider": "openai",
+        "profileId": "provider:profile",
+        "authorizationId": "authorization",
+        "authRequirement": "api-key",
+        "source": "auto"
+      }
+    },
+    "expected": {
+      "status": "ready",
+      "principal": "operator",
+      "placement": "in-session",
+      "labels": {
+        "admissionSource": "equal",
+        "ownerEmbedded": "equal",
+        "automations": "equal",
+        "board": "equal",
+        "eventTarget": "equal",
+        "memory": "equal",
+        "workspace": "equal",
+        "sandbox": "equal"
+      }
+    }
+  },
+  {
+    "job": {
+      "id": "fixture-job-14",
+      "agentId": "main",
+      "name": "fixture 14",
+      "enabled": false,
+      "createdAtMs": 0,
+      "updatedAtMs": 0,
+      "schedule": {
+        "kind": "every",
+        "everyMs": 60000
+      },
+      "sessionTarget": "session:agent:main:dashboard:session-1",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "fixture",
+        "toolsAllow": [
+          "read",
+          "automations"
+        ],
+        "toolsAllowIsDefault": true
+      },
+      "delivery": {
+        "mode": "none"
+      },
+      "state": {},
+      "owner": {
+        "agentId": "main",
+        "sessionKey": "agent:main:dashboard:session-1",
+        "accountId": "default"
+      },
+      "scheduledToolPolicy": {
+        "version": 1,
+        "mode": "account",
+        "ownerSessionKey": "agent:main:dashboard:session-1",
+        "ownerAccountId": "default"
+      },
+      "createdActor": {
+        "type": "human",
+        "source": "profile",
+        "id": "profile-1"
+      },
+      "toolsAllowProvenance": {
+        "version": 1,
+        "source": "final-executable-surface",
+        "callerOrigin": {
+          "kind": "external",
+          "channel": "webchat"
+        }
+      },
+      "inferenceBinding": {
+        "version": 1,
+        "provider": "openai",
+        "profileId": "provider:profile",
+        "authorizationId": "authorization",
+        "authRequirement": "api-key",
+        "source": "auto"
+      }
+    },
+    "expected": {
+      "status": "ready",
+      "principal": "unbound-parent",
+      "placement": "in-session",
+      "labels": {
+        "admissionSource": "equal",
+        "ownerEmbedded": "equal",
+        "automations": "equal",
+        "board": "equal",
+        "eventTarget": "equal",
+        "memory": "equal",
+        "workspace": "equal",
+        "sandbox": "equal"
+      }
+    }
+  },
+  {
+    "job": {
+      "id": "fixture-job-15",
+      "agentId": "main",
+      "name": "fixture 15",
+      "enabled": false,
+      "createdAtMs": 0,
+      "updatedAtMs": 0,
+      "schedule": {
+        "kind": "every",
+        "everyMs": 60000
+      },
+      "sessionTarget": "isolated",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "command",
+        "argv": [
+          "true"
+        ]
+      },
+      "delivery": {
+        "mode": "none"
+      },
+      "state": {}
+    },
+    "expected": {
+      "status": "ready",
+      "principal": "operator",
+      "placement": "detached",
+      "labels": {
+        "admissionSource": "equal",
+        "ownerEmbedded": "equal",
+        "automations": "equal",
+        "board": "equal",
+        "eventTarget": "equal",
+        "memory": "equal",
+        "workspace": "equal",
+        "sandbox": "equal"
+      }
+    }
+  },
+  {
+    "job": {
+      "id": "fixture-job-16",
+      "agentId": "main",
+      "name": "fixture 16",
+      "enabled": false,
+      "createdAtMs": 0,
+      "updatedAtMs": 0,
+      "schedule": {
+        "kind": "every",
+        "everyMs": 60000
+      },
+      "sessionTarget": "current",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "fixture",
+        "toolsAllow": [
+          "*"
+        ]
+      },
+      "delivery": {
+        "mode": "none"
+      },
+      "state": {},
+      "scheduledToolPolicy": {
+        "version": 1,
+        "mode": "trusted"
+      }
+    },
+    "expected": {
+      "status": "ready",
+      "principal": "operator",
+      "placement": "detached",
+      "labels": {
+        "admissionSource": "equal",
+        "ownerEmbedded": "equal",
+        "automations": "equal",
+        "board": "equal",
+        "eventTarget": "equal",
+        "memory": "equal",
+        "workspace": "equal",
+        "sandbox": "equal"
+      }
+    }
+  },
+  {
+    "job": {
+      "id": "fixture-job-17",
+      "agentId": "main",
+      "name": "fixture 17",
+      "enabled": false,
+      "createdAtMs": 0,
+      "updatedAtMs": 0,
+      "schedule": {
+        "kind": "every",
+        "everyMs": 60000
+      },
+      "sessionTarget": "current",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "fixture",
+        "toolsAllow": [
+          "read",
+          "automations"
+        ],
+        "toolsAllowIsDefault": true
+      },
+      "delivery": {
+        "mode": "none"
+      },
+      "state": {},
+      "owner": {
+        "agentId": "main",
+        "sessionKey": "agent:main:dashboard:session-1",
+        "accountId": "default"
+      },
+      "scheduledToolPolicy": {
+        "version": 1,
+        "mode": "account",
+        "ownerSessionKey": "agent:main:dashboard:session-1",
+        "ownerAccountId": "default"
+      },
+      "createdActor": {
+        "type": "human",
+        "source": "profile",
+        "id": "profile-1"
+      },
+      "toolsAllowProvenance": {
+        "version": 1,
+        "source": "final-executable-surface",
+        "callerOrigin": {
+          "kind": "unknown"
+        }
+      }
+    },
+    "expected": {
+      "status": "ready",
+      "principal": "unbound-parent",
+      "placement": "detached",
+      "labels": {
+        "admissionSource": "equal",
+        "ownerEmbedded": "equal",
+        "automations": "equal",
+        "board": "equal",
+        "eventTarget": "equal",
+        "memory": "equal",
+        "workspace": "equal",
+        "sandbox": "equal"
+      }
+    }
+  },
+  {
+    "job": {
+      "id": "fixture-job-18",
+      "agentId": "main",
+      "name": "fixture 18",
+      "enabled": false,
+      "createdAtMs": 0,
+      "updatedAtMs": 0,
+      "schedule": {
+        "kind": "every",
+        "everyMs": 60000
+      },
+      "sessionTarget": "current",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "fixture",
+        "toolsAllow": [
+          "read",
+          "automations"
+        ],
+        "toolsAllowIsDefault": true
+      },
+      "delivery": {
+        "mode": "none"
+      },
+      "state": {},
+      "owner": {
+        "agentId": "main",
+        "sessionKey": "agent:main:dashboard:session-1",
+        "accountId": "default"
+      },
+      "scheduledToolPolicy": {
+        "version": 1,
+        "mode": "account",
+        "ownerSessionKey": "agent:main:dashboard:session-1",
+        "ownerAccountId": "default"
+      },
+      "createdActor": {
+        "type": "human",
+        "source": "profile",
+        "id": "profile-1"
+      },
+      "toolsAllowProvenance": {
+        "version": 1,
+        "source": "final-executable-surface",
+        "callerOrigin": {
+          "kind": "external",
+          "channel": "webchat"
+        }
+      }
+    },
+    "expected": {
+      "status": "ready",
+      "principal": "unbound-parent",
+      "placement": "detached",
+      "labels": {
+        "admissionSource": "equal",
+        "ownerEmbedded": "equal",
+        "automations": "equal",
+        "board": "equal",
+        "eventTarget": "equal",
+        "memory": "equal",
+        "workspace": "equal",
+        "sandbox": "equal"
+      }
+    }
+  },
+  {
+    "job": {
+      "id": "fixture-job-19",
+      "agentId": "main",
+      "name": "fixture 19",
+      "enabled": false,
+      "createdAtMs": 0,
+      "updatedAtMs": 0,
+      "schedule": {
+        "kind": "every",
+        "everyMs": 60000
+      },
+      "sessionTarget": "current",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "fixture",
+        "toolsAllow": [
+          "read"
+        ]
+      },
+      "delivery": {
+        "mode": "none"
+      },
+      "state": {},
+      "owner": {
+        "agentId": "main",
+        "sessionKey": "agent:main:dashboard:session-1",
+        "accountId": "default"
+      },
+      "scheduledToolPolicy": {
+        "version": 1,
+        "mode": "account",
+        "ownerSessionKey": "agent:main:dashboard:session-1",
+        "ownerAccountId": "default"
+      },
+      "createdActor": {
+        "type": "human",
+        "source": "profile",
+        "id": "profile-1"
+      },
+      "toolsAllowProvenance": {
+        "version": 1,
+        "source": "final-executable-surface",
+        "callerOrigin": {
+          "kind": "external",
+          "channel": "webchat"
+        }
+      },
+      "inferenceBinding": {
+        "version": 1,
+        "provider": "openai",
+        "profileId": "provider:profile",
+        "authorizationId": "authorization",
+        "authRequirement": "api-key",
+        "source": "auto"
+      }
+    },
+    "expected": {
+      "status": "ready",
+      "principal": "unbound-parent",
+      "placement": "detached",
+      "labels": {
+        "admissionSource": "equal",
+        "ownerEmbedded": "equal",
+        "automations": "equal",
+        "board": "equal",
+        "eventTarget": "equal",
+        "memory": "equal",
+        "workspace": "equal",
+        "sandbox": "equal"
+      }
+    }
+  },
+  {
+    "job": {
+      "id": "fixture-job-20",
+      "agentId": "main",
+      "name": "fixture 20",
+      "enabled": false,
+      "createdAtMs": 0,
+      "updatedAtMs": 0,
+      "schedule": {
+        "kind": "every",
+        "everyMs": 60000
+      },
+      "sessionTarget": "current",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "fixture",
+        "toolsAllow": [
+          "*"
+        ]
+      },
+      "delivery": {
+        "mode": "none"
+      },
+      "state": {},
+      "owner": {
+        "agentId": "main",
+        "sessionKey": "agent:main:dashboard:session-1",
+        "accountId": "default"
+      },
+      "scheduledToolPolicy": {
+        "version": 1,
+        "mode": "account",
+        "ownerSessionKey": "agent:main:dashboard:session-1",
+        "ownerAccountId": "default"
+      },
+      "createdActor": {
+        "type": "human",
+        "source": "profile",
+        "id": "profile-1"
+      },
+      "toolsAllowProvenance": {
+        "version": 1,
+        "source": "final-executable-surface",
+        "callerOrigin": {
+          "kind": "external",
+          "channel": "webchat"
+        }
+      },
+      "inferenceBinding": {
+        "version": 1,
+        "provider": "openai",
+        "profileId": "provider:profile",
+        "authorizationId": "authorization",
+        "authRequirement": "api-key",
+        "source": "auto"
+      }
+    },
+    "expected": {
+      "status": "ready",
+      "principal": "unbound-parent",
+      "placement": "detached",
+      "labels": {
+        "admissionSource": "equal",
+        "ownerEmbedded": "equal",
+        "automations": "equal",
+        "board": "equal",
+        "eventTarget": "equal",
+        "memory": "equal",
+        "workspace": "equal",
+        "sandbox": "equal"
+      }
+    }
+  },
+  {
+    "job": {
+      "id": "fixture-job-21",
+      "agentId": "main",
+      "name": "fixture 21",
+      "enabled": false,
+      "createdAtMs": 0,
+      "updatedAtMs": 0,
+      "schedule": {
+        "kind": "every",
+        "everyMs": 60000
+      },
+      "sessionTarget": "current",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "fixture",
+        "toolsAllow": [
+          "*"
+        ]
+      },
+      "delivery": {
+        "mode": "none"
+      },
+      "state": {},
+      "owner": {
+        "agentId": "main",
+        "sessionKey": "agent:main:dashboard:session-1",
+        "accountId": "default"
+      },
+      "scheduledToolPolicy": {
+        "version": 1,
+        "mode": "account",
+        "ownerSessionKey": "agent:main:dashboard:session-1",
+        "ownerAccountId": "default"
+      },
+      "createdActor": {
+        "type": "human",
+        "source": "profile",
+        "id": "profile-1"
+      },
+      "toolsAllowProvenance": {
+        "version": 1,
+        "source": "final-executable-surface",
+        "callerOrigin": {
+          "kind": "unknown"
+        }
+      },
+      "inferenceBinding": {
+        "version": 1,
+        "provider": "openai",
+        "profileId": "provider:profile",
+        "authorizationId": "authorization",
+        "authRequirement": "api-key",
+        "source": "auto"
+      }
+    },
+    "expected": {
+      "status": "ready",
+      "principal": "unbound-parent",
+      "placement": "detached",
+      "labels": {
+        "admissionSource": "equal",
+        "ownerEmbedded": "equal",
+        "automations": "equal",
+        "board": "equal",
+        "eventTarget": "equal",
+        "memory": "equal",
+        "workspace": "equal",
+        "sandbox": "equal"
+      }
+    }
+  },
+  {
+    "job": {
+      "id": "fixture-job-22",
+      "agentId": "main",
+      "name": "fixture 22",
+      "enabled": false,
+      "createdAtMs": 0,
+      "updatedAtMs": 0,
+      "schedule": {
+        "kind": "every",
+        "everyMs": 60000
+      },
+      "sessionTarget": "current",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "fixture",
+        "toolsAllow": [
+          "*"
+        ]
+      },
+      "delivery": {
+        "mode": "none"
+      },
+      "state": {},
+      "owner": {
+        "agentId": "main",
+        "sessionKey": "agent:main:dashboard:session-1",
+        "accountId": "default"
+      },
+      "scheduledToolPolicy": {
+        "version": 1,
+        "mode": "account",
+        "ownerSessionKey": "agent:main:dashboard:session-1",
+        "ownerAccountId": "default"
+      },
+      "createdActor": {
+        "type": "human",
+        "source": "profile",
+        "id": "profile-1"
+      },
+      "toolsAllowProvenance": {
+        "version": 1,
+        "source": "final-executable-surface",
+        "callerOrigin": {
+          "kind": "external",
+          "channel": "webchat"
+        }
+      }
+    },
+    "expected": {
+      "status": "ready",
+      "principal": "unbound-parent",
+      "placement": "detached",
+      "labels": {
+        "admissionSource": "equal",
+        "ownerEmbedded": "equal",
+        "automations": "equal",
+        "board": "equal",
+        "eventTarget": "equal",
+        "memory": "equal",
+        "workspace": "equal",
+        "sandbox": "equal"
+      }
+    }
+  },
+  {
+    "job": {
+      "id": "fixture-job-23",
+      "agentId": "main",
+      "name": "fixture 23",
+      "enabled": false,
+      "createdAtMs": 0,
+      "updatedAtMs": 0,
+      "schedule": {
+        "kind": "every",
+        "everyMs": 60000
+      },
+      "sessionTarget": "current",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "fixture",
+        "toolsAllow": [
+          "*"
+        ]
+      },
+      "delivery": {
+        "mode": "none"
+      },
+      "state": {},
+      "owner": {
+        "agentId": "main",
+        "sessionKey": "agent:main:dashboard:session-1",
+        "accountId": "default"
+      },
+      "scheduledToolPolicy": {
+        "version": 1,
+        "mode": "account",
+        "ownerSessionKey": "agent:main:dashboard:session-1",
+        "ownerAccountId": "default"
+      },
+      "sourceConversation": {
+        "sessionKey": "agent:main:dashboard:session-1",
+        "sessionId": "parent-session",
+        "lifecycleRevision": "rev-1"
+      },
+      "createdActor": {
+        "type": "human",
+        "source": "profile",
+        "id": "profile-1"
+      },
+      "toolsAllowProvenance": {
+        "version": 1,
+        "source": "final-executable-surface",
+        "callerOrigin": {
+          "kind": "external",
+          "channel": "webchat"
+        }
+      },
+      "inferenceBinding": {
+        "version": 1,
+        "provider": "openai",
+        "profileId": "provider:profile",
+        "authorizationId": "authorization",
+        "authRequirement": "api-key",
+        "source": "auto"
+      }
+    },
+    "parentRow": {
+      "sessionId": "parent-session",
+      "lifecycleRevision": "rev-1",
+      "archived": false,
+      "sandboxRequired": false,
+      "cwd": "/work/parent/cwd"
+    },
+    "owner": true,
+    "expected": {
+      "status": "ready",
+      "principal": "parent",
+      "placement": "child",
+      "labels": {
+        "admissionSource": "equal",
+        "ownerEmbedded": "equal",
+        "automations": "gain-intended",
+        "board": "retarget",
+        "eventTarget": "retarget",
+        "memory": "gain-intended",
+        "workspace": "equal",
+        "sandbox": "equal"
+      }
+    }
+  },
+  {
+    "job": {
+      "id": "fixture-job-24",
+      "agentId": "main",
+      "name": "fixture 24",
+      "enabled": true,
+      "createdAtMs": 0,
+      "updatedAtMs": 0,
+      "schedule": {
+        "kind": "every",
+        "everyMs": 60000
+      },
+      "sessionTarget": "session:agent:main:dashboard:session-1",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "fixture",
+        "toolsAllow": [
+          "*"
+        ]
+      },
+      "delivery": {
+        "mode": "none"
+      },
+      "state": {},
+      "owner": {
+        "agentId": "main",
+        "sessionKey": "agent:main:dashboard:session-1",
+        "accountId": "default"
+      },
+      "scheduledToolPolicy": {
+        "version": 1,
+        "mode": "account",
+        "ownerSessionKey": "agent:main:dashboard:session-1",
+        "ownerAccountId": "default"
+      },
+      "sourceConversation": {
+        "sessionKey": "agent:main:dashboard:session-1",
+        "sessionId": "parent-session",
+        "lifecycleRevision": "rev-1"
+      },
+      "createdActor": {
+        "type": "human",
+        "source": "profile",
+        "id": "profile-1"
+      },
+      "toolsAllowProvenance": {
+        "version": 1,
+        "source": "final-executable-surface",
+        "callerOrigin": {
+          "kind": "external",
+          "channel": "webchat"
+        }
+      },
+      "inferenceBinding": {
+        "version": 1,
+        "provider": "openai",
+        "profileId": "provider:profile",
+        "authorizationId": "authorization",
+        "authRequirement": "api-key",
+        "source": "auto"
+      }
+    },
+    "parentRow": {
+      "sessionId": "parent-session",
+      "lifecycleRevision": "rev-1",
+      "archived": false,
+      "sandboxRequired": false,
+      "cwd": "/work/parent/cwd"
+    },
+    "owner": true,
+    "expected": {
+      "status": "ready",
+      "principal": "parent",
+      "placement": "in-session",
+      "labels": {
+        "admissionSource": "equal",
+        "ownerEmbedded": "equal",
+        "automations": "gain-intended",
+        "board": "equal",
+        "eventTarget": "equal",
+        "memory": "gain-intended",
+        "workspace": "equal",
+        "sandbox": "equal"
+      }
+    }
+  },
+  {
+    "job": {
+      "id": "fixture-job-25",
+      "agentId": "main",
+      "name": "fixture 25",
+      "enabled": true,
+      "createdAtMs": 0,
+      "updatedAtMs": 0,
+      "schedule": {
+        "kind": "every",
+        "everyMs": 60000
+      },
+      "sessionTarget": "current",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "fixture",
+        "toolsAllow": [
+          "*"
+        ]
+      },
+      "delivery": {
+        "mode": "none"
+      },
+      "state": {},
+      "owner": {
+        "agentId": "main",
+        "sessionKey": "agent:main:dashboard:session-1",
+        "accountId": "default"
+      },
+      "scheduledToolPolicy": {
+        "version": 1,
+        "mode": "account",
+        "ownerSessionKey": "agent:main:dashboard:session-1",
+        "ownerAccountId": "default"
+      },
+      "sourceConversation": {
+        "sessionKey": "agent:main:dashboard:session-1",
+        "sessionId": "parent-session",
+        "lifecycleRevision": "rev-1"
+      },
+      "createdActor": {
+        "type": "human",
+        "source": "profile",
+        "id": "profile-1"
+      },
+      "toolsAllowProvenance": {
+        "version": 1,
+        "source": "final-executable-surface",
+        "callerOrigin": {
+          "kind": "external",
+          "channel": "webchat"
+        }
+      },
+      "inferenceBinding": {
+        "version": 1,
+        "provider": "openai",
+        "profileId": "provider:profile",
+        "authorizationId": "authorization",
+        "authRequirement": "api-key",
+        "source": "user"
+      }
+    },
+    "parentRow": {
+      "sessionId": "parent-session",
+      "lifecycleRevision": "rev-1",
+      "archived": false,
+      "sandboxRequired": false
+    },
+    "owner": true,
+    "expected": {
+      "status": "ready",
+      "principal": "parent",
+      "placement": "child",
+      "labels": {
+        "admissionSource": "equal",
+        "ownerEmbedded": "equal",
+        "automations": "gain-intended",
+        "board": "retarget",
+        "eventTarget": "retarget",
+        "memory": "gain-intended",
+        "workspace": "equal",
+        "sandbox": "equal"
+      }
+    }
+  },
+  {
+    "job": {
+      "id": "fixture-job-26",
+      "agentId": "main",
+      "name": "fixture 26",
+      "enabled": true,
+      "createdAtMs": 0,
+      "updatedAtMs": 0,
+      "schedule": {
+        "kind": "every",
+        "everyMs": 60000
+      },
+      "sessionTarget": "current",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "fixture",
+        "toolsAllow": [
+          "*"
+        ]
+      },
+      "delivery": {
+        "mode": "none"
+      },
+      "state": {},
+      "owner": {
+        "agentId": "main",
+        "sessionKey": "agent:main:dashboard:session-1",
+        "accountId": "default"
+      },
+      "scheduledToolPolicy": {
+        "version": 1,
+        "mode": "account",
+        "ownerSessionKey": "agent:main:dashboard:session-1",
+        "ownerAccountId": "default"
+      },
+      "sourceConversation": {
+        "sessionKey": "agent:main:dashboard:session-1",
+        "sessionId": "parent-session",
+        "lifecycleRevision": "rev-1"
+      },
+      "createdActor": {
+        "type": "human",
+        "source": "profile",
+        "id": "profile-1"
+      },
+      "toolsAllowProvenance": {
+        "version": 1,
+        "source": "final-executable-surface",
+        "callerOrigin": {
+          "kind": "external",
+          "channel": "webchat"
+        }
+      },
+      "inferenceBinding": {
+        "version": 1,
+        "provider": "openai",
+        "profileId": "provider:profile",
+        "authorizationId": "authorization",
+        "authRequirement": "api-key",
+        "source": "auto"
+      }
+    },
+    "parentRow": {
+      "sessionId": "parent-session",
+      "lifecycleRevision": "rev-1",
+      "archived": false,
+      "sandboxRequired": false
+    },
+    "owner": true,
+    "expected": {
+      "status": "ready",
+      "principal": "parent",
+      "placement": "child",
+      "labels": {
+        "admissionSource": "equal",
+        "ownerEmbedded": "equal",
+        "automations": "gain-intended",
+        "board": "retarget",
+        "eventTarget": "retarget",
+        "memory": "gain-intended",
+        "workspace": "equal",
+        "sandbox": "equal"
+      }
+    }
+  },
+  {
+    "job": {
+      "id": "fixture-job-27",
+      "agentId": "main",
+      "name": "fixture 27",
+      "enabled": false,
+      "createdAtMs": 0,
+      "updatedAtMs": 0,
+      "schedule": {
+        "kind": "every",
+        "everyMs": 60000
+      },
+      "sessionTarget": "current",
+      "wakeMode": "now",
+      "payload": {
+        "kind": "agentTurn",
+        "message": "fixture",
+        "toolsAllow": [
+          "*"
+        ]
+      },
+      "delivery": {
+        "mode": "none"
+      },
+      "state": {},
+      "owner": {
+        "agentId": "main",
+        "sessionKey": "agent:main:dashboard:session-1",
+        "accountId": "default"
+      },
+      "scheduledToolPolicy": {
+        "version": 1,
+        "mode": "account",
+        "ownerSessionKey": "agent:main:dashboard:session-1",
+        "ownerAccountId": "default"
+      },
+      "sourceConversation": {
+        "sessionKey": "agent:main:dashboard:session-1",
+        "sessionId": "parent-session",
+        "lifecycleRevision": "rev-1"
+      },
+      "createdActor": {
+        "type": "human",
+        "source": "profile",
+        "id": "profile-1"
+      },
+      "toolsAllowProvenance": {
+        "version": 1,
+        "source": "final-executable-surface",
+        "callerOrigin": {
+          "kind": "external",
+          "channel": "webchat"
+        }
+      },
+      "inferenceBinding": {
+        "version": 1,
+        "provider": "openai",
+        "profileId": "provider:profile",
+        "authorizationId": "authorization",
+        "authRequirement": "api-key",
+        "source": "auto"
+      }
+    },
+    "parentRow": {
+      "sessionId": "parent-session",
+      "lifecycleRevision": "rev-1",
+      "archived": false,
+      "sandboxRequired": false
+    },
+    "owner": true,
+    "expected": {
+      "status": "ready",
+      "principal": "parent",
+      "placement": "child",
+      "labels": {
+        "admissionSource": "equal",
+        "ownerEmbedded": "equal",
+        "automations": "gain-intended",
+        "board": "retarget",
+        "eventTarget": "retarget",
+        "memory": "gain-intended",
+        "workspace": "equal",
+        "sandbox": "equal"
+      }
+    }
+  }
+]

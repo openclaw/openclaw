@@ -1,13 +1,29 @@
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import * as retention from "../infra/doctor-capture-retention.js";
 import * as ancestry from "../infra/restart-stale-pids.js";
+import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
+import * as baselineCapture from "../infra/update-recovery-baseline-capture.js";
 import { readUpdateRunDriver } from "../infra/update-run-driver.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { preserveDoctorOriginalState } from "./doctor-original-capture.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+const captureRef = (directory: string) => ({
+  directory,
+  manifestPath: path.join(directory, "manifest.json"),
+  manifestSha256: "0".repeat(64),
+});
+const captureDefaults = () => ({
+  root: process.cwd(),
+  runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+  signal: new AbortController().signal,
+  assertCurrent() {},
+});
 
 it.each(["ancestry-unverified", "missing-capture"] as const)(
   "preserves the original capture refusal classification for %s",
@@ -22,22 +38,15 @@ it.each(["ancestry-unverified", "missing-capture"] as const)(
       });
       const directory = state.path("missing-original-capture");
       const refusal = await preserveDoctorOriginalState({
-        root: process.cwd(),
+        ...captureDefaults(),
         env: state.env,
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        signal: new AbortController().signal,
-        assertCurrent() {},
         writeAuthority: {
           inputHash: "0".repeat(64),
           assertCurrent() {},
           originalRecoveryCapture: {
             runId: run.runId,
             installRoot: process.cwd(),
-            ref: {
-              directory,
-              manifestPath: path.join(directory, "manifest.json"),
-              manifestSha256: "0".repeat(64),
-            },
+            ref: captureRef(directory),
           },
         },
       }).catch((error: unknown) => error);
@@ -57,3 +66,63 @@ it.each(["ancestry-unverified", "missing-capture"] as const)(
     });
   },
 );
+
+it("keeps one sealed container capture, skips repeats, and still retires old captures", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const marker = state.path("activation-capture-marker");
+    const env = { ...state.env, OPENCLAW_IMAGE_ACTIVATION_CAPTURE_MARKER: marker };
+    const captureRoot = resolveUpdateCaptureRoot(state.stateDir);
+    const log = vi.fn();
+    const captureOriginal = (root: string | null) =>
+      preserveDoctorOriginalState({
+        ...captureDefaults(),
+        root,
+        env,
+        runtime: { log, error: vi.fn(), exit: vi.fn() },
+      });
+
+    // A nonfatal capture failure leaves the next start free to capture.
+    const unavailable = await captureOriginal(null);
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(unavailable.findings).toContainEqual(
+      expect.objectContaining({
+        category: "fix-now",
+        message: expect.stringContaining("Pre-repair recovery copy was unavailable"),
+        fixHint: expect.stringContaining("Check installation access and disk space"),
+      }),
+    );
+
+    const capture = vi
+      .spyOn(baselineCapture, "captureUpdateRecoveryBaseline")
+      .mockImplementation(async ({ runId }) => {
+        const directory = path.join(captureRoot, runId);
+        fs.mkdirSync(directory, { recursive: true });
+        fs.writeFileSync(path.join(directory, "manifest.json"), "{}");
+        return {
+          ref: captureRef(directory),
+          warnings: [],
+          diagnostics: { databaseWarnings: [] },
+        };
+      });
+    const retire = vi
+      .spyOn(retention, "retireExpiredStandaloneDoctorCaptures")
+      .mockResolvedValue({ retired: [], warnings: [] });
+    await captureOriginal(process.cwd());
+    expect(capture).toHaveBeenCalledOnce();
+    const runId = fs.readFileSync(marker, "utf8");
+    expect(runId).toBe(capture.mock.calls[0]![0].runId);
+
+    log.mockClear();
+    await captureOriginal(process.cwd());
+    expect(capture).toHaveBeenCalledOnce();
+    expect(log).not.toHaveBeenCalled();
+    // Repeat starts keep the container's capture while older ones still age out.
+    expect(retire).toHaveBeenCalledTimes(2);
+    expect(retire).toHaveBeenLastCalledWith(expect.objectContaining({ keepRunId: runId }));
+
+    fs.rmSync(path.join(captureRoot, runId), { recursive: true });
+    await captureOriginal(process.cwd());
+    expect(capture).toHaveBeenCalledTimes(2);
+    expect(fs.readFileSync(marker, "utf8")).toBe(capture.mock.calls[1]![0].runId);
+  });
+});

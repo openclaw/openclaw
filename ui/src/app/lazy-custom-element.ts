@@ -1,3 +1,4 @@
+import { createChangeListeners } from "../../../src/shared/listeners.js";
 import { t } from "../i18n/index.ts";
 import {
   isStaleChunkImportError,
@@ -41,8 +42,7 @@ export type OptionalCustomElement = {
   loadModule: CustomElementModuleLoader;
 };
 
-type UpdatingHost = {
-  requestUpdate: () => unknown;
+type RenderHost = {
   readonly updateComplete?: Promise<unknown>;
   /**
    * Render-root lookup used to gate action replay on the element actually
@@ -65,78 +65,72 @@ type LazyCustomElementRequest = LazyCustomElementRequestState & {
 };
 
 /** Owns visible lazy-element requests while global registration stays deduplicated by tag. */
-export class LazyCustomElementRequestController {
-  private current: LazyCustomElementRequest | undefined;
-  private readonly preloads = new Set<string>();
-  private active: OptionalCustomElement | undefined;
-  private activeDismissed = false;
-  private staleRetry: LazyCustomElementRequest | undefined;
+export function createLazyCustomElementRequests(
+  host: RenderHost = {},
+  onClose?: () => void,
+  retryStale = (canReload: () => boolean) => retryStaleChunkReloadWhenReachable({ canReload }),
+) {
+  let current: LazyCustomElementRequest | undefined;
+  const preloads = new Set<string>();
+  let activeElement: OptionalCustomElement | undefined;
+  let activeDismissed = false;
+  let staleRetry: LazyCustomElementRequest | undefined;
+  const listeners = createChangeListeners();
+  const notify = listeners.publish;
 
-  constructor(
-    private readonly host: UpdatingHost,
-    private readonly onClose?: () => void,
-    private readonly retryStale = (canReload: () => boolean) =>
-      retryStaleChunkReloadWhenReachable({ canReload }),
-    private readonly cancelStale = () => cancelStaleChunkRecovery(),
-  ) {}
-
-  get visibleState(): LazyCustomElementRequestState | undefined {
-    return this.current;
-  }
-
-  preload(element: OptionalCustomElement, options?: { reportError?: boolean }): void {
-    if (isOptionalElementDefined(element) || this.preloads.has(element.tagName)) {
+  function preload(element: OptionalCustomElement, options?: { reportError?: boolean }): void {
+    if (isOptionalElementDefined(element) || preloads.has(element.tagName)) {
       return;
     }
-    this.preloads.add(element.tagName);
+    preloads.add(element.tagName);
     void ensureCustomElementDefined(element.tagName, element.loadModule)
       .then(
-        () => this.host.requestUpdate(),
+        () => notify(),
         (error: unknown) => {
-          if (options?.reportError && !this.current) {
-            this.current = {
+          if (options?.reportError && !current) {
+            current = {
               element,
               error,
               stale: isStaleChunkImportError(error),
               status: "error",
             };
-            this.host.requestUpdate();
+            notify();
           }
         },
       )
-      .finally(() => this.preloads.delete(element.tagName));
+      .finally(() => preloads.delete(element.tagName));
   }
 
-  request(element: OptionalCustomElement, action?: () => void): void {
+  function requestElement(element: OptionalCustomElement, action?: () => void): void {
     const request = {
       action,
       element,
       status: "loading",
     } satisfies LazyCustomElementRequest;
-    this.current = request;
-    this.host.requestUpdate();
-    this.load(request);
+    current = request;
+    notify();
+    load(request);
   }
 
-  requestWhileActive(element: OptionalCustomElement, active: boolean): void {
+  function requestWhileActive(element: OptionalCustomElement, active: boolean): void {
     if (active) {
-      if (this.active !== element) {
-        this.active = element;
-        this.activeDismissed = false;
+      if (activeElement !== element) {
+        activeElement = element;
+        activeDismissed = false;
       }
-    } else if (this.active === element) {
-      this.active = undefined;
-      this.activeDismissed = false;
+    } else if (activeElement === element) {
+      activeElement = undefined;
+      activeDismissed = false;
     }
-    if (!active && this.current?.element === element) {
-      this.abandon();
+    if (!active && current?.element === element) {
+      abandon();
     } else {
-      this.pumpActive();
+      pumpActive();
     }
   }
 
-  retry(): void {
-    const request = this.current;
+  function retry(): void {
+    const request = current;
     if (request?.status !== "error") {
       return;
     }
@@ -145,98 +139,105 @@ export class LazyCustomElementRequestController {
       element: request.element,
       status: "loading",
     } satisfies LazyCustomElementRequest;
-    this.current = retryRequest;
-    this.staleRetry = request.stale ? retryRequest : undefined;
-    this.host.requestUpdate();
-    const canReload = () => this.current === retryRequest;
-    void (request.stale ? this.retryStale(canReload) : Promise.resolve(false)).then((reloading) => {
-      if (!reloading && this.current === retryRequest) {
-        this.load(retryRequest);
+    current = retryRequest;
+    staleRetry = request.stale ? retryRequest : undefined;
+    notify();
+    const canReload = () => current === retryRequest;
+    void (request.stale ? retryStale(canReload) : Promise.resolve(false)).then((reloading) => {
+      if (!reloading && current === retryRequest) {
+        load(retryRequest);
       }
     });
   }
 
-  close(): void {
-    if (this.current) {
-      if (this.current.element === this.active) {
-        this.activeDismissed = true;
+  function close(): void {
+    if (current) {
+      if (current.element === activeElement) {
+        activeDismissed = true;
       }
-      this.onClose?.();
-      this.abandon();
+      onClose?.();
+      abandon();
     }
   }
 
-  abandon(): void {
-    if (this.current) {
+  function abandon(): void {
+    if (current) {
       // A retired stale-chunk failure must not reload the page later (#130988);
       // surfaces that still show a failure re-arm recovery when they render.
-      if (
-        (this.current.status === "error" && this.current.stale) ||
-        this.current === this.staleRetry
-      ) {
-        this.cancelStale();
+      if ((current.status === "error" && current.stale) || current === staleRetry) {
+        cancelStaleChunkRecovery();
       }
-      this.current = undefined;
-      this.host.requestUpdate();
-      this.pumpActive();
+      current = undefined;
+      notify();
+      pumpActive();
     }
   }
 
-  private pumpActive(): void {
-    if (
-      this.active &&
-      !this.activeDismissed &&
-      !this.current &&
-      !isOptionalElementDefined(this.active)
-    ) {
-      this.request(this.active);
+  function pumpActive(): void {
+    if (activeElement && !activeDismissed && !current && !isOptionalElementDefined(activeElement)) {
+      requestElement(activeElement);
     }
   }
 
-  private load(request: LazyCustomElementRequest): void {
+  function load(request: LazyCustomElementRequest): void {
     void ensureCustomElementDefined(request.element.tagName, request.element.loadModule).then(
       async () => {
         // Registration outlives dismissal; mount the closed element so the next open works.
-        this.host.requestUpdate();
-        if (this.current !== request) {
+        notify();
+        if (current !== request) {
           return;
         }
-        await this.host.updateComplete;
-        if (this.current === request) {
+        await host.updateComplete;
+        if (current === request) {
           // Replay only once the host has actually rendered the element.
           // During boot the shell can still be splash-gated after this update;
           // replaying then re-dispatches an event nothing handles, which
-          // re-enters this controller in a microtask cycle that starves the
+          // re-enters this loader in a microtask cycle that starves the
           // render (and the Gateway socket) forever. The skipped action stays
           // persisted as the pending lazy shell action and replays through
           // restorePendingLazyAction on a later context update.
           const replayable =
-            !this.host.queryRenderedElement ||
-            this.host.queryRenderedElement(request.element.tagName) !== null;
+            !host.queryRenderedElement ||
+            host.queryRenderedElement(request.element.tagName) !== null;
           if (replayable) {
             request.action?.();
           }
-          if (this.current === request) {
-            this.abandon();
+          if (current === request) {
+            abandon();
           }
         }
       },
       (error: unknown) => {
-        if (this.current !== request) {
+        if (current !== request) {
           return;
         }
-        this.current = {
+        current = {
           action: request.action,
           element: request.element,
           error,
           stale: isStaleChunkImportError(error),
           status: "error",
         };
-        this.host.requestUpdate();
+        notify();
       },
     );
   }
+
+  return {
+    get visibleState(): LazyCustomElementRequestState | undefined {
+      return current;
+    },
+    subscribe: listeners.subscribe,
+    preload,
+    request: requestElement,
+    requestWhileActive,
+    retry,
+    close,
+    abandon,
+  };
 }
+
+export type LazyCustomElementRequests = ReturnType<typeof createLazyCustomElementRequests>;
 
 export const COMMAND_PALETTE_ELEMENT = {
   tagName: "openclaw-command-palette",
@@ -297,7 +298,7 @@ export const BROWSER_PANEL_ELEMENT = {
 export const BROWSER_DOCUMENT_ELEMENT = {
   tagName: "openclaw-browser-document",
   label: BROWSER_PANEL_ELEMENT.label,
-  loadModule: () => import("../components/browser/browser-document.ts"),
+  loadModule: () => import("../components/browser/browser-document.tsx"),
 } satisfies OptionalCustomElement;
 
 export const DESKTOP_PANEL_ELEMENT = {
@@ -311,7 +312,7 @@ export const LINK_READER_PANEL_ELEMENT = {
   get label() {
     return t("linkReader.title");
   },
-  loadModule: () => import("../components/link-reader-panel.ts"),
+  loadModule: () => import("../components/link-reader-panel.tsx"),
 } satisfies OptionalCustomElement;
 
 export const DASHBOARD_DOCUMENT_ELEMENT = {
@@ -343,7 +344,7 @@ export const EXEC_APPROVAL_ELEMENT = {
   get label() {
     return t("tabs.approvals");
   },
-  loadModule: () => import("../components/exec-approval.ts"),
+  loadModule: () => import("../components/exec-approval-solid.tsx"),
 } satisfies OptionalCustomElement;
 
 export function isOptionalElementDefined(element: OptionalCustomElement): boolean {

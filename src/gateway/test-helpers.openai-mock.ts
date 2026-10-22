@@ -1,26 +1,3 @@
-// OpenAI mock helpers provide deterministic fake Responses API streams for
-// gateway OpenAI-compatible HTTP tests.
-type OpenAIResponsesParams = {
-  input?: unknown[];
-};
-
-type OpenAIResponseStreamEvent =
-  | { type: "response.output_item.added"; item: Record<string, unknown> }
-  | { type: "response.function_call_arguments.delta"; delta: string }
-  | { type: "response.output_item.done"; item: Record<string, unknown> }
-  | {
-      type: "response.completed";
-      response: {
-        status: "completed";
-        usage: {
-          input_tokens: number;
-          output_tokens: number;
-          total_tokens: number;
-          input_tokens_details?: { cached_tokens?: number };
-        };
-      };
-    };
-
 function extractLastUserText(input: unknown[]): string {
   for (let i = input.length - 1; i >= 0; i -= 1) {
     const item = input[i] as Record<string, unknown> | undefined;
@@ -49,96 +26,65 @@ function extractLastUserText(input: unknown[]): string {
 }
 
 function extractToolOutput(input: unknown[]): string {
-  for (const itemRaw of input) {
-    const item = itemRaw as Record<string, unknown> | undefined;
-    if (!item || item.type !== "function_call_output") {
-      continue;
-    }
-    return typeof item.output === "string" ? item.output : "";
-  }
-  return "";
+  const item = input.find(
+    (entry) => (entry as Record<string, unknown> | undefined)?.type === "function_call_output",
+  ) as Record<string, unknown> | undefined;
+  return typeof item?.output === "string" ? item.output : "";
 }
 
-async function* fakeOpenAIResponsesStream(
-  params: OpenAIResponsesParams,
-): AsyncGenerator<OpenAIResponseStreamEvent> {
-  const input = Array.isArray(params.input) ? params.input : [];
+function buildOpenAIResponsesSse(input: unknown[]): Response {
   const toolOutput = extractToolOutput(input);
-
-  if (!toolOutput) {
-    const prompt = extractLastUserText(input);
-    const quoted = /"([^"]+)"/.exec(prompt)?.[1];
-    const toolPath = quoted ?? "package.json";
-    const argsJson = JSON.stringify({ path: toolPath });
-
-    yield {
-      type: "response.output_item.added",
-      item: {
-        type: "function_call",
-        id: "fc_test_1",
-        call_id: "call_test_1",
-        name: "read",
-        arguments: "",
-      },
-    };
-    yield { type: "response.function_call_arguments.delta", delta: argsJson };
-    yield {
-      type: "response.output_item.done",
-      item: {
-        type: "function_call",
-        id: "fc_test_1",
-        call_id: "call_test_1",
-        name: "read",
-        arguments: argsJson,
-      },
-    };
-    yield {
-      type: "response.completed",
-      response: {
-        status: "completed",
-        usage: { input_tokens: 10, output_tokens: 10, total_tokens: 20 },
-      },
-    };
-    return;
-  }
-
-  const nonceA = /nonceA=([^\s]+)/.exec(toolOutput)?.[1] ?? "";
-  const nonceB = /nonceB=([^\s]+)/.exec(toolOutput)?.[1] ?? "";
-  const reply = `${nonceA} ${nonceB}`.trim();
-
-  yield {
-    type: "response.output_item.added",
-    item: {
-      type: "message",
-      id: "msg_test_1",
-      role: "assistant",
-      content: [],
-      status: "in_progress",
-    },
-  };
-  yield {
-    type: "response.output_item.done",
-    item: {
-      type: "message",
-      id: "msg_test_1",
-      role: "assistant",
-      status: "completed",
-      content: [{ type: "output_text", text: reply, annotations: [] }],
-    },
-  };
-  yield {
+  const completed = {
     type: "response.completed",
     response: {
       status: "completed",
       usage: { input_tokens: 10, output_tokens: 10, total_tokens: 20 },
     },
   };
+
+  if (!toolOutput) {
+    const prompt = extractLastUserText(input);
+    const quoted = /"([^"]+)"/.exec(prompt)?.[1];
+    const toolPath = quoted ?? "package.json";
+    const argsJson = JSON.stringify({ path: toolPath });
+    const item = {
+      type: "function_call",
+      id: "fc_test_1",
+      call_id: "call_test_1",
+      name: "read",
+    };
+
+    return buildSseResponse([
+      { type: "response.output_item.added", item: { ...item, arguments: "" } },
+      { type: "response.function_call_arguments.delta", delta: argsJson },
+      { type: "response.output_item.done", item: { ...item, arguments: argsJson } },
+      completed,
+    ]);
+  }
+
+  const nonceA = /nonceA=([^\s]+)/.exec(toolOutput)?.[1] ?? "";
+  const nonceB = /nonceB=([^\s]+)/.exec(toolOutput)?.[1] ?? "";
+  const reply = `${nonceA} ${nonceB}`.trim();
+  const item = { type: "message", id: "msg_test_1", role: "assistant" };
+
+  return buildSseResponse([
+    {
+      type: "response.output_item.added",
+      item: { ...item, content: [], status: "in_progress" },
+    },
+    {
+      type: "response.output_item.done",
+      item: {
+        ...item,
+        status: "completed",
+        content: [{ type: "output_text", text: reply, annotations: [] }],
+      },
+    },
+    completed,
+  ]);
 }
 
 function decodeBodyText(body: unknown): string {
-  if (!body) {
-    return "";
-  }
   if (typeof body === "string") {
     return body;
   }
@@ -153,25 +99,10 @@ function decodeBodyText(body: unknown): string {
 
 function buildSseResponse(events: unknown[]): Response {
   const sse = `${events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join("")}data: [DONE]\n\n`;
-  const encoder = new TextEncoder();
-  const body = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(encoder.encode(sse));
-      controller.close();
-    },
-  });
-  return new Response(body, {
+  return new Response(sse, {
     status: 200,
     headers: { "content-type": "text/event-stream" },
   });
-}
-
-async function buildOpenAIResponsesSse(params: OpenAIResponsesParams): Promise<Response> {
-  const events: OpenAIResponseStreamEvent[] = [];
-  for await (const event of fakeOpenAIResponsesStream(params)) {
-    events.push(event);
-  }
-  return buildSseResponse(events);
 }
 
 export function installOpenAiResponsesMock(params?: { baseUrl?: string }) {
@@ -188,15 +119,15 @@ export function installOpenAiResponsesMock(params?: { baseUrl?: string }) {
 
     if (isResponsesRequest(url)) {
       const bodyText =
-        (init as { body?: unknown } | undefined)?.body !== undefined
-          ? decodeBodyText((init as { body?: unknown }).body)
+        init?.body !== undefined
+          ? decodeBodyText(init.body)
           : input instanceof Request
             ? await input.clone().text()
             : "";
 
       const parsed = bodyText ? (JSON.parse(bodyText) as Record<string, unknown>) : {};
       const inputItems = Array.isArray(parsed.input) ? parsed.input : [];
-      return await buildOpenAIResponsesSse({ input: inputItems });
+      return buildOpenAIResponsesSse(inputItems);
     }
     if (url.startsWith(baseUrl)) {
       throw new Error(`unexpected OpenAI request in mock test: ${url}`);

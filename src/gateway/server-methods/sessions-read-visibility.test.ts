@@ -25,7 +25,6 @@ import {
 import {
   disposeSessionReadContexts,
   identifiedClient,
-  initializeSessionReadContext,
   listSessions,
   requestContext,
 } from "./sessions-read-cache.test-support.js";
@@ -120,7 +119,7 @@ test.each([
       { agentId: "research", sessionKey, storePath },
       {
         sessionId,
-        updatedAt: 42,
+        updatedAt: Date.now(),
         displayName: "Research transcript title",
         visibility: "draft",
         createdActor: { type: "human", source: "profile", id: ownerId },
@@ -143,7 +142,7 @@ test.each([
     };
     if (transcript) {
       const backfilled = observeSessionRowBackfill([sessionKey]);
-      await initializeSessionReadContext(context);
+      await listSessions({ client, context, request });
       await backfilled;
     }
     const result = await listSessions({ client, context, request });
@@ -214,7 +213,8 @@ test("a hidden-foreign role cannot discover sessions through search, batch previ
       { agentId: "main", sessionKey, storePath },
       {
         sessionId,
-        updatedAt: 42,
+        // Post-write age-retention maintenance archives expired rows out of default lists.
+        updatedAt: Date.now(),
         createdActor: { type: "human", source: "profile", id: actorId },
         visibility: "shared",
       },
@@ -290,7 +290,7 @@ test.each(["research", "ops"] as const)(
         { agentId, sessionKey: "global", storePath },
         {
           sessionId,
-          updatedAt: 42,
+          updatedAt: Date.now(),
           createdActor: { type: "human", source: "profile", id: profiles[agentId] },
           visibility: "shared",
         },
@@ -332,7 +332,7 @@ test("sessions.describe preserves caller roles and sessions.get hides foreign dr
     { agentId: "main", sessionKey, storePath },
     {
       sessionId,
-      updatedAt: 42,
+      updatedAt: Date.now(),
       createdActor: { type: "human", source: "profile", id: ownerId },
       visibility: "draft",
     },
@@ -526,7 +526,7 @@ test("sessions.describe preserves caller roles and sessions.get hides foreign dr
       { agentId: "main", sessionKey, storePath },
       {
         sessionId,
-        updatedAt: 42,
+        updatedAt: Date.now(),
         createdActor: { type: "human", source: "profile", id: ownerId },
         visibility: "shared",
       },

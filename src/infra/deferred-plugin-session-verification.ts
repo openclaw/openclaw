@@ -29,8 +29,10 @@ import {
   readOnlySqliteValidationSnapshot,
 } from "./session-sqlite-migration-readers.js";
 import { verifyCanonicalSessionTranscriptSources } from "./session-sqlite-transcript-verification.js";
+import { runSqliteReadOnlyOperation } from "./sqlite-readonly-worker.js";
 import {
   databaseFileIdentityKey,
+  readDatabasePathIdentitySync,
   readDatabaseIdentityBirthtime,
 } from "./sqlite-worker-identity.js";
 
@@ -218,4 +220,32 @@ export function sameSourceContent(
   right: MigrationArtifactIdentity,
 ) {
   return left.sha256 === right.sha256 && left.size === right.size;
+}
+
+/** Only an exact byte match can replace a missing original; row counts cannot prove coverage. */
+export async function verifyMissingDeferredSessionTranscript(params: {
+  target: { agentId: string; sqlitePath: string };
+  sessionId: string;
+  identity: MigrationArtifactIdentity;
+  env: NodeJS.ProcessEnv;
+}): Promise<boolean> {
+  if (params.identity.size === 0) {
+    return false;
+  }
+  return await runSqliteReadOnlyOperation(
+    params.target.sqlitePath,
+    {
+      type: "deferredSessionImport.verifyMissingTranscript",
+      input: {
+        sessionId: params.sessionId,
+        identity: params.identity,
+      },
+    },
+    {
+      source: "canonical",
+      expectedIdentity: readDatabasePathIdentitySync(params.target.sqlitePath).key,
+      artifactPreserving: true,
+      env: params.env,
+    },
+  );
 }

@@ -51,6 +51,14 @@ let current: SystemdServiceIdentity;
 let effects: string[];
 let afterReset: (() => void) | undefined;
 let resetFailure: Error | undefined;
+const options = () => ({ stdout: new PassThrough(), systemdIdentity: original });
+const captureAdopted = () =>
+  captureSystemdServiceIdentity({
+    env: {},
+    target: original,
+    managerUid: 0,
+    rootServiceAccount: "openclaw-fixture",
+  });
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -113,35 +121,23 @@ afterEach(() => {
 });
 
 const changes = [
-  {
-    name: "account reassignment",
-    change: { serviceUser: "another-account" },
-    reason: "systemd-account-refused",
-  },
-  {
-    name: "same-account manager replacement",
-    change: { managerOwner: ":1.99" },
-    reason: "systemd-manager-changed",
-  },
-  {
-    name: "broker replacement reusing the manager name",
-    change: { busId: "abcdef0123456789abcdef0123456789" },
-    reason: "systemd-manager-changed",
-  },
-  {
-    name: "manager account replacement",
-    change: { managerUid: 2001 },
-    reason: "systemd-manager-changed",
-  },
-  {
-    name: "definition replacement",
-    change: { unitPath: "/etc/systemd/system/other.service" },
-    reason: "systemd-unit-changed",
-  },
+  ["account reassignment", { serviceUser: "another-account" }, "systemd-account-refused"],
+  ["same-account manager replacement", { managerOwner: ":1.99" }, "systemd-manager-changed"],
+  [
+    "broker replacement reusing the manager name",
+    { busId: "abcdef0123456789abcdef0123456789" },
+    "systemd-manager-changed",
+  ],
+  ["manager account replacement", { managerUid: 2001 }, "systemd-manager-changed"],
+  [
+    "definition replacement",
+    { unitPath: "/etc/systemd/system/other.service" },
+    "systemd-unit-changed",
+  ],
 ] as const;
 
 it.each(["before start", "during restart"])("refuses changed authority %s", async (phase) => {
-  for (const { name, change, reason } of changes) {
+  for (const [name, change, reason] of changes) {
     vi.clearAllMocks();
     effects = [];
     current = { ...original };
@@ -153,10 +149,10 @@ it.each(["before start", "during restart"])("refuses changed authority %s", asyn
       replace();
     }
     const activate = phase === "before start" ? startSystemdService : restartSystemdService;
-    await expect(
-      activate({ stdout: new PassThrough(), systemdIdentity: original }),
-      name,
-    ).rejects.toMatchObject({ name: "ServiceOwnershipRefusalError", reason });
+    await expect(activate(options()), name).rejects.toMatchObject({
+      name: "ServiceOwnershipRefusalError",
+      reason,
+    });
     expect(effects).toEqual(phase === "before start" ? [] : ["ResetFailedUnit"]);
     expect(native.systemctl).not.toHaveBeenCalled();
     expect(native.close).toHaveBeenCalledOnce();
@@ -168,7 +164,7 @@ it("accepts root account aliases", async () => {
     vi.clearAllMocks();
     effects = [];
     current.serviceUser = serviceUser;
-    await startSystemdService({ stdout: new PassThrough(), systemdIdentity: original });
+    await startSystemdService(options());
     expect(effects).toEqual(["ResetFailedUnit", "StartUnit"]);
     expect(native.open).toHaveBeenCalledExactlyOnceWith(original.bus.address, expect.any(Number));
     expect(native.systemctl).not.toHaveBeenCalled();
@@ -186,9 +182,7 @@ it("retains the root privilege requirement for a pinned system unit", async () =
 
 it("never falls back to an unbound manager when activation inspection fails", async () => {
   native.query.mockRejectedValueOnce(new Error("native inspection unavailable"));
-  await expect(
-    startSystemdService({ stdout: new PassThrough(), systemdIdentity: original }),
-  ).rejects.toThrow("native inspection unavailable");
+  await expect(startSystemdService(options())).rejects.toThrow("native inspection unavailable");
   expect(effects).toEqual([]);
   expect(native.systemctl).not.toHaveBeenCalled();
   expect(native.close).toHaveBeenCalledOnce();
@@ -197,7 +191,7 @@ it("never falls back to an unbound manager when activation inspection fails", as
 it("warns and still attempts start when only reset-failed fails", async () => {
   resetFailure = new Error("reset-failed unavailable");
   const warn = vi.fn();
-  await startSystemdService({ stdout: new PassThrough(), systemdIdentity: original, warn });
+  await startSystemdService({ ...options(), warn });
   expect(effects).toEqual(["ResetFailedUnit", "StartUnit"]);
   expect(warn).toHaveBeenCalledExactlyOnceWith(
     expect.stringContaining("reset-failed did not complete"),
@@ -207,9 +201,7 @@ it("warns and still attempts start when only reset-failed fails", async () => {
 it("does not downgrade an ownership refusal from reset-failed", async () => {
   resetFailure = new ServiceOwnershipRefusalError("systemd-account-refused");
   const warn = vi.fn();
-  await expect(
-    startSystemdService({ stdout: new PassThrough(), systemdIdentity: original, warn }),
-  ).rejects.toBe(resetFailure);
+  await expect(startSystemdService({ ...options(), warn })).rejects.toBe(resetFailure);
   expect(effects).toEqual(["ResetFailedUnit"]);
   expect(warn).not.toHaveBeenCalled();
 });
@@ -224,8 +216,7 @@ it("does not downgrade lost custody during reset-failed", async () => {
   const warn = vi.fn();
   await expect(
     startSystemdService({
-      stdout: new PassThrough(),
-      systemdIdentity: original,
+      ...options(),
       warn,
       assertCurrent: () => {
         if (!active) {
@@ -240,9 +231,10 @@ it("does not downgrade lost custody during reset-failed", async () => {
 
 it("captures the selected native owner before stop without any mutation", async () => {
   vi.stubEnv("DBUS_SYSTEM_BUS_ADDRESS", original.bus.address);
+  const { scope, unitName, unitPath } = original;
   const identity = await captureSystemdServiceIdentity({
     env: {},
-    target: { scope: original.scope, unitName: original.unitName, unitPath: original.unitPath },
+    target: { scope, unitName, unitPath },
     managerUid: original.managerUid,
   });
   expect(identity).toEqual(original);
@@ -261,12 +253,7 @@ it("refuses to capture authority for another service account", async () => {
 
 it("root can retain the explicitly adopted non-root account through pinned stop and start", async () => {
   current.serviceUser = "openclaw-fixture";
-  const identity = await captureSystemdServiceIdentity({
-    env: {},
-    target: original,
-    managerUid: 0,
-    rootServiceAccount: "openclaw-fixture",
-  });
+  const identity = await captureAdopted();
   await stopSystemdService({ stdout: new PassThrough(), systemdIdentity: identity });
   await startSystemdService({ stdout: new PassThrough(), systemdIdentity: identity });
   expect(effects).toEqual(["StopUnit", "ResetFailedUnit", "StartUnit"]);
@@ -275,12 +262,7 @@ it("root can retain the explicitly adopted non-root account through pinned stop 
 
 it.each(["other-account", "root"])("an adopted account never admits %s", async (replacement) => {
   current.serviceUser = "openclaw-fixture";
-  const identity = await captureSystemdServiceIdentity({
-    env: {},
-    target: original,
-    managerUid: 0,
-    rootServiceAccount: "openclaw-fixture",
-  });
+  const identity = await captureAdopted();
   current.serviceUser = replacement;
   await expect(
     stopSystemdService({ stdout: new PassThrough(), systemdIdentity: identity }),
@@ -291,19 +273,12 @@ it.each(["other-account", "root"])("an adopted account never admits %s", async (
 it("refuses an explicit adopted account to a non-root inspector", async () => {
   vi.spyOn(process, "geteuid").mockReturnValue(1000);
   current.serviceUser = "openclaw-fixture";
-  await expect(
-    captureSystemdServiceIdentity({
-      env: {},
-      target: original,
-      rootServiceAccount: "openclaw-fixture",
-    }),
-  ).rejects.toMatchObject({ reason: "systemd-account-refused" });
+  await expect(captureAdopted()).rejects.toMatchObject({ reason: "systemd-account-refused" });
   expect(effects).toEqual([]);
 });
 
 it("checks effect-specific process facts after native inspection without requiring them after stop", async () => {
   let serving = true;
-  const assertCurrent = () => {};
   native.query.mockImplementationOnce(async () => {
     // An asynchronous pre-effect revalidation may lose the observed process.
     serving = false;
@@ -311,9 +286,8 @@ it("checks effect-specific process facts after native inspection without requiri
   });
   await expect(
     stopSystemdService({
-      stdout: new PassThrough(),
-      systemdIdentity: original,
-      assertCurrent,
+      ...options(),
+      assertCurrent: () => {},
       beforeEffect: () => {
         if (!serving) {
           throw new Error("process replaced");
@@ -329,8 +303,7 @@ it("does not downgrade a final effect guard refusal from reset-failed into a sta
   const warn = vi.fn();
   await expect(
     startSystemdService({
-      stdout: new PassThrough(),
-      systemdIdentity: original,
+      ...options(),
       warn,
       beforeEffect: () => {
         throw denied;

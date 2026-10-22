@@ -1,7 +1,10 @@
 import { Show } from "solid-js";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { isChatSendReconnecting } from "../chat-send-presentation.ts";
 import type { readPendingSendStatus } from "../chat-thread-items.ts";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 export type ChatSendStatusActions = {
   connected?: boolean;
@@ -23,7 +26,7 @@ function SendStatusAction(props: {
       <span class="chat-send-status__part">
         <span aria-hidden="true">{"·"}</span>
         <button
-          class={"chat-send-status__action chat-send-status__" + props.kind}
+          class={["chat-send-status__action", `chat-send-status__${props.kind}`]}
           type="button"
           aria-label={
             props.kind === "retry" ? (props.label ?? t("chat.queue.retryQueuedMessage")) : undefined

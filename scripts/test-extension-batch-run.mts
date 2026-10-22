@@ -301,8 +301,8 @@ export async function runExtensionBatchPlan(
 ) {
   const suppliedEnv = params.env ?? process.env;
   const runtimePolicy = resolveCiTestRuntimePolicy(suppliedEnv);
-  const env =
-    runtimePolicy === "dual" ? { ...suppliedEnv, OPENCLAW_VITEST_RUNTIME: "node" } : suppliedEnv;
+  const allRuntimes = runtimePolicy === "bun-all" || runtimePolicy === "dual-all";
+  const env = allRuntimes ? { ...suppliedEnv, OPENCLAW_VITEST_RUNTIME: "node" } : suppliedEnv;
   const vitestArgs = params.vitestArgs ?? [];
   // Single-plugin CLI historically leaves exact exclusions to Vitest.
   const exactExcludePaths =
@@ -333,9 +333,9 @@ export async function runExtensionBatchPlan(
   );
   // Admit the whole selection before report or runtime preparation can import code.
   assertTestHomeSelection(env, homeMode);
-  if (runtimePolicy === "dual") {
+  if (allRuntimes) {
     for (const leaf of leafGroups) {
-      leaf.bunInvocations = leaf.invocations.flatMap((invocation) =>
+      const selections = leaf.invocations.flatMap((invocation) =>
         resolveCiTestRuntimeSelections(
           {
             configs: [invocation.config],
@@ -346,32 +346,57 @@ export async function runExtensionBatchPlan(
             env: invocation.env,
           },
           runtimePolicy,
-        )
-          .filter((selection) => selection.runtime === "bun")
-          .map((selection) =>
-            Object.assign({}, invocation, {
-              targets:
-                selection.includePatterns?.map((file) => relativizeExtensionVitestPath(file)) ??
-                invocation.targets,
-              env: {
-                ...invocation.env,
-                ...selection.env,
-                OPENCLAW_VITEST_RUNTIME: "bun",
-                [FS_MODULE_CACHE_PATH_ENV_KEY]: `${path.resolve(invocation.env[FS_MODULE_CACHE_PATH_ENV_KEY]!)}-bun`,
-              },
-            }),
-          ),
+        ).map((selection) => {
+          const cache = invocation.env[FS_MODULE_CACHE_PATH_ENV_KEY];
+          return Object.assign({}, invocation, {
+            args: [
+              ...relativizeExtensionVitestArgs(selection.vitestArgs ?? []),
+              ...invocation.args,
+            ],
+            targets:
+              selection.includePatterns?.map((file) => relativizeExtensionVitestPath(file)) ??
+              invocation.targets,
+            env: {
+              ...invocation.env,
+              ...selection.env,
+              OPENCLAW_VITEST_RUNTIME: selection.runtime,
+              ...(selection.runtime === "bun" && cache
+                ? { [FS_MODULE_CACHE_PATH_ENV_KEY]: `${path.resolve(cache)}-bun` }
+                : {}),
+            },
+          });
+        }),
       );
+      leaf.bunInvocations = selections.filter(
+        (invocation) => invocation.env.OPENCLAW_VITEST_RUNTIME === "bun",
+      );
+      if (runtimePolicy === "bun-all") {
+        leaf.invocations = selections.filter(
+          (invocation) => invocation.env.OPENCLAW_VITEST_RUNTIME === "node",
+        );
+      }
     }
   }
   const preparedGroups =
-    batchPlan.extensionCount === 1
+    batchPlan.extensionCount === 1 && !allRuntimes
       ? combineSinglePluginGroups(leafGroups, vitestArgs, env, homeMode)
       : leafGroups;
-  for (const group of preparedGroups) {
-    group.invocations = [...group.invocations, ...group.bunInvocations];
-  }
-  const invocations = preparedGroups.flatMap((group) => group.invocations);
+  const phases =
+    runtimePolicy === "dual-all"
+      ? [
+          preparedGroups,
+          preparedGroups
+            .filter((group) => group.bunInvocations.length > 0)
+            .map((group) => Object.assign({}, group, { invocations: group.bunInvocations })),
+        ]
+      : [
+          preparedGroups.map((group) =>
+            Object.assign({}, group, {
+              invocations: [...group.invocations, ...group.bunInvocations],
+            }),
+          ),
+        ];
+  const invocations = phases.flatMap((groups) => groups.flatMap((group) => group.invocations));
   const reports = await createVitestReportOwner(
     invocations.map((invocation) => ({
       config: invocation.config,
@@ -439,29 +464,31 @@ export async function runExtensionBatchPlan(
       return exitCode;
     }
     try {
-      await pMap(
-        preparedGroups,
-        async (group) => {
-          if (
-            stopScheduling ||
-            (exitCode !== 0 && batchPlan.extensionCount > 1) ||
-            termination.signal
-          ) {
-            return;
-          }
-          const running = runPlanGroup(
-            group,
-            runInvocation,
-            allowEmptyAfterExclude,
-            () => stopScheduling || termination.signal !== null,
-          ).then((groupExitCode) => {
-            exitCode = mergeVitestExitCodes(exitCode, groupExitCode);
-          });
-          started.push(running);
-          await running;
-        },
-        { concurrency: parallelism, stopOnError: false },
-      );
+      for (const groups of phases) {
+        await pMap(
+          groups,
+          async (group) => {
+            if (
+              stopScheduling ||
+              (exitCode !== 0 && batchPlan.extensionCount > 1 && runtimePolicy !== "dual-all") ||
+              termination.signal
+            ) {
+              return;
+            }
+            const running = runPlanGroup(
+              group,
+              runInvocation,
+              allowEmptyAfterExclude,
+              () => stopScheduling || termination.signal !== null,
+            ).then((groupExitCode) => {
+              exitCode = mergeVitestExitCodes(exitCode, groupExitCode);
+            });
+            started.push(running);
+            await running;
+          },
+          { concurrency: parallelism, stopOnError: false },
+        );
+      }
     } finally {
       await Promise.allSettled(started);
     }

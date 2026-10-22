@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   closeVisitorFixtures,
   NOW,
@@ -28,28 +28,91 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
-describe("Visitor revocation identity", () => {
-  it.each([
-    ["same-email reassignment", "grant commit"],
-    ["same-email reassignment", "provider dispatch"],
-    ["numeric profile merge", "grant commit"],
-    ["numeric profile merge", "provider dispatch"],
-  ] as const)("refuses a %s before %s", async (mutation, boundary) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      vi.spyOn(Date, "now").mockReturnValue(NOW);
-      const gateway = await createFixture("operator.read");
-      const registry = createRequestGatewayMethodRegistry();
-      gateway.context.getGatewayMethodRegistry = () => registry;
-      const runtime = createPluginRuntime();
-      const plugins = createPluginRegistry({
-        runtime,
-        logger: { info() {}, warn() {}, error() {}, debug() {} },
-        activateGlobalSideEffects: false,
+it.each([
+  ["same-email reassignment", "grant commit"],
+  ["same-email reassignment", "provider dispatch"],
+  ["numeric profile merge", "grant commit"],
+  ["numeric profile merge", "provider dispatch"],
+] as const)("refuses a %s before %s", async (mutation, boundary) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    vi.spyOn(Date, "now").mockReturnValue(NOW);
+    const gateway = await createFixture("operator.read");
+    const registry = createRequestGatewayMethodRegistry();
+    gateway.context.getGatewayMethodRegistry = () => registry;
+    const plugins = createPluginRegistry({
+      runtime: createPluginRuntime(),
+      logger: { info() {}, warn() {}, error() {}, debug() {} },
+      activateGlobalSideEffects: false,
+    });
+    const record = createPluginRecord({ id: "visitor-access", origin: "bundled" });
+    const api = plugins.createApi(record, { config: gateway.cfg });
+    plugins.registry.plugins.push(record);
+    try {
+      const numeric = mutation === "numeric profile merge";
+      const email = "moving@example.test";
+      const grant = numeric ? visitorGrant(42) : visitorGrant(email);
+      const grantKey = numeric ? "github:42" : email;
+      const emails = numeric ? [] : [email];
+      const githubAccountIds = numeric ? [42] : [];
+      const options = { env: state.env };
+      const original = ensureProfileForEmail(email, options);
+      linkEmail("retained@example.test", original.id, options);
+      const replacement = ensureProfileForEmail("replacement@example.test", options);
+      if (numeric) {
+        syncGitHubIdentity(
+          {
+            identity: { accountId: 42, login: "moving-account" },
+            authenticationAlias: { kind: "email", email },
+          },
+          options,
+        );
+      }
+      const store = createPluginStateKeyedStore<VisitorGrant>("visitor-access", {
+        namespace: "visitor-grants",
+        maxEntries: 50,
+        env: state.env,
       });
-      const record = createPluginRecord({ id: "visitor-access", origin: "bundled" });
-      const api = plugins.createApi(record, { config: gateway.cfg });
-      plugins.registry.plugins.push(record);
-      const run = <T>(execute: () => Promise<T>) =>
+      await store.register(grantKey, grant);
+      const withCurrent = store.withCurrent;
+      if (!withCurrent) {
+        throw new Error("Expected the native action-bound store");
+      }
+      let reassign = true;
+      const changeProfile = () => {
+        if (numeric) {
+          mergeProfiles(original.id, replacement.id, options);
+        } else {
+          linkEmail(email, replacement.id, options);
+        }
+        reassign = false;
+      };
+      const visitor = visitorFixture({
+        emails,
+        githubAccountIds,
+        gateway: api.runtime.gateway,
+        store: {
+          ...store,
+          withCurrent(authority) {
+            const guarded = withCurrent(authority);
+            return {
+              ...guarded,
+              register(key, value, entryOptions) {
+                const pending = guarded.register(key, value, entryOptions);
+                if (
+                  boundary === "grant commit" &&
+                  reassign &&
+                  key === grantKey &&
+                  value.expiresAt === NOW
+                ) {
+                  changeProfile();
+                }
+                return pending;
+              },
+            };
+          },
+        },
+      });
+      const revoke = (profileId: string) =>
         withPluginRuntimeGatewayRequestScope(
           {
             context: gateway.context,
@@ -58,119 +121,45 @@ describe("Visitor revocation identity", () => {
             pluginId: "visitor-access",
             pluginOrigin: "bundled",
           },
-          execute,
+          () => visitor.service.revoke({ profileId }, visitor.authority.assertCurrent),
         );
-      try {
-        const numeric = mutation === "numeric profile merge";
-        const email = "moving@example.test";
-        const grant = numeric ? visitorGrant(42) : visitorGrant(email);
-        const grantKey = numeric ? "github:42" : email;
-        const emails = numeric ? [] : [email];
-        const githubAccountIds = numeric ? [42] : [];
-        const options = { env: state.env };
-        const original = ensureProfileForEmail(email, options);
-        linkEmail("retained@example.test", original.id, options);
-        const replacement = ensureProfileForEmail("replacement@example.test", options);
-        if (numeric) {
-          syncGitHubIdentity(
-            {
-              identity: { accountId: 42, login: "moving-account" },
-              authenticationAlias: { kind: "email", email },
-            },
-            options,
-          );
-        }
-        const store = createPluginStateKeyedStore<VisitorGrant>("visitor-access", {
-          namespace: "visitor-grants",
-          maxEntries: 50,
-          env: state.env,
-        });
-        await store.register(grantKey, grant);
-        const withCurrent = store.withCurrent;
-        if (!withCurrent) {
-          throw new Error("Expected the native action-bound store");
-        }
-        let reassign = true;
-        const changeProfile = () => {
-          if (numeric) {
-            mergeProfiles(original.id, replacement.id, options);
-          } else {
-            linkEmail(email, replacement.id, options);
-          }
-          reassign = false;
-        };
-        const visitor = visitorFixture({
-          emails,
-          githubAccountIds,
-          gateway: api.runtime.gateway,
-          store: {
-            ...store,
-            withCurrent(authority) {
-              const guarded = withCurrent(authority);
-              return {
-                ...guarded,
-                register(key, value, entryOptions) {
-                  const pending = guarded.register(key, value, entryOptions);
-                  if (
-                    boundary === "grant commit" &&
-                    reassign &&
-                    key === grantKey &&
-                    value.expiresAt === NOW
-                  ) {
-                    changeProfile();
-                  }
-                  return pending;
-                },
-              };
-            },
-          },
-        });
-        await visitor.service.initialize();
-        if (boundary === "provider dispatch") {
-          const update = visitor.policy.update.bind(visitor.policy);
-          vi.spyOn(visitor.policy, "update").mockImplementation((change, assertCurrent) =>
-            update(async (targets) => {
-              const selected = await change(targets);
-              if (reassign) {
-                changeProfile();
-              }
-              return selected;
-            }, assertCurrent),
-          );
-        }
-        await expect(
-          run(() =>
-            visitor.service.revoke({ profileId: original.id }, visitor.authority.assertCurrent),
-          ),
-        ).rejects.toThrow();
-        expect(reassign).toBe(false);
-        expect(await store.lookup(grantKey)).toEqual(
-          boundary === "grant commit" ? grant : { ...grant, expiresAt: NOW },
+      await visitor.service.initialize();
+      if (boundary === "provider dispatch") {
+        const update = visitor.policy.update.bind(visitor.policy);
+        vi.spyOn(visitor.policy, "update").mockImplementation((change, assertCurrent) =>
+          update(async (targets) => {
+            const selected = await change(targets);
+            if (reassign) {
+              changeProfile();
+            }
+            return selected;
+          }, assertCurrent),
         );
-        expect(visitor.mutations()).toEqual([]);
-        if (boundary === "grant commit") {
-          expect(() =>
-            visitor.service.authorize(emails, githubAccountIds).assertCurrent(),
-          ).not.toThrow();
-        }
-        await expect(
-          run(() =>
-            visitor.service.revoke({ profileId: replacement.id }, visitor.authority.assertCurrent),
-          ),
-        ).resolves.toMatchObject({
-          details: {
-            outcome: "revoked",
-            emails,
-            ...(numeric ? { githubAccountIds } : {}),
-          },
-        });
-        expect(await store.lookup(grantKey)).toBeUndefined();
-        expect(visitor.targets()).toEqual([]);
-      } finally {
-        plugins.rollbackPluginGlobalSideEffects(record.id, record);
-        await gateway.close();
-        await gateway.removeSessions();
       }
-    });
+      await expect(revoke(original.id)).rejects.toThrow();
+      expect(reassign).toBe(false);
+      expect(await store.lookup(grantKey)).toEqual(
+        boundary === "grant commit" ? grant : { ...grant, expiresAt: NOW },
+      );
+      expect(visitor.mutations()).toEqual([]);
+      if (boundary === "grant commit") {
+        expect(() =>
+          visitor.service.authorize(emails, githubAccountIds).assertCurrent(),
+        ).not.toThrow();
+      }
+      await expect(revoke(replacement.id)).resolves.toMatchObject({
+        details: {
+          outcome: "revoked",
+          emails,
+          ...(numeric ? { githubAccountIds } : {}),
+        },
+      });
+      expect(await store.lookup(grantKey)).toBeUndefined();
+      expect(visitor.targets()).toEqual([]);
+    } finally {
+      plugins.rollbackPluginGlobalSideEffects(record.id, record);
+      await gateway.close();
+      await gateway.removeSessions();
+    }
   });
 });

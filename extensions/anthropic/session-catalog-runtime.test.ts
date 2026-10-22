@@ -7,6 +7,13 @@ import { listBoundClaudeSessions } from "./session-catalog-runtime.js";
 type SessionEntry = ReturnType<
   OpenClawPluginApi["runtime"]["agent"]["session"]["listSessionEntries"]
 >[number]["entry"];
+const threadId = "shared-thread";
+function session(sessionKey: string, entry: Partial<SessionEntry> = {}) {
+  return {
+    sessionKey,
+    entry: { cliSessionBindings: { "claude-cli": { sessionId: threadId } }, ...entry },
+  };
+}
 
 function boundSessions(entries: { sessionKey: string; entry: Partial<SessionEntry> }[]) {
   return listBoundClaudeSessions({
@@ -22,7 +29,11 @@ function boundSessions(entries: { sessionKey: string; entry: Partial<SessionEntr
 describe("Claude bound session resolution", () => {
   it("reuses revision-bound projections and reads unversioned entries every time", () => {
     const config = {};
-    const api = { id: "anthropic", config, runtime: {} } as OpenClawPluginApi;
+    const api = {
+      id: "anthropic",
+      config,
+      runtime: { config: { current: () => config } },
+    } as OpenClawPluginApi;
     const entries = [
       {
         agentId: "main",
@@ -82,19 +93,9 @@ describe("Claude bound session resolution", () => {
       nodeEntry: { execHost: "node" as const, execNode: "node-a" },
     },
   ])("keeps local and paired-node bindings distinct via $label", ({ nodeAdopted, nodeEntry }) => {
-    const threadId = "shared-thread";
     const bound = boundSessions([
-      {
-        sessionKey: "agent:main:local",
-        entry: { cliSessionBindings: { "claude-cli": { sessionId: threadId } } },
-      },
-      {
-        sessionKey: "agent:main:node",
-        entry: {
-          cliSessionBindings: { "claude-cli": { sessionId: threadId } },
-          ...nodeEntry,
-        },
-      },
+      session("agent:main:local"),
+      session("agent:main:node", nodeEntry),
     ]);
 
     expect(bound).toEqual(
@@ -112,30 +113,15 @@ describe("Claude bound session resolution", () => {
   });
 
   it("keeps an adopted session on a source key a sibling agent's CLI binding shares", () => {
-    const threadId = "shared-thread";
+    const sessionKey = "plugin:anthropic:catalog-adopt:claude:adopted";
     const bound = boundSessions([
-      {
-        sessionKey: "plugin:anthropic:catalog-adopt:claude:adopted",
-        entry: {
-          cliSessionBindings: { "claude-cli": { sessionId: threadId } },
-          pluginOwnerId: "anthropic",
-          modelSelectionLocked: true,
-        },
-      },
+      session(sessionKey, { pluginOwnerId: "anthropic", modelSelectionLocked: true }),
       // A later sibling binding must not displace the adopted owner of this source key.
-      {
-        sessionKey: "agent:other:routed",
-        entry: { cliSessionBindings: { "claude-cli": { sessionId: threadId } } },
-      },
+      session("agent:other:routed"),
     ]);
 
     expect(bound).toEqual(
-      new Map([
-        [
-          adoptedSourceKey("gateway:local", threadId),
-          { adopted: true, sessionKey: "plugin:anthropic:catalog-adopt:claude:adopted" },
-        ],
-      ]),
+      new Map([[adoptedSourceKey("gateway:local", threadId), { adopted: true, sessionKey }]]),
     );
   });
 });

@@ -83,7 +83,7 @@ class DiscordVoiceConversationInput {
       }
       this.pendingAudioBytes += pcm.length;
       if (this.params.createTurn) {
-        this.audio.push({ pcm: Buffer.from(pcm), receipt });
+        this.audio.push({ pcm, receipt });
       }
       return;
     }

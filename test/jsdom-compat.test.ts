@@ -11,7 +11,7 @@ const require = process.getBuiltinModule("module").createRequire(import.meta.url
 const { builtinEnvironments }: typeof import("vitest/runtime") = require("vitest/runtime");
 
 describe("jsdom native API boundary", () => {
-  it("adapts the package-local Vitest environment before creating object URLs", () => {
+  it("defers DOM loading until use and adapts package-local windows and object URLs", () => {
     const result = spawnSync(
       process.execPath,
       [
@@ -21,9 +21,23 @@ describe("jsdom native API boundary", () => {
         "--input-type=module",
         "--eval",
         `
+          import assert from "node:assert/strict";
           import { createRequire } from "node:module";
           const require = createRequire(process.argv[1]);
           const { builtinEnvironments } = require("vitest/runtime");
+          assert.ok(!require.cache[require.resolve("jsdom")], "preload must leave jsdom unloaded");
+          const { JSDOM } = require("jsdom");
+          const direct = new JSDOM("<iframe></iframe>");
+          try {
+            const received = [];
+            for (const target of [direct.window, direct.window.document.querySelector("iframe").contentWindow]) {
+              target.addEventListener("probe", () => received.push("probe"));
+              target.dispatchEvent(new target.Event("probe"));
+            }
+            assert.deepEqual(received, ["probe", "probe"]);
+          } finally {
+            direct.window.close();
+          }
           const environment = await builtinEnvironments.jsdom.setup(globalThis, {});
           try {
             const url = URL.createObjectURL(new Blob(["complete asset"], { type: "image/png" }));
@@ -37,12 +51,7 @@ describe("jsdom native API boundary", () => {
           }
         `,
         path.join(
-          path.dirname(
-            process
-              .getBuiltinModule("module")
-              .createRequire(path.resolve("ui/package.json"))
-              .resolve("vitest/package.json"),
-          ),
+          path.dirname(require.resolve("vitest/package.json", { paths: [path.resolve("ui")] })),
           "dist/workers/forks.js",
         ),
       ],
@@ -96,9 +105,7 @@ describe("jsdom native API boundary", () => {
   });
 
   it("preserves Blob and multipart file bytes, names, and types in Request", async () => {
-    const file = new File(["exact file bytes"], "report.bin", {
-      type: "application/octet-stream",
-    });
+    const file = new File(["exact file bytes"], "report.bin", { type: "application/octet-stream" });
     const request = new Request("https://example.test/", { method: "POST", body: file });
     expect(await request.text()).toBe("exact file bytes");
     const form = new FormData();
@@ -126,9 +133,7 @@ describe("jsdom native API boundary", () => {
       reader.addEventListener(
         "error",
         () => reject(reader.error ?? new Error("FileReader failed")),
-        {
-          once: true,
-        },
+        { once: true },
       );
     });
     reader.readAsDataURL(new File(["reader bytes"], "reader.txt", { type: "text/plain" }));

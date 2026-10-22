@@ -1,76 +1,22 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { githubItem, reportDocument, reportMember } from "./reports-data.test-support.js";
 import { completion, githubCounts as counts, type Complete } from "./reports.fixtures.js";
 import { generateSummaries } from "./summaries.js";
-import type { PersonReport, ReportDocument } from "./types.js";
-
-function member(login: string): PersonReport {
-  return {
-    login,
-    display: login,
-    access: [],
-    areas: [],
-    aliases: [],
-    github: { ...counts(), items: [] },
-    discord: { total: 0, channels: {}, excerpts: [] },
-  };
-}
+import type { ReportDocument } from "./types.js";
 
 function report(): ReportDocument {
-  const alex = member("alex");
-  alex.github.total = 1;
-  alex.github.commits = 1;
-  alex.github.repos = { "sample/widgets": 1 };
-  alex.github.items = [
-    {
-      kind: "commit",
-      repo: "sample/widgets",
-      title: "Correct the widget resize calculation",
-      url: "https://github.com/sample/widgets/commit/abc",
-      actor: "alex",
-      atMs: Date.parse("2026-08-20T12:00:00Z"),
-    },
-  ];
-  return {
-    version: 1,
-    period: {
-      period: "day",
-      key: "2026-08-20",
-      sinceMs: Date.parse("2026-08-20T00:00:00Z"),
-      untilMs: Date.parse("2026-08-21T00:00:00Z"),
-      title: "August 20, 2026",
-    },
-    generatedAtMs: 1,
-    status: "closed",
-    orgs: ["sample"],
-    memberCount: 2,
-    activeMembers: 1,
-    totals: {
-      github: { ...counts(), total: 1, commits: 1 },
-      discord: { messages: 0, channels: {} },
-    },
-    members: [alex, member("blair")],
-    otherActors: [],
-    unmatchedDiscord: [],
-    sources: { github: { ok: true, warnings: [], stats: {} } },
-  };
+  return reportDocument([
+    reportMember("alex", { github: { ...counts(1), items: [githubItem({ actor: "alex" })] } }),
+    reportMember("blair", { github: { ...counts(), items: [] } }),
+  ]);
 }
 
 function response() {
   return {
-    globalSummary:
-      "One member corrected widget resizing. The other member has no recorded activity.\n\n- **Widgets:** Corrected resize calculations.\n- **Reviews:** None recorded.\n- **Discord:** No messages recorded.\n- **Coverage:** GitHub collection succeeded.",
-    highlights: [
-      "Widget resize calculation corrected.",
-      "No review comments were recorded.",
-      "No Discord messages were recorded.",
-      "One member has no recorded activity.",
-    ],
+    globalSummary: "One active member.\n\n- **Widgets:** Fixed.\n- **Coverage:** Complete.",
+    highlights: ["Fixed.", "No reviews.", "No messages.", "One inactive."],
     members: [
-      {
-        login: "alex",
-        summary: "Corrected widget resizing in sample/widgets.",
-        confidence: "high",
-      },
+      { login: "alex", summary: "Corrected widget resizing.", confidence: "high" },
       { login: "blair", summary: "No visible activity was recorded.", confidence: "low" },
     ],
   };
@@ -88,6 +34,8 @@ function summarize(
   });
 }
 
+const modelCompletion = () => completion(JSON.stringify(response()));
+
 afterEach(() => vi.restoreAllMocks());
 
 describe("team report summaries", () => {
@@ -101,7 +49,7 @@ describe("team report summaries", () => {
     const complete = vi
       .fn<Complete>()
       .mockResolvedValueOnce(completion(JSON.stringify(incomplete)))
-      .mockResolvedValueOnce(completion(JSON.stringify(response())));
+      .mockResolvedValueOnce(modelCompletion());
     const result = await summarize(complete);
     expect(result.summary.source).toBe("model");
     expect(result.report.members.every((entry) => entry.summary?.source === "model")).toBe(true);
@@ -130,8 +78,10 @@ describe("team report summaries", () => {
     const logger = { warn: vi.fn() };
     const result = await summarize(complete, { report: input, logger });
     expect(complete).toHaveBeenCalledTimes(2);
-    expect(result.summary.source).toBe("fallback");
-    expect(result.summary.warnings).toEqual([expect.stringContaining(cause)]);
+    expect(result.summary).toMatchObject({
+      source: "fallback",
+      warnings: [expect.stringContaining(cause)],
+    });
     expect(result.summary.warnings?.[0]?.length).toBeLessThanOrEqual(300);
     expect(logger.warn.mock.calls).toEqual([[result.summary.warnings?.[0]]]);
     expect(JSON.stringify([result.summary, logger.warn.mock.calls])).not.toContain(
@@ -156,10 +106,8 @@ describe("team report summaries", () => {
     expect(logger.warn.mock.calls).toEqual([["Model summary unavailable: completion failed"]]);
     expect(JSON.stringify(result)).not.toContain("private-provider-error-marker");
     expect(complete).toHaveBeenCalledOnce();
-    const disabled = await generateSummaries({
-      report: report(),
+    const disabled = await summarize(complete, {
       options: { enabled: false },
-      llm: { complete },
       logger,
       previous: result,
     });
@@ -173,9 +121,9 @@ describe("team report summaries", () => {
     const complete = vi.fn<Complete>();
     const input = report();
     input.sources.github = { ok: false, warnings: ["Collection incomplete"], stats: {} };
-    const params = { report: input, options: { enabled: false }, llm: { complete } };
-    const first = await generateSummaries(params);
-    const second = await generateSummaries(params);
+    const params = { report: input, options: { enabled: false } };
+    const first = await summarize(complete, params);
+    const second = await summarize(complete, params);
     expect(first).toEqual(second);
     expect(first.summary.globalSummary).toContain("Source coverage has gaps");
     expect(first.report.members).toHaveLength(2);
@@ -184,7 +132,7 @@ describe("team report summaries", () => {
   });
 
   it("reuses an unchanged fingerprint and restores stored member prose onto fresh evidence", async () => {
-    const complete = vi.fn<Complete>().mockResolvedValue(completion(JSON.stringify(response())));
+    const complete = vi.fn<Complete>().mockResolvedValue(modelCompletion());
     const first = await summarize(complete);
     const fresh = report();
     fresh.generatedAtMs = 12345;
@@ -193,7 +141,6 @@ describe("team report summaries", () => {
     const next = await summarize(complete, { report: fresh, previous: first });
     expect(complete).toHaveBeenCalledOnce();
     expect(next.summary).toEqual(first.summary);
-    expect(next.summary.fingerprint).toBe(first.summary.fingerprint);
     expect(next.report.generatedAtMs).toBe(12345);
     expect(next.report.members.find((entry) => entry.login === "alex")?.summary?.text).toBe(
       response().members[0]?.summary,
@@ -202,42 +149,21 @@ describe("team report summaries", () => {
 
   it("bounds member evidence and excludes raw comment bodies from model input", async () => {
     const input = report();
-    const alex = input.members[0];
-    if (!alex) {
-      throw new Error("Missing fixture member");
-    }
-    alex.github.items = Array.from({ length: 100 }, (_, index) => ({
-      kind: "issue_comment",
-      repo: "sample/widgets",
-      title: `Public summary ${index}`,
-      body: "RAW BODY MUST NOT REACH THE MODEL",
-      url: `https://github.com/sample/widgets/issues/1#comment-${index}`,
-      actor: "alex",
-      atMs: index,
-    }));
-    const complete = vi.fn<Complete>().mockResolvedValue(completion(JSON.stringify(response())));
+    input.members[0]!.github.items = Array.from({ length: 100 }, (_, index) =>
+      githubItem({
+        kind: "issue_comment",
+        title: `Public summary ${index}`,
+        body: "RAW BODY MUST NOT REACH THE MODEL",
+        url: `https://github.com/sample/widgets/issues/1#comment-${index}`,
+        actor: "alex",
+        atMs: index,
+      }),
+    );
+    const complete = vi.fn<Complete>().mockResolvedValue(modelCompletion());
     await summarize(complete, { report: input });
     const digest = complete.mock.calls[0]?.[0].messages[1]?.content;
     expect(digest).not.toContain("RAW BODY");
     expect(digest).toContain("Public summary 99");
     expect(digest).not.toContain('"title":"Public summary 19"');
-  });
-
-  it("propagates cancellation and does not return a late model result or start a repair", async () => {
-    const controller = new AbortController();
-    const complete = vi.fn<Complete>().mockImplementation(async ({ signal }) => {
-      expect(signal).toBe(controller.signal);
-      controller.abort(new Error("Run deadline reached"));
-      return completion(JSON.stringify(response()));
-    });
-    await expect(
-      generateSummaries({
-        report: report(),
-        options: { enabled: true },
-        llm: { complete },
-        signal: controller.signal,
-      }),
-    ).rejects.toThrow("Run deadline reached");
-    expect(complete).toHaveBeenCalledOnce();
   });
 });

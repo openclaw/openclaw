@@ -38,9 +38,9 @@ export function parseYouTubeVideoUrl(raw: string | undefined) {
   ) {
     return undefined;
   }
-  let videoId: string | undefined;
+  let videoId: string | null | undefined;
   if (YOUTUBE_HOSTS.has(url.hostname) && url.pathname === "/watch") {
-    videoId = query.get("v") ?? undefined;
+    videoId = query.get("v");
   } else {
     if (query.has("v")) {
       return undefined;
@@ -69,8 +69,6 @@ export function parseYouTubeVideoUrl(raw: string | undefined) {
     embedUrl.searchParams.set("start", String(startSeconds));
   }
   return {
-    videoId,
-    startSeconds,
     watchUrl: watchUrl.href,
     embedUrl: embedUrl.href,
     thumbnailUrl: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,

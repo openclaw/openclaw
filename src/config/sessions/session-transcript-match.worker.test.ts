@@ -1,12 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { performance } from "node:perf_hooks";
 import { afterEach, expect, it } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { readSubagentRunAnnounceResultUsing } from "../../agents/subagents/announce/subagent-announce-result.js";
+import { readSessionMessageByIdAsync } from "../../gateway/session-transcript-readers.js";
+import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
+import { captureRuntimeConfigAsyncReader } from "../io.runtime.js";
 import { createSessionEntryWithTranscript } from "./session-accessor.js";
 import { findSessionTranscriptArchiveEventReadOnly } from "./session-accessor.sqlite-history.js";
 import { seedUnindexedTranscriptForTest } from "./session-accessor.sqlite-import.test-support.js";
@@ -14,37 +19,62 @@ import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import type { SessionTranscriptEventMatch } from "./session-history-read.types.js";
+import { loadSessionTranscriptEvents } from "./session-transcript-events.js";
 import { findTranscriptEvent } from "./session-transcript-match.js";
 
 afterEach(() => memorySessionActorOwners.reset());
 
-it("keeps incognito matching in its process-owned store without creating disk state", async () => {
-  await withOpenClawTestState({ label: "transcript-incognito-matching" }, async (state) => {
-    const scope = {
-      agentId: "main",
-      env: state.env,
-      sessionId: "private-answer",
-      sessionKey: "agent:main:dashboard:incognito-matching",
-      storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
+function assistant(id: string, runId: string, message: Record<string, unknown> = {}) {
+  return {
+    type: "message",
+    id,
+    message: {
+      role: "assistant",
+      stopReason: "stop",
+      content: `Complete answer ${id}`,
+      __openclaw: { runId },
+      ...message,
+    },
+  };
+}
+
+function transcriptScope(state: OpenClawTestState, sessionId: string, incognito = false) {
+  const scope = {
+    agentId: "main",
+    env: state.env,
+    sessionId,
+    sessionKey: incognito
+      ? "agent:main:dashboard:incognito-matching"
+      : `agent:main:subagent:${sessionId}`,
+    storePath: incognito
+      ? resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env })
+      : path.join(state.stateDir, "transcript.sqlite"),
+  };
+  expect(scope.storePath.startsWith(state.root)).toBe(true);
+  expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
+  return scope;
+}
+
+const canvasDetails = (id: string) => ({
+  kind: "canvas",
+  view: { id },
+  presentation: { target: "assistant_message" },
+});
+
+it("keeps incognito matching and raw reads in their memory owner without creating disk state", () =>
+  withOpenClawTestState({ label: "transcript-incognito-matching" }, async (state) => {
+    const scope = transcriptScope(state, "private-answer", true);
+    const expectNoArchiveOrDisk = async () => {
+      await expect(
+        findSessionTranscriptArchiveEventReadOnly(scope, "private-run"),
+      ).resolves.toBeUndefined();
+      await expect(fs.readdir(state.stateDir, { recursive: true })).resolves.toEqual([]);
     };
-    expect(scope.storePath.startsWith(state.root)).toBe(true);
-    expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
     await expect(findTranscriptEvent(scope, { kind: "latest" })).resolves.toBeUndefined();
-    const answer = {
-      type: "message",
-      id: "private-final",
-      message: {
-        role: "assistant",
-        stopReason: "stop",
-        content: "private complete answer",
-        __openclaw: { runId: "private-run" },
-      },
-    };
-    const unrelated = {
-      ...answer,
-      id: "other-final",
-      message: { ...answer.message, content: "other run", __openclaw: { runId: "other-run" } },
-    };
+    const answer = assistant("private-final", "private-run", {
+      content: "private complete answer",
+    });
+    const unrelated = assistant("other-final", "other-run", { content: "other run" });
     await createSessionEntryWithTranscript(scope, () => ({
       ok: true,
       entry: { incognito: true, sessionId: scope.sessionId, updatedAt: 1 },
@@ -57,48 +87,33 @@ it("keeps incognito matching in its process-owned store without creating disk st
     await expect(findTranscriptEvent(scope, { kind: "latest" })).resolves.toEqual({
       event: unrelated,
     });
-    await expect(
-      findSessionTranscriptArchiveEventReadOnly(scope, "private-run"),
-    ).resolves.toBeUndefined();
-    await expect(fs.readdir(state.stateDir, { recursive: true })).resolves.toEqual([]);
+    await expect(loadSessionTranscriptEvents(scope)).resolves.toEqual([answer, unrelated]);
+    await expectNoArchiveOrDisk();
 
     memorySessionActorOwners.closeDatabase({ agentId: scope.agentId, path: scope.storePath });
     await expect(findTranscriptEvent(scope, { kind: "latest" })).resolves.toBeUndefined();
-    await expect(
-      findSessionTranscriptArchiveEventReadOnly(scope, "private-run"),
-    ).resolves.toBeUndefined();
-    await expect(fs.readdir(state.stateDir, { recursive: true })).resolves.toEqual([]);
-  });
-});
+    await expect(loadSessionTranscriptEvents(scope)).resolves.toEqual([]);
+    await expectNoArchiveOrDisk();
+  }));
 
-it("recovers the exact complete child answer without preventing host event progress", async () => {
-  await withOpenClawTestState({ label: "transcript-responsiveness" }, async (state) => {
-    const storePath = path.join(state.stateDir, "transcript.sqlite");
-    expect(storePath.startsWith(state.root)).toBe(true);
-    expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
-    const sessionId = "synthetic-child";
-    const sessionKey = "agent:main:subagent:synthetic-child";
-    const target = { agentId: "main", sessionId, sessionKey, storePath };
+it("recovers the exact complete child answer without preventing host event progress", () =>
+  withOpenClawTestState({ label: "transcript-responsiveness" }, async (state) => {
+    const target = transcriptScope(state, "synthetic-child");
+    const { sessionId, sessionKey } = target;
     const fullAnswer = "Full final answer " + "complete ".repeat(1024) + "required-tail";
-    const assistant = (runId: string, text: string, id: string) => ({
-      type: "message",
-      id,
-      message: { role: "assistant", stopReason: "stop", content: text, __openclaw: { runId } },
-    });
     const events = [
       { type: "session", id: sessionId, version: 3 },
-      assistant("completed-run", "earlier commentary", "earlier"),
-      assistant("completed-run", fullAnswer, "answer"),
+      assistant("earlier", "completed-run", { content: "earlier commentary" }),
+      assistant("answer", "completed-run", { content: fullAnswer }),
       ...Array.from({ length: 512 }, (_, index) => ({
         type: "message",
         id: `tool-${index}`,
         message: { role: "toolResult", content: "x".repeat(64 * 1024) },
       })),
-      assistant("latest-run", "newest unrelated answer", "latest"),
+      assistant("latest", "latest-run", { content: "newest unrelated answer" }),
     ];
     await seedUnindexedTranscriptForTest({
       ...target,
-      env: state.env,
       entry: { sessionId, updatedAt: 1 },
       events: events.map((event, seq) => ({
         session_id: sessionId,
@@ -133,7 +148,6 @@ it("recovers the exact complete child answer without preventing host event progr
           resolve();
         });
       });
-      const started = performance.now();
       try {
         const prepared = await readSubagentRunAnnounceResultUsing(child, {
           readSubagentRun: () => child,
@@ -148,9 +162,7 @@ it("recovers the exact complete child answer without preventing host event progr
             findTranscriptEvent({ ...scope, env: state.env }, match),
           findSessionTranscriptArchiveEventReadOnly,
         });
-        const elapsedMs = performance.now() - started;
-        const hostProgressBeforeResult = hostEventObserved;
-        return { prepared, elapsedMs, hostProgressBeforeResult };
+        return { prepared, hostProgressBeforeResult: hostEventObserved };
       } finally {
         await hostEvent;
       }
@@ -164,88 +176,104 @@ it("recovers the exact complete child answer without preventing host event progr
     }
     expect(old.prepared.text).toBe(fullAnswer);
     expect(old.prepared.isCurrent()).toBe(true);
-    console.log(
-      JSON.stringify({
-        contract: "exact-run-final-answer-host-progress",
-        payloadRows: 512,
-        payloadBytesPerRow: 65536,
-        control: {
-          elapsedMs: latest.elapsedMs,
-          hostProgressBeforeResult: latest.hostProgressBeforeResult,
-        },
-        olderRun: {
-          elapsedMs: old.elapsedMs,
-          hostProgressBeforeResult: old.hostProgressBeforeResult,
-        },
-      }),
-    );
     expect(old.hostProgressBeforeResult).toBe(true);
-  });
-});
+  }));
 
-it("keeps match filters and active anchors authoritative across worker payload encodings", async () => {
-  await withOpenClawTestState({ label: "transcript-match-encodings" }, async (state) => {
+it("keeps match filters and active anchors authoritative across worker payload encodings", () =>
+  withOpenClawTestState({ label: "transcript-match-encodings" }, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
     for (const compressed of [false, true]) {
       const sessionId = compressed ? "compressed-matches" : "identity-matches";
-      const scope = {
-        agentId: "main",
-        env: state.env,
-        sessionId,
-        sessionKey: `agent:main:subagent:${sessionId}`,
-        storePath: path.join(state.stateDir, "transcript.sqlite"),
-      };
-      const assistant = (id: string, runId: string, message: Record<string, unknown> = {}) => ({
-        type: "message",
-        id,
+      const scope = transcriptScope(state, sessionId);
+      const encodedAssistant = (
+        id: string,
+        runId: string,
+        message: Record<string, unknown> = {},
+      ) => ({
+        ...assistant(id, runId, message),
         parentId: null,
         padding: compressed ? "compressible payload ".repeat(256) : "",
-        message: {
-          role: "assistant",
-          stopReason: "stop",
-          content: `Complete answer ${id}`,
-          __openclaw: { runId },
-          ...message,
+      });
+      const answer = encodedAssistant("answer", "completed-run", { display: true });
+      const finalMirror = encodedAssistant("final-source-reply", "mirror-run", {
+        openclawDeliveryMirror: {
+          kind: "message-tool-source-reply",
+          sourceTurnId: "mirror-run",
+          final: true,
         },
       });
-      const answer = assistant("answer", "completed-run");
-      const finalMirror = assistant("final-source-reply", "mirror-run", {
-        openclawDeliveryMirror: { kind: "message-tool-source-reply", final: true },
-      });
-      const deliveryMirror = assistant("delivery-mirror", "delivery-run", {
+      const deliveryMirror = encodedAssistant("delivery-mirror", "delivery-run", {
         idempotencyKey: "shared-key",
         provider: "openclaw",
         model: "delivery-mirror",
       });
-      const ordinary = assistant("ordinary", "delivery-run", { idempotencyKey: "shared-key" });
-      const user = assistant("user", "other-run", {
+      const ordinary = encodedAssistant("ordinary", "delivery-run", {
+        idempotencyKey: "shared-key",
+      });
+      const user = encodedAssistant("user", "other-run", {
         role: "user",
         idempotencyKey: "shared-key",
       });
-      const active = assistant("active", "branch-run");
-      const inactive = assistant("inactive", "branch-run");
+      const widget = encodedAssistant("widget", "widget-run", {
+        role: "toolResult",
+        toolName: "show_widget",
+        isError: false,
+        details: canvasDetails("cv_saved"),
+      });
+      const nestedWidget = {
+        ...encodedAssistant(
+          "nested-widget",
+          "widget-run",
+          createNestedToolActivity({
+            runId: "widget-run",
+            scopeId: "widget-scope",
+            afterEntryId: "widget",
+            startOrder: 0,
+            toolCallId: "nested-call",
+            toolName: "show_widget",
+            input: {},
+            result: {
+              content: [],
+              details: canvasDetails("cv_nested"),
+            },
+            isError: false,
+            startedAt: 1,
+            timestamp: 2,
+          }),
+        ),
+        parentId: "widget",
+      };
+      const active = { ...encodedAssistant("active", "branch-run"), parentId: "nested-widget" };
+      const inactive = encodedAssistant("inactive", "branch-run");
       const leaf = { type: "leaf", id: "leaf", parentId: "inactive", targetId: "active" };
       const events = [
         { type: "session", id: sessionId, version: 3 },
         answer,
-        assistant("silent", "completed-run", { content: "NO_REPLY" }),
-        assistant("tool-use", "completed-run", { stopReason: "toolUse" }),
-        assistant("tool-call", "completed-run", {
+        encodedAssistant("silent", "completed-run", { content: "NO_REPLY" }),
+        encodedAssistant("tool-use", "completed-run", { stopReason: "toolUse" }),
+        encodedAssistant("tool-call", "completed-run", {
           content: [{ type: "toolCall", id: "call", name: "read", arguments: {} }],
         }),
-        assistant("empty", "completed-run", { content: " " }),
-        assistant("nonfinal-source-reply", "completed-run", {
+        encodedAssistant("empty", "completed-run", { content: " " }),
+        encodedAssistant("nonfinal-source-reply", "completed-run", {
           openclawDeliveryMirror: { kind: "message-tool-source-reply", final: false },
         }),
         finalMirror,
-        assistant("mirror-silent", "mirror-run", { content: "NO_REPLY" }),
+        encodedAssistant("mirror-silent", "mirror-run", { content: "NO_REPLY" }),
         deliveryMirror,
         ordinary,
         user,
+        widget,
+        nestedWidget,
         active,
         inactive,
         leaf,
       ];
       await replaceTranscriptEvents(scope, events);
+      // Prepare the projection before observing the worker-only match reads.
+      await expect(readSessionMessageByIdAsync(scope, "active")).resolves.toMatchObject({
+        found: true,
+      });
       const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope)));
       expect(
         database.db
@@ -254,28 +282,24 @@ it("keeps match filters and active anchors authoritative across worker payload e
           )
           .get(sessionId),
       ).toEqual({ count: compressed ? events.length - 2 : 0 });
-      const cases: Array<{ match: SessionTranscriptEventMatch; event?: unknown }> = [
-        { match: { kind: "visible-final", runId: "completed-run" }, event: answer },
-        { match: { kind: "visible-final", runId: "mirror-run" }, event: finalMirror },
-        { match: { kind: "visible-final", runId: "absent-run" } },
-        { match: { kind: "idempotency", key: "shared-key" }, event: user },
-        { match: { kind: "idempotency", key: "shared-key", assistant: true }, event: ordinary },
-        {
-          match: { kind: "idempotency", key: "shared-key", runId: "delivery-run" },
-          event: ordinary,
-        },
-        {
-          match: { kind: "idempotency", key: "shared-key", deliveryMirror: true },
-          event: deliveryMirror,
-        },
-        { match: { kind: "idempotency", key: "absent-key" } },
-        { match: { kind: "visible-final", runId: "branch-run" }, event: inactive },
-        { match: { kind: "active-assistant", runId: "branch-run" }, event: active },
-        { match: { kind: "latest" }, event: leaf },
+      const cases: Array<[SessionTranscriptEventMatch, unknown?]> = [
+        [{ kind: "visible-final", runId: "completed-run" }, answer],
+        [{ kind: "visible-final", runId: "mirror-run" }, finalMirror],
+        [{ kind: "visible-final", runId: "absent-run" }],
+        [{ kind: "idempotency", key: "shared-key" }, user],
+        [{ kind: "idempotency", key: "shared-key", assistant: true }, ordinary],
+        [{ kind: "idempotency", key: "shared-key", runId: "delivery-run" }, ordinary],
+        [{ kind: "idempotency", key: "shared-key", deliveryMirror: true }, deliveryMirror],
+        [{ kind: "idempotency", key: "absent-key" }],
+        [{ kind: "visible-final", runId: "branch-run" }, inactive],
+        [{ kind: "active-assistant", runId: "branch-run" }, active],
+        [{ kind: "canvas-widget", docId: "cv_saved" }, widget],
+        [{ kind: "canvas-widget", docId: "cv_nested" }, nestedWidget],
+        [{ kind: "latest" }, leaf],
       ];
       const hostSql = observeHostDataSql();
       try {
-        for (const { match, event } of cases) {
+        for (const [match, event] of cases) {
           await expect(findTranscriptEvent(scope, match)).resolves.toEqual(
             event ? { event } : undefined,
           );
@@ -285,5 +309,4 @@ it("keeps match filters and active anchors authoritative across worker payload e
         hostSql.restore();
       }
     }
-  });
-});
+  }));

@@ -1,20 +1,36 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { SessionsPatchResult } from "../../../src/gateway/session-utils.types.js";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
+import {
+  createControlUiE2eSuite,
+  holdModuleResponse,
+} from "./control-ui-e2e-suite.test-support.ts";
+import { pollText, pollCount, pollAttribute } from "./new-session-page.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Model selection recovery" });
+
+const holdOptions = (page: Page) =>
+  holdModuleResponse(
+    page,
+    controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-model-picker-options.tsx"),
+  );
+async function openPicker(picker: Locator) {
+  const trigger = picker.locator("[data-chat-model-select]");
+  await pollAttribute(trigger, "aria-disabled").toBe("false");
+  await trigger.click();
+  return trigger;
+}
+const expectLoading = (picker: Locator) =>
+  pollText(picker.locator('[role="status"]')).toContain("Loading models");
 
 suite.define(() => {
   it.each([false, true])(
     "retains a confirmed model selection when the roster refresh fails=%s",
-    async (refreshFails) => {
-      await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-        const artifactDir = createControlUiE2eArtifactDir("model-selection-recovery");
+    (refreshFails) =>
+      suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
         const key = "agent:main:model-selection-proof";
         const row = {
           key,
@@ -51,15 +67,12 @@ suite.define(() => {
         const picker = page.locator(
           'openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker',
         );
-        const trigger = picker.locator("[data-chat-model-select]");
-        await expect.poll(() => trigger.getAttribute("aria-disabled")).toBe("false");
-        await trigger.click();
+        const trigger = await openPicker(picker);
         await revealChatModelOption(picker.locator('[data-chat-model-option="openai/gpt-5.5"]'));
-        await page.screenshot({ path: path.join(artifactDir, "before-selection.png") });
         await picker.locator('[data-chat-model-option="openai/gpt-5.5"]').click();
         const patch = await gateway.waitForRequest("sessions.patch");
         expect(patch.params).toMatchObject({ key, model: "openai/gpt-5.5" });
-        await expect.poll(() => trigger.getAttribute("aria-disabled")).toBe("true");
+        await pollAttribute(trigger, "aria-disabled").toBe("true");
 
         if (refreshFails) {
           await gateway.setMethodResponse("sessions.list", {
@@ -83,31 +96,102 @@ suite.define(() => {
           resolved: { modelProvider: "openai", model: selected.model },
         } satisfies SessionsPatchResult);
         await gateway.waitForRequest("sessions.list", { after: listCount });
-        await expect.poll(() => trigger.getAttribute("aria-disabled")).toBe("false");
+        await pollAttribute(trigger, "aria-disabled").toBe("false");
         await trigger.click();
         await picker.locator(".chat-controls__model-menu").waitFor();
-        const observedSelection = await trigger.getAttribute("data-chat-select-value");
-        const observedLabel = await trigger.textContent();
-        // Preserve the actual settled UI and transport evidence before the regression assertion.
-        await page.screenshot({ path: path.join(artifactDir, "after-confirmed-selection.png") });
-        await writeFile(
-          path.join(artifactDir, "selection.json"),
-          JSON.stringify(
-            {
-              refreshFails,
-              confirmed: selected,
-              observedSelection,
-              observedLabel,
-              patches: await gateway.getRequests("sessions.patch"),
-              lists: await gateway.getRequests("sessions.list"),
-            },
-            null,
-            2,
-          ),
-        );
-        expect(observedSelection).toBe("openai/gpt-5.5");
-        expect(observedLabel).toContain("GPT-5.5");
+        expect(await trigger.getAttribute("data-chat-select-value")).toBe("openai/gpt-5.5");
+        expect(await trigger.textContent()).toContain("GPT-5.5");
+      }),
+  );
+  it.each([
+    { status: "error", message: "Models unavailable" },
+    { status: "offline", message: "Offline" },
+  ] as const)("shows the $status catalog state when the panel arrives", ({ status, message }) =>
+    suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const held = await holdOptions(page);
+      const gateway = await installMockGateway(page, {
+        models: [],
+        methodResponses: {
+          "models.list": {
+            __mockError: { code: "UNAVAILABLE", message: "Synthetic catalog unavailable" },
+          },
+        },
       });
-    },
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const picker = page.locator(".chat-controls__model-picker").first();
+      const trigger = await openPicker(picker);
+      await held.request;
+      await gateway.waitForRequest("models.list");
+      await expectLoading(picker);
+      if (status === "offline") {
+        await gateway.setOnline(false);
+        await pollAttribute(trigger, "aria-disabled").toBe("true");
+      }
+      held.release();
+      await picker.locator(".chat-controls__model-menu").waitFor();
+      const notice = picker.locator(`[data-chat-model-catalog-state="${status}"]`);
+      await expect.poll(() => notice.isVisible()).toBe(true);
+      expect(await notice.textContent()).toBe(message);
+      expect(await notice.getAttribute("aria-live")).toBe("polite");
+    }),
+  );
+  it.each([
+    ["new", "open"],
+    ["new", "closed"],
+    ["new", "focus moved"],
+    ["chat", "open"],
+    ["chat", "closed"],
+    ["chat", "focus moved"],
+  ] as const)("keeps /%s usable while model choices load (%s)", (route, state) =>
+    suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const held = await holdOptions(page);
+      const models = ["Alpha", "Beta"].map((name) => ({
+        id: name.toLowerCase(),
+        name,
+        provider: "example",
+        contextWindow: 128_000,
+      }));
+      await installMockGateway(page, {
+        models,
+        agentModel: "example/alpha",
+        sessionInfo: { model: "alpha", modelProvider: "example" },
+      });
+      await page.goto(`${suite.server.baseUrl}${route}`);
+      const picker = page.locator(".chat-controls__model-picker").first();
+      const trigger = picker.locator("[data-chat-model-select]");
+      const textarea = page.locator(".agent-chat__input textarea").first();
+      await pollAttribute(trigger, "aria-disabled").toBe("false");
+      expect(held.requests()).toBe(0);
+      await trigger.click();
+      await held.request;
+      await expectLoading(picker);
+      expect(await picker.getAttribute("open")).not.toBeNull();
+      if (state === "closed") {
+        await trigger.click();
+        expect(await picker.getAttribute("open")).toBeNull();
+      }
+      if (state !== "open") {
+        await textarea.focus();
+      }
+      held.release();
+      const search = picker.locator("[data-chat-model-search]");
+      await pollCount(search).toBe(1);
+      await expect
+        .poll(() =>
+          page.evaluate(() => document.activeElement?.hasAttribute("data-chat-model-search")),
+        )
+        .toBe(state === "open");
+      if (state !== "open") {
+        expect(await textarea.evaluate((element) => document.activeElement === element)).toBe(true);
+        expect(await picker.getAttribute("open")).toBeNull();
+        await trigger.click();
+      }
+      await search.fill("Beta");
+      const choice = picker.locator('[data-chat-model-option="example/beta"]');
+      await expect.poll(() => choice.isVisible()).toBe(true);
+      await search.press("Enter");
+      await pollAttribute(picker, "open").toBeNull();
+      expect(held.requests()).toBe(1);
+    }),
   );
 });

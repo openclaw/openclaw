@@ -17,25 +17,25 @@ Every job carries exactly one payload kind, chosen by flag:
 
 | Payload       | Flag                                           | Runs                                                       |
 | ------------- | ---------------------------------------------- | ---------------------------------------------------------- |
-| System event  | `--system-event <text>`                        | Enqueued into the main session, no model call by itself    |
+| System event  | `--system-event <text>`                        | An ordinary turn in the owning agent’s main session        |
 | Agent message | `--message <text>`                             | A model-backed agent turn                                  |
 | Command       | `--command <shell>` or `--command-argv <json>` | A shell/process on the Gateway host, no model call         |
 | Script        | `--script <file\|->`                           | A headless code-mode script using the owning agent's tools |
 
-System-owned monitor jobs are gateway-converged and cannot be created or edited through the CLI or API. The `heartbeat` kind creates one heartbeat monitor job per heartbeat-enabled agent (see [Heartbeat](/gateway/heartbeat)). Monitor jobs appear in `openclaw cron list`; use `--all` to include disabled rows.
+Doctor converts former heartbeat monitors into ordinary editable `agentTurn` jobs. Gateway startup no longer reconciles a system-owned monitor from config. Use `openclaw automations list --all` to inspect both enabled and disabled jobs. See [Heartbeat migration](/gateway/heartbeat).
 
 The weekly Skill Workshop curator (declaration key `skill-collection-review:<agentId>`, and the older `skillCollectionReview` payload kind) is retired. The Gateway deletes those stored rows when it loads the cron store and creates no replacement; the declaration-key namespace stays reserved. Learned-skill cleanup now runs without a schedule; see [Unused-skill cleanup](/tools/skill-workshop#unused-skill-cleanup).
 
 ### Agent-turn options
 
 <ParamField path="--message" type="string" required>
-  Prompt text (required for isolated/current/custom-session jobs).
+  Prompt text for an agent-turn job, including main, isolated, current, and custom sessions.
 </ParamField>
 <ParamField path="--model" type="string">
   Model override; must resolve to an allowed model or the run fails with a validation error.
 </ParamField>
 <ParamField path="--fallbacks" type="string">
-  Per-job fallback model list, for example `--fallbacks openai/gpt-6-astra,openrouter/meta-llama/llama-3.3-70b-instruct:free`. Pass `--fallbacks ""` for a strict run with no fallbacks.
+  Per-job fallback model list, for example `--fallbacks openai/gpt-5.6-sol,openrouter/meta-llama/llama-3.3-70b-instruct:free`. Pass `--fallbacks ""` for a strict run with no fallbacks.
 </ParamField>
 <ParamField path="--clear-fallbacks" type="boolean">
   On `automations edit`, removes the per-job fallback override so the job follows configured fallback precedence. Cannot combine with `--fallbacks`.
@@ -52,6 +52,12 @@ The weekly Skill Workshop curator (declaration key `skill-collection-review:<age
 <ParamField path="--light-context" type="boolean">
   Skip workspace bootstrap file injection.
 </ParamField>
+<ParamField path="--skip-if-scratch-empty" type="boolean">
+  Skip an agent turn when its stored scratch is explicitly empty. Missing scratch still runs. Use `--no-skip-if-scratch-empty` to turn this off.
+</ParamField>
+<ParamField path="--include-reasoning" type="boolean">
+  Include reasoning returned by the agent alongside a meaningful result. Reasoning alone does not turn a quiet check into a notification. Use `--no-include-reasoning` to keep it out of delivery. This is separate from the model's thinking level.
+</ParamField>
 <ParamField path="--tools" type="string">
   Restrict which tools the job can use, for example `--tools exec,read`. Pass `--tools ""` for an empty allowlist that disables all agent tools, including tools used by a condition trigger.
 </ParamField>
@@ -60,7 +66,11 @@ New jobs that can run tools always store an explicit tool policy. A job created 
 `--tools` (or with `*`) stores `*`: each run uses the owner session's current tool policy,
 including its group, agent, sandbox, and runtime restrictions. An agent that requests a
 finite list is capped to the tools available to its creating turn and cannot widen the
-stored list. `automations edit --clear-tools` restores `*`. Existing jobs that predate an
+stored list. If a requested name, group, or pattern matches no captured tool, agent-created
+jobs and agent tool-cap edits fail with that entry in the error instead of saving a partial
+list. This includes Codex app tools that the creator runtime cannot carry. Use a supported
+tool name and runtime, or explicitly remove the unavailable entry.
+`automations edit --clear-tools` restores `*`. Existing jobs that predate an
 explicit tool policy retain their current behavior until their tool policy is explicitly
 edited or the job is recreated. Agent-created script payloads, condition triggers, and jobs
 whose creator captured Codex app authority store the creating turn's tools instead: scripts
@@ -99,6 +109,29 @@ Scheduled agent turns can inspect their own job and remove it when finished,
 even without an interactive sender. This self-scoped `automations` tool does not
 grant administrator access or control over other jobs, and explicit tool-policy
 denials still apply.
+
+An authenticated operator turn can schedule an `agentTurn` back into its exact
+existing conversation with `sessionTarget: "session:<same session key>"`. New
+jobs retain the original authenticated source privately, so the continuation can
+finish authorized work, such as inspecting and merging that conversation's PR,
+without another message from the operator. Each occurrence revalidates the
+original operator scopes, role, device, access grant, model restrictions, and exact
+session identity under current policy. This preserves the original operator
+scope ceiling; it is not a new PR-only permission or a blanket grant to automations.
+The stored tool cap, sandbox, and current tool denials still apply. Scheduled
+automation management remains self-scoped.
+
+This source is not inferred for existing jobs, guests, isolated/current targets,
+scripts, or another conversation. Executable edits discard it unless an
+authenticated creator schedules a fresh continuation; display-only edits retain
+it. Disabling, removing, or replacing the job or session retires the active
+occurrence. Re-enabling the job does not revive a revoked occurrence.
+
+While an `at` agent-turn continuation in an explicitly named conversation waits
+for a result, it can call `automations` with `action: "next_check"` and `in: "3m"`
+to rearm that same job. It does not create a new job or change its task, target,
+or permissions. Without a next-check proposal, ordinary one-shot completion and
+`deleteAfterRun` behavior are unchanged.
 
 Manual runs use the same scheduled execution context as timer-fired runs after
 the request passes admission. Ending the chat turn or tool call that started a
@@ -163,6 +196,46 @@ disabling or narrowing the job itself stops later requests and retries in the
 current invocation. A confirmed write still returns its result if authority ends
 while the response is pending.
 
+### Inference account continuity
+
+New isolated agent-turn jobs privately retain their selected stored inference account
+and compatible authentication route. OAuth and API keys can remain enabled together:
+changing interactive defaults, profile order, or the job’s plain model selection does
+not switch the job’s account or billing route. Automatic ownership remains distinct
+from an explicit user profile pin. Token refresh within the same authorization is
+allowed; deleting, replacing, or revoking that authorization stops the job rather
+than falling back to another account. Model and route compatibility still apply.
+
+To change an account deliberately, update the job with a model/profile selection,
+for example `--model "openai/gpt-4.1@work"`. This captures a fresh authorization.
+For legacy jobs without a recorded inference owner, `openclaw doctor --fix` records
+the account the job's next unbound run would use: an explicit selection, or else the
+first account in the run's normal account order, ignoring temporary rate-limit
+cooldowns. With `auth.order` set, that is the account every earlier run used; without
+it, runs rotated between accounts of the same type by last use, and Doctor records one
+of them. When several accounts are eligible, Doctor names the others and the command
+to change the choice.
+Doctor uses normal automation model selection, preserves inherited defaults and
+fallback lists, leaves existing bindings unchanged, and backs up cron state before
+committing. Missing accounts, and personal accounts needing their owner's
+authorization, are left unchanged with job-specific adoption instructions.
+
+Managed updates and the standard container entrypoint run repairing Doctor before
+activation. A manual source upgrade must include `openclaw doctor --fix` before
+starting the Gateway. Startup reports potentially unmigrated host-account jobs
+before scheduling; it does not capture credentials or rewrite jobs.
+
+Keys in the environment or provider config have no stored account to record. A job
+on such a route stays unbound and runs on that key; once a stored account becomes eligible for its route, the
+job stops with the adoption instructions instead of switching to that account. Job
+creation follows the same rule. An account refusal ends the run; it never falls back
+to another model or provider. Credentialless models remain usable without an account.
+Native runtime-owned jobs retain their runtime’s existing authorization checks, and a
+native connection cannot silently replace a job’s recorded host-managed inference account.
+An explicit update from an authorized native creator can adopt its runtime authority.
+Moving a job to an agent with a different credential owner requires explicit account adoption.
+Tool and delivery accounts remain separate from the inference account.
+
 `--model` sets the job's primary model; it does not replace a session `/model` override, so configured fallback chains still apply on top of it. An unresolved or disallowed model fails the run with an explicit validation error rather than silently falling back to the default. If a job has `--model` but no explicit or configured fallback list, OpenClaw passes an empty fallback override instead of silently appending the agent primary as a hidden retry target.
 
 A fallback after a provider timeout continues the same scheduled turn and reuses its saved user input. Failed attempts do not complete the turn or duplicate the scheduled prompt.
@@ -184,13 +257,57 @@ Fast mode follows the resolved live selection. Isolated automation resolves it i
 
 When a runtime reports token usage without a cost, automation estimates use the selected agent's local `models.json` prices and the model metadata retained for that run.
 
-If a run hits a live model-switch handoff, the scheduler retries with the switched provider/model and persists that selection (and any new auth profile) for the active run. Retries are bounded: after the initial attempt plus 2 switch retries, the scheduler aborts instead of looping.
+If a run hits a live model-switch handoff, the scheduler retries with the switched provider/model and persists that model selection for the active run. A job with a recorded inference account retains that account and its compatible authentication route; a switch cannot adopt a different account. Retries are bounded: after the initial attempt plus 2 switch retries, the scheduler aborts instead of looping.
 
 Before an isolated run starts, OpenClaw checks reachable local endpoints for configured `api: "ollama"` and `api: "openai-completions"` providers whose `baseUrl` is loopback, private-network, or `.local`. This preflight walks the job's configured fallback chain and only marks the run `skipped` once every candidate is unreachable; `--fallbacks ""` keeps that walk strict to just the primary model. A down endpoint records the run as `skipped` with a clear error instead of starting a model call. The result is cached for 5 minutes per endpoint (not per job or model), so many due jobs sharing a dead local Ollama/vLLM/SGLang/LM Studio server cost one check instead of a request storm. Skipped preflight runs do not increment execution-error backoff. They use the existing [failure-alert policy](/automation/cron-jobs/delivery#failure-notifications) without requiring `failureAlert.includeSkipped`; recurring jobs remain enabled and recover automatically when a later preflight finds the provider reachable.
 
 Client-side preflight timeouts are not cached. The next scheduled run checks the endpoint again instead of inheriting a timeout from another run.
 
 The local check opens and closes a TCP connection without sending HTTP requests or provider credentials, so authenticated local servers do not log spurious `/models` authorization failures. TLS, authentication, and model errors are handled by inference. Endpoints routed through a managed proxy defer connectivity checks to inference instead of testing a direct connection.
+
+### Job scratch and quiet results
+
+Each job can keep private task context in scratch stored in the shared state
+database, capped at 256 KiB. Present scratch is injected into the job's bounded
+run context. It is omitted from job lists, full job definitions, and run-history
+responses.
+
+<Warning>
+Do not put API keys, tokens, or other secrets in scratch. It becomes model prompt
+context even though it is omitted from job-list and history responses.
+</Warning>
+
+```bash
+openclaw automations scratch <job-id> --set "Check only for newly blocked work."
+openclaw automations scratch <job-id> --json
+```
+
+Scratch updates use revision compare-and-swap. The CLI reads the current revision
+before writing; `--expected-revision <n>` pins a known revision. During an
+automation turn, the `automations` tool exposes self-scoped `scratch_get`,
+`scratch_set`, and `record_result` actions. They do not grant access to another
+job's scratch or settings.
+
+`scratch_get` returns content and the current revision. `scratch_set` replaces
+the complete content, or clears it with `null`, and requires `expectedRevision`
+from that read. If the prompt says scratch was shortened, reread the complete
+content before replacing it. On a revision conflict, read again and reconcile
+the content instead of overwriting another edit.
+
+Use a normal final reply for a visible result and `NO_REPLY` for silence.
+`record_result` accepts one outcome (`no_change`, `progress`, `done`, `blocked`,
+or `needs_attention`) and a nonempty summary capped at 2000 characters. It records
+the result without sending a notification by itself. Meaningful outcomes are
+retained in ordinary run history and bounded session context, including when the
+final reply is silent; this is not a delivery retry queue. `no_change` keeps
+runner delivery silent without hiding execution failures. Adaptive scheduling still uses `next_check` on a paced
+job. Scratch is context, not another scheduler:
+runtime does not parse `tasks:` blocks or read `HEARTBEAT.md`.
+
+With `payload.skipIfScratchEmpty: true` (`--skip-if-scratch-empty`), blank text,
+comments, headings, fence markers, and empty checklist stubs count as an empty
+checklist. Removing scratch with `--unset` is different: missing scratch does
+not suppress a run. Disable the job when it should stop regardless of scratch.
 
 ### Command payloads
 
@@ -241,7 +358,7 @@ Script payloads can call configured MCP server tools as `MCP.<server>.<tool>({ .
 The script may return an object with these optional fields:
 
 - `notify`: Text delivered through the job's `announce`, `webhook`, or `none` delivery mode. If omitted, nothing is delivered. For a `main` job, the text becomes a system event.
-- `wake`: `"now"` requests an immediate heartbeat after enqueueing `notify` (or a compact completion event); `"next-heartbeat"` enqueues the event for the next heartbeat.
+- `wake`: `"now"` requests immediate session processing of `notify` (or a compact completion event). The legacy `"next-heartbeat"` value assigns the notice to an eligible scheduled automation; a missing target is reported.
 - `state`: JSON state, capped at 16 KB and persisted only after a successful run. The next run receives a frozen copy as `trigger.state`, matching trigger scripts. Because that namespace has one persisted owner, a script payload cannot be combined with a condition trigger on the same job.
 - `nextCheck`: A duration such as `"15m"`. It is valid only for jobs with pacing enabled and uses the same pacing clamp as agent-turn proposals.
 
@@ -305,25 +422,25 @@ only when it needs Codex app access. See
 | Current session | `current`           | Detached; commits to the creation-bound conversation | Context-aware recurring work    |
 | Custom session  | `session:custom-id` | Persistent named session                             | Workflows that build on history |
 
-Agent-turn jobs default to the creating conversation when the create request carries session context. Callers without a session key, including CLI and API callers that do not supply one, fall back to `isolated`. System events and heartbeats still default to `main`; command and script payloads still default to `isolated`.
+Agent-turn jobs default to the creating conversation when the create request carries session context. Callers without a session key, including CLI and API callers that do not supply one, fall back to `isolated`. System events default to `main`; command and script payloads still default to `isolated`.
 
 With `announce`, agent, command, and script results belong to the chat or topic that receives them. A different delivery destination gets the result instead of the creating conversation; without an external route, the creating conversation receives it. An isolated run still does not read that conversation's history. See [Automation delivery](/automation/cron-jobs/delivery) for generation checks and duplicate prevention.
 
 <AccordionGroup>
   <Accordion title="Main session vs current vs isolated vs custom">
-    **Main session** jobs enqueue a system event into the owning agent's main session and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). The event is processed with that session's existing context and last delivery context. Internal automation turns do not extend daily or idle reset freshness; only visible user activity updates session freshness. **Current-session** jobs execute in a detached run session, read a bounded tail of the conversation captured when the job was created, and deliver the final visible assistant result to the resolved destination (the creating conversation when no external route is configured). **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
+    **Main session** jobs run their system event or agent-turn payload through the owning agent’s ordinary session queue, with that session’s existing context and delivery context. The automation remains running until the turn settles; queue acceptance alone is not success. Internal automation turns do not extend daily or idle reset freshness; only visible user activity updates session freshness. **Current-session** jobs execute in a detached run session, read a bounded tail of the conversation captured when the job was created, and deliver the final visible assistant result to the resolved destination (the creating conversation when no external route is configured). **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
 
     `current` binds conversation context, not the original agent execution or its worktree; announce results belong to the resolved delivery destination. The detached run has its own session identity and uses the scheduled agent's workspace and captured tool restrictions. It does not inherit the conversation's cloud worker placement. Messages sent to the job's cron session address its latest detached run, independently of the bound conversation. In-flight turns sent through that stable cron key are canceled if the key is reassigned. A task-specific checkout path in the prompt does not grant access to it. Before using a job to continue repository work, verify that its execution environment can access the required checkout and tools; otherwise keep the work with its existing execution owner. A result committed to the conversation does not itself resume the original agent.
 
-    Custom-session agent turns wait for active work in that session before preparing or resetting its context, so a scheduled tick cannot invalidate an in-progress compaction.
+    Custom-session agent turns enter the session's ordinary turn queue and wait for active work before preparing context, so a scheduled tick cannot invalidate an in-progress compaction. The automation remains running until that turn settles; queue acceptance alone does not count as success. Saved authenticated continuations retain their original source and its current permissions through execution and delivery.
 
     To come back to this conversation later (for example, to recheck CI), add a one-shot `at` job with `payload: { kind: "agentTurn", message: "Instructions for your next turn" }` and `sessionTarget: "session:<your session key from Runtime>"`. It runs inside the existing conversation with the same history and saved workspace/worktree.
 
     Custom-session agent turns use the existing session’s saved workspace and working directory, including its managed worktree. Requester-scoped jobs may use a saved workspace only for their owning conversation; trusted operator-scheduled jobs can target another conversation’s saved workspace. A missing, retired, or mismatched worktree stops the run instead of falling back to the agent’s default workspace. Filesystem containment and the job’s tool restrictions still apply; a path in the job prompt does not grant access. Persistent-session rollover keeps the saved workspace binding, permission mode, containment root, and inherited tool restrictions; detached runs do not inherit this workspace context. A new `session:custom-id` without an existing session starts in the configured agent workspace. Use `delivery: { mode: "none" }` without an external target for quiet named-session work that needs no runner fallback announcement.
 
-    Main-session automation events are self-contained system-event reminders. They do not automatically include the default heartbeat prompt or the heartbeat monitor scratch; say it explicitly in the automation event text if a reminder should consult that context.
+    Main-session automation events are self-contained reminders. They include their own job scratch and notices assigned to that occurrence, not another monitor’s checklist or unrelated queued events. Put required instructions in the job payload or scratch.
 
-    Main-session jobs use the owning session's delivery context, not a separate chat announce target. Edits that enable announce delivery, or set a chat target without explicitly choosing no delivery, are rejected without changing the job. Use an isolated job with `--message` and `--announce` for chat delivery. Primary webhook delivery remains supported for main-session jobs.
+    Main-session agent-turn jobs support ordinary announce delivery, including an owner target. Main-session system-event and script jobs cannot use a separate chat announce target; edits that enable it are rejected without changing the job. Primary webhook delivery remains supported for main-session jobs.
 
   </Accordion>
   <Accordion title="What 'fresh session' means for isolated jobs">
@@ -338,7 +455,9 @@ With `announce`, agent, command, and script results belong to the chat or topic 
 
   </Accordion>
   <Accordion title="Subagent and Discord delivery">
-    When isolated automation runs orchestrate subagents, delivery prefers the final descendant output over stale parent interim text. If descendant tasks are still running or settling, OpenClaw suppresses that partial parent update instead of announcing it. This includes a yielded orchestrator waiting for its successor to start and completed descendants whose result delivery is still pending. The wait shares the existing run deadline and stops on cancellation. A `delivery.mode: "none"` run whose turn only handed work to a child waits for the child under the same deadline and records the child's final reply as the run output without sending it. A child that deliberately stays silent (`NO_REPLY`) leaves a quiet successful run; a child that times out or ends without a reply fails the run.
+    Child completion does not resume an isolated automation turn. If the orchestrator must act on child results (for example, integrate or verify their work), it must spawn with `collect: true` and collect the results with `agents_wait` before ending its turn; fire-and-forget delegation is valid when the child output itself is the deliverable.
+
+    When isolated automation runs orchestrate subagents, delivery prefers the final descendant output over stale parent interim text. If descendant tasks are still running or settling, OpenClaw suppresses that partial parent update instead of announcing it. This includes a yielded orchestrator waiting for its successor to start and completed descendants whose result delivery is still pending. The wait shares the existing run deadline and stops on cancellation. A `delivery.mode: "none"` run whose turn only handed work to a child waits for the child under the same deadline and records the child's final reply as the run output without sending it. Subagents must return a meaningful result or a concrete blocker, even when delivery is `none`. A child that returns only `NO_REPLY` enters [missing-answer recovery](/tools/subagents/announce#announce); if it still produces no result or times out, the automation fails.
 
     For text-only Discord announce targets, OpenClaw sends the final assistant text once instead of replaying both streamed/intermediate text and the final answer. Media and structured Discord payloads are still delivered separately so attachments and components are not dropped.
 

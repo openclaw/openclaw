@@ -118,6 +118,7 @@ describe("runEmbeddedAgent silent-error retry", () => {
     async (recovered) => {
       const { SqliteTranscriptMutationConflictError } =
         await import("../../config/sessions/session-mutation-conflict-error.js");
+      const { ReplaySafeTranscriptConflictError } = await import("./transcript-conflict.js");
       const error = new SqliteTranscriptMutationConflictError("conflicting-session");
       mockedRunEmbeddedAttempt.mockResolvedValueOnce(
         makeAttemptResult({
@@ -129,15 +130,20 @@ describe("runEmbeddedAgent silent-error retry", () => {
         }),
       );
 
-      await expect(
-        runEmbeddedAgent({
-          ...createOverflowRunParams(state),
-          provider: "anthropic",
-          model: "claude-opus-4-8",
-          runId: "run-transcript-conflict",
-        }),
-      ).rejects.toBe(error);
+      const rejection = await runEmbeddedAgent({
+        ...createOverflowRunParams(state),
+        provider: "anthropic",
+        model: "claude-opus-4-8",
+        runId: "run-transcript-conflict",
+      }).then(
+        () => undefined,
+        (cause: unknown) => cause,
+      );
 
+      expect(rejection).toBeInstanceOf(ReplaySafeTranscriptConflictError);
+      expect((rejection as InstanceType<typeof ReplaySafeTranscriptConflictError>).cause).toBe(
+        error,
+      );
       expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
       expect(mockedClassifyFailoverReason).not.toHaveBeenCalled();
       expect(mockedClassifyAssistantFailoverReason).not.toHaveBeenCalled();
@@ -172,7 +178,7 @@ describe("runEmbeddedAgent silent-error retry", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
   });
 
-  it("caps retries at MAX_EMPTY_ERROR_RETRIES and surfaces incomplete-turn error", async () => {
+  it("records a private incomplete-turn failure after exhausting retries", async () => {
     // 1 initial + 3 retries = 4 attempts, all returning empty-error.
     for (let i = 0; i < 4; i += 1) {
       mockedRunEmbeddedAttempt.mockResolvedValueOnce(emptyErrorAttempt("ollama", "glm-5.1:cloud"));
@@ -186,40 +192,14 @@ describe("runEmbeddedAgent silent-error retry", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(4);
-    expect(result.payloads?.[0]?.isError).toBe(true);
-  });
-
-  it("does not mark incomplete turns fallback-safe after a terminal heartbeat response", async () => {
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeAttemptResult({
-        ...emptyErrorAttempt("anthropic", "claude-opus-4-8", 1120, [
-          {
-            type: "thinking",
-            thinking: "internal reasoning before provider error",
-            thinkingSignature: JSON.stringify({ id: "rs_heartbeat_error", type: "reasoning" }),
-          },
-        ]),
-        heartbeatToolResponse: {
-          outcome: "progress",
-          notify: false,
-          summary: "Still working",
-        },
-      }),
-    );
-
-    const result = await runEmbeddedAgent({
-      ...createOverflowRunParams(state),
-      provider: "anthropic",
-      model: "claude-opus-4-8",
-      runId: "run-terminal-heartbeat-not-fallback-safe",
-    });
-
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads).toBeUndefined();
     expect(result.meta.error).toMatchObject({
       kind: "incomplete_turn",
-      fallbackSafe: false,
+      message: "No answer was returned. Ask again if you still need one.",
+      fallbackSafe: true,
     });
   });
+
   describe("current-assistant provenance", () => {
     it.each([
       { failure: "assistant error", accepted: false },

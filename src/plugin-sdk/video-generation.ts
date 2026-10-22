@@ -1,5 +1,3 @@
-// Public video-generation helpers and types for provider plugins.
-
 import {
   DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL,
   DASHSCOPE_WAN_VIDEO_CAPABILITIES,
@@ -20,7 +18,10 @@ import {
   sanitizeConfiguredModelProviderRequest,
 } from "./provider-http.js";
 
-export { selectSupportedVideoDuration } from "../video-generation/duration-support.js";
+export {
+  normalizeVideoGenerationDuration,
+  selectSupportedVideoDuration,
+} from "../video-generation/duration-support.js";
 
 export type {
   GeneratedVideoAsset,

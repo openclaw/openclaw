@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
@@ -310,10 +310,10 @@ export function readWorkspaceJournalInDatabase(
   db: EngineConnection,
   command: WorkspaceJournalReadCommand,
 ): WorkspaceJournalReadResult {
-  return runSqliteDeferredTransactionSync(db, () => {
-    if (command.type === "placementJournals.owners") {
-      return { type: command.type, owners: listWorkspaceReconciliationOwners(db) };
-    }
+  if (command.type === "placementJournals.owners") {
+    return { type: command.type, owners: listWorkspaceReconciliationOwners(db) };
+  }
+  return runSqliteReadSnapshotSync(db, () => {
     if (command.type === "placementJournals.placement") {
       return {
         type: command.type,

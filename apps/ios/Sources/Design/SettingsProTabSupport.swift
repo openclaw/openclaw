@@ -12,6 +12,33 @@ enum SettingsRoute: Hashable {
     case about
 }
 
+struct ManualGatewaySecurityRows: View {
+    let presentation: GatewayManualTransportPresentation
+    @Binding var useTLS: Bool
+
+    var body: some View {
+        Picker(selection: self.$useTLS) {
+            Text("Unencrypted")
+                .font(OpenClawType.captionSemiBold)
+                .tag(false)
+            Text("Secure (TLS)")
+                .font(OpenClawType.captionSemiBold)
+                .tag(true)
+        } label: {
+            Text("Connection security")
+                .font(OpenClawType.captionSemiBold)
+        }
+        .pickerStyle(.segmented)
+        .disabled(self.presentation.requiresTLS)
+
+        if let helperText = self.presentation.helperText {
+            Text(helperText)
+                .font(OpenClawType.footnote)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
 /// Canonical label/value list row for Settings and Talk surfaces. Keep every
 /// detail row on this view so row typography cannot drift between sections;
 /// plain `LabeledContent(String, value:)` renders unbranded system fonts.

@@ -1,9 +1,9 @@
-import crypto from "node:crypto";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test-support.js";
 
 const profileMocks = vi.hoisted(() => ({
@@ -58,72 +58,56 @@ vi.mock("./server-context.js", () => ({
   },
 }));
 
-const { readSystemProfileCookies, importSystemProfileCookies } =
+const { listSystemProfiles, readSystemProfileCookies, importSystemProfileCookies } =
   await import("./system-profiles.js");
 
 const KEYCHAIN_FIXTURE = "fixture-value";
+const source = { browser: "chrome", systemProfile: "Default" };
+const counts = { total: 2, imported: 1, failed: 0, skipped: 1 };
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function encryptV10(value: string, host: string): Buffer {
-  const key = crypto.pbkdf2Sync(KEYCHAIN_FIXTURE, "saltysalt", 1003, 16, "sha1");
-  const cipher = crypto.createCipheriv("aes-128-cbc", key, Buffer.alloc(16, 0x20));
-  const plain = Buffer.concat([
-    crypto.createHash("sha256").update(host).digest(),
-    Buffer.from(value),
-  ]);
-  return Buffer.concat([Buffer.from("v10"), cipher.update(plain), cipher.final()]);
-}
 
 function createSystemProfileFixture(): string {
   const homeDir = tempDirs.make("openclaw-system-profile-test-");
   const root = path.join(homeDir, "Library", "Application Support", "Google", "Chrome");
   const profileDir = path.join(root, "Default", "Network");
   fs.mkdirSync(profileDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(root, "Local State"),
-    JSON.stringify({ profile: { info_cache: { Default: { name: "Personal" } } } }),
-  );
+  writeLocalState(root, { name: "Personal" });
   const database = new DatabaseSync(path.join(profileDir, "Cookies"));
   try {
     database.exec(`
       PRAGMA journal_mode = WAL;
-      CREATE TABLE cookies (
-        host_key TEXT,
-        top_frame_site_key TEXT,
-        name TEXT,
-        value TEXT,
-        encrypted_value BLOB,
-        path TEXT,
-        expires_utc INTEGER,
-        is_secure INTEGER,
-        is_httponly INTEGER,
-        has_expires INTEGER,
-        samesite INTEGER
-      )
+      CREATE TABLE cookies (host_key TEXT, top_frame_site_key TEXT, name TEXT, value TEXT,
+        encrypted_value BLOB, path TEXT, expires_utc INTEGER, is_secure INTEGER,
+        is_httponly INTEGER, has_expires INTEGER, samesite INTEGER)
     `);
     const insert = database.prepare("INSERT INTO cookies VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-    for (const [host, name, value] of [
-      [".example.com", "session", "allowed-value"],
-      [".other.test", "other", "blocked-value"],
+    // v10 AES-CBC fixtures include the host SHA-256 prefix and use KEYCHAIN_FIXTURE.
+    const session = "djEw8FLknA8Ona/SEEK8MTWrp/+ee1iVrGr3X9Yj7z27UVFg6JceGIrbjRVGGZ+bWFdL";
+    const other = "djEwp3ELZgi3xCQ4ldhiSMXq3DesWjG+/zPQvHcoUFFBAQnyJofxh4DlFFHdHo97Urjj";
+    for (const [host, name, encrypted] of [
+      [".example.com", "session", session],
+      [".other.test", "other", other],
     ] as const) {
-      insert.run(host, "", name, "", encryptV10(value, host), "/", 0, 1, 1, 0, -1);
+      insert.run(host, "", name, "", Buffer.from(encrypted, "base64"), "/", 0, 1, 1, 0, -1);
     }
   } finally {
     database.close();
   }
   vi.spyOn(os, "homedir").mockReturnValue(homeDir);
-  return homeDir;
+  return path.join(profileDir, "Cookies");
+}
+
+function writeLocalState(root: string, info: Record<string, unknown>) {
+  fs.writeFileSync(
+    path.join(root, "Local State"),
+    JSON.stringify({ profile: { info_cache: { Default: info } } }),
+  );
 }
 
 function createManagedProfileFixture() {
   profileMocks.managedUserDataDir = tempDirs.make("openclaw-managed-profile-test-");
-  fs.writeFileSync(
-    path.join(profileMocks.managedUserDataDir, "Local State"),
-    JSON.stringify({
-      profile: { info_cache: { Default: { openclaw_mock_keychain: true } } },
-    }),
-  );
+  writeLocalState(profileMocks.managedUserDataDir, { openclaw_mock_keychain: true });
   const profile = {
     name: "imported",
     driver: "openclaw" as const,
@@ -144,81 +128,105 @@ function createManagedProfileFixture() {
   };
 }
 
-describe("system profile cookie reader", () => {
-  beforeEach(() => {
-    Object.defineProperty(process, "platform", { ...platformDescriptor, value: "darwin" });
-    profileMocks.cookiesSetManyViaPlaywright.mockClear();
-    profileMocks.tempRoot = tempDirs.make("openclaw-system-cookies-test-");
-  });
+beforeEach(() => {
+  Object.defineProperty(process, "platform", { ...platformDescriptor, value: "darwin" });
+  profileMocks.cookiesSetManyViaPlaywright.mockClear();
+  profileMocks.tempRoot = tempDirs.make("openclaw-system-cookies-test-");
+});
 
-  afterEach(() => {
-    Object.defineProperty(process, "platform", platformDescriptor);
-    vi.restoreAllMocks();
-  });
+afterEach(() => {
+  Object.defineProperty(process, "platform", platformDescriptor);
+  vi.restoreAllMocks();
+});
 
-  it("snapshots, decrypts, and applies the domain allowlist", async () => {
-    createSystemProfileFixture();
-    const readSecret = vi.fn(async () => Buffer.from(KEYCHAIN_FIXTURE));
-
-    const result = await readSystemProfileCookies(
-      { browser: "chrome", systemProfile: "Default", domains: ["example.com"] },
-      { readSecret },
+it.skipIf(process.platform === "win32")(
+  "keeps the event loop running while browser data access is parked",
+  async () => {
+    const homeDir = tempDirs.make("openclaw-system-profile-parked-");
+    const root = path.join(homeDir, "Library", "Application Support", "Google", "Chrome");
+    fs.mkdirSync(root, { recursive: true });
+    // A FIFO parks open() until a writer arrives, like macOS App Data consent awaiting an answer.
+    const localState = path.join(root, "Local State");
+    execFileSync("mkfifo", [localState]);
+    vi.spyOn(os, "homedir").mockReturnValue(homeDir);
+    // Releases a synchronous reader so a regression fails the assertion instead of hanging.
+    const valve = spawn(
+      "sh",
+      ["-c", 'sleep 3; while :; do printf "{}" > "$1"; done', "sh", localState],
+      { stdio: "ignore" },
     );
+    const readFile = vi.spyOn(fs.promises, "readFile");
+    try {
+      let settled = false;
+      const discoveries = Promise.all([listSystemProfiles("chrome"), listSystemProfiles()]).finally(
+        () => {
+          settled = true;
+        },
+      );
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+      expect(settled).toBe(false);
 
-    expect(result).toMatchObject({
-      browser: "chrome",
-      systemProfile: "Default",
-      counts: { total: 2, imported: 1, failed: 0, skipped: 1 },
-      domains: [".example.com"],
-    });
-    expect(result.cookies).toEqual([
-      expect.objectContaining({
-        name: "session",
-        value: "allowed-value",
-        domain: ".example.com",
-      }),
-    ]);
-    expect(readSecret).toHaveBeenCalledOnce();
-    expect(fs.readdirSync(profileMocks.tempRoot)).toEqual([]);
+      await fs.promises.writeFile(
+        localState,
+        JSON.stringify({ profile: { info_cache: { Default: { name: "Personal" } } } }),
+      );
+      const personal = [{ browser: "chrome", id: "Default", name: "Personal", hasCookies: false }];
+      await expect(discoveries).resolves.toEqual([personal, personal]);
+      expect(readFile.mock.calls.filter(([file]) => file === localState)).toHaveLength(1);
+    } finally {
+      valve.kill();
+    }
+  },
+);
+
+it("snapshots, decrypts, and applies the domain allowlist", async () => {
+  createSystemProfileFixture();
+  const readSecret = vi.fn(async () => Buffer.from(KEYCHAIN_FIXTURE));
+
+  const result = await readSystemProfileCookies(
+    { ...source, domains: ["example.com"] },
+    { readSecret },
+  );
+
+  expect(result).toMatchObject({
+    browser: "chrome",
+    systemProfile: "Default",
+    counts,
+    domains: [".example.com"],
+    cookies: [{ name: "session", value: "allowed-value", domain: ".example.com" }],
   });
+  expect(readSecret).toHaveBeenCalledOnce();
+  expect(fs.readdirSync(profileMocks.tempRoot)).toEqual([]);
+});
 
-  it("removes cookie snapshot scratch when opening the source database fails", async () => {
-    const homeDir = createSystemProfileFixture();
-    const cookiesFile = path.join(
-      homeDir,
-      "Library",
-      "Application Support",
-      "Google",
-      "Chrome",
-      "Default",
-      "Network",
-      "Cookies",
-    );
-    fs.rmSync(cookiesFile);
-    fs.mkdirSync(cookiesFile);
+it("removes cookie snapshot scratch when opening the source database fails", async () => {
+  const cookiesFile = createSystemProfileFixture();
+  fs.rmSync(cookiesFile);
+  fs.mkdirSync(cookiesFile);
 
-    await expect(
-      readSystemProfileCookies({ browser: "chrome", systemProfile: "Default" }),
-    ).rejects.toMatchObject({ code: "ERR_SQLITE_ERROR" });
-    expect(fs.readdirSync(profileMocks.tempRoot)).toEqual([]);
+  await expect(readSystemProfileCookies(source)).rejects.toMatchObject({
+    code: "ERR_SQLITE_ERROR",
   });
+  expect(fs.readdirSync(profileMocks.tempRoot)).toEqual([]);
+});
 
-  it("keeps the existing import flow on the shared reader", async () => {
-    createSystemProfileFixture();
-    const runtime = createManagedProfileFixture();
+it("keeps the existing import flow on the shared reader", async () => {
+  createSystemProfileFixture();
+  const runtime = createManagedProfileFixture();
 
-    const result = await importSystemProfileCookies(
-      { browser: "chrome", systemProfile: "Default", into: "imported", domains: ["example.com"] },
-      runtime as never,
-    );
+  const result = await importSystemProfileCookies(
+    { ...source, into: "imported", domains: ["example.com"] },
+    runtime as never,
+  );
 
-    expect(result.cookies).toEqual({ total: 2, imported: 1, failed: 0, skipped: 1 });
-    expect(profileMocks.cookiesSetManyViaPlaywright).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cdpUrl: "http://127.0.0.1:18800",
-        targetId: "tab-1",
-        cookies: [expect.objectContaining({ domain: ".example.com", name: "session" })],
-      }),
-    );
-  });
+  expect(result.cookies).toEqual(counts);
+  expect(profileMocks.cookiesSetManyViaPlaywright).toHaveBeenCalledWith(
+    expect.objectContaining({
+      cdpUrl: "http://127.0.0.1:18800",
+      targetId: "tab-1",
+      cookies: [expect.objectContaining({ domain: ".example.com", name: "session" })],
+    }),
+  );
 });

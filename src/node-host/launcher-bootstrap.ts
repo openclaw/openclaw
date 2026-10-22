@@ -25,7 +25,6 @@ export function resolveNodeHostLauncherStateDir(
   loadGlobalRuntimeDotEnvFilesCore({
     env,
     stateEnvPath: path.join(resolveStateDir(env), ".env"),
-    quiet: true,
     onWarning: (message) => process.stderr.write(`openclaw: ${message}\n`),
   });
   return resolveStateDir(env);

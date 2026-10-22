@@ -17,6 +17,8 @@ import {
   type ProjectedAgentRunIndex,
 } from "../infra/agent-run-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
+import { getOrCreateWeakOwnerMap } from "../shared/weak-owner-map.js";
 import type { SessionTranscriptUsageSnapshot } from "./session-transcript-derived-readers.js";
 import {
   createSessionRowModelCacheKey,
@@ -58,11 +60,7 @@ export function buildSessionListRowMetadataContext(params: {
     configuredDefaultModelByAgent: new Map(),
     thinkingFactsByModelRef: new Map(),
     findModelCatalogEntry: (catalog, query) => {
-      let entries = catalogEntries.get(catalog);
-      if (!entries) {
-        entries = new Map();
-        catalogEntries.set(catalog, entries);
-      }
+      const entries = getOrCreateWeakOwnerMap(catalogEntries, catalog);
       const key = createSessionRowModelCacheKey(query.provider, query.modelId);
       if (!entries.has(key)) {
         entries.set(key, findModelCatalogEntry(catalog, query));
@@ -70,11 +68,7 @@ export function buildSessionListRowMetadataContext(params: {
       return entries.get(key);
     },
     selectModelCatalogRuntimeEntry: (selection) => {
-      let entries = runtimeEntries.get(selection.routeVariants);
-      if (!entries) {
-        entries = new Map();
-        runtimeEntries.set(selection.routeVariants, entries);
-      }
+      const entries = getOrCreateWeakOwnerMap(runtimeEntries, selection.routeVariants);
       const key = `${selection.runtimeId}\0${selection.allowApiFallback !== false}\0${createSessionRowModelCacheKey(selection.entry.provider, selection.entry.id)}`;
       let selected = entries.get(key);
       if (!selected) {
@@ -114,6 +108,7 @@ export function buildProjectedSubagentActivity(
 export function projectSessionRowChildLinks(links: readonly SessionChildLink[] | undefined) {
   return links?.map(({ key, entry }) => ({
     key,
+    parsedKey: parseAgentSessionKey(key),
     entry: {
       sessionId: entry.sessionId,
       updatedAt: entry.updatedAt,

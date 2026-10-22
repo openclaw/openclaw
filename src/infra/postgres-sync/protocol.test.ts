@@ -2,36 +2,43 @@ import { describe, expect, it } from "vitest";
 import {
   decodePostgresError,
   decodePostgresRows,
-  isPostgresConnectionError,
-  rewritePostgresPlaceholders,
+  preparePostgresQuery,
   validatePostgresBindings,
 } from "./protocol.js";
 
-describe("experimental PostgreSQL SQL boundary", () => {
-  it.each([["XX000", false]] as const)(
-    "classifies server SQLSTATE %s as connection-level: %s",
-    (code, expected) => {
-      expect(isPostgresConnectionError(code)).toBe(expected);
-    },
-  );
-
+describe("PostgreSQL SQL boundary", () => {
   it.each([
     ["SELECT E'it\\'s ?', ?", "SELECT E'it\\'s ?', $1"],
     ["SELECT /* outer /* ? */ ? */ ?", "SELECT /* outer /* ? */ ? */ $1"],
     ["SELECT $$?$$, $tag$?$tag$, ?", "SELECT $$?$$, $tag$?$tag$, $1"],
     ["SELECT data ?? ?, data ??| ?", "SELECT data ? $1, data ?| $2"],
   ])("rewrites only anonymous placeholders: %s", (input, expected) => {
-    expect(rewritePostgresPlaceholders(input)).toBe(expected);
+    expect(preparePostgresQuery(input).sql).toBe(expected);
   });
 
-  it.each(["SELECT 1; /* x */ pragma foreign_keys"])(
-    "refuses unsupported PRAGMA commands: %s",
-    (input) => {
-      expect(() => rewritePostgresPlaceholders(input)).toThrow(
-        "The experimental PostgreSQL engine does not support PRAGMA statements",
-      );
-    },
-  );
+  it("refuses unsupported PRAGMA commands after a statement and comment", () => {
+    expect(() => preparePostgresQuery("SELECT 1; /* x */ pragma foreign_keys")).toThrow(
+      "The PostgreSQL engine does not support PRAGMA statements",
+    );
+  });
+
+  it.each([
+    ["WITH c AS (UPDATE t SET value = ? RETURNING *) SELECT * FROM c", "scoped"],
+    ["WITH c AS (WITH i AS (SELECT 1) DELETE FROM t RETURNING *) SELECT * FROM c", "scoped"],
+    ["WITH c AS (INSERT INTO t VALUES (?) RETURNING *) SELECT * FROM c", "scoped"],
+    ["MERGE INTO t USING s ON false WHEN NOT MATCHED THEN INSERT VALUES (?)", "scoped"],
+    ["SELECT * INTO copied FROM t", "unscoped"],
+    ['SELECT t."id" INTO copied FROM t', "unscoped"],
+    ['SELECT 1 AS "id" INTO copied', "unscoped"],
+    ["SELECT 1. INTO copied", "unscoped"],
+    ["SELECT * INTO copied FROM t; INSERT INTO copied VALUES (?)", "unscoped"],
+    ["SELECT * FROM t FOR UPDATE", undefined],
+    ["SELECT * FROM t FOR NO KEY UPDATE", undefined],
+    ["SELECT t.update, t . /* column */ into FROM t", undefined],
+    ["SELECT 1 AS update, 'DELETE', $$INSERT$$, E'UPDATE\\\' INTO' /* MERGE */", undefined],
+  ] as const)("retains mutation evidence while preparing %s", (input, expected) => {
+    expect(preparePostgresQuery(input).mutation).toBe(expected);
+  });
 
   it("accepts SQLite scalar and binary bindings", () => {
     expect(() =>
@@ -49,40 +56,30 @@ describe("experimental PostgreSQL SQL boundary", () => {
     ).not.toThrow();
   });
 
-  it.each([new Date(0)])("refuses non-scalar bindings before transport: %s", (value) => {
-    expect(() => validatePostgresBindings([value])).toThrow(TypeError);
+  it("refuses non-scalar bindings before transport", () => {
+    expect(() => validatePostgresBindings([new Date(0)])).toThrow(TypeError);
   });
 
   it("decodes safe int8, bytea, nulls, and scalar results", () => {
-    expect(
-      decodePostgresRows(
+    const fields = { count: 20, bytes: 17, empty: 20, text: 25, truth: 16 };
+    const result = {
+      rows: [
         {
-          rows: [
-            {
-              count: "9007199254740991",
-              bytes: new Uint8Array([0, 255]),
-              empty: null,
-              text: "hi",
-              truth: true,
-            },
-          ],
-          rowCount: 1,
-          fields: [
-            { name: "count", dataTypeID: 20 },
-            { name: "bytes", dataTypeID: 17 },
-            { name: "empty", dataTypeID: 20 },
-            { name: "text", dataTypeID: 25 },
-            { name: "truth", dataTypeID: 16 },
-          ],
+          bytes: new Uint8Array([0, 255]),
+          empty: null,
+          text: "hi",
+          count: "9007199254740991",
+          truth: true,
         },
-        false,
-      ),
-    ).toEqual([
+      ],
+      fields: Object.entries(fields).map(([name, dataTypeID]) => ({ name, dataTypeID })),
+    };
+    expect(decodePostgresRows(result, false)).toEqual([
       {
-        count: Number.MAX_SAFE_INTEGER,
         bytes: new Uint8Array([0, 255]),
         empty: null,
         text: "hi",
+        count: Number.MAX_SAFE_INTEGER,
         truth: 1,
       },
     ]);
@@ -101,23 +98,15 @@ describe("experimental PostgreSQL SQL boundary", () => {
     ]);
   });
 
-  it.each([["23514", 275, "CHECK"]])(
-    "preserves SQLite constraint handling for SQLSTATE %s",
-    (code, errcode, kind) => {
-      const error = decodePostgresError({
-        name: "error",
-        message: "original pg failure",
-        code,
-        constraint: "cards_key",
-      });
-      expect(error).toMatchObject({
-        message: `${kind} constraint failed: cards_key`,
-        code: "ERR_SQLITE_ERROR",
-        errcode,
-        cause: { message: "original pg failure", code, constraint: "cards_key" },
-      });
-    },
-  );
+  it("preserves SQLite CHECK constraint handling for SQLSTATE 23514", () => {
+    const cause = { message: "original pg failure", code: "23514", constraint: "cards_key" };
+    expect(decodePostgresError({ name: "error", ...cause })).toMatchObject({
+      message: "CHECK constraint failed: cards_key",
+      code: "ERR_SQLITE_ERROR",
+      errcode: 275,
+      cause,
+    });
+  });
 
   it("retains unrelated PostgreSQL errors and their SQLSTATE", () => {
     expect(

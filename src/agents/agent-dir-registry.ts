@@ -6,6 +6,7 @@ import { observeOwnedDirectory } from "../infra/owned-directory-observation.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
+import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-maintenance-context.js";
 import { resolveUserPath } from "../utils.js";
 
 // Process-local registry mapping resolved agent directories back to agent ids.
@@ -33,12 +34,14 @@ function forgetPreparedPaths(key: string) {
 
 function registryPath(agentDir: string, env?: NodeJS.ProcessEnv, registering = false): string {
   const pathname = path.resolve(resolveUserPath(agentDir, env));
-  const cached = preparedPaths.get(pathname);
+  // Repair can change paths itself; resolve them directly without retaining native watches.
+  const maintenance = getOpenClawDatabaseMaintenanceScope()?.ownsSchemaMaintenance === true;
+  const cached = maintenance ? undefined : preparedPaths.get(pathname);
   if (cached) {
     return cached.key;
   }
   const key = normalizeAgentDirRegistryPath(pathname, env);
-  if (!isMainThread || (!registering && !agentIdsByDir.has(key))) {
+  if (maintenance || !isMainThread || (!registering && !agentIdsByDir.has(key))) {
     return key;
   }
   const observations: Array<{ close(): void }> = [];
@@ -51,19 +54,15 @@ function registryPath(agentDir: string, env?: NodeJS.ProcessEnv, registering = f
   for (let child = pathname; path.dirname(child) !== child; child = path.dirname(child)) {
     const basename = path.basename(child);
     observations.push(
-      observeOwnedDirectory(
-        path.dirname(child),
-        (filename) => {
-          if (filename === undefined || filename === basename) {
-            if (resolveIdentityPathViaExistingAncestorSync(pathname) === key) {
-              return;
-            }
-            preparedPaths.delete(pathname);
-            prepared.close();
+      observeOwnedDirectory(path.dirname(child), (filename) => {
+        if (filename === undefined || filename === basename) {
+          if (resolveIdentityPathViaExistingAncestorSync(pathname) === key) {
+            return;
           }
-        },
-        { recoveryIntervalMs: 30_000 },
-      ),
+          preparedPaths.delete(pathname);
+          prepared.close();
+        }
+      }),
     );
   }
   // Fit the registered fleet plus this registration while bounding extra aliases.

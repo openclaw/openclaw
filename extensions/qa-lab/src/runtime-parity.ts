@@ -10,6 +10,7 @@ import {
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asFiniteNumber as readFiniteNumber,
+  asOptionalRecord,
   isRecord as isMessageRecord,
   normalizeOptionalString as readNonEmptyString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -19,6 +20,7 @@ import {
   type GatewayLogSentinelFinding,
 } from "./gateway-log-sentinel.js";
 import { readQaJsonResponse } from "./ignored-response-body.js";
+import { safeParseQaJson } from "./json.js";
 import * as parity from "./parity-shared.js";
 import type { RuntimeId } from "./runtime-id.js";
 import {
@@ -281,30 +283,6 @@ function extractAssistantText(message: Record<string, unknown>) {
   );
 }
 
-function parseJsonRecord(value: string): Record<string, unknown> | undefined {
-  if (!value.trim()) {
-    return undefined;
-  }
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    return isMessageRecord(parsed) ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function extractToolCalls(message: Record<string, unknown>): Array<{
-  id?: string;
-  tool: string;
-  args: unknown;
-}> {
-  return Array.from(readQaMessageToolCalls(message), ({ id, tool, args }) => ({
-    id,
-    tool: tool ?? "unknown",
-    args,
-  }));
-}
-
 function extractToolResults(message: Record<string, unknown>): Array<{
   id?: string;
   tool?: string;
@@ -449,49 +427,22 @@ function resolveToolCallOrder(
   const capture = createToolCallCapture();
   const { ordered } = capture;
   const byId = new Map<string, number>();
-  const unresolvedByTool = new Map<string, Set<number>>();
-
-  const enqueueUnresolved = (tool: string, index: number) => {
-    const indices = unresolvedByTool.get(tool) ?? new Set<number>();
-    indices.add(index);
-    unresolvedByTool.set(tool, indices);
-  };
-
-  const removeUnresolved = (index: number) => {
-    const tool = ordered[index]!.tool;
-    const toolIndices = unresolvedByTool.get(tool);
-    toolIndices?.delete(index);
-    if (toolIndices?.size === 0) {
-      unresolvedByTool.delete(tool);
-    }
-  };
-
-  const matchPendingIndex = (result: { id?: string; tool?: string }) => {
-    if (result.id && byId.has(result.id)) {
-      return byId.get(result.id);
-    }
-    if (result.tool) {
-      const toolIndices = unresolvedByTool.get(result.tool);
-      if (toolIndices && toolIndices.size > 0) {
-        return toolIndices.values().next().value;
-      }
-    }
-    return capture.pending();
-  };
 
   for (const record of records) {
     if (record.role === "assistant") {
-      for (const call of extractToolCalls(record.message)) {
-        const index = capture.call(call.tool, call.args, call.id);
+      for (const call of readQaMessageToolCalls(record.message)) {
+        const index = capture.call(call.tool ?? "unknown", call.args, call.id);
         if (call.id) {
           byId.set(call.id, index);
         }
-        enqueueUnresolved(call.tool, index);
       }
     }
     if (record.role === "user" || record.role === "tool" || record.role === "toolResult") {
       for (const result of extractToolResults(record.message)) {
-        const pendingIndex = matchPendingIndex(result);
+        const pendingIndex =
+          (result.id ? byId.get(result.id) : undefined) ??
+          capture.pending(result.tool) ??
+          capture.pending();
         const pendingCall = pendingIndex === undefined ? undefined : ordered[pendingIndex];
         capture.result(pendingIndex, {
           tool: result.tool,
@@ -499,10 +450,6 @@ function resolveToolCallOrder(
           callId: pendingIndex !== undefined ? pendingCall?.callId : result.id,
           errorClass: result.errorClass,
         });
-        if (pendingIndex === undefined) {
-          continue;
-        }
-        removeUnresolved(pendingIndex);
       }
     }
   }
@@ -520,7 +467,7 @@ function resolveToolCallOrderFromMockRequests(
     const rawToolOutput = request.toolOutput ?? "";
     if (rawToolOutput) {
       const pendingIndex = unresolvedOrder.shift();
-      const parsedOutput = parseJsonRecord(rawToolOutput);
+      const parsedOutput = asOptionalRecord(safeParseQaJson(rawToolOutput));
       capture.result(pendingIndex, {
         value: parsedOutput ?? rawToolOutput,
         errorClass: classifyToolResultError({ rawOutput: rawToolOutput, parsedOutput }),

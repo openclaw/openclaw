@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import {
@@ -10,48 +10,33 @@ import {
   createRuntimeConfigWriteApplication,
 } from "../config/runtime-write-application.js";
 import * as configFileSource from "../config/source-file.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
 import { commitConfigWithPendingPluginInstalls } from "../plugins/install-record-commit.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
-import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { createWatcherMock } from "./config-reload.watcher.test-support.js";
 import {
-  clearInstanceBindingProbeCoordinators,
   installInstanceBindingProbeCoordinator,
   writeInstanceBindingProbePlugin,
 } from "./server-plugins.lifecycle.test-fixtures.js";
 import {
   installInstanceBindingConfigIo,
+  closePluginGateway,
+  configurePluginGateway,
+  observePostReadyStartupMaintenance,
   requireBoundRuntime,
   requestSettledInstanceBindingProbe,
+  startPluginGateway,
+  reloadPlugin,
+  writeJson,
+  type PluginServer,
+  type PluginSocket,
 } from "./server-plugins.lifecycle.test-support.js";
 import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
-import {
-  connectWebchatClient,
-  installGatewayTestHooks,
-  rpcReq,
-  startTestGatewayServer,
-} from "./test-helpers.server.js";
-
-// Post-ready maintenance refreshes the derived registry under the plugin lifecycle lease, and
-// plugins.reload refuses a busy lease instead of queueing. Tests await that refresh first.
-async function observePostReadyStartupMaintenance(): Promise<{ settled: Promise<void> }> {
-  const startupPlugins = await import("./server-startup-plugins.js");
-  const runMaintenance = startupPlugins.runGatewayPostReadyStartupMaintenance;
-  const settled = createDeferredCore();
-  const observer = vi
-    .spyOn(startupPlugins, "runGatewayPostReadyStartupMaintenance")
-    .mockImplementation((params) => {
-      const maintenance = runMaintenance(params);
-      maintenance.then(settled.resolve, settled.resolve);
-      return maintenance;
-    });
-  onTestFinished(() => observer.mockRestore());
-  return { settled: settled.promise };
-}
+import { connectWebchatClient, installGatewayTestHooks, rpcReq } from "./test-helpers.server.js";
 
 // Fixtures must register real plugins after the shared helpers install their mocks.
 vi.doUnmock("../plugins/loader.js");
@@ -78,82 +63,67 @@ async function useGatewayGraphPluginRuntime(): Promise<void> {
   onTestFinished(() => runtimeLoader.mockRestore());
 }
 
-// A real plugin registry replacement must own accounts before their first route exists.
-describe("Gateway plugin replacement channel ownership", () => {
-  const channelId = "reload-webhook";
-  let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
-  let socket: Awaited<ReturnType<typeof connectWebchatClient>> | undefined;
-  let releasePending = createDeferredCore();
+function enabledPlugins(ids: string[], previous: OpenClawConfig["plugins"] = {}) {
+  return {
+    ...previous,
+    enabled: true,
+    allow: ids,
+    entries: {
+      ...previous.entries,
+      ...Object.fromEntries(ids.map((id) => [id, { enabled: true }])),
+    },
+  };
+}
 
-  afterEach(async () => {
-    releasePending.resolve();
-    const closingSocket = socket;
-    const socketClosed =
-      !closingSocket || closingSocket.readyState === closingSocket.CLOSED
-        ? Promise.resolve()
-        : new Promise<void>((resolve) => {
-            closingSocket.once("close", () => resolve());
-          });
-    closingSocket?.close();
-    try {
-      const results = await Promise.allSettled([
-        server?.close({ reason: "webhook reload cleanup" }),
-        socketClosed,
-      ]);
-      const failures = results.flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : [],
-      );
-      if (failures.length > 0) {
-        throw new AggregateError(failures, "Webhook lifecycle fixture shutdown failed");
-      }
-    } finally {
-      clearInstanceBindingProbeCoordinators();
-      delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
-      server = undefined;
-      socket = undefined;
-    }
-  });
+const channelId = "reload-webhook";
+let server: PluginServer | undefined;
+let socket: PluginSocket | undefined;
+let releasePending = createDeferredCore();
 
-  it(
-    "hot-applies pending installs without restarting a sibling whose package metadata keys were reordered",
-    { timeout: 120_000 },
-    async () => {
-      const bundledRoot = tempDirs.make("openclaw-cold-channel-");
-      for (const channel of ["cold-chat", "sibling-chat"]) {
-        const id = `${channel}-owner`;
-        const pluginDir = path.join(bundledRoot, id);
-        await fs.mkdir(pluginDir, { recursive: true });
-        await fs.writeFile(
-          path.join(pluginDir, "package.json"),
-          JSON.stringify({
-            name: id,
-            type: "commonjs",
-            main: "index.js",
-            openclaw: { extensions: ["./index.js"], runtimeExtensions: ["./index.js"] },
-            peerDependencies: { openclaw: ">=2026.1.1" },
-          }),
-        );
-        await fs.writeFile(
-          path.join(pluginDir, "openclaw.plugin.json"),
-          JSON.stringify({
-            id,
-            channels: [channel],
-            activation: { onStartup: true },
-            channelConfigs: {
-              [channel]: {
-                schema: {
-                  type: "object",
-                  additionalProperties: false,
-                  properties: { enabled: { type: "boolean" }, label: { type: "string" } },
-                },
-              },
+afterEach(async () => {
+  releasePending.resolve();
+  try {
+    await closePluginGateway(server, socket);
+  } finally {
+    server = undefined;
+    socket = undefined;
+  }
+});
+
+it(
+  "hot-applies pending installs without restarting a sibling whose package metadata keys were reordered",
+  { timeout: 120_000 },
+  async () => {
+    const bundledRoot = tempDirs.make("openclaw-cold-channel-");
+    for (const channel of ["cold-chat", "sibling-chat"]) {
+      const id = `${channel}-owner`;
+      const pluginDir = path.join(bundledRoot, id);
+      await fs.mkdir(pluginDir, { recursive: true });
+      await writeJson(path.join(pluginDir, "package.json"), {
+        name: id,
+        type: "commonjs",
+        main: "index.js",
+        openclaw: { extensions: ["./index.js"], runtimeExtensions: ["./index.js"] },
+        peerDependencies: { openclaw: ">=2026.1.1" },
+      });
+      await writeJson(path.join(pluginDir, "openclaw.plugin.json"), {
+        id,
+        channels: [channel],
+        activation: { onStartup: true },
+        channelConfigs: {
+          [channel]: {
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              properties: { enabled: { type: "boolean" }, label: { type: "string" } },
             },
-            configSchema: { type: "object", additionalProperties: false, properties: {} },
-          }),
-        );
-        await fs.writeFile(
-          path.join(pluginDir, "index.js"),
-          `
+          },
+        },
+        configSchema: { type: "object", additionalProperties: false, properties: {} },
+      });
+      await fs.writeFile(
+        path.join(pluginDir, "index.js"),
+        `
 module.exports = { id: ${JSON.stringify(id)}, register(api) {
   const instance = require("node:crypto").randomUUID();
   const channel = ${JSON.stringify(channel)};
@@ -178,190 +148,137 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     } },
   });
 } };`,
-        );
-      }
-      process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "0";
-      delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
-      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledRoot;
-      process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
-      process.env.OPENCLAW_SKIP_CRON = "1";
-      delete process.env.OPENCLAW_SKIP_CHANNELS;
-      delete process.env.OPENCLAW_SKIP_PROVIDERS;
-      const configPath = process.env.OPENCLAW_CONFIG_PATH;
-      if (!configPath) {
-        throw new Error("Gateway fixture did not set config path");
-      }
-      const config = loadGatewayTestConfig();
-      config.plugins = {
-        enabled: true,
-        allow: ["cold-chat-owner", "sibling-chat-owner"],
-        slots: { memory: "none" },
-        entries: {
-          "cold-chat-owner": { enabled: true },
-          "sibling-chat-owner": { enabled: true },
-        },
-      };
-      config.channels = { "sibling-chat": { enabled: true, label: "retained" } };
-      await fs.writeFile(configPath, JSON.stringify(config));
-      const hotReloadRecovery = vi.fn(() => ({ status: "emitted" as const }));
-      await useGatewayGraphPluginRuntime();
-      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-      const port = portClaim.port;
-      const createConfigFileAdapter = configFileSource.createConfigFileAdapter;
-      let configWatcher: ReturnType<typeof createWatcherMock> | undefined;
-      const watchSpy = vi
-        .spyOn(configFileSource, "createConfigFileAdapter")
-        .mockImplementation((options) => {
-          if (options.path !== configPath) {
-            return createConfigFileAdapter(options);
-          }
-          // Explicit writes own reloads; inject the filesystem echo at its race boundary below.
-          const watcher = createWatcherMock();
-          configWatcher = watcher;
-          const adapter = watcher.attach(options);
-          return {
-            ...adapter,
-            start() {
-              adapter.start();
-              queueMicrotask(() => watcher.emit("ready"));
-            },
-          };
-        });
-      onTestFinished(() => watchSpy.mockRestore());
-      server = await startTestGatewayServer(portClaim, {
-        auth: { mode: "none" },
-        controlUiEnabled: false,
-        sidecarStartup: "start",
-        hotReloadRecovery,
+      );
+    }
+    const configPath = configurePluginGateway(bundledRoot, true);
+    const config = loadGatewayTestConfig();
+    config.plugins = enabledPlugins(["cold-chat-owner", "sibling-chat-owner"], {
+      slots: { memory: "none" },
+    });
+    config.channels = { "sibling-chat": { enabled: true, label: "retained" } };
+    await writeJson(configPath, config);
+    const hotReloadRecovery = vi.fn(() => ({ status: "emitted" as const }));
+    await useGatewayGraphPluginRuntime();
+    const createConfigFileAdapter = configFileSource.createConfigFileAdapter;
+    let configWatcher: ReturnType<typeof createWatcherMock> | undefined;
+    const watchSpy = vi
+      .spyOn(configFileSource, "createConfigFileAdapter")
+      .mockImplementation((options) => {
+        if (options.path !== configPath) {
+          return createConfigFileAdapter(options);
+        }
+        // Explicit writes own reloads; inject the filesystem echo at its race boundary below.
+        const watcher = createWatcherMock();
+        configWatcher = watcher;
+        const adapter = watcher.attach(options);
+        return {
+          ...adapter,
+          async start() {
+            await adapter.start();
+            queueMicrotask(() => watcher.emit("ready"));
+          },
+        };
       });
-      await server.startupSettled;
-      socket = await connectWebchatClient({ port, scopes: ["operator.admin"] });
-      const connected = socket;
-      type Probe = {
-        instance: string;
-        captured: { enabled: boolean; label: string } | null;
-        starts: number;
-        stops: number;
-        pid: number;
-        reloadSettled: boolean;
-      };
-      const probe = async (channel: string) => {
+    onTestFinished(() => watchSpy.mockRestore());
+    const started = await startPluginGateway({ hotReloadRecovery });
+    server = started.server;
+    await server.startupSettled;
+    socket = await connectWebchatClient({ port: started.port, scopes: ["operator.admin"] });
+    const connected = socket;
+    type Probe = {
+      instance: string;
+      captured: { enabled: boolean; label: string } | null;
+      starts: number;
+      stops: number;
+      pid: number;
+      reloadSettled: boolean;
+    };
+    // Registration precedes watcher settlement; poll only the read, never the mutation.
+    const settledProbe = (channel: string) =>
+      vi.waitUntil(async () => {
         const result = await rpcReq<Probe>(connected, `${channel}.probe`, {});
         expect(result.ok, result.error?.message).toBe(true);
         assert.ok(result.payload);
-        // Registration is visible before the watcher releases its lifecycle lease.
-        // Wait for the owner's settlement signal, not a retry of a mutating RPC.
         const { reloadSettled, ...binding } = result.payload;
-        return { binding, reloadSettled };
-      };
-      const settledProbe = async (channel: string) =>
-        await vi.waitUntil(async () => {
-          const result = await probe(channel);
-          return result.reloadSettled ? result.binding : false;
-        });
-      await expect.poll(async () => (await settledProbe("sibling-chat")).starts).toBe(1);
-      const sibling = await settledProbe("sibling-chat");
-      const cold = await settledProbe("cold-chat");
-      expect(cold).toMatchObject({ captured: null, starts: 0, stops: 0, pid: process.pid });
-      for (const label of ["first setup", "edited setup"]) {
-        const current = await rpcReq<{ hash: string }>(connected, "config.get", {});
-        const changed = await rpcReq(connected, "config.patch", {
-          raw: JSON.stringify({ channels: { "cold-chat": { enabled: true, label } } }),
-          baseHash: current.payload?.hash,
-        });
-        expect(changed.ok, changed.error?.message).toBe(true);
-        expect(changed.payload).toMatchObject({
-          sentinel: { payload: { stats: { requiresRestart: false } } },
-        });
-        await expect
-          .poll(async () => (await settledProbe("cold-chat")).captured?.label)
-          .toBe(label);
-        expect(await settledProbe("cold-chat")).toMatchObject({
-          starts: 1,
-          stops: 0,
-          pid: cold.pid,
-        });
-        expect((await settledProbe("cold-chat")).instance).not.toBe(cold.instance);
-        expect(await settledProbe("sibling-chat")).toEqual(sibling);
-      }
-      // Installing another plugin can rebuild metadata through a different producer.
-      // Reordering an unchanged sibling's package keys must not stop its live account.
-      const siblingPackagePath = path.join(bundledRoot, "sibling-chat-owner", "package.json");
-      const siblingPackage = JSON.parse(await fs.readFile(siblingPackagePath, "utf8"));
-      await fs.writeFile(
-        siblingPackagePath,
-        JSON.stringify({
-          ...siblingPackage,
-          openclaw: { runtimeExtensions: ["./index.js"], extensions: ["./index.js"] },
-        }),
-      );
-      const persisted = JSON.parse(await fs.readFile(configPath, "utf8"));
-      const application = createRuntimeConfigWriteApplication();
-      const committed = await commitConfigWithPendingPluginInstalls({
-        writeOptions: attachRuntimeConfigWriteApplication({}, application),
-        nextConfig: {
-          ...persisted,
-          channels: {
-            ...persisted.channels,
-            "cold-chat": { enabled: true, label: "installed setup" },
-          },
-          plugins: {
-            ...persisted.plugins,
-            installs: {
-              "cold-chat-owner": {
-                source: "path",
-                sourcePath: path.join(bundledRoot, "cold-chat-owner"),
-                installPath: path.join(bundledRoot, "cold-chat-owner"),
-              },
-            },
-          },
-        },
+        return reloadSettled ? binding : false;
       });
-      expect(committed.afterWrite.mode).toBe("auto");
-      expect(application.claimed).toBe(true);
-      // Persistence schedules application; await its owner before probing the replacement.
-      await expect(application.result).resolves.toBe("applied");
-      expect((await settledProbe("cold-chat")).captured?.label).toBe("installed setup");
-      expect(await settledProbe("cold-chat")).toMatchObject({ starts: 1, stops: 0, pid: cold.pid });
-      expect(await settledProbe("sibling-chat")).toEqual(sibling);
-      assert.ok(configWatcher);
-      const watcher = configWatcher;
-      const metadataModule = await import("../config/io.plugin-metadata.js");
-      const resolveMetadata = metadataModule.resolveConfigWidePluginMetadataSnapshotAsync;
-      let echoed = false;
-      const metadataSpy = vi
-        .spyOn(metadataModule, "resolveConfigWidePluginMetadataSnapshotAsync")
-        .mockImplementation(async (params) => {
-          const metadata = await resolveMetadata(params);
-          if (!echoed && params.allowCurrent === false) {
-            echoed = true;
-            // The config write can echo while explicit reload prepares its metadata.
-            watcher.emit("change", configPath);
-          }
-          return metadata;
-        });
-      onTestFinished(() => metadataSpy.mockRestore());
-      const explicit = await rpcReq(connected, "plugins.reload", {
-        plugins: [{ pluginId: "cold-chat-owner" }],
+    await expect.poll(async () => (await settledProbe("sibling-chat")).starts).toBe(1);
+    const sibling = await settledProbe("sibling-chat");
+    const cold = await settledProbe("cold-chat");
+    expect(cold).toMatchObject({ captured: null, starts: 0, stops: 0, pid: process.pid });
+    for (const label of ["first setup", "edited setup"]) {
+      const current = await rpcReq<{ hash: string }>(connected, "config.get", {});
+      const changed = await rpcReq(connected, "config.patch", {
+        raw: JSON.stringify({ channels: { "cold-chat": { enabled: true, label } } }),
+        baseHash: current.payload?.hash,
       });
-      expect(echoed).toBe(true);
-      expect(explicit.ok, explicit.error?.message).toBe(true);
+      expect(changed.ok, changed.error?.message).toBe(true);
+      expect(changed.payload).toMatchObject({
+        sentinel: { payload: { stats: { requiresRestart: false } } },
+      });
+      await expect.poll(async () => (await settledProbe("cold-chat")).captured?.label).toBe(label);
+      expect(await settledProbe("cold-chat")).toMatchObject({
+        starts: 1,
+        stops: 0,
+        pid: cold.pid,
+      });
+      expect((await settledProbe("cold-chat")).instance).not.toBe(cold.instance);
       expect(await settledProbe("sibling-chat")).toEqual(sibling);
-      expect(connected.readyState).toBe(connected.OPEN);
-      expect(hotReloadRecovery).not.toHaveBeenCalled();
-    },
-  );
+    }
+    // Installing another plugin can rebuild metadata through a different producer.
+    // Reordering an unchanged sibling's package keys must not stop its live account.
+    const siblingPackagePath = path.join(bundledRoot, "sibling-chat-owner", "package.json");
+    const siblingPackage = JSON.parse(await fs.readFile(siblingPackagePath, "utf8"));
+    siblingPackage.openclaw = { runtimeExtensions: ["./index.js"], extensions: ["./index.js"] };
+    await writeJson(siblingPackagePath, siblingPackage);
+    const persisted = JSON.parse(await fs.readFile(configPath, "utf8"));
+    persisted.channels["cold-chat"] = { enabled: true, label: "installed setup" };
+    const installPath = path.join(bundledRoot, "cold-chat-owner");
+    persisted.plugins.installs = {
+      "cold-chat-owner": { source: "path", sourcePath: installPath, installPath },
+    };
+    const application = createRuntimeConfigWriteApplication();
+    const committed = await commitConfigWithPendingPluginInstalls({
+      writeOptions: attachRuntimeConfigWriteApplication({}, application),
+      nextConfig: persisted,
+    });
+    expect(committed.afterWrite.mode).toBe("auto");
+    expect(application.claimed).toBe(true);
+    // Persistence schedules application; await its owner before probing the replacement.
+    await expect(application.result).resolves.toBe("applied");
+    expect((await settledProbe("cold-chat")).captured?.label).toBe("installed setup");
+    expect(await settledProbe("cold-chat")).toMatchObject({ starts: 1, stops: 0, pid: cold.pid });
+    expect(await settledProbe("sibling-chat")).toEqual(sibling);
+    assert.ok(configWatcher);
+    const watcher = configWatcher;
+    const metadataModule = await import("../config/io.plugin-metadata.js");
+    const resolveMetadata = metadataModule.resolveConfigWidePluginMetadataSnapshotAsync;
+    let echoed = false;
+    const metadataSpy = vi
+      .spyOn(metadataModule, "resolveConfigWidePluginMetadataSnapshotAsync")
+      .mockImplementation(async (params) => {
+        const metadata = await resolveMetadata(params);
+        if (!echoed && params.allowCurrent === false) {
+          echoed = true;
+          // The config write can echo while explicit reload prepares its metadata.
+          watcher.emit("change", configPath);
+        }
+        return metadata;
+      });
+    onTestFinished(() => metadataSpy.mockRestore());
+    const explicit = await reloadPlugin(connected, "cold-chat-owner");
+    expect(echoed).toBe(true);
+    expect(explicit.ok, explicit.error?.message).toBe(true);
+    expect(await settledProbe("sibling-chat")).toEqual(sibling);
+    expect(connected.readyState).toBe(connected.OPEN);
+    expect(hotReloadRecovery).not.toHaveBeenCalled();
+  },
+);
 
-  it.each([
-    {
-      name: "hands off live and pending webhook accounts without requiring a restart while preserving a manual stop",
-      teardownFails: false,
-    },
-    {
-      name: "refuses webhook account replacement when service cleanup rejects",
-      teardownFails: true,
-    },
-  ])("$name", { timeout: 120_000 }, async ({ teardownFails }) => {
+it.each([false, true])(
+  "hands off webhook accounts while preserving manual stops (cleanup rejects=%s)",
+  { timeout: 120_000 },
+  async (teardownFails) => {
     releasePending = createDeferredCore();
     const starts = new Map<string, number>();
     const channelPlugin: ChannelPlugin = {
@@ -423,41 +340,16 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     coordinator.channel = channelPlugin;
     const bundledRoot = tempDirs.make("openclaw-instance-binding-");
     await writeInstanceBindingProbePlugin(bundledRoot, coordinator.channelName, channelId);
-    process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "0";
-    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledRoot;
-    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
-    process.env.OPENCLAW_SKIP_CRON = "1";
-    delete process.env.OPENCLAW_SKIP_CHANNELS;
-    delete process.env.OPENCLAW_SKIP_PROVIDERS;
-    const configPath = process.env.OPENCLAW_CONFIG_PATH;
-    if (!configPath) {
-      throw new Error("Gateway fixture did not set config path");
-    }
+    const configPath = configurePluginGateway(bundledRoot, true);
     const config = loadGatewayTestConfig();
-    config.plugins = {
-      ...config.plugins,
-      enabled: true,
-      allow: ["instance-binding-probe"],
-      entries: {
-        ...config.plugins?.entries,
-        "instance-binding-probe": { enabled: true },
-      },
-    };
-    await fs.writeFile(configPath, JSON.stringify(config));
-    const hotReloadRecovery = vi.fn(() => ({
-      status: "emitted" as const,
-    }));
+    config.plugins = enabledPlugins(["instance-binding-probe"], config.plugins);
+    await writeJson(configPath, config);
+    const hotReloadRecovery = vi.fn(() => ({ status: "emitted" as const }));
     await useGatewayGraphPluginRuntime();
-    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-    const port = portClaim.port;
     const maintenance = await observePostReadyStartupMaintenance();
-    server = await startTestGatewayServer(portClaim, {
-      auth: { mode: "none" },
-      controlUiEnabled: false,
-      sidecarStartup: "start",
-      hotReloadRecovery,
-    });
+    const started = await startPluginGateway({ hotReloadRecovery });
+    server = started.server;
+    const port = started.port;
     await server.startupSettled;
     await maintenance.settled;
     const probe = async (accountId: string) => {
@@ -473,11 +365,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     await expect
       .poll(() => [...starts.keys()].toSorted(), { timeout: 30_000 })
       .toEqual(["active", "parked", "pending"]);
-    expect(await probe("active")).toEqual({
-      status: 200,
-      body: "active:1",
-      registry: "current",
-    });
+    expect(await probe("active")).toEqual({ status: 200, body: "active:1", registry: "current" });
     expect((await probe("pending")).status).toBe(404);
     socket = await connectWebchatClient({ port, scopes: ["operator.admin"] });
     const stopped = await rpcReq(socket, "channels.stop", {
@@ -490,26 +378,21 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     const { runtime } = await requireBoundRuntime(coordinator.runtimes, "webhook channel reload");
     await requestSettledInstanceBindingProbe(runtime);
     const initialRegistry = getActivePluginRegistry();
-    const reload = await rpcReq(socket, "plugins.reload", {
-      plugins: [{ pluginId: "instance-binding-probe" }],
-    });
+    const reload = await reloadPlugin(socket);
     if (teardownFails) {
       expect(reload).toMatchObject({
         ok: false,
         error: { details: { runtime: { committed: false, phase: "drain" } } },
       });
       expect(reload.error?.message).toContain("instance-binding service cleanup rejected");
-      expect(coordinator.serviceStops).toBe(1);
-      expect(coordinator.serviceStarts).toBe(1);
+      expect(coordinator).toMatchObject({ serviceStops: 1, serviceStarts: 1 });
       expect(getActivePluginRegistry()).toBe(initialRegistry);
       releasePending.resolve();
       for (const accountId of ["active", "pending", "parked"]) {
         expect((await probe(accountId)).status).toBe(accountId === "active" ? 503 : 404);
         expect(starts.get(accountId)).toBe(1);
       }
-      const retry = await rpcReq(socket, "plugins.reload", {
-        plugins: [{ pluginId: "instance-binding-probe" }],
-      });
+      const retry = await reloadPlugin(socket);
       expect(retry.ok).toBe(false);
       expect(coordinator.serviceStarts).toBe(1);
       expect((await rpcReq(socket, "config.get", {})).ok).toBe(true);
@@ -534,13 +417,9 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       .poll(() => probe("pending"), { timeout: 30_000 })
       .toEqual({ status: 200, body: "pending:2", registry: "current" });
     releasePending.resolve();
-    expect(await probe("pending")).toEqual({
-      status: 200,
-      body: "pending:2",
-      registry: "current",
-    });
+    expect(await probe("pending")).toEqual({ status: 200, body: "pending:2", registry: "current" });
     expect((await probe("parked")).status).toBe(404);
     expect(starts.get("parked")).toBe(1);
     expect(hotReloadRecovery).not.toHaveBeenCalled();
-  });
-});
+  },
+);

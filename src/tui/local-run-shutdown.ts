@@ -1,4 +1,3 @@
-// Coordinates graceful shutdown for local TUI runs.
 import {
   MAX_TIMER_TIMEOUT_MS,
   parseStrictNonNegativeInteger,

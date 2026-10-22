@@ -6,7 +6,7 @@ import {
   trackSqliteStatementExecutions,
 } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
+import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.test-support.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import {
   closeOpenClawStateDatabaseAsync,

@@ -2,9 +2,9 @@ import type { ServerResponse } from "node:http";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withServer } from "openclaw/plugin-sdk/test-env";
-import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
+import { withDurableGoogleChatTransport } from "./durable-transport.test-support.js";
 
 const transport = vi.hoisted(() => ({
   baseUrl: "",
@@ -240,18 +240,9 @@ describe("Google Chat sender authority through real guarded HTTP", () => {
   });
 
   it("settles an accepted durable message after authority expires while reading its body", async () => {
-    await withOpenClawTestState(
-      { label: "googlechat-authority-settlement", layout: "state-only" },
-      async () => {
-        const [
-          { sendDurableMessageBatch },
-          { createTestRegistry, withPluginRuntimeRegistryScope },
-          { googlechatPlugin },
-        ] = await Promise.all([
-          import("openclaw/plugin-sdk/channel-outbound"),
-          import("openclaw/plugin-sdk/channel-test-helpers"),
-          import("../api.js"),
-        ]);
+    await withDurableGoogleChatTransport(
+      "googlechat-authority-settlement",
+      async (sendDurableMessageBatch) => {
         const authority = createAuthority();
         const accepted = createDeferred<ServerResponse>();
         const dispatch = vi.fn(async () => {});
@@ -262,21 +253,15 @@ describe("Google Chat sender authority through real guarded HTTP", () => {
             accepted.resolve(response);
           },
           async (requests) => {
-            const sending = withPluginRuntimeRegistryScope(
-              createTestRegistry([
-                { pluginId: "googlechat", plugin: googlechatPlugin, source: "test" },
-              ]),
-              () =>
-                sendDurableMessageBatch({
-                  cfg,
-                  channel: "googlechat",
-                  accountId: "default",
-                  to: "spaces/AAA",
-                  payloads: [{ text: "hello" }],
-                  assertDirectAdapterHandoff: authority.assert,
-                  onPlatformSendDispatch: dispatch,
-                }),
-            );
+            const sending = sendDurableMessageBatch({
+              cfg,
+              channel: "googlechat",
+              accountId: "default",
+              to: "spaces/AAA",
+              payloads: [{ text: "hello" }],
+              assertDirectAdapterHandoff: authority.assert,
+              onPlatformSendDispatch: dispatch,
+            });
             const response = await accepted.promise;
             authority.revoke();
             response.end(JSON.stringify({ name: "spaces/AAA/messages/accepted" }));

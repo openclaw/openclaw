@@ -56,7 +56,7 @@ export function usesBasetenChatTemplateThinking(modelId: string): boolean {
 export function buildBasetenModelCompat(modelId: string): ModelCompatConfig {
   return {
     ...BASE_COMPAT,
-    ...structuredClone(BASETEN_MODEL_COMPAT.get(modelId)),
+    ...BASETEN_MODEL_COMPAT.get(modelId),
   };
 }
 

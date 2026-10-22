@@ -12,7 +12,7 @@ vi.mock(import("openclaw/plugin-sdk/database-engine-runtime"), async (importOrig
   ...(await importOriginal()),
   openEngineWorkerStore,
 }));
-import { createWorkboardSqliteStores } from "./test/database-config.js";
+import { createWorkboardSqliteStores } from "./sqlite-store.js";
 
 const workerModuleUrl = new URL("./sqlite-store.worker.ts", import.meta.url);
 beforeEach(() => {

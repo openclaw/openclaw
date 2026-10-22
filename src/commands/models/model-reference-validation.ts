@@ -15,7 +15,7 @@ type ModelReferenceInspection = {
   model: string;
   /**
    * `uncatalogued-provider`: the provider is installed or configured but
-   * contributes no catalog rows to compare against (no manifest seed rows and
+   * contributes no conversational catalog rows to compare against (no chat seed rows and
    * no `models.providers.<id>.models`), so membership cannot be judged offline.
    */
   status:
@@ -60,6 +60,10 @@ function createModelReferenceInspector(params: ModelReferenceInspectionParams) {
     registry: snapshot.manifestRegistry,
     config: params.cfg,
   }).rows) {
+    // Decision-only declarations do not describe the provider's conversational catalog.
+    if (row.inference?.chat === false) {
+      continue;
+    }
     knownModels.add(row.mergeKey);
     cataloguedProviders.add(normalizeProviderId(row.provider));
   }
@@ -86,7 +90,7 @@ function createModelReferenceInspector(params: ModelReferenceInspectionParams) {
     if (knownModels.has(buildModelCatalogMergeKey(provider, model))) {
       return { ref, provider, model, status: "known" };
     }
-    // A provider with zero catalog rows (runtime-discovered catalogs such as
+    // A provider with zero conversational rows (runtime-discovered catalogs such as
     // OpenRouter) gives the membership check nothing to compare against, so an
     // unlisted id there is not evidence of a typo.
     const status = cataloguedProviders.has(provider) ? "unknown-model" : "uncatalogued-provider";

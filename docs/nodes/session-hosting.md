@@ -204,6 +204,9 @@ new work; active turns and background commands keep their slots. When no free
 or reclaimable slot remains, the node stays available for status and cancellation
 but is not selected for a new session turn.
 
+If a capacity refresh fails, the node logs a warning and advertises no available
+slots. Restart the node host if its capacity does not recover.
+
 Capacity, host-stat, and skill-bin updates do not interrupt active node work or
 change its pairing authority. This behavior requires an updated Gateway; node
 configuration and stored pairings remain unchanged.
@@ -391,8 +394,11 @@ For a specific paired device that advertises `workerHost.deviceFolders: true`,
 choose **Existing folder on device** in the workspace picker and enter an
 absolute path on that device. This option is not available for **Auto**, cloud
 workers, runtimes without worker-turn execution, or devices that do not advertise
-the capability. The device validates
-the folder; the Gateway does not browse or resolve this path locally.
+the capability. Operators with `operator.admin` can also choose **Browse folders
+on** _device_ to list folders on that device through its `fs.listDir` command.
+The listing is not limited to `folders` roots; the device validates the chosen
+folder when the session is created. The Gateway never browses or resolves this
+path locally.
 
 The session records `deviceFolder: { deviceId, path }` and dispatches to that
 exact device. Do not combine `deviceFolder` with a project, repository,
@@ -422,7 +428,7 @@ worker inside its own container instead:
       enabled: true,
       isolation: "container",
       // Optional: use a digest-pinned, private-registry, or preloaded image.
-      // containerImage: "registry.example.com/openclaw/node:24.21.0-slim",
+      // containerImage: "registry.example.com/openclaw/node:24.22.1-slim",
     },
   },
 }
@@ -432,6 +438,14 @@ Restart the node host after changing either setting. Isolation defaults to
 `"none"`, preserving the existing direct-process behavior. This setting is
 enforced locally on the node; the Gateway cannot silently disable it or fall
 back to an unisolated worker.
+
+Isolation applies only to sessions placed on this node. When `sessions.dispatch`
+to the node is refused (for example, because no container engine works), the
+session stays unplaced, and its turns run on the Gateway like any other
+undispatched session. To forbid Gateway-local execution entirely, set
+[`cloudWorkers.requiredProfile`](/gateway/config-cloud-workers#required-worker-profile)
+to a device profile for this node; turns then fail with an actionable error
+instead of running on the Gateway.
 
 Container isolation is supported on Linux and macOS node hosts; Windows is
 unsupported because native Windows paths cannot be mounted at their original
@@ -449,10 +463,10 @@ If an engine command times out, the launch error names the engine and operation
 (for example, `docker info`) and its deadline. It omits command arguments and
 environment values. Check that operation against the selected daemon before retrying.
 
-The default image is `node:24.21.0-slim`; the engine pulls it on first use when it
+The default image is `node:24.22.1-slim`; the engine pulls it on first use when it
 is not already present. Set `nodeHost.workerRuns.containerImage` to choose a
 digest-pinned image, a private-registry image, or an image already available
-to the engine. The image must provide a supported Node.js 24.16+ or 26.1+ runtime on
+to the engine. The image must provide a supported Node.js 24.22.1+ or 26.12.1+ runtime on
 its standard executable search path. If the image cannot be pulled, is
 inaccessible, or does not provide a suitable Node.js runtime, that session
 launch fails visibly; it never retries as a bare host process. Preload the
@@ -460,7 +474,7 @@ image or configure registry access before hosting sessions on an offline or
 restricted node. The default image can advance when OpenClaw updates its dependencies.
 Before upgrading an offline node, preload the new default image or set
 `nodeHost.workerRuns.containerImage` to a supported image already cached on that node.
-For example, a cached `node:24.19.0-slim` remains supported and can be selected explicitly.
+For example, a cached `node:26.12.1-slim` can be selected explicitly.
 Existing explicit image settings are preserved; replace unsupported Node images before
 upgrading OpenClaw. Worker startup requires a supported runtime; older releases may
 fail before the runtime diagnostic can run.

@@ -14,6 +14,28 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
 
 const { emitTelegramLiveLocationMessageHook } = await import("./location-message-hook.js");
 
+function emitLocation(
+  fields: Partial<Message> = {},
+  updateId = 9002,
+  updateKind: "edited_message" | "edited_channel_post" = "edited_message",
+) {
+  return emitTelegramLiveLocationMessageHook({
+    accountId: "main",
+    updateId,
+    updateKind,
+    isForum: false,
+    msg: {
+      chat: { id: 1234, type: "private" },
+      message_id: 456,
+      date: 1_786_094_460,
+      edit_date: 1_786_094_520,
+      from: { id: 789, is_bot: false, first_name: "Pat" },
+      location: { latitude: 43.8376, longitude: 18.4534, live_period: 900 },
+      ...fields,
+    } as Message,
+  });
+}
+
 describe("Telegram location message hooks", () => {
   beforeEach(() => {
     hookRunner.hasHooks.mockClear();
@@ -23,159 +45,74 @@ describe("Telegram location message hooks", () => {
   });
 
   it("ignores non-location edits", () => {
-    const msg = {
-      chat: { id: 1234, type: "private" },
-      message_id: 456,
-      date: 1_786_094_460,
-      edit_date: 1_786_094_520,
-      from: { id: 789, is_bot: false, first_name: "Mariano" },
-      text: "edited text",
-    } as Message;
-
-    emitTelegramLiveLocationMessageHook({
-      accountId: "main",
-      msg,
-      updateId: 9002,
-      updateKind: "edited_message",
-      isForum: false,
-    });
+    emitLocation({ location: undefined, text: "edited text" });
 
     expect(hookRunner.runMessageReceived).not.toHaveBeenCalled();
   });
 
-  it("emits edited live locations through the global message-received contract", () => {
-    const msg = {
-      chat: { id: 1234, type: "private" },
-      message_id: 456,
-      date: 1_786_094_460,
-      edit_date: 1_786_094_520,
-      from: { id: 789, is_bot: false, first_name: "Pat" },
-      location: {
-        latitude: 43.8376,
-        longitude: 18.4534,
-        horizontal_accuracy: 12,
-        live_period: 900,
-      },
-    } as Message;
-
-    emitTelegramLiveLocationMessageHook({
-      accountId: "main",
-      msg,
-      updateId: 9002,
-      updateKind: "edited_message",
-      isForum: false,
-    });
-
-    expect(hookRunner.hasHooks).toHaveBeenCalledWith("message_received", expect.any(Object));
-    expect(hookRunner.runMessageReceived).toHaveBeenCalledWith(
-      expect.objectContaining({
-        messageId: "456",
-        senderId: "789",
-        timestamp: 1_786_094_520_000,
-        location: expect.objectContaining({
+  it.each([
+    [
+      "edited_message",
+      9002,
+      {
+        location: {
           latitude: 43.8376,
           longitude: 18.4534,
-          accuracy: 12,
-          source: "live",
-          isLive: true,
-          livePeriodSeconds: 900,
-        }),
-        providerUpdate: {
-          id: "9002",
-          kind: "edited_message",
-          messageId: "456",
-          messageTimestamp: 1_786_094_460_000,
-          editedTimestamp: 1_786_094_520_000,
+          horizontal_accuracy: 12,
+          live_period: 900,
         },
-      }),
-      expect.objectContaining({
-        channelId: "telegram",
-        accountId: "main",
-        conversationId: "telegram:1234",
-        messageId: "456",
-        senderId: "789",
-      }),
-    );
-    expect(hookRunner.runInboundClaim).not.toHaveBeenCalled();
-  });
-
-  it("emits the terminal edit when live-location sharing stops", () => {
-    const msg = {
-      chat: { id: 1234, type: "private" },
-      message_id: 456,
-      date: 1_786_094_460,
-      edit_date: 1_786_094_580,
-      from: { id: 789, is_bot: false, first_name: "Pat" },
-      location: { latitude: 43.8376, longitude: 18.4534 },
-    } as Message;
-
-    emitTelegramLiveLocationMessageHook({
-      accountId: "main",
-      msg,
-      updateId: 9003,
-      updateKind: "edited_message",
-      isForum: false,
-    });
-
-    expect(hookRunner.runMessageReceived).toHaveBeenCalledWith(
-      expect.objectContaining({
-        location: expect.objectContaining({ isLive: false }),
-        providerUpdate: expect.objectContaining({ id: "9003", kind: "edited_message" }),
-      }),
-      expect.any(Object),
-    );
-    expect(hookRunner.runInboundClaim).not.toHaveBeenCalled();
-  });
-
-  it("emits edited channel-post live locations with their provider update kind", () => {
-    const msg = {
-      chat: { id: -1001234, type: "supergroup", title: "Travel updates" },
-      message_id: 456,
-      date: 1_786_094_460,
-      edit_date: 1_786_094_580,
-      from: { id: 789, is_bot: true, first_name: "Travel updates" },
-      location: { latitude: 43.8376, longitude: 18.4534, live_period: 900 },
-    } as Message;
-
-    emitTelegramLiveLocationMessageHook({
-      accountId: "main",
-      msg,
-      updateId: 9004,
-      updateKind: "edited_channel_post",
-      isForum: false,
-    });
-
-    expect(hookRunner.runMessageReceived).toHaveBeenCalledWith(
-      expect.objectContaining({
-        providerUpdate: expect.objectContaining({
-          id: "9004",
-          kind: "edited_channel_post",
+      },
+      true,
+    ],
+    ["edited_message", 9003, { location: { latitude: 43.8376, longitude: 18.4534 } }, false],
+    [
+      "edited_channel_post",
+      9004,
+      {
+        chat: { id: -1001234, type: "supergroup", title: "Travel updates" },
+        from: { id: 789, is_bot: true, first_name: "Travel updates" },
+      },
+      true,
+    ],
+  ] satisfies ["edited_message" | "edited_channel_post", number, Partial<Message>, boolean][])(
+    "emits %s location update %i without dispatching inbound claims",
+    (kind, id, fields, isLive) => {
+      emitLocation(fields, id, kind);
+      expect(hookRunner.hasHooks).toHaveBeenCalledWith("message_received", expect.any(Object));
+      expect(hookRunner.runMessageReceived).toHaveBeenCalledWith(
+        expect.objectContaining({
+          messageId: "456",
+          senderId: "789",
+          timestamp: 1_786_094_520_000,
+          location: expect.objectContaining({
+            latitude: 43.8376,
+            longitude: 18.4534,
+            isLive,
+            ...(id === 9002 ? { accuracy: 12, source: "live", livePeriodSeconds: 900 } : {}),
+          }),
+          providerUpdate: {
+            id: String(id),
+            kind,
+            messageId: "456",
+            messageTimestamp: 1_786_094_460_000,
+            editedTimestamp: 1_786_094_520_000,
+          },
         }),
-      }),
-      expect.any(Object),
-    );
-  });
+        expect.objectContaining({
+          channelId: "telegram",
+          accountId: "main",
+          ...(id === 9002 ? { conversationId: "telegram:1234" } : {}),
+          messageId: "456",
+          senderId: "789",
+        }),
+      );
+      expect(hookRunner.runInboundClaim).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not wait for plugin observers on the Telegram inbound path", () => {
     hookRunner.runMessageReceived.mockReturnValueOnce(new Promise(() => {}));
-    const msg = {
-      chat: { id: 1234, type: "private" },
-      message_id: 456,
-      date: 1_786_094_460,
-      edit_date: 1_786_094_520,
-      from: { id: 789, is_bot: false, first_name: "Pat" },
-      location: { latitude: 43.8376, longitude: 18.4534, live_period: 900 },
-    } as Message;
-
-    expect(
-      emitTelegramLiveLocationMessageHook({
-        accountId: "main",
-        msg,
-        updateId: 9005,
-        updateKind: "edited_message",
-        isForum: false,
-      }),
-    ).toBeUndefined();
+    expect(emitLocation({}, 9005)).toBeUndefined();
     expect(hookRunner.runMessageReceived).toHaveBeenCalledTimes(1);
   });
 });

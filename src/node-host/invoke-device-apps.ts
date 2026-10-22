@@ -30,8 +30,6 @@ type DeviceAppsInvokeResult =
 export async function invokeDeviceApps(params: {
   paramsJSON?: string | null;
   sharingEnabled: boolean;
-  platform?: NodeJS.Platform;
-  scan?: typeof scanInstalledApps;
 }): Promise<DeviceAppsInvokeResult> {
   if (!params.sharingEnabled) {
     return {
@@ -46,8 +44,7 @@ export async function invokeDeviceApps(params: {
   } catch (error) {
     return { ok: false, code: "INVALID_REQUEST", message: String(error) };
   }
-  const scan = params.scan ?? scanInstalledApps;
-  const inventory = await scan({ platform: params.platform ?? process.platform });
+  const inventory = await scanInstalledApps();
   if (inventory.status === "unsupported") {
     return {
       ok: false,

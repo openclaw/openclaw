@@ -1,5 +1,4 @@
 import { Buffer } from "node:buffer";
-import { lookup } from "node:dns/promises";
 import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import {
   buildHostnameAllowlistPolicyFromSuffixAllowlist as resolveMediaSsrfPolicy,
@@ -313,25 +312,6 @@ export type MSTeamsAttachmentDownloadLogger = Partial<
   Pick<MSTeamsMonitorLogger, "debug" | "warn" | "error">
 >;
 
-export type MSTeamsAttachmentResolveFn = (hostname: string) => Promise<{ address: string }>;
-
-function isMockFetchFn(fetchFn: typeof fetch): boolean {
-  const candidate = fetchFn as unknown as { mock?: unknown };
-  return Boolean(candidate.mock || Object.hasOwn(candidate, "_isMockFunction"));
-}
-
-function resolveGuardedFetchImpl(fetchFn?: typeof fetch): typeof fetch | undefined {
-  if (!fetchFn) {
-    return undefined;
-  }
-  if (fetchFn === fetch || fetchFn === globalThis.fetch || isMockFetchFn(fetchFn)) {
-    return fetchFn;
-  }
-  throw new Error(
-    "MSTeams attachment fetchFn must set fetchFnSupportsDispatcher to use guarded DNS pinning",
-  );
-}
-
 function resolveRetainedAuthorizationRedirectHostnameAllowlist(
   input?: string[],
 ): string[] | undefined {
@@ -377,22 +357,20 @@ export function isRedirectStatus(status: number): boolean {
 
 /**
  * Fetch a URL with redirect: "manual", validating each redirect target
- * against the hostname allowlist and optional DNS-resolved IP (anti-SSRF).
+ * against the hostname allowlist and DNS-resolved IP (anti-SSRF).
  *
  * This prevents:
  * - Auto-following redirects to non-allowlisted hosts
- * - DNS rebinding attacks when a lookup function is provided
+ * - DNS rebinding attacks through the pinned DNS lookup
  */
 export async function safeFetchWithPolicy(params: {
   url: string;
   policy: MSTeamsAttachmentFetchPolicy;
-  fetchFn?: typeof fetch;
+  resolveFn: (hostname: string) => Promise<{ address: string }>;
   requestInit?: RequestInit;
-  resolveFn?: MSTeamsAttachmentResolveFn;
   timeoutMs?: number;
 }): Promise<Response> {
   const { allowHosts, authAllowHosts } = params.policy;
-  const resolveFn = params.resolveFn ?? lookup;
   const currentHeaders = new Headers(params.requestInit?.headers);
   const currentUrl = params.url;
 
@@ -407,12 +385,11 @@ export async function safeFetchWithPolicy(params: {
   }
 
   const lookupFn: LookupFn = async (hostname) => {
-    const resolved = await resolveFn(hostname);
+    const resolved = await params.resolveFn(hostname);
     return [{ ...resolved, family: resolved.address.includes(":") ? 6 : 4 }];
   };
   const guarded = await fetchWithSsrFGuard({
     url: currentUrl,
-    fetchImpl: resolveGuardedFetchImpl(params.fetchFn),
     init: {
       ...params.requestInit,
       headers: currentHeaders,

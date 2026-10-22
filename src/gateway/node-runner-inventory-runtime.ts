@@ -201,11 +201,11 @@ export function collectNodeRunnerCatalogState(params: {
       issuesByNodeId.set(node.nodeId, [issue]);
     }
     if (proof) {
-      workerSlotsByNodeId.set(node.nodeId, { ...proof.workerHost.capacity });
+      workerSlotsByNodeId.set(node.nodeId, proof.workerHost.capacity);
     }
     const observation = state.bundleStatusByConn.get(node.connId);
     if (observation) {
-      workerBundleByNodeId.set(node.nodeId, structuredClone(observation.status));
+      workerBundleByNodeId.set(node.nodeId, observation.status);
     }
   }
   return {

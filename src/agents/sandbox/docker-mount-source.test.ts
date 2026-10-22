@@ -31,18 +31,20 @@ const wireMount = {
   Destination: "/gateway/workspace",
   RW: true,
 };
+const inspected = (value: unknown) => ({ stdout: JSON.stringify(value), stderr: "", code: 0 });
 let target = 0;
 
 function translateSandboxMountSource(
-  params: Omit<
-    Parameters<typeof translateSandboxMountSources>[0],
-    "containerPath" | "shadowedTargets"
-  >,
+  params: Partial<Parameters<typeof translateSandboxMountSources>[0]>,
 ): string {
   return translateSandboxMountSources({
-    ...params,
+    source: "/gateway/workspace",
+    allowedRoots: ["/gateway/workspace"],
+    mounts: parseInspectedSandboxMounts([wireMount]),
+    readOnly: false,
     containerPath: "/workspace",
     shadowedTargets: [],
+    ...params,
   })[0]!.hostPath;
 }
 
@@ -110,22 +112,13 @@ describe("Docker source namespace", () => {
   it.each(["/gateway/workspace", "/gateway/workspace/data"])(
     "rejects Docker --tmpfs at %s even when .Mounts only reports its bind ancestor",
     async (destination) => {
-      vi.mocked(execContainer).mockResolvedValueOnce({
-        stdout: JSON.stringify({
-          Id: id,
-          Mounts: [wireMount],
-          Tmpfs: { [destination]: "rw,size=1m" },
-        }),
-        stderr: "",
-        code: 0,
-      });
+      vi.mocked(execContainer).mockResolvedValueOnce(
+        inspected({ Id: id, Mounts: [wireMount], Tmpfs: { [destination]: "rw,size=1m" } }),
+      );
       const mounts = await resolveDockerSourceNamespace(DOCKER_SANDBOX_ENGINE);
       expect(() =>
         translateSandboxMountSource({
-          source: "/gateway/workspace",
-          allowedRoots: ["/gateway/workspace"],
           mounts: mounts!,
-          readOnly: false,
         }),
       ).toThrow(/unsupported (?:nested )?tmpfs mount/);
     },
@@ -137,28 +130,20 @@ describe("Docker source namespace", () => {
       if (failure === "unavailable") {
         vi.mocked(execContainer).mockRejectedValueOnce(new Error("daemon unavailable"));
       } else if (failure === "invalid-id" || failure === "missing-mounts") {
-        vi.mocked(execContainer).mockResolvedValueOnce({
-          stdout: JSON.stringify({
+        vi.mocked(execContainer).mockResolvedValueOnce(
+          inspected({
             Id: failure === "invalid-id" ? "short-id" : id,
             Mounts: failure === "missing-mounts" ? null : [wireMount],
           }),
-          stderr: "",
-          code: 0,
-        });
+        );
       } else {
         vi.mocked(execContainer)
-          .mockImplementationOnce(async () => ({
-            stdout: JSON.stringify({ Id: id, Mounts: [wireMount] }),
-            stderr: "",
-            code: 0,
-          }))
-          .mockResolvedValueOnce({
-            stdout: JSON.stringify(
+          .mockResolvedValueOnce(inspected({ Id: id, Mounts: [wireMount] }))
+          .mockResolvedValueOnce(
+            inspected(
               failure === "wrong-boot" ? ["other-boot", "mnt:[123]"] : ["test-boot", "mnt:[456]"],
             ),
-            stderr: "",
-            code: 0,
-          });
+          );
       }
       await expect(resolveDockerSourceNamespace(DOCKER_SANDBOX_ENGINE)).rejects.toThrow(
         "Connect Docker to the daemon that runs the Gateway",
@@ -203,15 +188,12 @@ describe("managed source translation", () => {
     ]);
     expect(
       translateSandboxMountSource({
-        readOnly: false,
         source: "/gateway/workspace/skills/demo",
-        allowedRoots: ["/gateway/workspace"],
         mounts,
       }),
     ).toBe("/host/special skills/demo");
     expect(() =>
       translateSandboxMountSource({
-        readOnly: false,
         source: "/gateway/workspace-other",
         allowedRoots: ["/gateway/workspace-other"],
         mounts,
@@ -223,14 +205,7 @@ describe("managed source translation", () => {
     const mounts = parseInspectedSandboxMounts([
       { ...wireMount, Type: "volume", Source: "/var/lib/docker/private" },
     ]);
-    expect(() =>
-      translateSandboxMountSource({
-        readOnly: false,
-        source: "/gateway/workspace",
-        allowedRoots: ["/gateway/workspace"],
-        mounts,
-      }),
-    ).toThrow("unsupported volume mount");
+    expect(() => translateSandboxMountSource({ mounts })).toThrow("unsupported volume mount");
   });
 
   it("rejects relative daemon sources", () => {
@@ -245,7 +220,6 @@ describe("managed source translation", () => {
   it("maps a root destination without losing the separator", () => {
     expect(
       translateSandboxMountSource({
-        readOnly: false,
         source: "/workspace",
         allowedRoots: ["/workspace"],
         mounts: parseInspectedSandboxMounts([{ ...wireMount, Destination: "/" }]),
@@ -253,17 +227,9 @@ describe("managed source translation", () => {
     ).toBe("/host/project/workspace");
   });
 
-  it("preserves Windows drive sources in container inspection", () => {
-    expect(
-      parseInspectedSandboxMounts([{ ...wireMount, Source: "c:\\Users\\Example\\project" }])[0]
-        ?.source,
-    ).toBe("C:/Users/Example/project");
-  });
-
   it("does not grant writes through a read-only Gateway bind", () => {
     const params = {
       source: "/gateway/workspace",
-      allowedRoots: ["/gateway/workspace"],
       mounts: parseInspectedSandboxMounts([{ ...wireMount, RW: false }]),
     };
     expect(() => translateSandboxMountSource({ ...params, readOnly: false })).toThrow(
@@ -276,20 +242,10 @@ describe("managed source translation", () => {
     vi.mocked(fs.realpathSync).mockImplementation((file) =>
       file === "/gateway/workspace/escape" ? "/etc" : String(file),
     );
-    expect(() =>
-      translateSandboxMountSource({
-        readOnly: false,
-        source: "/gateway/workspace/escape",
-        allowedRoots: ["/gateway/workspace"],
-        mounts: parseInspectedSandboxMounts([wireMount]),
-      }),
-    ).toThrow("escapes its Gateway workspace roots");
-    translateSandboxMountSource({
-      readOnly: false,
-      source: "/gateway/workspace",
-      allowedRoots: ["/gateway/workspace"],
-      mounts: parseInspectedSandboxMounts([wireMount]),
-    });
+    expect(() => translateSandboxMountSource({ source: "/gateway/workspace/escape" })).toThrow(
+      "escapes its Gateway workspace roots",
+    );
+    translateSandboxMountSource({});
     expect(
       vi.mocked(fs.realpathSync).mock.calls.some(([file]) => String(file).startsWith("/host/")),
     ).toBe(false);

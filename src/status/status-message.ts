@@ -22,7 +22,7 @@ import {
 } from "../agents/model-runtime-aliases.js";
 import { buildModelAliasIndex, resolveModelRefFromString } from "../agents/model-selection.js";
 import { resolveOpenAITextVerbosity } from "../agents/openai-text-verbosity.js";
-import { resolveSandboxRuntimeStatus } from "../agents/sandbox.js";
+import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
 import type { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
 import { formatCompactionStatus } from "../auto-reply/reply/compaction-notice.js";
 import type {
@@ -123,7 +123,6 @@ type StatusArgs = {
   activeModelAuth?: string;
   activeModel?: { modelProvider: string; model: string };
   usageLine?: string;
-  timeLine?: string;
   uptimeValue?: string;
   queue?: QueueStatus;
   mediaDecisions?: ReadonlyArray<MediaUnderstandingDecision>;
@@ -131,7 +130,6 @@ type StatusArgs = {
   pluginHealthLine?: string;
   channelFeatureLine?: string;
   transcriptUsage?: SessionTranscriptUsageSnapshot | null;
-  now?: number;
 };
 
 function normalizeAuthMode(value?: string) {
@@ -148,27 +146,6 @@ function normalizeAuthMode(value?: string) {
     return "unknown";
   }
   return undefined;
-}
-
-function resolveConfiguredTextVerbosity(params: {
-  config?: OpenClawConfig;
-  agentId?: string;
-  provider?: string | null;
-  model?: string | null;
-}): "low" | "medium" | "high" | undefined {
-  const provider = params.provider?.trim();
-  const model = params.model?.trim();
-  if (!provider || !model || provider !== "openai") {
-    return undefined;
-  }
-  return resolveOpenAITextVerbosity(
-    resolveExtraParams({
-      cfg: params.config,
-      provider,
-      modelId: model,
-      agentId: params.agentId,
-    }),
-  );
 }
 
 function resolveExecutionLabel(
@@ -240,7 +217,7 @@ const formatQueueDetails = (queue?: QueueStatus) => {
   if (!queue) {
     return "";
   }
-  const depth = typeof queue.depth === "number" ? `depth ${queue.depth}` : null;
+  const depth = queue.depth !== undefined ? `depth ${queue.depth}` : null;
   if (!queue.showDetails) {
     return depth ? ` (${depth})` : "";
   }
@@ -248,13 +225,13 @@ const formatQueueDetails = (queue?: QueueStatus) => {
   if (depth) {
     detailParts.push(depth);
   }
-  if (typeof queue.debounceMs === "number") {
+  if (queue.debounceMs !== undefined) {
     const ms = Math.max(0, Math.round(queue.debounceMs));
     const label =
       ms >= 1000 ? `${ms % 1000 === 0 ? ms / 1000 : (ms / 1000).toFixed(1)}s` : `${ms}ms`;
     detailParts.push(`debounce ${label}`);
   }
-  if (typeof queue.cap === "number") {
+  if (queue.cap !== undefined) {
     detailParts.push(`cap ${queue.cap}`);
   }
   if (queue.dropPolicy) {
@@ -389,70 +366,13 @@ const formatVoiceModeLine = (
   return parts.join(" · ");
 };
 
-function resolveChannelModelNote(params: {
-  config?: OpenClawConfig;
-  entry?: SessionEntry;
-  selectedProvider: string;
-  selectedModel: string;
-  parentSessionKey?: string;
-}): string | undefined {
-  if (!params.config || !params.entry) {
-    return undefined;
-  }
-  if (
-    normalizeOptionalString(params.entry.modelOverride) ||
-    normalizeOptionalString(params.entry.providerOverride)
-  ) {
-    return undefined;
-  }
-  const channelOverride = resolveChannelModelOverride({
-    cfg: params.config,
-    channel: sessionDeliveryChannel(params.entry),
-    groupId: params.entry.groupId,
-    groupChatType: params.entry.chatType ?? sessionDeliveryOrigin(params.entry)?.chatType,
-    groupChannel: params.entry.groupChannel,
-    groupSubject: params.entry.subject,
-    parentSessionKey: params.parentSessionKey,
-    directUserIds: [
-      sessionDeliveryOrigin(params.entry)?.nativeDirectUserId,
-      sessionDeliveryOrigin(params.entry)?.from,
-      sessionDeliveryOrigin(params.entry)?.to,
-    ],
-  });
-  if (!channelOverride) {
-    return undefined;
-  }
-  const aliasIndex = buildModelAliasIndex({
-    cfg: params.config,
-    defaultProvider: DEFAULT_PROVIDER,
-    allowPluginNormalization: false,
-  });
-  const resolvedOverride = resolveModelRefFromString({
-    raw: channelOverride.model,
-    defaultProvider: DEFAULT_PROVIDER,
-    aliasIndex,
-    allowPluginNormalization: false,
-  });
-  if (!resolvedOverride) {
-    return undefined;
-  }
-  if (
-    resolvedOverride.ref.provider !== params.selectedProvider ||
-    resolvedOverride.ref.model !== params.selectedModel
-  ) {
-    return undefined;
-  }
-  return "channel override";
-}
-
 export type StatusMessageParts = ReturnType<typeof buildStatusMessageParts>;
 
 export function buildStatusMessageParts(args: StatusArgs) {
-  const now = args.now ?? Date.now();
+  const now = Date.now();
   // Derive the live wall clock here so both /status and session_status expose
   // the same configured timezone without duplicating formatting at each caller.
   const cronNow = resolveCronStyleNow(args.config, now);
-  const timeLine = args.timeLine ?? cronNow?.timeLine;
   const uptimeLine = args.uptimeValue ? `⏱️ Uptime: ${args.uptimeValue}` : undefined;
   const entry = args.sessionEntry;
   const contextConfig = {
@@ -561,10 +481,10 @@ export function buildStatusMessageParts(args: StatusArgs) {
         if (!outputTokens) {
           outputTokens = logUsage.output;
         }
-        if (typeof cacheRead !== "number" || cacheRead <= 0) {
+        if (cacheRead === undefined || cacheRead <= 0) {
           cacheRead = logUsage.cacheRead ?? cacheRead;
         }
-        if (typeof cacheWrite !== "number" || cacheWrite <= 0) {
+        if (cacheWrite === undefined || cacheWrite <= 0) {
           cacheWrite = logUsage.cacheWrite ?? cacheWrite;
         }
       }
@@ -622,13 +542,46 @@ export function buildStatusMessageParts(args: StatusArgs) {
     allowAsyncLoad: false,
     allowCacheLookup: false,
   });
-  const channelModelNote = resolveChannelModelNote({
-    config: args.config,
-    entry,
-    selectedProvider: selectedLookupProvider,
-    selectedModel: selectedLookupModel,
-    parentSessionKey: args.parentSessionKey,
-  });
+  const channelOverride =
+    args.config &&
+    entry &&
+    !normalizeOptionalString(entry.modelOverride) &&
+    !normalizeOptionalString(entry.providerOverride)
+      ? resolveChannelModelOverride({
+          cfg: args.config,
+          channel: sessionDeliveryChannel(entry),
+          groupId: entry.groupId,
+          groupChatType: entry.chatType ?? sessionDeliveryOrigin(entry)?.chatType,
+          groupChannel: entry.groupChannel,
+          groupSubject: entry.subject,
+          parentSessionKey: args.parentSessionKey,
+          directUserIds: [
+            sessionDeliveryOrigin(entry)?.nativeDirectUserId,
+            sessionDeliveryOrigin(entry)?.from,
+            sessionDeliveryOrigin(entry)?.to,
+          ],
+        })
+      : undefined;
+  const channelModelAliasIndex = channelOverride
+    ? buildModelAliasIndex({
+        cfg: args.config,
+        defaultProvider: DEFAULT_PROVIDER,
+        allowPluginNormalization: false,
+      })
+    : undefined;
+  const resolvedChannelOverride = channelOverride
+    ? resolveModelRefFromString({
+        raw: channelOverride.model,
+        defaultProvider: DEFAULT_PROVIDER,
+        aliasIndex: channelModelAliasIndex,
+        allowPluginNormalization: false,
+      })
+    : undefined;
+  const channelModelNote =
+    resolvedChannelOverride?.ref.provider === selectedLookupProvider &&
+    resolvedChannelOverride.ref.model === selectedLookupModel
+      ? "channel override"
+      : undefined;
   const projectedActiveContextTokens = resolveProjectedSessionContextTokens({
     entry,
     provider: contextLookupProvider,
@@ -689,13 +642,13 @@ export function buildStatusMessageParts(args: StatusArgs) {
   const updatedAt = entry?.updatedAt;
   const sessionStartedAt = resolveTimestamp(args.sessionStartedAt ?? entry?.sessionStartedAt);
   const sessionDuration =
-    typeof sessionStartedAt === "number"
+    sessionStartedAt !== undefined
       ? formatDurationCompact(now - sessionStartedAt, { spaced: true })
       : undefined;
   const sessionValue = [
     args.sessionKey ?? "unknown",
     sessionDuration ? `duration ${sessionDuration}` : null,
-    typeof updatedAt === "number" ? `updated ${formatTimeAgo(now - updatedAt)}` : "no activity",
+    updatedAt !== undefined ? `updated ${formatTimeAgo(now - updatedAt)}` : "no activity",
   ]
     .filter(Boolean)
     .join(" • ");
@@ -739,12 +692,19 @@ export function buildStatusMessageParts(args: StatusArgs) {
         ? "elevated"
         : `elevated:${elevatedLevel}`
       : null;
-  const textVerbosity = resolveConfiguredTextVerbosity({
-    config: args.config,
-    agentId: args.agentId,
-    provider: activeProvider,
-    model: activeModel,
-  });
+  const textVerbosityProvider = activeProvider?.trim();
+  const textVerbosityModel = activeModel?.trim();
+  const textVerbosity =
+    textVerbosityProvider === "openai" && textVerbosityModel
+      ? resolveOpenAITextVerbosity(
+          resolveExtraParams({
+            cfg: args.config,
+            provider: textVerbosityProvider,
+            modelId: textVerbosityModel,
+            agentId: args.agentId,
+          }),
+        )
+      : undefined;
   const fastModeValue = formatFastModeStatusValue({
     mode: fastMode,
     fastAutoOnSeconds: fastModeState.fastAutoOnSeconds,
@@ -791,10 +751,10 @@ export function buildStatusMessageParts(args: StatusArgs) {
     state: entry,
   });
   const hasUsage =
-    typeof inputTokens === "number" ||
-    typeof outputTokens === "number" ||
-    typeof cacheRead === "number" ||
-    typeof cacheWrite === "number";
+    inputTokens !== undefined ||
+    outputTokens !== undefined ||
+    cacheRead !== undefined ||
+    cacheWrite !== undefined;
   const costConfig = hasUsage
     ? resolveModelCostConfig({
         provider: activeProvider,
@@ -810,10 +770,10 @@ export function buildStatusMessageParts(args: StatusArgs) {
         (hasUsage
           ? estimateAggregateUsageCost({
               usage: {
-                input: inputTokens ?? undefined,
-                output: outputTokens ?? undefined,
-                cacheRead: cacheRead ?? undefined,
-                cacheWrite: cacheWrite ?? undefined,
+                input: inputTokens,
+                output: outputTokens,
+                cacheRead,
+                cacheWrite,
               },
               cost: costConfig,
             })
@@ -846,7 +806,7 @@ export function buildStatusMessageParts(args: StatusArgs) {
     : undefined;
   const configuredFallbacks = (() => {
     const modelConfig = args.agent?.model;
-    if (typeof modelConfig === "object" && modelConfig && Array.isArray(modelConfig.fallbacks)) {
+    if (typeof modelConfig === "object" && modelConfig) {
       return sessionHasPersistedModelSelection ? undefined : modelConfig.fallbacks;
     }
     return undefined;
@@ -876,7 +836,7 @@ export function buildStatusMessageParts(args: StatusArgs) {
   const queueHasSignal = (args.queue?.depth ?? 0) > 0 || args.queue?.showDetails === true;
   const compactionValue = formatCompactionStatus(entry);
   const contextPct =
-    typeof totalTokens === "number" && totalTokens > 0 && contextTokens != null && contextTokens > 0
+    totalTokens !== undefined && totalTokens > 0 && contextTokens != null && contextTokens > 0
       ? Math.min(999, Math.round((totalTokens / contextTokens) * 100))
       : null;
   const filled = Math.min(10, Math.max(0, Math.round((contextPct ?? 0) / 10)));
@@ -891,7 +851,7 @@ export function buildStatusMessageParts(args: StatusArgs) {
   );
 
   const text = [
-    [versionLine, timeLine, uptimeLine],
+    [versionLine, cronNow?.timeLine, uptimeLine],
     [
       `🧠 Model: ${modelValue}`,
       `🌐 Endpoint: ${selectedEndpoint ?? "unknown"}`,
@@ -928,8 +888,8 @@ export function buildStatusMessageParts(args: StatusArgs) {
     .join("\n\n");
 
   const statusRows: MessagePresentationTableCell[][] = [];
-  const pushStatusRow = (label: string, value: string | number | null | undefined) => {
-    const cell = typeof value === "number" ? String(value) : (value?.trim() ?? "");
+  const pushStatusRow = (label: string, value: string | null | undefined) => {
+    const cell = value?.trim() ?? "";
     if (cell) {
       statusRows.push([label, cell]);
     }
@@ -958,7 +918,7 @@ export function buildStatusMessageParts(args: StatusArgs) {
   // renders keep one compact time-and-uptime line under the table.
   const presentationClockValue = cronNow
     ? `${cronNow.formattedTime} (${cronNow.userTimezone})`
-    : args.timeLine;
+    : undefined;
   const clockUptimeValue = [
     presentationClockValue,
     args.uptimeValue ? `⏱️ ${args.uptimeValue}` : null,

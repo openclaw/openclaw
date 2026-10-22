@@ -4,18 +4,20 @@ import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import {
   listAgentEntries,
   listAgentEntriesWithSource,
-  listAgentIds,
   resolveAgentWorkspaceDir,
   resolveConfiguredAgentId,
   resolveAmbientOwnerAgentId,
-  tryResolveAmbientOwnerAgentId,
 } from "../agents/agent-scope.js";
 import { resolveSandboxDockerEnv, resolveSandboxScope } from "../agents/sandbox/config-contract.js";
 import { LEGACY_AGENT_ROSTER_RULES } from "../commands/doctor/shared/legacy-config-migrations.runtime.entries.js";
 import { collectLegacyToolsBySenderIssues } from "../commands/doctor/shared/legacy-tools-by-sender.js";
 import { getContainerEnvFileEntryIssue } from "../infra/container-env-file.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { LINEAR_MATCHER_SOURCES } from "../logging/redact-linear-matchers.js";
+import { parseRedactPatternSource } from "../logging/redact-pattern-runtime.js";
+import { PEM_REDACT_PATTERN_SOURCE } from "../logging/redact-pem.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { compileConfigRegex } from "../security/config-regex.js";
 import {
   isAvatarDataUrl,
   isAvatarHttpUrl,
@@ -47,23 +49,32 @@ import {
 import { OpenClawSchema } from "./zod-schema.js";
 import { McpServerNameSchema, NodeHostMcpServerNameSchema } from "./zod-schema.root-support.js";
 
-export function collectHeartbeatOwnerWarnings(config: OpenClawConfig): ConfigValidationIssue[] {
-  const agentEntries = listAgentEntries(config);
-  // Match heartbeat enrollment so validation never warns for an owner the runner can use.
-  const unresolved =
-    listAgentIds(config).length > 1 &&
-    !agentEntries.some((entry) => Boolean(entry.heartbeat)) &&
-    !config.agents?.defaults?.heartbeat &&
-    tryResolveAmbientOwnerAgentId(config) === undefined;
-  return unresolved
-    ? [
-        {
-          path: "agents.defaults.heartbeat.agentId",
-          message:
-            "Multi-agent config has no ambient heartbeat owner; heartbeats stay disabled until agents.defaults.heartbeat.agentId or agents.defaults.systemAgent.agentId is set.",
-        },
-      ]
-    : [];
+// The schema accepts any string, but log redaction drops entries the safe-regex compiler
+// rejects; warn so operators do not rely on a mask that never applies.
+export function collectRedactPatternWarnings(config: OpenClawConfig): ConfigValidationIssue[] {
+  const patterns = config.logging?.redactPatterns;
+  if (!Array.isArray(patterns)) {
+    return [];
+  }
+  const warnings: ConfigValidationIssue[] = [];
+  patterns.forEach((raw, index) => {
+    // Built-in sources resolve to their own matchers before regex compilation.
+    if (raw === PEM_REDACT_PATTERN_SOURCE || LINEAR_MATCHER_SOURCES.has(raw)) {
+      return;
+    }
+    const compiled = compileConfigRegex(...parseRedactPatternSource(raw));
+    if (compiled?.reason) {
+      const repair =
+        compiled.reason === "invalid-regex"
+          ? "Fix the regex syntax"
+          : "Rewrite the nested repetition, for example (a+)+ as a+";
+      warnings.push({
+        path: `logging.redactPatterns.${index}`,
+        message: `Redaction pattern is ignored (${compiled.reason}); values it should mask stay visible in logs and diagnostics. ${repair}, then run openclaw config validate again.`,
+      });
+    }
+  });
+  return warnings;
 }
 
 function materializeBundledModelProviderOverlays(config: OpenClawConfig): OpenClawConfig {

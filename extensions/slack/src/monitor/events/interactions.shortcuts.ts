@@ -4,7 +4,10 @@ import { authorizeSlackSystemEventSender } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
 import { resolveSlackDeferredActionTarget } from "../deferred-action-routing.js";
 import { resolveSlackMonitorEventScope } from "../event-scope.js";
-import { enqueueSlackInteractionEvent } from "./interaction-event.js";
+import {
+  captureSlackInteractionEventRoute,
+  enqueueSlackInteractionEvent,
+} from "./interaction-event.js";
 
 type SlackShortcutHandlerArgs = SlackShortcutMiddlewareArgs &
   Pick<AllMiddlewareArgs, "context" | "client">;
@@ -13,9 +16,6 @@ export function registerSlackShortcutHandler(params: {
   ctx: SlackMonitorContext;
   trackEvent?: () => void;
 }): void {
-  if (typeof params.ctx.app.shortcut !== "function") {
-    return;
-  }
   params.ctx.app.shortcut(/.+/, async (args: SlackShortcutHandlerArgs) => {
     const { ack, body } = args;
     await ack();
@@ -93,13 +93,17 @@ export function registerSlackShortcutHandler(params: {
       messageText: messageBody?.message.text,
       responseUrl: messageBody?.response_url,
     };
-    const route = await runtimeContext.resolveSlackSystemEventRoute({
+    const destination = await runtimeContext.resolveSlackSystemEventRoute({
       channelId,
       channelType: auth.channelType,
       senderId: userId,
       threadTs,
       eventScope,
     });
+    const route = await captureSlackInteractionEventRoute(destination, runtimeContext.runtime.log);
+    if (!route || !runtimeContext.isRuntimePolicyCurrent()) {
+      return;
+    }
     const contextKey = [
       "slack:interaction:shortcut",
       interactionType,
@@ -115,14 +119,19 @@ export function registerSlackShortcutHandler(params: {
     runtimeContext.runtime.log?.(
       `slack:interaction ${interactionType} callback=${callbackId} user=${userId} channel=${channelId ?? "direct"}`,
     );
-    enqueueSlackInteractionEvent(eventPayload, route, {
-      contextKey,
-      deliveryContext: {
-        channel: "slack",
-        to: deferredTarget.target,
-        accountId: runtimeContext.accountId,
-        threadId: threadTs,
+    await enqueueSlackInteractionEvent(
+      eventPayload,
+      route,
+      {
+        contextKey,
+        deliveryContext: {
+          channel: "slack",
+          to: deferredTarget.target,
+          accountId: runtimeContext.accountId,
+          threadId: threadTs,
+        },
       },
-    });
+      runtimeContext.runtime.log,
+    );
   });
 }

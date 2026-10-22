@@ -11,12 +11,11 @@ it("keeps custom icon entry focused and ignores Enter while an IME composition i
   const mounted = mountSolid(
     () => {
       const appearance = useSessionMenuAppearance(
-        host,
         () => ({ session: { icon: null, color: null }, actionDisabledReasons: {} }),
         () => false,
         runAction,
       );
-      return appearance.render(true);
+      return appearance.render();
     },
     { container: host },
   );
@@ -41,6 +40,12 @@ it("keeps custom icon entry focused and ignores Enter while an IME composition i
   mounted.container.querySelector<HTMLButtonElement>(".session-menu__icon-back")!.click();
   flush();
   expect(document.activeElement).toBe(custom);
+  expect(custom.tabIndex).toBe(0);
+  expect(
+    [...host.querySelectorAll(".session-menu__icon-choice")].filter(
+      (choice) => choice.getAttribute("tabindex") === "0",
+    ),
+  ).toEqual([custom]);
   expect(input.value).toBe("");
   mounted.unmount();
   host.remove();
@@ -53,25 +58,56 @@ it("moves the icon grid tab stop and sends appearance actions through the menu o
   const mounted = mountSolid(
     () =>
       useSessionMenuAppearance(
-        host,
         () => ({ session: { icon: "🦞", color: null }, actionDisabledReasons: {} }),
         () => false,
         runAction,
-      ).render(true),
+      ).render(),
     { container: host },
   );
   const choices = mounted.container.querySelectorAll<HTMLButtonElement>(
     ".session-menu__icon-choice",
   );
-  choices[0]!.focus();
-  choices[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
-  expect(document.activeElement).toBe(choices[1]);
-  expect(choices[0]!.tabIndex).toBe(-1);
-  expect(choices[1]!.tabIndex).toBe(0);
-  choices[1]!.click();
+  // The emoji row's clear choice stays reachable although the icon row repeats it.
+  choices[1]!.focus();
+  choices[1]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+  expect(document.activeElement).toBe(choices[0]);
+  expect(choices[0]!.getAttribute("aria-label")).toBe("No icon");
+  choices[1]!.focus();
+  choices[1]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+  expect(document.activeElement).toBe(choices[2]);
+  expect(choices[1]!.tabIndex).toBe(-1);
+  expect(choices[2]!.tabIndex).toBe(0);
+  choices[2]!.click();
   expect(runAction).toHaveBeenLastCalledWith({ kind: "set-icon", icon: "🚀" });
   mounted.container.querySelector<HTMLButtonElement>(".session-menu__icon-remove")!.click();
   expect(runAction).toHaveBeenLastCalledWith({ kind: "reset-appearance" });
+  mounted.unmount();
+  host.remove();
+});
+
+it("leads the emoji and icon grids with the clear choice and keeps one tab stop", () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const runAction = vi.fn();
+  const mounted = mountSolid(
+    () =>
+      useSessionMenuAppearance(
+        () => ({ session: { icon: null, color: null }, actionDisabledReasons: {} }),
+        () => false,
+        runAction,
+      ).render(),
+    { container: host },
+  );
+  const noIcon = [
+    ...host.querySelectorAll<HTMLButtonElement>(".session-menu__icon-grid > :first-child"),
+  ];
+  expect(noIcon.map((choice) => choice.getAttribute("aria-label"))).toEqual(["No icon", "No icon"]);
+  expect(noIcon.map((choice) => [choice.getAttribute("aria-pressed"), choice.tabIndex])).toEqual([
+    ["true", 0],
+    ["true", -1],
+  ]);
+  noIcon[0]!.click();
+  expect(runAction).toHaveBeenLastCalledWith({ kind: "set-icon", icon: null });
   mounted.unmount();
   host.remove();
 });

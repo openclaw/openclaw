@@ -19,9 +19,9 @@ enum RuntimeLocator {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "runtime")
     // Keep these floors aligned with package.json engines so the app never launches
     // the gateway on an unsupported odd release or an older even-major runtime.
-    private static let minNode24 = Semver(major: 24, minor: 16, patch: 0)
-    private static let minNode26 = Semver(major: 26, minor: 1, patch: 0)
-    private static let supportedNodeRange = ">=24.16.0 <25, or >=26.1.0"
+    private static let minNode24 = Semver(major: 24, minor: 22, patch: 1)
+    private static let minNode26 = Semver(major: 26, minor: 12, patch: 1)
+    private static let supportedNodeRange = ">=24.22.1 <25, or >=26.12.1"
 
     static func parseVersion(_ output: String) -> Semver? {
         // Node probes and manager directory names may include a prefix or trailing metadata.
@@ -104,12 +104,6 @@ enum ExecutableVersionProbe {
                 logger.warning(
                     """
                     \(label, privacy: .public) --version slow (\(elapsedMs, privacy: .public)ms) \
-                    bin=\(binary, privacy: .public)
-                    """)
-            } else {
-                logger.debug(
-                    """
-                    \(label, privacy: .public) --version ok (\(elapsedMs, privacy: .public)ms) \
                     bin=\(binary, privacy: .public)
                     """)
             }

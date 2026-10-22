@@ -1,7 +1,5 @@
 import { getBatchResponseError } from "./batch-response-error.js";
 
-// Parses provider batch output lines into the custom-id embedding map.
-
 const DEFAULT_BATCH_OUTPUT_RECORD_MAX_BYTES = 4 * 1024 * 1024;
 const INITIAL_BATCH_OUTPUT_RECORD_BYTES = 64 * 1024;
 
@@ -72,7 +70,6 @@ export async function readEmbeddingBatchJsonl<T>(
       }
       parsed = JSON.parse(text);
     } catch {
-      recordBytes = 0;
       throw new Error(`${options.label}: malformed JSONL record`);
     }
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {

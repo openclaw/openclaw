@@ -1,5 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { startCodexAttemptTurn } from "./run-attempt-turn-start.js";
+import { beforeEach, expect, it, vi } from "vitest";
+import { startCodexAttemptTurn as startTurn } from "./run-attempt-turn-start.js";
+
+type TurnArgs = Parameters<typeof startTurn>;
 
 const recovery = vi.hoisted(() => ({
   kind: "compact" as "compact" | "overflow" | "image",
@@ -33,30 +35,25 @@ vi.mock("./session-binding.js", () => ({
 vi.mock("./user-prompt-message.js", () => ({
   buildCodexUserPromptMessage: () => ({ role: "user", content: "reviewed continuation" }),
 }));
+// mock-isolation: Provider-review recovery does not read accounts or mutate auth-profile state.
 vi.mock("./usage-limit-error.js", () => ({
-  CodexUsageLimitPromptError: class extends Error {},
-  formatCodexTurnStartUsageLimitError: async () => undefined,
+  resolveCodexTurnStartError: async () => undefined,
   markCodexAuthProfileBlockedFromRateLimits: vi.fn(),
 }));
 
-beforeEach(() => {
-  vi.clearAllMocks();
-});
+beforeEach(() => vi.clearAllMocks());
 
 function createFixture(acknowledged: boolean) {
-  const originalError = new Error("native turn/start rejected");
-  const startCodexTurn = vi.fn().mockRejectedValue(originalError);
-  const waitForActiveNativeTurnCompletion = vi.fn().mockResolvedValue(true);
-  const mutateBinding = recovery.clearBinding.mockResolvedValue(true);
-  const restartContextEngineCodexThread = vi
-    .fn()
-    .mockResolvedValue({ threadId: "replacement-thread" });
+  const error = new Error("native turn/start rejected");
+  const start = vi.fn().mockRejectedValue(error);
+  const wait = vi.fn().mockResolvedValue(true);
+  const clear = recovery.clearBinding.mockResolvedValue(true);
+  const restart = vi.fn().mockResolvedValue({ threadId: "replacement-thread" });
   const state = {
     thread: { threadId: "reviewed-thread", connectionScope: "isolated" },
-    restartContextEngineCodexThread,
+    restartContextEngineCodexThread: restart,
   };
-  // Only the start-recovery owner runs here. The mocked transport owns validation
-  // of this opaque marker; the separate transport tests exercise real issuance.
+  // Transport tests own real acknowledgment issuance; this fixture isolates recovery.
   const resources = {
     state,
     prompt: {
@@ -64,72 +61,51 @@ function createFixture(acknowledged: boolean) {
       context: {
         historyState: { messages: [] },
         runtime: {
-          runtimeParams: {},
           connection: {
-            params: {
-              runId: "next-run",
-              sessionId: "session-1",
-              provider: "openai",
-              modelId: "test-model",
-              ...(acknowledged ? { providerReviewAcknowledgment: {} } : {}),
-            },
+            params: acknowledged ? { providerReviewAcknowledgment: {} } : {},
             runAbortController: new AbortController(),
             activeContextEngine: {},
-            bindingStore: { mutate: mutateBinding, read: () => undefined },
-            bindingIdentity: "binding-1",
             appServer: { requestTimeoutMs: 1000 },
-            attemptStartedAt: 0,
           },
         },
       },
     },
-  } as unknown as Parameters<typeof startCodexAttemptTurn>[0];
-  const turnRuntime = { state: {}, turnIdRef: {} } as Parameters<typeof startCodexAttemptTurn>[1];
-  const notifications = { waitForActiveNativeTurnCompletion } as unknown as Parameters<
-    typeof startCodexAttemptTurn
-  >[2];
+  } as unknown as TurnArgs[0];
+  const turnRuntime = { state: {}, turnIdRef: {} } as TurnArgs[1];
+  const notifications = { waitForActiveNativeTurnCompletion: wait } as unknown as TurnArgs[2];
   const requestRuntime = {
-    startCodexTurn,
+    startCodexTurn: start,
     buildLlmInputEvent: vi.fn(),
     buildLlmOutputEvent: vi.fn(),
     codexModelCallDiagnostics: { emitStarted: vi.fn(), emitError: vi.fn() },
-  } as unknown as Parameters<typeof startCodexAttemptTurn>[3];
+  } as unknown as TurnArgs[3];
+  // Counts retain the start/wait/clear/restart/image-clear ordering.
+  const calls = [start, wait, clear, restart, recovery.clearImageBinding];
   return {
-    originalError,
+    error,
     state,
-    startCodexTurn,
-    waitForActiveNativeTurnCompletion,
-    mutateBinding,
-    restartContextEngineCodexThread,
-    run: () => startCodexAttemptTurn(resources, turnRuntime, notifications, requestRuntime),
+    counts: () => calls.map((call) => call.mock.calls.length),
+    run: () => startTurn(resources, turnRuntime, notifications, requestRuntime),
   };
 }
 
-describe("native acknowledged turn recovery boundary", () => {
-  it.each(["compact", "overflow", "image"] as const)(
-    "retains the reviewed thread after %s rejection while preserving ordinary recovery",
-    async (kind) => {
-      recovery.kind = kind;
-      const reviewed = createFixture(true);
-      await expect(reviewed.run()).rejects.toBe(reviewed.originalError);
-      expect(reviewed.startCodexTurn).toHaveBeenCalledTimes(1);
-      expect(reviewed.waitForActiveNativeTurnCompletion).not.toHaveBeenCalled();
-      expect(reviewed.mutateBinding).not.toHaveBeenCalled();
-      expect(reviewed.restartContextEngineCodexThread).not.toHaveBeenCalled();
-      expect(recovery.clearImageBinding).not.toHaveBeenCalled();
-      expect(reviewed.state.thread.threadId).toBe("reviewed-thread");
+it.each(["compact", "overflow", "image"] as const)(
+  "retains the reviewed thread after %s rejection while preserving ordinary recovery",
+  async (kind) => {
+    recovery.kind = kind;
+    const reviewed = createFixture(true);
+    await expect(reviewed.run()).rejects.toBe(reviewed.error);
+    expect(reviewed.counts()).toEqual([1, 0, 0, 0, 0]);
+    expect(reviewed.state.thread.threadId).toBe("reviewed-thread");
 
-      const ordinary = createFixture(false);
-      await expect(ordinary.run()).rejects.toBe(ordinary.originalError);
-      expect(ordinary.startCodexTurn).toHaveBeenCalledTimes(kind === "image" ? 1 : 2);
-      expect(ordinary.waitForActiveNativeTurnCompletion).toHaveBeenCalledTimes(
-        kind === "compact" ? 1 : 0,
-      );
-      expect(ordinary.mutateBinding).toHaveBeenCalledTimes(kind === "overflow" ? 1 : 0);
-      expect(ordinary.restartContextEngineCodexThread).toHaveBeenCalledTimes(
-        kind === "overflow" ? 1 : 0,
-      );
-      expect(recovery.clearImageBinding).toHaveBeenCalledTimes(kind === "image" ? 1 : 0);
-    },
-  );
-});
+    const ordinary = createFixture(false);
+    await expect(ordinary.run()).rejects.toBe(ordinary.error);
+    expect(ordinary.counts()).toEqual([
+      kind === "image" ? 1 : 2,
+      kind === "compact" ? 1 : 0,
+      kind === "overflow" ? 1 : 0,
+      kind === "overflow" ? 1 : 0,
+      kind === "image" ? 1 : 0,
+    ]);
+  },
+);

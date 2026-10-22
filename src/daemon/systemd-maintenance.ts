@@ -5,11 +5,7 @@ import { auditGatewayServiceConfig } from "./service-audit.js";
 import { withServiceInspectionBudget } from "./service-inspection-budget.js";
 import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
 import { reconcileGatewayServiceDefinition } from "./service-reconciliation.js";
-import {
-  assertServiceDefinitionWritable,
-  resolveManagedGatewayServiceCommand,
-  type GatewayServiceState,
-} from "./service-types.js";
+import { resolveManagedGatewayServiceCommand, type GatewayServiceState } from "./service-types.js";
 import {
   GatewayServiceAuthorityError,
   getGatewayServiceUpdateNativeCommand,
@@ -41,6 +37,11 @@ export async function readSystemdGatewayStopTimeout(state: GatewayServiceState) 
     : undefined;
 }
 
+type SystemdGatewayMaintenanceResult =
+  | { kind: "unchanged" }
+  | { kind: "refreshed" }
+  | { kind: "failed" };
+
 /** Refresh policy without activation: an ordinary install would stop under the old budget. */
 export async function prepareSystemdGatewayMaintenance(params: {
   state: GatewayServiceState;
@@ -48,7 +49,7 @@ export async function prepareSystemdGatewayMaintenance(params: {
   stopping: boolean;
   assertCurrent: () => void;
   warn: (message: string) => void;
-}): Promise<boolean> {
+}): Promise<SystemdGatewayMaintenanceResult> {
   const { state, assertCurrent } = params;
   let inspectEffective = true;
   try {
@@ -59,20 +60,22 @@ export async function prepareSystemdGatewayMaintenance(params: {
     assertCurrent();
     const outdated = audit.definitionDrift?.some((fact) => fact.kind === "outdated");
     if (!outdated && (timeout ?? 0) >= GATEWAY_SERVICE_STOP_TIMEOUT_MS) {
-      return false;
+      return { kind: "unchanged" };
     }
     const command = resolveManagedGatewayServiceCommand(state.command);
     if (!command) {
       params.warn("The installed definition is unavailable for a managed refresh.");
-      return false;
+      return { kind: "failed" };
     }
-    assertServiceDefinitionWritable(
-      state.definitionMutationCapability ?? { kind: "unknown", reason: "inspection-failed" },
-    );
+    // The mutation owner checks live system ownership and artifacts. A capability
+    // captured before an operator removed a system unit must not veto that check.
     await withGatewayServiceOperationLock(state.env, async (assertNative) =>
       withGatewayServiceUpdateAuthority(
         assertCurrent,
         async () => {
+          // Refuse a live system owner before backup/recovery acquires user-unit custody.
+          await assertNoSystemGatewayOwnership(state.env);
+          assertCurrent();
           await reconcileGatewayServiceDefinition({
             env: state.env,
             root: params.root,
@@ -97,7 +100,7 @@ export async function prepareSystemdGatewayMaintenance(params: {
                       previous.contents.toString("utf8"),
                       definitionTransaction.preservePolicy,
                     ),
-                    previous.mode,
+                    previous.requiresRegeneration ? 0o600 : previous.mode,
                   );
                   await definitionTransaction.beforeWrite();
                   await assertNoSystemGatewayOwnership(state.env);
@@ -120,7 +123,7 @@ export async function prepareSystemdGatewayMaintenance(params: {
         },
       ),
     );
-    return true;
+    return { kind: "refreshed" };
   } catch (error) {
     if (hasCommandProcessCleanupError(error) || error instanceof GatewayServiceAuthorityError) {
       inspectEffective = false;
@@ -128,7 +131,7 @@ export async function prepareSystemdGatewayMaintenance(params: {
     }
     assertCurrent();
     params.warn(`Gateway service policy refresh skipped: ${String(error)}`);
-    return false;
+    return { kind: "failed" };
   } finally {
     // No-stop updates still need manager facts: a drop-in can override the repaired base.
     if (!params.stopping && inspectEffective) {

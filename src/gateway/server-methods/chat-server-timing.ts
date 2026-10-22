@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import { isNativeAppUiClient } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { GatewayClientInfo } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { emitDiagnosticsTimelineEvent } from "../../infra/diagnostics-timeline.js";
 import { isOperatorUiClient } from "../../utils/message-channel.js";
@@ -85,7 +86,8 @@ export function resolveControlUiReconnectResumeParams(
   }
   const record = params as Record<string, unknown>;
   const resumeRequested =
-    record[CONTROL_UI_RECONNECT_RESUME_PARAM] === true && isOperatorUiClient(clientInfo);
+    record[CONTROL_UI_RECONNECT_RESUME_PARAM] === true &&
+    (isOperatorUiClient(clientInfo) || isNativeAppUiClient(clientInfo));
   if (!resumeRequested) {
     return { params, resumeRequested: false };
   }

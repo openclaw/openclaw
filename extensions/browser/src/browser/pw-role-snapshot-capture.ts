@@ -63,7 +63,6 @@ async function finalizeRoleSnapshotViaPlaywright(params: {
   return finalized;
 }
 
-/** Captures a role-ref snapshot used by model-facing browser interaction tools. */
 export async function snapshotRoleViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
