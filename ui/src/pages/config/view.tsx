@@ -1,10 +1,10 @@
 import {
-  createDeferred,
   createMemo,
   createSignal,
   Errored,
   For,
   isPending,
+  latest,
   Loading,
   Show,
   untrack,
@@ -253,16 +253,14 @@ export function Config(props: ConfigProps) {
       return result.ok ? undefined : result.error;
     });
   };
-  const schemaReady = createMemo(readSchema, { lazy: true });
-  // Initial readiness suspends; later reads retain accepted fields without holding owner updates.
-  const retainedSchemaReady = createDeferred(readSchema);
-  const readSchemaReady = () => (hasSchema() ? retainedSchemaReady() : schemaReady());
-  function SchemaError(props: { message: string; onRetry: () => void }) {
+  const schemaReady = createMemo(readSchema);
+  const readSchemaReady = () => (hasSchema() ? latest(schemaReady) : schemaReady());
+  function SchemaError(errorProps: { message: string; onRetry: () => void }) {
     return (
       <div class="config-content-callout">
         <div class="callout danger" role="alert">
-          {props.message}{" "}
-          <button type="button" class="btn btn--sm" onClick={() => props.onRetry()}>
+          {errorProps.message}{" "}
+          <button type="button" class="btn btn--sm" onClick={() => errorProps.onRetry()}>
             {t("common.retry")}
           </button>
         </div>
@@ -666,7 +664,7 @@ export function Config(props: ConfigProps) {
                   )}
                 </Show>
                 <span class="sr-only" role="status">
-                  {isPending(readSchemaReady) ? t("configView.loadingSchema") : ""}
+                  {isPending(schemaReady) ? t("configView.loadingSchema") : ""}
                 </span>
                 <FormEditor />
                 {state().showSetup ? (
