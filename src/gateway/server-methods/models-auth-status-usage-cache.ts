@@ -66,7 +66,7 @@ function scopeProviderUsageCredentialKey(
 ): string {
   // models.authStatus fingerprints every direct provider. Scope that evidence to
   // this fetch set so usage.status can share the same credential-bound snapshot.
-  // SAFETY: getProviderUsageRuntimeSnapshot always serializes this shape.
+  // SAFETY: fingerprintProviderUsageCredentials always serializes this shape.
   const parsed = JSON.parse(credentialKey) as {
     direct: Array<[string, string | null]>;
     [key: string]: unknown;

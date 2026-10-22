@@ -2,7 +2,7 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { writeFileWindowFully } from "../../infra/file-descriptor.js";
-import { root as fsRoot, FsSafeError } from "../../infra/fs-safe.js";
+import { root as fsRoot, FsSafeError, type Root } from "../../infra/fs-safe.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import { lstatIfExists } from "../../infra/path-existence.js";
 import {
@@ -14,6 +14,57 @@ import {
 } from "./provisioned-file-inspection.js";
 import { getRegistryWorktreeProvisionedChunk } from "./registry-read.js";
 import type { ProvisionedFileState } from "./types.js";
+
+async function copyProvisionedFile(params: {
+  sourceRoot: Root;
+  destinationRoot: Root;
+  relativePath: string;
+  assertCurrent?: () => void;
+  signal?: AbortSignal;
+}): Promise<boolean> {
+  const relativePath = params.relativePath;
+  // Eligibility checks preserve skip behavior; copyIn guards the later mutation.
+  if (
+    !(await hasSafeParentDirectories(params.sourceRoot.rootReal, relativePath)) ||
+    !(await hasSafeParentDirectories(params.destinationRoot.rootReal, relativePath))
+  ) {
+    return false;
+  }
+  const source = resolveGitPath(params.sourceRoot.rootReal, relativePath);
+  const destination = resolveGitPath(params.destinationRoot.rootReal, relativePath);
+  const sourceStat = await fs.lstat(source).catch(() => undefined);
+  if (!sourceStat?.isFile() || sourceStat.isSymbolicLink()) {
+    return false;
+  }
+  if (await lstatIfExists(destination, "ENOENT")) {
+    return false;
+  }
+  try {
+    // Absolute spellings preserve Git's literal "~" and POSIX drive-like filenames.
+    await params.destinationRoot.copyIn(
+      destination,
+      { root: params.sourceRoot, relativePath: source },
+      {
+        overwrite: false,
+        maxBytes: Infinity,
+        preserveSourceMode: true,
+        sourceHardlinks: "allow",
+        mutationSymlinks: "reject",
+        durable: false,
+        assertBeforeMutation: params.assertCurrent,
+        signal: params.signal,
+      },
+    );
+  } catch (error) {
+    if (error instanceof FsSafeError && error.code === "already-exists") {
+      // Existing checkout state is user-owned. Never mutate or claim it as provisioned.
+      return false;
+    }
+    throw error;
+  }
+  params.assertCurrent?.();
+  return true;
+}
 
 /** Copies the current manifest matches and returns only paths this call actually created. */
 export async function provisionIncludedFiles(
@@ -35,53 +86,20 @@ export async function provisionIncludedFiles(
   assertCurrent();
   const [sourceRoot, destinationRoot] = await Promise.all([fsRoot(repoRoot), fsRoot(worktreePath)]);
   const provisioned: string[] = [];
-  for (const entryPath of inspection.paths) {
-    const relativePath = normalizeProvisionedRelativePath(entryPath);
-    if (!relativePath) {
-      continue;
-    }
-    const signal = options.signal;
-    // Eligibility checks preserve skip behavior; copyIn guards the later mutation.
+  for (const relativePath of inspection.paths) {
+    const normalized = normalizeProvisionedRelativePath(relativePath);
     if (
-      !(await hasSafeParentDirectories(sourceRoot.rootReal, relativePath)) ||
-      !(await hasSafeParentDirectories(destinationRoot.rootReal, relativePath))
+      normalized &&
+      (await copyProvisionedFile({
+        sourceRoot,
+        destinationRoot,
+        relativePath: normalized,
+        assertCurrent,
+        signal: options.signal,
+      }))
     ) {
-      continue;
+      provisioned.push(normalized);
     }
-    const source = resolveGitPath(sourceRoot.rootReal, relativePath);
-    const destination = resolveGitPath(destinationRoot.rootReal, relativePath);
-    const sourceStat = await fs.lstat(source).catch(() => undefined);
-    if (!sourceStat?.isFile() || sourceStat.isSymbolicLink()) {
-      continue;
-    }
-    if (await lstatIfExists(destination, "ENOENT")) {
-      continue;
-    }
-    try {
-      // Absolute spellings preserve Git's literal "~" and POSIX drive-like filenames.
-      await destinationRoot.copyIn(
-        destination,
-        { root: sourceRoot, relativePath: source },
-        {
-          overwrite: false,
-          maxBytes: Infinity,
-          preserveSourceMode: true,
-          sourceHardlinks: "allow",
-          mutationSymlinks: "reject",
-          durable: false,
-          assertBeforeMutation: assertCurrent,
-          signal,
-        },
-      );
-    } catch (error) {
-      if (error instanceof FsSafeError && error.code === "already-exists") {
-        // Existing checkout state is user-owned. Never mutate or claim it as provisioned.
-        continue;
-      }
-      throw error;
-    }
-    assertCurrent?.();
-    provisioned.push(relativePath);
   }
   return provisioned.toSorted();
 }

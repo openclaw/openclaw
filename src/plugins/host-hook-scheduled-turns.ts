@@ -110,6 +110,19 @@ function resolvePluginSessionTurnTag(value: unknown): {
   return { tag, invalid: false };
 }
 
+function buildPluginSchedulerCronName(params: {
+  pluginId: string;
+  sessionKey: string;
+  tag?: string;
+  uniqueId?: string;
+}): string {
+  const uniqueId = params.uniqueId ?? randomUUID();
+  if (!params.tag) {
+    return `${PLUGIN_CRON_NAME_PREFIX}${params.pluginId}:${params.sessionKey}:${uniqueId}`;
+  }
+  return `${PLUGIN_CRON_NAME_PREFIX}${params.pluginId}${PLUGIN_CRON_TAG_MARKER}${params.tag}:${params.sessionKey}:${uniqueId}`;
+}
+
 function buildPluginSchedulerTagPrefix(params: {
   pluginId: string;
   tag: string;
@@ -207,11 +220,12 @@ export async function schedulePluginSessionTurn(params: {
     return undefined;
   }
   const cron = params.cron;
-  const pluginId = params.pluginId;
-  const uniqueId = scheduleName || randomUUID();
-  const cronJobName = tag
-    ? `${PLUGIN_CRON_NAME_PREFIX}${pluginId}${PLUGIN_CRON_TAG_MARKER}${tag}:${sessionKey}:${uniqueId}`
-    : `${PLUGIN_CRON_NAME_PREFIX}${pluginId}:${sessionKey}:${uniqueId}`;
+  const cronJobName = buildPluginSchedulerCronName({
+    pluginId: params.pluginId,
+    sessionKey,
+    ...(tag !== undefined ? { tag } : {}),
+    ...(scheduleName ? { uniqueId: scheduleName } : {}),
+  });
   const cronPayload: CronJobCreate["payload"] = {
     kind: "agentTurn",
     message,

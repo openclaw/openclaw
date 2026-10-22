@@ -14,6 +14,46 @@ import { createMcpServerToolDenyMatcher } from "./tool-policy-match.js";
 
 type LoadedMcpConfig = ReturnType<typeof loadEmbeddedAgentMcpConfig>;
 
+function digestSafeServerNameAssignments(
+  safeServerNamesByServer?: ReadonlyMap<string, string>,
+): Record<string, string> | undefined {
+  if (!safeServerNamesByServer || safeServerNamesByServer.size === 0) {
+    return undefined;
+  }
+  return Object.fromEntries(
+    [...safeServerNamesByServer.entries()].toSorted(([a], [b]) => a.localeCompare(b)),
+  );
+}
+
+function filterMcpServers<T>(
+  mcpServers: Record<string, T>,
+  options: {
+    includeServerNames?: ReadonlySet<string>;
+    excludeServerNames?: ReadonlySet<string>;
+    safeServerNamesByServer: ReadonlyMap<string, string>;
+    toolDenylist?: string[];
+  },
+): Record<string, T> {
+  if (!options.includeServerNames && !options.excludeServerNames && !options.toolDenylist?.length) {
+    return mcpServers;
+  }
+  const filtered: Record<string, T> = {};
+  const isDenied = createMcpServerToolDenyMatcher(options.toolDenylist);
+  for (const [serverName, rawServer] of Object.entries(mcpServers)) {
+    if (options.includeServerNames && !options.includeServerNames.has(serverName)) {
+      continue;
+    }
+    if (options.excludeServerNames?.has(serverName)) {
+      continue;
+    }
+    if (isDenied(options.safeServerNamesByServer.get(serverName) ?? serverName)) {
+      continue;
+    }
+    filtered[serverName] = rawServer;
+  }
+  return filtered;
+}
+
 export function loadSessionMcpConfig(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
@@ -48,33 +88,15 @@ export function loadSessionMcpConfig(params: {
   }
   const safeServerNamesByServer =
     params.safeServerNamesByServer ?? assignSafeServerNames(Object.keys(loaded.mcpServers));
-  const safeServerNames =
-    safeServerNamesByServer.size === 0
-      ? undefined
-      : Object.fromEntries(
-          [...safeServerNamesByServer.entries()].toSorted(([a], [b]) => a.localeCompare(b)),
-        );
+  const safeServerNames = digestSafeServerNameAssignments(safeServerNamesByServer);
   const mcpAppsEnabled = params.cfg?.mcp?.apps?.enabled === true;
   const mcpToolsDeny = normalizeMcpToolDenials(params.toolOverrides?.mcpToolsDeny);
-  const sourceServers = loaded.mcpServers;
-  let mcpServers = sourceServers;
-  const { includeServerNames, excludeServerNames, toolDenylist } = params;
-  if (includeServerNames || excludeServerNames || toolDenylist?.length) {
-    mcpServers = {};
-    const isDenied = createMcpServerToolDenyMatcher(toolDenylist);
-    for (const [serverName, rawServer] of Object.entries(sourceServers)) {
-      if (includeServerNames && !includeServerNames.has(serverName)) {
-        continue;
-      }
-      if (excludeServerNames?.has(serverName)) {
-        continue;
-      }
-      if (isDenied(safeServerNamesByServer.get(serverName) ?? serverName)) {
-        continue;
-      }
-      mcpServers[serverName] = rawServer;
-    }
-  }
+  const mcpServers = filterMcpServers(loaded.mcpServers, {
+    includeServerNames: params.includeServerNames,
+    excludeServerNames: params.excludeServerNames,
+    safeServerNamesByServer,
+    toolDenylist: params.toolDenylist,
+  });
   const prepareDataDirsByServer = Object.fromEntries(
     Object.entries(loaded.prepareDataDirsByServer ?? {}).filter(([serverName]) =>
       Object.hasOwn(mcpServers, serverName),

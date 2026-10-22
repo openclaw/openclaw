@@ -23,6 +23,54 @@ import {
 
 const MAX_RECONCILIATION_PATH_BYTES = 64 * 1024 * 1024;
 
+async function localWorkspaceDescendantPaths(
+  root: string,
+  entryPaths: readonly string[],
+  isRetainedInput: ReturnType<typeof createStagedInputPathMatcher>,
+  nonDirectoryReplacements: ReadonlySet<string>,
+  excludeBuildCaches: boolean,
+): Promise<string[]> {
+  const paths: string[] = [];
+  const pending = [...entryPaths];
+  let pathBytes = 0;
+  let enumeratedEntries = 0;
+  while (pending.length > 0) {
+    const directory = pending.pop()!;
+    const names: string[] = [];
+    for await (const entry of await fs.opendir(localPath(root, directory))) {
+      names.push(entry.name);
+      enumeratedEntries += 1;
+      if (enumeratedEntries > MAX_WORKSPACE_INVENTORY_ENTRIES) {
+        throw new Error("Gateway workspace manifest has too many entries");
+      }
+    }
+    for (const name of names.toSorted()) {
+      const childPath = `${directory}/${name}`;
+      pathBytes += Buffer.byteLength(childPath);
+      if (pathBytes > MAX_RECONCILIATION_PATH_BYTES) {
+        throw new Error("Gateway workspace manifest paths exceed their byte limit");
+      }
+      if (isRuntimeOwnedWorkspacePath(childPath)) {
+        // Runtime-owned paths are excluded edits, not disposable cache children.
+        // Surface their presence as a conflict before replacing an ancestor.
+        if (hasPathAncestor(nonDirectoryReplacements, childPath)) {
+          paths.push(childPath);
+        }
+        continue;
+      }
+      if (isDerivedWorkspacePath(childPath, await isRetainedInput(childPath), excludeBuildCaches)) {
+        continue;
+      }
+      paths.push(childPath);
+      const stats = await fs.lstat(localPath(root, childPath));
+      if (stats.isDirectory() && !stats.isSymbolicLink()) {
+        pending.push(childPath);
+      }
+    }
+  }
+  return paths;
+}
+
 export async function preflightWorkspaceApplyImpl(
   params: Omit<WorkspaceManifestValueInputs["workspace.reconcile.preflight"], "hashes">,
 ): Promise<WorkspaceManifestValueOutputs["workspace.reconcile.preflight"]["value"]> {
@@ -53,48 +101,13 @@ export async function preflightWorkspaceApplyImpl(
   }
   // Traverse disjoint replacement roots once with one shared budget. A manifest
   // lists every nested directory, so walking from each changed path is quadratic.
-  const root = params.root;
-  const nonDirectoryReplacements = new Set(
-    structuralRoots.filter((entryPath) => currentNodes.has(entryPath)),
+  const localStructuralPaths = await localWorkspaceDescendantPaths(
+    params.root,
+    localStructuralRoots,
+    isRetainedInput,
+    new Set(structuralRoots.filter((entryPath) => currentNodes.has(entryPath))),
+    excludeBuildCaches,
   );
-  const localStructuralPaths: string[] = [];
-  const pending = [...localStructuralRoots];
-  let pathBytes = 0;
-  let enumeratedEntries = 0;
-  while (pending.length > 0) {
-    const directory = pending.pop()!;
-    const names: string[] = [];
-    for await (const entry of await fs.opendir(localPath(root, directory))) {
-      names.push(entry.name);
-      enumeratedEntries += 1;
-      if (enumeratedEntries > MAX_WORKSPACE_INVENTORY_ENTRIES) {
-        throw new Error("Gateway workspace manifest has too many entries");
-      }
-    }
-    for (const name of names.toSorted()) {
-      const childPath = `${directory}/${name}`;
-      pathBytes += Buffer.byteLength(childPath);
-      if (pathBytes > MAX_RECONCILIATION_PATH_BYTES) {
-        throw new Error("Gateway workspace manifest paths exceed their byte limit");
-      }
-      if (isRuntimeOwnedWorkspacePath(childPath)) {
-        // Runtime-owned paths are excluded edits, not disposable cache children.
-        // Surface their presence as a conflict before replacing an ancestor.
-        if (hasPathAncestor(nonDirectoryReplacements, childPath)) {
-          localStructuralPaths.push(childPath);
-        }
-        continue;
-      }
-      if (isDerivedWorkspacePath(childPath, await isRetainedInput(childPath), excludeBuildCaches)) {
-        continue;
-      }
-      localStructuralPaths.push(childPath);
-      const stats = await fs.lstat(localPath(root, childPath));
-      if (stats.isDirectory() && !stats.isSymbolicLink()) {
-        pending.push(childPath);
-      }
-    }
-  }
   const paths = [...new Set([...changed, ...localStructuralPaths])].toSorted();
   const applyPaths = new Set<string>();
   const conflicts = new Set<string>();
