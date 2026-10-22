@@ -1,8 +1,8 @@
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { expect, it, vi } from "vitest";
-import { withTestDir } from "../../../../src/test-helpers/temp-dir.js";
 import { createStdioTransport } from "./transport-stdio.js";
 
 // openclaw-test-isolation: Process registration has separate lifecycle coverage;
@@ -17,7 +17,7 @@ vi.mock(import("./transport-process-registration.js"), async (importOriginal) =>
 it.runIf(process.platform !== "win32")(
   "starts a managed launcher after Homebrew removes the running Node executable",
   async () => {
-    await withTestDir({ prefix: "codex-node-upgrade-" }, async (root) => {
+    await withTempDir("codex-node-upgrade-", async (root) => {
       const original = Object.getOwnPropertyDescriptor(process, "execPath")!;
       const oldNode = path.join(root, "Cellar/node/26.12.0/bin/node");
       const stableNode = path.join(root, "opt/node/bin/node");
@@ -28,7 +28,7 @@ it.runIf(process.platform !== "win32")(
       await fs.symlink(process.execPath, stableNode);
       await fs.writeFile(
         launcher,
-        "console.log(JSON.stringify({ args: process.argv.slice(2), marker: process.env.MARKER, path: process.env.PATH }));",
+        "console.log(JSON.stringify({ args: process.argv.slice(2), marker: process.env.MARKER, path: process.env.PATH, nodePath: process.env.NODE_PATH, preload: process.env.LD_PRELOAD }));",
       );
       try {
         Object.defineProperty(process, "execPath", { ...original, value: oldNode });
@@ -42,7 +42,11 @@ it.runIf(process.platform !== "win32")(
             commandSource: "resolved-managed",
             args: ["app-server", "--listen", "stdio://"],
             headers: {},
-            env: { MARKER: "recovered" },
+            env: {
+              MARKER: "recovered",
+              NODE_PATH: "/unrelated/modules",
+              LD_PRELOAD: "/unrelated/inject",
+            },
             clearEnv: ["PATH"],
           },
           { PATH: "/unrelated/runtime" },
