@@ -1,10 +1,6 @@
 /* oxlint-disable max-lines -- The Settings presentation factory keeps its existing request and preference contracts together. */
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { createEffect, createMemo, createSignal, createStore, onSettled } from "solid-js";
-import type {
-  PluginsListResult,
-  SessionsCatalogListResult,
-} from "../../../../packages/gateway-protocol/src/index.js";
 import type * as Push from "../../../../packages/gateway-protocol/src/schema/push.js";
 import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -38,13 +34,12 @@ import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import { resolveControlUiServerQueueMode } from "../../lib/chat/follow-up-mode.ts";
 import { currentConfigRead } from "../../lib/config/config-state-model.ts";
-import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { modelSettingPrimary, readModelSetting } from "../../lib/model-setting.ts";
-import { createPageRequest } from "../../lib/page-request.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
+import { createAppearanceCatalogs } from "./appearance-catalogs.ts";
 import { createConfigPageModels } from "./config-page-models.ts";
 import {
   configSectionKeysForPage,
@@ -121,23 +116,23 @@ export function createConfigPage(
     active: () => connected && pageId === "appearance",
     selectedAgent: () => context.settingsAgentSelection.state.selectedId,
   });
-  let acceptedPluginCatalog: PluginsListResult | null = null;
-  let acceptedLabelsCatalog: SessionsCatalogListResult | null = null;
-  // Retained receipts serve cancellation; only the issued read enters async rendering.
-  const [pluginsRead, setPluginsRead] = createSignal<
-    PluginsListResult | Promise<PluginsListResult> | null
-  >(null, { ownedWrite: true });
+  const catalogs = createAppearanceCatalogs(invalidate);
+  const pluginsRead = createMemo(() => {
+    revision();
+    return catalogs.pluginsRead;
+  });
   const sessionSourcePlugins = createMemo(async () => {
-    const catalog = await pluginsRead();
+    const catalog = await pluginsRead().value;
     return catalog
       ? new Set(catalog.plugins.filter((plugin) => plugin.installed).map((plugin) => plugin.id))
       : null;
   });
-  const [labelsRead, setLabelsRead] = createSignal<
-    SessionsCatalogListResult | Promise<SessionsCatalogListResult> | null
-  >(null, { ownedWrite: true });
+  const labelsRead = createMemo(() => {
+    revision();
+    return catalogs.labelsRead;
+  });
   const sessionCatalogLabels = createMemo(async () => {
-    const catalog = await labelsRead();
+    const catalog = await labelsRead().value;
     return catalog
       ? new Map(catalog.catalogs.map((entry) => [entry.id, entry.label]))
       : EMPTY_SESSION_CATALOG_LABELS;
@@ -161,8 +156,6 @@ export function createConfigPage(
   let previousClient: GatewayBrowserClient | null = null;
   let previousHello: unknown;
   let previousPhase: string | null = null;
-  let requestedPluginsClient: GatewayBrowserClient | null = null;
-  let labelsKey = "";
   let countdown: ReturnType<typeof setInterval> | undefined;
   let routeInitialized = false;
   let normalizedMemoryLocation = "";
@@ -181,16 +174,18 @@ export function createConfigPage(
   }
 
   function mutationDisabled() {
+    const state = context.runtimeConfig.state;
+    return mutationBusy() || state.configLoading || !context.runtimeConfig.canSet;
+  }
+  function mutationBusy() {
     revision();
     const state = context.runtimeConfig.state;
     return (
       !state.connected ||
-      state.configLoading ||
       state.configSaving ||
       state.configApplying ||
       updates.busy() ||
       context.overlays.snapshot.updateStatusRefreshing ||
-      !context.runtimeConfig.canSet ||
       !hasOperatorAdminAccess(context.gateway.snapshot.hello?.auth ?? null)
     );
   }
@@ -240,10 +235,7 @@ export function createConfigPage(
 
   function abortRequests() {
     observerModels.retire();
-    cancelPlugins();
-    cancelLabels();
-    requestedPluginsClient = null;
-    labelsKey = "";
+    catalogs.retire();
   }
 
   /** Reads current owners after each publication, never copies their state into a store. */
@@ -275,7 +267,12 @@ export function createConfigPage(
       settings().customTheme?.importedAt,
     );
     observerModels.synchronize();
-    syncAppearanceRequests();
+    catalogs.synchronize(
+      pageId === "appearance",
+      snapshot,
+      context.settingsAgentSelection.state.selectedId,
+      hiddenSessionCatalogIds,
+    );
     updates.synchronize(pageId);
     const campaign = context.overlays.snapshot.updateSchedule?.campaign;
     const ticking =
@@ -310,83 +307,6 @@ export function createConfigPage(
       target.scrollIntoView?.({ behavior: resolveScrollBehavior(), block: "start" });
       targetBlockId = null;
     });
-  }
-
-  const pluginsTask = createPageRequest(invalidate, {
-    task: (client: GatewayBrowserClient, { signal }) => {
-      const read = client.request<PluginsListResult>("plugins.list", {}, { signal });
-      void setPluginsRead(read);
-      return read;
-    },
-    onComplete: (catalog) => {
-      acceptedPluginCatalog = catalog;
-    },
-    onError: () => {},
-  });
-  const labelsTask = createPageRequest(invalidate, {
-    task: (
-      { client, agentId }: { client: GatewayBrowserClient; agentId: string | null },
-      { signal },
-    ) => {
-      const read = client.request<SessionsCatalogListResult>(
-        "sessions.catalog.list",
-        { ...(agentId ? { agentId } : {}), metadataOnly: true },
-        { signal },
-      );
-      void setLabelsRead(read);
-      return read;
-    },
-    onComplete: (catalog) => {
-      acceptedLabelsCatalog = catalog;
-    },
-    onError: () => {},
-  });
-
-  function cancelPlugins() {
-    pluginsTask.cancel();
-    setPluginsRead(acceptedPluginCatalog);
-  }
-
-  function cancelLabels() {
-    labelsTask.cancel();
-    setLabelsRead(acceptedLabelsCatalog);
-  }
-
-  function syncAppearanceRequests() {
-    const snapshot = context.gateway.snapshot;
-    const active = pageId === "appearance";
-    const pluginsClient =
-      active && canCallGatewayMethod(snapshot, "plugins.list", "operator.read")
-        ? snapshot.client
-        : null;
-    if (pluginsClient !== requestedPluginsClient) {
-      cancelPlugins();
-      requestedPluginsClient = pluginsClient;
-      acceptedPluginCatalog = null;
-      setPluginsRead(null);
-      if (pluginsClient) {
-        void pluginsTask.run(pluginsClient);
-      }
-    }
-    const agentId = context.settingsAgentSelection.state.selectedId;
-    const labelsClient =
-      active &&
-      hiddenSessionCatalogIds.size > 0 &&
-      canCallGatewayMethod(snapshot, "sessions.catalog.list", "operator.read")
-        ? snapshot.client
-        : null;
-    const key = labelsClient
-      ? `${agentId}\0${[...hiddenSessionCatalogIds].toSorted().join("\0")}`
-      : "";
-    if (key !== labelsKey) {
-      cancelLabels();
-      labelsKey = key;
-      acceptedLabelsCatalog = null;
-      setLabelsRead(null);
-      if (labelsClient) {
-        void labelsTask.run({ client: labelsClient, agentId });
-      }
-    }
   }
 
   function synchronizeRuntimeConfig(runtimeConfig: ApplicationContext["runtimeConfig"]) {
@@ -497,13 +417,6 @@ export function createConfigPage(
     const localePref = currentSyncedPref("locale");
     const chatSendShortcutPref = currentSyncedPref("chatSendShortcut");
     const chatFollowUpModePref = currentSyncedPref("chatFollowUpMode");
-    const sessionObserverBusy =
-      !configState.connected ||
-      configState.configSaving ||
-      configState.configApplying ||
-      updates.busy() ||
-      context.overlays.snapshot.updateStatusRefreshing ||
-      !hasOperatorAdminAccess(context.gateway.snapshot.hello?.auth ?? null);
     const observerLifetime = commandLifetime.promise;
     const observerResult = (saved: boolean) => {
       if (!saved && observerLifetime === commandLifetime.promise && configState.lastError) {
@@ -702,7 +615,7 @@ export function createConfigPage(
       sidebarLiveActivity:
         settings().sidebarLiveActivity ?? UI_APPEARANCE_DEFAULTS.sidebarLiveActivity,
       hiddenSessionCatalogIds,
-      hiddenSessionCatalogLabels: { read: sessionCatalogLabels, scope: labelsRead() },
+      hiddenSessionCatalogLabels: { read: sessionCatalogLabels, scope: labelsRead().value },
       setSessionCatalogHidden: setStoredSessionCatalogHidden,
       terminalFontFamily: settings().terminalFontFamily,
       setTerminalFontFamily: (value: string | undefined) =>
@@ -724,7 +637,7 @@ export function createConfigPage(
       sessionObserverModels: observerModels.models,
       sessionObserverModelsScope: observerModels.scope,
       sessionObserverModelsUnavailable: observerModels.unavailable,
-      sessionObserverDisabled: sessionObserverBusy,
+      sessionObserverDisabled: mutationBusy(),
       setSessionObserverEnabled: (enabled: boolean) =>
         runtimeConfig
           .patch({
@@ -770,7 +683,7 @@ export function createConfigPage(
       resetChatFollowUpMode: () => resetSyncedPref("chatFollowUpMode"),
       catalogOpenTarget: normalizeCatalogOpenTarget(settings().catalogOpenTarget),
       pluginsHref: pathForRoute("plugin-settings", context.basePath),
-      sessionSourcePlugins: { read: sessionSourcePlugins, scope: pluginsRead() },
+      sessionSourcePlugins: { read: sessionSourcePlugins, scope: pluginsRead().value },
       microphone: {
         ...mediaDevices.microphone,
         selectedDeviceId: settings().realtimeTalkInputDeviceId ?? "",

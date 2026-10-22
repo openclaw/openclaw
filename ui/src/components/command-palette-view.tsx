@@ -19,6 +19,7 @@ import {
   type RouteId,
 } from "../app-route-paths.ts";
 import { registerCommandPaletteEnglish } from "../i18n/locales/en-command-palette.ts";
+import { isMobileBrowserPlatform, keepMobileReturnNative } from "../lib/browser-platform.ts";
 import { MAX_HUMAN_MENTIONS } from "../lib/chat/human-mentions.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
@@ -128,6 +129,9 @@ function handleKeydown(
     !(event.target instanceof HTMLTextAreaElement) ||
     event.target.id !== COMMAND_PALETTE_INPUT_ID
   ) {
+    return;
+  }
+  if (keepMobileReturnNative(event)) {
     return;
   }
   if (event.key === "Enter" && event.repeat) {
@@ -395,23 +399,35 @@ function PaletteSearch(props: {
             <Icon name="messageSquarePlus" />
           </span>
           <h2>{t("palette.noResults")}</h2>
-          <p>
-            <ShortcutText
-              text={t("palette.noResultsStart", { shortcut: "{shortcut}" })}
-              shortcut={() => (
-                <KeyboardShortcut combo={KEYBOARD_SHORTCUT_COMBOS.modifiedEnter} inline />
-              )}
-            />
-          </p>
+          <Show when={!isMobileBrowserPlatform()}>
+            <p>
+              <ShortcutText
+                text={t("palette.noResultsStart", { shortcut: "{shortcut}" })}
+                shortcut={() => (
+                  <KeyboardShortcut combo={KEYBOARD_SHORTCUT_COMBOS.modifiedEnter} inline />
+                )}
+              />
+            </p>
+          </Show>
         </div>
       </Show>
       <div id="cmd-palette-keys" class="cmd-palette__footer">
         <Show when={results().items.length > 0 && !current().query.includes("\n")}>
           <PaletteHint shortcut={<Kbd keys={["↑", "↓"]} />} label={t("palette.footer.navigate")} />
-          <PaletteHint shortcut={<Kbd keys="↵" />} label={t("palette.footer.select")} />
+          <Show when={!isMobileBrowserPlatform()}>
+            <PaletteHint shortcut={<Kbd keys="↵" />} label={t("palette.footer.select")} />
+          </Show>
         </Show>
         <PaletteHint
-          shortcut={<KeyboardShortcut combo={KEYBOARD_SHORTCUT_COMBOS.newline} />}
+          shortcut={
+            <KeyboardShortcut
+              combo={
+                isMobileBrowserPlatform()
+                  ? KEYBOARD_SHORTCUT_COMBOS.sendMessage
+                  : KEYBOARD_SHORTCUT_COMBOS.newline
+              }
+            />
+          }
           label={t("palette.footer.newline")}
         />
       </div>
@@ -537,7 +553,9 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
                         ? "palette.startingSession"
                         : "palette.startSession",
                     )}
-                    <KeyboardShortcut combo={KEYBOARD_SHORTCUT_COMBOS.modifiedEnter} />
+                    <Show when={!isMobileBrowserPlatform()}>
+                      <KeyboardShortcut combo={KEYBOARD_SHORTCUT_COMBOS.modifiedEnter} />
+                    </Show>
                   </button>
                 </openclaw-tooltip>
                 <PaletteSessionControls draft={current().draft} revision={current()} />

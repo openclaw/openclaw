@@ -13,7 +13,7 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import type { JsonSchema } from "../../lib/config-form-utils.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
-import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import type { PluginDiscoveryDetailResult, PluginsInspectResult } from "../../lib/plugins/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { PluginManager } from "../../plugins/control-ui-manager.solid.tsx";
@@ -206,13 +206,9 @@ function InstalledInventory(props: InventoryProps): JSX.Element {
                     <a
                       class="settings-row__text plugins-settings-row__link"
                       href={props.pluginHref(plugin().id)}
-                      onClick={(event: MouseEvent) => {
-                        if (!shouldHandleNavigationClick(event)) {
-                          return;
-                        }
-                        event.preventDefault();
-                        props.onOpenPlugin(plugin().id);
-                      }}
+                      onClick={(event: MouseEvent) =>
+                        handleNavigationClick(event, () => props.onOpenPlugin(plugin().id))
+                      }
                     >
                       <span class="settings-row__title oc-settings-row-title">{plugin().name}</span>
                       <span class="settings-row__desc oc-settings-row-description">

@@ -5,7 +5,8 @@ import type { AgentActivityItem } from "../../../../../packages/gateway-protocol
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { messageRecoveryKey } from "../chat-message-recovery.ts";
 import * as chatThreadBuild from "../chat-thread-build.ts";
-import { persistedMessageEntryId, setExpansionState } from "../chat-thread.ts";
+import { persistedMessageEntryId } from "../chat-thread-items.ts";
+import { setExpansionState } from "../chat-thread.ts";
 import {
   createTestTranscript as createTranscript,
   stubAnimationFrames,
