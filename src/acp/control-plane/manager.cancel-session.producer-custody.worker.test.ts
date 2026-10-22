@@ -4,7 +4,11 @@ import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { resolveSessionStorePathForAcp } from "../runtime/session-meta-store.js";
 import { withAcpCancellationFixture } from "./manager.cancel-session.worker.test-support.js";
-import { createGate, startTurn } from "./manager.cancellation-locator.test-support.js";
+import {
+  createGate,
+  startTurn,
+  untilAborted,
+} from "./manager.cancellation-locator.test-support.js";
 import { DEFAULT_DEPS } from "./manager.types.js";
 
 type Fixture = Parameters<Parameters<typeof withAcpCancellationFixture>[0]>[0];
@@ -24,12 +28,6 @@ function invocation(f: Fixture, requestId: string, text = requestId) {
         ...overrides,
       }),
   };
-}
-
-function untilAborted(signal: AbortSignal | undefined) {
-  return new Promise<void>((resolve) => {
-    signal?.addEventListener("abort", () => resolve(), { once: true });
-  });
 }
 
 it.for(["delivered", "failed"] as const)(

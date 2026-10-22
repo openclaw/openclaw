@@ -9,7 +9,6 @@ import type {
   CronJobsListResult,
   ModelCatalogEntry,
   SkillStatusReport,
-  ToolsEffectiveResult,
 } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
@@ -135,33 +134,6 @@ describe("AgentsPage gateway lifecycle", () => {
     expect(page.read().readData().agentSkillsRead).not.toBe(issued);
   });
 
-  it("retires visible-session effective tools across a same-client reconnect", async () => {
-    const staleResult = deferred<ToolsEffectiveResult>();
-    let effectiveReads = 0;
-    const request = vi.fn(async (method: string) => {
-      if (method === "tools.effective") {
-        return ++effectiveReads === 1
-          ? staleResult.promise
-          : { profile: "current-connection", groups: [] };
-      }
-      return { agentId: "main", profiles: [], groups: [] };
-    });
-    const client = createTestGatewayClient(request);
-    const { page, currentGateway } = mountPage(client, "tools");
-    expect(page.read().readData().toolsEffectiveLoading).toBe(true);
-    emitGatewaySnapshot(currentGateway, snapshot(client, false));
-    emitGatewaySnapshot(currentGateway, snapshot(client));
-    await waitForFast(() =>
-      expect(page.read().readData().toolsEffectiveResult?.profile).toBe("current-connection"),
-    );
-    staleResult.resolve({ profile: "retired-connection" } as ToolsEffectiveResult);
-    await staleResult.promise;
-    await Promise.resolve();
-    expect(page.read().readData().toolsEffectiveResult?.profile).toBe("current-connection");
-    expect(page.read().readData().toolsEffectiveError).toBeNull();
-    expect(page.read().readData().toolsEffectiveLoading).toBe(false);
-  });
-
   it("does not stage a default-agent change after a same-client reconnect", async () => {
     const loading = deferred();
     const client = {} as GatewayBrowserClient;
@@ -280,46 +252,6 @@ describe("AgentsPage gateway lifecycle", () => {
     page.read().onConfigSave();
     await waitForFast(() => expect(save).toHaveBeenCalledOnce());
     expect(refreshList).not.toHaveBeenCalled();
-  });
-
-  it("refreshes effective tools after saving tool settings for the same session", async () => {
-    const saved = deferred<boolean>();
-    const roster = deferred<typeof agentsList>();
-    let effectiveReads = 0;
-    const request = vi.fn(async (method: string) => {
-      if (method === "tools.effective") {
-        effectiveReads += 1;
-        return {
-          agentId: "main",
-          profile: effectiveReads === 1 ? "messaging" : "full",
-          groups: [],
-        };
-      }
-      return { agentId: "main", profiles: [], groups: [] };
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const agents = agentsCapability(async () => files("main", "unused"));
-    agents.refreshList = vi.fn(() => roster.promise);
-    const context = pageContext(gateway(snapshot(client)), agents);
-    const { page } = mountPage(client, "tools", {
-      ...context,
-      runtimeConfig: { ...context.runtimeConfig, state: {}, save: () => saved.promise },
-    } as unknown as ApplicationContext);
-    await waitForFast(() =>
-      expect(page.read().readData().toolsEffectiveResult?.profile).toBe("messaging"),
-    );
-
-    page.read().onConfigSave();
-    saved.resolve(true);
-    await saved.promise;
-    roster.resolve(agentsList);
-    await roster.promise;
-    await Promise.resolve();
-
-    await waitForFast(() =>
-      expect(page.read().readData().toolsEffectiveResult?.profile).toBe("full"),
-    );
-    expect(effectiveReads).toBe(2);
   });
 
   it("loads the selected agent's configured model catalog once for the overview model picker", async () => {

@@ -62,7 +62,7 @@ describe("config appearance preferences", () => {
       permissionRequired: false,
       selectedDeviceId: deviceId,
       discovery: null,
-      error: null,
+      selection: null,
     };
   }
 
@@ -443,7 +443,7 @@ describe("config appearance preferences", () => {
       onMicrophoneSelect: vi.fn(),
       onMicrophoneRefresh,
       camera: mediaDevice("camera-1", "Desk Camera"),
-      onCameraSelect: vi.fn(),
+      onCameraSelect: vi.fn().mockResolvedValue(undefined),
       onCameraRefresh,
       composerHoldToRecord: true,
     });
@@ -499,11 +499,15 @@ describe("config appearance preferences", () => {
         discovery: loading ? new Promise<string | null>(() => {}) : null,
         permissionRequired: true,
         selectedDeviceId: "",
-        error: null,
+        selection: null,
       };
       const { container } = renderAppearance(
         device === "camera"
-          ? { camera: state, onCameraSelect: vi.fn(), onCameraRefresh: onRefresh }
+          ? {
+              camera: state,
+              onCameraSelect: vi.fn().mockResolvedValue(undefined),
+              onCameraRefresh: onRefresh,
+            }
           : { microphone: state, onMicrophoneSelect: vi.fn(), onMicrophoneRefresh: onRefresh },
       );
       const select = required(container, `[data-settings-${device}]`, HTMLSelectElement);

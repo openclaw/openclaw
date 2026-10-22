@@ -29,6 +29,7 @@ function nativeVoice(snapshot: NonNullable<NativeDeviceSettingsCapability["snaps
   const listeners = new Set<() => void>();
   const settings = {
     snapshot,
+    initialSnapshot: Promise.resolve(snapshot),
     set: vi.fn<NativeDeviceSettingsCapability["set"]>(),
     subscribe: (listener: Parameters<NativeDeviceSettingsCapability["subscribe"]>[0]) => {
       const notify = () => listener(snapshot);

@@ -5,9 +5,24 @@ import {
   asOptionalRecord,
   filterStringRecord,
   isStringRecord,
+  omitUndefinedFields,
 } from "./record-coerce.js";
 
 describe("record-coerce", () => {
+  it("removes only undefined projection fields in place without traversing nested records", () => {
+    const nested = { untouched: undefined };
+    const fields = { missing: undefined, empty: "", zero: 0, disabled: false, nil: null, nested };
+    expect(omitUndefinedFields(fields)).toBe(fields);
+    expect(fields).toStrictEqual({
+      empty: "",
+      zero: 0,
+      disabled: false,
+      nil: null,
+      nested: { untouched: undefined },
+    });
+    expect(fields.nested).toBe(nested);
+  });
+
   it("keeps record coercion behavior for optional and nullable variants", () => {
     expect(asOptionalRecord({ ok: true })).toEqual({ ok: true });
     expect(asOptionalRecord(null)).toBeUndefined();

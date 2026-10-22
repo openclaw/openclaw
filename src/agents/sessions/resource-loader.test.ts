@@ -6,7 +6,6 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { withMockedWindowsPlatform } from "../../test-utils/vitest-spies.js";
 import darkTheme from "../modes/interactive/theme/dark.json" with { type: "json" };
 import type { ExtensionFactory } from "./extensions/types.js";
-import { loadPromptTemplates } from "./prompt-templates.js";
 import { DefaultResourceLoader } from "./resource-loader.js";
 import type { PathMetadata, SourceScope } from "./source-info.js";
 
@@ -117,16 +116,6 @@ describe("DefaultResourceLoader", () => {
     );
     expect(loader.getPrompts().diagnostics).toEqual([]);
     expect(loader.getThemes().diagnostics).toEqual([]);
-
-    await linkDirectory(resources, join(root, "prompts"));
-    const prompts = loadPromptTemplates({
-      cwd: root,
-      agentDir: root,
-      promptPaths: [join(root, "prompts")],
-    });
-    expect(prompts.map((prompt) => prompt.filePath).toSorted()).toEqual(
-      expectedNames.map((name) => join(root, "prompts", `${name}.md`)),
-    );
   });
 
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(

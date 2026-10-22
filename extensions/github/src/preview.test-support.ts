@@ -4,8 +4,22 @@ import type { ControlUiGitHubPreviewIdentity } from "./preview-contract.js";
 import { loadControlUiGitHubPreview } from "./preview.js";
 
 // List endpoints such as /pulls/{n}/commits return arrays, not objects.
-export function githubJson(body: unknown, status = 200): Response {
-  return Response.json(body, { status });
+export function githubJson(
+  body: unknown,
+  status = 200,
+  headers: Record<string, string> = {},
+): Response {
+  return Response.json(body, { status, headers });
+}
+
+export function queuedFetch(...responses: (Response | (() => Promise<Response>))[]) {
+  const fetcher = vi.fn<typeof fetch>();
+  for (const response of responses) {
+    fetcher.mockImplementationOnce(async () =>
+      typeof response === "function" ? response() : response,
+    );
+  }
+  return fetcher;
 }
 
 export const avatarDataUrl = "data:image/png;base64,iVBORw==";

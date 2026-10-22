@@ -6,7 +6,7 @@ import {
   type PluginDeclaredSurfaceGroup,
 } from "../../../../packages/gateway-protocol/src/schema/plugin-declared-surface-groups.js";
 import { Icon } from "../../components/solid/icon.tsx";
-import "../../components/modal-dialog.ts";
+import "../../components/modal-dialog.tsx";
 import {
   SettingsRow,
   SettingsSection,

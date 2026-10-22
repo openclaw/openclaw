@@ -2,7 +2,7 @@ import {
   readClawHubRiskAcknowledgementRequiredError,
   readClawReviewRequiredError,
 } from "@openclaw/gateway-protocol";
-import { createMemo, createSignal, onCleanup, Show } from "solid-js";
+import { action, createMemo, createOptimistic, createSignal, onSettled, Show } from "solid-js";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadSettings } from "../../app/settings.ts";
@@ -488,27 +488,28 @@ class ClawsCatalogModel {
       onRetryDetail: () => this.loadDetail(),
       onConfirm: () => {
         this.riskAcknowledged = false;
-        void this.add();
+        return this.add();
       },
       onConfirmConsent: () => {
         this.riskAcknowledged = true;
         this.consentWarning = null;
-        void this.add(this.reviewPlan);
+        return this.add(this.reviewPlan);
       },
       onCancelConsent: () => {
         this.consentWarning = null;
         this.reviewPlan = null;
         this.riskAcknowledged = false;
       },
-      onConfirmReview: () => void this.add(this.reviewPlan),
+      onConfirmReview: () => this.add(this.reviewPlan),
       onCancelReview: () => {
         this.reviewPlan = null;
         this.riskAcknowledged = false;
       },
       onRetryOpenChat: () => {
         if (this.addedAgentId) {
-          void this.finishChatHandoff(this.addedAgentId, this.context);
+          return this.finishChatHandoff(this.addedAgentId, this.context);
         }
+        return undefined;
       },
     };
   }
@@ -518,6 +519,11 @@ export function ClawsCatalogDialog(props: ClawsDialogProps) {
   const context = useApplication();
   const [detailRequest, setDetailRequest] = createSignal<Promise<ClawCatalogDetail | null>>();
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
+  const [applying, showApplying] = createOptimistic(false);
+  const presentMutation = action(function* (completed: Promise<void>) {
+    showApplying(true);
+    yield completed;
+  });
   const model = new Proxy(
     new ClawsCatalogModel(context, props, (request) => {
       void setDetailRequest(request);
@@ -539,12 +545,26 @@ export function ClawsCatalogDialog(props: ClawsDialogProps) {
     invalidateRequests: (change) => model.invalidateRequests(change),
     ensureInitialData: () => model.ensureInitialData(),
   });
-  onCleanup(() => model.dispose());
+  onSettled(() => () => model.dispose());
   const detail = createMemo(() => detailRequest() ?? null);
   const view = createMemo(() => {
     revision();
     return model.view();
   });
+  function mutate(run: () => void | Promise<void>) {
+    const alreadyApplying = model.applying;
+    const scope = model.gateway.capture();
+    const completed = run();
+    if (alreadyApplying || !model.applying || !scope || !completed) {
+      return;
+    }
+    // Commit owner receipts, including cleared consent, before the action holds.
+    onSettled(() => {
+      if (model.gateway.isCurrent(scope) && model.applying) {
+        void presentMutation(completed);
+      }
+    });
+  }
   const preview = createMemo(() => {
     revision();
     return model.preview;
@@ -568,7 +588,16 @@ export function ClawsCatalogDialog(props: ClawsDialogProps) {
   };
   return (
     <openclaw-claws-catalog-dialog>
-      <ClawsCatalogView {...view()} readDetail={detail} detailRequest={detailRequest()} />
+      <ClawsCatalogView
+        {...view()}
+        applying={applying() && view().applying}
+        onConfirm={() => mutate(view().onConfirm)}
+        onConfirmConsent={() => mutate(view().onConfirmConsent)}
+        onConfirmReview={() => mutate(view().onConfirmReview)}
+        onRetryOpenChat={() => mutate(view().onRetryOpenChat)}
+        readDetail={detail}
+        detailRequest={detailRequest()}
+      />
       <Show when={preview()}>
         {(current) => (
           <openclaw-file-preview-modal

@@ -8,8 +8,12 @@ type ConfigPageProps = ReturnType<ReturnType<typeof createConfigPage>["configPro
 // Async presenters retain their owners' admitted completions.
 type ConfigData = {
   [Key in keyof ConfigPageProps]: Key extends
+    | "presentationRetired"
+    | "setSessionObserverEnabled"
+    | "setSessionObserverUtilityModel"
     | "onNativeNotificationsSendTest"
     | "onImportCustomTheme"
+    | "onCameraSelect"
     | "onWebPushSubscribe"
     | "onWebPushUnsubscribe"
     | "onWebPushTest"

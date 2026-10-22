@@ -149,7 +149,9 @@ function PluginPageContent(props: PluginPageProps, host: HTMLElement) {
                 context.gateway.snapshot.phase === "connected"
                   ? context.gateway.snapshot.client
                   : null;
-              return <Logbook initialClient={initialClient} />;
+              return (
+                <Logbook initialClient={initialClient} getRetired={() => lifecycle.actionRetired} />
+              );
             }}
           </Show>
         </Loading>
@@ -176,14 +178,18 @@ function PluginPageContent(props: PluginPageProps, host: HTMLElement) {
           <section class="plugin-tab-embed">
             <Show when={view().generation} keyed>
               {(_generation) => {
-                onCleanup(() => lifecycle.syncPluginThemeFrame(null));
+                let frame!: HTMLIFrameElement;
+                onSettled(() => {
+                  lifecycle.syncPluginThemeFrame(frame);
+                  return () => lifecycle.syncPluginThemeFrame(null);
+                });
                 return (
                   <iframe
                     class="plugin-tab-embed__frame"
                     src={view().info?.path}
                     title={view().info?.label}
                     sandbox={resolveEmbedSandbox(context.config.current.embedSandboxMode)}
-                    ref={(frame) => lifecycle.syncPluginThemeFrame(frame)}
+                    ref={(element) => (frame = element)}
                     onLoad={lifecycle.handlePluginThemeLoad}
                   />
                 );

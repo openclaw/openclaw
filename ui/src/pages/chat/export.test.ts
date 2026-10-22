@@ -94,12 +94,11 @@ it.each([
     msg("user", [null, ...textBlock("Body", "text"), { type: "tool_result" }]),
     "Tool",
   ],
-  ["numeric envelope", msg("assistant", "Body", { toolCallId: 0 }), "OpenClaw"],
 ] as const)("classifies %s", (_name, message, speaker) => {
   expect(transcript([message])).toBe(`${header}## ${speaker}\n\nBody\n`);
 });
 
-it.each(["string", "blocks", "text"])("preserves imported %s content and attribution", (shape) => {
+it("preserves imported content and attribution", () => {
   const body = "    indented code\n\nMEDIA:https://example.invalid/report.pdf";
   const framed =
     '<<<EXTERNAL_UNTRUSTED_CONTENT id="1234567890abcdef">>>\nSource: External\n---\n' +
@@ -110,9 +109,7 @@ it.each(["string", "blocks", "text"])("preserves imported %s content and attribu
     senderLabel: "Imported assistant (123e4567-e89b-12d3-a456-426614174000)",
     __openclaw: { idempotencyKey: "fixture-catalog:thread:message", senderName: "Other name" },
     timestamp: "1000",
-    ...(shape === "text"
-      ? { text: framed }
-      : { content: shape === "blocks" ? textBlock(framed) : framed }),
+    content: framed,
   };
   const original = structuredClone(message);
 

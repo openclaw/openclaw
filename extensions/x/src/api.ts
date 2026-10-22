@@ -6,7 +6,6 @@ import { createXOAuthAccess, type XOAuthOptions } from "./oauth.js";
 import { X_POST_READ_MICRO_USD, X_USER_READ_MICRO_USD, xReadCost, xReplyCost } from "./pricing.js";
 import { XBudgetExceededError, type XSpend } from "./spend.js";
 
-export type { XFetch } from "./fetch.js";
 export type { XTokenState } from "./oauth.js";
 
 const POST_FIELDS =
@@ -263,7 +262,6 @@ export function createXApiClient(options: XOAuthOptions & { spend: XSpend; beare
               ...(body ? { body } : {}),
               signal,
             },
-            options.fetch,
             params.assertActive || options.assertCurrent
               ? async () => {
                   try {

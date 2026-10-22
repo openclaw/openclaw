@@ -3,8 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isBrowserMachineOutput } from "../../cli-output-mode.js";
 
 const manageMocks = vi.hoisted(() => {
-  const doctorAction = vi.fn();
-  const tabsAction = vi.fn();
+  const doctorAction = vi.fn<(opts: { deep?: boolean }) => void>();
+  const tabsAction = vi.fn<(...args: unknown[]) => void>();
   const registerBrowserManageCommands = vi.fn((browser: Command) => {
     browser.command("tabs").action(tabsAction);
     browser.command("doctor").option("--deep").action(doctorAction);
@@ -22,7 +22,7 @@ const inspectMocks = vi.hoisted(() => ({
   registerBrowserInspectCommands: vi.fn(),
 }));
 const actionInputMocks = vi.hoisted(() => {
-  const waitAction = vi.fn();
+  const waitAction = vi.fn<(opts: unknown, parent: unknown) => void>();
   const registerBrowserActionInputCommands = vi.fn(
     (browser: Command, parentOpts: (command: Command) => unknown) => {
       browser
@@ -40,7 +40,8 @@ const debugMocks = vi.hoisted(() => ({
   registerBrowserDebugCommands: vi.fn(),
 }));
 const stateMocks = vi.hoisted(() => {
-  const cookieSetAction = vi.fn();
+  const cookieSetAction =
+    vi.fn<(name: string, value: string, opts: unknown, parent: unknown) => void>();
   const registerBrowserStateCommands = vi.fn(
     (browser: Command, parentOpts: (command: Command) => unknown) => {
       browser
@@ -82,25 +83,6 @@ async function run(args: string[], positionalOptions = true) {
   await program.parseAsync(args, { from: "user" });
 }
 
-function requireFirstCall<TArgs extends unknown[]>(
-  mock: { mock: { calls: TArgs[] } },
-  label: string,
-): TArgs {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error(`expected ${label}`);
-  }
-  return call;
-}
-
-function requireTrailingCommand(args: unknown[], label: string): Command {
-  const command = args.at(-1);
-  if (!(command instanceof Command)) {
-    throw new Error(`expected trailing command for ${label}`);
-  }
-  return command;
-}
-
 describe("registerBrowserCli lazy browser subcommands", () => {
   it.each([
     { args: ["storage", "session", "get", "key"], machine: true },
@@ -127,14 +109,13 @@ describe("registerBrowserCli lazy browser subcommands", () => {
     expect(manageMocks.registerBrowserManageCommands).toHaveBeenCalledTimes(1);
     expect(debugMocks.registerBrowserDebugCommands).not.toHaveBeenCalled();
     expect(manageMocks.doctorAction).toHaveBeenCalledTimes(1);
-    const [doctorOptions] = requireFirstCall(manageMocks.doctorAction, "doctor action call");
-    expect(doctorOptions.deep).toBe(true);
+    expect(manageMocks.doctorAction.mock.calls[0]?.[0]).toMatchObject({ deep: true });
   });
 
   it("keeps explicit Gateway and wait URLs under their separate owners", async () => {
     await run(["browser", "--url", "ws://127.0.0.1:18789", "wait", "--url", "**/done"]);
 
-    const [opts, parent] = requireFirstCall(actionInputMocks.waitAction, "wait action call");
+    const [opts, parent] = actionInputMocks.waitAction.mock.calls[0]!;
     expect(opts).toMatchObject({ url: "**/done" });
     expect(parent).toMatchObject({ url: "ws://127.0.0.1:18789" });
   });
@@ -142,10 +123,10 @@ describe("registerBrowserCli lazy browser subcommands", () => {
   it("accepts the shipped trailing browser profile order after lazy loading", async () => {
     await run(["browser", "tabs", "--browser-profile", "remote", "--timeout", "60000"]);
 
-    const tabsCommand = requireTrailingCommand(
-      requireFirstCall(manageMocks.tabsAction, "tabs action call"),
-      "tabs action",
-    );
+    const tabsCommand = manageMocks.tabsAction.mock.calls[0]?.at(-1);
+    if (!(tabsCommand instanceof Command)) {
+      throw new Error("expected trailing tabs command");
+    }
     expect(tabsCommand.parent?.opts()).toMatchObject({
       browserProfile: "remote",
       timeout: "60000",
@@ -166,7 +147,7 @@ describe("registerBrowserCli lazy browser subcommands", () => {
       "abc",
     ]);
 
-    const cookieCall = requireFirstCall(stateMocks.cookieSetAction, "cookie set action call");
+    const cookieCall = stateMocks.cookieSetAction.mock.calls[0]!;
     expect(cookieCall[3]).toMatchObject({ timeout: "60000", browserProfile: "work", json: true });
   });
 

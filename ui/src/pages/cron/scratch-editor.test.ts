@@ -1,5 +1,5 @@
 import { createSignal, flush } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CronScratchGetResult } from "../../api/types.ts";
@@ -30,8 +30,14 @@ async function mount(request: (method: string, params?: unknown) => Promise<unkn
   const gateway = createGateway(createTestGatewayClient(request), true);
   const [jobId, setJobId] = createSignal("ordinary-job");
   const [currentGateway, setGateway] = createSignal<ApplicationContext["gateway"] | null>(gateway);
+  let lifetime = Promise.withResolvers<void>();
+  const retire = () => {
+    lifetime.resolve();
+    lifetime = Promise.withResolvers<void>();
+  };
   const view = mountSolid(() =>
     CronScratchEditor({
+      getRetired: () => lifetime.promise,
       get jobId() {
         return jobId();
       },
@@ -42,11 +48,28 @@ async function mount(request: (method: string, params?: unknown) => Promise<unkn
   );
   await settle();
   const editor = view.container.querySelector<HTMLElement>("openclaw-cron-scratch-editor")!;
-  return { editor, gateway, setJobId, setGateway, unmount: view.unmount };
+  return {
+    editor,
+    gateway,
+    setJobId(this: void, id: string) {
+      retire();
+      setJobId(id);
+    },
+    setGateway(this: void, next: ApplicationContext["gateway"] | null) {
+      retire();
+      setGateway(next);
+    },
+    unmount(this: void) {
+      retire();
+      view.unmount();
+    },
+  };
 }
 
 async function click(editor: ScratchEditor, label: string) {
-  getButtonByText(editor, label).click();
+  const button = getButtonByText(editor, label);
+  await waitForSolid(() => expect(button.disabled).toBe(false));
+  button.click();
   await settle();
 }
 
@@ -66,6 +89,56 @@ afterEach(() => {
 });
 
 describe("ordinary automation scratch editor", () => {
+  it.each([false, true])("retains a pending save draft after rejected=%s", async (rejected) => {
+    const pending = Promise.withResolvers<CronScratchGetResult>();
+    onTestFinished(() => pending.resolve(snapshot("Draft notes", 2)));
+    const request = vi
+      .fn<GatewayBrowserClient["request"]>()
+      .mockResolvedValueOnce(snapshot("Saved notes", 1))
+      .mockImplementationOnce(() => pending.promise);
+    const { editor } = await mount(request);
+    await click(editor, "Load scratch");
+    const textarea = editor.querySelector("textarea")!;
+    textarea.value = "Draft notes";
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    await settle();
+    const save = getButtonByText(editor, "Save scratch");
+    save.click();
+    await waitForSolid(() => expect(save.disabled).toBe(true));
+    expect(textarea.value).toBe("Draft notes");
+    expect(textarea.readOnly).toBe(true);
+    if (rejected) {
+      pending.reject(new Error("Synthetic save unavailable"));
+    } else {
+      pending.resolve(snapshot("Draft notes", 2));
+    }
+    await waitForSolid(() => expect(save.disabled).toBe(false));
+    expect(editor.querySelector("textarea")).toBe(textarea);
+    expect(textarea.value).toBe("Draft notes");
+    expect(editor.textContent).toContain(rejected ? "Synthetic save unavailable" : "Scratch saved");
+  });
+
+  it("releases a held save when selecting another job", async () => {
+    const pending = Promise.withResolvers<CronScratchGetResult>();
+    onTestFinished(() => pending.resolve(snapshot("Retired notes", 2)));
+    const request = vi
+      .fn<GatewayBrowserClient["request"]>()
+      .mockResolvedValueOnce(snapshot("Saved notes", 1))
+      .mockImplementationOnce(() => pending.promise);
+    const { editor, setJobId } = await mount(request);
+    await click(editor, "Load scratch");
+    const save = getButtonByText(editor, "Save scratch");
+    save.click();
+    await waitForSolid(() => expect(save.disabled).toBe(true));
+    setJobId("another-job");
+    await waitForSolid(() => expect(editor.querySelector("textarea")).toBeNull());
+    expect(getButtonByText(editor, "Load scratch").disabled).toBe(false);
+    pending.reject(new Error("Retired save failed"));
+    await pending.promise.catch(() => {});
+    await settle();
+    expect(editor.textContent).not.toContain("Retired save failed");
+  });
+
   it("loads on demand and admits only one read while it is pending", async () => {
     const pending = createDeferred<CronScratchGetResult>();
     const request = vi.fn(() => pending.promise);

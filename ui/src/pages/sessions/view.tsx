@@ -3,7 +3,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { createMemo, For, Repeat, Show } from "solid-js";
+import { createMemo, Errored, For, Repeat, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { ContextNewSessionAction } from "../../components/solid/new-session-link.tsx";
 import {
@@ -11,6 +11,7 @@ import {
   SettingsSection,
   SettingsStatus,
 } from "../../components/solid/settings-ui.tsx";
+import { formatUiError } from "../../lib/format-error.ts";
 import { presenceViewerLabel } from "../../lib/presence-users.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -119,13 +120,26 @@ export function SessionsView(props: SessionsProps) {
   const rows = createMemo(() => props.result?.sessions ?? []);
   const archivedCount = createMemo(() => rows().filter((row) => row.archived === true).length);
   const transcriptSearch = createMemo(() => props.transcriptSearch);
+  const commandError = createMemo(() => {
+    if (props.error) {
+      // oxlint-disable-next-line typescript/only-throw-error -- Relay the owner's original error; the boundary formats it for display.
+      throw props.error;
+    }
+    return null;
+  });
   return (
     <SettingsPage wide>
-      {props.error ? (
-        <div class="sessions-error" role="alert">
-          {props.error}
-        </div>
-      ) : undefined}
+      <Show when={!props.commandPending}>
+        <Errored
+          fallback={(error) => (
+            <div class="sessions-error" role="alert">
+              {formatUiError(error())}
+            </div>
+          )}
+        >
+          {commandError()}
+        </Errored>
+      </Show>
       <SettingsSection
         title={t("sessionsView.title")}
         description={

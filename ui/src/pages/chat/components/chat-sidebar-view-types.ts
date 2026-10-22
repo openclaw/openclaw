@@ -28,7 +28,6 @@ type SessionWorkspaceOptionalKey =
   | "mobileNavigation"
   | "onToggleMobileGroup"
   | "onMobileScroll"
-  | "onSearchFocus"
   | "connected"
   | "directories"
   | "onToggleDirectory"

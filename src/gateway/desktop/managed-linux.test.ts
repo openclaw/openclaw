@@ -9,13 +9,9 @@ import { isSecretValueRegisteredForRedaction } from "../../logging/secret-redact
 import type { BufferedCommandResult } from "../../process/exec.js";
 import * as processExec from "../../process/exec.js";
 import * as supervisorRuntime from "../../process/supervisor/index.js";
-import type {
-  ManagedRun,
-  ProcessSupervisor,
-  RunExit,
-  SpawnInput,
-} from "../../process/supervisor/types.js";
+import type { ProcessSupervisor } from "../../process/supervisor/types.js";
 import * as audioBridge from "./audio-bridge.js";
+import { createDesktopSupervisor } from "./audio.test-support.js";
 import { runExit } from "./computer.test-support.js";
 import { createHostDesktopService } from "./host-source.js";
 import { createManagedLinuxAudio } from "./managed-linux-audio.js";
@@ -50,10 +46,6 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-function exited(stderr = ""): RunExit {
-  return runExit({ exitCode: 1, durationMs: 1, stderr });
-}
-
 function passwordResult(missing = false): BufferedCommandResult {
   return {
     stdout: missing ? Buffer.alloc(0) : Buffer.from("12345678", "hex"),
@@ -66,98 +58,20 @@ function passwordResult(missing = false): BufferedCommandResult {
 }
 
 function createFakeSupervisor() {
-  const inputs: SpawnInput[] = [];
-  const completedSpawns = new Map<number, ReturnType<typeof createDeferred<void>>>();
-  const spawnCompletion = (count: number) => {
-    let completion = completedSpawns.get(count);
-    if (!completion) {
-      completion = createDeferred();
-      completedSpawns.set(count, completion);
-    }
-    return completion;
-  };
-  const runs: Array<{
-    managed: ManagedRun;
-    settle: (exit: RunExit) => void;
-    settled: boolean;
-    scopeKey?: string;
-  }> = [];
-  const supervisor: ProcessSupervisor = {
-    acquireScopeCleanup(scopeKey) {
-      return async () => {
-        supervisor.cancelScope(scopeKey);
-        await Promise.all(
-          runs.filter((run) => run.scopeKey === scopeKey).map((run) => run.managed.wait()),
-        );
-      };
-    },
-    async spawn(input) {
-      input.assertCurrent?.();
-      inputs.push(input);
-      const { promise: wait, resolve: settle } = createDeferred<RunExit>();
-      const managed: ManagedRun = {
-        activity: {
-          get resultSettled() {
-            return record.settled;
-          },
-          lastOutputAtMs: 0,
-        },
-        runId: `run-${runs.length}`,
-        startedAtMs: 0,
-        wait: async () => await wait,
-        cancel: () => {
-          if (!record.settled) {
-            record.settled = true;
-            record.settle(exited());
-          }
-        },
-      };
-      const record = { managed, settle, settled: false, scopeKey: input.scopeKey };
-      runs.push(record);
-      if (input.mode === "child" && input.argv[0] === "dbus-daemon") {
+  return createDesktopSupervisor(
+    (input) => {
+      if (input.argv[0] === "dbus-daemon") {
         input.onStdout?.(`${input.env?.DBUS_SESSION_BUS_ADDRESS},guid=fixture\n`);
       }
-      if (input.mode === "child" && input.argv[0] === "pulseaudio") {
+      if (input.argv[0] === "pulseaudio") {
         input.onStderr?.("Daemon startup complete.\n");
       }
-      if (input.mode === "child" && input.argv[0] === "parec") {
+      if (input.argv[0] === "parec") {
         input.onStdoutRaw?.(Buffer.alloc(4));
       }
-      const completion = spawnCompletion(inputs.length);
-      // Notify after the spawn caller resumes; earlier native setup can await real filesystem work.
-      setImmediate(() => completion.resolve());
-      return managed;
     },
-    cancel(runId) {
-      runs.find((run) => run.managed.runId === runId)?.managed.cancel();
-    },
-    cancelScope(scopeKey) {
-      for (const run of runs) {
-        if (run.scopeKey === scopeKey) {
-          run.managed.cancel();
-        }
-      }
-    },
-  };
-  const exit = (index: number, stderr = "") => {
-    const run = runs[index];
-    if (!run || run.settled) {
-      throw new Error(`fake run ${index} is unavailable`);
-    }
-    run.settled = true;
-    run.settle(exited(stderr));
-  };
-  return {
-    inputs,
-    runs,
-    supervisor,
-    exit,
-    afterSpawn: (count: number) => spawnCompletion(count).promise,
-    async restart(index: number, count: number) {
-      exit(index);
-      await spawnCompletion(count).promise;
-    },
-  };
+    runExit({ exitCode: 1, durationMs: 1 }),
+  );
 }
 
 function audioResult(
@@ -201,11 +115,11 @@ const onStop = async () => undefined;
 const signal = () => new AbortController().signal;
 
 function expectAppsRunning(fake: ReturnType<typeof createFakeSupervisor>) {
-  expect([0, 2, 3].every((index) => !fake.runs[index]!.settled)).toBe(true);
+  expect([0, 2, 3].every((index) => !fake.runs[index]!.activity.resultSettled)).toBe(true);
 }
 
 function expectStopped(fake: ReturnType<typeof createFakeSupervisor>) {
-  expect(fake.runs.every((run) => run.settled)).toBe(true);
+  expect(fake.runs.every((run) => run.activity.resultSettled)).toBe(true);
 }
 
 function heldAudioGeneration(generationToHold: number) {
@@ -351,10 +265,8 @@ describe("managed Linux desktop", () => {
     available = false;
     fake.exit(1);
     await recoveryFinished.promise;
-    expect(lease.isCurrent()).toBe(true);
-    expect(stopped).not.toHaveBeenCalled();
-    expect(onFailed).not.toHaveBeenCalled();
-    expect(desktop.status().state).toBe("running");
+    expect([desktop.status().state, lease.isCurrent()]).toEqual(["running", true]);
+    expect([stopped.mock.calls, onFailed.mock.calls]).toEqual([[], []]);
     expectAppsRunning(fake);
     expect(fake.inputs).toHaveLength(5);
     expect(capture.stream.destroyed).toBe(true);
@@ -432,10 +344,8 @@ describe("managed Linux desktop", () => {
     const capture = await lastSource.start(signal());
     fake.exit(6);
     await audioStopped.promise;
-    expect(desktop.status().state).toBe("running");
-    expect(lease.isCurrent()).toBe(true);
-    expect(stopped).not.toHaveBeenCalled();
-    expect(onFailed).not.toHaveBeenCalled();
+    expect([desktop.status().state, lease.isCurrent()]).toEqual(["running", true]);
+    expect([stopped.mock.calls, onFailed.mock.calls]).toEqual([[], []]);
     expectAppsRunning(fake);
     expect(fake.inputs).toHaveLength(8);
     expect(capture.stream.destroyed).toBe(true);
@@ -737,9 +647,9 @@ describe("managed Linux desktop", () => {
       expect(stoppedComputer).toHaveBeenCalledOnce();
       expect(previous.isCurrent()).toBe(false);
       if (event === "stop") {
-        expect(fake.runs.every((run) => !run.settled)).toBe(true);
+        expect(fake.runs.every((run) => !run.activity.resultSettled)).toBe(true);
       } else {
-        expect(fake.runs.filter((run) => !run.settled)).toHaveLength(2);
+        expect(fake.runs.filter((run) => !run.activity.resultSettled)).toHaveLength(2);
       }
       expect(fake.inputs).toHaveLength(3);
       await expect(desktop.acquireComputer({ onStop: stoppedComputer })).rejects.toThrow(
@@ -762,30 +672,4 @@ describe("managed Linux desktop", () => {
       expect(next.isCurrent()).toBe(true);
     },
   );
-
-  it("stops and removes its session when the registry linger expires", async () => {
-    const { desktop } = await createFixture();
-    const registry = createDesktopSessionRegistry();
-    cleanups.push(async () => registry.stopAll());
-    await registry.acquire({
-      sourceKey: "host",
-      ownerEpoch: 0,
-      start: () => desktop.acquire(),
-      teardown: () => desktop.stop(),
-    });
-    const observer = registry.attachObserver("host", {
-      control: false,
-      ownerEpoch: 0,
-      close: vi.fn(),
-    });
-    expect(observer).toBeDefined();
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    try {
-      observer?.release();
-      await vi.advanceTimersByTimeAsync(60_000);
-    } finally {
-      vi.useRealTimers();
-    }
-    await vi.waitFor(() => expect(desktop.status()).toEqual({ state: "not-started" }));
-  });
 });

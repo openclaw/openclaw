@@ -6,6 +6,7 @@ import { nativeListener } from "../../lib/solid-native-listener.ts";
 import type { PlaceBrowserOptions } from "./place-browser.ts";
 export function PlaceBrowser(props: {
   params: PlaceBrowserOptions;
+  registeringProject: boolean;
   pathRef?: (node: HTMLInputElement) => void;
 }) {
   const options = new Map<string, HTMLButtonElement>();
@@ -187,7 +188,7 @@ export function PlaceBrowser(props: {
           <button
             type="button"
             class="new-session-page__browser-register"
-            disabled={props.params.registeringProject}
+            disabled={props.registeringProject}
             ref={nativeListener("click", () => {
               const path = props.params.registerProjectPath;
               if (path) {
@@ -201,7 +202,7 @@ export function PlaceBrowser(props: {
         <button
           type="button"
           class="new-session-page__browser-use"
-          disabled={view().usablePath === null || props.params.registeringProject}
+          disabled={props.registeringProject || view().usablePath === null}
           ref={nativeListener("click", () => {
             const path = props.params.browser.usablePath();
             if (path !== null) {

@@ -170,8 +170,8 @@ async function reopenDatabases() {
   closeOpenClawStateDatabaseForTest();
 }
 
-it("preserves canonical closure after a session-key repair and repair rerun", async () => {
-  await withOpenClawTestState({ label: "retained-acp-key-repair" }, async (state) => {
+it("preserves canonical closure after a session-key repair and repair rerun", () =>
+  withOpenClawTestState({ label: "retained-acp-key-repair" }, async (state) => {
     const f = await seedRetainedSource(state, undefined, SESSION_KEY.toUpperCase());
     expect((await f.importCore()).totals.importedEntries).toBe(1);
     const repairKeys = () =>
@@ -182,13 +182,12 @@ it("preserves canonical closure after a session-key repair and repair rerun", as
     await f.write(null);
     await f.reopenAndExpect();
     f.assertOriginalsRetained();
-  });
-});
+  }));
 
 it.each(["initialize", "close"] as const)(
   "rolls back canonical ACP %s and source consumption when commit authority is revoked",
-  async (operation) => {
-    await withOpenClawTestState({ label: `retained-acp-atomic-${operation}` }, async (state) => {
+  (operation) =>
+    withOpenClawTestState({ label: `retained-acp-atomic-${operation}` }, async (state) => {
       const f = await seedRetainedSource(state);
       expect((await f.importCore()).totals.importedEntries).toBe(1);
       const canonicalMeta = { ...LEGACY_META, runtimeSessionName: "canonical-runtime" };
@@ -244,12 +243,11 @@ it.each(["initialize", "close"] as const)(
       await f.write(null);
       await f.reopenAndExpect();
       f.assertOriginalsRetained();
-    });
-  },
+    }),
 );
 
-it("does not revive closed ACP metadata after reopening and settling the plugin migration", async () => {
-  await withOpenClawTestState({ label: "retained-acp-close-resolved" }, async (state) => {
+it("does not revive closed ACP metadata after reopening and settling the plugin migration", () =>
+  withOpenClawTestState({ label: "retained-acp-close-resolved" }, async (state) => {
     const f = await seedRetainedSource(state);
     await f.migrateAcp();
     expect((await f.importCore()).totals.importedEntries).toBe(1);
@@ -274,11 +272,10 @@ it("does not revive closed ACP metadata after reopening and settling the plugin 
     expect(settled.targets.flatMap((target) => target.issues)).toEqual([]);
     expect(fs.existsSync(f.scope.storePath)).toBe(false);
     expect(f.readMeta()).toBeUndefined();
-  });
-});
+  }));
 
-it("keeps import completion bound to the ACP lifecycle when the legacy session id changes", async () => {
-  await withOpenClawTestState({ label: "retained-acp-lifecycle" }, async (state) => {
+it("keeps import completion bound to the ACP lifecycle when the legacy session id changes", () =>
+  withOpenClawTestState({ label: "retained-acp-lifecycle" }, async (state) => {
     const f = await seedRetainedSource(state, SOURCE_REVISION);
     await f.migrateAcp();
     expect((await f.importCore()).totals.importedEntries).toBe(1);
@@ -290,11 +287,10 @@ it("keeps import completion bound to the ACP lifecycle when the legacy session i
     fs.writeFileSync(f.scope.storePath, changed);
     await f.reopenAndExpect();
     expect(fs.readFileSync(f.scope.storePath, "utf8")).toBe(changed);
-  });
-});
+  }));
 
-it("preserves canonical ACP edits before the first import", async () => {
-  await withOpenClawTestState({ label: "retained-acp-edit" }, async (state) => {
+it("preserves canonical ACP edits before the first import", () =>
+  withOpenClawTestState({ label: "retained-acp-edit" }, async (state) => {
     const f = await seedRetainedSource(state);
     expect((await f.importCore()).totals.importedEntries).toBe(1);
     const updated: SessionAcpMeta = {
@@ -309,11 +305,10 @@ it("preserves canonical ACP edits before the first import", async () => {
     f.assertOriginalsRetained();
     await f.write(null);
     await f.reopenAndExpect();
-  });
-});
+  }));
 
-it("imports retained ACP metadata after core session sources are archived", async () => {
-  await withOpenClawTestState({ label: "retained-acp-archived-source" }, async (state) => {
+it("imports retained ACP metadata after core session sources are archived", () =>
+  withOpenClawTestState({ label: "retained-acp-archived-source" }, async (state) => {
     const f = await seedRetainedSource(state);
     expect((await f.importCore()).totals.importedEntries).toBe(1);
     f.assertOriginalsRetained();
@@ -325,8 +320,7 @@ it("imports retained ACP metadata after core session sources are archived", asyn
     await f.write(null);
     await f.reopenAndExpect();
     assertArchivesRetained();
-  });
-});
+  }));
 
 it.each(
   (["retained", "archived"] as const).flatMap((sourceMode) => [
@@ -335,8 +329,8 @@ it.each(
   ]),
 )(
   "does not first-import ACP after the canonical $binding was replaced ($sourceMode, source revision: $initialRevision)",
-  async ({ binding, initialRevision, sourceMode }) => {
-    await withOpenClawTestState({ label: "retained-acp-replaced" }, async (state) => {
+  ({ binding, initialRevision, sourceMode }) =>
+    withOpenClawTestState({ label: "retained-acp-replaced" }, async (state) => {
       const f = await seedRetainedSource(state, initialRevision);
       expect((await f.importCore()).totals.importedEntries).toBe(1);
       const assertSourcesRetained =
@@ -356,12 +350,11 @@ it.each(
       await replaceSessionEntry(f.scope, original);
       await f.reopenAndExpect();
       assertSourcesRetained();
-    });
-  },
+    }),
 );
 
-it("does not infer an unconsumed ACP import when recorded provenance is null", async () => {
-  await withOpenClawTestState({ label: "retained-acp-unknown-provenance" }, async (state) => {
+it("does not infer an unconsumed ACP import when recorded provenance is null", () =>
+  withOpenClawTestState({ label: "retained-acp-unknown-provenance" }, async (state) => {
     const f = await seedRetainedSource(state);
     expect((await f.importCore()).totals.importedEntries).toBe(1);
     const { db } = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
@@ -373,11 +366,10 @@ it("does not infer an unconsumed ACP import when recorded provenance is null", a
     await expect(f.migrateAcp()).rejects.toThrow("no matching recorded source provenance");
     expect(f.readMeta()).toBeUndefined();
     f.assertOriginalsRetained();
-  });
-});
+  }));
 
-it("rolls back ACP metadata if its import receipt cannot be committed", async () => {
-  await withOpenClawTestState({ label: "retained-acp-receipt-rollback" }, async (state) => {
+it("rolls back ACP metadata if its import receipt cannot be committed", () =>
+  withOpenClawTestState({ label: "retained-acp-receipt-rollback" }, async (state) => {
     const f = await seedRetainedSource(state);
     expect((await f.importCore()).totals.importedEntries).toBe(1);
     const { db } = openOpenClawStateDatabase({ env: state.env });
@@ -400,5 +392,4 @@ it("rolls back ACP metadata if its import receipt cannot be committed", async ()
     await f.migrateAcp();
     expect(f.readMeta()).toEqual(LEGACY_META);
     f.assertOriginalsRetained();
-  });
-});
+  }));

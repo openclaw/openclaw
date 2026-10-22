@@ -524,12 +524,10 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     testFile: "src/auto-reply/reply/get-reply.dashboard.test.ts",
     watchGlobs: ["skills/control-ui/SKILL.md"],
   },
-  ...["src/boards/board-generated-identity.test.ts", "src/boards/board-store.test.ts"].map(
-    (testFile): PolicyTestWatch => ({
-      testFile,
-      watchGlobs: ["src/boards/sqlite-board-store.worker.ts"],
-    }),
-  ),
+  ...["src/boards/board-store.test.ts"].map((testFile): PolicyTestWatch => ({
+    testFile,
+    watchGlobs: ["src/boards/sqlite-board-store.worker.ts"],
+  })),
   ...[
     "src/cli/capability-cli/model.account-secrets.provenance.test.ts",
     "src/commands/models/list.probe.resources.test.ts",
@@ -1327,7 +1325,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     ],
   },
   {
-    testFile: "src/tts/tts-summary.static-catalog.test.ts",
+    testFile: "src/tts/tts-summary.selection.test.ts",
     watchGlobs: ["extensions/kimi-coding/openclaw.plugin.json"],
   },
   {

@@ -1,18 +1,17 @@
 import { describe, expect, it } from "vitest";
 import type { FeishuMessageEvent } from "./bot.js";
+import { createFeishuTestEvent } from "./bot.test-support.js";
 import { getFeishuSequentialKey } from "./sequential-key.js";
 
 function createTextEvent(text: string, messageId = "om_message_1"): FeishuMessageEvent {
-  return {
-    sender: { sender_id: { open_id: "ou_sender_1", user_id: "ou_user_1" }, sender_type: "user" },
-    message: {
-      message_id: messageId,
-      chat_id: "oc_dm_chat",
-      chat_type: "p2p",
-      message_type: "text",
-      content: JSON.stringify({ text }),
-    },
-  } as FeishuMessageEvent;
+  return createFeishuTestEvent({
+    messageId,
+    text,
+    chatId: "oc_dm_chat",
+    senderOpenId: "ou_sender_1",
+    senderUserId: "ou_user_1",
+    senderType: "user",
+  });
 }
 
 function key(

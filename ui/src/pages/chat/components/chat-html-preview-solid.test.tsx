@@ -6,7 +6,6 @@ import { createApplicationContextProvider } from "../../../test-helpers/applicat
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import "./chat-html-preview-element.tsx";
 import { HtmlPreview } from "./chat-html-preview-view.tsx";
 import { ChatSvgAttachment } from "./chat-svg-attachment.tsx";
 
@@ -34,8 +33,6 @@ describe("Solid preview consumers", () => {
     const view = mountSolid(
       () => (
         <HtmlPreview
-          state={undefined}
-          onRetry={() => {}}
           content="<h1>Preview</h1>"
           sourceIdentity="preview.html"
           title="Preview"

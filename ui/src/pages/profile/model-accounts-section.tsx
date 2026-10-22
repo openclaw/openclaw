@@ -1,4 +1,5 @@
-import { For, Show } from "solid-js";
+import type { JSX } from "@solidjs/web";
+import { createDeferred, createMemo, Errored, For, isPending, Loading, Show } from "solid-js";
 import type {
   UserModelAccount,
   UserProfileAuthLink,
@@ -109,11 +110,109 @@ function AccountRow(props: {
   );
 }
 
+function SignInChoice(props: StateProps & { pending: boolean; cancel: JSX.Element }) {
+  const state = () => props.readState();
+  const choice = () => state().signIn;
+  const provider = () => choice()?.providers.find((entry) => entry.id === choice()?.provider);
+  return (
+    <div class="model-accounts-choice">
+      <Picker
+        params={{
+          label: t("profilePage.modelAccounts.provider"),
+          className: "profile-auth-provider",
+          value: choice()?.provider || null,
+          options:
+            choice()?.providers.map((entry) => ({
+              value: entry.id,
+              label: entry.label,
+            })) ?? [],
+          disabled: props.pending || state().busy,
+          renderLeading: (entry) => <ProviderBrandIcon provider={entry.value} />,
+          onChange: (value) => state().selectProvider(value),
+        }}
+      />
+      <Show when={provider()}>
+        <Picker
+          params={{
+            label: t("profilePage.modelAccounts.method"),
+            className: "profile-auth-method",
+            value: choice()?.method || null,
+            options:
+              provider()?.methods.map((method) => ({
+                value: method.id,
+                label: method.label,
+                description: method.hint,
+              })) ?? [],
+            disabled: props.pending || state().busy,
+            onChange: (value) => state().selectMethod(value),
+          }}
+        />
+      </Show>
+      <Show
+        when={!props.pending && !state().busy && !state().error && choice()?.providers.length === 0}
+      >
+        <span>{t("profilePage.modelAccounts.noMethods")}</span>
+      </Show>
+      <div class="wizard-step__actions">
+        {props.cancel}
+        <button
+          type="button"
+          class="btn btn--sm primary profile-auth-connect-start"
+          disabled={props.pending || state().busy || !choice()?.method}
+          onClick={() => state().startConnect()}
+        >
+          {t("profilePage.modelAccounts.connectAction")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function StatusCheck(props: StateProps & { pending: boolean; onCheck: () => void }) {
+  const state = () => props.readState();
+  return (
+    <Show when={state().statusUnavailable || props.pending}>
+      <button
+        type="button"
+        class="btn btn--sm profile-auth-connect-check"
+        disabled={props.pending || state().cancelBusy}
+        onClick={() => props.onCheck()}
+      >
+        {t("profilePage.modelAccounts.checkStatusAction")}
+      </button>
+    </Show>
+  );
+}
+
 function SignIn(props: StateProps) {
   const state = () => props.readState();
   const choice = () => state().signIn;
   const provider = () => choice()?.providers.find((entry) => entry.id === choice()?.provider);
   const flow = () => state().connectFlow;
+  const catalogReceipt = createMemo(() => state().catalogReceipt);
+  const catalogRead = createDeferred(() =>
+    catalogReceipt().result.then((error) => {
+      if (error) {
+        throw new Error(error);
+      }
+    }),
+  );
+  const statusReceipt = createMemo(() => state().statusReceipt);
+  const statusRead = createDeferred(() =>
+    statusReceipt().result.then((error) => {
+      if (error) {
+        throw new Error(error);
+      }
+    }),
+  );
+  const readCatalog = () => {
+    catalogRead();
+    return null;
+  };
+  const readStatus = () => {
+    statusRead();
+    return null;
+  };
   const cancel = () => (
     <button
       type="button"
@@ -139,54 +238,22 @@ function SignIn(props: StateProps) {
           <Show
             when={flow()}
             fallback={
-              <div class="model-accounts-choice">
-                <Picker
-                  params={{
-                    label: t("profilePage.modelAccounts.provider"),
-                    className: "profile-auth-provider",
-                    value: choice()?.provider || null,
-                    options:
-                      choice()?.providers.map((entry) => ({
-                        value: entry.id,
-                        label: entry.label,
-                      })) ?? [],
-                    disabled: state().busy,
-                    renderLeading: (entry) => <ProviderBrandIcon provider={entry.value} />,
-                    onChange: (value) => state().selectProvider(value),
-                  }}
-                />
-                <Show when={provider()}>
-                  <Picker
-                    params={{
-                      label: t("profilePage.modelAccounts.method"),
-                      className: "profile-auth-method",
-                      value: choice()?.method || null,
-                      options:
-                        provider()?.methods.map((method) => ({
-                          value: method.id,
-                          label: method.label,
-                          description: method.hint,
-                        })) ?? [],
-                      disabled: state().busy,
-                      onChange: (value) => state().selectMethod(value),
-                    }}
+              <Errored
+                fallback={() => (
+                  <SignInChoice readState={props.readState} pending={false} cancel={cancel()} />
+                )}
+              >
+                <Loading
+                  fallback={<SignInChoice readState={props.readState} pending cancel={cancel()} />}
+                >
+                  {readCatalog()}
+                  <SignInChoice
+                    readState={props.readState}
+                    pending={isPending(catalogRead)}
+                    cancel={cancel()}
                   />
-                </Show>
-                <Show when={!state().busy && !state().error && choice()?.providers.length === 0}>
-                  <span>{t("profilePage.modelAccounts.noMethods")}</span>
-                </Show>
-                <div class="wizard-step__actions">
-                  {cancel()}
-                  <button
-                    type="button"
-                    class="btn btn--sm primary profile-auth-connect-start"
-                    disabled={state().busy || !choice()?.method}
-                    onClick={() => state().startConnect()}
-                  >
-                    {t("profilePage.modelAccounts.connectAction")}
-                  </button>
-                </div>
-              </div>
+                </Loading>
+              </Errored>
             }
           >
             <div class="model-accounts-flow">
@@ -211,16 +278,35 @@ function SignIn(props: StateProps) {
                   />
                 )}
               </Show>
-              <Show when={state().statusUnavailable}>
-                <button
-                  type="button"
-                  class="btn btn--sm profile-auth-connect-check"
-                  disabled={state().cancelBusy}
-                  onClick={() => state().connectStatus("status")}
+              <Errored
+                fallback={(_error, reset) => (
+                  <StatusCheck
+                    readState={props.readState}
+                    pending={false}
+                    onCheck={() => {
+                      state().connectStatus("status");
+                      reset();
+                    }}
+                  />
+                )}
+              >
+                <Loading
+                  fallback={
+                    <StatusCheck
+                      readState={props.readState}
+                      pending
+                      onCheck={() => state().connectStatus("status")}
+                    />
+                  }
                 >
-                  {t("profilePage.modelAccounts.checkStatusAction")}
-                </button>
-              </Show>
+                  {readStatus()}
+                  <StatusCheck
+                    readState={props.readState}
+                    pending={isPending(statusRead)}
+                    onCheck={() => state().connectStatus("status")}
+                  />
+                </Loading>
+              </Errored>
             </div>
           </Show>
         }

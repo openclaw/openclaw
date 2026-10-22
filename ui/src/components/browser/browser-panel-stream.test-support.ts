@@ -3,6 +3,7 @@ import {
   createBrowserClient,
   createBrowserPanelTestMetrics,
   createBrowserPanelTestTab,
+  createView,
   flushBrowserResponses,
   setupBrowserPanelTestCleanup,
   stubScreenshotMedia,
@@ -34,6 +35,16 @@ export async function flush() {
   }
 }
 
+export async function receive(socket: TestScreencastSocket, data: string | ArrayBuffer) {
+  socket.receive(data);
+  await flush();
+}
+
+export async function decoded(image: EventTarget) {
+  image.dispatchEvent(new Event("load"));
+  await flush();
+}
+
 export function deferImages() {
   const images: EventTarget[] = [];
   vi.stubGlobal("Image", function () {
@@ -42,6 +53,30 @@ export function deferImages() {
     return image;
   });
   return images;
+}
+
+// Strict dispatch keeps each scenario's permitted requests explicit.
+export function panelScenario(
+  targetId: string,
+  url: string | undefined,
+  routes: Record<string, (request: Envelope) => unknown>,
+) {
+  const gateway = createBrowserClient(async (request) => {
+    const route = routes[request.path];
+    if (!route) {
+      throw new Error(`Unexpected browser route: ${request.path}`);
+    }
+    return await route(request);
+  });
+  const host = new TestBrowserPanelHost(gateway.client);
+  const controller = host.createPanel();
+  controller.activeTargetId = targetId;
+  controller.view = createView(targetId, url);
+  const calls = (path: string) =>
+    gateway.request.mock.calls
+      .map(([, envelope]) => envelope as Envelope)
+      .filter((envelope) => envelope.path === path);
+  return { ...gateway, host, controller, calls };
 }
 
 export function streamFixture<Socket extends TestScreencastSocket>(
