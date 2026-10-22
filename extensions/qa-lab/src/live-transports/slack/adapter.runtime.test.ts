@@ -5,6 +5,7 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "../../bus-state.js";
 import type { QaChannelE2eDriver } from "../shared/channel-e2e.types.js";
+import { slackRequest } from "./slack-capture.test-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   acquireCaptureStore: vi.fn(),
@@ -382,19 +383,12 @@ describe("Slack agent E2E request settlement", () => {
     const capturedEvents: Array<Record<string, unknown>> = [];
     const f = await nativeAdapterFixture(() => undefined, capturedEvents);
     const owned = await f.driver.send({ text: "owned root" });
-    capturedEvents.push({
-      id: 1,
-      flowId: "unknown-post",
-      host: "slack.com",
-      kind: "request",
-      method: "POST",
-      path: "/api/chat.postMessage",
-      dataText: new URLSearchParams({
-        channel: "C123",
+    capturedEvents.push(
+      slackRequest(1, "chat.postMessage", {
         thread_ts: owned.id,
         text: "unconfirmed SUT reply",
-      }).toString(),
-    });
+      }),
+    );
     await f.adapter.cleanup?.();
     await expect(f.adapter.captureBeforeGatewayCleanup?.()).rejects.toThrow(
       "final capture is incomplete",
