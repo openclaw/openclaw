@@ -1,3 +1,4 @@
+import { createRouter, definePage } from "@openclaw/uirouter";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -7,7 +8,9 @@ import {
 import type { UsersBackgroundResult } from "../../../../packages/gateway-protocol/src/schema/users-background.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationTheme } from "../../app/context.ts";
+import { RouterOutlet } from "../../app/router-outlet.tsx";
 import {
   rememberProfileAppearanceIdentity,
   resetProfileAppearancePrefs,
@@ -79,20 +82,41 @@ async function mount(
     refresh: () => notify("theme"),
     subscribe: subscribe("theme"),
   };
+  const backgroundModule = { renderSolid: AppearanceBackground };
+  const router = createRouter<RouteId, ApplicationContext, typeof backgroundModule>({
+    routes: [
+      definePage({
+        id: "appearance",
+        path: "/settings/appearance",
+        component: () => backgroundModule,
+      }),
+      definePage({
+        id: "usage",
+        path: "/usage",
+        component: () => ({ renderSolid: () => <p>Background destination</p> }),
+      }),
+    ],
+  });
   const context = {
     gateway: gateway.gateway,
     runtimeConfig: { state: { connected: true }, canPatch: true },
     theme,
-    router: { subscribe: subscribe("route") },
+    router,
   } as ApplicationContext;
   const provider = createSolidApplicationContextProvider(context);
   host.innerHTML = '<div class="config-content"><div class="settings-page"></div></div>';
   const container = host.querySelector<HTMLElement>(".settings-page")!;
-  const { unmount: dispose } = mountSolid(() => <AppearanceBackground />, {
-    container,
-    wrapper: provider.wrapper,
+  const { unmount: dispose } = mountSolid(
+    () => <RouterOutlet router={router} retryContext={context} />,
+    {
+      container,
+      wrapper: provider.wrapper,
+    },
+  );
+  await router.navigate("appearance", context);
+  await waitForSolid(() => {
+    expect(container.querySelector("openclaw-appearance-background")).not.toBeNull();
   });
-  flush();
   const element = container.querySelector<HTMLElement>("openclaw-appearance-background")!;
   const range = element.querySelector<HTMLInputElement>('input[type="range"]')!;
   const preview = element.querySelector<SessionBackground>("[data-background-preview-canvas]")!;
@@ -105,8 +129,12 @@ async function mount(
     settings,
     theme,
     context,
-    navigate: () => notify("route"),
-    dispose,
+    navigate: () => void router.navigate("usage", context),
+    leavePage: () => router.navigate("usage", context),
+    dispose: () => {
+      dispose();
+      router.stop();
+    },
     setContext: (next: ApplicationContext) => {
       provider.setContext(next);
       flush();
@@ -273,17 +301,54 @@ function chooseBackgroundFile(input: HTMLInputElement) {
   input.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
+it("leaves the background page while an upload is still pending", async () => {
+  const pending = createDeferred<UsersBackgroundResult>();
+  const saved = { status: "ok", asset: null, preference: null } as const;
+  const request = vi.fn((method: string) =>
+    method === "users.background.upload" ? pending.promise : Promise.resolve(saved),
+  );
+  const { element, leavePage, dispose } = await mount({}, createTestGatewayClient(request));
+  chooseBackgroundFile(element.querySelector<HTMLInputElement>("[data-background-file]")!);
+  await waitForSolid(() => {
+    expect(request.mock.calls.some(([method]) => method === "users.background.upload")).toBe(true);
+    expect(element.querySelector('[role="status"]')?.textContent).toContain("Preparing");
+  });
+  let navigation: ReturnType<typeof leavePage> | undefined;
+  try {
+    navigation = leavePage();
+    await waitForSolid(() => {
+      expect(host.textContent).toContain("Background destination");
+      expect(element.isConnected).toBe(false);
+    });
+    pending.resolve(saved);
+    await navigation;
+    await waitForSolid(() => {
+      expect(host.textContent).toContain("Background destination");
+      expect(host.querySelector("openclaw-appearance-background")).toBeNull();
+      expect(host.querySelector('[role="alert"]')).toBeNull();
+    });
+  } finally {
+    pending.resolve(saved);
+    await navigation;
+    dispose();
+  }
+});
+
 it("presents background upload failure and retry without losing the selected controls", async () => {
   const first = createDeferred<UsersBackgroundResult>();
   const second = createDeferred<UsersBackgroundResult>();
   let uploads = 0;
+  let failMetadata = false;
   const request = vi.fn((method: string) => {
     if (method === "users.background.upload") {
       return uploads++ === 0 ? first.promise : second.promise;
     }
+    if (failMetadata && method === "users.background.get") {
+      return Promise.reject(new Error("Synthetic metadata failure after saving"));
+    }
     return Promise.resolve({ status: "ok", asset: null, preference: null });
   });
-  const { element } = await mount({}, createTestGatewayClient(request));
+  const { element, gateway } = await mount({}, createTestGatewayClient(request));
   const input = element.querySelector<HTMLInputElement>("[data-background-file]")!;
   const upload = element.querySelector<HTMLButtonElement>("[data-background-upload]")!;
   chooseBackgroundFile(input);
@@ -317,6 +382,18 @@ it("presents background upload failure and retry without losing the selected con
   expect(element.querySelector("[data-background-file]")).toBe(input);
   const writes = request.mock.calls.filter(([method]) => method === "users.background.upload");
   expect(writes).toHaveLength(2);
+  failMetadata = true;
+  gateway.publishEvent({
+    type: "event",
+    event: "users.prefs.changed",
+    payload: { keys: ["ui.background"] },
+  });
+  await waitForSolid(() => {
+    expect(element.querySelector('[role="alert"]')?.textContent).toContain(
+      "Synthetic metadata failure after saving",
+    );
+    expect(element.querySelector('[role="status"]')).toBeNull();
+  });
 });
 
 it("retires an unresolved upload before admitting the replacement profile's upload", async () => {
@@ -408,14 +485,24 @@ it("keeps the current profile's upload while its background metadata refresh is 
 });
 
 it("shows invalid background file feedback and clears it when a valid upload starts", async () => {
+  const metadata = createDeferred<UsersBackgroundResult>();
   const completion = createDeferred<UsersBackgroundResult>();
   const saved = { status: "ok", asset: null, preference: null } as const;
-  const request = vi.fn((method: string) =>
-    method === "users.background.upload" ? completion.promise : Promise.resolve(saved),
-  );
+  const request = vi.fn((method: string, _params?: unknown, options?: { signal?: AbortSignal }) => {
+    if (method === "users.background.get" && options?.signal) {
+      return metadata.promise;
+    }
+    return method === "users.background.upload" ? completion.promise : Promise.resolve(saved);
+  });
   const { element } = await mount({}, createTestGatewayClient(request));
   const input = element.querySelector<HTMLInputElement>("[data-background-file]")!;
   const upload = element.querySelector<HTMLButtonElement>("[data-background-upload]")!;
+  metadata.reject(new Error("Synthetic metadata failure before upload"));
+  await waitForSolid(() =>
+    expect(element.querySelector('[role="alert"]')?.textContent).toContain(
+      "Synthetic metadata failure before upload",
+    ),
+  );
   const transfer = new DataTransfer();
   transfer.items.add(new File(["invalid image"], "background.txt", { type: "text/plain" }));
   input.files = transfer.files;
@@ -433,7 +520,145 @@ it("shows invalid background file feedback and clears it when a valid upload sta
     expect(element.querySelector('[role="alert"]')).toBeNull();
   });
   completion.resolve(saved);
-  await waitForSolid(() => expect(upload.disabled).toBe(false));
+  await waitForSolid(() => {
+    expect(upload.disabled).toBe(false);
+    expect(element.querySelector('[role="status"]')?.textContent).toContain(
+      "Background image saved.",
+    );
+    expect(element.querySelector('[role="alert"]')).toBeNull();
+  });
+});
+
+it("dismisses metadata errors on a local choice and retires reads across profiles", async () => {
+  const first = createDeferred<UsersBackgroundResult>();
+  const abandoned = createDeferred<UsersBackgroundResult>();
+  let reads = 0;
+  const request = vi.fn(() => {
+    reads += 1;
+    return reads === 1
+      ? first.promise
+      : reads === 2
+        ? abandoned.promise
+        : Promise.resolve({ status: "ok", asset: null, preference: null });
+  });
+  const { element, gateway, range, settings, theme } = await mount(
+    { source: { kind: "custom", assetId: "metadata-old" } },
+    createTestGatewayClient(request),
+  );
+  await waitForSolid(() => expect(reads).toBe(1));
+  first.reject(new Error("Synthetic metadata failure"));
+  await waitForSolid(() =>
+    expect(element.querySelector('[role="alert"]')?.textContent).toContain(
+      "Synthetic metadata failure",
+    ),
+  );
+  const refreshTheme = theme.refresh;
+  const refresh = vi.spyOn(theme, "refresh").mockImplementation(() => {
+    // Mirror the real theme owner adopting a locally persisted choice.
+    settings.background = loadSettings().background ?? DEFAULT_BACKGROUND_PREFERENCE;
+    refreshTheme();
+  });
+  element.querySelector<HTMLButtonElement>('[data-background-source="theme"]')!.click();
+  await waitForSolid(() => {
+    expect(reads).toBe(2);
+    expect(element.querySelector('[role="alert"]')).toBeNull();
+  });
+  refresh.mockRestore();
+  gateway.publish({ ...gateway.gateway.snapshot, selfUser: { id: "replacement-demo" } });
+  settings.background = { ...settings.background, visibility: 0.8 };
+  theme.refresh();
+  await waitForSolid(() => {
+    expect(reads).toBe(3);
+    expect(range.getAttribute("aria-valuetext")).toBe("80%");
+    expect(element.querySelector('[role="alert"]')).toBeNull();
+  });
+  abandoned.reject(new Error("Retired metadata failure"));
+  await new Promise<void>((resolve) => {
+    requestAnimationFrame(() => resolve());
+  });
+  await waitForSolid(() => expect(element.querySelector('[role="alert"]')).toBeNull());
+  expect(element.querySelector('input[type="range"]')).toBe(range);
+});
+
+it("recovers thumbnail errors without waiting for a retired image and revokes the current URL", async () => {
+  const first = createDeferred<Response>();
+  const abandoned = createDeferred<Response>();
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = 2;
+  const jpeg = await new Promise<Blob | null>((resolve) => {
+    canvas.toBlob(resolve, "image/jpeg");
+  });
+  expect(jpeg).not.toBeNull();
+  let imageReads = 0;
+  const nativeFetch = globalThis.fetch.bind(globalThis);
+  vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input), location.href);
+    if (!url.pathname.includes("/__openclaw__/users/background/")) {
+      return nativeFetch(input, init);
+    }
+    imageReads += 1;
+    return imageReads === 1
+      ? first.promise
+      : imageReads === 2
+        ? abandoned.promise
+        : Promise.resolve(new Response(jpeg, { headers: { "content-type": "image/jpeg" } }));
+  });
+  const revoke = vi.spyOn(URL, "revokeObjectURL");
+  const request = vi.fn(async () => ({
+    status: "ok",
+    preference: null,
+    asset: {
+      assetId: "thumbnail-demo",
+      width: 2,
+      height: 2,
+      mime: "image/jpeg",
+      byteLength: jpeg!.size,
+    },
+  }));
+  const { element, gateway } = await mount({}, createTestGatewayClient(request));
+  await waitForSolid(() => expect(imageReads).toBe(1));
+  first.reject(new Error("Synthetic thumbnail failure"));
+  await waitForSolid(() =>
+    expect(element.querySelector('[role="alert"]')?.textContent).toContain(
+      "Your background image could not be loaded",
+    ),
+  );
+  element.querySelector<HTMLButtonElement>('[data-background-source="theme"]')!.click();
+  await waitForSolid(() => expect(element.querySelector('[role="alert"]')).toBeNull());
+  const refresh = () =>
+    gateway.publishEvent({
+      type: "event",
+      event: "users.prefs.changed",
+      payload: { keys: ["ui.background"] },
+    });
+  refresh();
+  await waitForSolid(() => expect(imageReads).toBe(2));
+  refresh();
+  await waitForSolid(() => {
+    expect(imageReads).toBe(3);
+    expect(
+      element.querySelector<HTMLImageElement>(".settings-background-option__sample img")?.src,
+    ).toMatch(/^blob:/);
+    expect(element.querySelector('[role="alert"]')).toBeNull();
+  });
+  const currentUrl = element.querySelector<HTMLImageElement>(
+    ".settings-background-option__sample img",
+  )!.src;
+  abandoned.reject(new Error("Retired thumbnail failure"));
+  await new Promise<void>((resolve) => {
+    requestAnimationFrame(() => resolve());
+  });
+  await waitForSolid(() => {
+    expect(element.querySelector('[role="alert"]')).toBeNull();
+    expect(
+      element.querySelector<HTMLImageElement>(".settings-background-option__sample img")?.src,
+    ).toBe(currentUrl);
+  });
+  gateway.publish({ ...gateway.gateway.snapshot, phase: "stopped", client: null });
+  await waitForSolid(() =>
+    expect(element.querySelector(".settings-background-option__sample img")).toBeNull(),
+  );
+  expect(revoke).toHaveBeenCalledWith(currentUrl);
 });
 
 let update: ((props: BackgroundViewProps) => void) | undefined;
