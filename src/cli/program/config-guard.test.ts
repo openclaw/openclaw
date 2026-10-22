@@ -214,9 +214,7 @@ describe("ensureConfigReady", () => {
     expect(preflightMock).toHaveBeenCalledTimes(expectedPreflightCalls);
     expect(getProcessPluginCache()).toBe(processCache);
     if (expectedPreflightCalls > 0) {
-      expect(preflightMock).toHaveBeenCalledWith({
-        gateway: false,
-      });
+      expect(preflightMock).toHaveBeenCalledWith({ gateway: false });
     }
     if (commandPath[0] === "logs") {
       expect(readSnapshotMock).toHaveBeenCalledWith({
@@ -345,12 +343,11 @@ describe("ensureConfigReady", () => {
     expect(recoveryMocks.runDoctor).toHaveBeenCalledOnce();
     expect(preflightMock).toHaveBeenCalledTimes(2);
     expect(preflightMock).toHaveBeenLastCalledWith({ gateway: false });
-    expect(readSnapshotMock).not.toHaveBeenCalled();
+    expectNoCalls(readSnapshotMock, runtime.exit);
     expect(publishConfigMock).toHaveBeenCalledWith(
       validSnapshot.config,
       validSnapshot.sourceConfig,
     );
-    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it.each([
