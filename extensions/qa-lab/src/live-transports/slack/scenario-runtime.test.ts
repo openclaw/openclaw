@@ -17,7 +17,8 @@ import {
 } from "./slack-live.scenario-implementations.js";
 import { loadSlackQaRuntime } from "./slack-plugin.runtime.js";
 
-vi.mock("./slack-live.approval-checkpoint.js", () => ({
+vi.mock("./slack-live.approval-checkpoint.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./slack-live.approval-checkpoint.js")>()),
   writeSlackApprovalCheckpoint: vi.fn(),
 }));
 

@@ -75,7 +75,7 @@ function fixture() {
   return {
     ...context,
     html: (name: string, html: string) => putHtml(context.store, context.sessionKey, name, html),
-    updateWidget(set: string, values: SQLInputValue[] = [], name = "status") {
+    updateWidget: (set: string, values: SQLInputValue[] = [], name = "status") => {
       context.database.db
         .prepare(`UPDATE board_widgets SET ${set} WHERE session_key = ? AND name = ?`)
         .run(...values, context.sessionKey, name);
@@ -86,13 +86,13 @@ function fixture() {
         .get(context.sessionKey, name) as { manifest: string };
       return JSON.parse(row.manifest);
     },
-    pin(
+    pin: (
       name: string,
       title: string,
       html: string,
       key?: string,
       fallbackName = `${name}-${key?.repeat(8)}`,
-    ) {
+    ) => {
       return store.putWidget({
         ...htmlWidget(context.sessionKey, name, html),
         title,
@@ -109,11 +109,11 @@ function fixture() {
     },
     readHtml: (name: string) => readBoardHtml(store, context.target, name),
     current: () => store.getSnapshot(context.target),
-    async reopen() {
+    reopen: async () => {
       await closeDatabases();
       store = new SqliteBoardStore(context.storeOptions);
     },
-    unmark(name: string) {
+    unmark: (name: string) => {
       context.database.db
         .prepare(
           "UPDATE board_widgets SET manifest = json_remove(manifest, '$.nameIdentity') WHERE session_key = ? AND name = ?",

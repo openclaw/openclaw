@@ -230,7 +230,8 @@ it.each(["every", "cron"] as const)(
       "cron service stopped",
     );
     const cancelled = scheduler.job(target.id)!;
-    expect(cancelled.state).toMatchObject({ nextRunAtMs: now, queuedAtMs: undefined });
+    expect(cancelled.state.nextRunAtMs).toBe(now);
+    expect(cancelled.state.queuedAtMs).toBeUndefined();
     const restarted = await scheduler.restart(now + 2, options);
     expect(restarted.rejected.find(({ jobId }) => jobId === target.id)?.reason).toBe(
       "already-requested",

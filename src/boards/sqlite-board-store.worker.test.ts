@@ -113,7 +113,7 @@ function observePublications(database: ReturnType<typeof fixture>["database"], s
     host,
     pipelineSql,
     changes,
-    expectRevision(revision: number) {
+    expectRevision: (revision: number) => {
       const change = { sessionKey, storePath: database.path };
       expect(changes.splice(0)).toEqual([{ change, inTransaction: false, revision }]);
       expect(facts.splice(0)).toEqual([{ ...change, facts: { kind: "unchanged" } }]);
@@ -372,13 +372,14 @@ it.each(["snapshot", "metadata", "mcp"] as const)(
     await put("initial");
     await using writer = await holdWriter(options);
     const written = writer.track(put("updated"));
-    const read = writer.track(
-      operation === "snapshot"
-        ? store.getSnapshot(target)
-        : operation === "metadata"
-          ? store.getSnapshotWithHtmlViewMetadata(target).then(({ snapshot }) => snapshot)
-          : store.readWidgetMcpApp(target, "app"),
-    );
+    const read =
+      operation === "mcp"
+        ? writer.track(store.readWidgetMcpApp(target, "app"))
+        : writer.track(
+            operation === "snapshot"
+              ? store.getSnapshot(target)
+              : store.getSnapshotWithHtmlViewMetadata(target).then(({ snapshot }) => snapshot),
+          );
     await writer.release();
     await written;
     expect(await read).toMatchObject(

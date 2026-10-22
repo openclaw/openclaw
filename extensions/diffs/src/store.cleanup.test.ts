@@ -70,7 +70,7 @@ it("scheduled cleanup joins accepted filesystem work before reporting a sibling 
   await file(failedId, true);
   const [started, release] = [createDeferred<void>(), createDeferred<void>()];
   const failure = new Error("fixture Blob lookup failed");
-  const lookup = fixture.blobStore.lookup.bind(blobStore);
+  const lookup = fixture.blobStore.lookup.bind(fixture.blobStore);
   vi.spyOn(fixture.blobStore, "lookup").mockImplementation((key) =>
     key === failedId ? Promise.reject(failure) : lookup(key),
   );

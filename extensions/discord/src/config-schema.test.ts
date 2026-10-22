@@ -44,6 +44,11 @@ describe("discord config schema", () => {
     ).toBe(!legacy);
   });
 
+  it('rejects dmPolicy="open" without allowFrom "*"', () => {
+    const issues = invalid({ dmPolicy: "open", allowFrom: ["123"] });
+    expect(issues[0]?.path.join(".")).toBe("allowFrom");
+  });
+
   it('rejects dmPolicy="allowlist" without allowFrom', () => {
     const issues = invalid({ dmPolicy: "allowlist" });
     expect(issues.some((issue) => issue.path.includes("allowFrom"))).toBe(true);

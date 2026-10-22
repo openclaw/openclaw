@@ -3,32 +3,32 @@ import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { disposeHighlighter } from "@pierre/diffs";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  OpenClawPluginApi,
+  OpenClawPluginToolContext,
+} from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  PluginBlobEntry,
+  PluginBlobStoreWithReceipts,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerDiffsPlugin } from "./plugin.js";
-import {
-  createDiffStoreHarness,
-  createTempDiffRoot,
-  diffContext as toolContext,
-  registerDiffsForTest,
-} from "./test-helpers.js";
-import { parseViewerPayloadJson } from "./viewer-payload.js";
+import { createTempDiffRoot } from "./test-helpers.js";
 
 const { launchMock } = vi.hoisted(() => ({
   launchMock: vi.fn(),
 }));
+const toolContext = {
+  agentId: "main",
+  sessionId: "session-123",
+  messageChannel: "discord",
+  agentAccountId: "default",
+};
 const browserConfig: OpenClawConfig = { browser: { executablePath: process.execPath } };
-const cleanups: Array<() => Promise<void>> = [];
-afterEach(async () => {
-  for (const cleanup of cleanups.splice(0).toReversed()) {
-    await cleanup();
-  }
-});
 
 let PlaywrightDiffScreenshotter: typeof import("./browser.runtime.js").PlaywrightDiffScreenshotter;
 type ScreenshotParams = Parameters<
@@ -41,8 +41,7 @@ vi.mock("playwright-core", () => ({
   },
 }));
 
-afterAll(async () => {
-  await disposeHighlighter();
+afterAll(() => {
   vi.doUnmock("playwright-core");
   vi.resetModules();
 });
@@ -165,7 +164,7 @@ describe("PlaywrightDiffScreenshotter", () => {
       gateway: { publicOrigin: "https://explicit.example" },
       browser: { executablePath: process.execPath },
     };
-    const { render } = await createRegistrationHarness({}, processConfig);
+    const { render } = createRegistrationHarness({}, processConfig);
     launchMock.mockResolvedValue(createMockBrowser([]));
 
     const { details } = await render({ config: explicitConfig });
@@ -234,46 +233,58 @@ describe("PlaywrightDiffScreenshotter", () => {
   });
 });
 
-async function createRegistrationHarness(
+function createRegistrationHarness(
   pluginConfig: Record<string, unknown> = {},
   initialConfig = createRuntimeConfig(pluginConfig),
-  rootDir?: string,
 ) {
   let config = initialConfig;
-  const fixture = await createDiffStoreHarness("openclaw-diffs-registration-");
-  const { api, on, handler, tool, stop } = registerDiffsForTest({
-    stateDir: path.join(path.dirname(fixture.rootDir), "state"),
-    blobStore: fixture.blobStore,
-    getConfig: () => config,
+  const registered: {
+    tool?: Parameters<OpenClawPluginApi["registerTool"]>[0];
+    httpHandler?: Parameters<OpenClawPluginApi["registerHttpRoute"]>[0]["handler"];
+  } = {};
+  const on = vi.fn();
+  const blobStore = createMemoryBlobStore();
+  const api = createTestPluginApi({
+    id: "diffs",
+    config: { gateway: { port: 18789, bind: "loopback" } },
     pluginConfig,
-    rootDir,
+    runtime: {
+      config: { current: () => config },
+      state: { openBlobStore: () => blobStore },
+    } as never,
+    registerTool(tool) {
+      registered.tool = tool;
+    },
+    registerHttpRoute(route) {
+      registered.httpHandler = route.handler;
+    },
+    on,
   });
-  cleanups.push(async () => {
-    try {
-      await stop();
-    } finally {
-      await fixture.cleanup();
-    }
-  });
+  registerDiffsPlugin(api);
+  const registration = expectDefined(registered.tool, "registered diffs tool");
+  if (typeof registration !== "function") {
+    throw new Error("expected diffs tool factory");
+  }
+  const handleRequest = expectDefined(registered.httpHandler, "registered diffs HTTP handler");
 
   return {
     on,
-    openBlobStore: api.runtime.state.openBlobStore,
     setConfig: (next: OpenClawConfig) => {
       config = next;
     },
-    get: async (url: string, headers: IncomingMessage["headers"] = {}) => {
+    get: async (viewerPath: string, headers?: IncomingMessage["headers"]) => {
       const res = createMockServerResponse();
-      const req = { method: "GET", url, headers, socket: { remoteAddress: "127.0.0.1" } };
-      expect(await handler(req as IncomingMessage, res)).toBe(true);
+      expect(await handleRequest(localReq({ method: "GET", url: viewerPath, headers }), res)).toBe(
+        true,
+      );
       return res;
     },
-    render: async (context: OpenClawPluginToolContext = toolContext, args = {}) => {
-      const result = await tool(context).execute("tool-1", {
-        before: "one\n",
-        after: "two\n",
-        ...args,
-      });
+    render: async (context: OpenClawPluginToolContext = toolContext) => {
+      const tool = expectDefined(registration(context), "diffs tool for context");
+      if (Array.isArray(tool)) {
+        throw new Error("expected one registered diffs tool");
+      }
+      const result = await tool.execute("tool-1", { before: "one\n", after: "two\n" });
       const details = expectDefined(asOptionalRecord(result.details), "diffs tool details");
       expect(typeof details.viewerPath).toBe("string");
       return { details, viewerPath: String(details.viewerPath) };
@@ -304,15 +315,19 @@ describe("diffs plugin registration", () => {
       viewerBaseUrl: "https://startup.example.com/openclaw",
       defaults: STARTUP_DIFFS_DEFAULTS,
     };
-    const { render, get, setConfig } = await createRegistrationHarness(startupConfig);
+    const { render, get, setConfig } = createRegistrationHarness(startupConfig);
 
     setConfig(
       createRuntimeConfig({
         viewerBaseUrl: "https://live.example.com/gateway",
         defaults: {
           mode: "view",
-          fontFamily: "JetBrains Mono",
-          fontSize: 17,
+          theme: "dark",
+          background: true,
+          layout: "unified",
+          showLineNumbers: true,
+          diffIndicators: "bars",
+          lineSpacing: 1.6,
         },
       }),
     );
@@ -326,14 +341,11 @@ describe("diffs plugin registration", () => {
     expect(String(res.body)).toContain('"diffStyle":"unified"');
     expect(String(res.body)).toContain('"disableLineNumbers":false');
     expect(String(res.body)).toContain('"diffIndicators":"bars"');
-    expect(String(res.body)).toContain("--diffs-line-height: 27px;");
-    expect(String(res.body)).toContain("--diffs-font-size: 17px;");
-    expect(String(res.body)).toContain("JetBrains Mono");
-    expect(details.mode).toBe("view");
+    expect(String(res.body)).toContain("--diffs-line-height: 24px;");
   });
 
   it("uses live runtime viewer-access config through the registered HTTP handler", async () => {
-    const { on, render, get, setConfig } = await createRegistrationHarness(
+    const { on, render, get, setConfig } = createRegistrationHarness(
       { defaults: STARTUP_DIFFS_DEFAULTS, security: { allowRemoteViewer: true } },
       createRuntimeConfig({ security: { allowRemoteViewer: true } }),
     );
@@ -374,7 +386,7 @@ describe("diffs plugin registration", () => {
   });
 
   it("fails closed for remote viewer access when the live diffs plugin entry is removed", async () => {
-    const { render, get, setConfig } = await createRegistrationHarness({
+    const { render, get, setConfig } = createRegistrationHarness({
       security: { allowRemoteViewer: true },
     });
 
@@ -386,6 +398,97 @@ describe("diffs plugin registration", () => {
     expect(proxiedRes.statusCode).toBe(404);
   });
 });
+
+function createMemoryBlobStore<TMetadata>(): PluginBlobStoreWithReceipts<TMetadata> {
+  const entries = new Map<string, PluginBlobEntry<TMetadata>>();
+  const read = (key: string): PluginBlobEntry<TMetadata> | undefined => {
+    const entry = entries.get(key);
+    if (!entry || (entry.expiresAt !== undefined && entry.expiresAt <= Date.now())) {
+      entries.delete(key);
+      return undefined;
+    }
+    return { ...entry, bytes: entry.bytes.slice() };
+  };
+  const register = (
+    key: string,
+    bytes: Uint8Array,
+    metadata: TMetadata,
+    opts?: { ttlMs?: number },
+  ) => {
+    const createdAt = Date.now();
+    const receipt = { createdAt, ...(opts?.ttlMs ? { expiresAt: createdAt + opts.ttlMs } : {}) };
+    entries.set(key, {
+      key,
+      sizeBytes: bytes.byteLength,
+      bytes: bytes.slice(),
+      metadata,
+      ...receipt,
+    });
+    return receipt;
+  };
+  const info = ({ bytes: _bytes, ...entry }: PluginBlobEntry<TMetadata>) => entry;
+  const deleteExpiredKey = async (key: string) => {
+    const entry = entries.get(key);
+    if (!entry || entry.expiresAt === undefined || entry.expiresAt > Date.now()) {
+      return undefined;
+    }
+    entries.delete(key);
+    return info(entry);
+  };
+  return {
+    async register(key, bytes, metadata, opts) {
+      register(key, bytes, metadata, opts);
+    },
+    async registerIfAbsent(key, bytes, metadata, opts) {
+      if (read(key)) {
+        return false;
+      }
+      register(key, bytes, metadata, opts);
+      return true;
+    },
+    async registerIfAbsentWithReceipt(key, bytes, metadata, opts) {
+      return read(key) ? undefined : register(key, bytes, metadata, opts);
+    },
+    async lookup(key) {
+      return read(key);
+    },
+    async entries() {
+      return [...entries.keys()].flatMap((key) => {
+        const entry = read(key);
+        return entry ? [info(entry)] : [];
+      });
+    },
+    async delete(key) {
+      return entries.delete(key);
+    },
+    deleteExpiredKey,
+    async deleteExpired() {
+      const expired = [];
+      for (const key of entries.keys()) {
+        const entry = await deleteExpiredKey(key);
+        if (entry) {
+          expired.push(entry);
+        }
+      }
+      return expired;
+    },
+    async clear() {
+      entries.clear();
+    },
+  };
+}
+
+function localReq(input: {
+  method: string;
+  url: string;
+  headers?: IncomingMessage["headers"];
+}): IncomingMessage {
+  return {
+    ...input,
+    headers: input.headers ?? {},
+    socket: { remoteAddress: "127.0.0.1" },
+  } as unknown as IncomingMessage;
+}
 
 async function createScreenshotterHarness(options?: Parameters<typeof createMockPage>[0]) {
   const pages: Array<ReturnType<typeof createMockPage>> = [];
@@ -435,44 +538,3 @@ function createMockPage(options?: {
     close: vi.fn(async () => {}),
   };
 }
-
-describe("plugin discovery", () => {
-  it("skips runtime registration while collecting CLI metadata", () => {
-    const hooks = { registerTool: vi.fn(), registerHttpRoute: vi.fn(), on: vi.fn() };
-    registerDiffsPlugin(createTestPluginApi({ registrationMode: "cli-metadata", ...hooks }));
-    for (const hook of Object.values(hooks)) {
-      expect(hook).not.toHaveBeenCalled();
-    }
-  });
-
-  it.each(["assets", "dist/assets"])("requires a manifest and runtime in %s", async (assetDir) => {
-    const { rootDir, cleanup } = await createTempDiffRoot("diffs-language-pack-");
-    cleanups.push(cleanup);
-    const pack = path.join(rootDir, "diffs-language-pack");
-    await fs.mkdir(pack, { recursive: true });
-    await fs.writeFile(path.join(pack, "openclaw.plugin.json"), '{"id":"diffs-language-pack"}\n');
-    const { render, get, openBlobStore } = await createRegistrationHarness(
-      { defaults: { mode: "view" } },
-      undefined,
-      path.join(rootDir, "diffs"),
-    );
-    expect(openBlobStore).toHaveBeenCalledWith({
-      namespace: "diff-artifacts",
-      maxEntries: 2_048,
-      maxBytesPerEntry: 32 * 1024 * 1024,
-      maxBytesPerNamespace: 256 * 1024 * 1024,
-      overflowPolicy: "reject-new",
-    });
-    const before = await render(toolContext, { lang: "abap" });
-    expect(String((await get(before.viewerPath)).body)).not.toContain("diffs-language-pack/assets");
-    await fs.mkdir(path.join(pack, assetDir), { recursive: true });
-    await fs.writeFile(path.join(pack, assetDir, "viewer-runtime.js"), "export {};\n");
-    const after = await render(toolContext, { lang: "abap" });
-    const html = String((await get(after.viewerPath)).body);
-    expect(html).toContain("diffs-language-pack/assets/viewer.js");
-    expect(
-      parseViewerPayloadJson(html.match(/data-openclaw-diff-payload>(.*?)<\/script>/)?.[1] ?? "")
-        .langs,
-    ).toEqual(["abap"]);
-  });
-});

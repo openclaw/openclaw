@@ -71,7 +71,7 @@ describe("DiffArtifactStore", () => {
   it.each(["size-mismatch", "oversized-output"] as const)(
     "rejects %s with valid authorized metadata",
     async (kind) => {
-      const artifact = await createViewerArtifact(store, { html: "viewer", inputKind: "patch" });
+      const artifact = await viewer({ html: "viewer", inputKind: "patch" });
       const entry = await blobStore.lookup(artifact.id);
       assert.isDefined(entry);
       if (entry.metadata.kind !== "viewer") {
@@ -87,7 +87,7 @@ describe("DiffArtifactStore", () => {
   it("reopens compressed viewer bytes and retrieves them with one authorized lookup", async () => {
     await store.stopCleanup();
     const registrationLookup = vi.spyOn(blobStore, "lookup");
-    const artifact = await createViewerArtifact(store, {
+    const artifact = await viewer({
       html: "<html>demo é 🦀</html>",
       context,
     });
@@ -118,7 +118,7 @@ describe("DiffArtifactStore", () => {
     await store.stopCleanup();
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(8_640_000_000_000_000 - 1_000);
-    const artifact = await createViewerArtifact(store, { inputKind: "patch", ttlMs: 60_000 });
+    const artifact = await viewer({ inputKind: "patch", ttlMs: 60_000 });
 
     expect(artifact.expiresAt).toBe("+275760-09-13T00:00:00.000Z");
     await expect(blobStore.lookup(artifact.id)).resolves.toMatchObject({
@@ -129,7 +129,7 @@ describe("DiffArtifactStore", () => {
 
   it("expires artifacts after the ttl", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
-    const artifact = await createViewerArtifact(store, { ttlMs: 1_000 });
+    const artifact = await viewer({ ttlMs: 1_000 });
 
     await store.stopCleanup();
     await expireDiffArtifactForTest(rootDir, artifact.id, 1_000);
@@ -147,7 +147,7 @@ describe("DiffArtifactStore", () => {
       .mockImplementation(registerIfAbsent);
     const cleanupSpy = vi.spyOn(store, "cleanupExpired").mockResolvedValue();
 
-    await createViewerArtifact(store, { html: "<html>retry</html>", title: "Retry" });
+    await viewer({ html: "<html>retry</html>", title: "Retry" });
 
     expect(registerSpy).toHaveBeenCalledTimes(2);
     expect(cleanupSpy).toHaveBeenCalled();
@@ -199,13 +199,13 @@ describe("DiffArtifactStore", () => {
     store = new DiffArtifactStore({ rootDir, blobStore });
     const cleanupSpy = vi.spyOn(store, "cleanupExpired").mockResolvedValue();
 
-    await createViewerArtifact(store, { html: "<html>one</html>", title: "One" });
-    await createViewerArtifact(store, { html: "<html>two</html>", title: "Two" });
+    await viewer({ html: "<html>one</html>", title: "One" });
+    await viewer({ html: "<html>two</html>", title: "Two" });
 
     expect(cleanupSpy).toHaveBeenCalledTimes(1);
 
     vi.setSystemTime(new Date(now.getTime() + 301_000));
-    await createViewerArtifact(store, { html: "<html>three</html>", title: "Three" });
+    await viewer({ html: "<html>three</html>", title: "Three" });
 
     expect(cleanupSpy).toHaveBeenCalledTimes(2);
   });
