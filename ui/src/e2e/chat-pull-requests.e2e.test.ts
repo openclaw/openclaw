@@ -254,7 +254,7 @@ suite.define(() => {
         exact: true,
       })
       .click();
-    await page.getByRole("menuitem", { name: "Hide from this session", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Hide", exact: true }).click();
     await pollCount(chips).toBe(2);
     await pollAttr(chips.first().locator(".chat-pr__link"), "href").toContain("/103469");
   });
@@ -345,9 +345,7 @@ suite.define(() => {
             const link = detail.getByRole("link", { name: "Open on GitHub", exact: true });
             await pollAttr(link, "href").toBe(expectedUrl);
             await link.click({ trial: true });
-            await detail
-              .getByRole("button", { name: "Hide from this session", exact: true })
-              .click({ trial: true });
+            await detail.getByRole("button", { name: "Hide", exact: true }).click({ trial: true });
             await openDetailsPullRequests(page);
           } else {
             await pollAttr(chip.locator(".chat-pr__link"), "href").toBe(expectedUrl);
@@ -359,9 +357,7 @@ suite.define(() => {
               })
               .click();
             const menu = chip.getByRole("menu");
-            await menu
-              .getByRole("menuitem", { name: "Hide from this session", exact: true })
-              .click({ trial: true });
+            await menu.getByRole("menuitem", { name: "Hide", exact: true }).click({ trial: true });
             await page.keyboard.press("Escape");
             await menu.waitFor({ state: "hidden" });
           }

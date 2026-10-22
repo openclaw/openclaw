@@ -402,7 +402,7 @@ suite.define(() => {
       expect(await page.getByRole("button", { name: "Choose a new publication" }).count()).toBe(0);
       const prName = "pull request synthetic/publication-demo#44";
       const actions = { name: `Actions for ${prName}`, exact: true };
-      const dismiss = { name: "Hide from this session", exact: true };
+      const dismiss = { name: "Hide", exact: true };
       await rows.getByRole("button", actions).click();
       await page.getByRole("menuitem", dismiss).click();
       await expect.poll(() => rows.count()).toBe(0);

@@ -332,6 +332,13 @@ it.each([
                 currentAgentId: "main",
                 messages: [],
                 pullRequests: [pullRequest, { ...pullRequest, number: 173825, state }],
+                pullRequestsBranch: {
+                  owner: pullRequest.owner,
+                  repo,
+                  branch: pullRequest.branch,
+                  additions: 12,
+                  deletions: 3,
+                },
                 onDismissPullRequest: onDismiss,
                 onOpenSessionDiff,
               },
@@ -379,14 +386,19 @@ it.each([
     ).toBe(true);
     expect(group.querySelectorAll(".chat-pr")).toHaveLength(2);
     expect(group.querySelectorAll(".chat-pr")[1]?.getAttribute("data-state")).toBe(state);
-    // PR totals stay descriptive; only All changes opens the session diff.
+    // PR totals stay descriptive; the Environment diff opens this session’s changes.
     expect(row.querySelector("button.chat-pr__diff")).toBeNull();
-    const allChanges = container.querySelector<HTMLButtonElement>(".chat-details__all-changes")!;
-    expect(allChanges.closest("summary")).toBeNull();
-    expect(allChanges.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+    const changes = container.querySelector<HTMLButtonElement>(
+      ".chat-environment__branch button.chat-pr__diff",
+    )!;
+    await expect.element(page.elementLocator(changes)).toBeVisible();
+    expect(changes.textContent).toContain("+12");
+    expect(changes.textContent).toContain("−3");
+    expect(changes.closest("summary")).toBeNull();
+    expect(changes.getBoundingClientRect().bottom).toBeLessThanOrEqual(
       row.getBoundingClientRect().top,
     );
-    await page.elementLocator(allChanges).click();
+    await page.elementLocator(changes).click();
     expect(onOpenSessionDiff).toHaveBeenCalledOnce();
     expect(group.open).toBe(true);
     const summary = group.querySelector<HTMLElement>(":scope > summary")!;
@@ -400,7 +412,7 @@ it.each([
     trigger.focus();
     await userEvent.keyboard("{Enter}");
     const dismiss = page.getByRole("menuitem", {
-      name: "Hide from this session",
+      name: "Hide",
       exact: true,
     });
     await expect.element(dismiss).toBeVisible();
