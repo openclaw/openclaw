@@ -1,6 +1,6 @@
 import { vi } from "vitest";
+import { createMockSubsystemLogger } from "../../../../test/helpers/mock-subsystem-logger.js";
 import { GatewayClientRegistry } from "../client-registry.js";
-import { createGatewayWsTestLogger } from "../ws-connection.test-helpers.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import type { GatewayWsMessageHandlerParams as Handler } from "./message-handler-types.js";
 import { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.js";
@@ -50,9 +50,9 @@ export function createAdmissionHandler(overrides: AdmissionOverrides) {
     setCloseCause: vi.fn(),
     setLastFrameMeta: vi.fn(),
     originCheckMetrics: { hostHeaderFallbackAccepted: 0 },
-    logGateway: createGatewayWsTestLogger() as Handler["logGateway"],
-    logHealth: createGatewayWsTestLogger() as Handler["logHealth"],
-    logWsControl: createGatewayWsTestLogger() as Handler["logWsControl"],
+    logGateway: createMockSubsystemLogger("gateway"),
+    logHealth: createMockSubsystemLogger("health"),
+    logWsControl: createMockSubsystemLogger("ws-control"),
     ...overrides,
   } satisfies Handler;
 }

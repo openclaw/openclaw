@@ -42,6 +42,14 @@ function publicationCase<Name extends string>(
   return { name, caption, expectedText, finalText };
 }
 const cases = [
+  publicationCase("ordinary", "Attached proof.", ["Attached proof."]),
+  publicationCase("internal", privateCaption, []),
+  publicationCase(
+    "delivery",
+    "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
+    [],
+  ),
+  publicationCase("mixed", `Attached proof.\n${privateCaption}`, ["Attached proof."]),
   publicationCase("quoted-marker", "what is <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>?", [
     "what is <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>?",
   ]),

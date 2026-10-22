@@ -2,9 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { INTERNAL_SESSION_PATH_PARAM } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { loadRoute, routeLocation } from "./route-loading.test-support.ts";
-import { createSessionRouteContext } from "./route-resolution.test-support.ts";
 
 const fullId = "0123456789abcdef0123456789abcdef";
 const SHARE_ROUTE = {
@@ -22,11 +20,16 @@ function catalogContext(
   request: (method: string, params: Record<string, unknown>) => Promise<unknown>,
   basePath = "",
 ): ApplicationContext {
-  const { context } = createSessionRouteContext({ ok: false }, [], { agentId: "research" });
-  context.basePath = basePath;
-  context.gateway.snapshot.client = createTestGatewayClient(request);
-  context.agents.state.agentsList = { defaultId: "research", mainKey: "main", agents: [] };
-  return context;
+  return {
+    basePath,
+    gateway: {
+      snapshot: { phase: "connected", client: { request }, hello: null },
+      subscribe: vi.fn(() => () => undefined),
+    },
+    agents: { state: { agentsList: { defaultId: "research", mainKey: "main" } } },
+    agentSelection: { state: { selectedId: "research" } },
+    sessions: { state: { result: null } },
+  } as unknown as ApplicationContext;
 }
 
 function beamCatalog(sessions: Array<{ threadId: string; name: string }>, nextCursor?: string) {
@@ -61,7 +64,23 @@ const loadCatalog = (result: unknown, path = "/beam/0123456789ab") =>
   loadRoute(catalogContext(vi.fn(async () => result)), path);
 
 describe("catalog share route resolution", () => {
-  it.each(["old-title-0123456789ab", "pretty-beam-route-0123456789ab"])(
+  it("resolves an external-style provider descriptor without catalog-specific UI policy", async () => {
+    const result = beamCatalog([{ threadId: fullId, name: "External session" }]);
+    const catalog = {
+      ...result.catalogs[0],
+      id: "external",
+      label: "External",
+      shareRoute: { ...SHARE_ROUTE, routeSegment: "shared-sessions" },
+    };
+    await expect(
+      loadCatalog({ catalogs: [catalog] }, "/shared-sessions/0123456789ab"),
+    ).resolves.toMatchObject({
+      kind: "session",
+      sessionKey: `agent:research:catalog:external:gateway:${fullId}`,
+    });
+  });
+
+  it.each(["0123456789ab", "old-title-0123456789ab", "pretty-beam-route-0123456789ab"])(
     "resolves %s by id and canonicalizes the title under the default agent",
     async (reference) => {
       const request = vi.fn(async (method: string) => {

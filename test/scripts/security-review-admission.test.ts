@@ -138,11 +138,9 @@ type Projection = [Mode, string, string, boolean];
 type StatusPatch = Partial<ReturnType<typeof fixture>["combined"]>;
 
 it.each<Projection>([
-  ...ciProjections.map<Projection>(([state, description]) => [
-    "enforced",
-    state,
-    description,
-    true,
+  ...ciProjections.flatMap<Projection>(([state, description]) => [
+    ["enforced", state, description, false],
+    ["enforced", state, description, true],
   ]),
   ["inactive", "failure", ciFailure, false],
   ["grandfathered", "failure", ciFailure, false],
@@ -176,6 +174,7 @@ it.each<Projection>([
 it.each<Mutation>([
   ["edited", "approval", { updated_at: "2026-09-27T11:31:00Z" }],
   ["revoked", "approval", { body: "Approval withdrawn" }],
+  ["role lost", "state", { role: "write" }],
   ["head", "head", { sha: "d".repeat(40) }, "Superseded", true],
   ["rollout", "state", { rollout: "grandfathered" }, "rollout changed", true],
   ["merged", "pull", mergedPull, "eligibility changed", true],
@@ -192,13 +191,17 @@ it.each<Mutation>([
   await expect(f.run()).rejects.toThrow(error ?? "approval is no longer current");
 });
 
-it.each<[string, "dependency" | "combined", StatusPatch, boolean?]>([
+it.each<[string, "dependency" | "combined", StatusPatch, ("missing" | "duplicate")?]>([
+  ["missing guard", "dependency", {}, "missing"],
+  ["failed guard", "dependency", { state: "failure" }],
   ["pending guard", "dependency", { state: "pending" }],
-  ["duplicate guard", "dependency", {}, true],
+  ["duplicate guard", "dependency", {}, "duplicate"],
   ["stale guard", "dependency", { created_at: "2026-09-27T11:59:00Z" }],
   ["unknown decision", "dependency", { description: "PR #7: Someone approved" }],
   ["later decision", "dependency", { updated_at: "2026-09-27T12:00:50Z" }],
   ["foreign publisher", "combined", { target_url: publisher.url + "1" }],
+  ["foreign creator", "combined", { creator: { login: "another-bot", type: "Bot" } }],
+  ["stale projection", "combined", { created_at: "2026-09-27T11:59:00Z" }],
   ["foreign PR", "combined", { description: `PR #8: ${ciFailure}` }],
   ["security veto", "combined", securityVeto],
   [
@@ -206,10 +209,12 @@ it.each<[string, "dependency" | "combined", StatusPatch, boolean?]>([
     "combined",
     { state: "pending", description: "PR #7: CI and security review have not completed" },
   ],
-])("refuses %s evidence", async (_name, target, patch, duplicate) => {
+])("refuses %s evidence", async (_name, target, patch, count) => {
   const f = fixture();
   Object.assign(f[target], patch);
-  if (duplicate) {
+  if (count === "missing") {
+    f.statuses.shift();
+  } else if (count === "duplicate") {
     f.statuses.push({ ...f.dependency, id: 4 });
   }
   await expect(f.run()).rejects.toThrow(/Published security clearance/);

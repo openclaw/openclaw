@@ -85,8 +85,6 @@ vi.mock("./shared.js", async (importOriginal) => ({
 const tempDirs = createTempDirTracker();
 const outputText = () => runtime.log.mock.calls.flat().join("\n");
 const jsonResult = () => runtime.writeJson.mock.lastCall?.[0];
-const recordPendingMigration = (pluginId: string, reason: string, command: string) =>
-  recordMigrations({ pending: [{ pluginId, reason, command }] });
 function expectOutput(...included: string[]) {
   included.forEach((part) => expect(outputText()).toContain(part));
 }
@@ -336,7 +334,10 @@ it.each([true, false])(
     // Module resets retain worker admission; force this fixture to observe its unsafe library.
     workerThreads.setEnvironmentData(admissionKey, undefined);
     vi.resetModules();
-    const realPrepare = DatabaseSync.prototype.prepare;
+    const sqlitePrototype: {
+      prepare: (this: DatabaseSync, sql: string) => ReturnType<DatabaseSync["prepare"]>;
+    } = DatabaseSync.prototype;
+    const realPrepare = sqlitePrototype.prepare;
     const prepare = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
       this: DatabaseSync,
       sql,
@@ -468,11 +469,15 @@ it.each([false, true])(
       registry: { latestVersion: "9999.0.0" },
     });
     const run = createUpdateRun({ trigger: "cli" });
-    await recordPendingMigration(
-      "sample",
-      "Plugin upgrade did not complete.",
-      "openclaw doctor --fix",
-    );
+    await recordMigrations({
+      pending: [
+        {
+          pluginId: "sample",
+          reason: "Plugin upgrade did not complete.",
+          command: "openclaw doctor --fix",
+        },
+      ],
+    });
     recordUpdateRunPhase(run.runId, "validating");
     if (finished) {
       finishUpdateRun(run.runId, { status: "succeeded" });
@@ -492,11 +497,15 @@ it.each([false, true])(
 );
 
 it.each([true, false])("unreadable migration preserves availability (JSON: %s)", async (json) => {
-  await recordPendingMigration(
-    "codex",
-    "The configured plugin package is missing.",
-    "openclaw plugins install @openclaw/codex",
-  );
+  await recordMigrations({
+    pending: [
+      {
+        pluginId: "codex",
+        reason: "The configured plugin package is missing.",
+        command: "openclaw plugins install @openclaw/codex",
+      },
+    ],
+  });
   openState()
     .db.prepare("UPDATE migration_runs SET report_json = ? WHERE id = ?")
     .run("not-json", "deferred-plugin-migration:codex");

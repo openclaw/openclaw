@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
@@ -30,6 +31,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import {
   createInterruptedPackagePublication,
   preparePackagePublication,

@@ -669,6 +669,7 @@ const STORAGE_MODULE_WORK_SECONDS = new Map<string, number>([
   ["src/plugins/install-record-commit.retention.test.ts", 7.563],
   ["src/infra/device-pairing-node.lifecycle.test.ts", 4.165],
   ["src/agents/tools-effective-inventory.cold-provider.test.ts", 9.37],
+  ["src/meeting-bot/participation.capacity-race.test.ts", 0.909],
   ["test/imessage-reply-alias.integration.test.ts", 6.901],
   ["test/plugins/memory-dreaming-cron.test.ts", 2.991],
   ["src/config/sessions/session-accessor.sqlite-history-query-plan.test.ts", 5.374],

@@ -33,6 +33,7 @@ import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin
 import {
   registerSessionBindingAdapter,
   type SessionBindingAdapter,
+  type SessionBindingRecord,
   unregisterSessionBindingAdapter,
 } from "openclaw/plugin-sdk/thread-bindings-runtime";
 import {
@@ -56,6 +57,13 @@ import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.j
 import { createDirectDispatchContext } from "./bot.direct-dispatch.test-support.js";
 import { registerTelegramModelPickerCases } from "./bot.model-picker.test-support.js";
 import {
+  ada,
+  botIdentity,
+  groupCallbackConfig,
+  inboundMessage,
+  openDirect,
+  photoReply,
+  questionCallbackConfig,
   createReplyPhotoMessage,
   createTelegramCallbackContext,
   makeTelegramKeyedStoreTestMock,
@@ -140,54 +148,10 @@ let createTelegramBot: (
 const loadConfig = getLoadConfigMock();
 const INFO_EMOJI = "\u{2139}\u{FE0F}";
 const emptyKeyboard = { reply_markup: { inline_keyboard: [] } };
-const openDirect = (): TelegramChannelConfig => ({ dmPolicy: "open", allowFrom: ["*"] });
 const groupChat = { id: -100999, type: "supergroup", title: "Test Group" };
-
-function groupCallbackConfig(): TelegramChannelConfig {
-  return {
-    dmPolicy: "open",
-    capabilities: { inlineButtons: "group" },
-    groupPolicy: "open",
-    groups: { "*": { requireMention: false } },
-  };
-}
-function questionCallbackConfig(): TelegramChannelConfig {
-  return {
-    ...groupCallbackConfig(),
-    allowFrom: ["9"],
-    capabilities: { inlineButtons: "all" },
-    groups: { "*": { requireMention: false, allowFrom: ["9"] } },
-  };
-}
 
 function messageContext(message: Record<string, unknown>) {
   return { message, me: { username: "openclaw_bot" }, getFile: getEmptyTelegramFile };
-}
-
-const ada = { id: 9, is_bot: false, first_name: "Ada", username: "ada_bot" };
-const botIdentity = { id: 999, is_bot: true, first_name: "OpenClaw", username: "openclaw_bot" };
-function inboundMessage(overrides: Record<string, unknown> = {}) {
-  return {
-    chat: { id: 7, type: "private" },
-    from: ada,
-    message_id: 103,
-    date: 1736380800,
-    ...overrides,
-  };
-}
-
-function photoReply(chat: Record<string, unknown>, overrides: Record<string, unknown> = {}) {
-  return inboundMessage({
-    chat,
-    message_id: 101,
-    date: 1736380700,
-    from: { id: 999, is_bot: true, first_name: "OpenClaw" },
-    text: "Done, here is the image",
-    photo: [
-      { file_id: "generated-photo-1", file_unique_id: "generated-photo-u1", width: 1, height: 1 },
-    ],
-    ...overrides,
-  });
 }
 
 function makeCallbackContext(
@@ -1443,6 +1407,15 @@ describe("createTelegramBot", () => {
         decision,
         senderId: "9",
       });
+      expect(approvalCall.cfg).toMatchObject(
+        targetOnly
+          ? { approvals: { exec: { enabled: true, mode: "targets" } } }
+          : {
+              channels: {
+                telegram: { execApprovals: { enabled: true, approvers: ["9"], target: "dm" } },
+              },
+            },
+      );
       expect(resolveExecApprovalSpy).toHaveBeenCalledTimes(expectedCalls);
       if (secondOwner) {
         expect(execApprovalCall(1)).toMatchObject({
@@ -2490,13 +2463,29 @@ describe("createTelegramBot", () => {
   it("passes false command auth to Telegram plugin callbacks for non-allowlisted group senders", async () => {
     const pluginId = "qa-telegram-interactive-binding";
     const pluginRoot = "/plugins/qa-telegram-interactive-binding";
+    const conversationId = "-100999:topic:99";
+    const binding: SessionBindingRecord = {
+      bindingId: pluginId,
+      targetSessionKey: "agent:qa:telegram:interactive-binding",
+      targetKind: "session",
+      conversation: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId,
+        parentConversationId: "-100999",
+      },
+      status: "active",
+      boundAt: 1,
+      metadata: { pluginBindingOwner: "plugin", pluginId, pluginRoot },
+    };
     const forbiddenWrite = async (): Promise<never> => {
       throw new Error("unauthorized binding write");
     };
     const bind = vi.fn<NonNullable<SessionBindingAdapter["bind"]>>(forbiddenWrite);
     const unbind = vi.fn<NonNullable<SessionBindingAdapter["unbind"]>>(forbiddenWrite);
-    const resolveByConversation =
-      vi.fn<SessionBindingAdapter["resolveByConversation"]>(forbiddenWrite);
+    const resolveByConversation = vi.fn<SessionBindingAdapter["resolveByConversation"]>((ref) =>
+      binding.conversation.conversationId === ref.conversationId ? binding : null,
+    );
     const adapter: SessionBindingAdapter = {
       channel: "telegram",
       accountId: "default",

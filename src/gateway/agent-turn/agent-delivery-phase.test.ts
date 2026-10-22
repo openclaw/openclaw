@@ -1,4 +1,4 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { withinTest } from "../../../test/helpers/promise.js";
 import { withPluginRuntimeGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
@@ -108,59 +108,60 @@ for (const scope of ["local", "foreign Gateway", "foreign store"] as const) {
   });
 }
 
-it.each([
-  ["ordinary", false, "target"],
-  ["ordinary", false, "channel"],
-  ["incognito-private", false, "target"],
-  ["private-entry", true, "channel"],
-] as const)(
-  "preserves strict and best-effort diagnostics for %s (incognito=%s, source=%s)",
-  async (suffix, incognito, source) => {
-    const ordinary = suffix === "ordinary";
-    const failure = new Error(privateMessage);
-    if (ordinary && source === "target") {
-      Object.assign(failure, { code: "INVALID_TARGET" });
-    }
-    mocks.resolveAgentDeliveryPlanWithSessionRoute.mockResolvedValue({
-      baseDelivery: {},
-      resolvedChannel: source === "target" ? "telegram" : "webchat",
-      ...(source === "target" ? { targetResolutionError: failure } : {}),
-    });
-    mocks.resolveAgentOutboundTarget.mockReturnValue({
-      resolvedTarget: { ok: false, error: failure },
-    });
-    mocks.resolveMessageChannelSelection.mockRejectedValue(failure);
-    const respond = vi.fn();
-    const info = vi.fn();
-    const params = deliveryParams({
-      sessionEntry: {
-        sessionId: "private-session",
-        updatedAt: 1,
-        ...(incognito ? { incognito: true as const } : {}),
-      },
-      resolvedSessionKey: `agent:main:dashboard:${suffix}`,
-      context: { logGateway: { info } } as never,
-      respond,
-    });
-
-    expect(await resolveAgentDeliveryPhase(params)).toBeUndefined();
-    if (ordinary && source === "target") {
-      expect(respond).toHaveBeenCalledWith(false, undefined, {
-        code: ErrorCodes.INVALID_REQUEST,
-        message: `${privateMessage} | INVALID_TARGET`,
+describe.each([
+  ["ordinary", "ordinary", false],
+  ["Incognito key", "incognito-private", false],
+  ["Incognito entry", "private-entry", true],
+] as const)("%s delivery diagnostics", (name, suffix, incognito) => {
+  it.each(["target", "channel"] as const)(
+    "preserves strict and best-effort %s failures without private error logs",
+    async (source) => {
+      const ordinary = name === "ordinary";
+      const failure = new Error(privateMessage);
+      if (ordinary && source === "target") {
+        Object.assign(failure, { code: "INVALID_TARGET" });
+      }
+      mocks.resolveAgentDeliveryPlanWithSessionRoute.mockResolvedValue({
+        baseDelivery: {},
+        resolvedChannel: source === "target" ? "telegram" : "webchat",
+        ...(source === "target" ? { targetResolutionError: failure } : {}),
       });
-    }
-    const [error, metadata] = respond.mock.calls[0]?.slice(2) ?? [];
-    expect(error?.message).toContain(privateMessage);
-    const diagnostics = { errorMessage: error?.message, ...metadata };
-    expectDiagnostics(diagnostics, ordinary, !ordinary);
+      mocks.resolveAgentOutboundTarget.mockReturnValue({
+        resolvedTarget: { ok: false, error: failure },
+      });
+      mocks.resolveMessageChannelSelection.mockRejectedValue(failure);
+      const respond = vi.fn();
+      const info = vi.fn();
+      const params = deliveryParams({
+        sessionEntry: {
+          sessionId: "private-session",
+          updatedAt: 1,
+          ...(incognito ? { incognito: true as const } : {}),
+        },
+        resolvedSessionKey: `agent:main:dashboard:${suffix}`,
+        context: { logGateway: { info } } as never,
+        respond,
+      });
 
-    respond.mockClear();
-    expect(await resolveAgentDeliveryPhase({ ...params, bestEffortDeliver: true })).toMatchObject({
-      deliver: true,
-    });
-    expect(respond).not.toHaveBeenCalled();
-    expect(info).toHaveBeenCalledOnce();
-    expectDiagnostics(info.mock.calls, ordinary);
-  },
-);
+      expect(await resolveAgentDeliveryPhase(params)).toBeUndefined();
+      if (ordinary && source === "target") {
+        expect(respond).toHaveBeenCalledWith(false, undefined, {
+          code: ErrorCodes.INVALID_REQUEST,
+          message: `${privateMessage} | INVALID_TARGET`,
+        });
+      }
+      const [error, metadata] = respond.mock.calls[0]?.slice(2) ?? [];
+      expect(error?.message).toContain(privateMessage);
+      const diagnostics = { errorMessage: error?.message, ...metadata };
+      expectDiagnostics(diagnostics, ordinary, !ordinary);
+
+      respond.mockClear();
+      expect(await resolveAgentDeliveryPhase({ ...params, bestEffortDeliver: true })).toMatchObject(
+        { deliver: true },
+      );
+      expect(respond).not.toHaveBeenCalled();
+      expect(info).toHaveBeenCalledOnce();
+      expectDiagnostics(info.mock.calls, ordinary);
+    },
+  );
+});

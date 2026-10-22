@@ -9,6 +9,7 @@ import {
 } from "../../lib/chat/outbox-recovery.ts";
 import {
   captureChatOutboxAdmission as captureAdmission,
+  storageTargetForComposer,
   storageTargetForGateway,
   subscribeStoredChatOutboxChanges as subscribeOutbox,
 } from "../../lib/chat/outbox-store.ts";
@@ -30,6 +31,7 @@ import {
 const gatewayUrl = "ws://outbox.test";
 const globalScope = "global\u0000agent:selected";
 const mainScope = "main\u0000agent:selected";
+const qualifiedScope = "agent:selected:main\u0000agent:selected";
 const state = {
   settings: { gatewayUrl },
   connected: true,
@@ -136,6 +138,23 @@ it.each(["delivery", "navigation"] as const)("keeps durable custody after %s", (
   }
 });
 
+it.each(["recipient", "position"] as const)("shares %s replacements with peers", (change) => {
+  const { host, stored, submission } = admittedSubmission();
+  const peer = { ...host, chatQueue: [...host.chatQueue] };
+  const replacement = {
+    ...stored,
+    ...(change === "recipient"
+      ? { mentions: [{ profileId: "new-recipient", start: 0, end: 5 }] }
+      : { orderKey: 2 }),
+  };
+  const changes = [{ expected: stored, next: replacement }];
+  expect(updateQueueItems(host, host.sessionKey, changes, stored.agentId)).toBe(true);
+  expect(readQueued(peer, stored.id)).toEqual(replacement);
+  expect(removeQueued(peer, stored.id)).toBe("removed");
+  submission.release();
+  expect(readQueued(host, stored.id)).toBeNull();
+});
+
 it.each([
   ["main", "agent:default:workspace", "default"],
   ["agent:other:main", "agent:other:workspace", "other"],
@@ -177,6 +196,61 @@ const legacy = {
   updatedAt: 50,
   queue,
 };
+
+it("preserves v1 global and qualified-main recovery separately", () => {
+  const source = seed(1, {
+    [globalScope]: legacy,
+    [qualifiedScope]: { ...legacy, queue: [queue[0]] },
+  });
+  expect(listOutboxes(state)).toEqual([]);
+  expect(loadComposer(state, "global", "selected").snapshot).toBeNull();
+  const entries = readRecovery(state).entries;
+  const scopes = entries.map((entry) => entry.sourceScopeKey).toSorted();
+  expect(scopes).toEqual([qualifiedScope, globalScope]);
+  expect(entries.find((entry) => entry.sourceScopeKey === globalScope)?.session).toEqual({
+    ...legacy,
+    queue: queue.map((item) => ({ ...item, sessionKey: "global", agentId: "selected" })),
+  });
+  expect(entries.find((entry) => entry.sourceScopeKey === qualifiedScope)?.session.queue).toEqual([
+    { ...queue[0], sessionKey: "agent:selected:main", agentId: "selected" },
+  ]);
+  expect(sessionStorage.getItem(source.key)).toBeNull();
+  expect(sessionStorage.getItem(storageTargetForComposer(state).key)).toBeNull();
+  const migrated = JSON.parse(sessionStorage.getItem(storageTargetForGateway(gatewayUrl).key)!);
+  expect(migrated.sessions[globalScope].draftRevision).toBe(42);
+});
+
+it("restores collapsed entries unsent into a confirmed empty target", () => {
+  const source = seed(2, { [globalScope]: legacy });
+  const [entry] = readRecovery(state).entries;
+  expect(entry?.session).toEqual(legacy);
+  expect(listOutboxes(state)).toEqual([]);
+  const destination = destinationFor("agent:selected:review", "selected");
+  expect(restoreRecovery(state, entry!, destination)).toBe("restored");
+  expect(readRecovery(state).entries).toEqual([]);
+  const restored = listOutboxes(state)[0]!;
+  expect(
+    restored.queue.map((item) => [item.id, item.sendRunId, item.sendAttempts, item.attachments]),
+  ).toEqual(queue.map((item) => [item.id, item.sendRunId, item.sendAttempts, item.attachments]));
+  expect(restored.queue[0]?.sendState).toBe("unconfirmed");
+  expect(restored.queue.slice(1).every((item) => item.sendState === "failed")).toBe(true);
+  expect(loadComposer(state, restored.sessionKey).snapshot?.goalMode).toEqual(legacy.goalMode);
+  expect(sessionStorage.getItem(source.key)).toBeNull();
+  expect(restoreRecovery(state, entry!, destination)).toBe("conflict");
+});
+
+it.each([2, 3] as const)("keeps v%s source bytes when migration exceeds quota", (version) => {
+  const source = seed(version, { [mainScope]: legacy });
+  const write = vi.spyOn(sessionStorage, "setItem").mockImplementation(() => {
+    throw new DOMException("quota", "QuotaExceededError");
+  });
+  expect(readRecovery(state).entries[0]?.session.queue).toHaveLength(60);
+  expect(sessionStorage.getItem(source.key)).toBe(source.raw);
+  expect(listOutboxes(state)).toEqual([]);
+  write.mockRestore();
+  expect(readRecovery(state).entries).toHaveLength(1);
+  expect(sessionStorage.getItem(source.key)).toBeNull();
+});
 
 it.each(["newer text", "quote-only"] as const)("preserves %s recovery conflicts", (input) => {
   seed(2, { [globalScope]: legacy });
@@ -231,12 +305,7 @@ it("defers new recovery while full, then resumes after restoration", () => {
       {
         sourceVersion: 2,
         sourceScopeKey: `old-${i}`,
-        session: {
-          draft: `draft ${i}`,
-          goalMode: legacy.goalMode,
-          draftRevision: i + 1,
-          updatedAt: i + 1,
-        },
+        session: { draft: `draft ${i}`, draftRevision: i + 1, updatedAt: i + 1 },
       },
     ]),
   );
@@ -252,7 +321,6 @@ it("defers new recovery while full, then resumes after restoration", () => {
   expect(resumed.entries).toHaveLength(80);
   expect(resumed.entries.at(-1)?.session).toEqual(legacy);
   expect(loadComposer(state, state.sessionKey).snapshot?.draft).toBe("draft 0");
-  expect(loadComposer(state, state.sessionKey).snapshot?.goalMode).toEqual(legacy.goalMode);
   expect(sessionStorage.getItem(source.key)).toBeNull();
   expect(recovery.blocked).toBe(true);
 });
@@ -300,13 +368,14 @@ it("keeps only row data when a durable row becomes a local model wait", () => {
   const item = queueItem({ id: "model-wait" });
   admit(host, item);
   const stored = listOutboxes(host)[0]!.queue[0]!;
+
   updateQueued(host, item.id, (current) => ({ ...current, sendState: "waiting-model" }));
+
   expect(readQueued(host, item.id)).toEqual({ ...stored, sendState: "waiting-model" });
   expect(removeQueued(host, item.id)).toBe("removed");
   expect(host.chatQueue).toEqual([]);
   expect(readQueued(host, item.id)).toBeNull();
 });
-
 it("pins admission despite notification-driven default changes", () => {
   const host = { ...state, agentsList: { ...state.agentsList } };
   const unsubscribe = subscribeOutbox(() => {

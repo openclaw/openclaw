@@ -5,6 +5,7 @@ import { performance } from "node:perf_hooks";
 import { constants as zlibConstants, deflateRawSync } from "node:zlib";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ClientOptions } from "ws";
 import {
   WebSocket,
   WebSocketServer,
@@ -34,7 +35,7 @@ import { GATEWAY_PER_MESSAGE_DEFLATE, registerDeflatedSegment } from "../ws-comp
 installGatewayTestHooks({ scope: "suite" });
 
 async function openOperatorSocket(
-  open: (options?: WebSocket.ClientOptions) => WebSocket,
+  open: (options?: ClientOptions) => WebSocket,
   headers?: Record<string, string>,
 ): Promise<WebSocket> {
   const socket = open({ headers });
@@ -64,7 +65,7 @@ async function withServer(
   run: (fixture: {
     port: number;
     capture: ReturnType<typeof captureGatewayConnection>;
-    open: (options?: WebSocket.ClientOptions) => WebSocket;
+    open: (options?: ClientOptions) => WebSocket;
   }) => Promise<void>,
 ) {
   const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });

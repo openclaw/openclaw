@@ -1,19 +1,31 @@
+import { spawnSync } from "node:child_process";
+import {
+  copyFileSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadSecurityReviewPolicy } from "../../scripts/github/security-review-policy.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import {
-  makeSecurityReviewPull,
-  runGuardFixture,
-  securityReviewHead as headSha,
-  securityReviewRollout as rollout,
-  stageGuardPolicy,
-} from "./security-review.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const headSha = "a".repeat(40);
 const author = { id: 1, login: "contributor", type: "User" };
 const approver = { id: 2, login: "maintainer", type: "User" };
 const pullPath = "/repos/openclaw/openclaw/pulls/7";
+const rolloutSha = "c".repeat(40);
+const rollout = {
+  number: 152415,
+  state: "closed",
+  merged: true,
+  merged_at: "2025-12-01T00:00:00Z",
+  merge_commit_sha: rolloutSha,
+  base: { ref: "main", repo: { full_name: "openclaw/openclaw" } },
+};
 const marker = "<!-- openclaw:security-sensitive-guard -->";
 const requestedAt = "2026-01-01T00:00:00Z";
 const notice = {
@@ -41,6 +53,9 @@ const command = (changes: Partial<typeof approval>): Options => ({
 const afterNotice = (changes: Partial<typeof notice>): Options => ({
   comments: [{ ...notice, ...changes }, approval],
 });
+const guardFiles = (script: Options["script"]) => [
+  { filename: script === "dependency-guard" ? "pnpm-workspace.yaml" : "src/gateway/auth.ts" },
+];
 const commentEvent = {
   action: "created",
   issue: { number: 7, pull_request: {} },
@@ -48,10 +63,20 @@ const commentEvent = {
 };
 const { collectSecuritySensitiveChanges } = loadSecurityReviewPolicy();
 
-const pullRequest = makeSecurityReviewPull();
+const pullRequest = {
+  number: 7,
+  state: "open",
+  draft: false,
+  created_at: "2026-01-01T00:00:00Z",
+  user: author,
+  changed_files: 1,
+  head: { sha: headSha, ref: "change", repo: { id: 2 } },
+  base: { sha: "b".repeat(40), ref: "main", repo: { id: 1 } },
+};
 
 type Options = {
   authorRole?: string;
+  approverRole?: string;
   authorType?: string;
   reviews?: object[];
   files?: object[];
@@ -59,15 +84,20 @@ type Options = {
   event?: object;
   routes?: Record<string, unknown>;
   changedFiles?: number;
+  createdAt?: string;
   policy?: string;
   script?: "security-sensitive-guard" | "dependency-guard";
 };
 
-function runGuard(options: Options = {}, statuses?: string[], exitCode = 0) {
+function runGuard(options: Options = {}) {
   const root = tempDirs.make("security-sensitive-guard-");
+  const eventPath = path.join(root, "event.json");
+  const logPath = path.join(root, "requests.jsonl");
+  const fixturePath = path.join(root, "fixture.json");
   const files = options.files ?? [{ filename: "src/gateway/auth.ts", status: "modified" }];
   const pr = {
     ...pullRequest,
+    created_at: options.createdAt ?? pullRequest.created_at,
     user: { ...author, type: options.authorType ?? "User" },
     changed_files: options.changedFiles ?? files.length,
   };
@@ -83,24 +113,70 @@ function runGuard(options: Options = {}, statuses?: string[], exitCode = 0) {
       role_name: options.authorRole ?? "read",
     },
     "GET /repos/openclaw/openclaw/collaborators/maintainer/permission": {
-      role_name: "maintain",
+      role_name: options.approverRole ?? "maintain",
     },
     ...options.routes,
   };
+  writeFileSync(
+    eventPath,
+    JSON.stringify({
+      repository: { default_branch: "main" },
+      ...(options.event ?? { pull_request: pr }),
+    }),
+  );
+  writeFileSync(fixturePath, JSON.stringify({ routes, logPath, clock: true }));
+  writeFileSync(logPath, "");
   const script = options.script ?? "security-sensitive-guard";
-  const scriptPath =
-    options.policy === undefined
-      ? path.resolve(`scripts/github/${script}.mjs`)
-      : stageGuardPolicy(root, options.policy, script);
-  const result = runGuardFixture({
-    root,
-    script: scriptPath,
-    routes,
-    event: { repository: { default_branch: "main" }, ...(options.event ?? { pull_request: pr }) },
-    env: { PATH: process.env.PATH },
-  });
-  const { requests } = result;
-  const evaluation = {
+  let scriptPath = path.resolve(`scripts/github/${script}.mjs`);
+  if (options.policy !== undefined) {
+    // Exercise policy edits in a separate trusted checkout without modifying the
+    // shared source tree or adding a production-only-for-tests policy override.
+    for (const source of [
+      "scripts/github/security-sensitive-guard.mjs",
+      "scripts/github/dependency-guard.mjs",
+      "scripts/github/security-review-policy.mjs",
+      "scripts/github/security-review-rollout.mjs",
+      "scripts/github/guard-review.mjs",
+      "scripts/github/guard-shared.mjs",
+      "scripts/lib/bounded-response.mjs",
+    ]) {
+      const target = path.join(root, source);
+      mkdirSync(path.dirname(target), { recursive: true });
+      copyFileSync(source, target);
+    }
+    mkdirSync(path.join(root, ".github"));
+    writeFileSync(path.join(root, ".github/security-review-policy.yml"), options.policy);
+    symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
+    scriptPath = realpathSync(path.join(root, `scripts/github/${script}.mjs`));
+  }
+  const result = spawnSync(
+    process.execPath,
+    ["--import", path.resolve("test/fixtures/github-guard-fetch.mjs"), scriptPath],
+    {
+      encoding: "utf8",
+      env: {
+        PATH: process.env.PATH,
+        GITHUB_TOKEN: "fixture-token",
+        GITHUB_EVENT_PATH: eventPath,
+        GITHUB_REPOSITORY: "openclaw/openclaw",
+        GITHUB_RUN_ID: "123",
+        OPENCLAW_GUARD_TEST_FIXTURE: fixturePath,
+      },
+    },
+  );
+  const requests = readFileSync(logPath, "utf8")
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map(
+      (line) =>
+        JSON.parse(line) as {
+          method: string;
+          path?: string;
+          body?: { state?: string; context?: string; body?: string; labels?: string[] };
+        },
+    );
+  return {
     ...result,
     requests,
     statuses: requests
@@ -112,14 +188,21 @@ function runGuard(options: Options = {}, statuses?: string[], exitCode = 0) {
         (request.method === "PATCH" && request.path?.includes("/issues/comments/")),
     )?.body?.body,
   };
-  expect(evaluation.status, evaluation.stderr).toBe(exitCode);
-  if (statuses) {
-    expect(evaluation.statuses).toEqual(statuses);
-  }
-  return evaluation;
+}
+
+function expectGuard(options: Options, statuses: string[], exitCode = 0) {
+  const result = runGuard(options);
+  expect(result.status, result.stderr).toBe(exitCode);
+  expect(result.statuses).toEqual(statuses);
+  return result;
 }
 
 describe("security-sensitive guard entry point", () => {
+  it.each(["maintain", "admin"])("allows a %s author without extra approval", (authorRole) => {
+    const result = expectGuard({ authorRole }, ["failure", "success"]);
+    expect(result.comment).toContain("informational");
+  });
+
   it.each([
     { script: "security-sensitive-guard" as const, filename: "src/gateway/auth.ts" },
     { script: "dependency-guard" as const, filename: "pnpm-workspace.yaml" },
@@ -134,18 +217,21 @@ describe("security-sensitive guard entry point", () => {
         "POST /repos/openclaw/openclaw/issues/7/labels": { httpError: 403 },
       },
     });
-    expect(result.comment).toContain("informational");
+    expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).toMatch(/Skipping label .*Fixture API failure/u);
     expect(result.stderr).toMatch(/Skipping comment creation.*Fixture API failure/u);
   });
 
   it.each<[string, Options]>([
     ["an external author", {}],
+    ["write access", { authorRole: "write" }],
     ["an admin bot", { authorRole: "admin", authorType: "Bot" }],
     [
       "an ordinary approval review",
       { reviews: [{ user: approver, state: "APPROVED", commit_id: headSha }] },
     ],
+    ["a write-only approver", { ...command({}), approverRole: "write" }],
+    ["a bot command", command({ user: { ...approver, type: "Bot" } })],
     [
       "a removed maintainer",
       {
@@ -158,7 +244,9 @@ describe("security-sensitive guard entry point", () => {
     ["a command before the first notice", { comments: [approval] }],
     ["a simultaneous command", command({ created_at: requestedAt, updated_at: requestedAt })],
     ["an old comment adding the command", command({ created_at: requestedAt })],
+    ["an edited command", command({ updated_at: "2026-01-01T00:02:00Z" })],
     ["a comment predating the revised notice", afterNotice({ updated_at: "2026-01-01T00:02:00Z" })],
+    ["a different guard's command", command({ body: "/allow-dependencies-change" })],
     ["a quoted command", command({ body: "> /allow-security-sensitive-change" })],
     ["a fenced command", command({ body: "```\n/allow-security-sensitive-change\n```" })],
     ["a contributor's copied notice", afterNotice({ user: author })],
@@ -179,17 +267,37 @@ describe("security-sensitive guard entry point", () => {
       }),
     ],
   ])("requires a fresh command for %s", (_name, options) => {
-    const result = runGuard(options, ["failure", "failure"]);
+    const result = expectGuard(options, ["failure", "failure"]);
     expect(result.comment).toContain("/allow-security-sensitive-change");
     expect(
       result.requests.some((request) => request.body?.labels?.includes("security-review-required")),
     ).toBe(true);
   });
 
-  it.each(["created", "edited", "deleted"])("rereads authority for %s comment events", (action) => {
-    const result = runGuard({ event: { ...commentEvent, action } });
-    expect(result.statuses).toEqual(["failure", "failure"]);
-  });
+  it.each(["maintain", "admin"])(
+    "accepts a current-revision command from a %s user",
+    (approverRole) => {
+      const result = expectGuard(
+        { comments: [notice, approval], approverRole, event: commentEvent },
+        ["failure", "success"],
+      );
+      expect(result.comment).toContain("- Maintainer: @maintainer");
+      expect(result.comment).toContain(`- Approval comment: ${approval.html_url}`);
+      expect(
+        result.requests
+          .filter((request) => request.path?.includes("/statuses/"))
+          .every((request) => request.path?.endsWith(headSha)),
+      ).toBe(true);
+    },
+  );
+
+  it.each(["created", "edited", "deleted"])(
+    "uses the %s comment event only as a PR locator and rereads live command authority",
+    (action) => {
+      const result = runGuard({ event: { ...commentEvent, action } });
+      expect(result.statuses).toEqual(["failure", "failure"]);
+    },
+  );
 
   it.each([
     { name: "head", oldRecord: { head: "c".repeat(40), base: "main" } },
@@ -208,58 +316,53 @@ describe("security-sensitive guard entry point", () => {
     const waiting = runGuard({ comments: [{ ...notice, body: first.comment }] });
     expect(waiting.statuses.at(-1)).toBe("failure");
     const updatedNotice = { ...notice, body: waiting.comment, updated_at: "2026-01-01T00:02:00Z" };
-    const allowed = runGuard({ comments: [updatedNotice, approval] }, ["failure", "success"]);
-    expect(allowed.comment).toContain("- Maintainer: @maintainer");
-    expect(allowed.comment).toContain(`- Approval comment: ${approval.html_url}`);
-    expect(
-      allowed.requests
-        .filter(({ path: requestPath }) => requestPath.includes("/statuses/"))
-        .every(({ path: requestPath }) => requestPath.endsWith(headSha)),
-    ).toBe(true);
+    const allowed = runGuard({ comments: [updatedNotice, approval] });
+    expect(allowed.status, allowed.stderr).toBe(0);
     const approvedNotice = {
       ...updatedNotice,
       body: allowed.comment,
       updated_at: "2026-01-01T00:03:00Z",
     };
-    runGuard({
+    const refreshed = runGuard({
       comments: [approvedNotice, approval],
       event: commentEvent,
     });
-    runGuard(
-      {
-        comments: [approvedNotice],
-        event: { ...commentEvent, action: "deleted" },
-      },
-      ["failure", "failure"],
-    );
+    expect(refreshed.status, refreshed.stderr).toBe(0);
+    const revoked = runGuard({
+      comments: [approvedNotice],
+      event: { ...commentEvent, action: "deleted" },
+    });
+    expect(revoked.status, revoked.stderr).toBe(0);
+    expect(revoked.statuses).toEqual(["failure", "failure"]);
   });
 
   it.each([{ ...commentEvent, issue: { number: 7 } }, { inputs: { pr_number: "7" } }])(
-    "rejects missing PR locators: %j",
+    "rejects events without a PR locator before making requests: %j",
     (event) => {
-      const result = runGuard({ event }, [], 1);
+      const result = runGuard({ event });
+      expect(result.status).toBe(1);
       expect(result.requests).toEqual([]);
     },
   );
 
-  it.each([undefined, "", null])("rejects invalid default branches: %s", (defaultBranch) => {
-    const result = runGuard(
-      {
+  it.each([undefined, "", null])(
+    "rejects an invalid default branch %s before writes",
+    (defaultBranch) => {
+      const result = runGuard({
         event: {
           repository: { default_branch: defaultBranch },
           issue: { number: 7, pull_request: {} },
           comment: {},
         },
-      },
-      [],
-      1,
-    );
-    expect(result.stderr).toContain("event has no default branch");
-    expect(result.requests).toEqual([]);
-  });
+      });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("event has no default branch");
+      expect(result.requests).toEqual([]);
+    },
+  );
 
   it.each(["security-sensitive-guard", "dependency-guard"] as const)(
-    "%s stops closed PRs during rollout",
+    "%s stops a closed PR during rollout reads without publishing failure",
     (script) => {
       const pr = { ...pullRequest, created_at: "2025-01-01T00:00:00Z" };
       const result = runGuard({
@@ -274,6 +377,7 @@ describe("security-sensitive guard entry point", () => {
           "GET /repos/openclaw/openclaw/pulls/152415": { advanceMs: 15_000, response: rollout },
         },
       });
+      expect(result.status, result.stderr).toBe(0);
       expect(result.stdout).toContain("skipping");
       expect(result.requests.every((entry) => entry.method === "GET")).toBe(true);
       expect(result.requests.at(-1)).toMatchObject({ method: "GET", path: pullPath });
@@ -281,27 +385,91 @@ describe("security-sensitive guard entry point", () => {
   );
 
   it("refuses incomplete changed-file lists", () => {
-    const result = runGuard({ changedFiles: 3001 }, ["failure"], 1);
+    const result = expectGuard({ changedFiles: 3001 }, ["failure"], 1);
     expect(result.stderr).toContain("complete changed-file list");
   });
 
+  it.each(["security-sensitive-guard", "dependency-guard"] as const)(
+    "%s skips a superseded head after approval is read",
+    (script) => {
+      const pr = pullRequest;
+      const result = runGuard({
+        script,
+        files: guardFiles(script),
+        authorRole: "maintain",
+        comments: [notice, approval],
+        routes: {
+          [`GET ${pullPath}`]: {
+            responses: [pr, pr, { ...pr, head: { ...pr.head, sha: "c".repeat(40) } }],
+          },
+        },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("Superseded");
+      expect(result.statuses).toEqual(["failure"]);
+      expect(result.comment).toBeUndefined();
+    },
+  );
+
   it("leaves hard-tier approval to CODEOWNERS and ignores ordinary changes", () => {
-    const result = runGuard(
-      {
-        comments: [],
-        files: [{ filename: "SECURITY.md" }, { filename: "src/utils.ts" }],
-      },
-      ["failure", "success"],
-    );
+    const result = runGuard({
+      comments: [],
+      files: [{ filename: "SECURITY.md" }, { filename: "src/utils.ts" }],
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.statuses).toEqual(["failure", "success"]);
     expect(result.comment).toBeUndefined();
   });
 
-  it.each([
-    { name: "unavailable", response: { httpError: 403 } },
-    { name: "malformed", response: { ...rollout, merge_commit_sha: "main" } },
-  ])("invalidates a previous approval when rollout metadata is $name", ({ response }) => {
-    runGuard({ routes: { "GET /repos/openclaw/openclaw/pulls/152415": response } }, ["failure"], 1);
-  });
+  describe.each(["security-sensitive-guard", "dependency-guard"] as const)(
+    "%s rollout enforcement",
+    (script) => {
+      const files = guardFiles(script);
+
+      it.each([
+        { status: "diverged", ancestor: "b".repeat(40), enforced: false },
+        { status: "ahead", ancestor: rolloutSha, enforced: true },
+      ])(
+        "applies old-PR rollout authority for $status ancestry",
+        ({ status, ancestor, enforced }) => {
+          const result = runGuard({
+            script,
+            files,
+            createdAt: "2025-11-01T00:00:00Z",
+            routes: {
+              [`GET /repos/openclaw/openclaw/compare/${rolloutSha}...${headSha}`]: {
+                base_commit: { sha: rolloutSha },
+                merge_base_commit: { sha: ancestor },
+                status,
+              },
+            },
+          });
+          expect(result.status, result.stderr).toBe(0);
+          if (enforced) {
+            expect(result.statuses.at(-1)).toBe("failure");
+            expect(result.comment).toContain("/allow-");
+          } else {
+            expect(result.stdout).toContain("grandfathered");
+            expect(result.statuses).toEqual([]);
+            expect(result.requests.every((request) => request.method === "GET")).toBe(true);
+          }
+        },
+      );
+
+      it.each([
+        { name: "unavailable", response: { httpError: 403 } },
+        { name: "malformed", response: { ...rollout, merge_commit_sha: "main" } },
+      ])("invalidates a previous approval when rollout metadata is $name", ({ response }) => {
+        const result = runGuard({
+          script,
+          files,
+          routes: { "GET /repos/openclaw/openclaw/pulls/152415": response },
+        });
+        expect(result.status).toBe(1);
+        expect(result.statuses).toEqual(["failure"]);
+      });
+    },
+  );
 
   describe("trusted YAML policy", () => {
     const policy = `
@@ -320,17 +488,22 @@ dependencies:
     it.each([
       { script: "security-sensitive-guard" as const, filename: "custom/product.ts" },
       { script: "dependency-guard" as const, filename: "custom/dependency-policy" },
-    ])("$script uses its checkout policy", ({ script, filename }) => {
-      const result = runGuard({ script, policy, files: [{ filename }] });
-      expect(result.statuses).toEqual(["failure", "failure"]);
-      expect(result.comment).toContain("custom/");
-    });
+    ])(
+      "$script reads changed classification from YAML beside its checkout",
+      ({ script, filename }) => {
+        const result = runGuard({ script, policy, files: [{ filename }] });
+        expect(result.statuses).toEqual(["failure", "failure"]);
+        expect(result.comment).toContain("custom/");
+      },
+    );
 
     it.each(["security-sensitive-guard", "dependency-guard"] as const)(
-      "%s invalidates success for invalid YAML",
+      "%s cannot preserve an old success when YAML is invalid",
       (script) => {
         for (const invalidPolicy of ["categories: [", policy.replace("paths:", "pathz:")]) {
-          const result = runGuard({ script, policy: invalidPolicy }, ["failure"], 1);
+          const result = runGuard({ script, policy: invalidPolicy });
+          expect(result.status).toBe(1);
+          expect(result.statuses).toEqual(["failure"]);
           expect(result.stderr).toContain("Invalid security-review-policy.yml");
         }
       },
