@@ -17,6 +17,8 @@ scenario:
       defaults:
         compaction:
           mode: default
+          # Isolate the invalid-output retry from the separate split-turn summary.
+          keepRecentTokens: 1
   docsRefs:
     - docs/concepts/compaction.md
   codeRefs:
