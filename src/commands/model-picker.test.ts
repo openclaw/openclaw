@@ -11,7 +11,12 @@ import {
   promptDefaultModel,
   promptModelAllowlist,
 } from "../flows/model-picker.js";
-import type { WizardMultiSelectParams, WizardPrompter } from "../wizard/prompts.js";
+import {
+  WizardCancelledError,
+  type WizardMultiSelectParams,
+  type WizardPrompter,
+  type WizardSelectParams,
+} from "../wizard/prompts.js";
 import { makePrompter } from "./setup/__tests__/test-utils.js";
 
 const loadModelCatalog = vi.hoisted(() => vi.fn());
@@ -262,6 +267,82 @@ beforeEach(() => {
 afterEach(() => {
   cliBackendsTesting.resetDepsForTest();
   vi.unstubAllEnvs();
+});
+
+function menuCatalog(count: number, singleProvider = false) {
+  return Array.from({ length: count }, (_, index) =>
+    catalogModel(
+      singleProvider || index < 15 ? "zeta" : index < 30 ? "alpha" : "beta",
+      `model-${index}`,
+      `Model ${index}`,
+    ),
+  );
+}
+
+it.each([
+  { count: 30, selection: "*", singleProvider: false },
+  { count: 31, selection: "*", singleProvider: false },
+  { count: 31, selection: "alpha", singleProvider: false },
+  { count: 31, selection: "*", singleProvider: true },
+])(
+  "preserves counts and choices for $count models ($selection, single=$singleProvider)",
+  async ({ count, selection, singleProvider }) => {
+    vi.stubEnv("OPENCLAW_LOCALE", "en");
+    const catalog = menuCatalog(count, singleProvider);
+    loadModelCatalog.mockResolvedValue(catalog);
+    const modelPrompt = count > 30 && !singleProvider ? 1 : 0;
+    const chosen = selection === "alpha" ? "alpha/model-15" : "zeta/model-0";
+    const prompts: WizardSelectParams<unknown>[] = [];
+    const prompter = makePrompter({
+      select: async (params) => {
+        prompts.push(params);
+        const value = params.message === "Filter models by provider" ? selection : chosen;
+        return expectDefined(params.options.find((option) => option.value === value)).value;
+      },
+    });
+    const { result } = await promptDefaultPicker({
+      config: agentConfig({
+        model: "zeta/model-0",
+        models: { "alpha/model-15": { alias: "compact" } },
+      }),
+      prompter,
+    });
+    expect(prompts).toHaveLength(modelPrompt + 1);
+    if (modelPrompt === 1) {
+      expect(prompts[0]?.options).toEqual([
+        { value: "*", label: "All providers" },
+        { value: "alpha", label: "alpha", hint: "15 models" },
+        { value: "beta", label: "beta", hint: "1 model" },
+        { value: "zeta", label: "zeta", hint: "15 models" },
+      ]);
+    }
+    const expected = selection === "alpha" ? catalog.slice(15, 30) : catalog;
+    const expectedValues = expected.map(({ provider, id }) => `${provider}/${id}`);
+    if (selection === "alpha") {
+      expectedValues.push("zeta/model-0");
+    }
+    const options = expectDefined(prompts[modelPrompt]).options;
+    expect(options.map(({ value }) => value)).toEqual(["__manual__", ...expectedValues]);
+    if (!singleProvider) {
+      expect(expectDefined(options.find(({ value }) => value === "alpha/model-15")).hint).toContain(
+        "alias: compact",
+      );
+    }
+    expect(result).toEqual({ model: chosen });
+  },
+);
+
+it("propagates provider-menu cancellation before choosing a model", async () => {
+  loadModelCatalog.mockResolvedValue(menuCatalog(31));
+  const cancellation = new WizardCancelledError();
+  const select = vi.fn(async () => {
+    throw cancellation;
+  });
+  await expect(promptDefaultPicker({ prompter: makePrompter({ select }) })).rejects.toBe(
+    cancellation,
+  );
+  expect(select).toHaveBeenCalledTimes(1);
+  expect(pickerRuntime.runProviderModelSelectedHook).not.toHaveBeenCalled();
 });
 
 it("uses selected ChatGPT capabilities regardless of physical row order", async () => {

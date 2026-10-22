@@ -1,4 +1,3 @@
-// Docs command tests cover docs lookup, fetch handling, and runtime output.
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { isRich } from "../../packages/terminal-core/src/theme.js";
@@ -30,23 +29,24 @@ vi.mock("../cli/command-format.js", () => ({
 }));
 
 const { docsSearchCommand } = await import("./docs.js");
+let runtime: ReturnType<typeof createTestRuntime>;
+const search = (query: string[], options: Parameters<typeof docsSearchCommand>[2] = {}) =>
+  docsSearchCommand(query, runtime, options);
+const respond = (results: unknown) =>
+  fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ results })));
+const loggedJson = () => JSON.parse(String(runtime.log.mock.calls[0]?.[0]));
 
 describe("docsSearchCommand", () => {
   beforeEach(() => {
     fetchMock.mockReset();
     vi.mocked(isRich).mockReturnValue(false);
     vi.stubGlobal("fetch", fetchMock);
+    runtime = createTestRuntime();
   });
 
   it("calls the Cloudflare docs search API", async () => {
-    fetchMock.mockResolvedValueOnce(
-      new Response(JSON.stringify({ results: [] }), {
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
-    const runtime = createTestRuntime();
-
-    await docsSearchCommand(["plugin", "allowlist"], runtime);
+    respond([]);
+    await search(["plugin", "allowlist"]);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = expectDefined(
@@ -62,34 +62,23 @@ describe("docsSearchCommand", () => {
   });
 
   it("limits normalized search results before rendering", async () => {
-    fetchMock.mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          results: [
-            { title: "Invalid result without a link" },
-            { title: "CLI reference", link: "https://docs.openclaw.ai/cli" },
-            { title: "Plugin guide", link: "https://docs.openclaw.ai/plugins" },
-          ],
-        }),
-      ),
-    );
-    const runtime = createTestRuntime();
-
-    await docsSearchCommand(["openclaw"], runtime, { json: true, limit: 1 });
-
-    expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
+    respond([
+      { title: "Invalid result without a link" },
+      { title: "CLI reference", link: "https://docs.openclaw.ai/cli" },
+      { title: "Plugin guide", link: "https://docs.openclaw.ai/plugins" },
+    ]);
+    await search(["openclaw"], { json: true, limit: 1 });
+    expect(loggedJson()).toEqual({
       query: "openclaw",
       results: [{ title: "CLI reference", link: "https://docs.openclaw.ai/cli" }],
     });
   });
 
   it("emits one JSON object for the docs homepage", async () => {
-    const runtime = createTestRuntime();
-
-    await docsSearchCommand([], runtime, { json: true });
+    await search([], { json: true });
 
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
+    expect(loggedJson()).toEqual({
       query: null,
       url: "https://docs.openclaw.ai/",
       results: [],
@@ -97,10 +86,8 @@ describe("docsSearchCommand", () => {
   });
 
   it("rejects string results instead of reporting a successful empty search", async () => {
-    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ results: "unavailable" })));
-    const runtime = createTestRuntime();
-
-    await expect(docsSearchCommand(["gateway"], runtime, { json: true })).rejects.toThrow(
+    respond("unavailable");
+    await expect(search(["gateway"], { json: true })).rejects.toThrow(
       "Docs search failed: Docs search response is malformed: expected results array",
     );
 
@@ -116,9 +103,7 @@ describe("docsSearchCommand", () => {
     fetchMock.mockResolvedValueOnce(
       new Response(body, { headers: { "Content-Type": "application/json" } }),
     );
-    const runtime = createTestRuntime();
-
-    await expect(docsSearchCommand(["plugin"], runtime)).rejects.toThrow(
+    await expect(search(["plugin"])).rejects.toThrow(
       "Docs search failed: Docs search response is malformed JSON",
     );
   });
@@ -144,23 +129,14 @@ describe("docsSearchCommand", () => {
     },
   ])("renders search results with rich=$rich", async ({ rich, output }) => {
     vi.mocked(isRich).mockReturnValue(rich);
-    fetchMock.mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          results: [
-            {
-              title: "Plugin [allowlist]",
-              link: "https://docs.openclaw.ai/plugins/allowlist",
-              snippet: "How to (configure).",
-            },
-          ],
-        }),
-        { headers: { "Content-Type": "application/json" } },
-      ),
-    );
-    const runtime = createTestRuntime();
-
-    await docsSearchCommand(["plugin", "[allowlist]"], runtime);
+    respond([
+      {
+        title: "Plugin [allowlist]",
+        link: "https://docs.openclaw.ai/plugins/allowlist",
+        snippet: "How to (configure).",
+      },
+    ]);
+    await search(["plugin", "[allowlist]"]);
 
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
@@ -185,9 +161,7 @@ describe("docsSearchCommand", () => {
         headers: { "Content-Type": "application/json" },
       }),
     );
-    const runtime = createTestRuntime();
-
-    await expect(docsSearchCommand(["oversized"], runtime)).rejects.toThrow(
+    await expect(search(["oversized"])).rejects.toThrow(
       "Docs search failed: Docs search response exceeds 8388608 bytes",
     );
     expect(cancel).toHaveBeenCalledOnce();

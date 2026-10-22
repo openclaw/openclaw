@@ -1937,7 +1937,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/commands/codex-runtime-plugin-install.test.ts",
   "src/commands/control-ui-handoff.test.ts",
   "src/commands/daemon-install-helpers.test.ts",
-  "src/commands/dashboard.links.test.ts",
   "src/commands/dashboard.test.ts",
   "src/commands/dashboard/json.test.ts",
   "src/commands/doctor-agent-database-admission.test.ts",

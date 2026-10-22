@@ -15,20 +15,7 @@ vi.mock("../config/sessions.js", () => ({
 
 function createDatabase(pathname: string, table: string): void {
   const database = new DatabaseSync(pathname);
-  if (table === "schema_meta") {
-    database.exec(`
-      CREATE TABLE schema_meta (
-        meta_key TEXT PRIMARY KEY,
-        role TEXT NOT NULL,
-        schema_version INTEGER NOT NULL,
-        agent_id TEXT
-      );
-      INSERT INTO schema_meta (meta_key, role, schema_version, agent_id)
-      VALUES ('primary', 'agent', 0, 'main');
-    `);
-  } else {
-    database.exec(`CREATE TABLE ${table} (meta_key TEXT PRIMARY KEY)`);
-  }
+  database.exec(`CREATE TABLE ${table} (meta_key TEXT PRIMARY KEY)`);
   database.close();
 }
 

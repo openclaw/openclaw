@@ -91,6 +91,15 @@ beforeEach(() => {
   loadDeviceIdentityIfPresentAsync.mockResolvedValue(null);
   loadDeviceAuthTokenReadOnly.mockResolvedValue(null);
   serviceInstall.mockResolvedValue(undefined);
+  runExec.mockResolvedValue({
+    stdout: JSON.stringify({
+      nodeVersion: "26.8.1",
+      sqliteVersion: "3.53.4",
+      sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+      nodeSharedSqlite: false,
+    }),
+    stderr: "",
+  });
 });
 afterEach(() => {
   process.execPath = originalExecPath;
@@ -118,15 +127,6 @@ async function install(env: Record<string, string | undefined> = {}, authFromEnv
 
 describe.skipIf(process.platform === "win32")("node-host runtime install boundary", () => {
   it("accepts a Node 26 system runtime with safe embedded SQLite", async () => {
-    runExec.mockResolvedValue({
-      stdout: JSON.stringify({
-        nodeVersion: "26.8.1",
-        sqliteVersion: "3.53.4",
-        sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
-        nodeSharedSqlite: false,
-      }),
-      stderr: "",
-    });
     const plan = await install();
     expect(plan.programArguments).toEqual([
       "/usr/bin/node",
@@ -144,14 +144,6 @@ describe.skipIf(process.platform === "win32")("node-host runtime install boundar
   it.each([false, true])(
     "persists ambient auth only when explicitly selected for a paired node (explicit=%s)",
     async (explicit) => {
-      runExec.mockResolvedValue({
-        stdout: JSON.stringify({
-          nodeVersion: "26.8.1",
-          sqliteVersion: "3.53.4",
-          sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
-        }),
-        stderr: "",
-      });
       loadNodeHostConfig.mockResolvedValue({
         version: 1,
         nodeId: "paired-node",
@@ -166,12 +158,11 @@ describe.skipIf(process.platform === "win32")("node-host runtime install boundar
         },
         explicit,
       );
-      expect(plan.environment?.OPENCLAW_GATEWAY_TOKEN).toBe(
-        explicit ? "unrelated-gateway-token" : undefined,
-      );
-      expect(plan.environment?.OPENCLAW_GATEWAY_PASSWORD).toBe(
-        explicit ? "unrelated-gateway-password" : undefined,
-      );
+      for (const key of ["TOKEN", "PASSWORD"]) {
+        expect(plan.environment?.[`OPENCLAW_GATEWAY_${key}`]).toBe(
+          explicit ? `unrelated-gateway-${key.toLowerCase()}` : undefined,
+        );
+      }
       expect(plan.programArguments.includes("--auth-from-env")).toBe(explicit);
     },
   );
