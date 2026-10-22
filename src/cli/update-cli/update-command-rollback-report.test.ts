@@ -6,7 +6,6 @@ import { prepareGithubIssue } from "../../infra/github-issue.js";
 import * as ledger from "../../infra/update-run-ledger.js";
 import { defaultRuntime } from "../../runtime.js";
 import { stepFixture } from "./update-command-fixtures.test-support.js";
-import { runInteractiveUpdateFailureAction } from "./update-command-report.js";
 import {
   UpdateCommandFailure,
   UpdateCommandFinalizedRecoveryFailure,
@@ -199,18 +198,11 @@ describe("interactive report actions", () => {
     });
     mocks.select.mockImplementation(async () => actions.shift() ?? "dismiss");
     mocks.confirm.mockResolvedValue(confirmed);
-    const run = () =>
-      runInteractiveUpdateFailureAction({
-        attemptId: runId,
-        env: f.env,
-        result: f.result,
-        runtime: defaultRuntime,
-      });
-    return run;
+    return f.run;
   }
 
   it("shows the sanitized preview and honors cancellation without submission", async () => {
-    await expect(action(["report"], false)()).resolves.toBe("handled");
+    await action(["report"], false)();
     expect(mocks.prepare).toHaveBeenCalledOnce();
     expect(defaultRuntime.log).toHaveBeenCalledWith(f.prepared.body);
     expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({ initialValue: false }));
@@ -230,7 +222,7 @@ describe("interactive report actions", () => {
       message,
       savedReportPath: f.prepared.savedReportPath,
     });
-    await expect(run()).resolves.toBe("handled");
+    await run();
     if (result.status !== "fallback") {
       expect(defaultRuntime.log).toHaveBeenCalledWith(message);
     }
@@ -260,7 +252,7 @@ describe("interactive report actions", () => {
       })
       .mockRejectedValueOnce(new Error("transport failed"))
       .mockRejectedValueOnce(new Error("still unavailable"));
-    await expect(run()).resolves.toBe("handled");
+    await run();
     expect(mocks.select).toHaveBeenCalledTimes(4);
     expect(
       mocks.select.mock.calls.map(([params]) =>
@@ -280,7 +272,8 @@ describe("interactive report actions", () => {
   it("requires a fresh explicit choice before diagnosing after a report failure", async () => {
     const run = action(["report", "triage"]);
     mocks.submit.mockRejectedValueOnce(new Error("report unavailable"));
-    await expect(run()).resolves.toBe("triage");
+    await run();
+    expect(mocks.triage).toHaveBeenCalledOnce();
     expect(mocks.select).toHaveBeenCalledTimes(2);
     expect(defaultRuntime.error).toHaveBeenCalledWith(
       expect.stringContaining("report unavailable"),
