@@ -152,10 +152,10 @@ function expectSearch(config: OpenClawConfig, provider: string, enabled = true) 
 
 beforeEach(() => {
   ensureOnboardingPluginInstalled.mockClear();
-  authMocks.hasAuthProfileForProvider.mockReset();
-  authMocks.hasAuthProfileForProvider.mockReturnValue(false);
-  webSearchProviderMocks.resolvePluginWebSearchProviders.mockReset();
-  webSearchProviderMocks.resolvePluginWebSearchProviders.mockReturnValue([mockGrokProvider]);
+  authMocks.hasAuthProfileForProvider.mockReset().mockReturnValue(false);
+  webSearchProviderMocks.resolvePluginWebSearchProviders
+    .mockReset()
+    .mockReturnValue([mockGrokProvider]);
 });
 
 it("keeps search config unchanged when plugin capability consent is declined", async () => {
@@ -258,19 +258,22 @@ it.each([
       };
       const original = structuredClone(config);
       const text = vi.fn(async () => "");
-      const result = await setup(
-        config,
-        createWizardPrompter({ text }, { defaultSelect: "grok" }),
-        {
-          quickstartDefaults: mode === "quickstart",
-          secretInputMode: mode === "reference-mode" ? "ref" : "plaintext",
-        },
-      );
+      const prompts = createWizardPrompter({ text }, { defaultSelect: "grok" });
+      const result = await setup(config, prompts, {
+        quickstartDefaults: mode === "quickstart",
+        secretInputMode: mode === "reference-mode" ? "ref" : "plaintext",
+      });
       expectSearch(result.config, "grok");
       expect(result.config.models).toEqual(original.models);
       expect(result.config.plugins?.entries?.xai?.config).toBeUndefined();
       expect(config).toEqual(original);
       expect(text).toHaveBeenCalledTimes(mode === "interactive" ? 1 : 0);
+      if (mode === "quickstart") {
+        expect(prompts.note).not.toHaveBeenCalledWith(
+          mockGrokProvider.credentialNote,
+          mockGrokProvider.label,
+        );
+      }
     });
   },
 );
@@ -316,18 +319,6 @@ it("shows provider credential notes before SecretRef setup notes", async () => {
   );
 });
 
-it("skips provider credential notes in quickstart fast path", async () => {
-  const prompter = grokPrompter();
-  await setup({ plugins: grokPluginsWithCredential(true) }, prompter, {
-    quickstartDefaults: true,
-  });
-
-  expect(prompter.note).not.toHaveBeenCalledWith(
-    mockGrokProvider.credentialNote,
-    mockGrokProvider.label,
-  );
-});
-
 it.each([true, false])(
   "preserves disabled web_search unless explicitly overridden (%s)",
   async (preserve) => {
@@ -370,15 +361,6 @@ it("offers and installs DeepSeek search before its plugin is installed", async (
   });
 });
 
-it("forwards the persistent-effect guard to external provider installation", async () => {
-  const beforePersistentEffect = vi.fn(async () => {});
-  await setup({}, grokPrompter(["brave"], "brave-test-key"), {
-    beforePersistentEffect,
-  });
-
-  expect(latestPluginInstallRequest().beforePersistentEffect).toBe(beforePersistentEffect);
-});
-
 it("returns an install-failed outcome without changing config", async () => {
   ensureOnboardingPluginInstalled.mockResolvedValueOnce({
     cfg: { plugins: { installs: {} } },
@@ -398,13 +380,16 @@ it("returns an install-failed outcome without changing config", async () => {
 });
 
 it("installs an external catalog search provider when web search stays disabled", async () => {
+  const beforePersistentEffect = vi.fn(async () => {});
   const { config: next } = await setup(
     { tools: { web: { search: { provider: "brave", enabled: false } } } },
     grokPrompter(["brave"], "brave-disabled-key"),
+    { beforePersistentEffect },
   );
 
   expect(ensureOnboardingPluginInstalled).toHaveBeenCalledTimes(1);
   const installRequest = latestPluginInstallRequest();
+  expect(installRequest.beforePersistentEffect).toBe(beforePersistentEffect);
   expect(installRequest).toMatchObject({
     entry: {
       pluginId: "brave",

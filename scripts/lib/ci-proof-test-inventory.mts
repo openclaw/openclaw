@@ -2405,7 +2405,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/entry.respawn-diagnostics.test.ts",
   "src/entry.run-main.test.ts",
   "src/entry.test.ts",
-  "src/flows/channel-setup-fallback.test.ts",
   "src/flows/channel-setup.test.ts",
   "src/flows/doctor-core-platform-notes.test.ts",
   "src/flows/doctor-gateway-exec-credential.test.ts",
