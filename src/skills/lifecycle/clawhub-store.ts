@@ -2,7 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
-import { stableStringify } from "@openclaw/normalization-core";
+import { hasNonEmptyString, stableStringify } from "@openclaw/normalization-core";
 import { normalizeOptionalString as normalizeOptionalStringValue } from "@openclaw/normalization-core/string-coerce";
 import {
   getAgentWorkspaceAccess,
@@ -146,10 +146,6 @@ export function normalizeGitHubCommitSegment(raw: unknown): string | undefined {
   return commit && /^[0-9a-f]{40}$/i.test(commit) ? commit : undefined;
 }
 
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
-
 export function normalizeDownloadedArtifactLock(
   raw: unknown,
 ): ClawHubSkillDownloadedArtifactLock | undefined {
@@ -159,8 +155,8 @@ export function normalizeDownloadedArtifactLock(
   const candidate = raw as Partial<ClawHubSkillDownloadedArtifactLock>;
   if (
     (candidate.kind === "archive" || candidate.kind === "clawpack") &&
-    isNonEmptyString(candidate.sha256) &&
-    isNonEmptyString(candidate.integrity)
+    hasNonEmptyString(candidate.sha256) &&
+    hasNonEmptyString(candidate.integrity)
   ) {
     return { kind: candidate.kind, sha256: candidate.sha256, integrity: candidate.integrity };
   }
@@ -172,7 +168,7 @@ export function normalizeSkillFileLock(raw: unknown): ClawHubSkillFileLock | und
     return undefined;
   }
   const candidate = raw as Partial<ClawHubSkillFileLock>;
-  return isNonEmptyString(candidate.path) && isNonEmptyString(candidate.sha256)
+  return hasNonEmptyString(candidate.path) && hasNonEmptyString(candidate.sha256)
     ? { path: candidate.path, sha256: candidate.sha256 }
     : undefined;
 }
@@ -182,9 +178,9 @@ function normalizeClawHubSkillOrigin(
 ): ClawHubSkillOrigin | null {
   if (
     raw?.version !== 1 ||
-    !isNonEmptyString(raw.registry) ||
-    !isNonEmptyString(raw.slug) ||
-    !isNonEmptyString(raw.installedVersion) ||
+    !hasNonEmptyString(raw.registry) ||
+    !hasNonEmptyString(raw.slug) ||
+    !hasNonEmptyString(raw.installedVersion) ||
     typeof raw.installedAt !== "number"
   ) {
     return null;
