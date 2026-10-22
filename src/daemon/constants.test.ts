@@ -6,21 +6,15 @@ import {
   resolveGatewaySystemdServiceNameCandidates,
 } from "./constants.js";
 
-function expectCandidates(profile: string | undefined, expected: string[]) {
+it.each([
+  [undefined, ["openclaw-gateway", "openclaw"]],
+  ["default", ["openclaw-gateway", "openclaw"]],
+  ["lisa", ["openclaw-gateway-lisa", "openclaw-lisa"]],
+  ["node", ["openclaw-gateway-node"]],
+  ["gateway", ["openclaw-gateway-gateway"]],
+  ["gateway-lisa", ["openclaw-gateway-gateway-lisa"]],
+] as const)("resolves canonical and unambiguous legacy candidates for %s", (profile, expected) => {
   expect(resolveGatewaySystemdServiceNameCandidates(profile)).toEqual(expected);
-}
-
-it("includes current default and legacy bare openclaw", () => {
-  expectCandidates(undefined, ["openclaw-gateway", "openclaw"]);
-  expectCandidates("default", ["openclaw-gateway", "openclaw"]);
-});
-it("includes current and legacy names for a named profile", () => {
-  expectCandidates("lisa", ["openclaw-gateway-lisa", "openclaw-lisa"]);
-});
-it("omits legacy names that identify Node or another profile's gateway", () => {
-  expectCandidates("node", ["openclaw-gateway-node"]);
-  expectCandidates("gateway", ["openclaw-gateway-gateway"]);
-  expectCandidates("gateway-lisa", ["openclaw-gateway-gateway-lisa"]);
 });
 
 it.each([

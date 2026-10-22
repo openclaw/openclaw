@@ -583,6 +583,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/commands-plugins.owner.test.ts",
   "src/auto-reply/reply/commands-plugin.owner.test.ts",
   "src/auto-reply/reply/commands-plugin.test.ts",
+  "src/auto-reply/reply/commands-plugin.native-subagents.test.ts",
   "src/auto-reply/reply/commands-session-restart.test.ts",
   "src/cli/node-cli/identity.test.ts",
   "src/node-host/local-id.test.ts",

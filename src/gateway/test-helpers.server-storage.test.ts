@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, expect, onTestFinished, test, vi } from "vitest";
@@ -131,9 +132,7 @@ test("joins external-store workers before deleting their Gateway lease coordinat
   const identity = stateCache.captureOpenClawStateDatabaseReadAdmission(sharedStatePath).identity;
   const sharedState = stateDb.openOpenClawStateDatabase({ env });
   let retained = stateCache.retainOpenClawStateDatabaseForIndependentRead(sharedState.path);
-  if (!retained) {
-    throw new Error("Expected the fixture shared-state owner to be open");
-  }
+  assert(retained, "Expected the fixture shared-state owner to be open");
   const closedOwners: Array<string | undefined> = [];
   const unregister = stateCache.registerOpenClawStateDatabaseAsyncResource({
     close: async (closedIdentity) => {

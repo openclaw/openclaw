@@ -445,6 +445,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
         allowReservedCommandNames,
         allowOwnerStatusExposure: canClaimReservedCommandOwnership(record),
       },
+      record.contracts?.commandRuntimeCapabilities,
     );
     if (!result.ok) {
       reportRegistrationError(record, `command registration failed: ${result.error}`);

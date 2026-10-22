@@ -781,7 +781,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "extensions/slack/src/monitor/message-handler/prepare.test.ts",
   "extensions/slack/src/monitor/message-handler/prepare.thread-session-key.test.ts",
   "extensions/slack/src/monitor/provider.auth-test-token.test.ts",
-  "extensions/slack/src/monitor/provider.event-identity-recovery.test.ts",
   "extensions/slack/src/monitor/provider.ingress-start-cleanup.test.ts",
   "extensions/slack/src/monitor/provider.reconnect-loop.test.ts",
   "extensions/slack/src/monitor/slash.test.ts",
