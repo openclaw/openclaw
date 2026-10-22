@@ -1,10 +1,17 @@
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSmsAccount } from "./accounts.js";
 import { smsPlugin } from "./channel.js";
 import type { SmsDeliveryRecord } from "./delivery-observations.js";
 import { createPartialSmsSend } from "./partial-send.test-support.js";
+import { setSmsRuntime } from "./runtime.js";
+import { toSmsPlainText } from "./send.js";
 import type { probeSmsAccount as probeSmsAccountType } from "./status.js";
 import type { sendSmsViaTwilio as sendSmsViaTwilioType } from "./twilio.js";
 import type { SmsChannelConfig } from "./types.js";
@@ -30,6 +37,7 @@ const listRecentSmsDeliveryRecords = vi.hoisted(() =>
   vi.fn(async (): Promise<SmsDeliveryRecord[]> => []),
 );
 const recordInitialSmsDeliveryResult = vi.hoisted(() => vi.fn(async () => null));
+const deliveryWarn = vi.fn();
 const probeSmsAccount = vi.hoisted(() =>
   vi.fn<typeof probeSmsAccountType>(async () => ({
     ok: true,
@@ -57,6 +65,12 @@ vi.mock("./status.js", async (importOriginal) => ({
 }));
 
 beforeEach(() => {
+  const runtime = createPluginRuntimeMock();
+  const logger = runtime.logging.getChildLogger({ plugin: "sms" });
+  logger.warn = deliveryWarn;
+  runtime.logging.getChildLogger = () => logger;
+  setSmsRuntime(runtime);
+  deliveryWarn.mockClear();
   sendSmsViaTwilio.mockReset();
   sendSmsViaTwilio.mockImplementation(async ({ to, onPlatformSendDispatch }) => {
     await onPlatformSendDispatch?.();
@@ -73,6 +87,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  clearRuntimeConfigSnapshot();
 });
 
 function createConfig(overrides: SmsChannelConfig = {}) {
@@ -90,6 +105,7 @@ function mediaContext({
   mediaLocalRoots?: string[];
   mediaReadFile?: () => Promise<Buffer>;
   onPlatformSendDispatch?: () => Promise<void>;
+  onDeliveryResult?: ReturnType<typeof createPartialSmsSend>["onDeliveryResult"];
 } = {}) {
   return {
     cfg: createConfig({ publicWebhookUrl: SMS_TEST_WEBHOOK, ...config }),
@@ -354,5 +370,92 @@ describe("smsPlugin outbound", () => {
       .catch((error: unknown) => error);
 
     fixture.expectPartial(observed);
+  });
+  it("records later chunks after an observation write fails", async () => {
+    sendSmsViaTwilio
+      .mockResolvedValueOnce({ sid: "SM-1", to: TO, status: "queued" })
+      .mockResolvedValueOnce({ sid: "SM-2", to: TO, status: "queued" });
+    recordInitialSmsDeliveryResult.mockRejectedValueOnce(new Error("first write failed"));
+    await outbound?.sendText?.({
+      cfg: createConfig({ textChunkLimit: 5 }),
+      to: TO,
+      text: "alpha beta",
+    });
+    expect(sendSmsViaTwilio).toHaveBeenCalledTimes(2);
+    expect(recordInitialSmsDeliveryResult).toHaveBeenCalledTimes(2);
+    expect(deliveryWarn).toHaveBeenCalledOnce();
+  });
+
+  it("labels transcript headers promoted to a chunk boundary", async () => {
+    const header = "user[2026-07-02]";
+    await outbound?.sendText?.({
+      cfg: createConfig({ textChunkLimit: 60 }),
+      to: TO,
+      text: `${"x".repeat(50)} ${header} ok`,
+    });
+    const texts = sendSmsViaTwilio.mock.calls.map(([call]) => call.text);
+    expect(texts).toContain(`[assistant-authored transcript] ${header} ok`);
+    expect(texts.every((text) => text !== undefined && text.length <= 60)).toBe(true);
+  });
+
+  it("labels assistant-authored transcript role headers in plain text", () => {
+    const header = "user[Thu 2026-07-02] question";
+    const labeled = `[assistant-authored transcript] ${header}`;
+    expect(toSmsPlainText(header)).toBe(labeled);
+    expect(toSmsPlainText(`\`${header}\``)).toBe(labeled);
+    expect(toSmsPlainText(`\u00a0${header}`)).toBe(labeled);
+    expect(toSmsPlainText(`- ${header}`)).toBe(`• ${labeled}`);
+    expect(toSmsPlainText("[user](https://example.com)[Thu 2026-07-02] question")).toBe(
+      "[assistant-authored transcript] user (https://example.com)[Thu 2026-07-02] question",
+    );
+  });
+
+  it("checks current credentials before staging media", async () => {
+    setRuntimeConfigSnapshot(createConfig({ authToken: "replacement" }));
+    await expect(lifecycle?.beforeSendAttempt?.(mediaContext())).rejects.toThrow(
+      "SMS credentials changed for default",
+    );
+    expect(hostedMediaMocks.prepare).not.toHaveBeenCalled();
+  });
+
+  it("preserves pre-dispatch staging failures", async () => {
+    const rejection = new PlatformMessageNotDispatchedError("unsupported hosted media", {
+      cause: new Error("unsupported content type"),
+      retryable: false,
+    });
+    hostedMediaMocks.prepare.mockRejectedValueOnce(rejection);
+    await expect(lifecycle?.beforeSendAttempt?.(mediaContext())).rejects.toBe(rejection);
+    expect(sendSmsViaTwilio).not.toHaveBeenCalled();
+  });
+
+  it("reports an accepted MMS before a dispatched caption chunk fails", async () => {
+    const fixture = createPartialSmsSend(sendSmsViaTwilio, "MM-first", "media");
+    const ctx = mediaContext({
+      config: { textChunkLimit: 5 },
+      text: "alpha beta gamma",
+      onPlatformSendDispatch: fixture.onPlatformSendDispatch,
+      onDeliveryResult: fixture.onDeliveryResult,
+    });
+    await lifecycle?.beforeSendAttempt?.(ctx);
+    const observed: unknown = await messageSend?.media?.(ctx).catch((error: unknown) => error);
+    expect(sendSmsViaTwilio.mock.calls[0]?.[0]).toMatchObject({
+      text: "alpha",
+      mediaUrls: [hostedMediaMocks.url],
+    });
+    expect(sendSmsViaTwilio.mock.calls[1]?.[0]).toMatchObject({ text: " beta" });
+    expect(sendSmsViaTwilio.mock.calls[1]?.[0]).not.toHaveProperty("mediaUrls");
+    fixture.expectPartial(observed);
+  });
+
+  it("sends media-only MMS without a Body", async () => {
+    const ctx = mediaContext({ text: " " });
+    await lifecycle?.beforeSendAttempt?.(ctx);
+    await messageSend?.media?.(ctx);
+    expect(sendSmsViaTwilio).toHaveBeenCalledExactlyOnceWith({
+      account: createSmsTestAccount({ accountId: "default" }),
+      to: TO,
+      mediaUrls: [hostedMediaMocks.url],
+      onPlatformSendDispatch: expect.any(Function),
+    });
   });
 });

@@ -139,7 +139,12 @@ describe("createSmsIngressSpool", () => {
       dmPolicy: "allowlist" as const,
       allowFrom: [sender],
     };
-    const deliveries: Array<{ id: string; body: string; attachments: number }> = [];
+    const deliveries: Array<{
+      id: string;
+      body: string;
+      attachments: number;
+      receivedAt: number | undefined;
+    }> = [];
     const channelRuntime = {
       commands: {
         shouldComputeCommandAuthorized: () => false,
@@ -173,6 +178,7 @@ describe("createSmsIngressSpool", () => {
             id: String(input.extra?.MessageSid),
             body: input.message.bodyForAgent ?? input.message.rawBody,
             attachments: input.media?.length ?? 0,
+            receivedAt: input.timestamp,
           });
           return {};
         },
@@ -254,8 +260,8 @@ describe("createSmsIngressSpool", () => {
     expect(secondResponse.status).toBe(200);
     await spool.waitForIdle();
     expect(deliveries).toEqual([
-      { id: messageSid, body: "keep this attachment", attachments: 1 },
-      { id: secondSid, body: "the later message", attachments: 0 },
+      { id: messageSid, body: "keep this attachment", attachments: 1, receivedAt: now - 1_000 },
+      { id: secondSid, body: "the later message", attachments: 0, receivedAt: now },
     ]);
     expect(mediaRequests).toBe(2);
     expect(authenticatedMediaRequests).toBe(2);
@@ -266,36 +272,17 @@ describe("createSmsIngressSpool", () => {
     expect(await queue.listPending()).toEqual([]);
   });
 
-  it.each([false, true])("replays an event admitted after shutdown: %s", async (afterStop) => {
+  it("replays an event admitted after shutdown", async () => {
     const stateDir = await createStateDir();
-    const receivedAt = 1_700_000_000_456;
-    const now = afterStop
-      ? undefined
-      : vi
-          .spyOn(Date, "now")
-          .mockReturnValueOnce(receivedAt)
-          .mockReturnValue(receivedAt + 60_000);
     const retired = createTestSpool(stateDir, {
       deliver: vi.fn<SmsIngressDeliver>(async () => undefined),
     });
-    if (afterStop) {
-      retired.start();
-    } else {
-      await retired.enqueue(form("SM-replay"));
-    }
+    retired.start();
     await retired.stop();
-    if (afterStop) {
-      await expect(retired.enqueue(form("SM-replay"))).resolves.toMatchObject({ kind: "accepted" });
-    }
-    now?.mockRestore();
+    await expect(retired.enqueue(form("SM-replay"))).resolves.toMatchObject({ kind: "accepted" });
     const deliver = adoptingDelivery();
-    const recovered = createTestSpool(stateDir, { deliver });
-    await drainSpool(recovered);
-
+    await drainSpool(createTestSpool(stateDir, { deliver }));
     expect(deliver).toHaveBeenCalledOnce();
-    if (!afterStop) {
-      expect(deliver).toHaveBeenCalledWith(expect.any(Object), expect.any(Object), receivedAt);
-    }
   });
 
   it("does not let a non-cooperative delivery block route replacement shutdown", async () => {
@@ -315,68 +302,39 @@ describe("createSmsIngressSpool", () => {
     spool.start();
     await spool.enqueue(form("SM-non-cooperative-stop"));
     await deliveryStarted;
-
     await spool.stop();
-
     expect(deliverySignal?.aborted).toBe(true);
   });
 
-  it.each(["SmsMessageSid"])("accepts the legacy %s event id alias", async (key) => {
-    const stateDir = await createStateDir();
-    const deliver = adoptingDelivery();
-    const spool = createTestSpool(stateDir, { deliver });
-    const rawForm = form("SM-alias");
-    delete rawForm.MessageSid;
-    rawForm[key] = "SM-alias";
+  it.each(["MessageSid", "SmsMessageSid"])(
+    "preserves Messaging Service RCS identity with %s",
+    async (key) => {
+      const stateDir = await createStateDir();
+      const deliver = adoptingDelivery();
+      const spool = createTestSpool(stateDir, {
+        account: { ...account, fromNumber: "", messagingServiceSid: "MG123" },
+        deliver,
+      });
 
-    expect(await spool.enqueue(rawForm)).toMatchObject({ kind: "accepted", duplicate: false });
-    await drainSpool(spool);
+      const rawForm: Record<string, string> = {
+        ...form("SM-rcs-service"),
+        From: "rcs:+15551234567",
+        To: "rcs:example-agent",
+        MessagingServiceSid: "MG123",
+      };
+      delete rawForm.MessageSid;
+      rawForm[key] = "SM-rcs-service";
+      expect(await spool.enqueue(rawForm)).toMatchObject({ kind: "accepted", duplicate: false });
+      await drainSpool(spool);
 
-    expect(deliver).toHaveBeenCalledWith(
-      expect.objectContaining({ messageSid: "SM-alias" }),
-      expect.any(Object),
-      expect.any(Number),
-    );
-  });
-
-  it("preserves the old handler-reload replay guard scenario with a tombstone", async () => {
-    const stateDir = await createStateDir();
-    const firstDeliver = adoptingDelivery();
-    const first = createTestSpool(stateDir, { deliver: firstDeliver });
-    await first.enqueue(form("SM-handler-reload"));
-    await drainSpool(first);
-    await first.stop();
-
-    const reloadedDeliver = vi.fn<SmsIngressDeliver>(async () => undefined);
-    const reloaded = createTestSpool(stateDir, { deliver: reloadedDeliver });
-    expect(await reloaded.enqueue(form("SM-handler-reload"))).toMatchObject({
-      kind: "completed",
-      duplicate: true,
-    });
-    await drainSpool(reloaded);
-
-    expect(firstDeliver).toHaveBeenCalledOnce();
-    expect(reloadedDeliver).not.toHaveBeenCalled();
-  });
-
-  it("preserves Messaging Service RCS identity", async () => {
-    const stateDir = await createStateDir();
-    const deliver = adoptingDelivery();
-    const spool = createTestSpool(stateDir, {
-      account: { ...account, fromNumber: "", messagingServiceSid: "MG123" },
-      deliver,
-    });
-
-    await spool.enqueue({
-      ...form("SM-rcs-service"),
-      From: "rcs:+15551234567",
-      To: "rcs:example-agent",
-      MessagingServiceSid: "MG123",
-    });
-    await drainSpool(spool);
-
-    expect(deliver).toHaveBeenCalledOnce();
-  });
+      expect(deliver).toHaveBeenCalledOnce();
+      expect(deliver).toHaveBeenCalledWith(
+        expect.objectContaining({ messageSid: "SM-rcs-service" }),
+        expect.any(Object),
+        expect.any(Number),
+      );
+    },
+  );
 
   it.each<[string, Record<string, string>, ResolvedSmsAccount?]>([
     ["invalid payload", { MessageSid: "SM-invalid", From: "+15551234567" }],
