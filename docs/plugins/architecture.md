@@ -258,6 +258,11 @@ including TypeScript source entries, share the host's code identity; each invent
 still owns its registered callbacks and cleanup. Loading edited bundled code requires
 a Gateway restart; rebuild first when the installation loads compiled output.
 
+Source preparation workers wake synchronous host readers after posting results,
+callback requests, and consumption acknowledgements. The shared sequence is a
+progress hint only: the host still services the transport and checks the actual
+task receipt and deadline. Readers retain bounded polling for worker failures.
+
 Doctor retains an unexecuted source snapshot across its maintenance phases.
 Each phase admits fresh callback instances with private module files and settles
 their cleanup before releasing its lifecycle lease. The snapshot is reused for
