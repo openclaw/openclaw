@@ -1,3 +1,4 @@
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { recordBackupOutcomeBestEffort } from "./backup-shared.js";
 
@@ -21,11 +22,9 @@ export async function backupRecordCommand(
   if (!target) {
     throw new Error("Missing required --target label.");
   }
-  const bytes = opts.bytes === undefined ? undefined : Number(opts.bytes);
-  if (
-    bytes !== undefined &&
-    (!Number.isSafeInteger(bytes) || bytes < 0 || String(opts.bytes).trim() === "")
-  ) {
+  const bytes =
+    opts.bytes === undefined ? undefined : parseStrictNonNegativeInteger(opts.bytes);
+  if (opts.bytes !== undefined && bytes === undefined) {
     throw new Error("--bytes must be a nonnegative integer.");
   }
   const outcome = {

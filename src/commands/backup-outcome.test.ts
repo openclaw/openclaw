@@ -14,7 +14,7 @@ import { readBackupRuns } from "../state/backup-run-records.js";
 import * as stateDb from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { backupRecordCommand } from "./backup-record.js";
-import { createTestRuntime } from "./test-runtime-config-helpers.js";
+import { createCapturingTestRuntime, createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const transport = vi.hoisted(() => ({ call: vi.fn() }));
 vi.mock("../gateway/call.js", async (importOriginal) => ({
@@ -160,5 +160,47 @@ it("rejects wrong owners, revoked callers, and malformed input before recording"
   expect(authorizeOperatorScopesForMethod("backup.recordOutcome", ["operator.write"])).toEqual({
     allowed: false,
     missingScope: "operator.admin",
+  });
+});
+
+describe("backup record --bytes strict integer validation", () => {
+  it.each(["0x10", "0b101", "0o17", "1e3", "12abc", "-5", "", "   "])(
+    "rejects non-decimal-integer --bytes %p before recording",
+    async (bytes) => {
+      await fixture(false);
+      const runtime = createTestRuntime();
+      await expect(
+        backupRecordCommand(runtime, { status: "ok", target: "t", bytes }),
+      ).rejects.toThrow("--bytes must be a nonnegative integer.");
+      expect(runtime.error).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["+5", 5],
+    ["010", 10],
+    ["42", 42],
+    ["0", 0],
+  ])("accepts decimal string --bytes %p and records %i", async (bytes, expected) => {
+    await fixture(false);
+    const { runtime, logs } = createCapturingTestRuntime();
+    await backupRecordCommand(runtime, { status: "ok", target: "t", bytes, json: true });
+    expect(JSON.parse(logs.at(-1)!)).toMatchObject({ target: "t", status: "ok", bytes: expected });
+  });
+
+  it("accepts a numeric --bytes caller and records the value", async () => {
+    await fixture(false);
+    const { runtime, logs } = createCapturingTestRuntime();
+    await backupRecordCommand(runtime, { status: "ok", target: "t", bytes: 42, json: true });
+    expect(JSON.parse(logs.at(-1)!)).toMatchObject({ bytes: 42 });
+  });
+
+  it("omits bytes from the outcome when --bytes is not supplied", async () => {
+    await fixture(false);
+    const { runtime, logs } = createCapturingTestRuntime();
+    await backupRecordCommand(runtime, { status: "ok", target: "t", json: true });
+    const outcome = JSON.parse(logs.at(-1)!);
+    expect(outcome).toMatchObject({ target: "t", status: "ok" });
+    expect(outcome).not.toHaveProperty("bytes");
   });
 });
