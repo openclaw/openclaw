@@ -430,6 +430,13 @@ it.each([
     expect(document.activeElement).toBe(trigger);
     await userEvent.keyboard("{Enter}");
     await expect.element(dismiss).toBeVisible();
+
+    for (const id of ["checks", "monitoring"]) {
+      await page.elementLocator(menu.querySelector<HTMLElement>(`[data-value="${id}"]`)!).click();
+      await expect.poll(() => document.activeElement?.getAttribute("data-value")).toBe("back");
+      await userEvent.keyboard("{Escape}");
+      await expect.poll(() => document.activeElement?.getAttribute("data-value")).toBe(id);
+    }
     host.presented = false;
     await host.updateComplete;
     await expect.poll(() => menu.matches(":popover-open")).toBe(false);

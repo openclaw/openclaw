@@ -49,7 +49,6 @@ describe("AgentsPage routing", () => {
       page.read().agentFiles.onFileDraftChange("AGENTS.md", "Previous agent's file");
       page.setRouteData({
         ...agentsRouteData(currentGateway, null, requestedAgentId, selection),
-        gatewaySnapshot: snapshot(null, false),
         panel: "tools",
       });
 

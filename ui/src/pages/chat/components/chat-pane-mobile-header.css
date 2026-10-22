@@ -215,13 +215,7 @@ openclaw-pending-session-create .sidebar-region__header .chat-pane__header--mobi
 }
 
 .agent-chat__header--mobile .mobile-header__spinner {
-  animation: mobile-header-spin 1s linear infinite;
-}
-
-@keyframes mobile-header-spin {
-  to {
-    transform: rotate(360deg);
-  }
+  animation: btn-spinner-spin 1s linear infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {

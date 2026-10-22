@@ -7,39 +7,19 @@ export type SessionAttentionClassification =
       reason: string;
       classification: "long_running";
       activeWorkKind?: DiagnosticSessionActiveWorkKind;
-      recoveryEligible: false;
     }
   | {
       eventType: "session.stalled";
       reason: string;
       classification: "blocked_tool_call" | "stalled_agent_run";
       activeWorkKind?: DiagnosticSessionActiveWorkKind;
-      recoveryEligible: false;
     }
   | {
       eventType: "session.stuck";
       reason: string;
       classification: "stale_session_state";
       activeWorkKind?: undefined;
-      recoveryEligible: true;
     };
-
-export function isRepeatedModelRequestStalled(
-  activity: DiagnosticSessionActivitySnapshot,
-  abortThresholdMs: number,
-): boolean {
-  const now = Date.now();
-  return (
-    activity.hasActiveEmbeddedRun === true &&
-    (activity.repeatedRequestNoProgressAgeMs ?? 0) >= abortThresholdMs &&
-    (activity.activeModelCallRecoveryDeadlineAtMs === undefined ||
-      now >= activity.activeModelCallRecoveryDeadlineAtMs) &&
-    (activity.activeRetryWaitDeadlineAtMs === undefined ||
-      now >= activity.activeRetryWaitDeadlineAtMs) &&
-    (activity.activeToolRecoveryDeadlineAtMs === undefined ||
-      now >= activity.activeToolRecoveryDeadlineAtMs)
-  );
-}
 
 export function classifySessionAttention(params: {
   state?: "idle" | "processing" | "waiting";
@@ -54,7 +34,6 @@ export function classifySessionAttention(params: {
     reason,
     classification: "long_running",
     activeWorkKind: params.activity.activeWorkKind,
-    recoveryEligible: false,
   });
   const stalled = (
     reason: string,
@@ -64,7 +43,6 @@ export function classifySessionAttention(params: {
     reason,
     classification,
     activeWorkKind: params.activity.activeWorkKind,
-    recoveryEligible: false,
   });
   if (
     params.activity.activeRetryWaitDeadlineAtMs !== undefined &&
@@ -99,7 +77,6 @@ export function classifySessionAttention(params: {
         eventType: "session.stuck",
         reason: "queued_work_without_active_run",
         classification: "stale_session_state",
-        recoveryEligible: true,
       };
     }
     if (
@@ -145,7 +122,6 @@ export function classifySessionAttention(params: {
     eventType: "session.stuck",
     reason: params.queueDepth > 0 ? "queued_work_without_active_run" : "stale_session_state",
     classification: "stale_session_state",
-    recoveryEligible: true,
   };
 }
 

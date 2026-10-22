@@ -7,10 +7,11 @@ import {
   renderTerminalSafeTable,
 } from "../../packages/terminal-core/src/table.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
-import { getLoadedChannelPlugin } from "../channels/plugins/index.js";
+import { findChatChannelMeta } from "../channels/chat-meta.js";
+import { getChannelPlugin, getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
+import { normalizeChatChannelId } from "../channels/registry.js";
 import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
-import { formatGatewaySummary, formatOutboundDeliverySummary } from "../infra/outbound/format.js";
 import {
   resolveMessageActionMessageId,
   resolveMessageActionOutcome,
@@ -213,14 +214,26 @@ export function formatMessageCliText(
       const directResult = poll?.result
         ? { ...poll.result, channel: poll.channel }
         : (send?.result as OutboundDeliveryResult | undefined);
-      const summary =
-        delivery.via === "direct"
-          ? formatOutboundDeliverySummary(delivery.channel, directResult, { action })
-          : formatGatewaySummary({
-              action,
-              channel: delivery.channel,
-              messageId: delivery.result?.messageId ?? null,
-            });
+      let summary: string;
+      if (delivery.via === "direct") {
+        const resultChannel = directResult ? directResult.channel : delivery.channel;
+        let label = getChannelPlugin(resultChannel)?.meta.label;
+        if (!label) {
+          // Some legacy chat channels are not plugins; keep their human labels for CLI output.
+          const normalized = normalizeChatChannelId(resultChannel);
+          label = normalized
+            ? (findChatChannelMeta(normalized)?.label ?? resultChannel)
+            : resultChannel;
+        }
+        const base = `✅ ${action} via ${label}. Message ID: ${directResult ? directResult.messageId : "unknown"}`;
+        summary = directResult?.target
+          ? `${base} (${directResult.target.kind} ${directResult.target.id})`
+          : base;
+      } else {
+        const channelSuffix = delivery.channel ? ` (${delivery.channel})` : "";
+        const messageId = delivery.result?.messageId ?? "unknown";
+        summary = `✅ ${action} via gateway${channelSuffix}. Message ID: ${messageId}`;
+      }
       const lines = [ok(summary)];
       if (pollId) {
         lines.push(ok(`Poll id: ${pollId}`));
