@@ -7,6 +7,7 @@ import { captureOperatorToolGatewayContinuationContext } from "../../gateway/ser
 import { authorizePreparedSessionMutation } from "../../gateway/session-sharing-policy.js";
 import { prepareSessionMutationFacts } from "../../gateway/session-sharing-preparation.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { assertionSucceeds } from "../../shared/assertion.js";
 import { prepareUserProfileRoleAuthority } from "../../state/user-channel-identity-operations.js";
@@ -23,6 +24,7 @@ class FollowupAccessChangedError extends Error {}
 export async function prepareSessionsSendFollowup(params: {
   runId: string;
   requesterTurnRunId?: string;
+  visibleReply?: boolean;
   withRequesterAuthority?: <T>(run: () => T) => T;
   requesterAgentId: string;
   requesterSessionKey: string;
@@ -49,6 +51,7 @@ export async function prepareSessionsSendFollowup(params: {
   const revoked = new AbortController();
   const signal = AbortSignal.any([captured.signal, revoked.signal]);
   let stopAccessWatch: (() => void) | undefined;
+  let stopIdentityWatch: (() => void) | undefined;
   let released = false;
   let observationReleased = false;
   let authorityReleased = true;
@@ -59,6 +62,7 @@ export async function prepareSessionsSendFollowup(params: {
     }
     released = true;
     stopAccessWatch?.();
+    stopIdentityWatch?.();
     for (const read of facts) {
       read.release();
     }
@@ -151,6 +155,35 @@ export async function prepareSessionsSendFollowup(params: {
         return [target.canonicalKey, target.storeKey, ...target.storeKeys];
       }),
     );
+    const incarnations = facts.map((read) => ({ read, target: read.readCurrent(cfg).target }));
+    stopIdentityWatch = onSessionIdentityMutation((change) => {
+      if (
+        incarnations.some(({ read, target }) => {
+          if (
+            target.agentId !== change.agentId ||
+            target.entry.sessionId !== change.previous.sessionId ||
+            !change.previous.sessionKeys.some((key) => target.storeKeys.includes(key))
+          ) {
+            return false;
+          }
+          if (target.readSource) {
+            return target.readSource.databaseIdentity === change.databaseIdentity;
+          }
+          // Memory-only readers fence their own actor without publishing a disk source.
+          try {
+            return (
+              read.readCurrent(getRuntimeConfig()).target.entry.sessionId !== target.entry.sessionId
+            );
+          } catch {
+            return true;
+          }
+        })
+      ) {
+        revoked.abort(
+          new FollowupAccessChangedError("Followup conversation was reset or replaced."),
+        );
+      }
+    });
     stopAccessWatch = sessionChanges.subscribe((change) => {
       if ("sessionKey" in change && !watchedKeys.has(change.sessionKey)) {
         return;
@@ -189,6 +222,9 @@ export async function prepareSessionsSendFollowup(params: {
       runId: params.runId,
       requesterSessionKey: params.requesterSessionKey,
       requesterSessionId,
+      requesterStorePath: facts[0]!.storageTarget.storePath,
+      requesterTurnRunId: params.requesterTurnRunId,
+      visibleReply: params.visibleReply,
       requesterAuthority,
       requesterAgentId: params.requesterAgentId,
       targetSessionKey: params.targetSessionKey,

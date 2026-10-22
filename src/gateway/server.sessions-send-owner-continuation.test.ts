@@ -93,12 +93,23 @@ function completeRun(runId: string, text: string) {
   return { payloads: [{ text, mediaUrl: null }], meta: { durationMs: 1, terminalReply } };
 }
 
-it.for(["success", "child error", "owner revoked", "owner reassigned", "new user turn"] as const)(
-  "enforces owner authority at the final plugin write after an inline wait expires (%s)",
-  async (outcome, { signal }) => {
+it.for([
+  { flow: "child", outcome: "success" },
+  { flow: "child", outcome: "child error" },
+  { flow: "child", outcome: "owner revoked" },
+  { flow: "child", outcome: "owner reassigned" },
+  { flow: "child", outcome: "new user turn" },
+  { flow: "child", outcome: "new user while waiting" },
+  { flow: "peer", outcome: "success" },
+  { flow: "peer", outcome: "owner revoked" },
+  { flow: "peer", outcome: "owner reassigned" },
+] as const)(
+  "enforces owner authority at the final plugin write after an inline wait expires ($flow: $outcome)",
+  async ({ flow, outcome }, { signal }) => {
+    const visiblePeer = flow === "peer";
     const root = tempDirs.make("openclaw-followup-owner-");
     const parent = "agent:main:main";
-    const child = "agent:main:subagent:owner-proof";
+    const child = visiblePeer ? "agent:peer:main" : "agent:main:subagent:owner-proof";
     const parentId = "owner-proof-parent";
     const originalRun = "owner-proof-original";
     const parentIdentity = { sessionKey: parent, sessionId: parentId, agentId: "main" };
@@ -108,14 +119,23 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
       wait(awaitGateBeforeSettlement(entered, work, message));
     const effectPath = path.join(root, "effect.txt");
     testState.sessionStorePath = path.join(root, "sessions.json");
+    testState.agentsConfig = { entries: { main: {}, peer: {} } };
     await writeSessionStore({
       entries: {
         [parent]: { sessionId: parentId, updatedAt: 1 },
-        [child]: { sessionId: "owner-proof-child", spawnedBy: parent, spawnDepth: 1, updatedAt: 1 },
+        [child]: {
+          sessionId: "owner-proof-child",
+          ...(!visiblePeer ? { spawnedBy: parent, spawnDepth: 1 } : {}),
+          updatedAt: 1,
+        },
       },
     });
     await prepareGatewayReplyRuntimeForTest();
-    const config = { ...getRuntimeConfig(), commands: { ownerAllowFrom: ["discord:owner-proof"] } };
+    const config = {
+      ...getRuntimeConfig(),
+      commands: { ownerAllowFrom: ["discord:owner-proof"] },
+      tools: { sessions: { visibility: "all" as const }, agentToAgent: { enabled: true } },
+    };
     setRuntimeConfigSnapshot(config);
     publishSystemEventStoreConfig(config);
     const sender = { senderId: "owner-proof", channel: "discord" };
@@ -133,6 +153,7 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
     const requesterAccepted = createDeferred();
     const completionClosed = createDeferred();
     let closeCompletion: (() => void) | undefined;
+    let readCompletionProgress: (() => SessionFollowupCompletion["progress"]) | undefined;
     let requesterReceipt: unknown;
     const onCompletionClosed = () => completionClosed.resolve();
     const observeInlineWait = vi
@@ -141,6 +162,9 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
         observeInlineWait.mockRestore();
         const pending = this.take(timeoutMs);
         if (timeoutMs !== undefined) {
+          readCompletionProgress = () => this.progress;
+          expect(this.request.visibleReply).toBe(visiblePeer);
+          expect(this.request.targetAgentId).toBe(visiblePeer ? "peer" : "main");
           this.signal.addEventListener("abort", onCompletionClosed, { once: true });
           closeCompletion = () => {
             this.close();
@@ -173,6 +197,7 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
     let pluginError: unknown;
     let parentError: unknown;
     let originalClosed = false;
+    let effectWrites = 0;
     const builder = createTestPluginRegistry();
     const artifact = {
       source: path.join(root, "index.js"),
@@ -227,6 +252,7 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
             await effectMayFinish.promise;
             context.assertInvocationCurrent();
             fs.writeFileSync(effectPath, "authorized effect");
+            effectWrites += 1;
             return { content: [{ type: "text", text: "written" }], details: {} };
           },
         }),
@@ -238,7 +264,7 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
       const runId = expectDefined(opts.runId, "Gateway run ID");
       // The simulated command replaces session-preparation, which publishes these run facts.
       registerAgentRunContext(runId, {
-        agentId: "main",
+        agentId: visiblePeer && opts.sessionKey === child ? "peer" : "main",
         sessionKey: opts.sessionKey,
         sessionId: opts.sessionKey === child ? "owner-proof-child" : parentId,
       });
@@ -260,9 +286,16 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
         expect(originalClosed).toBe(true);
         expect(opts.inputProvenance).toMatchObject({
           kind: "inter_session",
-          sourceTool: "subagent_announce",
+          sourceTool: visiblePeer ? "sessions_send" : "subagent_announce",
           sourceSessionKey: child,
         });
+        if (visiblePeer) {
+          expect(opts).toMatchObject({
+            deliver: true,
+            channel: "discord",
+            to: "channel:owner-proof",
+          });
+        }
         const admitted = await admission.admit("embedded");
         const caller = createAdmittedGatewayToolCallerIdentity({
           admittedRunContext: admitted,
@@ -330,7 +363,15 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
                 createOpenClawTools({
                   runId: originalRun,
                   ...toolOptions,
-                  config: { ...config, tools: { sessions: { visibility: "all" } } },
+                  config,
+                  ...(visiblePeer
+                    ? {
+                        requesterReplyExpectation: "required" as const,
+                        agentChannel: "discord",
+                        agentAccountId: "default",
+                        agentTo: "channel:owner-proof",
+                      }
+                    : {}),
                 }).find((tool) => tool.name === "sessions_send"),
                 "sessions_send tool",
               );
@@ -349,6 +390,9 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
         releaseAgentRunDelegatedAuthority(authority);
         clearAgentRunContext(originalRun);
         originalClosed = true;
+        if (outcome === "new user while waiting") {
+          revokeRequesterCronAuthority(parent);
+        }
         childMayFinish.resolve();
       }
       await gate(
@@ -358,12 +402,17 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
       );
       // Cross the native accepted-ack yield without advancing run deadlines.
       await vi.advanceTimersByTimeAsync(10);
-      await gate(
-        pluginEntered.promise,
-        parentFinished.promise,
-        "Requester ended before plugin invocation",
-      );
-      expect([parentError, pluginError]).toEqual([undefined, undefined]);
+      if (outcome === "new user while waiting") {
+        await wait(parentFinished.promise);
+      } else {
+        await gate(
+          pluginEntered.promise,
+          parentFinished.promise,
+          "Requester ended before plugin invocation",
+        );
+        expect(pluginError).toBeUndefined();
+      }
+      expect(parentError).toBeUndefined();
       if (outcome === "owner revoked" || outcome === "owner reassigned") {
         setRuntimeConfigSnapshot({
           ...config,
@@ -376,13 +425,26 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
       await wait(parentFinished.promise);
       await wait(completionClosed.promise);
       expect(parentError).toBeUndefined();
-      expect(requesterReceipt).toMatchObject({ status: "ok", inputProcessingCompleted: true });
+      expect(requesterReceipt).toMatchObject({ status: "ok" });
+      if (visiblePeer) {
+        // The command fixture performs no channel send. Keep its missing visible
+        // receipt truthful; this proof owns plugin effects, not channel delivery.
+        expect(readCompletionProgress?.().phase).toBe("failed");
+      } else {
+        expect(requesterReceipt).toMatchObject({ inputProcessingCompleted: true });
+      }
       if (outcome === "success" || outcome === "child error") {
         expect(pluginError).toBeUndefined();
+        expect(effectWrites).toBe(1);
         expect(fs.readFileSync(effectPath, "utf8")).toBe("authorized effect");
       } else {
         expect(pluginError).toBeInstanceOf(Error);
-        expect(String(pluginError)).toMatch(/owner identity is no longer active/);
+        expect(String(pluginError)).toMatch(
+          outcome === "new user while waiting"
+            ? /owner_authority_required/
+            : /owner identity is no longer active/,
+        );
+        expect(effectWrites).toBe(0);
         expect(fs.existsSync(effectPath)).toBe(false);
       }
     } finally {

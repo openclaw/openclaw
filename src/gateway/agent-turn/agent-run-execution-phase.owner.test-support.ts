@@ -216,6 +216,7 @@ export function bindFollowupCompletion(execution: ReturnType<typeof createExecut
     runId: params.runId,
     requesterSessionKey: "agent:main:requester",
     requesterSessionId: "requester-session",
+    requesterStorePath: "/synthetic/requester/sessions.json",
     requesterAgentId: "main",
     targetAgentId: "main",
     targetSessionKey: sessionKey,

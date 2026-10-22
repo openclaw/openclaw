@@ -210,20 +210,34 @@ async function adoptProgressDraft(
   payload: ReplyPayload,
   info: Parameters<NonNullable<Deliver>>[1],
 ): Promise<boolean> {
-  if (
-    info.kind !== "final" ||
-    payload.isError === true ||
-    typeof info.adoptProgressDraft !== "function"
-  ) {
+  const adopt = info.adoptProgressDraftWithReply ?? info.adoptProgressDraft;
+  if (info.kind !== "final" || payload.isError === true || !adopt) {
     return false;
   }
-  const adopt = info.adoptProgressDraft;
   await turn.draftEventQueue;
   const stream = turn.answerLane.stream;
   if (!stream || turn.answerLane.finalized || turn.isSuperseded()) {
     return false;
   }
   await info.onPlatformSendDispatch?.();
+  // An accepted delegation owns status even when the model emitted no plan or
+  // commentary. The channel supplies only a generic, audience-safe heading.
+  if (
+    !turn.progressCompositor.isVisible &&
+    !turn.progressCompositor.hasStarted &&
+    !turn.progressCompositor.hasStatusHeadline &&
+    !turn.progressCompositor.hasPlanProgress &&
+    turn.progressCompositor.getSnapshot().lines.length === 0
+  ) {
+    info.assertPlatformSendAuthorized?.();
+    await turn.progressCompositor.pushItemEvent({
+      itemId: "delegation:waiting",
+      kind: "subagent",
+      title: "Delegated work",
+      phase: "update",
+      status: "running",
+    });
+  }
   if (
     !turn.progressCompositor.isVisible &&
     !turn.progressCompositor.hasStarted &&
@@ -234,7 +248,9 @@ async function adoptProgressDraft(
     info.assertPlatformSendAuthorized?.();
     await turn.progressCompositor.start();
   }
-  if (!turn.progressCompositor.isVisible || turn.isSuperseded()) {
+  // The gate can start a send outside the draft event queue. Its first receipt
+  // may still be in flight; flush it before checking confirmed ownership below.
+  if (turn.isSuperseded()) {
     return false;
   }
   turn.progressCompositor.cancel();
@@ -334,7 +350,8 @@ async function deliverReplyWithNormalization(
     effectivePayload.interactive === undefined &&
     effectivePayload.presentation === undefined &&
     effectivePayload.channelData?.askUser === undefined &&
-    (await adoptProgressDraft(turn, incomingPayload, info))
+    (await adoptProgressDraft(turn, incomingPayload, info)) &&
+    !info.adoptProgressDraftWithReply
   ) {
     return toTelegramReplyDeliveryResult(turn, true);
   }

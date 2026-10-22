@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { SessionFollowupCompletion } from "../../agents/subagents/completion/session-followup-completion.js";
 import { SubagentRegistryWriteError } from "../../agents/subagents/registry/subagent-registry-persistence.js";
 import type * as SubagentRegistry from "../../agents/subagents/registry/subagent-registry.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
@@ -165,6 +166,57 @@ it.each([
   }
   expect(onRawLlmResponse.mock.calls).toEqual(
     kind === "message-tool sentinel" ? [["NO_REPLY"]] : [],
+  );
+});
+
+describe.each(["ordinary", "queued"] as const)("%s peer progress", (lane) => {
+  it.each([
+    { acknowledgment: undefined, noChange: false },
+    { acknowledgment: "I found the first result; the peer is checking the rest.", noChange: false },
+    { acknowledgment: undefined, noChange: true },
+  ])(
+    "retains pending peer progress with acknowledgment=$acknowledgment/noChange=$noChange",
+    async ({ acknowledgment, noChange }) => {
+      context.execution.result.acceptedSessionSpawns = undefined;
+      context.execution.result.meta = { durationMs: 0 };
+      context.execution.result.payloads = acknowledgment ? [{ text: acknowledgment }] : [];
+      if (noChange) {
+        context.execution.automation = {
+          result: { outcome: "no_change", summary: "Nothing new yet." },
+          includeReasoning: true,
+        };
+        context.execution.result.payloads = [{ text: "Private reasoning", isReasoning: true }];
+      }
+      const custody = new AbortController();
+      const owner = SessionFollowupCompletion.bind({
+        runId: "peer-status-run",
+        requesterSessionKey: expectDefined(context.sessionKey, "peer requester"),
+        requesterSessionId: context.followupRun.run.sessionId,
+        requesterStorePath: "/synthetic/requester/sessions.json",
+        requesterTurnRunId: runId,
+        requesterAgentId: context.followupRun.run.agentId,
+        targetSessionKey: "agent:peer:main",
+        targetAgentId: "peer",
+        visibleReply: true,
+        custody: {
+          signal: custody.signal,
+          assertCurrent: () => custody.signal.throwIfAborted(),
+          run: (work) => work(),
+          release: () => undefined,
+        },
+      });
+      onTestFinished(() => owner.close());
+      owner.markAccepted("peer-status-run");
+
+      const payloads = await prepare(lane);
+
+      expect(payloads.map((payload) => payload.text)).toEqual([
+        acknowledgment ?? "I’m continuing this work and will send the result when it is ready.",
+      ]);
+      const continuation = getReplyPayloadMetadata(payloads[0] ?? {})?.progressContinuation;
+      expect(continuation).toBeDefined();
+      expect(continuation?.preserveReply).toBe(acknowledgment ? true : undefined);
+    },
   );
 });
 

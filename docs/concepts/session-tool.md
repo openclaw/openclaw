@@ -250,6 +250,13 @@ Supply the message body in the required `message` argument. Hidden aliases such 
 
 `sessions_send` runs another session on the same Gateway and optionally waits for the response. Its `sessionKey`, `label`, or `agentId` selects local model context, not an external destination. A peer's reply reaches the requester once, either inline or as a later inter-session input. Continue the conversation with another `sessions_send`. To post to a channel, use `message` with an explicit channel and target.
 
+A new message while an accepted result is pending does not cancel that result's
+original completion source or move its reply to another conversation. It retires
+the earlier turn's automation entitlement; the result returns under its original
+caller restrictions without borrowing the new turn's owner privileges. Private
+completions remain private. Stop, reset, and revoked completion-source authority
+still prevent delivery.
+
 Waiting sends recover long inline replies from the accepted run's stored answer instead
 of returning its 4,096-character lifecycle preview. If that answer is unavailable,
 `replyTruncated: true` and a note identify the possibly incomplete reply. The normal
@@ -320,6 +327,17 @@ only the exact unconsumed pending input can be re-admitted.
 - **Wait for reply:** set a timeout and get the response inline.
 - **Message a busy session:** ordinary peer sends and `mode: "followup"` start separately admitted turns with their existing correlated completion. A zero-wait send to the caller's own busy child or an eligible run-scoped target retains the existing active-delivery exception; explicit `mode: "steer"` still requests active input under its existing access checks. An idle recipient starts a new turn. An uncertain acceptance never replays the input. Default self-sends start a new turn; explicit `mode: "steer"` can steer the active self-session.
 - **Continue a paused child task:** send the continuation without `mode`. When the caller controls a native child paused by `sessions_yield` with task-owned completion, the runtime resumes that task automatically, preserving its identity and original completion recipient. Use `mode: "resume"` to require this behavior explicitly. An explicit `mode: "followup"` starts a separate turn and leaves the paused task intact.
+
+When a channel turn owes a visible reply, an ordinary send to another native
+session retains ownership of any result still pending after the tool returns.
+The runtime delivers the result to the original requester for a visible follow-up,
+including when the target delegates again. In Telegram, a confirmed progress
+draft follows the delegated work and the requester's processing without requiring
+an agent-authored plan. A meaningful acknowledgment stays visible beside the
+status. `/stop` or resetting the requester ends this follow-up without cancelling
+the peer's other work. This live progress ownership is process-local and is not
+restored after a Gateway restart. Explicit steering and private turns keep their
+existing reply behavior.
 
 A new turn for your native child starts only after Gateway admission
 and input preparation. If admission rejects the turn, the send returns an error

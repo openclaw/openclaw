@@ -339,7 +339,10 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       logSkippedDelivery("internal-only payload");
       return { visibleReplySent: false };
     }
-    if (await draftPreview.adoptProgressDraft(deliverablePayload, info)) {
+    if (
+      (await draftPreview.adoptProgressDraft(deliverablePayload, info)) &&
+      !info.adoptProgressDraftWithReply
+    ) {
       replyReference.markSent();
       return { visibleReplySent: true };
     }

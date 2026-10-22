@@ -5,6 +5,7 @@ import {
   type DiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
 import { getCurrentSessionControllerOwner } from "../../../sessions/session-controller.context.js";
+import { resolveReplyExpectation } from "../../reply-completion.js";
 import type { EmbeddedRunTrigger } from "../../run-trigger.js";
 import { mergeForcedEmbeddedAttemptToolsAllow } from "./attempt-tool-construction-plan.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
@@ -45,6 +46,9 @@ type AttemptToolRunFacts = Pick<
   | "replyToMode"
   | "hasRepliedRef"
   | "sourceReplyDeliveryMode"
+  | "terminalReplyExpectation"
+  | "allowEmptyAssistantReplyAsSilent"
+  | "inputProvenance"
   | "taskSuggestionDeliveryMode"
 >;
 
@@ -119,6 +123,7 @@ export function buildEmbeddedAttemptToolRunContext(
     replyToMode: params.replyToMode,
     hasRepliedRef: params.hasRepliedRef,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    requesterReplyExpectation: resolveReplyExpectation(params),
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     requesterThinkingLevel: params.thinkLevel,
     requesterThinkingExplicit: params.thinkingExplicit,

@@ -184,6 +184,7 @@ it.for(["observer error", "observer error before dispatch", "cancel before dispa
       runId: "owner-proof-child",
       requesterSessionKey: SESSION,
       requesterSessionId: SESSION_ID,
+      requesterStorePath: "/synthetic/requester/sessions.json",
       requesterAgentId: "main",
       targetSessionKey: CHILD,
       targetAgentId: "main",

@@ -16,6 +16,7 @@ export function resolveAutomationReplyState(
     opts?: InternalGetReplyOptions;
     terminalFailurePayload?: ReplyPayload;
     isHeartbeat?: boolean;
+    hasPendingFollowups?: boolean;
   } = {},
 ) {
   const { opts, isHeartbeat, terminalFailurePayload = execution.terminalFailurePayload } = params;
@@ -31,6 +32,7 @@ export function resolveAutomationReplyState(
   const authoredSilence =
     successfulTerminal && result.meta?.terminalReply?.disposition === "silent";
   const pendingContinuation =
+    params.hasPendingFollowups === true ||
     result.meta?.yielded === true ||
     result.meta?.continuationPending === true ||
     (result.meta?.pendingToolCalls?.length ?? 0) > 0;

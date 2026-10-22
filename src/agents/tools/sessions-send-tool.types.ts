@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import type { ReplyExpectation } from "../reply-completion.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
 
 export type AgentStepSession = {
@@ -13,6 +14,7 @@ export type SessionsSendToolOptions = {
   agentSessionKey?: string;
   agentSessionId?: string;
   requesterTurnRunId?: string;
+  requesterReplyExpectation?: ReplyExpectation;
   inheritedToolPolicySource?: "sender";
   agentChannel?: string;
   requesterOrigin?: DeliveryContext;

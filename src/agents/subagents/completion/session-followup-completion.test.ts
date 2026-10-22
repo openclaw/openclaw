@@ -9,19 +9,23 @@ import {
   SessionFollowupCompletion,
   getFollowupForCohort,
   promoteFollowupYield,
+  listSessionFollowupCompletions,
 } from "./session-followup-completion.js";
 
 let owner: SessionFollowupCompletion;
 let controller: AbortController;
 const release = vi.fn();
 const noop = () => {};
-beforeEach(() => {
+function setup(accepted = true) {
   controller = new AbortController();
   release.mockClear();
   owner = SessionFollowupCompletion.bind({
     runId: "first",
     requesterSessionKey: "A",
     requesterSessionId: "A-session",
+    requesterStorePath: "/synthetic/requester/sessions.json",
+    requesterTurnRunId: "requester-turn",
+    visibleReply: true,
     requesterAgentId: "main",
     targetAgentId: "main",
     targetSessionKey: "B",
@@ -35,8 +39,11 @@ beforeEach(() => {
       },
     },
   });
-  owner.markAccepted("first");
-});
+  if (accepted) {
+    owner.markAccepted("first");
+  }
+}
+beforeEach(() => setup());
 afterEach(() => {
   owner.close();
   vi.useRealTimers();
@@ -79,6 +86,43 @@ const final = {
   terminalReply: { disposition: "visible", text: "B_DONE" },
   replyText: "B_DONE",
 } as const;
+
+it("projects only accepted source obligations and follows the requester execution until retirement", async () => {
+  owner.close();
+  setup(false);
+  const source = {
+    requesterSessionKey: "A",
+    requesterAgentId: "main",
+    requesterTurnRunId: "requester-turn",
+  };
+  expect(listSessionFollowupCompletions(source)).toEqual([]);
+  owner.markAccepted("first");
+  expect(listSessionFollowupCompletions(source)).toEqual([owner]);
+  expect(listSessionFollowupCompletions({ ...source, requesterTurnRunId: "unrelated" })).toEqual(
+    [],
+  );
+  expect(listSessionFollowupCompletions({ ...source, requesterAgentId: "other" })).toEqual([]);
+  const observed: unknown[] = [];
+  owner.subscribe(() => observed.push(owner.progress));
+  owner.subscribe(() => {
+    throw new Error("projection failed");
+  });
+  const c = await yieldCohort();
+  const next = successor(c);
+  await owner.prepareSuccessor(next);
+  adopt(next);
+  await owner.withRequesterRun("requester-resumed", async () => {
+    expect(owner.progress).toEqual({ phase: "processing", runId: "requester-resumed" });
+  });
+  expect(owner.progress).toEqual({ phase: "processing", runId: "requester-resumed" });
+  expect(observed).toContainEqual({ phase: "waiting", runId: "second" });
+  expect(observed).toContainEqual({ phase: "processing", runId: "requester-resumed" });
+  owner.failProgress();
+  expect(owner.progress).toEqual({ phase: "failed", runId: "requester-resumed" });
+  owner.close();
+  expect(listSessionFollowupCompletions(source)).toEqual([]);
+  expect(release).toHaveBeenCalledOnce();
+});
 
 it.each(["replacement", "cleared wake", "cleared adopted wake"] as const)(
   "retains only the canonical committed cohort after publication: %s",

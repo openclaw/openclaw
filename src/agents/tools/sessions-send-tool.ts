@@ -22,13 +22,10 @@ import {
   isUnscopedSessionKeySentinel,
   normalizeAgentId,
 } from "../../routing/session-key.js";
-import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { isCronRunSessionKey, parseAgentSessionKey } from "../../sessions/session-key-utils.js";
-import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { bindRequesterYieldCronAuthority } from "../cron-creator-authority-context.js";
-import { RESTART_RECOVERY_INTERRUPTION_NOTE } from "../restart-recovery-prompt.js";
 import { isSubagentSessionFromEntry } from "../subagents/spawn/subagent-depth-policy.js";
 import {
   describeSessionsSendTool,
@@ -82,6 +79,7 @@ import {
   readSessionsSendTarget,
   readSessionsSendTimeout,
 } from "./sessions-send-tool.input.js";
+import { prepareSessionsSendPrompt } from "./sessions-send-tool.prompt.js";
 import { SessionsSendToolSchema, SessionsSendOutputSchema } from "./sessions-send-tool.schema.js";
 import type { SessionsSendToolOptions } from "./sessions-send-tool.types.js";
 
@@ -454,27 +452,21 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
           const isIsolatedCronRequester = isCronRunSessionKey(requesterSessionKey);
           let targetSession = await readSession(resolvedKey, targetAgentId);
           let targetSessionEntry = targetSession.store[targetSession.canonicalKey];
-          const inputProvenance = {
-            kind: "inter_session" as const,
-            sourceSessionKey: requesterSessionKey,
-            sourceChannel: opts?.agentChannel,
-            sourceTool: "sessions_send",
-            ...(requesterIsSubagent ? { sourceRole: "subagent" as const } : {}),
-          };
-          let dispatchMessage = annotateInterSessionPromptText(message, inputProvenance);
           let targetAcpMeta = await readAcpSessionMetaForEntryAsync({
             sessionKey: targetSession.canonicalKey,
             agentId: targetSession.agentId,
             cfg,
             entry: targetSessionEntry,
           });
-          if (
-            !targetAcpMeta &&
-            targetSessionEntry?.status === "interrupted" &&
-            isSubagentSessionFromEntry(targetSession.canonicalKey, targetSessionEntry)
-          ) {
-            dispatchMessage = `${formatSystemTurnPrompt(RESTART_RECOVERY_INTERRUPTION_NOTE)}\n\n${dispatchMessage}`;
-          }
+          const { inputProvenance, dispatchMessage } = prepareSessionsSendPrompt({
+            message,
+            requesterSessionKey,
+            requesterChannel: opts?.agentChannel,
+            requesterIsSubagent,
+            targetSessionKey: targetSession.canonicalKey,
+            targetSessionEntry,
+            targetAcpMeta,
+          });
           const source = {
             agentId: requesterSession.agentId,
             sessionKey: requesterSession.canonicalKey,
@@ -664,6 +656,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
                 requesterSessionKey: requesterSession.canonicalKey,
                 requesterAgentId,
                 requesterTurnRunId: opts?.requesterTurnRunId,
+                requesterReplyExpectation: opts?.requesterReplyExpectation,
                 targetSession: targetSessionEntry,
                 withRequesterAuthority,
                 watch: params.watch === true,

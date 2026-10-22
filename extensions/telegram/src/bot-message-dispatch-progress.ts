@@ -208,7 +208,7 @@ export async function settleFailedFinalDelivery(turn: Turn): Promise<void> {
 /**
  * Keeps a confirmed progress card after its turn for the owner that adopted it.
  * The card keeps Telegram's rendering, throttling and deletion; only the
- * adopting owner's prepared items reach it.
+ * adopting owner's prepared items and requester plan reach it.
  */
 export function retainProgressDraft(turn: Turn, stream: TelegramDraftStream) {
   // Retirement revokes the card synchronously: renders still queued here and
@@ -218,6 +218,14 @@ export function retainProgressDraft(turn: Turn, stream: TelegramDraftStream) {
     if (retired) {
       throw new TelegramRequestNotStartedError("Telegram retained progress retired");
     }
+  };
+  const snapshot = turn.progressCompositor.getSnapshot();
+  // The generic seed starts the card; the adopting owner's real items replace it.
+  const initialSnapshot = {
+    ...snapshot,
+    lines: snapshot.lines.filter(
+      (line) => typeof line === "string" || line.id !== "delegation:waiting",
+    ),
   };
   const compositor = createChannelProgressDraftCompositor({
     preparedItems: true,
@@ -229,7 +237,7 @@ export function retainProgressDraft(turn: Turn, stream: TelegramDraftStream) {
     reasoningGate: false,
     toolIcons: true,
     updateOnLineChange: true,
-    initialSnapshot: turn.progressCompositor.getSnapshot(),
+    initialSnapshot,
     update: (_text, options) => {
       if (retired) {
         return;
@@ -255,6 +263,8 @@ export function retainProgressDraft(turn: Turn, stream: TelegramDraftStream) {
   return {
     push: (item: Parameters<Turn["progressCompositor"]["pushItemEvent"]>[0]) =>
       enqueue(() => compositor.pushItemEvent(item)),
+    updatePlan: (...args: Parameters<Turn["progressCompositor"]["pushPlanProgress"]>) =>
+      enqueue(() => compositor.pushPlanProgress(...args)),
     retire: () => {
       retired = true;
       enqueue(async () => {

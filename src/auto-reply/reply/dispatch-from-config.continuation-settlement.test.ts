@@ -141,6 +141,41 @@ describe("accepted continuation status delivery", () => {
   });
   const dispatchStatus = (payload = statusReply()) =>
     dispatchSettled({ dispatcher, replyResolver: statusResolver(settle, payload) });
+
+  it.each([true, undefined] as const)(
+    "preserves ordinary delivery for a legacy draft adopter with preserveReply=%s",
+    async (preserveReply) => {
+      const messages: string[] = [];
+      const adopt = vi.fn(() => true);
+      const payload = setReplyPayloadMetadata(
+        {
+          text: preserveReply
+            ? "I found the first result; the rest will follow."
+            : "Still working.",
+        },
+        { progressContinuation: { preserveReply, adopt, close: () => undefined } },
+      );
+      dispatcher = createReplyDispatcher({
+        deliver: async (reply, info) => {
+          // An existing adapter replaces the reply after successful adoption.
+          if (info.adoptProgressDraft?.(progressDraft)) {
+            return { visibleReplySent: true };
+          }
+          messages.push(reply.text ?? "");
+          return { visibleReplySent: true };
+        },
+      });
+      await withReplyDispatcher({
+        dispatcher,
+        run: async () => {
+          dispatcher.sendFinalReply(payload);
+        },
+      });
+      expect(messages).toEqual(preserveReply ? [payload.text] : []);
+      expect(adopt).toHaveBeenCalledTimes(preserveReply ? 0 : 1);
+    },
+  );
+
   it.each([
     { outcome: "ambiguous", initial: "prepared", expected: "unknown" },
     { outcome: "recovery-owned", initial: "prepared", expected: undefined },

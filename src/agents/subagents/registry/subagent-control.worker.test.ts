@@ -15,6 +15,12 @@ import {
 } from "vitest";
 import * as sync from "../../../../test/helpers/promise.js";
 import * as sqlite from "../../../../test/helpers/sqlite-parent-observer.js";
+import {
+  abortSessionRunTargetWithOutcome,
+  captureChannelSessionStop,
+} from "../../../auto-reply/reply/abort-operation.js";
+import type { ProgressContinuationDraft } from "../../../channels/progress-continuation.js";
+import { createChannelProgressDraftCompositor } from "../../../channels/progress-draft-compositor.js";
 import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../../config/config.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import * as sessions from "../../../config/sessions/session-accessor.js";
@@ -43,6 +49,7 @@ import {
   setSubagentAnnounceDeliveryDepsForTest,
   type SubagentAnnounceDeliveryTestDeps,
 } from "../announce/subagent-announce-overrides.test-support.js";
+import { SessionFollowupCompletion } from "../completion/session-followup-completion.js";
 import { resolveStoredSubagentCapabilities } from "../spawn/subagent-capabilities.js";
 import { withPreparedSessionCapabilityRead } from "../spawn/subagent-session-store.js";
 import { holdQueuedSwarmRun, releaseSwarmRun, reserveSwarmRun } from "../swarm/swarm-scheduler.js";
@@ -588,8 +595,193 @@ describe("subagent progress drafts", () => {
     return wakes;
   }
 
-  type TestDraft = { push: Mock; retire: Mock };
-  const newDraft = (): TestDraft => ({ push: vi.fn(), retire: vi.fn() });
+  type TestDraft = { push: Mock; updatePlan: Mock; retire: Mock };
+  const newDraft = (): TestDraft => ({ push: vi.fn(), updatePlan: vi.fn(), retire: vi.fn() });
+
+  function renderedDraft() {
+    const progress = createChannelProgressDraftCompositor({
+      active: true,
+      mode: "progress",
+      seed: "retained-delegation",
+      preparedItems: true,
+      showWorkStatus: true,
+      entry: { streaming: { mode: "progress", progress: { toolProgress: true } } },
+    });
+    onTestFinished(() => progress.cancel());
+    let pending: Promise<unknown> = progress.start();
+    const draft = {
+      push: vi.fn<ProgressContinuationDraft["push"]>((item) => {
+        pending = pending.then(() => progress.pushItemEvent(item));
+      }),
+      updatePlan: vi.fn<NonNullable<ProgressContinuationDraft["updatePlan"]>>((steps, options) => {
+        pending = pending.then(() => progress.pushPlanProgress(steps, options));
+      }),
+      retire: vi.fn(),
+    };
+    return { draft, progress, flush: () => pending };
+  }
+
+  function bindPeer(
+    runId: string,
+    requesterTurnRunId = "parent-turn",
+    sessionId = "requester-session",
+    storePath = resolveSessionStorePathCore(getRuntimeConfig().session?.store, { agentId: "main" }),
+  ) {
+    const lifetime = new AbortController();
+    const owner = SessionFollowupCompletion.bind({
+      runId,
+      requesterTurnRunId,
+      visibleReply: true,
+      requesterSessionKey: requesterKey,
+      requesterSessionId: sessionId,
+      requesterStorePath: storePath,
+      requesterAgentId: "main",
+      targetSessionKey: "agent:peer:main",
+      targetAgentId: "peer",
+      custody: {
+        signal: lifetime.signal,
+        assertCurrent: () => lifetime.signal.throwIfAborted(),
+        run: (work) => work(),
+        release: () => lifetime.abort(),
+      },
+    });
+    owner.markAccepted(runId);
+    return owner;
+  }
+
+  it("updates the same peer card through two handoffs without retaining closed rows or private plans", async () => {
+    const peer = bindPeer("peer-run");
+    const { draft, progress, flush } = renderedDraft();
+    await progress.pushPlanProgress([{ step: "Original request", status: "in_progress" }]);
+    expect(adoptSubagentProgressDraft([], draft, [peer])).toBe(true);
+    emitAgentEvent({
+      runId: "peer-run",
+      stream: "item",
+      data: {
+        itemId: "private-tool",
+        kind: "tool",
+        name: "read",
+        status: "running",
+        text: CHILD_RESULT,
+        arguments: CHILD_RESULT,
+        result: CHILD_RESULT,
+      },
+    });
+    emitAgentEvent({
+      runId: "peer-run",
+      stream: "plan",
+      data: { steps: [{ step: CHILD_RESULT, status: "in_progress" }], explanation: CHILD_RESULT },
+    });
+    let next: SessionFollowupCompletion | undefined;
+    let last: SessionFollowupCompletion | undefined;
+    try {
+      await peer.withRequesterRun("requester-return", async () => {
+        expect(draft.push).toHaveBeenCalledWith(
+          expect.objectContaining({ title: "Processing the result" }),
+        );
+        emitAgentEvent({
+          runId: "requester-return",
+          stream: "plan",
+          data: {
+            steps: [{ step: "Verify the result", status: "in_progress" }],
+            explanation: "Updated *literal* plan",
+            explanationFormat: "plain",
+          },
+        });
+        next = bindPeer("next-peer-run", "requester-return");
+        expect(draft.retire).not.toHaveBeenCalled();
+      });
+      peer.close();
+      expect(draft.retire).not.toHaveBeenCalled();
+      expect(draft.push).toHaveBeenCalledWith(expect.objectContaining({ itemId: "next-peer-run" }));
+      await flush();
+      expect(progress.getSnapshot().plan).toEqual([
+        { step: "Verify the result", status: "in_progress" },
+      ]);
+      expect(progress.getSnapshot().planExplanation).toBe("Updated *literal* plan");
+      expect(progress.getSnapshot().planExplanationFormat).toBe("plain");
+      expect(JSON.stringify(progress.getSnapshot())).not.toContain(CHILD_RESULT);
+      expect(progress.getSnapshot().lines).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ id: "peer-run" })]),
+      );
+      expect(progress.getSnapshot().lines).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ id: "peer-run:tool" })]),
+      );
+      expectCard(draft, 0);
+      await next!.withRequesterRun("requester-again", async () => {
+        emitAgentEvent({ runId: "requester-again", stream: "plan", data: { steps: [] } });
+        last = bindPeer("last-peer-run", "requester-again");
+      });
+      next?.close();
+      // Closed requesters cannot overwrite the current owner's plan.
+      emitAgentEvent({
+        runId: "requester-return",
+        stream: "plan",
+        data: { steps: [{ step: "Stale plan", status: "in_progress" }] },
+      });
+      await flush();
+      expect(progress.getSnapshot().plan).toBeUndefined();
+      expect(progress.getSnapshot().lines).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ id: "next-peer-run" })]),
+      );
+      expect(draft.retire).not.toHaveBeenCalled();
+      last?.close();
+      expect(draft.retire).toHaveBeenCalledOnce();
+    } finally {
+      peer.close();
+      next?.close();
+      last?.close();
+    }
+  });
+
+  it("stop retires only the original requester's detached peer card", async () => {
+    const original = bindPeer("original-peer");
+    const replacement = bindPeer("replacement-peer", "next-turn", "replacement-session");
+    const otherStore = bindPeer(
+      "other-store-peer",
+      "parent-turn",
+      "requester-session",
+      "/synthetic/other-store/sessions.json",
+    );
+    const draft = newDraft();
+    expect(adoptSubagentProgressDraft([], draft, [original])).toBe(true);
+    try {
+      const capture = captureChannelSessionStop({
+        agentId: "main",
+        key: requesterKey,
+        storePath: original.request.requesterStorePath,
+        sessionId: "requester-session",
+      });
+      const result = abortSessionRunTargetWithOutcome({
+        capture,
+        hookContext: { sessionKey: requesterKey, sessionId: "requester-session" },
+        retirements: [],
+      });
+      const outcome = await result.completed;
+      expect(outcome.aborted).toBe(true);
+      await result.settled;
+      expect(original.signal.aborted).toBe(true);
+      expect(replacement.signal.aborted).toBe(false);
+      expect(otherStore.signal.aborted).toBe(false);
+      expect(draft.retire).toHaveBeenCalledOnce();
+    } finally {
+      original.close();
+      replacement.close();
+      otherStore.close();
+    }
+  });
+
+  it("leaves a terminal failure visible when the requester result could not be delivered", () => {
+    const owner = bindPeer("failed-peer");
+    const draft = newDraft();
+    expect(adoptSubagentProgressDraft([], draft, [owner])).toBe(true);
+    owner.failProgress();
+    owner.close(new Error(CHILD_RESULT));
+    expect(draft.push).toHaveBeenLastCalledWith(
+      expect.objectContaining({ phase: "end", status: "failed" }),
+    );
+    expectCard(draft, 0);
+  });
 
   async function adoptCohort(children = ["a", "b"], origin?: Parameters<typeof yieldCohort>[2]) {
     const spawns = await yieldCohort("parent-turn", children, origin);
@@ -790,6 +982,11 @@ describe("subagent progress drafts", () => {
       draft,
       ["Waiting for the follow-up checks.", "Everything is verified."],
       async (params) => {
+        emitAgentEvent({
+          runId: String(params?.idempotencyKey),
+          stream: "plan",
+          data: { steps: [{ step: "Follow-up checks", status: "in_progress" }] },
+        });
         await yieldCohort(String(params?.idempotencyKey), ["c", "d"]);
       },
     );
@@ -797,6 +994,10 @@ describe("subagent progress drafts", () => {
     await endRun("a");
     await endRun("b");
     expect(wakes).toHaveLength(1);
+    expect(draft.updatePlan).toHaveBeenCalledWith(
+      [{ step: "Follow-up checks", status: "in_progress" }],
+      expect.any(Object),
+    );
     expect(draft.retire).not.toHaveBeenCalled();
     for (const itemId of ["c", "d"]) {
       expect(draft.push).toHaveBeenCalledWith(

@@ -509,8 +509,20 @@ export function captureRequesterFollowupAuthority(params: {
       }
     },
     async run<T>(runId: string, run: () => Promise<T>): Promise<T> {
-      if (!isCurrent(authority) || authority.admittedRunId !== undefined) {
+      if (
+        authority.admittedRunId !== undefined ||
+        authority.lifecycleGeneration !== getAgentRunLifecycleGeneration() ||
+        !authority.isFollowupCurrent()
+      ) {
         throw new Error("Requester followup authority is no longer current");
+      }
+      if (!isCurrent(authority)) {
+        // A new channel turn retires automation, not the separately retained
+        // completion source. Return once under that source, without borrowing
+        // another dispatch's owner identity or automation entitlement.
+        discard(authority);
+        authority.admittedRunId = runId;
+        return await activeDispatch.exit(run);
       }
       // The followup owner retains caller restrictions separately. This scope
       // supplies only the captured channel identity to the returning parent.

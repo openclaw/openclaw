@@ -94,6 +94,7 @@ describe("Gateway dispatch run ownership", () => {
       runId: f.runId,
       requesterSessionKey: "agent:main:parent",
       requesterSessionId: "requester-session",
+      requesterStorePath: "/synthetic/requester/sessions.json",
       requesterAgentId: "main",
       targetAgentId: "main",
       targetSessionKey: f.sessionKey,
