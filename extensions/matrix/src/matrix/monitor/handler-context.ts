@@ -138,7 +138,7 @@ export async function resolveMatrixInboundContext(config: {
   }
   const replySenderAllowed =
     !replyContext?.senderId || isRoomContextSenderAllowed(replyContext.senderId);
-  const roomInfo = isRoom ? await getRoomInfo(roomId) : undefined;
+  const roomInfo = isRoom ? await getRoomInfo(roomId, { currentName: true }) : undefined;
   const roomName = roomInfo?.name;
   const envelopeFrom = isDirectMessage ? senderName : (roomName ?? roomId);
   const textWithId = `${bodyText}\n[matrix event id: ${messageId} room: ${roomId}]`;

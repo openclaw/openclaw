@@ -14,9 +14,10 @@ OpenClaw can run agent turns through a local AI CLI, such as Claude Code or Gemi
 - Sessions are supported, so follow-up turns stay coherent.
 - Images pass through if the CLI accepts image paths.
 
-With Claude CLI, a successful `sessions_yield` ends the current turn through the
-native interrupt control, suppresses later reply text, and keeps the Claude session
-available for the next child-completion turn.
+With Claude CLI, a successful `sessions_yield` closes the current subprocess after
+its tool result is consumed and suppresses later reply text. The next child-completion
+turn resumes the same saved Claude session in a new subprocess. This avoids recording
+the yield as a user interruption; it adds process startup time after a yield.
 
 A CLI backend can be an agent's primary runtime or a fallback. Choosing **Claude CLI** during onboarding keeps `anthropic/*` model refs and runs them through Claude Code. For ACP session controls, background tasks, thread/conversation binding, and persistent external coding sessions, use [ACP Agents](/tools/acp-agents) instead. CLI backends are not ACP.
 

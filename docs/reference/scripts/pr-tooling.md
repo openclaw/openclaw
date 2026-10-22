@@ -80,6 +80,25 @@ Only verified native merge completion retires the exact workflow binding.
 Failures and pending completion preserve it. Repeating completion reconciles
 the merge outcome without repeating publication, comments, or cleanup.
 
+## Reconcile a completed CI review
+
+If CI completed but its combined `openclaw/ci-gate` commit status remains pending,
+maintainers can replay Security Review for that exact CI run:
+
+```bash
+gh workflow run security-review.yml --ref main -f completed_ci_run_id=<run-id>
+```
+
+The replay validates the completed run's repository and workflow, then selects
+only current PRs whose head, source repository, and branch still match. It runs
+the ordinary security review and CI checks; it does not rerun CI or waive a gate.
+The dispatch must use the default branch. A stale run cannot approve a newer PR head.
+
+Completion reviews retain the observed run ID and attempt. Missing or older
+observations retry within the existing recovery budget; exhaustion fails the
+scheduled pass so its scan window remains eligible. A newer active run or attempt
+keeps the status pending until that run completes.
+
 ## Recover a retained dependency projection
 
 When a retained anchor's pinned package directory disappears, changing

@@ -1,7 +1,6 @@
 /* oxlint-disable max-lines -- The Settings presentation factory keeps its existing request and preference contracts together. */
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { createEffect, createMemo, createSignal, createStore, onSettled } from "solid-js";
-import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type * as Push from "../../../../packages/gateway-protocol/src/schema/push.js";
 import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -35,18 +34,11 @@ import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import { resolveControlUiServerQueueMode } from "../../lib/chat/follow-up-mode.ts";
 import { currentConfigRead } from "../../lib/config/config-state-model.ts";
-import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { modelSettingPrimary, readModelSetting } from "../../lib/model-setting.ts";
-import { createPageRequest } from "../../lib/page-request.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
-import {
-  canReadSystemInfo,
-  readSystemInfo,
-  SYSTEM_INFO_POLL_INTERVAL_MS,
-} from "../../lib/system-info.ts";
 import { createAppearanceCatalogs } from "./appearance-catalogs.ts";
 import { createConfigPageModels } from "./config-page-models.ts";
 import {
@@ -118,12 +110,10 @@ export function createConfigPage(
   let connected = false;
   const settings = () => context.theme.settings;
   let hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
-  let systemInfo: SystemInfoResult | null = null;
-  let systemInfoUnavailable = false;
   const observerModels = createConfigPageModels({
     invalidate,
-    requestClient: systemInfoRequestClient,
-    hasSystemInfo: () => systemInfo !== null,
+    gateway: () => context.gateway,
+    active: () => connected && pageId === "appearance",
     selectedAgent: () => context.settingsAgentSelection.state.selectedId,
   });
   const catalogs = createAppearanceCatalogs(invalidate);
@@ -166,7 +156,6 @@ export function createConfigPage(
   let previousClient: GatewayBrowserClient | null = null;
   let previousHello: unknown;
   let previousPhase: string | null = null;
-  let poll: ReturnType<typeof setInterval> | undefined;
   let countdown: ReturnType<typeof setInterval> | undefined;
   let routeInitialized = false;
   let normalizedMemoryLocation = "";
@@ -245,7 +234,6 @@ export function createConfigPage(
   };
 
   function abortRequests() {
-    systemInfoTask.cancel();
     observerModels.retire();
     catalogs.retire();
   }
@@ -265,8 +253,6 @@ export function createConfigPage(
     if (connectionChanged) {
       retireCommands();
       abortRequests();
-      systemInfo = null;
-      systemInfoUnavailable = false;
       observerModels.reset();
       resetConfigViewState();
       updates.reset();
@@ -280,18 +266,7 @@ export function createConfigPage(
       gateway.connection.gatewayUrl,
       settings().customTheme?.importedAt,
     );
-    const client = systemInfoRequestClient();
-    if (!client) {
-      clearInterval(poll);
-      poll = undefined;
-      systemInfoTask.cancel();
-      observerModels.cancel();
-    } else if (connectionChanged || !systemInfo || !poll) {
-      startSystemInfoPolling();
-      void refreshSystemInfo();
-    } else {
-      observerModels.refresh();
-    }
+    observerModels.synchronize();
     catalogs.synchronize(
       pageId === "appearance",
       snapshot,
@@ -332,52 +307,6 @@ export function createConfigPage(
       target.scrollIntoView?.({ behavior: resolveScrollBehavior(), block: "start" });
       targetBlockId = null;
     });
-  }
-
-  function startSystemInfoPolling() {
-    clearInterval(poll);
-    poll = setInterval(() => {
-      void refreshSystemInfo();
-    }, SYSTEM_INFO_POLL_INTERVAL_MS);
-  }
-
-  function systemInfoRequestClient(): GatewayBrowserClient | null {
-    if (
-      !connected ||
-      document.visibilityState === "hidden" ||
-      pageId !== "appearance" ||
-      systemInfoUnavailable ||
-      !canReadSystemInfo(context.gateway.snapshot)
-    ) {
-      return null;
-    }
-    return context.gateway.snapshot.client;
-  }
-
-  const systemInfoTask = createPageRequest(invalidate, {
-    task: async (client: GatewayBrowserClient, { signal }) => {
-      const sample = await readSystemInfo(context.gateway, signal);
-      return systemInfoRequestClient() === client ? sample : null;
-    },
-    onComplete: (sample) => {
-      if (sample) {
-        systemInfo = sample.value;
-        startSystemInfoPolling();
-        observerModels.refresh(true);
-      }
-    },
-    onError: (error) => {
-      if (isMissingOperatorReadScopeError(error)) {
-        systemInfo = null;
-        systemInfoUnavailable = true;
-      }
-    },
-  });
-  async function refreshSystemInfo() {
-    const client = systemInfoRequestClient();
-    if (client && !systemInfoTask.pending) {
-      await systemInfoTask.run(client);
-    }
   }
 
   function synchronizeRuntimeConfig(runtimeConfig: ApplicationContext["runtimeConfig"]) {
@@ -704,7 +633,7 @@ export function createConfigPage(
         : null,
       sessionObserverEnabled: controlUiConfig?.sessionObserver !== false,
       sessionObserverUtilityModel: modelSettingPrimary(utilityModel),
-      sessionObserverResolvedModel: systemInfo?.defaultAgentUtilityModel,
+      sessionObserverResolvedModel: observerModels.resolvedModel,
       sessionObserverModels: observerModels.models,
       sessionObserverModelsScope: observerModels.scope,
       sessionObserverModelsUnavailable: observerModels.unavailable,
@@ -727,7 +656,7 @@ export function createConfigPage(
           .then(async (saved) => {
             observerResult(saved);
             if (saved && retired === commandLifetime.promise) {
-              await refreshSystemInfo();
+              await observerModels.refreshStatus();
             }
             return saved;
           });
@@ -837,7 +766,6 @@ export function createConfigPage(
       connected = false;
       customThemeImportOwner.retireImport();
       mediaDeviceOwner.retire();
-      clearInterval(poll);
       clearInterval(countdown);
       abortRequests();
       if (scrollFrame !== null) {

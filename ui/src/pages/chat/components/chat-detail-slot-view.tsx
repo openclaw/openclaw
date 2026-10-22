@@ -1,4 +1,4 @@
-import { createMemo, lazy, Loading } from "solid-js";
+import { createMemo, lazy } from "solid-js";
 import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-links.ts";
 import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
@@ -8,6 +8,7 @@ import type { ChatDetailSlotProps } from "../chat-pane-embedded-types.ts";
 import { ensureLazySidebarElement, lazySidebarElements } from "../chat-pane-sidebar-layout.ts";
 import { selectedChatSessionRow } from "../chat-state-route.ts";
 import { openSlot } from "../sidebar-layout.ts";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { assistantMediaPolicyKey } from "./chat-message-media.ts";
 import {
   getSessionWorkspace,
@@ -96,14 +97,16 @@ export function ChatDetailSlot(props: ChatDetailSlotProps) {
           <span>{props.content.message}</span>
         </div>
       ) : props.content.kind === "tool-output" ? (
-        <Loading fallback={<PanelLoadingSkeleton variant="review" label={t("common.loading")} />}>
+        <ChatLazyBoundary
+          fallback={<PanelLoadingSkeleton variant="review" label={t("common.loading")} />}
+        >
           <ChatToolOutput
             class="chat-sidebar"
             content={props.content}
             loadFullMessage={props.chat.loadFullAssistantMessage ?? null}
             connectionEpoch={props.chat.connectionEpoch}
           />
-        </Loading>
+        </ChatLazyBoundary>
       ) : panelLoad() !== undefined ? (
         panelLoad() === null ? (
           <PanelLoadingSkeleton variant="review" label={t("common.loading")} />

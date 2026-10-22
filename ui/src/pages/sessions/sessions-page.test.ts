@@ -171,7 +171,7 @@ describe("sessions page lifecycle", () => {
       input.dispatchEvent(new Event("input", { bubbles: true }));
       form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
       await waitForFast(() => expect(patch).toHaveBeenCalledOnce());
-      expect(input.disabled).toBe(true);
+      await waitForFast(() => expect(input.disabled).toBe(true));
       pending.reject(new Error("Rename unavailable. Try again."));
       await waitForFast(() =>
         expect(modal.querySelector('[role="alert"]')?.textContent).toContain(
