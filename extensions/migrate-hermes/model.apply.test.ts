@@ -158,11 +158,42 @@ describe("Hermes migration model planning", () => {
   it.each([
     ["openrouter", "anthropic/claude-opus-4.7", "openrouter/anthropic/claude-opus-4.7"],
     ["custom:local", "vendor/model", "local/vendor/model"],
+    ["openai-codex", "gpt-5.6", "openai/gpt-5.6"],
+    ["azure-foundry", "gpt-5.4", "microsoft-foundry/gpt-5.4"],
+    ["bedrock", "anthropic.claude-opus-4-6-v1", "amazon-bedrock/anthropic.claude-opus-4-6-v1"],
+    ["copilot", "gpt-5.4", "github-copilot/gpt-5.4"],
+    ["gemini", "gemini-3.1-pro", "google/gemini-3.1-pro"],
+    ["glm", "glm-5.2", "zai/glm-5.2"],
+    ["kimi-for-coding", "kimi-k2.5", "moonshot/kimi-k2.5"],
+    ["kimi-coding", "kimi-k2.5", "moonshot/kimi-k2.5"],
+    ["kimi", "kimi-for-coding/kimi-k2.5", "moonshot/kimi-k2.5"],
+    ["moonshot", "kimi-k2.5", "moonshot/kimi-k2.5"],
+    ["alibaba", "qwen3.5-plus", "qwen/qwen3.5-plus"],
+    ["dashscope", "qwen3.6-plus", "qwen/qwen3.6-plus"],
+    ["alibaba-coding-plan", "qwen3-coder-next", "qwen/qwen3-coder-next"],
+    ["xai-oauth", "grok-4.1-fast", "xai/grok-4.1-fast"],
+    ["minimax-oauth", "MiniMax-M2.7", "minimax-portal/MiniMax-M2.7"],
+    ["minimax-cn", "MiniMax-M2.7", "minimax/MiniMax-M2.7"],
+    ["opencode-zen", "gpt-5.4", "opencode/gpt-5.4"],
     ["auto", "anthropic/claude-opus-4.6", "anthropic/claude-opus-4.6"],
+    ["qwen-cli", "qwen3.5-plus", "qwen/qwen3.5-plus"],
+    ["qwen-oauth", "qwen3.5-plus", "qwen/qwen3.5-plus"],
+    ["qwen-portal", "qwen3.5-plus", "qwen/qwen3.5-plus"],
+    ["vertex", "gemini-3.1-pro", "google-vertex/gemini-3.1-pro"],
+    ["custom:My Local LLM", "local-model", "my-local-llm/local-model"],
   ])("preserves qualified model routing through %s", async (provider, model, expected) => {
     const plan = await planModel(`model:\n  provider: ${provider}\n  default: ${model}\n`);
     expect(plan.items[0]?.details?.model).toBe(expected);
-    expect(plan.items.some((entry) => entry.id.startsWith("config:model-provider:"))).toBe(false);
+    expect(plan.items.some((entry) => entry.id.startsWith("config:model-provider:"))).toBe(
+      ["alibaba", "dashscope", "minimax-cn"].includes(provider),
+    );
+    if (["qwen-cli", "qwen-oauth", "qwen-portal"].includes(provider)) {
+      expect(
+        plan.items.find((entry) => entry.id === "manual:auth-reauthenticate:qwen")?.reason,
+      ).toBe(
+        "Authenticate qwen with an API key after migration: openclaw onboard --auth-choice qwen-api-key.",
+      );
+    }
   });
 
   it.each([

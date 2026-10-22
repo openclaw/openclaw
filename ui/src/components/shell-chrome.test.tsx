@@ -45,7 +45,7 @@ describe("Solid shell chrome", () => {
         prop:onOpenPalette={palette}
       />
     ));
-    const find = <T extends HTMLElement = HTMLElement>(selector: string) =>
+    const find = <T extends HTMLElement = HTMLElement>(selector: string): T | null =>
       view.container.querySelector<T>(selector);
     const topbar = find<SolidBridgeElement<object>>("openclaw-app-topbar")!;
     const update = async (write: () => void) => {

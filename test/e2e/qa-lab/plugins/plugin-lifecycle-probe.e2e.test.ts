@@ -94,7 +94,7 @@ it.each([
     "expected lifecycle-claw inspect status disabled, got loaded",
   ],
   ["missing", true, undefined, "missing"],
-] as const)("validates %s inspect JSON", (_name, enabled, status, error) => {
+] as const)("validates %s inspect JSON", (_name, enabled, status, error = undefined) => {
   const check = enabled ? assertInspectLoaded : assertInspectDisabled;
   const file = inspectFile(status === undefined ? undefined : { enabled, status });
   const result = expect(() => check("lifecycle-claw", file));

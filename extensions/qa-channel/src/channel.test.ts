@@ -775,7 +775,7 @@ describe("message action bus", () => {
         { action: "thread-reply", channelId: "canonical/room", threadId: "thread-1" },
         { to: "channel:canonical/room", threadId: "thread-1" },
       ],
-    ]) {
+    ] as const) {
       expect(qaChannelPlugin.actions?.extractToolSend?.({ args })).toEqual(expected);
     }
     await expectMessage(
@@ -806,7 +806,7 @@ it("serializes preview deletion with media and final delivery", async () => {
   const edit = vi.spyOn(qaBus, "editQaBusMessage");
   vi.spyOn(outboundMedia, "loadOutboundMediaFromUrl").mockResolvedValue({
     buffer: Buffer.from("attachment"),
-    kind: "file",
+    kind: "document",
     contentType: "text/plain",
     fileName: "answer.txt",
   });

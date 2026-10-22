@@ -325,6 +325,21 @@ describe("startNostrBus inbound guards", () => {
     },
   );
 
+  it("rate limits repeated invalid signatures before authorization work fans out", async () => {
+    mockState.verifyEvent.mockReturnValue(false);
+    const authorizeSender = vi.fn(async () => "allow" as const);
+    await startTestNostrBus({
+      authorizeSender,
+      guardPolicy: { rateLimit: rateLimit(1, 10) },
+    });
+    await emitEvent({ id: "invalid-1" });
+    await emitEvent({ id: "invalid-2" });
+    expect(mockState.verifyEvent).toHaveBeenCalledTimes(1);
+    expect(authorizeSender).not.toHaveBeenCalled();
+    expect(countRejection("invalid_signature")).toBe(1);
+    expect(countRejection("rate_limited")).toBe(1);
+  });
+
   it("rate limits repeated events before decrypt", async () => {
     await startTestNostrBus();
     for (let i = 0; i < 21; i += 1) {

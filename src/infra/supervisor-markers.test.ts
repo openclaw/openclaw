@@ -15,6 +15,8 @@ type Case = [
 it.each<Case>([
   ["darwin", { OPENCLAW_LAUNCHD_LABEL: " ai.openclaw.gateway " }, "launchd"],
   ["darwin", { OPENCLAW_LAUNCHD_LABEL: "   " }, null],
+  ["darwin", { LAUNCH_JOB_LABEL: "ai.openclaw.gateway" }, "launchd"],
+  ["darwin", { XPC_SERVICE_NAME: "ai.openclaw.gateway" }, "launchd"],
   ["darwin", { LAUNCH_JOB_NAME: "ai.openclaw.work", OPENCLAW_PROFILE: "work" }, "launchd"],
   ["darwin", { LAUNCH_JOB_LABEL: "ai.openclaw.mac" }, null],
   ["darwin", macApp, null],

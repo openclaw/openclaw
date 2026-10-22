@@ -12,7 +12,9 @@ import { hermesCase, item } from "./test/hermes-case.js";
 import { useHermesFixture } from "./test/migration-fixture.js";
 import { writeFile } from "./test/provider-helpers.js";
 
-const fixture = useHermesFixture(() => vi.unstubAllEnvs());
+const fixture = useHermesFixture(() => {
+  vi.unstubAllEnvs();
+});
 const makeCase = () => hermesCase(fixture.paths.root);
 const endpoint = (base_url: string, model: string, transport?: string) => ({
   base_url,
@@ -186,6 +188,8 @@ mcp_servers:
     lifecycle: { idle_timeout_seconds: "60", max_lifetime_seconds: 3600 }
     keepalive_interval: 10
   protected: { url: https://protected.example/rpc, client_cert: [ placeholder, placeholder, placeholder ] }
+  utilities_only: { command: utilities-only, tools: { include: [], resources: false, prompts: true } }
+  no_tools: { command: no-tools, tools: { include: [], resources: false, prompts: false } }
 `,
     );
     const plan = await h.plan();
@@ -208,6 +212,14 @@ mcp_servers:
       }),
     });
     mcp(plan, "protected", { url: "https://protected.example/rpc", transport: "streamable-http" });
+    mcp(plan, "utilities_only", {
+      command: "utilities-only",
+      toolFilter: { include: ["prompts_list", "prompts_get"] },
+    });
+    mcp(plan, "no_tools", {
+      command: "no-tools",
+      toolFilter: { exclude: ["*"] },
+    });
     manual(
       plan,
       ...[
