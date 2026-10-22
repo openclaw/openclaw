@@ -42,9 +42,11 @@ function createTransport(
   });
 }
 
-function expectSignals(child: ChildProcess, signals: NodeJS.Signals[]) {
-  for (const signal of signals) {
-    expect(vi.mocked(child).kill.mock.calls.filter(([sent]) => sent === signal)).toHaveLength(1);
+function expectSignals(children: ChildProcess[], signals: NodeJS.Signals[]) {
+  for (const child of children) {
+    for (const signal of signals) {
+      expect(vi.mocked(child).kill.mock.calls.filter(([sent]) => sent === signal)).toHaveLength(1);
+    }
   }
 }
 
@@ -55,19 +57,7 @@ const mockTranscriptionSession = (connected = false) => ({
   isConnected: vi.fn(() => connected),
 });
 
-const mockVoiceBridge = () => ({
-  ...mockTranscriptionSession(true),
-  sendUserMessage: vi.fn(),
-  setMediaTimestamp: vi.fn(),
-  submitToolResult: vi.fn(),
-  acknowledgeMark: vi.fn(),
-  triggerGreeting: vi.fn(),
-});
-
-const engineOptions = (
-  config: ReturnType<typeof resolveGoogleMeetConfig>,
-  meetingSessionId: string,
-) => ({
+const engineOptions = (config: ReturnType<typeof resolveGoogleMeetConfig>) => ({
   config,
   fullConfig: {},
   runtime: {} as never,
@@ -79,7 +69,7 @@ const engineOptions = (
   consultAgent: async () => ({ text: "" }),
   tools: [],
   handleToolCall: async () => {},
-  meetingSessionId,
+  meetingSessionId: "meet-test",
   logger: makeLogger(),
 });
 
@@ -89,7 +79,14 @@ function voiceFixture(
   const config = resolveGoogleMeetConfig({
     realtime: { strategy: "bidi", provider: "openai", ...realtime },
   });
-  const bridge = mockVoiceBridge();
+  const bridge = {
+    ...mockTranscriptionSession(true),
+    sendUserMessage: vi.fn(),
+    setMediaTimestamp: vi.fn(),
+    submitToolResult: vi.fn(),
+    acknowledgeMark: vi.fn(),
+    triggerGreeting: vi.fn(),
+  };
   const { transport } = createTestMeetRealtimeAudioTransport();
   const provider = {
     id: config.realtime.provider,
@@ -99,7 +96,7 @@ function voiceFixture(
     ),
     createBridge: vi.fn<RealtimeVoiceProviderPlugin["createBridge"]>(() => bridge),
   } satisfies RealtimeVoiceProviderPlugin;
-  const options = engineOptions(config, "meet-test");
+  const options = engineOptions(config);
   const close = () => provider.createBridge.mock.lastCall?.[0].onClose?.("completed");
   const start = (extra: Partial<Parameters<typeof startMeetingRealtimeEngine>[0]> = {}) =>
     startMeetingRealtimeEngine({ ...options, providers: [provider], transport, ...extra });
@@ -157,25 +154,21 @@ const recordingSpawn: MeetRealtimeAudioSpawn = (command, args, options) => {
 function agentFixture(inputFails = false) {
   const script = writeCommand(BRIDGE_SCRIPT);
   const sttSession = mockTranscriptionSession(!inputFails);
-  const logger = makeLogger();
   const config = resolveGoogleMeetConfig({
     chrome: { audioFormat: "pcm16-24khz" },
     realtime: { provider: "openai", agentId: "jay", introMessage: "" },
   });
+  const options = engineOptions(config);
   const transport = createTransport(script, {
-    logger,
-    ...(inputFails
-      ? { inputCommand: [path.join(path.dirname(script), "missing-capture")] }
-      : {
-          bargeInRmsThreshold: config.chrome.bargeInRmsThreshold,
-          bargeInPeakThreshold: config.chrome.bargeInPeakThreshold,
-          bargeInCooldownMs: config.chrome.bargeInCooldownMs,
-        }),
+    logger: options.logger,
+    ...(inputFails && { inputCommand: [path.join(path.dirname(script), "missing-capture")] }),
+    bargeInRmsThreshold: config.chrome.bargeInRmsThreshold,
+    bargeInPeakThreshold: config.chrome.bargeInPeakThreshold,
+    bargeInCooldownMs: config.chrome.bargeInCooldownMs,
   });
   const start = () =>
     startMeetingAgentRealtimeEngine({
-      ...engineOptions(config, inputFails ? "meet-startup-failure" : "meet-1"),
-      logger,
+      ...options,
       transport,
       providers: [
         {
@@ -189,7 +182,7 @@ function agentFixture(inputFails = false) {
         } satisfies RealtimeTranscriptionProviderPlugin,
       ],
     });
-  return { sttSession, logger, transport, start };
+  return { sttSession, logger: options.logger, transport, start };
 }
 
 afterEach(() => {
@@ -220,9 +213,7 @@ it("stops the engine when input fails during provider setup", async () => {
   assert.ok(inputProcess, "Expected an input child process");
 
   await once(inputProcess, "error");
-  await vi.waitFor(() => {
-    expect(sttSession.close).toHaveBeenCalledTimes(1);
-  });
+  await vi.waitFor(() => expect(sttSession.close).toHaveBeenCalledOnce());
   finishConnect();
 
   await expect(engineResult).resolves.toEqual(
@@ -254,8 +245,7 @@ it("contains a forced local command-pair stdout stream error through bridge stop
   );
   expect(handle.getHealth().bridgeClosed).toBe(true);
   expect(sttSession.close).toHaveBeenCalledTimes(1);
-  expectSignals(inputProcess, ["SIGTERM"]);
-  expectSignals(outputProcess, ["SIGTERM"]);
+  expectSignals([inputProcess, outputProcess], ["SIGTERM"]);
 });
 
 it.skipIf(process.platform === "win32")(
@@ -281,8 +271,7 @@ it.skipIf(process.platform === "win32")(
     const elapsedMs = Date.now() - startedAt;
     expect(elapsedMs).toBeGreaterThanOrEqual(900);
     expect(elapsedMs).toBeLessThan(5_000);
-    expectSignals(inputProcess, ["SIGTERM", "SIGKILL"]);
-    expectSignals(outputProcess, ["SIGTERM", "SIGKILL"]);
+    expectSignals([inputProcess, outputProcess], ["SIGTERM", "SIGKILL"]);
   },
 );
 
@@ -301,7 +290,7 @@ it("preserves the configured realtime agent through provider startup", async () 
 
 it("stops the audio transport when the provider bridge closes unexpectedly", async () => {
   const fixture = voiceFixture();
-  const handle = await fixture.start({ meetingSessionId: "meet-unexpected-close" });
+  const handle = await fixture.start();
   fixture.close();
   await vi.waitFor(() => {
     expect(fixture.transport.stop).toHaveBeenCalledOnce();
@@ -317,7 +306,7 @@ it("retries only the unsettled transport teardown phase", async () => {
   vi.mocked(fixture.transport.stop)
     .mockRejectedValueOnce(stopError)
     .mockResolvedValueOnce(undefined);
-  const handle = await fixture.start({ meetingSessionId: "meet-stop-retry" });
+  const handle = await fixture.start();
   await expect(handle.stop()).rejects.toBe(stopError);
   await expect(handle.stop()).resolves.toBeUndefined();
   expect(fixture.transport.stop).toHaveBeenCalledTimes(2);
@@ -328,7 +317,7 @@ it("retries only the unsettled transport teardown phase", async () => {
 it("keeps a whole code point when a provider id crosses the log boundary", async () => {
   const prefix = "a".repeat(179);
   const fixture = voiceFixture({ strategy: "native", provider: prefix + "😀tail" });
-  const handle = await fixture.start({ meetingSessionId: "long-provider-log" });
+  const handle = await fixture.start();
   expect(fixture.logger.info).toHaveBeenCalledWith(
     expect.stringContaining(`provider=${prefix} model=provider-default`),
   );

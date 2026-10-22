@@ -1,23 +1,8 @@
-import { createServer, type Server } from "node:http";
+import { once } from "node:events";
+import { createServer } from "node:http";
 import * as providerAuthRuntime from "openclaw/plugin-sdk/provider-auth-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveGoogleMeetAccessToken, waitForGoogleMeetAuthCode } from "./oauth.js";
-
-async function occupyPort(port: number): Promise<Server | null> {
-  const server = createServer();
-  try {
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(port, "localhost", resolve);
-    });
-  } catch (error) {
-    if (error instanceof Error && error.message.includes("EADDRINUSE")) {
-      return null;
-    }
-    throw error;
-  }
-  return server;
-}
 
 function mockTokenResponse(response: Response) {
   vi.stubGlobal(
@@ -70,7 +55,15 @@ describe("Google Meet OAuth", () => {
   });
 
   it("falls back to manual paste when the local callback port is occupied", async () => {
-    const blocker = await occupyPort(8085);
+    const blocker = createServer();
+    try {
+      blocker.listen(8085, "localhost");
+      await once(blocker, "listening");
+    } catch (error) {
+      if (!(error instanceof Error && error.message.includes("EADDRINUSE"))) {
+        throw error;
+      }
+    }
     try {
       const lines: string[] = [];
       const code = await waitForCode({
@@ -81,11 +74,9 @@ describe("Google Meet OAuth", () => {
       expect(code).toBe("auth-code-123");
       expect(lines.some((line) => line.includes("Switching to manual mode"))).toBe(true);
     } finally {
-      if (blocker) {
-        await new Promise<void>((resolve) => {
-          blocker.close(() => resolve());
-        });
-      }
+      await new Promise<void>((resolve) => {
+        blocker.close(() => resolve());
+      });
     }
   });
 

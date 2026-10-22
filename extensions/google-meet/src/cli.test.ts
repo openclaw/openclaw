@@ -99,7 +99,7 @@ it.each([
 });
 
 it("can prove Google Meet API create access", async () => {
-  const responses: Record<string, unknown> = {
+  const fetchMock = cli.stubJsonRoutes({
     "https://oauth2.googleapis.com/token": {
       access_token: "new-access-token",
       expires_in: 3600,
@@ -109,12 +109,7 @@ it("can prove Google Meet API create access", async () => {
       name: "spaces/new-space",
       meetingUri: "https://meet.google.com/new-abcd-xyz",
     },
-  };
-  const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
-    const response = responses[cli.requestUrl(input).href];
-    return response ? cli.jsonResponse(response) : new Response("not found", { status: 404 });
   });
-  vi.stubGlobal("fetch", fetchMock);
   await run(["doctor", "--oauth", "--create-space", "--json"], {
     config: {
       oauth: { clientId: "client-id", clientSecret: "client-secret", refreshToken: "rt-secret" },
@@ -165,18 +160,17 @@ it("recovers and summarizes an existing Meet tab", async () => {
       }),
     },
   });
-  expect(output()).toContain("Google Meet current tab: found");
-  expect(output()).toContain("target: tab-1");
-  expect(output()).toContain("manual reason: meet-admission-required");
+  cli.expectText(
+    output(),
+    "Google Meet current tab: found",
+    "target: tab-1",
+    "manual reason: meet-admission-required",
+  );
 });
 
 const session = meetSession({ id: "meet_gateway", transport: "chrome-node" });
-const runRuntime = (
-  runtime: NonNullable<Parameters<typeof cli.setupCli>[0]["runtime"]>,
-  args: string[],
-) => run(args, { runtime });
 const runSetup = (ok: boolean, id: string, message: string, args: string[]) =>
-  runRuntime({ setupStatus: async () => ({ ok, checks: [{ id, ok, message }] }) }, args);
+  run(args, { runtime: { setupStatus: async () => ({ ok, checks: [{ id, ok, message }] }) } });
 
 type Result = Awaited<ReturnType<GoogleMeetRuntime["speak"]>> & { browserLeft?: boolean };
 type Case = ["leave" | "speak", Result, string | Error];
@@ -238,31 +232,22 @@ it("prints setup checks as text and JSON", async () => {
   expect(process.exitCode).toBe(1);
 });
 
-it("rejects unknown setup mode and transport values", async () => {
+it.each([
+  ["mode", "agnt", "agent, bidi, transcribe, or realtime"],
+  ["transport", "definitely-not-a-transport", "chrome, chrome-node, or twilio"],
+])("rejects unknown setup %s values", async (option, value, allowed) => {
   const setupStatus = vi.fn<NonNullable<GoogleMeetRuntime["setupStatus"]>>();
-  await expect(run(["setup", "--mode", "agnt"], { runtime: { setupStatus } })).rejects.toThrow(
-    "mode must be agent, bidi, transcribe, or realtime; received agnt",
-  );
-  await expect(
-    run(["setup", "--transport", "definitely-not-a-transport"], { runtime: { setupStatus } }),
-  ).rejects.toThrow(
-    "transport must be chrome, chrome-node, or twilio; received definitely-not-a-transport",
+  await expect(run(["setup", `--${option}`, value], { runtime: { setupStatus } })).rejects.toThrow(
+    `${option} must be ${allowed}; received ${value}`,
   );
   expect(setupStatus).not.toHaveBeenCalled();
 });
 
 it("accepts --json on session status", async () => {
-  await runRuntime(
-    {
-      status: async () => ({
-        found: true,
-        sessions: [
-          meetSession({ transport: "twilio", participantIdentity: "Twilio PSTN participant" }),
-        ],
-      }),
-    },
-    ["status", "--json"],
-  );
+  const sessions = [
+    meetSession({ transport: "twilio", participantIdentity: "Twilio PSTN participant" }),
+  ];
+  await run(["status", "--json"], { runtime: { status: async () => ({ found: true, sessions }) } });
   expect(json()).toMatchObject({
     found: true,
     sessions: [{ id: "meet_1", transport: "twilio" }],
@@ -286,23 +271,21 @@ it("prints cursor-based transcripts from the gateway-owned runtime", async () =>
     { sessionId: "meet_gateway", sinceIndex: 3 },
     { progress: false },
   );
-  expect(output()).toContain("# 2 earlier lines dropped by the transcript cap");
-  expect(output()).toContain("Alice: fourth line");
-  expect(output()).toContain("# nextIndex: 4");
+  cli.expectText(
+    output(),
+    "# 2 earlier lines dropped by the transcript cap",
+    "Alice: fourth line",
+    "# nextIndex: 4",
+  );
 });
 
-it.each(["9007199254740992"])(
-  "rejects invalid transcript cursors before gateway delegation: %s",
-  async (since) => {
-    const callGatewayFromCli = vi.fn();
-
-    await expect(
-      run(["transcript", "meet_gateway", "--since", since], { callGatewayFromCli }),
-    ).rejects.toThrow("--since must be a non-negative safe integer");
-
-    expect(callGatewayFromCli).not.toHaveBeenCalled();
-  },
-);
+it("rejects invalid transcript cursors before gateway delegation", async () => {
+  const callGatewayFromCli = vi.fn();
+  await expect(
+    run(["transcript", "meet_gateway", "--since", "9007199254740992"], { callGatewayFromCli }),
+  ).rejects.toThrow("--since must be a non-negative safe integer");
+  expect(callGatewayFromCli).not.toHaveBeenCalled();
+});
 
 it.each([
   ["join", "chrome-node", "realtime", { id: "meet_gateway", transport: "chrome-node" }],

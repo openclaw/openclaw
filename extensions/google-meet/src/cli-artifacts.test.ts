@@ -17,14 +17,17 @@ import JSZip from "jszip";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { writeMeetExportBundle } from "./cli-export.js";
 import * as cli from "./test-support/cli-harness.js";
+import { MEET_URL } from "./test-support/fixtures.test-helpers.js";
 
 const { run, output, json } = cli.useCli();
 const runApiCommand = (command: string, args: string[] = []) =>
   run([command, "--access-token", "token", "--expires-at", String(Date.now() + 120_000), ...args]);
 
-function runRecordCommand(command: string, args: string[] = []) {
-  return runApiCommand(command, ["--conference-record", "rec-1", ...args]);
-}
+const runRecordCommand = (command: string, args: string[] = []) =>
+  runApiCommand(command, ["--conference-record", "rec-1", ...args]);
+const record = "conferenceRecords/rec-1";
+const transcript = `${record}/transcripts/t1`;
+const participantSession = `${record}/participants/p1/participantSessions/s1`;
 
 const bundleFiles = [
   "summary.md",
@@ -48,59 +51,78 @@ afterEach(() => {
   rmSync(`${tempDir}.zip`, { force: true });
 });
 
-it("prints artifacts and attendance output", async () => {
-  await runRecordCommand("artifacts", ["--json"]);
-  expect(json()).toMatchObject({
-    tokenSource: "cached-access-token",
-    conferenceRecords: [{ name: "conferenceRecords/rec-1" }],
-    artifacts: [
-      {
-        recordings: [{ name: "conferenceRecords/rec-1/recordings/r1" }],
-        transcripts: [{ name: "conferenceRecords/rec-1/transcripts/t1" }],
-        transcriptEntries: [
-          {
-            transcript: "conferenceRecords/rec-1/transcripts/t1",
-            entries: [{ text: "Hello from the transcript." }],
-          },
-        ],
-        smartNotes: [{ name: "conferenceRecords/rec-1/smartNotes/sn1" }],
-      },
-    ],
-  });
+it.each([
+  [
+    "artifacts",
+    ["--conference-record", "rec-1", "--json"],
+    {
+      tokenSource: "cached-access-token",
+      conferenceRecords: [{ name: record }],
+      artifacts: [
+        {
+          recordings: [{ name: `${record}/recordings/r1` }],
+          transcripts: [{ name: transcript }],
+          transcriptEntries: [{ transcript, entries: [{ text: "Hello from the transcript." }] }],
+          smartNotes: [{ name: `${record}/smartNotes/sn1` }],
+        },
+      ],
+    },
+  ],
+  [
+    "attendance",
+    ["--conference-record", "rec-1"],
+    ["attendance rows: 1", "participant: Alice", participantSession],
+  ],
+  [
+    "attendance",
+    ["--conference-record", "rec-1", "--format", "markdown"],
+    ["# Google Meet Attendance", "## Alice", participantSession],
+  ],
+] satisfies Array<[string, string[], Record<string, unknown> | string[]]>)(
+  "prints %s output for %j",
+  async (command, args, expected) => {
+    await runApiCommand(command, args);
+    if (Array.isArray(expected)) {
+      cli.expectText(output(), ...expected);
+    } else {
+      expect(json()).toMatchObject(expected);
+    }
+  },
+);
 
-  await runRecordCommand("attendance");
-  expect(output()).toContain("attendance rows: 1");
-  expect(output()).toContain("participant: Alice");
-  expect(output()).toContain("conferenceRecords/rec-1/participants/p1/participantSessions/s1");
+it.each([
+  [["--meeting", "abc-defg-hij"], "space: spaces/abc-defg-hij"],
+  [["--today"], "calendar event: Project sync"],
+] satisfies Array<[string[], string]>)(
+  "prints the latest conference record for %j",
+  async (args, expected) => {
+    await runApiCommand("latest", args);
+    cli.expectText(output(), expected, `conference record: ${record}`);
+  },
+);
+
+it("prints calendar event previews", async () => {
+  await runApiCommand("calendar-events", ["--today"]);
+  cli.expectText(output(), "meet events: 1", "* Project sync", MEET_URL);
 });
 
 it("ends an active conference for a Meet space", async () => {
-  const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
-    const url = cli.requestUrl(input);
-    if (url.pathname === "/v2/spaces/abc-defg-hij") {
-      return cli.jsonResponse({
-        name: "spaces/space-resource-123",
-        meetingCode: "abc-defg-hij",
-        meetingUri: "https://meet.google.com/abc-defg-hij",
-      });
-    }
-    if (url.pathname === "/v2/spaces/space-resource-123:endActiveConference") {
-      return cli.jsonResponse({});
-    }
-    return new Response("not found", { status: 404 });
+  const endUrl = "https://meet.googleapis.com/v2/spaces/space-resource-123:endActiveConference";
+  const fetchMock = cli.stubJsonRoutes({
+    "https://meet.googleapis.com/v2/spaces/abc-defg-hij": {
+      name: "spaces/space-resource-123",
+      meetingCode: "abc-defg-hij",
+      meetingUri: MEET_URL,
+    },
+    [endUrl]: {},
   });
-  vi.stubGlobal("fetch", fetchMock);
-
-  await runApiCommand("end-active-conference", ["https://meet.google.com/abc-defg-hij", "--json"]);
+  await runApiCommand("end-active-conference", [MEET_URL, "--json"]);
   expect(json()).toMatchObject({
     space: "spaces/space-resource-123",
     ended: true,
     tokenSource: "cached-access-token",
   });
-  const endCall = fetchMock.mock.calls.find(
-    ([input]) =>
-      input === "https://meet.googleapis.com/v2/spaces/space-resource-123:endActiveConference",
-  );
+  const endCall = fetchMock.mock.calls.find(([input]) => input === endUrl);
   expect(endCall?.[1]).toEqual({
     method: "POST",
     body: "{}",
@@ -116,31 +138,10 @@ it("rejects access policy flags when create would use browser fallback", async (
   await expect(
     run(["create", "--access-type", "OPEN"], {
       runtime: {
-        createViaBrowser: vi.fn(async () => {
-          throw new Error("browser fallback should not run");
-        }),
+        createViaBrowser: vi.fn().mockRejectedValue(new Error("browser fallback should not run")),
       },
     }),
   ).rejects.toThrow("access policy options require OAuth/API room creation");
-});
-
-it.each([
-  [["--meeting", "abc-defg-hij"], "space: spaces/abc-defg-hij"],
-  [["--today"], "calendar event: Project sync"],
-] satisfies Array<[string[], string]>)(
-  "prints the latest conference record for %j",
-  async (args, expected) => {
-    await runApiCommand("latest", args);
-    expect(output()).toContain(expected);
-    expect(output()).toContain("conference record: conferenceRecords/rec-1");
-  },
-);
-
-it("prints calendar event previews", async () => {
-  await runApiCommand("calendar-events", ["--today"]);
-  expect(output()).toContain("meet events: 1");
-  expect(output()).toContain("* Project sync");
-  expect(output()).toContain("https://meet.google.com/abc-defg-hij");
 });
 
 it("rejects a fractional Meet API page size before fetching", async () => {
@@ -150,23 +151,6 @@ it("rejects a fractional Meet API page size before fetching", async () => {
     "page-size must be a positive integer",
   );
   expect(fetchMock).not.toHaveBeenCalled();
-});
-
-it("prints markdown artifact and attendance output", async () => {
-  const outputPath = path.join(tempDir, "artifacts.md");
-
-  await runRecordCommand("artifacts", ["--format", "markdown", "--output", outputPath]);
-  const markdown = readFileSync(outputPath, "utf8");
-  expect(output()).toContain(`wrote: ${outputPath}`);
-  expect(markdown).toContain("# Google Meet Artifacts");
-  expect(markdown).toContain("## conferenceRecords/rec-1");
-  expect(markdown).toContain("### Transcript Entries: conferenceRecords/rec-1/transcripts/t1");
-  expect(markdown).toContain("Hello from the transcript.");
-
-  await runRecordCommand("attendance", ["--format", "markdown"]);
-  expect(output()).toContain("# Google Meet Attendance");
-  expect(output()).toContain("## Alice");
-  expect(output()).toContain("conferenceRecords/rec-1/participants/p1/participantSessions/s1");
 });
 
 it.skipIf(process.platform === "win32")(
@@ -216,10 +200,19 @@ it("quotes carriage returns in formula-neutralized CSV cells", async () => {
 it("writes an export bundle", async () => {
   await runRecordCommand("export", ["--include-doc-bodies", "--zip", "--output", tempDir]);
   expect(output()).toContain(`export: ${tempDir}`);
-  expect(readOutput("summary.md")).toContain("# Google Meet Artifacts");
+  cli.expectText(
+    readOutput("summary.md"),
+    "# Google Meet Artifacts",
+    `## ${record}`,
+    `### Transcript Entries: ${transcript}`,
+    "Hello from the transcript.",
+  );
   expect(readOutput("attendance.csv")).toContain("conferenceRecords/rec-1,Alice,users/alice");
-  expect(readOutput("transcript.md")).toContain("Hello from the transcript.");
-  expect(readOutput("transcript.md")).toContain("Transcript document body.");
+  cli.expectText(
+    readOutput("transcript.md"),
+    "Hello from the transcript.",
+    "Transcript document body.",
+  );
   const manifest = JSON.parse(readOutput("manifest.json"));
   expect(manifest).toMatchObject({
     request: { conferenceRecord: "rec-1", includeDocumentBodies: true },
@@ -228,7 +221,7 @@ it("writes an export bundle", async () => {
   });
   expect(manifest.files).toEqual(bundleFiles);
   expect(JSON.parse(readOutput("artifacts.json"))).toMatchObject({
-    conferenceRecords: [{ name: "conferenceRecords/rec-1" }],
+    conferenceRecords: [{ name: record }],
     artifacts: [{ transcripts: [{ documentText: "Transcript document body." }] }],
   });
   const zip = await JSZip.loadAsync(readFileSync(`${tempDir}.zip`));
@@ -239,26 +232,26 @@ it("includes artifact warnings in export summaries and manifests", async () => {
   cli.stubMeetArtifactsApi({ failSmartNoteDocumentBody: true });
 
   await runRecordCommand("export", ["--include-doc-bodies", "--output", tempDir, "--json"]);
-  const summary = readOutput("summary.md");
-  expect(summary).toContain("### Warnings");
-  expect(summary).toContain("Document body warning");
-  const manifest = JSON.parse(readOutput("manifest.json"));
-  expect(manifest).toMatchObject({
+  cli.expectText(readOutput("summary.md"), "### Warnings", "Document body warning");
+  expect(JSON.parse(readOutput("manifest.json"))).toMatchObject({
     counts: { warnings: 1 },
     warnings: [
       {
         type: "smart_note_document_body",
-        conferenceRecord: "conferenceRecords/rec-1",
-        resource: "conferenceRecords/rec-1/smartNotes/sn1",
+        conferenceRecord: record,
+        resource: `${record}/smartNotes/sn1`,
       },
     ],
   });
 });
 
 it("prints a dry-run export manifest without writing files", async () => {
-  const outputDir = path.join(tempDir, "bundle");
-
-  await runRecordCommand("export", ["--include-doc-bodies", "--output", outputDir, "--dry-run"]);
+  await runRecordCommand("export", [
+    "--include-doc-bodies",
+    "--output",
+    publicationDir,
+    "--dry-run",
+  ]);
   const payload = JSON.parse(output());
   expect(payload).toMatchObject({
     dryRun: true,
@@ -269,14 +262,13 @@ it("prints a dry-run export manifest without writing files", async () => {
     },
   });
   expect(payload.manifest.files).toEqual(bundleFiles);
-  expect(existsSync(outputDir)).toBe(false);
+  expect(existsSync(publicationDir)).toBe(false);
 });
 it("writes the artifact summary to --output", async () => {
   const outputPath = path.join(tempDir, "summary.txt");
   await runRecordCommand("artifacts", ["--format", "summary"]);
   const summary = output();
-  expect(summary).toContain("conference records: 1\n");
-  expect(summary).toContain("token source: cached-access-token\n");
+  cli.expectText(summary, "conference records: 1\n", "token source: cached-access-token\n");
   await runRecordCommand("artifacts", ["--format", "summary", "--output", outputPath]);
   expect(existsSync(outputPath)).toBe(true);
   expect(readFileSync(outputPath, "utf8")).toBe(summary);
@@ -337,11 +329,7 @@ it.each([
     const suppliedOutputDir = `${publicationDir}${trailingSeparators}`;
     const zipPath = `${publicationDir}.zip`;
     const result = await writeBundle(suppliedOutputDir, true);
-    const manifest = JSON.parse(
-      readFileSync(path.join(publicationDir, "manifest.json"), "utf8"),
-    ) as {
-      zipFile?: string;
-    };
+    const manifest = JSON.parse(readFileSync(path.join(publicationDir, "manifest.json"), "utf8"));
     expect(result).toMatchObject({ outputDir: suppliedOutputDir, zipFile: zipPath });
     expect(manifest.zipFile).toBe(zipPath);
     expect(existsSync(zipPath)).toBe(true);

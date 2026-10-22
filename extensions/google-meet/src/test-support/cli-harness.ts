@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import * as gatewayRuntime from "openclaw/plugin-sdk/gateway-runtime";
-import { afterAll, afterEach, beforeEach, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, expect, vi } from "vitest";
 import { registerGoogleMeetCli } from "../cli.js";
 import { resolveGoogleMeetConfig } from "../config.js";
 import type { GoogleMeetRuntime } from "../runtime.js";
@@ -56,6 +56,21 @@ export function jsonResponse(value: unknown): Response {
 
 export function requestUrl(input: RequestInfo | URL): URL {
   return new URL(typeof input === "string" || input instanceof URL ? input : input.url);
+}
+
+export function expectText(text: string, ...parts: string[]) {
+  for (const part of parts) {
+    expect(text).toContain(part);
+  }
+}
+
+export function stubJsonRoutes(routes: Record<string, unknown>) {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+    const response = routes[requestUrl(input).href];
+    return response ? jsonResponse(response) : new Response("not found", { status: 404 });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
 }
 
 export function stubMeetArtifactsApi(
