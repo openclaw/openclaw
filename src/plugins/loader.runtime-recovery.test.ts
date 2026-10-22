@@ -118,6 +118,7 @@ it.each(["installed", "bundled-mjs"] as const)(
       },
     });
     const config = configWith();
+    const context = { config, workspaceDir: root };
     const manifestPath = path.join(plugin.dir, "openclaw.plugin.json");
     const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
     writeFixtureJson(plugin.dir, "openclaw.plugin.json", {
@@ -137,12 +138,11 @@ it.each(["installed", "bundled-mjs"] as const)(
         },
         async () => {
           const metadata = withPluginCache(publishedCache, () =>
-            loadPluginMetadataSnapshot({ config, workspaceDir: root }),
+            loadPluginMetadataSnapshot(context),
           );
           bindPluginMetadataSnapshotCache(metadata, publishedCache);
           const options = {
-            config,
-            workspaceDir: root,
+            ...context,
             manifestRegistry: metadata.manifestRegistry,
             discovery: metadata.discovery,
             runtimeSideEffects: true,
@@ -187,19 +187,13 @@ it.each(["installed", "bundled-mjs"] as const)(
               const restoredRecord = restored.plugins.find((record) => record.id === id)!;
               expect(restoredRecord).not.toBe(oldRecord);
               expect(getPluginInstance(restoredRecord)).not.toBe(oldInstance);
-              prepareOwnedPluginLoadContext(
-                { config, workspaceDir: root },
-                process.env,
-                restored,
-                metadata,
-              );
+              prepareOwnedPluginLoadContext(context, process.env, restored, metadata);
               bindPluginRegistryGatewayOwner(restored, { current: () => restored });
               setActivePluginRegistry(restored, undefined, "gateway-bindable", root);
-              setGatewayPluginMetadataSnapshot(metadata, { config, workspaceDir: root });
+              setGatewayPluginMetadataSnapshot(metadata, context);
               expect(
                 getCurrentPluginMetadataSnapshot({
-                  config,
-                  workspaceDir: root,
+                  ...context,
                   allowWorkspaceScopedSnapshot: true,
                 }),
               ).toBeUndefined();
@@ -211,10 +205,7 @@ it.each(["installed", "bundled-mjs"] as const)(
               const loadInbound = createPreparedInboundRegistryLoader();
               for (let pass = 0; pass < 2; pass++) {
                 const inbound = withPluginRuntimeRegistryScope(restored, () =>
-                  loadInbound(
-                    { config, workspaceDir: root, allowGatewaySubagentBinding: true },
-                    metadata,
-                  ),
+                  loadInbound({ ...context, allowGatewaySubagentBinding: true }, metadata),
                 );
                 expect(inbound).toBe(restored);
                 expect(await resolveProbe(inbound).execute("inbound", {})).toMatchObject(expected);

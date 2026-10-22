@@ -397,16 +397,8 @@ describe("collectCodexRouteWarnings", () => {
     const result = repairFixture({
       defaults: { model: "openai-codex/gpt-5.6-sol" },
       providers: {
-        openai: {
-          baseUrl: "",
-          models: [{ ...MODEL_CATALOG_METADATA, id: "gpt-5.6-sol", api: "openai-responses" }],
-        },
-        "openai-codex": {
-          baseUrl: "",
-          models: [
-            { ...MODEL_CATALOG_METADATA, id: "gpt-5.6-sol", api: "openai-chatgpt-responses" },
-          ],
-        },
+        openai: catalogProvider("gpt-5.6-sol", { api: "openai-responses" }),
+        "openai-codex": catalogProvider("gpt-5.6-sol", { api: "openai-chatgpt-responses" }),
       },
       hooks: { mappings: [{ model: "codex/gpt-5.4-mini" }] },
     });
@@ -631,17 +623,11 @@ describe("collectCodexRouteWarnings", () => {
       defaults: { model: "openai-codex/gpt-5.5" },
       plugins: {
         allow: ["brave", "discord", "whatsapp"],
-        entries: {
-          brave: { enabled: true },
-          discord: { enabled: true },
-          whatsapp: { enabled: true },
-        },
+        entries: Object.fromEntries(
+          ["brave", "discord", "whatsapp"].map((id) => [id, { enabled: true }]),
+        ),
       },
-      list: [
-        { id: "main", model: "openai-codex/gpt-5.5" },
-        { id: "meimei", model: "openai-codex/gpt-5.5" },
-        { id: "youyou-cli", model: "openai-codex/gpt-5.5" },
-      ],
+      list: ["main", "meimei", "youyou-cli"].map((id) => ({ id, model: "openai-codex/gpt-5.5" })),
     });
 
     expect(result.warnings).toStrictEqual([]);

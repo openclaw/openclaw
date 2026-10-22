@@ -15,6 +15,25 @@ export type GatewayTestResponseFrame = {
   error?: { code?: string; message?: string } & Record<string, unknown>;
 };
 
+export const dispatchProfile = (
+  profileId: string,
+  overrides: Partial<NonNullable<GatewayWsClient["authenticatedUserProfile"]>> = {},
+) => ({
+  profileId,
+  displayName: null,
+  avatarRevision: "1",
+  hasAvatar: false,
+  updatedAt: 1,
+  ...overrides,
+});
+
+export const requestFrame = (id: string, method: string, params: unknown = {}) => ({
+  type: "req",
+  id,
+  method,
+  params,
+});
+
 export function createOperatorWsClient(
   overrides: {
     connId?: string;

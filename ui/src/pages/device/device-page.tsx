@@ -1,5 +1,5 @@
-import { createSignal, onCleanup } from "@solidjs/signals";
-import { For, Show } from "solid-js";
+import { createSignal } from "@solidjs/signals";
+import { For, onSettled, Show } from "solid-js";
 import { deviceSettingsGroupLabelKey } from "../../app-navigation.ts";
 import type {
   NativeDeviceSettingsCapability,
@@ -80,7 +80,7 @@ export function DevicePage() {
     return capability ? pendingCookieSyncEdits.get(capability) : undefined;
   };
   let disposed = false;
-  onCleanup(() => {
+  onSettled(() => () => {
     disposed = true;
     flushTargetProfile();
   });

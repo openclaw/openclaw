@@ -1,21 +1,14 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { buildConfiguredAcpSessionKey } from "../../acp/persistent-bindings.types.js";
+import {
+  buildConfiguredAcpSessionKey,
+  resolveConfiguredAcpBindingSpecFromRecord,
+} from "../../acp/persistent-bindings.types.js";
+import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { clearActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 import * as bindingRegistry from "./configured-binding-registry.js";
-
-const resolveAgentConfigMock = vi.hoisted(() => vi.fn());
-const resolveDefaultAgentIdMock = vi.hoisted(() => vi.fn());
-const resolveAgentWorkspaceDirMock = vi.hoisted(() => vi.fn());
-
-vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../agents/agent-scope.js")>()),
-  resolveAgentConfig: resolveAgentConfigMock,
-  resolveDefaultAgentId: resolveDefaultAgentIdMock,
-  resolveAgentWorkspaceDir: resolveAgentWorkspaceDirMock,
-}));
 
 const conversation = {
   channel: "discord",
@@ -64,37 +57,12 @@ function publishPlugin(plugin = createDiscordAcpPlugin()) {
   return plugin;
 }
 
-beforeEach(() => {
-  resolveAgentConfigMock.mockReset().mockReturnValue(undefined);
-  resolveDefaultAgentIdMock.mockReset().mockReturnValue("main");
-  resolveAgentWorkspaceDirMock.mockReset().mockReturnValue("/tmp/workspace");
-  setActivePluginRegistry(createEmptyPluginRegistry());
-});
+const resolveRecord = (cfg: OpenClawConfig) =>
+  bindingRegistry.resolveConfiguredBindingRecord({ cfg, ...conversation });
+
+beforeEach(() => setActivePluginRegistry(createEmptyPluginRegistry()));
 
 afterEach(() => clearActivePluginRegistry());
-
-it("resolves configured ACP bindings from canonical conversation refs", () => {
-  publishPlugin();
-
-  const resolved = bindingRegistry.resolveConfiguredBinding({
-    cfg: createConfig(),
-    conversation,
-  });
-
-  expect(resolved?.conversation).toEqual({
-    channel: "discord",
-    accountId: "default",
-    conversationId: "1479098716916023408",
-  });
-  expect(resolved?.record.conversation.channel).toBe("discord");
-  expect(resolved?.statefulTarget).toEqual({
-    kind: "stateful",
-    driverId: "acp",
-    sessionKey: resolved?.record.targetSessionKey,
-    agentId: "codex",
-    label: undefined,
-  });
-});
 
 it("resolves wildcard binding session keys from the compiled registry", () => {
   publishPlugin();
@@ -114,25 +82,22 @@ it("resolves wildcard binding session keys from the compiled registry", () => {
     conversation: { channel: "discord", accountId: "work" },
     metadata: { backend: "acpx" },
   });
+  expect(resolved?.statefulTarget).toEqual({
+    kind: "stateful",
+    driverId: "acp",
+    sessionKey: resolved?.record.targetSessionKey,
+    agentId: "codex",
+    label: undefined,
+  });
 });
 
 it("does not perform late plugin discovery when a channel plugin is unavailable", () => {
-  const resolved = bindingRegistry.resolveConfiguredBindingRecord({
-    cfg: createConfig(),
-    ...conversation,
-  });
-
-  expect(resolved).toBeNull();
+  expect(resolveRecord(createConfig())).toBeNull();
 });
 
 it("skips ordinary route bindings without invoking a configured binding provider", () => {
   const plugin = publishPlugin();
-  expect(
-    bindingRegistry.resolveConfiguredBindingRecord({
-      cfg: createConfig({ route: true }),
-      ...conversation,
-    }),
-  ).toBeNull();
+  expect(resolveRecord(createConfig({ route: true }))).toBeNull();
   expect(plugin.bindings.compileConfiguredBinding).not.toHaveBeenCalled();
 });
 
@@ -142,17 +107,57 @@ it("uses the current loaded channel plugin on each resolve", () => {
   publishPlugin(firstPlugin);
   const cfg = createConfig();
 
-  bindingRegistry.resolveConfiguredBindingRecord({
-    cfg,
-    ...conversation,
-  });
+  resolveRecord(cfg);
 
   publishPlugin(secondPlugin);
-  bindingRegistry.resolveConfiguredBindingRecord({
-    cfg,
-    ...conversation,
-  });
+  resolveRecord(cfg);
 
   expect(firstPlugin.bindings?.compileConfiguredBinding).toHaveBeenCalledTimes(1);
   expect(secondPlugin.bindings?.compileConfiguredBinding).toHaveBeenCalledTimes(1);
+});
+
+const model = "ollama-cloud/glm-5.2:cloud";
+function thinkingConfig(defaults: AgentDefaultsConfig, thinkingDefault?: "high"): OpenClawConfig {
+  return {
+    session: { mainKey: "main", scope: "per-sender" },
+    agents: {
+      entries: { codex: { model, ...(thinkingDefault ? { thinkingDefault } : {}) } },
+      defaults,
+    },
+  };
+}
+const defaults = {
+  thinkingDefault: "adaptive" as const,
+  models: { [model]: { params: { thinking: "off" } } },
+};
+
+it.each([
+  ["model beats global", thinkingConfig(defaults), "off"],
+  ["agent beats model", thinkingConfig(defaults, "high"), "high"],
+  ["global fallback", thinkingConfig({ thinkingDefault: "adaptive" }), "adaptive"],
+  ["harness fallback", { agents: { entries: { codex: { model: undefined } } } }, undefined],
+  [
+    "global without model",
+    { agents: { entries: { codex: {} }, defaults: { thinkingDefault: "off" } } },
+    "off",
+  ],
+] as const)("configured ACP thinking: %s", (_name, cfg, expected) => {
+  publishPlugin();
+  const materialized = resolveRecord({
+    ...cfg,
+    bindings: [
+      {
+        type: "acp",
+        agentId: "codex",
+        match: {
+          channel: "discord",
+          peer: { kind: "channel", id: conversation.conversationId },
+        },
+      },
+    ],
+  });
+  if (!materialized) {
+    throw new Error("expected a configured ACP binding");
+  }
+  expect(resolveConfiguredAcpBindingSpecFromRecord(materialized.record)?.thinking).toBe(expected);
 });

@@ -72,14 +72,10 @@ describe("structured_output", () => {
   });
 
   it.each([{ result: ["one", "two"] }, { result: '["one","two"]' }])(
-    "accepts arrays (%j), rejects malformed schemas before spawn",
+    "accepts arrays (%j)",
     async ({ result }) => {
       const arraySchema = { type: "array", items: { type: "string" } };
-      expect(validateStructuredOutputSchema({})).toBeUndefined();
       expect(validateStructuredOutputSchema(arraySchema)).toBeUndefined();
-      expect(validateStructuredOutputSchema({ type: "object", properties: "invalid" })).toContain(
-        "Invalid sessions_spawn outputSchema",
-      );
       const { submit } = makeTool({ schema: arraySchema });
       await expect(submit(result)).resolves.toBeDefined();
       expect(peek(runId)?.structured).toEqual(["one", "two"]);

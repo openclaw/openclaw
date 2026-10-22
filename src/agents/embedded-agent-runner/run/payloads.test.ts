@@ -191,22 +191,15 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
   });
 
   it.each([
-    { parts: ["First part.", "Second part.\nNO_REPLY"], expected: "First part.\nSecond part." },
-    {
-      type: "input_text",
-      parts: ["First part.", "Second part.\nNO_REPLY"],
-      expected: "First part.\nSecond part.",
-    },
-    {
-      type: "output_text",
-      parts: ["First part.", "Second part.\nNO_REPLY"],
-      expected: "First part.\nSecond part.",
-    },
-    { parts: ["First part.", "Second part.\nNO_", "REPLY"], expected: "First part.\nSecond part." },
-    { parts: ["```text\nNO_REPLY", "```\nNO_REPLY"], expected: "```text\nNO_REPLY\n```" },
-  ])(
-    "preserves earlier segment source and boundaries after trailing cleanup: $type $parts",
-    ({ parts, expected, type = "text" }) => {
+    ...["text", "input_text", "output_text"].map(
+      (type) =>
+        [type, ["First part.", "Second part.\nNO_REPLY"], "First part.\nSecond part."] as const,
+    ),
+    ["text", ["First part.", "Second part.\nNO_", "REPLY"], "First part.\nSecond part."],
+    ["text", ["```text\nNO_REPLY", "```\nNO_REPLY"], "```text\nNO_REPLY\n```"],
+  ] as const)(
+    "preserves earlier segment source and boundaries after trailing cleanup: %s %s",
+    (type, parts, expected) => {
       const earlier = makeAgentAssistantMessage({
         content: parts.map((text) => ({ type, text })) as AssistantMessage["content"],
       });
@@ -359,28 +352,15 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     ).toBeUndefined();
   });
 
-  it("shows exec tool error details when verbose mode is full", () => {
+  it.each([
+    ["exec", "Exec", "command failed"],
+    ["write", "Write", "permission denied"],
+  ])("shows %s tool error details when verbose mode is full", (toolName, title, error) => {
     const payloads = buildPayloads({
-      lastToolError: { toolName: "exec", error: "command failed" },
+      lastToolError: { toolName, error },
       verboseLevel: "full",
     });
-
-    expectSingleToolErrorPayload(payloads, {
-      title: "Exec",
-      detail: "command failed",
-    });
-  });
-
-  it("includes details for mutating tool failures when verbose is full", () => {
-    const payloads = buildPayloads({
-      lastToolError: { toolName: "write", error: "permission denied" },
-      verboseLevel: "full",
-    });
-
-    expectSingleToolErrorPayload(payloads, {
-      title: "Write",
-      detail: "permission denied",
-    });
+    expectSingleToolErrorPayload(payloads, { title, detail: error });
   });
 
   it("strips NO_REPLY text but keeps voice media directives", () => {
@@ -548,22 +528,10 @@ describe("buildEmbeddedRunPayloads process-error warnings", () => {
   });
 
   it.each([
-    {
-      label: "signal",
-      reason: { kind: "signal", signal: "SIGKILL" } as const,
-      expected: "signal SIGKILL",
-    },
-    {
-      label: "overall timeout",
-      reason: { kind: "timeout", timeoutKind: "overall-timeout" } as const,
-      expected: "timed out",
-    },
-    {
-      label: "no-output timeout",
-      reason: { kind: "timeout", timeoutKind: "no-output-timeout" } as const,
-      expected: "timed out waiting for output",
-    },
-  ])("renders $label without fabricating an exit code", ({ reason, expected }) => {
+    [{ kind: "signal", signal: "SIGKILL" }, "signal SIGKILL"],
+    [{ kind: "timeout", timeoutKind: "overall-timeout" }, "timed out"],
+    [{ kind: "timeout", timeoutKind: "no-output-timeout" }, "timed out waiting for output"],
+  ] as const)("renders %j without fabricating an exit code", (reason, expected) => {
     const payloads = buildPayloads({
       lastToolError: processError(reason),
       verboseLevel: "off",

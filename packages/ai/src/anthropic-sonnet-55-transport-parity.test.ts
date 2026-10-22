@@ -1,8 +1,13 @@
 import type { Context } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
 import { capturePaths } from "./anthropic-parity.test-support.js";
-import { registerParityHostLifecycle } from "./provider-transport-parity.test-support.js";
-import { createZeroUsage } from "./usage.test-support.js";
+import {
+  anthropicModel,
+  assistantMessage,
+  registerParityHostLifecycle,
+  textBlock,
+  userMessage,
+} from "./provider-transport-parity.test-support.js";
 
 describe("Anthropic 5.5 transport parity", () => {
   registerParityHostLifecycle();
@@ -113,21 +118,16 @@ describe("Anthropic 5.5 transport parity", () => {
     const thinking = "  signed thinking\r\nwith exact whitespace  ";
     const context: Context = {
       messages: [
-        { role: "user", content: "Start.", timestamp: 1 },
-        {
-          role: "assistant",
-          api: "anthropic-messages",
-          provider: "anthropic",
-          model: source,
-          content: [
+        userMessage("Start."),
+        assistantMessage(
+          { ...anthropicModel, id: source },
+          [
             { type: "thinking", thinking, thinkingSignature: "synthetic-signature" },
-            { type: "text", text: "Visible answer." },
+            textBlock("Visible answer."),
           ],
-          stopReason: "stop",
-          usage: createZeroUsage(),
-          timestamp: 2,
-        },
-        { role: "user", content: "Continue.", timestamp: 3 },
+          { timestamp: 2 },
+        ),
+        userMessage("Continue.", { timestamp: 3 }),
       ],
     };
     for await (const { payload } of capturePaths({

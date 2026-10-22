@@ -4,9 +4,9 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
+import { placementControls } from "./placement.test-support.ts";
 import { resolveProjectChip } from "./project-chip.ts";
 import { ProjectChip } from "./project-chip.tsx";
-import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
 import { pickerParams } from "./where-chip.test-support.ts";
 import { WhereChip } from "./where-chip.tsx";
 
@@ -66,6 +66,7 @@ it("retains project artwork while current labels and selection remain live", () 
   vi.spyOn(place, "canWrite").mockReturnValue(true);
   vi.spyOn(place, "deviceFolderAvailable", "get").mockReturnValue(false);
   vi.spyOn(browser, "projects", "get").mockReturnValue(projects);
+  vi.spyOn(browser, "projectsReady", "get").mockReturnValue(true);
   vi.spyOn(browser, "projectQuery", "get").mockReturnValue("Sample");
   vi.spyOn(browser, "projectId", "get").mockImplementation(() => projectId);
   vi.spyOn(browser, "popoverOpen").mockReturnValue(true);
@@ -75,18 +76,7 @@ it("retains project artwork while current labels and selection remain live", () 
     onPopoverHide: vi.fn(),
     onPopoverAfterHide: vi.fn(),
   });
-  const options: NewSessionPlaceControlsOptions = {
-    place,
-    gateway,
-    context: undefined,
-    data: undefined,
-    submitting: false,
-    pendingPlacement: false,
-    onConnectMachine: vi.fn(),
-    onNavigate: vi.fn(),
-    onFocusComposer: vi.fn(),
-    onChange: vi.fn(),
-  };
+  const options = placementControls({ place, gateway, context: undefined });
   const params = {
     params: options,
     state: resolveProjectChip({

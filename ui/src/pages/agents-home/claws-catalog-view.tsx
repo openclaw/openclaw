@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { Errored, For, Loading, Show } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
-import "../../components/modal-dialog.ts";
+import "../../components/modal-dialog.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../i18n/index.ts";

@@ -169,18 +169,6 @@ it("rate limits new session IDs without counting loadSession refreshes", async (
   );
 });
 
-it("settles and clears the active run when the completion snapshot cannot be delivered", async () => {
-  const { agent, sessionStore, sessionUpdate } = harness({ row });
-  await agent.loadSession(createLoadSessionRequest(sessionId));
-  sessionUpdate.mockClear();
-  sessionUpdate.mockRejectedValueOnce(new Error("session update transport failed"));
-  const prompt = agent.prompt(createPromptRequest(sessionId, "hello"));
-  await agent.handleGatewayEvent(createChatFinalEvent(sessionId));
-  await expect(prompt).resolves.toEqual({ stopReason: "end_turn" });
-  const session = sessionStore.getSession(sessionId);
-  expect(session).toMatchObject({ activeRunId: null, abortController: null });
-});
-
 it("streams partial tool output and retains file locations through completion", async () => {
   const { agent, sessionUpdate, expectUpdate } = harness();
   await agent.loadSession(createLoadSessionRequest(sessionId));

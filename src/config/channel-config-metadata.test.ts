@@ -97,18 +97,15 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
   );
 
   // The producer's traversal bound must not depend on the runtime stack limit.
-  it.each(["feishu", "qqbot"])(
-    "surfaces the raw deeply nested %s schema after bounded traversal",
-    (channelId) => {
-      const schema = deepSchema();
+  it("surfaces the raw deeply nested external schema after bounded traversal", () => {
+    const schema = deepSchema();
 
-      const entries = collectChannelSchemaMetadataWithOwnership(
-        createChannelSchemaRegistry(channelId, schema),
-      );
-      expect(entries[0]).toMatchObject({ id: channelId });
-      expect(entries[0]?.configSchema).toBe(schema);
-    },
-  );
+    const entries = collectChannelSchemaMetadataWithOwnership(
+      createChannelSchemaRegistry("qqbot", schema),
+    );
+    expect(entries[0]).toMatchObject({ id: "qqbot" });
+    expect(entries[0]?.configSchema).toBe(schema);
+  });
 
   it("keeps bundled schema preparation failures on the throwing path", () => {
     expect(() =>

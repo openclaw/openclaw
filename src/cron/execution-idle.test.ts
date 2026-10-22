@@ -44,7 +44,6 @@ describe("idle-only execution admission", () => {
       defaultAgentId: "main",
       log: createNoopLogger(),
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(),
       isExecutionIdle: (job, ownSessionKey, ownReplyOperation) =>
         isCronExecutionIdle({}, job, "main", ownSessionKey, ownReplyOperation),

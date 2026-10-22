@@ -16,7 +16,7 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { PluginPage, type PluginPageProps } from "./plugin-page.tsx";
-import { page as pluginRoute } from "./route.ts";
+import { page as pluginRoute } from "./route.tsx";
 
 type ApplicationConfig = ApplicationConfigCapability["current"];
 const cleanups: Array<() => void> = [];

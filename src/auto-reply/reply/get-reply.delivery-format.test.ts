@@ -88,27 +88,24 @@ function expectContractOnce(prompt: string, markup: string) {
   expect(prompt).toContain(`"text_markup": "${markup}"`);
 }
 
-it.each([["rich", "markdown_telegram_rich"]])(
-  "gives a Telegram reply on the %s account its contract once",
-  async (accountId, markup) => {
-    const { cfg, lastPrompt } = await setup("reply-delivery-format");
-    await getReplyFromConfig(
-      finalizeInboundContext({
-        Body: "Post the status table",
-        Provider: "telegram",
-        Surface: "telegram",
-        OriginatingChannel: "telegram",
-        OriginatingTo: "telegram:123",
-        AccountId: accountId,
-        ChatType: "direct",
-        SessionKey: `agent:main:telegram:${accountId}:direct:123`,
-      }),
-      undefined,
-      cfg,
-    );
-    expectContractOnce(lastPrompt(), markup);
-  },
-);
+it("gives a Telegram reply on the rich account its contract once", async () => {
+  const { cfg, lastPrompt } = await setup("reply-delivery-format");
+  await getReplyFromConfig(
+    finalizeInboundContext({
+      Body: "Post the status table",
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:123",
+      AccountId: "rich",
+      ChatType: "direct",
+      SessionKey: "agent:main:telegram:rich:direct:123",
+    }),
+    undefined,
+    cfg,
+  );
+  expectContractOnce(lastPrompt(), "markdown_telegram_rich");
+});
 
 it("gives a heartbeat delivered to Telegram the delivering account's contract once", async () => {
   const { cfg, storePath, lastPrompt } = await setup("heartbeat-delivery-format");

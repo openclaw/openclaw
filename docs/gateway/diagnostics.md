@@ -201,8 +201,14 @@ The Gateway also emits an always-on `main-thread stall` warning after a synchron
 callback blocks for at least 250 milliseconds. Each line names the longest-running
 known task segment from RPC handlers, scheduled jobs, diagnostic phases, timeline spans, or
 worker message handling, with elapsed and task milliseconds. Time awaiting I/O
-does not count as task execution. Labels cover the synchronous portion of explicit
-task scopes. Asynchronous continuations and unknown callbacks use best-effort unattributed
+does not count as task execution. Prepared session-row reads carry the enclosing
+operation across waits and append `session-rows:select`, `session-rows:prepare`, or
+`session-rows:consume`; agent roster batches append `agent-roster`. For example,
+`gateway:rpc:sessions.list:session-rows:select` identifies list selection, and
+scheduled work retains its `scheduler:<lane>:<task>` prefix. Labels contain only
+code-owned operation names, never session keys or request content. Labels cover
+the synchronous portion of explicit task scopes. Other asynchronous continuations
+and unknown callbacks use best-effort unattributed
 delay warnings from the event-loop sampler; the Gateway does not install
 process-wide async hooks to time every promise continuation. During healthy idle
 windows, the native histogram is disabled: an unscoped stall that finishes before
@@ -583,6 +589,15 @@ collect more samples at greater CPU and memory cost. Choose a CLI timeout longer
 than the requested capture. The critical-memory warning points to this RPC;
 pressure never starts a capture automatically.
 
+The response reports `requestedDurationMs`, `effectiveDurationMs` (the clamped
+sampling window), and `actualDurationMs`. `durationLimitReason` is
+`"collected-samples"` when the 30-second cap shortened the request,
+`"maximum-duration"` when the 15-minute cap shortened it, and `null` otherwise.
+The collected-sample cap limits profiler memory growth; sampled allocation bytes
+do not end a capture early. Actual duration includes native start and stop work
+and can exceed the effective window when the event loop is busy. Setup, cleanup,
+and sanitization can add further RPC latency.
+
 `includeCollected: true` enables both collected-object flags. Explicit per-GC
 flags override the shorthand. The optional booleans `includeObjectsCollectedByMajorGC` and
 `includeObjectsCollectedByMinorGC` both default to `false`. Enable both to retain
@@ -603,7 +618,7 @@ allows 30 seconds beyond the requested window for setup and cleanup; event-loop
 stalls can require more time. Disconnection, authority revocation, or Gateway
 shutdown cancels sampling and discards the partial profile after cleanup.
 
-The result includes actual elapsed `durationMs`, `samplingIntervalBytes`,
+The result includes actual elapsed `durationMs` (an alias of `actualDurationMs`), `samplingIntervalBytes`,
 `includeObjectsCollectedByMajorGC`, `includeObjectsCollectedByMinorGC`,
 `heapUsedBefore`, `heapUsedAfter`, `rssBefore`, `rssAfter` (all memory values in
 bytes), `redactedNodeCount`, `unattributedSampleCount`, `unattributedSampleBytes`,

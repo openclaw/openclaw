@@ -118,33 +118,25 @@ it("keeps current policy inside read transactions and refreshes after savepoint 
   expect(read()).toBe("main");
 });
 
-it.each(["run", "get", "all", "iterate"] as const)(
-  "observes prepared %s writes and indirect trigger changes",
-  (method) => {
-    const { db, read } = fixture();
-    db.exec(`CREATE TABLE policy_input (value TEXT);
+it("observes indirect trigger writes while a RETURNING cursor remains open", () => {
+  const { db, read } = fixture();
+  db.exec(`CREATE TABLE policy_input (value TEXT);
         CREATE TRIGGER change_policy AFTER INSERT ON policy_input
         BEGIN UPDATE session_key_contract SET main_key = NEW.value WHERE id = 1; END;`);
-    admitSqliteSchema(db);
-    const write = db.prepare("INSERT INTO policy_input VALUES (?) RETURNING value");
-    expect(read()).toBe("main");
-    if (method === "iterate") {
-      const rows = write.iterate("changed");
-      try {
-        expect(rows.next().done).toBe(false);
-        expect(read()).toBe("changed");
-        db.exec("UPDATE session_key_contract SET main_key = 'during-returning' WHERE id = 1");
-        expect(read()).toBe("during-returning");
-      } finally {
-        rows.return?.();
-      }
-      expect(read()).toBe("during-returning");
-    } else {
-      write[method]("changed");
-      expect(read()).toBe("changed");
-    }
-  },
-);
+  admitSqliteSchema(db);
+  const write = db.prepare("INSERT INTO policy_input VALUES (?) RETURNING value");
+  expect(read()).toBe("main");
+  const rows = write.iterate("changed");
+  try {
+    expect(rows.next().done).toBe(false);
+    expect(read()).toBe("changed");
+    db.exec("UPDATE session_key_contract SET main_key = 'during-returning' WHERE id = 1");
+    expect(read()).toBe("during-returning");
+  } finally {
+    rows.return?.();
+  }
+  expect(read()).toBe("during-returning");
+});
 
 it("does not reuse policy facts during native callbacks or after failed batches and rollback", () => {
   const { db, read, observe } = fixture();

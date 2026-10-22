@@ -101,7 +101,7 @@ describe("sessions_send direct queue source authority", () => {
         setRuntimeConfigSnapshot(cfg);
         setActivePluginRegistry(createSessionConversationTestRegistry());
         const requesterSessionKey = "agent:main:dashboard:queue-source";
-        const sessionKey = `agent:${targetAgentId}:cron:queue-target:run:active`;
+        const sessionKey = `agent:${targetAgentId}:dashboard:queue-target`;
         const sessionId = "queue-target-session";
         for (const [key, id] of [
           [requesterSessionKey, "queue-source-session"],
@@ -317,7 +317,8 @@ describe("sessions_send direct queue source authority", () => {
           }
           tool = available;
         }
-        const send = () => tool.execute("source-send", { sessionKey, message, timeoutSeconds: 0 });
+        const send = () =>
+          tool.execute("source-send", { sessionKey, message, mode: "steer", timeoutSeconds: 0 });
         const pending = withGatewayToolCallerIdentity(
           {
             ...createSessionsSendTestCaller(requesterSessionKey),

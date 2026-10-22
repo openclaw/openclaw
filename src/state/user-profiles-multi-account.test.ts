@@ -6,16 +6,16 @@ import { observeMainThreadReads } from "../test-utils/main-thread-sql-spies.test
 import * as stateReads from "./openclaw-state-db-readonly.js";
 import { withOpenClawStateDatabaseReadSnapshot as withSnapshot } from "./openclaw-state-db-readonly.js";
 import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
+  closeOpenClawStateDatabaseAsync as closeAsync,
+  closeOpenClawStateDatabaseForTest as closeDatabase,
+  openOpenClawStateDatabase as openDatabase,
 } from "./openclaw-state-db.js";
 import { prepareUserProfileRolePolicyAuthority as roleAuthority } from "./user-channel-identity-operations.js";
 import { setCanonicalUserPreferences as setPreferences } from "./user-preferences.js";
 import { getUserPreferences, setUserPreferences } from "./user-preferences.test-support.js";
 import {
   prepareUserProfileGitHubAttribution as prepareAttribution,
-  readUserProfileGitHubCommand,
+  readUserProfileGitHubCommand as readGitHub,
   resolveUserProfileGitHubAttribution as resolveAttribution,
 } from "./user-profile-github-identity.js";
 import {
@@ -54,10 +54,13 @@ const consent = (id: string, enabled: boolean) =>
   setUserPreferences(id, { [GIT_COAUTHOR_PREFERENCE_KEY]: enabled }, options);
 const readConsent = (id: string) => getUserPreferences(id, [GIT_COAUTHOR_PREFERENCE_KEY], options);
 const attribution = async (id: string) => (await resolveAttribution([id], options)).get(id);
+const schemaVersion = () =>
+  openDatabase(options).db.prepare("PRAGMA user_version").get()?.user_version;
+const legacyPerson = { displayName: "Saved Person Name", githubIdentity: { login: "legacy" } };
 
 describe("multi-account people", () => {
   it("bounds directory materialization while preserving merged-profile filtering and account order", async () => {
-    const database = openOpenClawStateDatabase(options);
+    const database = openDatabase(options);
     ensureUserProfilesSchema(options, database);
     const directory = (limit: number) => readDirectory(limit, options);
     expect(await directory(2)).toEqual({ profiles: [], truncated: false });
@@ -129,7 +132,7 @@ describe("multi-account people", () => {
   it("does not initialize missing profile storage during attribution reads", async () => {
     expect(await resolveAttribution(["missing-person"], options)).toEqual(new Map());
     expect(existsSync(options.path)).toBe(false);
-    const { db } = openOpenClawStateDatabase(options);
+    const { db } = openDatabase(options);
     expect(await resolveAttribution(["missing-person"], options)).toEqual(new Map());
     expect(
       db.prepare("SELECT name FROM sqlite_schema WHERE name = 'user_profiles'").get(),
@@ -142,12 +145,12 @@ describe("multi-account people", () => {
     const unverified = ensureProfileForEmail("unverified@example.test", options);
     linkEmail("alias@example.test", person.id, options);
     consent(person.id, true);
-    const { db } = openOpenClawStateDatabase(options);
+    const { db } = openDatabase(options);
     const reads = observeMainThreadReads();
     const transactions = vi.spyOn(db, "exec");
     try {
       expect(
-        readUserProfileGitHubCommand(db, {
+        readGitHub(db, {
           type: "userProfiles.githubAttribution.resolve",
           profileIds: [person.id, alias.id, alias.id, unverified.id, "missing"],
         }),
@@ -169,7 +172,7 @@ describe("multi-account people", () => {
   });
 
   it("adds the nullable primary column to existing profiles without advancing the schema", async () => {
-    let db = openOpenClawStateDatabase(options).db;
+    let db = openDatabase(options).db;
     db.exec(
       "CREATE TABLE user_profiles (id TEXT NOT NULL PRIMARY KEY, display_name TEXT, avatar BLOB, avatar_mime TEXT, avatar_sha256 TEXT, merged_into TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL) STRICT",
     );
@@ -182,10 +185,10 @@ describe("multi-account people", () => {
     db.prepare(
       "INSERT INTO user_profile_identities (provider, subject, profile_id, created_at) VALUES ('github', '70', ?, 1)",
     ).run("legacy-person");
-    const version = db.prepare("PRAGMA user_version").get()?.user_version;
+    const version = schemaVersion();
     // Decode the legacy shape before the schema owner makes it admissible for reopen.
     expect(
-      readUserProfileGitHubCommand(db, {
+      readGitHub(db, {
         type: "userProfiles.githubAttribution.resolve",
         profileIds: ["legacy-person"],
       }),
@@ -195,7 +198,7 @@ describe("multi-account people", () => {
       "UPDATE user_profile_identities SET canonical_login = 'legacy' WHERE subject = '70'",
     ).run();
     expect(
-      readUserProfileGitHubCommand(db, {
+      readGitHub(db, {
         type: "userProfiles.githubAttribution.resolve",
         profileIds: ["legacy-person"],
       }),
@@ -205,10 +208,7 @@ describe("multi-account people", () => {
     expect(db.prepare("PRAGMA table_info(user_profiles)").all()).not.toContainEqual(
       expect.objectContaining({ name: "primary_github_account_id" }),
     );
-    expect(getProfile("legacy-person", options)).toMatchObject({
-      displayName: "Saved Person Name",
-      githubIdentity: { login: "legacy" },
-    });
+    expect(getProfile("legacy-person", options)).toMatchObject(legacyPerson);
     const profile = createAccount(70, "legacy", "legacy@example.test");
     expect(profile.id).toBe("legacy-person");
     expect(
@@ -225,9 +225,9 @@ describe("multi-account people", () => {
         pk: 0,
       }),
     );
-    expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(version);
-    await closeOpenClawStateDatabaseAsync();
-    db = openOpenClawStateDatabase(options).db;
+    expect(schemaVersion()).toBe(version);
+    await closeAsync();
+    db = openDatabase(options).db;
     db.prepare("UPDATE user_profiles SET primary_github_account_id = 999 WHERE id = ?").run(
       profile.id,
     );
@@ -235,11 +235,8 @@ describe("multi-account people", () => {
     db.prepare("UPDATE user_profiles SET primary_github_account_id = 70 WHERE id = ?").run(
       profile.id,
     );
-    closeOpenClawStateDatabaseForTest();
-    expect(getProfile(profile.id, options)).toMatchObject({
-      displayName: "Saved Person Name",
-      githubIdentity: { login: "legacy" },
-    });
+    closeDatabase();
+    expect(getProfile(profile.id, options)).toMatchObject(legacyPerson);
   });
   it("keeps both verified accounts on one person across merge and alternating sign-ins", async () => {
     const primary = {
@@ -258,13 +255,11 @@ describe("multi-account people", () => {
     const work = syncEmailGitHubProfile(secondary);
     setAvatar(person.id, new Uint8Array([1, 2, 3]), "image/png", options);
     consent(person.id, false);
-    const version = openOpenClawStateDatabase(options)
-      .db.prepare("PRAGMA user_version")
-      .get()?.user_version;
+    const version = schemaVersion();
     const beforeMerge = await prepareAttribution([work.id], options);
     linkEmail(secondary.email, person.id, options);
     expect(beforeMerge.isCurrent()).toBe(false);
-    closeOpenClawStateDatabaseForTest();
+    closeDatabase();
     await hydrate();
     for (const account of [secondary, primary, secondary]) {
       expect(syncEmailGitHubProfile(account)).toMatchObject({
@@ -353,9 +348,7 @@ describe("multi-account people", () => {
         [work.id, null],
       ]),
     );
-    expect(
-      openOpenClawStateDatabase(options).db.prepare("PRAGMA user_version").get()?.user_version,
-    ).toBe(version);
+    expect(schemaVersion()).toBe(version);
   });
 
   it("keeps an inherited primary through repeated merges regardless of account age", async () => {
@@ -389,7 +382,7 @@ describe("multi-account people", () => {
     createAccount(91, "second", "second@example.test");
     linkEmail("second@example.test", person.id, options);
     for (const primaryId of [null, 999]) {
-      openOpenClawStateDatabase(options)
+      openDatabase(options)
         .db.prepare("UPDATE user_profiles SET primary_github_account_id = ? WHERE id = ?")
         .run(primaryId, person.id);
       expect(createAccount(91, "second", "second@example.test")).toMatchObject({

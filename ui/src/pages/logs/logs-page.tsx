@@ -42,7 +42,7 @@ export function LogsPage() {
   const context = useApplication();
   const [status, setStatus] = createSignal(createPanelRefreshStatus(), { ownedWrite: true });
   const [file, setFile] = createSignal<string | null>(null, { ownedWrite: true });
-  const [entries, setEntries] = createSignal<LogEntry[]>([], { ownedWrite: true });
+  const [entries, setEntries] = createStore<LogEntry[]>([], { shallow: true });
   const [filterText, setFilterText] = createSignal("");
   const [levelFilters, setLevelFilters] = createStore<Record<LogLevel, boolean>>({
     ...DEFAULT_LOG_LEVEL_FILTERS,
@@ -71,7 +71,7 @@ export function LogsPage() {
       cursorBootId = undefined;
       setStatus(createPanelRefreshStatus());
       setFile(null);
-      setEntries([]);
+      setEntries(() => []);
       setTruncated(false);
       follow.reset();
     },
@@ -133,14 +133,19 @@ export function LogsPage() {
       }
       const nextEntries = payload.lines.map(parseLogLine);
       const reset = resetCursor || sourceChanged || payload.reset || previousCursor === null;
-      const bufferedEntries = reset ? nextEntries : [...entries(), ...nextEntries];
       // Truncation belongs to the displayed history until a complete tail replaces it.
       setTruncated(
         Boolean(payload.truncated) ||
           (!reset && truncated()) ||
-          bufferedEntries.length > LOG_BUFFER_LIMIT,
+          (reset ? nextEntries.length : entries.length + nextEntries.length) > LOG_BUFFER_LIMIT,
       );
-      setEntries(bufferedEntries.slice(-LOG_BUFFER_LIMIT));
+      setEntries((draft) => {
+        if (reset) {
+          draft.length = 0;
+        }
+        draft.push(...nextEntries);
+        draft.splice(0, Math.max(0, draft.length - LOG_BUFFER_LIMIT));
+      });
       cursor = payload.cursor;
       cursorBootId = bootId;
       setFile(payload.file);
@@ -152,7 +157,7 @@ export function LogsPage() {
         return false;
       }
       if (isMissingOperatorReadScopeError(error)) {
-        setEntries([]);
+        setEntries(() => []);
         setTruncated(false);
         const failed = failPanelRefresh(createPanelRefreshStatus(), error, gateway.snapshot);
         setStatus(
@@ -200,7 +205,7 @@ export function LogsPage() {
       <ShellLayoutBoundary traits={{ logsPage: true, toolbarHeader: true }}>
         <section class="content-header">
           <div>
-            <div class="page-title">{t("tabs.logs")}</div>
+            <h1 class="page-title">{t("tabs.logs")}</h1>
           </div>
         </section>
         <SettingsWorkspace fillHeight>
@@ -209,7 +214,7 @@ export function LogsPage() {
             refreshDisabled={!gateway.connected || requestState() !== "idle"}
             status={status()}
             file={file()}
-            entries={entries()}
+            entries={entries}
             filterText={filterText()}
             levelFilters={levelFilters}
             autoFollow={autoFollow()}

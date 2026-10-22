@@ -29,6 +29,15 @@ function createProgress(
     update,
     rendered: () => expect(update.mock.lastCall?.[0]),
     lines: () => expect(progress.getSnapshot().lines),
+    write: (toolCallId: string, path: string, content: string) =>
+      progress.pushToolEvent({
+        toolCallId,
+        name: "write",
+        phase: "start",
+        args: { path, content },
+      }),
+    completeTool: (toolCallId: string) =>
+      progress.pushItemEvent({ toolCallId, kind: "tool", phase: "end", status: "completed" }),
     toolItem: (
       itemId: string,
       name: string,
@@ -67,11 +76,25 @@ const plan = [
 const INITIAL_DELAY_MS = 1_500;
 const quiet = { toolProgress: false, label: false } as const;
 const commentary = { toolProgress: true, label: false, commentary: true } as const;
+const tools = { toolProgress: true } as const;
+const unlabeledTools = { ...tools, label: false } as const;
+const prepared = { preparedItems: true };
 const approvalRequest = {
   phase: "requested",
   approvalId: "approval",
   title: "Run checks",
 } as const;
+const lineWithId = (id: string) => expect.objectContaining({ id });
+function expectText(text: string, included: string[], excluded: string[] = []) {
+  included.forEach((value) => expect(text).toContain(value));
+  excluded.forEach((value) => expect(text).not.toContain(value));
+}
+function createSnapshot(overrides: Partial<ChannelProgressDraftCompositorParams> = {}) {
+  return createProgress(
+    { ...commentary, maxLines: 8 },
+    { ...prepared, seed: "snapshot", ...overrides },
+  );
+}
 
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => {
@@ -82,11 +105,7 @@ afterEach(() => {
 it.each(["NO_REPLY", "_NO_REPLY_", "no_reply"])(
   "forwards prepared literal commentary: %s",
   async (text) => {
-    const { progress, rendered } = createProgress({
-      toolProgress: false,
-      label: false,
-      commentary: true,
-    });
+    const { progress, rendered } = createProgress({ ...quiet, commentary: true });
     expect(await progress.pushCommentaryProgress(text)).toBe(true);
     rendered().toContain(text);
   },
@@ -393,7 +412,7 @@ it("cancels expiry and ignores late status until a new turn", async () => {
 });
 
 it("holds narration behind the initial progress delay", async () => {
-  const { progress, update } = createProgress({ toolProgress: true });
+  const { progress, update } = createProgress(tools);
   await progress.pushToolProgress("Exec");
   await progress.pushNarrationProgress("Reading config");
   await vi.advanceTimersByTimeAsync(INITIAL_DELAY_MS - 1);
@@ -407,10 +426,7 @@ it("holds narration behind the initial progress delay", async () => {
 });
 
 it("renders prepared items without duplicating raw diagnostic events", async () => {
-  const { progress, lines, activity, item } = createProgress(
-    { toolProgress: true },
-    { preparedItems: true },
-  );
+  const { progress, lines, activity, item } = createProgress(tools, prepared);
   await progress.start();
   await progress.pushToolEvent({
     itemId: "tool-1",
@@ -462,21 +478,12 @@ it("renders prepared items without duplicating raw diagnostic events", async () 
 });
 
 it("projects failed message reaction progress", async () => {
-  const action = "react";
-  const status = "failed";
-  const { progress, activity, lines } = createProgress(
-    { toolProgress: true },
-    { preparedItems: true },
-  );
+  const args = { action: "react", channel: "slack", target: "C000000001" };
+  const { progress, activity, lines } = createProgress(tools, prepared);
   await progress.start();
-  await activity("message", "message-1", "start", {
-    args: { action, channel: "slack", target: "C000000001" },
-  });
+  await activity("message", "message-1", "start", { args });
   lines().toEqual([]);
-  await activity("message", "message-1", "result", {
-    args: { action, channel: "slack", target: "C000000001" },
-    status,
-  });
+  await activity("message", "message-1", "result", { args, status: "failed" });
   await activity("read", "read-1", "result", {
     args: { path: "README.md" },
     status: "completed",
@@ -488,23 +495,13 @@ it("projects failed message reaction progress", async () => {
 });
 
 it("retains completed edits when clearing a quiet plan", async () => {
-  const { progress, rendered, lines } = createProgress(quiet, {
+  const { progress, rendered, lines, write, completeTool } = createProgress(quiet, {
     updateOnLineChange: true,
   });
   await progress.pushPlanProgress([{ step: "Stale plan", status: "in_progress" }]);
-  await progress.pushToolEvent({
-    toolCallId: "write-1",
-    name: "write",
-    phase: "start",
-    args: { path: "src/example.ts", content: "one\ntwo" },
-  });
+  await write("write-1", "src/example.ts", "one\ntwo");
   expect(progress.getSnapshot().diffStat).toBeUndefined();
-  await progress.pushItemEvent({
-    toolCallId: "write-1",
-    kind: "tool",
-    phase: "end",
-    status: "completed",
-  });
+  await completeTool("write-1");
   expect(progress.getSnapshot().diffStat).toEqual({ files: 1, added: 2, removed: 0 });
   expect(await progress.pushPlanProgress([])).toBe(true);
   rendered().toContain("📝 1 files +2");
@@ -527,7 +524,7 @@ it("logs timer-fired startup failures at the boundary", async () => {
 
 it("passes unformatted prepared notes to native updates", async () => {
   const tryNativeUpdate = vi.fn(async () => true);
-  const { progress } = createProgress({ label: false, toolProgress: true }, { tryNativeUpdate });
+  const { progress } = createProgress(unlabeledTools, { tryNativeUpdate });
   await progress.pushPlanProgress([], {
     explanation: "Use **literal**.",
     explanationFormat: "plain",
@@ -537,10 +534,7 @@ it("passes unformatted prepared notes to native updates", async () => {
 });
 
 it("retains plans across partial message boundaries but clears them per turn", async () => {
-  const { progress, item, update, rendered } = createProgress(
-    { label: false, toolProgress: true },
-    { mode: "partial" },
-  );
+  const { progress, item, update, rendered } = createProgress(unlabeledTools, { mode: "partial" });
   const steps = [{ step: "Patch", status: "in_progress" as const }];
   await progress.pushPlanProgress(steps, { explanation: "0/1 complete" });
   await progress.pushToolProgress("Inspecting files", { startImmediately: true });
@@ -581,10 +575,7 @@ it("retains plans across partial message boundaries but clears them per turn", a
 });
 
 it("preserves summary presentation for SDK callers", async () => {
-  const { progress, activity, rendered } = createProgress(
-    { toolProgress: true },
-    { presentation: "summary" },
-  );
+  const { progress, activity, rendered } = createProgress(tools, { presentation: "summary" });
   await activity("exec", "call-1", "start");
   await progress.noteActivity({ startImmediately: true });
   rendered().toBe("Working");
@@ -671,4 +662,123 @@ it("rejects pending startup acceptance after final delivery cancels it", async (
   accepted.resolve(true);
   expect(await result).toBe(false);
   expect(progress).toMatchObject({ hasStarted: false, isVisible: false });
+});
+
+it("preserves public progress in rendering and snapshot capture", async () => {
+  const secret = `sk-test-${"a".repeat(48)}`;
+  const { progress, update } = createProgress(
+    { ...commentary, label: `Account ${secret}` },
+    { ...prepared, seed: "snapshot" },
+  );
+  await progress.start();
+  await progress.pushPlanProgress([{ step: `Check account ${secret}`, status: "in_progress" }], {
+    explanation: `Validate account ${secret}`,
+  });
+  await progress.pushNarrationProgress(`Inspect account ${secret}`);
+  await progress.pushToolProgress({
+    id: "public-tool",
+    kind: "tool",
+    text: secret,
+    label: secret,
+    detail: secret,
+  });
+  await progress.pushCommentaryProgress(`Checking account ${secret}`);
+  const snapshot = progress.getSnapshot();
+  expect(JSON.stringify(update.mock.calls)).toContain(secret);
+  expect(progress.getText()).toContain(secret);
+  expect(JSON.stringify(snapshot)).toContain(secret);
+  expect(snapshot.plan?.[0]?.step).toContain("Check account");
+  expect(update.mock.calls[0]?.[0]).toContain("Account");
+});
+
+it.each([true, false])("hydrates detached progress (live=%s)", async (live) => {
+  const initialSnapshot = {
+    label: "Parent label",
+    lines: [
+      { id: "commentary:parent", kind: "item" as const, text: "Parent note", label: "Note" },
+      { id: "child", kind: "tool" as const, text: "Read", label: "Read", status: "running" },
+    ],
+    plan: plan.slice(0, 2),
+    planExplanation: "Checking *literal* input",
+    planExplanationFormat: "plain" as const,
+    statusHeadline: "Transferred *headline*",
+    statusHeadlineFormat: "plain" as const,
+    preparedBlocks: [{ text: "Old transport markup", format: "markdown" as const }],
+  };
+  const update = vi.fn<NonNullable<ChannelProgressDraftCompositorParams["update"]>>(() => true);
+  const { progress, item, lines } = createSnapshot({
+    initialSnapshot,
+    update: live ? update : undefined,
+  });
+  expect(update).not.toHaveBeenCalled();
+  expect(vi.getTimerCount()).toBe(0);
+  expect(progress).toMatchObject({ hasStarted: false, isVisible: false });
+  await progress.noteActivity({ startImmediately: true });
+  await item("tool", "child", { name: "read", status: "completed" });
+  expect(progress).toMatchObject({ hasStarted: live, isVisible: live });
+  expect(vi.getTimerCount()).toBe(0);
+  expectText(
+    progress.getText(),
+    ["Parent label", "Parent note", "Inspect", "Repair", "Transferred \\*headline\\*"],
+    ["Old transport markup"],
+  );
+  const childLines = progress
+    .getSnapshot()
+    .lines.filter((line) => typeof line === "object" && line.id === "child");
+  expect(childLines).toEqual([expect.objectContaining({ status: "completed" })]);
+  if (live) {
+    expect(update.mock.lastCall?.[1].snapshot.preparedBlocks).toContainEqual({
+      text: "Transferred *headline*",
+      format: "plain",
+    });
+  }
+  await progress.pushItemEvent({ itemId: "child", hideFromChannelProgress: true });
+  lines().not.toContainEqual(lineWithId("child"));
+  await progress.pushNarrationProgress("Child status");
+  expectText(progress.getText(), ["Child status"], ["Transferred"]);
+  expect(progress.getSnapshot().statusHeadlineFormat).toBeUndefined();
+  await progress.pushNarrationProgress("");
+  expect(progress.getText()).toContain("Checking \\*literal\\* input");
+  expect(progress.getSnapshot().planExplanationFormat).toBe("plain");
+});
+
+it("applies privacy, quiet failures, approval priority and bounds to transferred lines", async () => {
+  const { progress: parent, item: parentItem } = createSnapshot();
+  await parent.pushPlanProgress([{ step: "Parent checklist", status: "in_progress" }]);
+  await parentItem("tool", "private", { name: "read", title: "Sensitive row" });
+  const approval = { approvalId: "approval", title: "Allow repair" };
+  await parent.pushApprovalEvent({ ...approval, phase: "requested" });
+  const initialSnapshot = parent.getSnapshot();
+  parent.cancel();
+  const { progress, update, item, lines } = createProgress(
+    { ...quiet, commentary: true, maxLines: 2 },
+    { ...prepared, seed: "snapshot", initialSnapshot },
+  );
+  await progress.noteActivity({ startImmediately: true });
+  await progress.pushItemEvent({ itemId: "private", hideFromChannelProgress: true });
+  lines().not.toContainEqual(lineWithId("private"));
+  await item("tool", "failed", { name: "exec", status: "failed" });
+  lines().not.toContainEqual(lineWithId("failed"));
+  await progress.pushCommentaryProgress("Child note", { itemId: "child" });
+  const text = update.mock.lastCall?.[0] ?? "";
+  expectText(text, ["Allow repair", "Parent checklist"], ["Sensitive row", "failed"]);
+  expect(text.split("\n").filter(Boolean)).toHaveLength(2);
+  await progress.pushApprovalEvent({ ...approval, phase: "resolved" });
+  expectText(update.mock.lastCall?.[0] ?? "", ["Child note"], ["Allow repair"]);
+});
+
+it("retains known mutation totals without inventing cross-owner file uniqueness", async () => {
+  const { progress, write } = createSnapshot({
+    initialSnapshot: { lines: [], diffStat: { files: 1, added: 2, removed: 1 } },
+  });
+  async function writeCompleted(toolCallId: string, path: string) {
+    await write(toolCallId, path, "one\ntwo\nthree");
+    await progress.pushItemEvent({ toolCallId, phase: "end", status: "completed" });
+  }
+  await writeCompleted("child-write", "possibly-the-parent-file.ts");
+  expect(progress.getSnapshot().diffStat).toEqual({ files: 1, added: 2, removed: 1 });
+  progress.resetActivity();
+  expect(progress.getSnapshot().diffStat).toBeUndefined();
+  await writeCompleted("next-write", "new-file.ts");
+  expect(progress.getSnapshot().diffStat).toEqual({ files: 1, added: 3, removed: 0 });
 });

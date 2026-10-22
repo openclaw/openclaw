@@ -70,7 +70,7 @@ Reloading a previously visited chat restores the last settled sidebar while the 
 
 A short transcript loads at most one older page automatically when you open or reload a chat. It stops once the visible area is filled, without filling the backscroll buffer. Scroll up or choose **Show earlier** to continue loading older messages, even if the transcript still fits on screen.
 
-The cached transcript also preserves its conversation title when the conversation is outside the saved sidebar page. Live session metadata replaces that display projection when it arrives.
+The cached transcript also preserves its conversation title when the conversation is outside the saved sidebar page. Live session metadata replaces that display projection when it arrives. Reloading a full-UUID chat link can show that scoped cache while the Gateway confirms the route. Sending and restored queued messages wait for confirmation; a deleted or moved conversation replaces the cached view with the Gateway's result.
 
 An authenticated same-origin reload includes shared display settings and your profile’s appearance and sidebar preferences in the document. Chat uses this display projection while connecting, without loading the full editable configuration. Preference changes from other tabs refresh through the Gateway’s existing notifications; settings pages and configuration writes still load the full snapshot.
 
@@ -156,6 +156,10 @@ Changing Gateway, losing access, or selecting different content retires the old
 frame and its local state.
 
 Hidden retained chats defer command and model metadata refreshes until you return to them. Returning to a recently opened chat reuses its completed metadata on the same connection until a Gateway change invalidates it. Concurrent readers share the same request. Session events with an unchanged model-selection revision retain the model catalog, and session-only changes retain agent commands. Native sessions without a model-selection revision wait for a 2.5-second quiet period after ordinary patches before refreshing the catalog and session facts. Explicit model, account, and runtime selections refresh promptly. Configuration and command changes refresh commands; catalog and session lifecycle changes refresh affected model choices. Agent-specific catalog changes retain other agents’ cached choices and pending catalog requests. Repeated changes during a request share one trailing refresh instead of issuing overlapping requests.
+
+Deleting a session refreshes the roster and invalidates that session's model choices without reloading metadata for unrelated chats. Session action menus build their contents when opened.
+
+Provider speed observations are tracked separately for each requested tier. Repeated identical responses retain the matching Fast or Ultrafast hint without refreshing every open chat's model choices. Recovery or expiry clears only the affected hint.
 
 Metadata refreshes wait for an in-progress model-runtime replacement to publish. An agent whose model runtime is unavailable does not interrupt commands or model choices for healthy agents; its metadata becomes available when its owner publishes.
 

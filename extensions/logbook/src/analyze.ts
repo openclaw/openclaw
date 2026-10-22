@@ -192,7 +192,6 @@ export function parseCardsJson(params: { raw: string; day: string }): CardParseR
       appPrimary: normalizeDomain(appSites.primary),
       appSecondary: normalizeDomain(appSites.secondary),
       distractions: parseDistractions(params.day, raw.distractions),
-      keyframeId: undefined,
     });
   });
   if (problems.length > 0) {

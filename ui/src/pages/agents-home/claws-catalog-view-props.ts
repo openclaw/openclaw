@@ -30,10 +30,10 @@ export type ClawsCatalogViewProps = {
   onClose: () => void;
   onRetryCatalog: () => void;
   onRetryDetail: () => void;
-  onConfirm: () => void;
-  onConfirmConsent: () => void;
+  onConfirm: () => void | Promise<void>;
+  onConfirmConsent: () => void | Promise<void>;
   onCancelConsent: () => void;
-  onConfirmReview: () => void;
+  onConfirmReview: () => void | Promise<void>;
   onCancelReview: () => void;
-  onRetryOpenChat: () => void;
+  onRetryOpenChat: () => void | Promise<void>;
 };

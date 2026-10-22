@@ -217,15 +217,44 @@ it("keeps a successor reference busy when a retired save completes", async () =>
 });
 
 it("preserves an uncommitted literal across unrelated config revisions", async () => {
-  const { context, scope, update, input, committed } = await mount();
+  const { editor, context, scope, update, input, committed } = await mount();
   input.focus();
   editInput(input, "synthetic-pending-key");
-  scope.client.request.mockResolvedValue(inspection({ kind: "literal" }, "next-revision"));
+  const pending = createDeferred<unknown>();
+  scope.client.request.mockReturnValueOnce(pending.promise);
   await update({ baseHash: "next-revision" });
+  await vi.waitFor(() => expect(editor.textContent).toContain("Loading"));
   expect(input.value).toBe("synthetic-pending-key");
+  expect(document.activeElement).toBe(input);
+  expect(editor.querySelector("input")).toBe(input);
   expect(context.onCommit).not.toHaveBeenCalled();
+  pending.resolve(inspection({ kind: "literal" }, "next-revision"));
+  await vi.waitFor(() => expect(editor.textContent).not.toContain("Loading"));
   input.blur();
   await committed("synthetic-pending-key");
+});
+
+it("retries a failed inspection without remounting the credential input", async () => {
+  const { editor, scope, update, input, click } = await mount();
+  const pending = createDeferred<unknown>();
+  scope.client.request.mockReturnValueOnce(pending.promise);
+  input.focus();
+  await update({ baseHash: "next-revision" });
+  await vi.waitFor(() => expect(editor.textContent).toContain("Loading"));
+  pending.reject(new Error("Inspection unavailable"));
+  await vi.waitFor(() => expect(editor.textContent).toContain("Inspection unavailable"));
+  expect(editor.querySelector("input")).toBe(input);
+  expect(document.activeElement).toBe(input);
+  expect(editor.textContent).not.toContain("Loading");
+  scope.client.request.mockResolvedValue(inspection({ kind: "literal" }, "next-revision"));
+  click("Retry");
+  await vi.waitFor(() => expect(scope.client.request).toHaveBeenCalledTimes(3));
+  await vi.waitFor(() => expect(editor.textContent).not.toContain("Inspection unavailable"));
+  expect(editor.querySelector("input")).toBe(input);
+  expect(scope.client.request).toHaveBeenLastCalledWith("plugins.credentials.inspect", {
+    ...inspectParams,
+    baseHash: "next-revision",
+  });
 });
 
 it("commits when focus leaves for another credential, but not its own reveal button", async () => {
@@ -341,6 +370,13 @@ it("retains the reference draft and Cancel until a failed write's retry succeeds
   await vi.waitFor(() => expect(text('[role="alert"]')).toContain("could not be saved"));
   expect(id.value).toBe("CHANGED_KEY");
   expect(button(editor, "Cancel")).toBeDefined();
+  editInput(id, "RETRIED_KEY");
+  flush();
+  expect(vi.mocked(context.onCommit).mock.calls[0]?.[1]).toEqual({
+    source: "env",
+    provider: "default",
+    id: "CHANGED_KEY",
+  });
   click("Save");
   await vi.waitFor(() => expect(modal(editor)).toBeNull());
 });

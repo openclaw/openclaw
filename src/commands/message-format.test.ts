@@ -56,6 +56,15 @@ function textJoined(lines: string[]): string {
 }
 
 describe("formatMessageCliText displayLimit", () => {
+  it("keeps a whitespace-only primary message instead of selecting its fallback", () => {
+    const result = readResultPayload({
+      messages: [{ id: "message-id", content: "  ", text: "Wrong fallback" }],
+    });
+    const output = textJoined(formatMessageCliText(result));
+    expect(output).toContain("message-id");
+    expect(output).not.toContain("Wrong fallback");
+  });
+
   it("renders the message inside a Slack pin envelope", () => {
     const message = { ts: "1712345678.123456", user: "message-author", text: "Pinned checklist" };
     const result = {
