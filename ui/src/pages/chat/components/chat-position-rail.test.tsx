@@ -591,19 +591,20 @@ describe("conversation position rail", () => {
       }
       await settleFrames();
       expect(observed.has(original)).toBe(true);
+      const layoutWrites = vi.spyOn(marks.style, "setProperty");
       const query = vi.spyOn(root, "querySelectorAll");
       const targetScans = () =>
         query.mock.calls.filter(([selector]) => selector === ".chat-bubble[data-entry-id]").length;
-
       for (const word of ["one", "two", "three"]) {
+        layoutWrites.mockClear();
         props.stream = `Live **${word}**`;
         rerender();
         await settleFrames();
         expect(container.querySelector(".chat-bubble strong")?.textContent).toBe(word);
         expect(container.querySelector('.chat-bubble[data-entry-id="question"]')).toBe(original);
+        expect(layoutWrites).not.toHaveBeenCalled();
       }
       expect(targetScans()).toBe(0);
-
       const elements = transcript.renderSession(
         props.sessionKey,
         (session) => session.messageElements,
@@ -996,6 +997,7 @@ describe("conversation position rail", () => {
       rerender();
       await settleFrames();
       expect(streamBubble.querySelector("strong")?.textContent).toBe("updated");
+      expect(provisional.getAttribute("aria-description")).toContain("Draft updated response");
       expect(query.mock.calls.filter(([selector]) => selector.includes(".chat-bubble"))).toEqual(
         [],
       );

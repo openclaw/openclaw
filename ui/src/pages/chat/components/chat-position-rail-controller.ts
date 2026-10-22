@@ -551,12 +551,6 @@ export function createPositionRail(props: PositionRailParams) {
       return undefined;
     }
     const interaction = interactionState;
-    for (const field of ["focusedId", "hoveredId"] as const) {
-      if (!markers.some((candidate) => candidate.id === interaction[field])) {
-        interaction[field] = null;
-      }
-    }
-
     if (markers !== markerSource) {
       markerSource = markers;
       const ids = markers.map((marker) => marker.id);
@@ -568,6 +562,11 @@ export function createPositionRail(props: PositionRailParams) {
       }
       markersChanged = true;
     }
+    for (const field of ["focusedId", "hoveredId"] as const) {
+      if (!markerIndexes.has(interaction[field] ?? "")) {
+        interaction[field] = null;
+      }
+    }
     // Text-only previews retain the rail geometry. Native resize/scroll and
     // transcript observations already request measurements when it changes.
     if (!refreshingWindow && markersChanged) {
@@ -577,7 +576,9 @@ export function createPositionRail(props: PositionRailParams) {
     if (!transcriptArraysEqual(indexes, renderedIndexes) || markersChanged) {
       renderedIndexes = indexes;
     }
-    scheduleLayout();
+    if (markersChanged || targetsChanged || refreshingWindow || previewElement) {
+      scheduleLayout();
+    }
     const rovingId = interaction.focusedId ?? currentActiveId ?? markers[0]!.id;
     const moveFocus = (event: KeyboardEvent, index: number) => {
       const nextIndex =

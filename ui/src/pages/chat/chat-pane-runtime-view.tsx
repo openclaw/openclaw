@@ -138,6 +138,11 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     }
     const context = runtime.context;
     const parentSession = projectOwner(runtime.parentSession, (owner) => owner.read(), Object.is);
+    const transcriptPosition = projectOwner(
+      runtime.transcript,
+      (owner) => owner.isPositionSettled,
+      Object.is,
+    );
     const repository = createMemo(() => {
       const target = runtime.repository.target;
       return target
@@ -247,6 +252,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         publication()?.read();
         repository()?.read();
         parentSession.read();
+        transcriptPosition.read();
         progress.read();
         realtime()?.read();
         theme.preferences.read();
