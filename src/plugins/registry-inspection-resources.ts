@@ -4,7 +4,7 @@ import {
   collectRegistryInvocationInstances,
   PluginInvocationScope,
 } from "./plugin-invocation-scope.js";
-import { markPluginRegistriesRetired } from "./registry-lifecycle.js";
+import { adoptPluginRegistryRecords, markPluginRegistriesRetired } from "./registry-lifecycle.js";
 import {
   PluginRegistrationResourceSource,
   type RegistrationDisposer,
@@ -82,6 +82,28 @@ export class PluginRegistryInspectionResources {
       this.#rollbackInstances.add(instance);
     }
     this.#source.rollback(pluginId, retire);
+  }
+
+  /** Publish same-context retained instances and their registration resources together. */
+  adoptRetainedRegistrations(previous: PluginRegistry): void {
+    const source = inspections.get(previous);
+    const registry = this.#registry;
+    if (!source || !registry || source.#release || this.#release) {
+      throw new Error("Plugin inspection handoff requires live source and successor registries");
+    }
+    // A scoped catalog acquisition can reuse this same physical inspection.
+    if (source === this) {
+      return;
+    }
+    for (const record of registry.plugins) {
+      if (
+        previous.plugins.includes(record) &&
+        getPluginInstance(record)?.owner?.registry === previous
+      ) {
+        source.#source.transferRegistrationTo(record.id, this.#source);
+      }
+    }
+    adoptPluginRegistryRecords(registry);
   }
 
   /** Copied callbacks keep their source through this inspection's final disposer. */

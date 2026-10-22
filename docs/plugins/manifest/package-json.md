@@ -148,6 +148,7 @@ If two distinct plugin roots share the same `id`, only the **highest-precedence*
 
 Implications:
 
+- When the workspace extensions root resolves to the global extensions root (for example, when the workspace is your home directory), OpenClaw scans it only as a global source. Installed plugins retain their installation provenance and official trust checks.
 - An auto-discovered workspace or untracked global copy will not shadow a bundled plugin, even when its id is enabled or allowlisted. `plugins.allow` and `plugins.entries.<id>.enabled` control load permission, not source selection.
 - To override a bundled plugin intentionally, select its path via `plugins.load.paths`. A tracked global install can also override an ordinary bundled copy, but not a development-source bundled copy.
 - Explicit config-selected overrides emit one informational diagnostic per plugin per discovery generation, without a config warning. Ambiguous selections and other unexpected duplicates still warn and identify the discarded copy and selected source. Intentional tracked-install overrides of ordinary bundled copies do not emit duplicate warnings.

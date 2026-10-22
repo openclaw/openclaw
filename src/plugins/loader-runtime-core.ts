@@ -39,6 +39,7 @@ import {
   type PluginManifestRegistry,
 } from "./manifest-registry.js";
 import { getPluginCache } from "./plugin-cache.js";
+import { PluginInventoryRetiredError } from "./plugin-instance-error.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { createPluginIdScopeSet, normalizePluginIdScope } from "./plugin-scope.js";
 import {
@@ -217,7 +218,7 @@ export function* loadOpenClawPluginsSteps(
   trackActivationCleanup?: (completion: Promise<void>) => void,
 ): Generator<(() => Promise<void>) | undefined, PluginRegistry> {
   if (getPluginCache().retirement) {
-    throw new Error("Plugin inventory has retired; begin a new plugin operation.");
+    throw new PluginInventoryRetiredError();
   }
   const requestedOnlyPluginIds = normalizePluginIdScope(options.onlyPluginIds);
   const requestedOnlyPluginIdSet = createPluginIdScopeSet(requestedOnlyPluginIds);
@@ -628,7 +629,7 @@ export function* loadOpenClawPluginsSteps(
       if (state.pluginLoadAttemptCount !== attemptedBefore) {
         yield;
         if (getPluginCache().retirement) {
-          throw new Error("Plugin inventory has retired; begin a new plugin operation.");
+          throw new PluginInventoryRetiredError();
         }
       }
     }

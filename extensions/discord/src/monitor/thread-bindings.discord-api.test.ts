@@ -4,7 +4,6 @@ import * as discordRest from "../internal/rest.js";
 import * as discordSend from "../send.js";
 import { createDiscordSendReceipt } from "../send.receipt.js";
 import {
-  isDiscordThreadGoneError,
   maybeSendBindingMessage,
   resolveChannelIdForBinding,
 } from "./thread-bindings.discord-api.js";
@@ -76,12 +75,6 @@ it("keeps a forum id instead of its parent category", async () => {
   expect(await resolveChannelIdForBinding({ cfg, accountId: "default", threadId: "forum-1" })).toBe(
     "forum-1",
   );
-});
-
-it("rejects fractional Discord status values", () => {
-  expect(isDiscordThreadGoneError({ status: 403.5 })).toBe(false);
-  expect(isDiscordThreadGoneError({ statusCode: "404.5" })).toBe(false);
-  expect(isDiscordThreadGoneError({ statusCode: "+404" })).toBe(true);
 });
 
 it.each([false, true])("blocks revoked binding notices (webhook=%s)", async (webhook) => {

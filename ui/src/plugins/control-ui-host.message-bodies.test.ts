@@ -48,7 +48,7 @@ describe("plugin session message body admission", () => {
   }
 
   function hello() {
-    store.current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
+    store.current().testOptions.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
   }
   function start() {
     store.gateway.start();
@@ -66,7 +66,7 @@ describe("plugin session message body admission", () => {
   const rosterPayload = { sessionKey: "agent:main:background", messageId: "message-1" };
   const fullPayload = { ...rosterPayload, message: { role: "assistant", content: "Complete" } };
   function emit(payload: unknown) {
-    store.current().opts.onEvent?.(createGatewayEvent("session.message", payload));
+    store.current().testOptions.onEvent?.(createGatewayEvent("session.message", payload));
   }
 
   it("shares runtime body interest, filters the admission window, and reverts after the last listener", async () => {
@@ -118,7 +118,7 @@ describe("plugin session message body admission", () => {
       const listener = vi.fn();
       const stop = timing === "connecting" ? undefined : listen(timing, listener);
       store.gateway.start();
-      expect(store.current().opts.includeSessionMessageBodies).toBe(
+      expect(store.current().testOptions.includeSessionMessageBodies).toBe(
         timing === "connecting" ? undefined : true,
       );
       store.current().request.mockResolvedValue({ subscribed: true });
@@ -143,8 +143,10 @@ describe("plugin session message body admission", () => {
       expect(listener).toHaveBeenCalledExactlyOnceWith(fullPayload);
       if (timing === "early") {
         expect(bodyRequests()).toEqual([]);
-        store.current().opts.onClose?.({ code: 1006, reason: "reconnecting", willRetry: true });
-        expect(store.current().opts.includeSessionMessageBodies).toBe(true);
+        store
+          .current()
+          .testOptions.onClose?.({ code: 1006, reason: "reconnecting", willRetry: true });
+        expect(store.current().testOptions.includeSessionMessageBodies).toBe(true);
         hello();
         emit(fullPayload);
         expect(listener).toHaveBeenCalledTimes(2);

@@ -37,7 +37,13 @@ import { dispatchCronNotification } from "./notification-dispatch.js";
 import { wakeCronRunQueues } from "./run-queue-wake.js";
 import { runCronRuntimeMutation } from "./runtime-mutation.js";
 import { publishDurableNextRunChanges } from "./runtime-publication.js";
-import type { CronAddOptions, CronServiceState, DeferredCronNotifications } from "./state.js";
+import {
+  assertCronHostExecutionAllowed,
+  describeCronHostExecutionRestriction,
+  type CronAddOptions,
+  type CronServiceState,
+  type DeferredCronNotifications,
+} from "./state.js";
 
 const loadedCronStoreRevisions = new WeakMap<CronServiceState, { revision: number }>();
 
@@ -183,7 +189,9 @@ export async function ensureLoaded(
       continue;
     }
     const hydrated = hydratedRaw;
-    const loadWarning = state.deps.describeJobLoadWarning?.(hydrated);
+    const loadWarning =
+      describeCronHostExecutionRestriction(hydrated, state.deps.hostExecutionDisabled) ??
+      state.deps.describeJobLoadWarning?.(hydrated);
     const loadWarningKey = `host:${hydrated.id}`;
     if (loadWarning && !state.warnedInvalidPersistedJobKeys.has(loadWarningKey)) {
       state.warnedInvalidPersistedJobKeys.add(loadWarningKey);
@@ -379,10 +387,19 @@ export async function prepareCronJobMutation(
   // Config validation can await a write publication after the operation's initial load.
   await ensureLoaded(state, { deferQuarantinePersist: !state.deps.cronEnabled });
   source.assertCurrent();
-  return planCronJobMutation(state.store!, mutation, {
+  const plan = planCronJobMutation(state.store!, mutation, {
     ...snapshot.scheduler?.config,
     nowMs: snapshot.nowMs,
   });
+  // Operators may pause an existing blocked job without changing what it runs.
+  const disablesOnly =
+    mutation.kind === "update" &&
+    mutation.patch.enabled === false &&
+    Object.keys(mutation.patch).length === 1;
+  if (plan.job && !disablesOnly) {
+    assertCronHostExecutionAllowed(state, plan.job);
+  }
+  return plan;
 }
 
 /** Publish a private CRUD draft only after its job and receipt transaction is known committed. */

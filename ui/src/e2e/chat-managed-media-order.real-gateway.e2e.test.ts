@@ -2,6 +2,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
+import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator, Page } from "playwright";
@@ -15,11 +16,13 @@ import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
+import { createDeferred } from "../../../test/helpers/promise.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import type { ChatState } from "../pages/chat/chat-state-contract.ts";
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
 import { pairControlUiPage } from "../test-helpers/control-ui-browser-pairing.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
@@ -43,6 +46,7 @@ const expectedOrder = [
 const fixtureKey = "synthetic-managed-media-key";
 
 async function startProvider() {
+  const echoReleased = createDeferred();
   const requests: string[] = [];
   const failures: string[] = [];
   const routes: string[] = [];
@@ -67,26 +71,31 @@ async function startProvider() {
           response.destroy();
         });
         request.on("end", () => {
-          try {
-            const model = asOptionalRecord(JSON.parse(body))?.model;
-            if (model !== "echo" && model !== "metadata") {
-              throw new Error("Unexpected fixture model");
+          void (async () => {
+            try {
+              const model = asOptionalRecord(JSON.parse(body))?.model;
+              if (model !== "echo" && model !== "metadata") {
+                throw new Error("Unexpected fixture model");
+              }
+              requests.push(model);
+              if (model === "echo" && (!reply || !body.includes(prompt))) {
+                throw new Error("The provider must receive the browser chat.send prompt");
+              }
+              if (model === "echo") {
+                await echoReleased.promise;
+              }
+              // Exactly one assistant message containing two local MEDIA directives.
+              // No tool result, preordered image block, or direct transcript write bypasses delivery.
+              writeOpenAiResponsesText(response, {
+                text: model === "echo" ? reply : "Managed media ordering proof",
+                messageId: `managed-media-message-${requests.length}`,
+                responseId: `managed-media-response-${requests.length}`,
+              });
+            } catch (error) {
+              failures.push(String(error));
+              response.writeHead(500).end("Synthetic provider failed");
             }
-            requests.push(model);
-            if (model === "echo" && (!reply || !body.includes(prompt))) {
-              throw new Error("The provider must receive the browser chat.send prompt");
-            }
-            // Exactly one assistant message containing two local MEDIA directives.
-            // No tool result, preordered image block, or direct transcript write bypasses delivery.
-            writeOpenAiResponsesText(response, {
-              text: model === "echo" ? reply : "Managed media ordering proof",
-              messageId: `managed-media-message-${requests.length}`,
-              responseId: `managed-media-response-${requests.length}`,
-            });
-          } catch (error) {
-            failures.push(String(error));
-            response.writeHead(500).end("Synthetic provider failed");
-          }
+          })();
         });
       }),
   });
@@ -98,8 +107,10 @@ async function startProvider() {
     setReply(text: string) {
       reply = text;
     },
-    close: () =>
-      runQaGatewayFixture(
+    releaseEcho: () => echoReleased.resolve(),
+    close: () => {
+      echoReleased.resolve();
+      return runQaGatewayFixture(
         async () => {},
         async () => {
           const shutdown = reservation.releaseListener();
@@ -107,7 +118,8 @@ async function startProvider() {
           await shutdown;
         },
         reservation.claim.release,
-      ),
+      );
+    },
   };
 }
 
@@ -357,6 +369,32 @@ async function runManagedMediaScenario() {
       await waitForControlUiGatewayReady(page);
       await page.getByRole("textbox", { name: "Chat composer", exact: true }).fill(prompt);
       await page.getByRole("button", { name: "Send message", exact: true }).click();
+      // The recap belongs to a run the pane observed, not a terminal history row.
+      await page.waitForFunction((expectedSessionKey) => {
+        const pane = document.querySelector<HTMLElement & { state?: ChatState }>(
+          'openclaw-chat-pane[aria-hidden="false"]',
+        );
+        const state = pane?.state;
+        if (!pane || state?.sessionKey !== expectedSessionKey || !state.chatRunId) {
+          return false;
+        }
+        // An existing indicator can precede projection of the acknowledged run.
+        return Array.from(pane.querySelectorAll(".chat-working-indicator")).some((indicator) => {
+          const runKey = indicator
+            .closest('[data-chat-row-key^="agent-run:"]')
+            ?.getAttribute("data-chat-row-key");
+          const streamKey = indicator
+            .closest('[data-chat-row-key^="stream-working:"]')
+            ?.getAttribute("data-chat-row-key");
+          return (
+            indicator.checkVisibility({ visibilityProperty: true }) &&
+            ((runKey && JSON.parse(runKey.slice("agent-run:".length))[0] === state.chatRunId) ||
+              streamKey ===
+                `stream-working:${JSON.stringify([expectedSessionKey, state.chatRunId])}`)
+          );
+        });
+      }, sessionKey);
+      provider.releaseEcho();
       const bubble = page.locator(".chat-group.assistant .chat-bubble").filter({ hasText: intro });
       const renderedImages = bubble.locator("img.chat-message-image");
       // A durable reply can briefly overlap its live tail until the run retires.
@@ -537,11 +575,57 @@ async function runManagedMediaScenario() {
       await assertDecoded();
       // The terminal session recap arrives independently of final text and image decode.
       // It adds height beside the bubble, so admit it before freezing live ancestry.
-      await page
-        .locator(".chat-group.assistant")
-        .filter({ hasText: intro })
-        .locator(".chat-turn-recap")
-        .waitFor({ state: "visible" });
+      try {
+        await page
+          .locator(".chat-group.assistant")
+          .filter({ hasText: intro })
+          .locator(".chat-turn-recap")
+          .waitFor({ state: "visible" });
+      } catch (error) {
+        await withTimeout(
+          page.evaluate(
+            ({ expectedSessionKey, assistantRunId }) => {
+              const pane = document.querySelector<HTMLElement & { state?: ChatPageHost }>(
+                'openclaw-chat-pane[aria-hidden="false"]',
+              );
+              const state = pane?.state;
+              const row = state?.sessionsResult?.sessions.find(
+                (entry) => entry.key === expectedSessionKey,
+              );
+              const recaps = Array.from(pane?.querySelectorAll(".chat-turn-recap") ?? []);
+              return {
+                recapPanePresent: Boolean(pane),
+                recapSessionMatches: state?.sessionKey === expectedSessionKey,
+                recapRunCleared: state?.chatRunId === null,
+                recapCount: recaps.length,
+                recapVisibleCount: recaps.filter((element) =>
+                  element.checkVisibility({ visibilityProperty: true }),
+                ).length,
+                recapAttachedCount: recaps.filter((element) =>
+                  element.closest(".chat-group.assistant"),
+                ).length,
+                recapTerminalRowPresent: Boolean(row),
+                recapTerminalRowDone: row?.status === "done",
+                recapTerminalRuntimeMs:
+                  typeof row?.runtimeMs === "number" && Number.isFinite(row.runtimeMs)
+                    ? row.runtimeMs
+                    : null,
+                recapAssistantRunPresent: assistantRunId !== null,
+                recapTerminalRunMatchesAssistant:
+                  assistantRunId !== null && row?.lastRunId === assistantRunId,
+              };
+            },
+            {
+              expectedSessionKey: sessionKey,
+              assistantRunId: readSessionMessageIdentity(assistants[0])?.runId ?? null,
+            },
+          ),
+          1_000,
+        )
+          .then((facts) => recordControlUiE2eFailureFacts(page, facts))
+          .catch(() => undefined);
+        throw error;
+      }
       const liveOrder = await captureOrder(page, bubble, "live");
       expect(await bubble.textContent()).not.toContain("MEDIA:");
       expect(sends).toEqual([prompt]);

@@ -311,7 +311,10 @@ async function executeAgentRun(
           await reactivateCompletedSubagentSession({
             sessionKey: params.resolvedSessionKey,
             runId: params.runId,
-            task: message,
+            ...(params.inputProvenance?.kind === "internal_system" &&
+            params.inputProvenance.sourceTool === "subagent_restart_recovery"
+              ? {}
+              : { task: message }),
             gatewayContextResolver: params.context.resolveGatewayContext,
             assertCurrent: assertDispatchCurrent,
             acpSession: params,
@@ -482,9 +485,7 @@ async function executeAgentRun(
                 ...(execApprovalContinuationPromptRange
                   ? { execApprovalContinuationPromptRange }
                   : {}),
-                ...(execApprovalContinuationTranscriptPromptRange
-                  ? { execApprovalContinuationTranscriptPromptRange }
-                  : {}),
+                execApprovalContinuationTranscriptPromptRange,
                 groupId: params.groupId,
                 groupChannel: params.groupChannel,
                 groupSpace: params.groupSpace,

@@ -7,12 +7,12 @@ import { verifyLinkedPrincipalDelivery } from "./gateway.sessions-send-provenanc
 import { verifyCollaborativeCancellation } from "./gateway.sessions-send-provenance.cancellation.test-support.js";
 import {
   createScenario,
+  expectProofIdle,
   gateway,
   humanReplies,
   observeProofSteeringAdmission,
   outbound,
   patchProofConfig,
-  providerErrors,
   registerProofModelScript,
   runHuman,
   runProofIngress,
@@ -250,10 +250,9 @@ async function verifyRegisteredRequesterPolicy(signal: AbortSignal) {
         );
       }
       if (rejectedSteering) {
-        await waitForGatewayActiveWork(30_000);
+        await expectProofIdle();
         expect(scenario.targetRequests).toEqual([]);
         expect(proofDeliveries(scenario.recipient)).toEqual([]);
-        expect(providerErrors).toEqual([]);
         continue;
       }
       if (spec.mode !== "steer") {
@@ -265,8 +264,7 @@ async function verifyRegisteredRequesterPolicy(signal: AbortSignal) {
         const terminal = await waitForProofRun(scenario.accepted?.runId);
         expect(terminal).toMatchObject({ status: "ok" });
       }
-      await waitForGatewayActiveWork(30_000);
-      expect(providerErrors).toEqual([]);
+      await expectProofIdle();
       const deliveries = proofDeliveries(scenario.recipient);
       expect
         .soft(deliveries, spec.name)
@@ -350,9 +348,8 @@ async function verifyNativeSpawnRequester(signal: AbortSignal, collect: boolean)
     await source;
     expect(parent.result).toMatchObject(acceptedSteer);
     expect(await waitForProofRun(spawnResult?.runId)).toMatchObject({ status: "ok" });
-    await waitForGatewayActiveWork(30_000);
+    await expectProofIdle();
     expect(steeringAfterSourceCompletion).toEqual([true]);
-    expect(providerErrors).toEqual([]);
   } finally {
     issueSteer.resolve();
     releaseChild.resolve();
@@ -444,11 +441,10 @@ async function verifyQueuedCollectorAdmission(signal: AbortSignal) {
     expect(steeringSource.result).toMatchObject(acceptedSteer);
     expect(await queuedCompletion).toMatchObject({ status: "ok" });
     expect(await waitForProofRun(blockerResult?.runId)).toMatchObject({ status: "ok" });
-    await waitForGatewayActiveWork(30_000);
+    await expectProofIdle();
     expect(queuedRequests.some((request) => request.prompt.includes(steerInput))).toBe(true);
     expectToolAvailability(queuedRequests, "exec", false);
     expect(queuedAfterSourceCompletion).toEqual(queuedRequests.map(() => true));
-    expect(providerErrors).toEqual([]);
   } finally {
     blockerStarted.resolve();
     releaseBlocker.resolve();
@@ -500,10 +496,9 @@ async function verifyCompletedChildFollowup(signal: AbortSignal) {
       targetDisposition: "queued",
     });
     expect(await waitForProofRun(sourceFollowup.result?.runId)).toMatchObject({ status: "ok" });
-    await waitForGatewayActiveWork(30_000);
+    await expectProofIdle();
     expect(followup.requests.length).toBeGreaterThan(0);
     expectToolAvailability(followup.requests, "exec", false);
-    expect(providerErrors).toEqual([]);
   } finally {
     await waitForGatewayActiveWork(30_000);
     if (changedPolicy) {
@@ -578,10 +573,9 @@ async function verifySteeringPolicyCompatibility(
     await compatible;
     expect(compatibleSource.result).toMatchObject(acceptedSteer);
     await incumbent;
-    await waitForGatewayActiveWork(30_000);
+    await expectProofIdle();
     expect(requests.some((request) => request.prompt.includes(restrictedInput))).toBe(false);
     expect(requests.some((request) => request.prompt.includes(compatibleInput))).toBe(true);
-    expect(providerErrors).toEqual([]);
   } finally {
     release.resolve();
     await Promise.allSettled([incumbent, compatible]);
@@ -700,8 +694,7 @@ async function verifyCrossHumanAdmission(
   scenario.releaseIncumbent.resolve();
   expect((await running.bob).deferredToActiveRun).toBe(collaborative ? "steer" : "followup");
   await running.alice;
-  await waitForGatewayActiveWork(30_000);
-  expect(providerErrors).toEqual([]);
+  await expectProofIdle();
   expect(scenario.accepted).toMatchObject({ status: "accepted" });
   expectToolAvailability(scenario.incumbentRequests, "message", true);
   expect(scenario.targetRequests.length).toBeGreaterThan(0);

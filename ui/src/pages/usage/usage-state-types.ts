@@ -2,6 +2,7 @@ import type { SessionLogEntry } from "../../../../src/infra/session-cost-usage.t
 import type { CostUsageSummary } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
+import type { PageReadResult } from "../../lib/page-request.ts";
 import type {
   CostUsageDailyEntry,
   SessionsUsageEntry,
@@ -17,6 +18,7 @@ export type UsageAggregates = SessionsUsageResult["aggregates"];
 export type UsageContextDetail = {
   weight: UsageSessionEntry["contextWeight"];
   loading: boolean;
+  read: Promise<PageReadResult> | null;
   status: PanelRefreshStatus;
 };
 
@@ -60,7 +62,7 @@ export type UsageFilterState = {
 
 export type UsageDisplayState = {
   chartMode: "tokens" | "cost";
-  dailyChartMode: "total" | "by-type";
+  dailyChartMode: "total" | "by-type" | "by-provider";
   sessionSort: "tokens" | "cost" | "recent" | "messages" | "errors";
   sessionSortDir: "asc" | "desc";
   recentSessions: string[];
@@ -86,3 +88,11 @@ export type UsageDetailPresentation = {
 export type { SessionLogEntry } from "../../../../src/infra/session-cost-usage.types.js";
 
 export type SessionLogRole = SessionLogEntry["role"];
+
+export type UsagePresentation = {
+  display: Pick<
+    UsageDisplayState,
+    "chartMode" | "dailyChartMode" | "contextExpanded" | "headerPinned"
+  >;
+  detail: UsageDetailPresentation;
+};

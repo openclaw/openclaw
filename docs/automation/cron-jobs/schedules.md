@@ -25,6 +25,8 @@ These schedule flags work with both `openclaw automations add` and `openclaw aut
 
 Timestamps without a timezone are treated as UTC. Add `--tz America/New_York` to interpret an offset-less `--at` datetime, or to evaluate a cron expression, in that IANA timezone. Cron expressions without `--tz` use the Gateway host timezone. `--tz` is not valid with `--every` or `--on-exit`.
 
+The Control UI's **Run at** field uses your browser's local timezone. A time skipped by a daylight-saving transition is invalid; choose a time before or after the gap. A newly entered repeated fall-back time uses its first occurrence. Editing other fields preserves the existing one-shot instant, including its original offset and timestamp precision.
+
 Recurring top-of-hour expressions (minute `0` with a wildcard hour field) are automatically staggered by up to 5 minutes to reduce load spikes. Use `--exact` to force precise timing, or `--stagger 30s` for an explicit window (cron schedules only).
 
 In the Control UI, enable **Exact timing** to disable staggering. For recurring top-of-hour expressions, turn it off and clear **Stagger window** to restore the default window of up to 5 minutes. For other expressions, clearing a saved window without changing the expression disables staggering and reopens with **Exact timing** enabled. A new schedule with a blank window keeps default timing when its expression changes.
@@ -37,11 +39,74 @@ Changing an `at` or `on-exit` job to an `every` or `cron` schedule clears its in
 
 ### Heartbeat task migration
 
-Heartbeat scratch supported a structured `tasks:` block before v2026.8.1. If you are upgrading from an earlier release, run `openclaw doctor --fix` to convert each entry into an ordinary editable main-session automation job. Doctor preserves the interval and previous last-run timing, creates the jobs before removing the block, and safely converges the same declaration keys on rerun.
+Run `openclaw doctor --fix` to convert supported heartbeat configuration,
+system-owned monitor jobs, and structured scratch tasks into ordinary editable
+`agentTurn` jobs. Doctor supports July 2026 and later heartbeat shapes. See
+[Heartbeat migration](/gateway/heartbeat) for the migration and older-version guidance.
 
-These migrated jobs carry public `systemEvent` payloads, so `openclaw automations list`, `get`, `edit`, and `remove` plus the `automations` agent tool manage them like other jobs (the tool still accepts its legacy `cron` name as a compatibility alias). Their execution uses the guarded heartbeat task wake: active hours, minimum spacing, flood control, and retries while the target session is busy still apply, while the scheduler owns each task's independent cadence. Jobs due in the same coalescing window can share one heartbeat turn. A scheduled occurrence outside heartbeat active hours is skipped and retried at the job's next occurrence.
+Conversions preserve job IDs and history, scratch revisions, disabled state,
+schedule anchors and pending occurrences, and tool authority. Doctor retires
+legacy configuration or scratch task blocks only after verifying the destination.
+If an import is ambiguous or incomplete, it keeps the source and reports what
+needs attention rather than starting a partially migrated job.
 
-Heartbeat scratch is monitor prose only. Runtime heartbeats do not parse `tasks:` text as schedules; create new recurring work as automations.
+The job becomes authoritative after migration. Use `openclaw automations list`,
+`get`, `edit`, and `remove`, or the `automations` agent tool, to manage it. Config
+reloads, restarts, and subsequent Doctor runs do not overwrite edits or recreate
+a deleted migrated monitor. Runtime does not interpret scratch `tasks:` blocks
+as schedules or read `HEARTBEAT.md`.
+
+### Monitoring policies
+
+Use job-level policies for periodic checks that should respect quiet hours and
+foreground work. They apply through ordinary scheduler and session admission;
+no separate heartbeat runner is involved.
+
+| Field                                    | Behavior                                                                                                               |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `activeHours: { start, end, timezone? }` | Restricts execution to a timezone-aware window. Start is inclusive; end is exclusive. Overnight windows are supported. |
+| `idleOnly: true`                         | Gives foreground work priority without occupying a running slot while waiting.                                         |
+| `payload.skipIfScratchEmpty: true`       | Skips an agent turn with explicitly empty scratch. Missing scratch still runs.                                         |
+
+Omitting these fields keeps ordinary automation defaults. A manual force-run
+bypasses cadence, but still respects active hours, authorization, lifecycle, and
+delivery restrictions. Starting foreground work does not replay side effects
+from an already-started run.
+
+`activeHours.start` and `end` use `HH:MM`; only `end` accepts `24:00`.
+Equal start and end define an empty window. `timezone` accepts `user` (the
+default, using the configured user timezone), `local` (Gateway host), or an IANA
+timezone. The window uses local wall-clock time across daylight saving changes,
+independently of the cron expression's schedule timezone.
+
+A one-shot `at` job due outside its active hours stays pending until the window
+opens. Recurring `every` and `cron` schedules skip that occurrence and advance
+to the next scheduled time.
+
+```bash
+openclaw automations add \
+  --name "Project monitor" \
+  --every 30m \
+  --session isolated \
+  --message "Check the job scratch for newly blocked work. Report changes that need attention; otherwise reply NO_REPLY." \
+  --active-hours-start 08:00 \
+  --active-hours-end 22:00 \
+  --active-hours-timezone user \
+  --idle-only \
+  --skip-if-scratch-empty \
+  --no-deliver
+```
+
+The same flags work with `automations edit`. Supply both window endpoints when
+adding a window; edits can change one field of an existing window. Use
+`--clear-active-hours` to remove the window, `--no-idle-only` to turn off idle
+priority, or `--clear-idle-only` to remove that stored policy.
+
+Keep instructions explicit: name the sources or checklist, do not infer old
+tasks from past chats, and report changes that need attention. A human check-in
+is a separate job with an intentional cadence. See
+[Job scratch and quiet results](/automation/cron-jobs/payloads#job-scratch-and-quiet-results)
+and [Owner delivery](/automation/cron-jobs/delivery#owner-delivery-and-direct-messages).
 
 ### Stream sources
 
@@ -230,7 +295,7 @@ return {
 };
 ```
 
-Removing or disabling a job during condition evaluation cancels that evaluation before its payload can start. After a main-session payload hands work to heartbeat, that shared heartbeat retains its own lifecycle.
+Removing or disabling a job during condition evaluation cancels that evaluation before its payload can start. Main-session payloads use ordinary session admission and retain the job’s cancellation and authority checks.
 
 Author watchers around **actionable state**, not only success: a watcher that goes quiet when its check fails or times out looks healthy while broken. Compare the observation with `trigger.state` and return fresh state to deduplicate; do not rely on model or process memory. When firing, make `message` self-contained because it becomes the fired run's complete event context.
 

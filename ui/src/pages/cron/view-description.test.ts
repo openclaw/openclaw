@@ -32,6 +32,7 @@ describe("cron view saved metadata", () => {
       expect(row.querySelector(".cron-job-menu__trigger")?.getAttribute("aria-label")).toContain(
         expected,
       );
+      expect(row.querySelectorAll('.cron-job-menu [role="menuitem"]')).toHaveLength(0);
       const toggle = getElement(row, `[data-test-id="cron-row-toggle-${job.id}"]`, HTMLSpanElement);
       const toggleInput = getElement(toggle, "input.settings-toggle__input", HTMLInputElement);
       const actionLabel = `${enabled ? "Pause" : "Resume"}: ${expected}`;
@@ -45,6 +46,7 @@ describe("cron view saved metadata", () => {
       toggleInput.dispatchEvent(new Event("change", { bubbles: true }));
       expect(onToggle).toHaveBeenCalledExactlyOnceWith(job, !enabled);
       await openCronMenu(row, ".cron-job-menu");
+      expect(row.querySelectorAll('.cron-job-menu [role="menuitem"]')).toHaveLength(3);
       getElement(row, '.cron-job-menu [data-value="run-if-due"]', HTMLButtonElement).click();
       await waitForSolid(() => expect(onRun).toHaveBeenLastCalledWith(job, "due"));
       expect(onRun).toHaveBeenCalledTimes(2);

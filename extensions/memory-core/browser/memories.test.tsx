@@ -1,101 +1,44 @@
 /* @vitest-environment jsdom */
 
-import type {
-  ControlUiSettingsContext,
-  ControlUiSettingsSnapshot,
-  ControlUiSettingsView,
-  MemorySearchResponse,
-} from "openclaw/plugin-sdk/control-ui";
+import type { MemorySearchResponse } from "openclaw/plugin-sdk/control-ui";
 import { flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { memoriesView } from "./memories.tsx";
-
-const disposers: (() => void)[] = [];
-afterEach(() => {
-  for (const dispose of disposers.splice(0)) {
-    dispose();
-  }
-});
-const waitForSolid = (assertion: () => void) =>
-  vi.waitFor(() => {
-    flush();
-    assertion();
-  });
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason: unknown) => void;
-  const promise = new Promise<T>((yes, no) => {
-    resolve = yes;
-    reject = no;
-  });
-  return { promise, resolve, reject };
-}
+import {
+  contextForTest,
+  deferred,
+  disposers,
+  disposeTestViews,
+  expectText,
+  findButton,
+  mountSettingsView,
+  snapshot,
+  waitForSolid,
+} from "./memory.test-support.ts";
+afterEach(disposeTestViews);
 
 type Request = (method: string, params: Record<string, unknown>) => Promise<unknown>;
-function createElement(
-  request: Request,
-  advertised = true,
-  initialAgentId: string | null = "main",
-) {
-  const container = document.createElement("div");
-  document.body.append(container);
-  let lifetime: AbortController;
-  let view: ReturnType<ControlUiSettingsView["mount"]>;
-  let snapshot: ControlUiSettingsSnapshot;
+function createElement(request: Request, advertised = true, agentId: string | null = "main") {
+  const lifetime = new AbortController();
   const formatError = vi.fn((error: unknown) =>
     error instanceof Error ? error.message : String(error),
   );
-  function mount(agentId: string | null) {
-    lifetime?.abort();
-    view?.dispose();
-    lifetime = new AbortController();
-    snapshot = {
-      agentId,
-      agentsLoading: false,
-      agentsError: null,
-      engine: { kind: "default", id: "memory-core", availability: "enabled" },
-      connected: true,
-      advertisedMethods: advertised ? ["memory.search", "agents.workspace.get"] : [],
-      connectionEpoch: 1,
-      routeIntent: "memories",
-      locale: "en",
-    };
-    const context: ControlUiSettingsContext = {
-      props: snapshot,
-      signal: lifetime.signal,
-      // This view uses semantic controls; shared visual primitives are exercised in the browser.
-      components: {
-        mountSection: vi.fn(),
-        mountRow: vi.fn(),
-        mountStatus: vi.fn(),
-        mountValue: vi.fn(),
-        mountNavigation: vi.fn(),
-        mountLobster: vi.fn(),
-      },
-      request: <T,>(method: string, params?: unknown) =>
-        request(method, params as Record<string, unknown>) as Promise<T>,
-      formatError,
-      formatRelativeTimestamp: String,
-      navigate: vi.fn(),
-      refreshAgents: vi.fn(),
-    };
-    view = memoriesView.mount(container, context);
-    flush();
-  }
-  mount(initialAgentId);
-  disposers.push(() => {
-    lifetime.abort();
-    view.dispose();
-    container.remove();
+  const props = snapshot({
+    agentId,
+    advertisedMethods: advertised ? ["memory.search", "agents.workspace.get"] : [],
+    routeIntent: "memories",
   });
+  const context = contextForTest(props, {
+    signal: lifetime.signal,
+    request: <T,>(method: string, params?: unknown) =>
+      request(method, params as Record<string, unknown>) as Promise<T>,
+    formatError,
+  });
+  const { container, update } = mountSettingsView(memoriesView, context);
+  disposers.push(() => lifetime.abort());
   return Object.assign(container, {
     retire: () => lifetime.abort(),
-    // The host keeps this view mounted through a same-identity reconnect.
-    update(patch: Partial<ControlUiSettingsSnapshot>) {
-      snapshot = { ...snapshot, ...patch };
-      view.update(snapshot);
-      flush();
-    },
+    update,
     formatError,
   });
 }
@@ -121,6 +64,11 @@ function search(element: HTMLElement, query = "Ada") {
   typeQuery(element, query);
   submit(element);
 }
+function searchElement(request: Request, query = "Ada") {
+  const element = createElement(request);
+  search(element, query);
+  return element;
+}
 
 const result = {
   path: "memory/people/ada.md",
@@ -134,7 +82,7 @@ const result = {
 function searchResponse(
   results: MemorySearchResponse["results"],
   overrides: Partial<MemorySearchResponse> = {},
-) {
+): MemorySearchResponse {
   return { agentId: "main", provider: "local", searchMode: "hybrid", results, ...overrides };
 }
 
@@ -142,55 +90,59 @@ function fileReads(request: { mock: { calls: Array<[string, ...unknown[]]> } }) 
   return request.mock.calls.filter(([method]) => method === "agents.workspace.get");
 }
 
-function memoryFileResponse(content: string) {
-  return { file: { encoding: "utf8", content } };
+const memoryFileResponse = (content: string) => ({ file: { encoding: "utf8", content } });
+function requestFiles(read: Request, results = [result]) {
+  return vi.fn<Request>((method, params) =>
+    method === "memory.search" ? Promise.resolve(searchResponse(results)) : read(method, params),
+  );
 }
+const row = (element: HTMLElement) => element.querySelector<HTMLButtonElement>("article > button");
+const match = (element: HTMLElement) =>
+  element.querySelector('[data-memory-match="true"]')?.textContent;
+const retry = (element: HTMLElement) => findButton(element, /^Retry$/);
+const waitText = (element: HTMLElement, text: string) =>
+  waitForSolid(() => expect(element.textContent).toContain(text));
+async function openResult(element: HTMLElement) {
+  await waitForSolid(() => expect(row(element)).not.toBeNull());
+  row(element)?.click();
+}
+const waitMatch = (element: HTMLElement, text: string) =>
+  waitForSolid(() => expect(match(element)).toBe(text));
 
 describe("Memory Core indexed-search presentation", () => {
-  it.each(["search", "detail"])(
-    "discards a retired %s failure before using lifetime-bound error formatting",
-    async (stage) => {
-      const pending = deferred<unknown>();
-      const request = vi.fn<Request>((method) =>
-        stage === "detail" && method === "memory.search"
-          ? Promise.resolve(searchResponse([result]))
-          : pending.promise,
-      );
-      const element = createElement(request);
-      search(element);
-      if (stage === "detail") {
-        await waitForSolid(() => expect(element.querySelector("article > button")).not.toBeNull());
-        element.querySelector<HTMLButtonElement>("article > button")?.click();
-      }
-      element.retire();
-      element.formatError.mockImplementation(() => {
-        throw new Error("retired formatter must not run");
-      });
-      pending.reject(new Error("retired failure"));
-      await pending.promise.catch(() => undefined);
-      flush();
-      expect(element.formatError).not.toHaveBeenCalled();
-      expect(element.textContent).not.toContain("retired failure");
-    },
-  );
+  it.each(["search", "detail"])("ignores retired %s errors before formatting", async (stage) => {
+    const pending = deferred<unknown>();
+    const request = vi.fn<Request>((method) =>
+      stage === "detail" && method === "memory.search"
+        ? Promise.resolve(searchResponse([result]))
+        : pending.promise,
+    );
+    const element = searchElement(request);
+    if (stage === "detail") {
+      await openResult(element);
+    }
+    element.retire();
+    element.formatError.mockImplementation(() => {
+      throw new Error("retired formatter must not run");
+    });
+    pending.reject(new Error("retired failure"));
+    await pending.promise.catch(() => undefined);
+    flush();
+    expect(element.formatError).not.toHaveBeenCalled();
+    expect(element.textContent).not.toContain("retired failure");
+  });
 
   it.each([
     [true, "Search for a person, project, decision"],
     [false, "Update the gateway to search memories"],
-  ] satisfies [boolean, string][])(
-    "renders the advertised=%s search state",
-    (advertised, message) => {
-      const element = createElement(
-        vi.fn(() => Promise.resolve({})),
-        advertised,
-      );
-      expect(element.textContent).toContain(message);
-      expect(element.querySelector("form") === null).toBe(!advertised);
-    },
-  );
+  ] satisfies [boolean, string][])("advertised=%s", (advertised, message) => {
+    const element = createElement(vi.fn<Request>().mockResolvedValue({}), advertised);
+    expect(element.textContent).toContain(message);
+    expect(element.querySelector("form") === null).toBe(!advertised);
+  });
 
-  it("keeps search disabled when no agent is available", async () => {
-    const request = vi.fn(() => Promise.resolve({}));
+  it("keeps search disabled when no agent is available", () => {
+    const request = vi.fn<Request>().mockResolvedValue({});
     const element = createElement(request, true, null);
     typeQuery(element, "Ada");
     expect(element.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(true);
@@ -198,60 +150,64 @@ describe("Memory Core indexed-search presentation", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("renders empty and retryable error states", async () => {
+  it.each([true, false])("retries failed searches only when connected=%s", async (connected) => {
+    const retried = deferred<MemorySearchResponse>();
     const request = vi
       .fn<Request>()
       .mockRejectedValueOnce(new Error("index unavailable"))
-      .mockResolvedValueOnce(searchResponse([], { provider: "none", searchMode: "fts-only" }));
-    const element = createElement(request);
-    search(element, "missing");
-    await waitForSolid(() => expect(element.textContent).toContain("index unavailable"));
-
-    const retry = [...element.querySelectorAll("button")].find(
-      (button) => button.textContent?.trim() === "Retry",
-    );
-    retry?.click();
-    await waitForSolid(() => expect(element.textContent).toContain("No memories matched"));
-    expect(element.textContent).toContain("keyword search");
-    expect(request).toHaveBeenCalledTimes(2);
+      .mockReturnValueOnce(retried.promise);
+    const element = searchElement(request, "missing");
+    const input = element.querySelector("input");
+    const submitButton = element.querySelector<HTMLButtonElement>('button[type="submit"]');
+    await waitText(element, "index unavailable");
+    if (!connected) {
+      element.update({ connected: false, connectionEpoch: 2 });
+    }
+    expect(retry(element)?.disabled).toBe(!connected);
+    retry(element)?.click();
+    if (connected) {
+      await waitText(element, "Searching");
+      expect(element.textContent).not.toContain("index unavailable");
+      expect(element.querySelector("input")).toBe(input);
+      expect(element.querySelector('button[type="submit"]')).toBe(submitButton);
+      expect(submitButton?.disabled).toBe(true);
+      retried.resolve(searchResponse([], { provider: "none", searchMode: "fts-only" }));
+      await waitText(element, "No memories matched");
+      expect(element.textContent).toContain("keyword search");
+      expect(submitButton?.disabled).toBe(false);
+    }
+    expect(request).toHaveBeenCalledTimes(connected ? 2 : 1);
   });
 
   it("shares pending and loaded files across matches while keeping each row's highlight", async () => {
     const second = { ...result, startLine: 1, endLine: 1 };
     const third = { ...second, path: "memory/projects/Open Claw.md" };
     const pending = deferred<unknown>();
-    const fileResponse = memoryFileResponse("first\nmatched two\nmatched three\nfourth");
-    const request = vi.fn((method: string, params: Record<string, unknown>) => {
-      if (method === "memory.search") {
-        return Promise.resolve(searchResponse([result, second, third]));
-      }
-      return params.path === result.path
-        ? pending.promise
-        : Promise.resolve(memoryFileResponse("Another memory file"));
-    });
-    const element = createElement(request);
-    search(element);
+    const request = requestFiles(
+      (_method, params) =>
+        params.path === result.path
+          ? pending.promise
+          : Promise.resolve(memoryFileResponse("Another memory file")),
+      [result, second, third],
+    );
+    const element = searchElement(request);
     await waitForSolid(() => expect(element.querySelectorAll("article")).toHaveLength(3));
 
     const rows = element.querySelectorAll<HTMLButtonElement>("article > button");
+    const expanded = () => [...rows].map((button) => button.getAttribute("aria-expanded"));
     rows[0]?.click();
-    await waitForSolid(() => expect(element.textContent).toContain("Loading the full memory file"));
+    await waitText(element, "Loading the full memory file");
     rows[1]?.click();
     flush();
-    expect(rows[0]?.getAttribute("aria-expanded")).toBe("false");
-    expect(rows[1]?.getAttribute("aria-expanded")).toBe("true");
+    expect(expanded()).toEqual(["false", "true", "false"]);
     expect(element.querySelectorAll(".memory-memories__detail")).toHaveLength(1);
     expect(fileReads(request)).toHaveLength(1);
 
-    pending.resolve(fileResponse);
-    await waitForSolid(() =>
-      expect(element.querySelector('[data-memory-match="true"]')?.textContent).toBe("first"),
-    );
+    pending.resolve(memoryFileResponse("first\nmatched two\nmatched three\nfourth"));
+    await waitMatch(element, "first");
     rows[0]?.click();
     flush();
-    expect(element.querySelector('[data-memory-match="true"]')?.textContent).toBe(
-      "matched two\nmatched three",
-    );
+    expect(match(element)).toBe("matched two\nmatched three");
 
     rows[0]?.click();
     rows[0]?.click();
@@ -264,8 +220,7 @@ describe("Memory Core indexed-search presentation", () => {
 
     rows[2]?.click();
     flush();
-    expect(rows[0]?.getAttribute("aria-expanded")).toBe("false");
-    expect(rows[2]?.getAttribute("aria-expanded")).toBe("true");
+    expect(expanded()).toEqual(["false", "false", "true"]);
     expect(rows[2]?.getAttribute("aria-controls")).toBe("memory-detail-2");
     expect(element.querySelector("#memory-detail-2")).not.toBeNull();
     expect(fileReads(request)).toHaveLength(2);
@@ -282,8 +237,7 @@ describe("Memory Core indexed-search presentation", () => {
     const request = vi.fn<Request>(() =>
       Promise.resolve(searchResponse([{ ...result, path: "MEMORY.md" }, ...nonExpandable])),
     );
-    const element = createElement(request);
-    search(element, "memory");
+    const element = searchElement(request, "memory");
     await waitForSolid(() => expect(element.querySelectorAll("article")).toHaveLength(6));
 
     expect(element.querySelectorAll("article > button")).toHaveLength(1);
@@ -292,67 +246,39 @@ describe("Memory Core indexed-search presentation", () => {
   });
 
   it("keeps workspace read failures on the expanded row", async () => {
-    const request = vi.fn((method: string) =>
-      method === "memory.search"
-        ? Promise.resolve(searchResponse([result]))
-        : Promise.reject(new Error("workspace file not found")),
-    );
-    const element = createElement(request);
-    search(element);
-    await waitForSolid(() => expect(element.querySelector("article > button")).not.toBeNull());
-    element.querySelector<HTMLButtonElement>("article > button")?.click();
-
-    await waitForSolid(() =>
-      expect(element.textContent).toContain(
-        "Could not load this memory file: workspace file not found",
-      ),
-    );
-    expect(element.textContent).toContain(result.snippet);
-    expect(element.textContent).not.toContain("Memory search failed");
+    const request = requestFiles(() => Promise.reject(new Error("workspace file not found")));
+    const element = searchElement(request);
+    await openResult(element);
+    await waitText(element, "Could not load this memory file: workspace file not found");
+    expectText(element, [result.snippet], ["Memory search failed"]);
   });
 
-  it.each(["resolves", "rejects"] as const)(
-    "keeps the current file read when an earlier search's read %s",
-    async (outcome) => {
-      const previous = deferred<unknown>();
-      const current = deferred<unknown>();
-      let readCount = 0;
-      const request = vi.fn((method: string) => {
-        if (method === "memory.search") {
-          return Promise.resolve(searchResponse([result]));
-        }
-        return readCount++ === 0 ? previous.promise : current.promise;
-      });
-      const element = createElement(request);
-      for (const query of ["Ada", "Ada again"]) {
-        search(element, query);
-        flush();
-        await waitForSolid(() => expect(element.querySelector("article > button")).not.toBeNull());
-        element.querySelector<HTMLButtonElement>("article > button")?.click();
-        await waitForSolid(() =>
-          expect(element.textContent).toContain("Loading the full memory file"),
-        );
-      }
-      expect(readCount).toBe(2);
-
-      if (outcome === "resolves") {
-        previous.resolve(memoryFileResponse("Retired content"));
-      } else {
-        previous.reject(new Error("Retired read failure"));
-      }
-      await previous.promise.catch(() => undefined);
+  it.each(["resolves", "rejects"] as const)("ignores stale %s reads", async (outcome) => {
+    const previous = deferred<unknown>();
+    const current = deferred<unknown>();
+    let readCount = 0;
+    const request = requestFiles(() => (readCount++ === 0 ? previous.promise : current.promise));
+    const element = createElement(request);
+    for (const query of ["Ada", "Ada again"]) {
+      search(element, query);
       flush();
-      expect(element.textContent).toContain("Loading the full memory file");
-      expect(element.textContent).not.toContain("Retired");
+      await openResult(element);
+      await waitText(element, "Loading the full memory file");
+    }
+    expect(readCount).toBe(2);
 
-      current.resolve(memoryFileResponse("first\nFresh matched content\nthird"));
-      await waitForSolid(() =>
-        expect(element.querySelector('[data-memory-match="true"]')?.textContent).toBe(
-          "Fresh matched content\nthird",
-        ),
-      );
-    },
-  );
+    if (outcome === "resolves") {
+      previous.resolve(memoryFileResponse("Retired content"));
+    } else {
+      previous.reject(new Error("Retired read failure"));
+    }
+    await previous.promise.catch(() => undefined);
+    flush();
+    expectText(element, ["Loading the full memory file"], ["Retired"]);
+
+    current.resolve(memoryFileResponse("first\nFresh matched content\nthird"));
+    await waitMatch(element, "Fresh matched content\nthird");
+  });
 
   it("keeps results and the query through a same-identity reconnect and retries interrupted reads", async () => {
     const request = vi
@@ -360,12 +286,9 @@ describe("Memory Core indexed-search presentation", () => {
       .mockResolvedValueOnce(searchResponse([result]))
       .mockRejectedValueOnce(new Error("gateway closed"))
       .mockResolvedValueOnce(memoryFileResponse("first\nmatched two\nmatched three"));
-    const element = createElement(request);
-    search(element);
-    await waitForSolid(() => expect(element.querySelector("article > button")).not.toBeNull());
-    const row = () => element.querySelector<HTMLButtonElement>("article > button");
-    row()?.click();
-    await waitForSolid(() => expect(element.textContent).toContain("gateway closed"));
+    const element = searchElement(request);
+    await openResult(element);
+    await waitText(element, "gateway closed");
 
     element.update({ connected: false, connectionEpoch: 2 });
     expect(element.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(true);
@@ -374,29 +297,11 @@ describe("Memory Core indexed-search presentation", () => {
     expect(element.textContent).toContain(result.snippet);
     expect(request.mock.calls.filter(([method]) => method === "memory.search")).toHaveLength(1);
 
-    row()?.click();
+    row(element)?.click();
     flush();
-    row()?.click();
-    await waitForSolid(() =>
-      expect(element.querySelector('[data-memory-match="true"]')?.textContent).toBe(
-        "matched two\nmatched three",
-      ),
-    );
+    row(element)?.click();
+    await waitMatch(element, "matched two\nmatched three");
     expect(fileReads(request)).toHaveLength(2);
-  });
-
-  it("disables search retry while the Gateway is offline", async () => {
-    const request = vi.fn<Request>().mockRejectedValueOnce(new Error("gateway closed"));
-    const element = createElement(request);
-    search(element);
-    await waitForSolid(() => expect(element.textContent).toContain("gateway closed"));
-    element.update({ connected: false, connectionEpoch: 2 });
-    const retry = [...element.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent?.trim() === "Retry",
-    );
-    expect(retry?.disabled).toBe(true);
-    retry?.click();
-    expect(request).toHaveBeenCalledTimes(1);
   });
 
   it("shows stale guidance alongside empty results and clears it after a fresh search", async () => {
@@ -417,12 +322,9 @@ describe("Memory Core indexed-search presentation", () => {
         }),
       )
       .mockResolvedValueOnce(searchResponse([fresh], { provider: "none", searchMode: "fts-only" }));
-    const element = createElement(request);
+    const element = searchElement(request);
     const readText = () => (element.textContent ?? "").replace(/\s+/gu, " ").trim();
-    search(element);
-    await waitForSolid(() =>
-      expect(element.querySelector(".memory-memories__results-heading")).not.toBeNull(),
-    );
+    await waitText(element, "No memories matched");
     expect(element.querySelectorAll("article")).toHaveLength(0);
     expect.soft(readText(), "stale result warning").toContain(warning);
     expect.soft(readText(), "agent-scoped recovery guidance").toContain(action);

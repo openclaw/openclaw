@@ -16,6 +16,7 @@ import {
 } from "./managed-npm-retention.js";
 
 const retentionTempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
 const makeNpmDir = () => path.join(retentionTempDirs.make("openclaw-retention-"), "npm");
 
 function makePackage(projectRoot = makeNpmDir(), name = "retained-plugin") {
@@ -43,36 +44,32 @@ it.each(["stat", "mkdir"] as const)(
     let current = true;
     const failure = new Error("update authority revoked");
     const mkdir = fs.promises.mkdir.bind(fs.promises);
-    const mkdirSpy = vi.spyOn(fs.promises, "mkdir").mockImplementation(async (target, options) => {
+    vi.spyOn(fs.promises, "mkdir").mockImplementation(async (target, options) => {
       const result = await mkdir(target, options);
       if (preparation === "mkdir") {
         current = false;
       }
       return result;
     });
-    try {
-      const operation = markRetainedManagedNpmInstall({
-        packageDir,
-        pluginId: "retained-plugin",
-        reason: "replaced-by-update",
-        assertCurrent: () => {
-          if (!current) {
-            throw failure;
-          }
-        },
-      });
-      if (preparation === "stat") {
-        current = false;
-      }
-      await expect(operation).rejects.toBe(failure);
-      expect(fs.existsSync(packageDir)).toBe(true);
-      if (preparation === "mkdir") {
-        expect(fs.readFileSync(markerPath, "utf8")).toBe(previous);
-      } else {
-        expect(fs.existsSync(markerDir)).toBe(false);
-      }
-    } finally {
-      mkdirSpy.mockRestore();
+    const operation = markRetainedManagedNpmInstall({
+      packageDir,
+      pluginId: "retained-plugin",
+      reason: "replaced-by-update",
+      assertCurrent: () => {
+        if (!current) {
+          throw failure;
+        }
+      },
+    });
+    if (preparation === "stat") {
+      current = false;
+    }
+    await expect(operation).rejects.toBe(failure);
+    expect(fs.existsSync(packageDir)).toBe(true);
+    if (preparation === "mkdir") {
+      expect(fs.readFileSync(markerPath, "utf8")).toBe(previous);
+    } else {
+      expect(fs.existsSync(markerDir)).toBe(false);
     }
   },
 );
@@ -88,34 +85,29 @@ it.each(["before", "after"])("preserves a one-shot refusal %s marker removal", a
   );
   let revoked = phase === "before";
   const rm = fs.promises.rm.bind(fs.promises);
-  const rmSpy =
-    phase === "after"
-      ? vi.spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
-          await rm(target, options);
-          revoked = true;
-        })
-      : undefined;
-  try {
-    await expect(
-      clearRetainedManagedNpmInstallMarker(packageDir, () => {
-        if (revoked) {
-          revoked = false;
-          throw failure;
-        }
-      }),
-    ).rejects.toBe(failure);
-    if (phase === "before") {
-      expect(fs.readFileSync(markerPath, "utf8")).toBe(before);
-      await expect(clearRetainedManagedNpmInstallMarker(packageDir)).resolves.toBe(true);
-    }
-    expect(fs.existsSync(markerPath)).toBe(false);
-    if (phase === "after") {
-      expect(fs.existsSync(path.dirname(markerPath))).toBe(true);
-    }
-    expect(fs.existsSync(packageDir)).toBe(true);
-  } finally {
-    rmSpy?.mockRestore();
+  if (phase === "after") {
+    vi.spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
+      await rm(target, options);
+      revoked = true;
+    });
   }
+  await expect(
+    clearRetainedManagedNpmInstallMarker(packageDir, () => {
+      if (revoked) {
+        revoked = false;
+        throw failure;
+      }
+    }),
+  ).rejects.toBe(failure);
+  if (phase === "before") {
+    expect(fs.readFileSync(markerPath, "utf8")).toBe(before);
+    await expect(clearRetainedManagedNpmInstallMarker(packageDir)).resolves.toBe(true);
+  }
+  expect(fs.existsSync(markerPath)).toBe(false);
+  if (phase === "after") {
+    expect(fs.existsSync(path.dirname(markerPath))).toBe(true);
+  }
+  expect(fs.existsSync(packageDir)).toBe(true);
 });
 
 it.each(["ordinary", "generation", "legacy"] as const)(

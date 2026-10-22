@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentRuntimeToolConfig } from "./tool-runtime-config.js";
-import { resolveAgentToolSearchRuntimeConfig } from "./tool-search-runtime-config.js";
 import { resolveAgentToolSurfacePlan } from "./tool-surface-plan.js";
 
 const secretMarker = () => ({ source: "exec", provider: "example", id: "example/value" });
@@ -33,7 +32,7 @@ function resolveSurface(
   }).toolSearchRuntimeConfig;
 }
 
-describe("resolveAgentToolSearchRuntimeConfig", () => {
+describe("Tool Search runtime snapshot selection", () => {
   afterEach(() => resetConfigRuntimeState());
 
   it.each([true, false])(
@@ -75,6 +74,6 @@ describe("resolveAgentToolSearchRuntimeConfig", () => {
       ? { plugins: pluginConfig("explicit") }
       : { tools: { toolSearch: false } };
     expect(resolveAgentRuntimeToolConfig(config)).toBe(config);
-    expect(resolveAgentToolSearchRuntimeConfig({ config })).toBe(config);
+    expect(resolveSurface(config)).toBe(config);
   });
 });

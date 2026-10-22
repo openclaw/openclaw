@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi, type Mock } from "vitest";
 import type { NodeInvokeParams, NodeInvokeResult } from "../node-invoke.types.js";
+import type { NodeRegistry } from "../node-registry.js";
 import type { GatewayRequestHandler, GatewayRequestHandlerOptions } from "./types.js";
 
 export type RespondCall = Parameters<GatewayRequestHandlerOptions["respond"]>;
@@ -26,6 +27,28 @@ export async function invokeNodeRequest(
 }
 
 type MockCallSource = Pick<Mock, "mock">;
+
+export function expectNodeReply(
+  respond: GatewayRequestHandlerOptions["respond"],
+  payload: unknown,
+) {
+  expect(respond).toHaveBeenCalledWith(true, payload, undefined);
+}
+
+export function expectNodeFailure(
+  respond: GatewayRequestHandlerOptions["respond"],
+  error: Record<string, unknown>,
+) {
+  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(error));
+}
+
+export function bindNodeRegistry(registry: NodeRegistry) {
+  return {
+    get: registry.get.bind(registry),
+    getForPairingGeneration: registry.getForPairingGeneration.bind(registry),
+    invoke: registry.invoke.bind(registry),
+  };
+}
 
 export type TestNodeSession = {
   nodeId: string;

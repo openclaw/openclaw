@@ -159,7 +159,9 @@ export type VerifySetupInferenceResult =
     };
 
 export type CompleteSetupInferenceResult =
-  | (Omit<Extract<VerifySetupInferenceResult, { ok: true }>, "modelTarget"> & { text: string })
+  | (Omit<Extract<VerifySetupInferenceResult, { ok: true }>, "modelTarget"> & {
+      text: string;
+    })
   | Extract<VerifySetupInferenceResult, { ok: false }>;
 
 export type BoundVerifySetupInferenceResult =

@@ -83,6 +83,24 @@ async function unexpectedWorkspaceAccess(): Promise<never> {
   throw new Error("unexpected workspace access");
 }
 
+it("stages a non-PDF upload above 50 MiB when mediaMaxMb admits it", async ({ state }) => {
+  const cfg = attachmentConfig(state, { mediaMaxMb: 51 });
+  const size = 50 * 1024 * 1024 + 1;
+  const { result, respond } = await prepareAttachmentFixture({
+    params: attachmentParams("large-upload", "large.txt", Buffer.alloc(size, "x")),
+    session: { cfg },
+    abortCleanup: vi.fn(),
+  });
+
+  expect(respond.mock.calls).toEqual([]);
+  assert(result.ok, "admitted attachment was not staged");
+  const media = result.value.mediaPathOffloads[0]!;
+  expect(media.path).toMatch(/^media\/inbound\/openclaw-staged-/u);
+  await expect(fs.stat(path.resolve(media.workspaceDir!, media.path!))).resolves.toMatchObject({
+    size,
+  });
+});
+
 it.for(["off", "all"] as const)(
   "prepares both owners' global attachments with sandbox %s",
   async (mode, { state }) => {

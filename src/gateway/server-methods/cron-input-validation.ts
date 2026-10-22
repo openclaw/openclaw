@@ -9,6 +9,7 @@ import type { AuthProfileAuthorization } from "../../agents/auth-profiles/author
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { createRestartRecoveryOperatorSource } from "../../agents/operator-run-recovery-source.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../../agents/simple-completion-selection.js";
+import { attributeDelegatedSessionCreator } from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   assertValidCronAnnounceDelivery,
@@ -317,7 +318,14 @@ export async function captureCronCreatorSession(
     ? creatorSession?.createdActor
     : resolveOperatorSessionCreation(caller.client).actor;
   const actorId = normalizeOptionalString(actor?.id);
-  const createdActor = actor ? { ...actor, ...(actorId ? { id: actorId } : {}) } : undefined;
+  const legacyActor = actor ? { ...actor, ...(actorId ? { id: actorId } : {}) } : undefined;
+  const createdActor = callerScope
+    ? attributeDelegatedSessionCreator(
+        legacyActor,
+        callerScope.creatorProfileId,
+        callerScope.agentId,
+      )
+    : legacyActor;
   const inference =
     // A creator runtime grant owns its own inference identity. Never bind an ambient host profile.
     !hasRuntimeAuthority && job.payload.kind === "agentTurn" && job.sessionTarget !== "main"
@@ -358,9 +366,9 @@ export async function captureCronUpdatedInferenceBinding(
   const selection = model
     ? resolveSimpleCompletionSelectionForAgent({ cfg, agentId, modelRef: model })
     : null;
-  // CLI backends own their login: creation records no binding for them, so an
-  // unbound job must not demand a stored account. A job that already records one
-  // keeps its rejection until an authorized transition replaces that account.
+  // A native CLI login records no binding, so an unbound job must not demand a stored
+  // account. A job that already records one keeps its rejection until an authorized
+  // transition replaces that account.
   const cliExecution = selection
     ? resolveCliRuntimeExecutionProvider({
         cfg,
@@ -370,7 +378,7 @@ export async function captureCronUpdatedInferenceBinding(
         authProfileId: selection.profileId,
       })
     : undefined;
-  if (!model || (cliExecution && !nextJob.inferenceBinding) || !selection?.profileId) {
+  if (!model || !selection?.profileId) {
     if (patch.agentId !== undefined && nextJob.inferenceBinding) {
       // A move may keep the account only when the new agent sees the same credential owner.
       const authority = await acquireCronInferenceAuthorization({
@@ -395,6 +403,9 @@ export async function captureCronUpdatedInferenceBinding(
     caller,
   );
   if (!inference.inferenceBinding) {
+    if (cliExecution && !nextJob.inferenceBinding) {
+      return undefined;
+    }
     throw new Error("The selected automation account is unavailable.");
   }
   return inference;

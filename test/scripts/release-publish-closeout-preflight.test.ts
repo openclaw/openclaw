@@ -111,7 +111,16 @@ closeout: inspectStableCloseoutPreflight(closeoutInput)})`,
   expect(result.admission.admitted).toBe(admitted);
   expectGate(result.observation.gates, { id: "github.release", status });
   if (state === "draft") {
-    expect(result.observation.release).toMatchObject({ id: 7, draft: true });
+    expect(result.observation.release).toEqual({
+      id: 7,
+      draft: true,
+      prerelease: false,
+      tag_name: "v2026.9.5",
+      html_url: "https://github.com/openclaw/openclaw/releases/tag/v2026.9.5",
+      target_commitish: sha,
+      body,
+      assets: [],
+    });
     expectGate(result.closeout, {
       id: "stable-closeout.release-assets",
       status: "WARN",

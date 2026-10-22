@@ -28,7 +28,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
-import { withSessionState } from "./session-manager-fixtures.test-support.js";
+import { sessionScope, withSessionState } from "./session-manager-fixtures.test-support.js";
 
 function canonicalTarget(
   state: OpenClawTestState,
@@ -36,10 +36,8 @@ function canonicalTarget(
   sessionKey = `agent:main:${sessionId}`,
 ) {
   return {
-    agentId: "main",
-    sessionId,
+    ...sessionScope(path.join(state.agentDir("main"), "openclaw-agent.sqlite"), sessionId),
     sessionKey,
-    storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
   };
 }
 

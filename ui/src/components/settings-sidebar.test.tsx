@@ -407,6 +407,23 @@ describe("settings sidebar search", () => {
         container.querySelector<HTMLElement>("openclaw-settings-save-indicator"),
       ).not.toBeNull();
 
+      for (const kind of [
+        "connecting",
+        "starting",
+        "restarting",
+        "suspending",
+        "reconnecting",
+        "restoring",
+      ] as const) {
+        renderSidebar(kind);
+        expect(
+          container.querySelector(".gateway-status__icon .session-run-spinner"),
+        ).not.toBeNull();
+        expect(container.querySelector(".gateway-status__retry")).toBeNull();
+      }
+      renderSidebar("reload-required");
+      expect(container.querySelector(".gateway-status__icon .session-run-spinner")).toBeNull();
+
       renderSidebar("suspended", "connection refused?token=settings-secret");
       const suspended = container.querySelector<HTMLElement>(".gateway-status--suspended");
       expect(suspended?.textContent).toContain(t("connection.suspended"));

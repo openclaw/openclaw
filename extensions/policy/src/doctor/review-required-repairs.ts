@@ -28,14 +28,7 @@ export function previewPolicyReviewRequiredRepair(
       changes: [],
     });
   }
-  if (
-    findings.length === 0 ||
-    findings.some(
-      (finding) =>
-        finding.checkId !== checkId ||
-        POLICY_FIX_METADATA_BY_CHECK_ID.get(finding.checkId)?.fixClass !== "reviewRequired",
-    )
-  ) {
+  if (findings.length === 0 || findings.some((finding) => finding.checkId !== checkId)) {
     return Promise.resolve({
       status: "skipped",
       reason: "policy finding is not classified as review-required",

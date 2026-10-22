@@ -35,38 +35,6 @@ async function runSystemAgentEntry(
   );
 }
 
-async function runOnboardingEntry(
-  options: Record<string, unknown>,
-  commandRuntime: Command,
-  runtime: RuntimeEnv,
-): Promise<void> {
-  if (options.baseline) {
-    const unsupportedOptions = listExplicitOptionFlagsExcept(commandRuntime, BASELINE_OPTION_NAMES);
-    if (unsupportedOptions.length > 0) {
-      const { rejectOnboardingOption } = await import("../../commands/onboard-options.js");
-      const message = `--baseline cannot be combined with: ${unsupportedOptions.join(", ")}.`;
-      rejectOnboardingOption({ json: options.json === true }, runtime, message);
-      return;
-    }
-    const { setupCommand } = await import("../../commands/setup.js");
-    await setupCommand(
-      {
-        workspace: readStringValue(options.workspace),
-        skipBootstrap: options.skipBootstrap === true,
-        json: Boolean(options.json),
-      },
-      runtime,
-    );
-    return;
-  }
-  const onboardingOptions = await resolveOnboardCommandOptions(options, commandRuntime, runtime);
-  if (!onboardingOptions) {
-    return;
-  }
-  const { setupWizardCommand } = await import("../../commands/onboard.js");
-  await setupWizardCommand(onboardingOptions, runtime);
-}
-
 function addSystemAgentOptions(command: Command): Command {
   return command
     .option("-m, --message <text>", "Run one OpenClaw request")
@@ -136,7 +104,38 @@ export function registerSetupCommand(program: Command): void {
         await runSystemAgentEntry(options, defaultRuntime);
         return;
       }
-      await runOnboardingEntry(options, commandRuntime, defaultRuntime);
+      if (options.baseline) {
+        const unsupportedOptions = listExplicitOptionFlagsExcept(
+          commandRuntime,
+          BASELINE_OPTION_NAMES,
+        );
+        if (unsupportedOptions.length > 0) {
+          const { rejectOnboardingOption } = await import("../../commands/onboard-options.js");
+          const message = `--baseline cannot be combined with: ${unsupportedOptions.join(", ")}.`;
+          rejectOnboardingOption({ json: options.json === true }, defaultRuntime, message);
+          return;
+        }
+        const { setupCommand } = await import("../../commands/setup.js");
+        await setupCommand(
+          {
+            workspace: readStringValue(options.workspace),
+            skipBootstrap: options.skipBootstrap === true,
+            json: Boolean(options.json),
+          },
+          defaultRuntime,
+        );
+        return;
+      }
+      const onboardingOptions = await resolveOnboardCommandOptions(
+        options,
+        commandRuntime,
+        defaultRuntime,
+      );
+      if (!onboardingOptions) {
+        return;
+      }
+      const { setupWizardCommand } = await import("../../commands/onboard.js");
+      await setupWizardCommand(onboardingOptions, defaultRuntime);
     });
   });
 

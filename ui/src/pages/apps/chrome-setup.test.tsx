@@ -125,6 +125,32 @@ describe("Apps local Chrome setup", () => {
       "https://docs.openclaw.ai/tools/chrome-extension",
     ]);
   });
+  it("blocks duplicate setup while pending and recovers after a rejected request", async () => {
+    const pending = createDeferred<unknown>();
+    const retry = createDeferred<unknown>();
+    const post = vi.fn().mockReturnValueOnce(pending.promise).mockReturnValueOnce(retry.promise);
+    bridge(post);
+    const { setup } = await mount();
+    click(setup, labels.inspect);
+    click(setup, labels.inspect);
+    expect(post).toHaveBeenCalledExactlyOnceWith({ action: "inspect" });
+    flush();
+    expect([...setup.querySelectorAll("button")].every((button) => button.disabled)).toBe(true);
+    expect(setup.textContent).toContain("Working on this device…");
+
+    pending.reject(new Error("Native setup unavailable"));
+    await expectText(setup, "Setup could not finish");
+    await idle(setup);
+    click(setup, labels.verify);
+    flush();
+    expect(setup.textContent).toContain("Working on this device…");
+    expect(setup.textContent).not.toContain("Setup could not finish");
+    expect([...setup.querySelectorAll("button")].every((button) => button.disabled)).toBe(true);
+    retry.resolve(result(connected));
+    await expectText(setup, "Extension connected on this device.");
+    await idle(setup);
+    expect(setup.textContent).not.toContain("Setup could not finish");
+  });
   it.each([
     { label: "legacy", actions: undefined, buttons: [labels.install] },
     { label: "none", actions: [], buttons: [] },

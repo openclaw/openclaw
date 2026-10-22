@@ -265,7 +265,7 @@ export async function admitUpdateCommandRun(params: {
     originalRecoveryCapture:
       params.initialization?.originalRecoveryCapture ?? params.opts.run?.originalRecoveryCapture,
     defaultStepTimeoutMs: record.trigger === "campaign" ? AUTO_UPDATE_STEP_TIMEOUT_MS : undefined,
-    env,
+    ...ledgerOptions,
     ...(record.trigger !== "cli" &&
     meta?.runId === record.runId &&
     meta.completionOwner === "gateway-restart"
@@ -324,12 +324,12 @@ export function createUpdateRunProgress(
     pendingSteps,
     onRollbackOutcome: (rollbackOutcome) => {
       if (!deferred) {
-        recordUpdateRunVerification(run.runId, { rollbackOutcome }, { env: run.env });
+        recordUpdateRunVerification(run.runId, { rollbackOutcome }, run);
       }
     },
     onHeartbeat() {
       if (!deferred) {
-        heartbeatUpdateRun(run.runId, driver, { env: run.env });
+        heartbeatUpdateRun(run.runId, driver, run);
       }
     },
     deferLedgerWrites() {
@@ -419,7 +419,7 @@ export function completeUpdateCommandRun(
   if (recoveries.some(({ record }) => isUpdateRecoveryPending(record))) {
     return { ...result, status: "error", reason: "update-recovery-pending", runId: run.runId };
   }
-  const recordOptions = { env: run.env, redactPaths: result.root ? [result.root] : [] };
+  const recordOptions = { ...run, redactPaths: result.root ? [result.root] : [] };
   // Both finalization and outer CLI unwind come here. A verified restored generation
   // stays with its helper until native recovery finishes; neither caller may close it early.
   const helperRecoveryPending =

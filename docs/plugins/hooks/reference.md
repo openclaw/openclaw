@@ -130,7 +130,7 @@ contracts above; a modifying hook is not an observation hook.
 | `before_agent_reply`            | Claim   | Short-circuit the model turn with a synthetic reply or silence                                                                  |
 | `before_agent_finalize`         | Modify  | Inspect the natural final answer and request one more model pass                                                                |
 | `agent_end`                     | Observe | Observe final messages, success state, and run duration                                                                         |
-| `heartbeat_prompt_contribution` | Modify  | Add heartbeat-only context for background monitor and lifecycle plugins                                                         |
+| `heartbeat_prompt_contribution` | Modify  | Add context for receipt-owned proactive automation jobs; retains its historical public name                                     |
 
 **Conversation observation**
 
@@ -170,14 +170,11 @@ original prompt in transcript, use `before_agent_run` on a supported runner.
 To short-circuit an agent turn with a synthetic reply or silence, use
 `before_agent_reply`.
 
-For heartbeat turns, `before_agent_reply` receives
-`ctx.heartbeatEventQueueSessionKey` when the host knows the underlying
-system-event queue. This can differ from `ctx.sessionKey` for an isolated
-heartbeat run. Use the supplied key for event lookup; do not derive a base
-session by removing a `:heartbeat` suffix because a configured session can be
-named `heartbeat`. The field is optional for older hosts. Without it, plugins
-can inspect only `ctx.sessionKey`; they cannot infer an isolated run's base
-queue. The field identifies an existing queue and grants no additional access.
+The retired `heartbeatEventQueueSessionKey` context field is no longer supplied.
+Use the admitted `ctx.sessionKey`; do not infer another session by stripping a
+`:heartbeat` suffix. Historical session names and the public `heartbeat`
+trigger value remain recognizable, but do not select a separate executor or
+grant additional access.
 
 <a id="sessions-and-compaction" />
 

@@ -14,7 +14,7 @@ import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.tes
 import { boardStore } from "../board-store.js";
 import { progressCardStore } from "../progress-card-store.js";
 import { createBoardHarness } from "./board.test-support.js";
-import { createProgressCardHandlers } from "./progress-card.js";
+import { progressCardHandlers } from "./progress-card.js";
 import { sessionDeleteHandlers } from "./sessions-delete.js";
 
 const review = vi.hoisted(() => vi.fn());
@@ -170,7 +170,7 @@ it.each([
 it("returns explicit absence without opening Board, progress, or deletion sources", async () => {
   const sessionKey = "agent:absent:dashboard:incognito-missing";
   const harness = privateBoard(sessionKey);
-  Object.assign(harness.handlers, createProgressCardHandlers(), sessionDeleteHandlers);
+  Object.assign(harness.handlers, progressCardHandlers, sessionDeleteHandlers);
   const sql = observeMainThreadSql();
   onTestFinished(() => sql.restore());
   expect(await harness.rpc("board.get")).toMatchObject([true, { revision: 0, widgets: [] }]);

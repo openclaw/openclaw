@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { resolveAgentWorkspaceDir, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   createConfigIO,
@@ -8,6 +9,7 @@ import { maybeLoadDotEnvForConfig } from "../config/io.runtime-env.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { loadPinnedRuntimeConfigAsync } from "../config/runtime-snapshot.js";
 import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
+import { validateConfigObjectWithPlugins } from "../config/validation.js";
 import { configValidationIssuesToHealthFindings } from "../flows/doctor-config-validation-findings.js";
 import { scrubDoctorErrorMessage } from "../flows/doctor-error-message.js";
 import type { DoctorHealthCheckContext } from "../flows/doctor-health-contribution-types.js";
@@ -44,6 +46,10 @@ import {
   withArtifactPreservingStateReads,
   withOpenClawStateDatabaseReadSnapshot,
 } from "../state/openclaw-state-db-readonly.js";
+import {
+  resolveLegacyHeartbeatAgents,
+  tryProjectRetiredHeartbeatConfig,
+} from "./doctor-heartbeat-legacy.js";
 import type { DoctorLintCliOptions } from "./doctor-lint-options.js";
 import {
   createDeferredInspectionExecution,
@@ -330,7 +336,25 @@ async function executeDoctorLint(
   stateView: DoctorLintStateView,
 ): Promise<DoctorLintExecution> {
   const snapshot = await stateView.readConfigSnapshot();
-  if (snapshot.exists && !snapshot.valid) {
+  const projectedHeartbeatConfig =
+    snapshot.exists && !snapshot.valid
+      ? tryProjectRetiredHeartbeatConfig(snapshot.sourceConfig)
+      : undefined;
+  const admittedHeartbeatConfig =
+    projectedHeartbeatConfig &&
+    (resolveLegacyHeartbeatAgents(snapshot.sourceConfig).some(
+      (agent) => agent.heartbeat !== undefined,
+    ) ||
+      !isDeepStrictEqual(snapshot.sourceConfig.channels, projectedHeartbeatConfig.channels))
+      ? projectedHeartbeatConfig
+      : undefined;
+  const projectedHeartbeatValidation = admittedHeartbeatConfig
+    ? validateConfigObjectWithPlugins(admittedHeartbeatConfig, {
+        env: stateView.pluginMetadataEnv,
+        sourceRaw: admittedHeartbeatConfig,
+      })
+    : undefined;
+  if (snapshot.exists && !snapshot.valid && !projectedHeartbeatValidation?.ok) {
     const { collectNodeRuntimeFindings } = await import("./node-runtime-diagnostics.js");
     const runtimeFindings = await collectNodeRuntimeFindings(stateView.sourceEnv);
     const findings = [
@@ -374,8 +398,21 @@ async function executeDoctorLint(
     };
   }
 
-  await loadPinnedRuntimeConfigAsync(async () => ({ config: snapshot.config }));
-  const cfg = captureRuntimeConfig(snapshot.config);
+  const admittedConfig = projectedHeartbeatValidation?.ok
+    ? projectedHeartbeatValidation.config
+    : snapshot.config;
+  const lintConfigSnapshot = projectedHeartbeatValidation?.ok
+    ? {
+        exists: snapshot.exists,
+        issues: [],
+        warnings: projectedHeartbeatValidation.warnings,
+      }
+    : snapshot;
+  const legacyHeartbeatConfig = projectedHeartbeatValidation?.ok
+    ? snapshot.sourceConfig
+    : undefined;
+  await loadPinnedRuntimeConfigAsync(async () => ({ config: admittedConfig }));
+  const cfg = captureRuntimeConfig(admittedConfig);
   const sourceEnv = { ...stateView.sourceEnv };
   const defaultAgentId = tryResolveDefaultAgentId(cfg);
   const ctx: HealthCheckContext = {
@@ -417,7 +454,7 @@ async function executeDoctorLint(
   const coreCtx = {
     ...ctx,
     env: opts.updateReadiness ? stateView.pluginMetadataEnv : sourceEnv,
-    lintConfigSnapshot: snapshot,
+    lintConfigSnapshot,
     deep: opts.deep === true,
     runWithPrivateStateSnapshot,
     runWithSourceState,
@@ -426,7 +463,15 @@ async function executeDoctorLint(
 
   const checks: HealthCheck[] = [
     stateSchemaHealthCheck,
-    ...coreChecks.map((check) => withCoreLintContext(check, coreCtx, availabilityFindings)),
+    ...coreChecks.map((check) =>
+      withCoreLintContext(
+        check,
+        legacyHeartbeatConfig && check.id === HEARTBEAT_CADENCE_CHECK_ID
+          ? { ...coreCtx, cfg: legacyHeartbeatConfig }
+          : coreCtx,
+        availabilityFindings,
+      ),
+    ),
     ...extensionChecks,
   ];
   const runOpts: DoctorLintRunOptions = {

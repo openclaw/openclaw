@@ -503,6 +503,9 @@ function createSharedStateWorkerBackend(
       updateRunWriter?.assertSettled();
       if (nativeDatabase) {
         assertTransactionUsable(nativeDatabase.db);
+        if (!nativeDatabase.db.isOpen && isPostgresSqlConnection(nativeDatabase.db)) {
+          throw new Error("Shared-state worker retained a closed PostgreSQL connection");
+        }
         if (nativeDatabase.db.isOpen && nativeDatabase.db.isTransaction) {
           throw new Error("Shared-state worker retained an unsettled transaction");
         }

@@ -30,15 +30,10 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {
-    try {
-      closeOpenClawAgentDatabasesForTest();
-    } finally {
-      try {
-        closeOpenClawStateDatabaseForTest();
-      } finally {
-        cleanup();
-      }
-    }
+    using teardown = new DisposableStack();
+    teardown.defer(cleanup);
+    teardown.defer(closeOpenClawStateDatabaseForTest);
+    teardown.defer(closeOpenClawAgentDatabasesForTest);
   });
 });
 
@@ -101,8 +96,8 @@ it("reports an uncleared quarantine row instead of claiming repair success", () 
 
   const before = f.row(agentPath);
   expect(before).toMatchObject({ kind: "agent", reason: "corrupt index" });
-  const quarantine = openDatabase(f.storePath);
-  try {
+  {
+    using quarantine = openDatabase(f.storePath);
     // chmod cannot refuse writes from root; fail the real SQLite writes instead.
     quarantine.exec(`
         CREATE TRIGGER refuse_quarantine_clear BEFORE DELETE ON quarantined_databases
@@ -114,8 +109,6 @@ it("reports an uncleared quarantine row instead of claiming repair success", () 
     expect(f.row(agentPath)).toEqual(before);
     expect(f.agent).toThrow(damage);
     quarantine.exec("DROP TRIGGER refuse_quarantine_clear;");
-  } finally {
-    quarantine.close();
   }
   expect(clearOpenClawAgentDatabaseOpenFailure(agentPath, { env: f.env })).toBe(true);
   expect(f.row(agentPath)).toBeUndefined();

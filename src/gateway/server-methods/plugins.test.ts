@@ -2,7 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Compile } from "typebox/compile";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PluginsListResultSchema } from "../../../packages/gateway-protocol/src/schema/plugins.js";
-import { encodePluginDiscoveryId } from "../../plugins/catalog-discovery.js";
+import { pluginCatalogId } from "../../plugins/catalog-discovery.js";
 import { emptyInstalledPluginComponents } from "../../plugins/installed-plugin-components.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
@@ -601,7 +601,7 @@ vi.mock("../../infra/clawhub-plugin-skills.js", () => ({
 describe("plugin skill read Gateway boundary", () => {
   const catalogSkill = {
     source: "catalog",
-    catalogId: encodePluginDiscoveryId("@example/plugin"),
+    catalogId: pluginCatalogId({ id: "example", clawhubPackage: "@example/plugin" }),
     version: "1.0.0",
     skillName: "guide",
   };

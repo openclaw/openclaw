@@ -5,7 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createTestAdmittedRunContext } from "../agents/admitted-run-context.test-support.js";
 import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
-import { resolveExecTarget } from "../agents/bash-tools.exec-runtime.js";
+import { resolveExecTarget } from "../agents/bash-tools.exec-target.js";
 import * as pluginTools from "../agents/openclaw-plugin-tools.js";
 import { resolveScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
@@ -149,7 +149,6 @@ it.each(["inherited", "finite", "schema-filtered", "denied", "excluded"] as cons
       defaultAgentId: "main",
       log: createNoopLogger(),
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
     const context = createDirectChatContext({

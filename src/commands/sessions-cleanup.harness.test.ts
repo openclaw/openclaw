@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
+import * as sessions from "../config/sessions.js";
 import {
   appendTranscriptMessageSync,
   loadSessionEntry,
@@ -23,7 +24,9 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { cleanupSummary } from "./sessions-cleanup-summary.test-support.js";
 import { sessionsCleanupCommand } from "./sessions-cleanup.js";
+import { runLocalSessionsCleanup } from "./sessions-cleanup.runtime.js";
 
 const OWNER_PLUGIN_ID = "cleanup-owner";
 const HARNESS_ID = "cleanup-runtime";
@@ -142,6 +145,52 @@ afterEach(() => {
 });
 
 afterAll(cleanupPluginLoaderFixturesForTest);
+
+it("keeps prior store summaries when a later target returns a failure", async () => {
+  await withOpenClawTestState(
+    {
+      label: "cleanup-partial",
+      env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", OPENCLAW_BUNDLED_PLUGINS_DIR: undefined },
+    },
+    async (state) => {
+      const target = (agentId: string) => ({
+        agentId,
+        storePath: state.statePath(`agents/${agentId}/sessions/sessions.json`),
+      });
+      const mainSummary = cleanupSummary({
+        mode: "enforce",
+        dryRun: false,
+        beforeCount: 1,
+        missing: 1,
+        wouldMutate: true,
+        applied: true,
+        appliedCount: 0,
+      });
+      const run = vi
+        .spyOn(sessions, "runSessionsCleanup")
+        .mockResolvedValueOnce({
+          mode: "enforce",
+          previewResults: [],
+          appliedSummaries: [mainSummary],
+        })
+        .mockRejectedValueOnce(new Error("injected later-store failure"));
+      const result = await runLocalSessionsCleanup(
+        {
+          cfg: { plugins: { enabled: false } },
+          opts: { enforce: true },
+          targets: [target("main"), target("work")],
+        },
+        createNonExitingRuntime(),
+      );
+      expect(result.appliedSummaries).toEqual([mainSummary]);
+      expect(run.mock.calls.map(([params]) => params.reclamationMode)).toEqual([
+        "in-process",
+        "in-process",
+      ]);
+      expect(result.failure).toMatchObject({ target: target("work"), lifecycleCommitted: false });
+    },
+  );
+});
 
 it("refuses an owned store, permits preview, and cleans only after exclusive admission", async () => {
   await withOpenClawTestState({ label: "cleanup-maintenance-owner" }, async (state) => {

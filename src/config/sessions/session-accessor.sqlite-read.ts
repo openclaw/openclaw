@@ -315,7 +315,6 @@ export function readTranscriptExportSnapshotsFromDatabase(
               : transcriptEventJsonSql(database.db)
             ).as("event_json"),
           ])
-          .where("session_id", "in", [...bySession.keys()])
           .where((eb) =>
             eb.or(
               batch.map(({ request, throughSeq, afterSeq }) =>

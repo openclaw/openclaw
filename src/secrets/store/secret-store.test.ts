@@ -73,10 +73,10 @@ function remove(name: string) {
   return deleteSecretStoreEntry({ scope: team, name, database });
 }
 function readHidden(name: string) {
-  return readHiddenGitHubSecretRecord({ name, database });
+  return readHiddenGitHubSecretRecord({ name });
 }
 function removeHidden(name: string) {
-  return deleteHiddenGitHubSecretRecord({ name, database });
+  return deleteHiddenGitHubSecretRecord({ name });
 }
 function writeHidden(name: string, value: string, updatedBy?: string | null) {
   return writeHiddenGitHubSecretRecord({ name, value, updatedBy, database });
@@ -129,7 +129,9 @@ function rawWriter(now: number) {
 function createDatabaseOptions() {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-secret-store-")));
   roots.push(root);
-  return { path: path.join(root, "state.sqlite") };
+  fs.mkdirSync(path.join(root, "state"));
+  vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  return { path: path.join(root, "state", "openclaw.sqlite") };
 }
 
 function countStoredRows(name: string): number {
@@ -206,16 +208,15 @@ describe("secret store", () => {
       vi.useFakeTimers();
       vi.setSystemTime(now - ageMs);
       await write(name, "temporary-value", { kind, allowedHosts });
-      const consumption = consumeGitHubSetupHandoff({ name, nowMs: now, database });
-      const duplicate = accepted
-        ? consumeGitHubSetupHandoff({ name, nowMs: now, database })
-        : undefined;
+      vi.setSystemTime(now);
+      const consumption = consumeGitHubSetupHandoff({ name });
+      const duplicate = accepted ? consumeGitHubSetupHandoff({ name }) : undefined;
       expect(await consumption).toBe(accepted ? "temporary-value" : undefined);
       if (accepted) {
         expect(await duplicate).toBeUndefined();
         expect(countStoredRows(name)).toBe(0);
         await write("DEPLOY_TOKEN", "unrelated-value");
-        expect(await consumeGitHubSetupHandoff({ name: "DEPLOY_TOKEN", database })).toBeUndefined();
+        expect(await consumeGitHubSetupHandoff({ name: "DEPLOY_TOKEN" })).toBeUndefined();
         expect(await read("DEPLOY_TOKEN")).toEqual({ ok: true, value: "unrelated-value" });
       }
     },
@@ -340,10 +341,10 @@ describe("secret store", () => {
     await writeHidden(oauthName, "oauth-value", "test");
     await write("UNRELATED_SECRET", "keep-value");
 
-    expect(await listHiddenGitHubSecretRecords({ prefix: "github-device", database })).toEqual([
+    expect(await listHiddenGitHubSecretRecords({ prefix: "github-device" })).toEqual([
       { name: deviceName, value: "device-value" },
     ]);
-    expect(await listHiddenGitHubSecretRecords({ prefix: "github-oauth", database })).toEqual([
+    expect(await listHiddenGitHubSecretRecords({ prefix: "github-oauth" })).toEqual([
       { name: oauthName, value: "oauth-value" },
     ]);
     expect(await readHidden(deviceName)).toBe("device-value");
@@ -399,9 +400,7 @@ describe("secret store", () => {
       for (let index = 0; index < 64; index++) {
         insert({ name: `UNRELATED_${index}`, value: `synthetic-unrelated:${prefix}:${index}` });
       }
-      expect(
-        (await listHiddenGitHubSecretRecords({ prefix, database })).map(({ name }) => name),
-      ).toEqual(
+      expect((await listHiddenGitHubSecretRecords({ prefix })).map(({ name }) => name)).toEqual(
         fixtures
           .filter((entry) => entry.accept)
           .map((entry) => entry.name)

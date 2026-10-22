@@ -87,7 +87,7 @@ async function setup() {
     ]),
     auth: { role: "operator", scopes: ["operator.admin"], recoveryScope: "offline-owner" },
   };
-  client.opts.onHello?.(hello);
+  client.testOptions.onHello?.(hello);
   await store.gateway.loadSelfProfile();
   const sessions = createTestSessionCapability(store.gateway);
   assert(store.gateway.snapshot.client);
@@ -148,8 +148,8 @@ async function setup() {
     draw,
     writes,
     disconnect: () =>
-      client.opts.onClose?.({ code: 1006, reason: "network lost", willRetry: true }),
-    reconnect: () => client.opts.onHello?.(hello),
+      client.testOptions.onClose?.({ code: 1006, reason: "network lost", willRetry: true }),
+    reconnect: () => client.testOptions.onHello?.(hello),
   };
 }
 
@@ -170,7 +170,7 @@ it.each(["identity change", "retirement", "stop"] as const)(
     if (retirement === "identity change") {
       h.gateway.connect({ token: "synthetic-other-identity" });
     } else if (retirement === "retirement") {
-      Object.assign(h.current(), { offlineRecoveryRetired: true });
+      Object.defineProperty(h.current(), "offlineRecoveryRetired", { value: true });
       h.disconnect();
     } else {
       h.gateway.stop();

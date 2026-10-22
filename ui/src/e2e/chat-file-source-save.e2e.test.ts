@@ -6,6 +6,7 @@ import {
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { selectFileAction } from "./chat-file-actions.test-support.ts";
 import { chatMessage } from "./chat-flow.test-support.ts";
 import { exactButton, polledText } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -85,7 +86,7 @@ suite.define(() => {
         await link.click();
         const file = page.locator(".sidebar-file-view");
         const editor = file.locator(".cm-content");
-        await exactButton(file, "Edit file").click();
+        await selectFileAction(file, "Edit file");
         await editor.fill(draft);
         workspaceId = "workspace-b";
         await page.evaluate(() => {
@@ -117,11 +118,16 @@ suite.define(() => {
         expect(await exactButton(file, "Save").isDisabled()).toBe(false);
         expect(await file.getByRole("button", { name: "Overwrite", exact: true }).count()).toBe(0);
 
-        await exactButton(page, "Close tab: notes.md").click();
+        await gateway.emitGatewayEvent("sessions.changed", {
+          sessionKey,
+          agentId: "main",
+          reason: "project",
+        });
+        await file.waitFor({ state: "hidden" });
         await link.click();
+        await selectFileAction(file, "Edit file");
         await polledText(editor).toContain("Original project notes.");
         expect(await editor.textContent()).not.toContain("Unsaved work from workspace A.");
-        await exactButton(file, "Edit file").click();
         await editor.fill("Fresh edit in workspace B.\n");
         await exactButton(file, "Save").click();
         await expect.poll(() => saves).toBe(1);

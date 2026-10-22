@@ -11,7 +11,10 @@ import type { ChatHistoryBoundaryProps } from "./chat-history-boundary.tsx";
 import type { ChatMessageEntryAnimations } from "./chat-message-entry.ts";
 import type { TranscriptAnnouncement } from "./chat-transcript-announcement.ts";
 import { readConnectedTranscriptRows } from "./chat-transcript-geometry.ts";
-import type { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
+import type {
+  ComposerActivityLayout,
+  TranscriptLayoutOwner,
+} from "./chat-transcript-layout-owner.ts";
 import type { TranscriptContent, TranscriptRow } from "./chat-transcript-layout.ts";
 import type { TranscriptMessageElements } from "./chat-transcript-message-elements.ts";
 
@@ -27,6 +30,8 @@ export type ChatTranscriptPendingScrollOffset = {
 export type TranscriptCallbacks = {
   /** Sidebar commits originate on the pane element, separate from its state owner. */
   geometryEventTarget?: HTMLElement;
+  getComposerFloat?: () => HTMLElement | null;
+  getComposerActivityLayout?: () => ComposerActivityLayout | null;
   onViewportResize?: () => void;
   onReaderScroll?: (towardEnd?: boolean) => void;
   /** The pane owns reader intent; geometry-only follow must honor that policy. */

@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { selectFileAction } from "./chat-file-actions.test-support.ts";
 import {
   newChatPage,
   copiedViaExec,
@@ -674,6 +675,16 @@ suite.define(() => {
     const gateway = await installMockGateway(page, {
       methodResponses: {
         "artifacts.list": { artifacts: [] },
+        "sessions.files.get": {
+          root: "/workspace",
+          file: {
+            name: "AGENTS.md",
+            path: "/workspace/AGENTS.md",
+            previewKind: "text",
+            contentEncoding: "utf8",
+            content: "# Workspace instructions",
+          },
+        },
         "sessions.files.list": {
           browser: { entries: [], path: "" },
           files: [
@@ -693,14 +704,20 @@ suite.define(() => {
 
     await page.goto(`${suite.server.baseUrl}chat`);
     await openChatSidePanelType(page, "Files");
-    await page.locator(".chat-workspace-rail__file-name", { hasText: "AGENTS.md" }).waitFor({
-      timeout: 10_000,
-    });
-
-    await page.getByRole("button", { name: "Copy path" }).click();
+    await page
+      .locator(".workspace-desktop")
+      .getByRole("button", {
+        name: "/workspace/AGENTS.md",
+        exact: true,
+      })
+      .click();
+    const panel = page.locator("openclaw-chat-detail-panel:visible");
+    await panel.locator(".sidebar-file-view").waitFor();
+    await selectFileAction(panel, "Copy path");
 
     expect(await copiedViaExec(page)).toContain("/workspace/AGENTS.md");
     expect(await gateway.getRequests("sessions.files.list")).toHaveLength(1);
+    expect(await gateway.getRequests("sessions.files.get")).toHaveLength(1);
     expect(await gateway.getRequests("chat.send")).toHaveLength(0);
   });
 });

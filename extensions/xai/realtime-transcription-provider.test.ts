@@ -1,4 +1,3 @@
-import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginCapabilityCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
@@ -43,12 +42,6 @@ const transcript = (text: string, final = false) => ({
   speech_final: final,
 });
 
-function completed(register: (done: () => void) => void) {
-  return new Promise<void>((resolve) => {
-    register(resolve);
-  });
-}
-
 afterEach(async () => {
   await cleanup?.();
   cleanup = undefined;
@@ -62,51 +55,51 @@ async function createRealtimeSttServer(params?: {
   initialEvent?: unknown;
   transcriptionEvents?: readonly Record<string, unknown>[];
 }) {
-  const server = createServer();
-  const wss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024 * 1024 });
+  const wss = new WebSocketServer({ port: 0, host: "127.0.0.1", maxPayload: 16 * 1024 * 1024 });
   const requests: Array<{ url: URL; headers: import("node:http").IncomingHttpHeaders }> = [];
   const binaryFrames: Buffer[] = [];
   const completion = createDeferred<void>();
 
-  server.on("upgrade", (request, socket, head) => {
+  wss.on("connection", (ws, request) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
     requests.push({ url, headers: request.headers });
-    wss.handleUpgrade(request, socket, head, (ws) => {
-      ws.send(JSON.stringify(params?.initialEvent ?? { type: "transcript.created" }));
-      ws.on("message", (data, isBinary) => {
-        const buffer = Array.isArray(data)
-          ? Buffer.concat(data)
-          : data instanceof ArrayBuffer
-            ? Buffer.from(data)
-            : data;
-        if (isBinary) {
-          binaryFrames.push(buffer);
-          const events = params?.transcriptionEvents ?? [
-            transcript("hello openclaw"),
-            transcript("hello openclaw final", true),
-          ];
-          for (const event of events) {
-            ws.send(JSON.stringify(event));
-          }
-          return;
+    ws.send(JSON.stringify(params?.initialEvent ?? { type: "transcript.created" }));
+    ws.on("message", (data, isBinary) => {
+      const buffer = Array.isArray(data)
+        ? Buffer.concat(data)
+        : data instanceof ArrayBuffer
+          ? Buffer.from(data)
+          : data;
+      if (isBinary) {
+        binaryFrames.push(buffer);
+        const events = params?.transcriptionEvents ?? [
+          transcript("hello openclaw"),
+          transcript("hello openclaw final", true),
+        ];
+        for (const event of events) {
+          ws.send(JSON.stringify(event));
         }
-        const event = JSON.parse(buffer.toString()) as { type?: string };
-        if (event.type === "audio.done") {
-          ws.send(JSON.stringify({ type: "transcript.done", text: "hello openclaw final" }));
-          completion.resolve();
-        }
-      });
+        return;
+      }
+      const event = JSON.parse(buffer.toString()) as { type?: string };
+      if (event.type === "audio.done") {
+        ws.send(JSON.stringify({ type: "transcript.done", text: "hello openclaw final" }));
+        completion.resolve();
+      }
     });
   });
 
-  await completed((done) => server.listen(0, "127.0.0.1", done));
-  const port = (server.address() as AddressInfo).port;
+  await new Promise<void>((resolve) => {
+    wss.once("listening", resolve);
+  });
+  const port = (wss.address() as AddressInfo).port;
   cleanup = async () => {
     for (const ws of wss.clients) {
       ws.terminate();
     }
-    await completed((done) => wss.close(done));
-    await completed((done) => server.close(done));
+    await new Promise<void>((resolve) => {
+      wss.close(() => resolve());
+    });
   };
   return {
     baseUrl: `http://127.0.0.1:${port}/v1`,

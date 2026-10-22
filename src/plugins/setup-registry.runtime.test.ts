@@ -96,7 +96,7 @@ describe("setup-registry descriptor lookup", () => {
       await using cache = createPluginCache();
       setTestEnvValue("OPENCLAW_STATE_DIR", strictRoot);
       const compatEnv = { ...process.env, OPENCLAW_STATE_DIR: compatRoot };
-      const strictEnv = { ...process.env };
+      const strictEnv = { ...process.env, OPENCLAW_STATE_DIR: strictRoot };
       writeConfigMachineState("plugins.bundledDiscovery", "compat", { env: compatEnv });
       writeConfigMachineState("plugins.bundledDiscovery", "allowlist", { env: strictEnv });
       clearBundledDiscoveryModeMemo();
@@ -123,8 +123,9 @@ describe("setup-registry descriptor lookup", () => {
         using sql = scoped(observeMainThreadSql());
         sql.calibrate();
         for (const env of [compatEnv, strictEnv, compatEnv]) {
+          setTestEnvValue("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
           const enabled = env === compatEnv;
-          const params = { config, env, metadataSnapshot: snapshot };
+          const params = { config, metadataSnapshot: snapshot };
           expect(descriptor({ ...params, backend: "scope-cli" })).toEqual(
             enabled ? { pluginId: "bundled-cli-owner", backend: { id: "scope-cli" } } : undefined,
           );

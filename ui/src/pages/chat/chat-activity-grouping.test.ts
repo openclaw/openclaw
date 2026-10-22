@@ -2,24 +2,14 @@
 import assert from "node:assert/strict";
 import { describe, expect, it } from "vitest";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
-import { coalesceActivityRuns, groupMessages } from "./chat-thread-grouping.ts";
+import { message as chatMessage } from "./chat-thread-fixtures.test-support.ts";
+import { groupMessages } from "./chat-thread-grouping.ts";
+import { coalesceActivityRuns } from "./chat-turn-presentation.ts";
 
 function preparedGroup(message: unknown, key: string): MessageGroup {
   const [group] = groupMessages([{ kind: "message", key, message }], {}, undefined, true);
   assert(group?.kind === "group", "expected a prepared message group");
   return group;
-}
-
-function assistantMessage(
-  content: unknown,
-  timestamp: number,
-  overrides: Record<string, unknown> = {},
-) {
-  return { role: "assistant", content, timestamp, ...overrides };
-}
-
-function userMessage(content: string, timestamp: number, overrides: Record<string, unknown> = {}) {
-  return { role: "user", content, timestamp, ...overrides };
 }
 
 describe("coalesceActivityRuns", () => {
@@ -59,7 +49,7 @@ describe("coalesceActivityRuns", () => {
               ];
               return Object.assign(
                 preparedGroup(
-                  assistantMessage(content, 1_000 * index, { runId: `hb-run-${index}` }),
+                  chatMessage("assistant", content, 1_000 * index, { runId: `hb-run-${index}` }),
                   `hb-${index}`,
                 ),
                 {
@@ -74,7 +64,7 @@ describe("coalesceActivityRuns", () => {
               );
             });
       const prompt = preparedGroup(
-        userMessage("Start", 500, { __openclaw: { idempotencyKey: "run-1:user" } }),
+        chatMessage("user", "Start", 500, { __openclaw: { idempotencyKey: "run-1:user" } }),
         "prompt",
       );
       const initial = coalesceActivityRuns([prompt, ...groups.slice(0, 2)]);
@@ -124,7 +114,7 @@ describe("coalesceActivityRuns", () => {
       content: "Message from the parent session.",
       provenance: { kind: "inter_session", sourceTool: "sessions_send" },
     },
-  ])("keeps $name between activity logs", ({ name, ...message }) => {
+  ])("keeps $name between activity logs", ({ name, ...fields }) => {
     const groups = projectedToolGroups();
     const boundary =
       name === "divider"
@@ -132,7 +122,7 @@ describe("coalesceActivityRuns", () => {
         : name === "stream"
           ? { kind: "stream-run" as const, key: "stream-run:live", runId: "run-2", parts: [] }
           : preparedGroup(
-              assistantMessage(message.content, 2_000, { ...message, runId: "run-2" }),
+              chatMessage("assistant", fields.content, 2_000, { ...fields, runId: "run-2" }),
               "boundary",
             );
     const first = { ...groups[0]!, runId: "run-1" };

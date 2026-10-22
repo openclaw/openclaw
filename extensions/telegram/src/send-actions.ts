@@ -93,7 +93,7 @@ export async function sendTypingTelegram(
         );
         return { ok: true };
       },
-      (err) => isRecoverableTelegramNetworkError(err, { context: "action" }),
+      isRecoverableTelegramNetworkError,
       "internal",
     );
   } finally {
@@ -138,7 +138,7 @@ export async function reactMessageTelegram(
       }
       return { ok: true };
     },
-    (err) => isRecoverableTelegramNetworkError(err, { context: "react" }),
+    isRecoverableTelegramNetworkError,
   );
 }
 
@@ -171,7 +171,7 @@ export async function deleteMessageTelegram(
       }
       return { ok: true };
     },
-    (err) => isRecoverableTelegramNetworkError(err, { context: "delete" }),
+    isRecoverableTelegramNetworkError,
   );
 }
 

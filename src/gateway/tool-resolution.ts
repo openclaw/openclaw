@@ -9,12 +9,16 @@ import { applyToolAvailabilityDescriptions } from "../agents/agent-tools.deferre
 import { createOpenClawCodingToolsInternalAsync } from "../agents/agent-tools.js";
 import { filterToolsByMessageProvider } from "../agents/agent-tools.message-provider-policy.js";
 import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
-import { resolveTurnToolSurface } from "../agents/agent-tools.turn-authority.js";
+import {
+  isSchedulerSystemTurn,
+  resolveTurnToolSurface,
+} from "../agents/agent-tools.turn-authority.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { nodeExecSchema } from "../agents/bash-tools.schemas.js";
 import { resolveConversationQuestionInputMode } from "../agents/conversation-capability-profile.js";
 import { applyDelegationCapability } from "../agents/delegation-capability.js";
 import { prepareExecDefaults, resolvePreparedExecDefaultsAsync } from "../agents/exec-defaults.js";
+import { applyGatewayToolPolicy } from "../agents/gateway-tool-policy.js";
 import { createLazyExecTool, resolveExecToolConfig } from "../agents/lazy-exec-tool.js";
 import { createOpenClawToolsAsync } from "../agents/openclaw-tools.js";
 import { filterRequesterYieldTools } from "../agents/openclaw-tools.requester-yield.js";
@@ -442,6 +446,7 @@ export async function resolveGatewayScopedTools(
     sessionControlAuthority,
     sandboxSessionRenameOnly,
     conversationReadOrigin: params.conversationReadOrigin,
+    inputProvenance: params.inputProvenance,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     skillWorkshop: params.skillWorkshop,
     allowMediaInvokeCommands: params.allowMediaInvokeCommands,
@@ -518,7 +523,6 @@ export async function resolveGatewayScopedTools(
           inputProvenance: params.inputProvenance,
           trustedInternalHandoff: params.trustedInternalHandoff,
           trigger: params.trigger,
-          continuesConversation: params.continuesConversation,
           approvalReviewerDeviceId: params.approvalReviewerDeviceId,
           runtimeToolAllowlist: [...mediatedToolNames],
           exec: execDefaults
@@ -681,15 +685,18 @@ export async function resolveGatewayScopedTools(
     ].map(normalizeToolPolicyName),
   );
   const completeTools = (filtered: AnyAgentTool[]) =>
-    applySwarmCollectorToolContract(
-      applyDelegationCapability(
-        filtered.filter((tool) => !gatewayDenySet.has(normalizeToolPolicyName(tool.name))),
-        params.delegationCapability,
+    applyGatewayToolPolicy(
+      applySwarmCollectorToolContract(
+        applyDelegationCapability(
+          filtered.filter((tool) => !gatewayDenySet.has(normalizeToolPolicyName(tool.name))),
+          params.delegationCapability,
+        ),
+        {
+          swarmCollector: Boolean(swarmCollectorContext),
+          structuredOutputTool: openClawTools.find((tool) => tool.name === "structured_output"),
+        },
       ),
-      {
-        swarmCollector: Boolean(swarmCollectorContext),
-        structuredOutputTool: openClawTools.find((tool) => tool.name === "structured_output"),
-      },
+      params.cfg,
     );
   const turnTools = completeTools(policyFiltered);
   // Run-bound CLI catalogs share the session surface; authority only changes executors.
@@ -700,6 +707,7 @@ export async function resolveGatewayScopedTools(
           ? completeTools(filterGatewayToolPolicies(params.cfg, undefined, "session"))
           : undefined,
         ownerOnlyDenied: new Set(ownerOnlyGatewayDeny),
+        schedulerSystemTurn: isSchedulerSystemTurn(params),
       })
     : { tools: turnTools, exportedTools: turnTools };
   // The loopback exec tool is node-only. Do not let a raw `exec` capability get

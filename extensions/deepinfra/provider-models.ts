@@ -79,27 +79,6 @@ function entryToSurfaceModel(entry: DeepInfraAgentModelEntry): DeepInfraDiscover
   };
 }
 
-function bucketBySurface(models: DeepInfraDiscoveredModel[]): DeepInfraDiscoveredCatalog {
-  const catalog: DeepInfraDiscoveredCatalog = {
-    chat: [],
-    vlm: [],
-    imageGen: [],
-    videoGen: [],
-  };
-  const buckets = new Map<string, DeepInfraDiscoveredModel[]>([
-    ["chat", catalog.chat],
-    ["vlm", catalog.vlm],
-    ["image-gen", catalog.imageGen],
-    ["video-gen", catalog.videoGen],
-  ]);
-  for (const model of models) {
-    for (const tag of new Set(model.tags)) {
-      buckets.get(tag)?.push(model);
-    }
-  }
-  return catalog;
-}
-
 function chatSurfaceModelToModelDefinition(
   model: DeepInfraDiscoveredModel,
 ): Omit<ModelDefinitionConfig, "cost"> {
@@ -168,7 +147,24 @@ async function loadDeepInfraSurfaces(): Promise<DeepInfraDiscoveredCatalog> {
       if (data.length > 0 && surfaceModels.length === 0) {
         throw new Error("DeepInfra model metadata discovery unavailable.");
       }
-      return bucketBySurface(surfaceModels);
+      const catalog: DeepInfraDiscoveredCatalog = {
+        chat: [],
+        vlm: [],
+        imageGen: [],
+        videoGen: [],
+      };
+      const buckets = new Map<string, DeepInfraDiscoveredModel[]>([
+        ["chat", catalog.chat],
+        ["vlm", catalog.vlm],
+        ["image-gen", catalog.imageGen],
+        ["video-gen", catalog.videoGen],
+      ]);
+      for (const model of surfaceModels) {
+        for (const tag of new Set(model.tags)) {
+          buckets.get(tag)?.push(model);
+        }
+      }
+      return catalog;
     },
   });
 }

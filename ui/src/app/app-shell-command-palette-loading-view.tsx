@@ -26,13 +26,17 @@ export function CommandPaletteLoading(props: {
           onCompositionStart={() => props.state.handleCompositionStart()}
           onCompositionEnd={() => props.state.handleCompositionEnd()}
           onKeyDown={(event) => props.state.handleKeydown(event)}
+          onDragOver={(event) => props.state.handleDragOver(event)}
+          onDrop={(event) => props.state.handleDrop(event)}
         >
           <CommandPaletteInput
             onAutofocusRef={(element) => {
               initialInput = element;
             }}
             value={value()}
-            placeholder={t("palette.placeholder")}
+            placeholder={t(
+              props.state.hasAttachments() ? "palette.attachmentPrompt" : "palette.placeholder",
+            )}
             onInputRef={(element, previous) => props.state.inputRef(element, previous)}
             onValueChange={(nextValue, event) => props.state.captureInput(nextValue, event)}
             onPaste={(event) => props.state.handlePaste(event)}

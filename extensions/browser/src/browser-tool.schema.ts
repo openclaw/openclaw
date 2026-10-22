@@ -117,6 +117,12 @@ function createBrowserActProperties(capabilities: BrowserToolCapabilities) {
   };
 }
 
+// Legacy input repair accepts the full contract, even when this run hides a capability.
+export const BROWSER_ACT_REQUEST_KEYS = [
+  "kind",
+  ...Object.keys(createBrowserActProperties(resolveBrowserToolCapabilities())),
+];
+
 // IMPORTANT: OpenAI function tool schemas must have a top-level `type: "object"`.
 // A root-level `Type.Union([...])` compiles to `{ anyOf: [...] }` (no `type`),
 // which OpenAI rejects ("Invalid schema ... type: None"). Keep this schema an object.

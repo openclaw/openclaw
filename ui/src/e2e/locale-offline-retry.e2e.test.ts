@@ -55,6 +55,27 @@ async function reconnect(page: Page, gateway: MockGatewayControls): Promise<void
 }
 
 suite.define(() => {
+  it("updates the mounted Appearance heading when the language changes", async () => {
+    const context = await createContext();
+    const page = await context.newPage();
+    await installMockGateway(page);
+
+    await page.goto(`${suite.server.baseUrl}settings/appearance`);
+    const heading = page.locator("openclaw-config-page h1.page-title");
+    const picker = page.locator("#settings-language openclaw-select-picker");
+    await expect.poll(() => heading.textContent()).toBe("Appearance");
+
+    await selectPickerValue(picker, "zh-CN");
+    await expect.poll(() => page.evaluate(() => document.documentElement.lang)).toBe("zh-CN");
+    const artifacts = createControlUiE2eArtifactDir("appearance-locale-heading");
+    await page.screenshot({ path: path.join(artifacts, "appearance-language-switch.png") });
+    await expect.poll(() => heading.textContent()).toBe("外观");
+
+    await selectPickerValue(picker, "en");
+    await expect.poll(() => heading.textContent()).toBe("Appearance");
+    expect(new URL(page.url()).pathname).toBe("/settings/appearance");
+  });
+
   it.each([
     { name: "sv-SE", browserLocale: "sv-SE", savedLocale: null, expectedLocale: "sv" },
     { name: "sv-FI", browserLocale: "sv-FI", savedLocale: null, expectedLocale: "sv" },

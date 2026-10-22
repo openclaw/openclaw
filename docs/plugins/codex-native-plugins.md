@@ -698,6 +698,15 @@ per-app/tool settings above.
 Destructive plugin elicitations are allowed by default for configured Codex
 plugins, while unsafe schemas and ambiguous ownership are rejected:
 
+Set `read_only: true` on a configured plugin entry to limit its connected apps
+to tools explicitly marked read-only by `app/read`. Missing tool metadata and
+disabled tools fail closed. OpenClaw projects this restriction into native Codex
+tool permissions, including on thread recovery and side questions; an old saved
+tool grant cannot enable a write. All eligible read tools are available. This
+does not restrict individual actions within a tool or configure unrelated
+`mcp_servers` entries. If multiple enabled plugins own the same app, a read-only
+restriction from any owner remains in force. The default is `false`.
+
 - Global `allow_destructive_actions` defaults to `true`.
 - Per-plugin `allow_destructive_actions` overrides the global policy for
   that plugin.

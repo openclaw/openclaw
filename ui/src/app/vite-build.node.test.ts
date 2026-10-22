@@ -10,6 +10,7 @@ import { build, createLogger, type InlineConfig } from "vite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { controlUiCodeSplitting } from "../../config/control-ui-chunking.ts";
 import controlUiViteConfig from "../../vite.config.ts";
+import { normalizeControlUiBuildInfo } from "../build-info-normalizers.ts";
 
 function readBuiltIdentity(html: string): { buildId: string } {
   const encoded = /globalThis\.OPENCLAW_CONTROL_UI_BUILD_INFO=(.*?);<\/script>/u.exec(html)?.[1];
@@ -86,7 +87,15 @@ async function buildOutput(config: InlineConfig) {
 function createConfig(level: "info" | "silent" = "silent"): InlineConfig {
   info.mockReset();
   return {
-    ...controlUiViteConfig({ outDir }),
+    ...controlUiViteConfig({
+      outDir,
+      buildInfo: normalizeControlUiBuildInfo({
+        version: "1.0.0",
+        commit: "a".repeat(40),
+        dirty: false,
+        release: process.env.OPENCLAW_CONTROL_UI_RELEASE_BUILD?.trim() === "1",
+      }),
+    }),
     configFile: false,
     root,
     publicDir: false,
@@ -120,10 +129,14 @@ it("omits already imported JavaScript from lazy preload tables, retaining lazy J
   const config = createConfig();
   await writeRoot(
     "main.js",
-    'import { shared } from "./shared.js"; globalThis.shared = shared; globalThis.load = () => import("./lazy.js");',
+    'import { shared } from "./shared.js"; globalThis.shared = shared; globalThis.load = () => import("./lazy.js"); globalThis.loadPlain = () => import("./plain.js");',
   );
   await writeRoot("shared.js", 'export const shared = "shared";');
   await writeRoot("lazy-only.js", 'export const lazy = "lazy-only";');
+  await writeRoot(
+    "plain.js",
+    'import { lazy } from "./lazy-only.js"; export const message = "No stylesheet wait" + lazy;',
+  );
   await writeRoot(
     "lazy.js",
     'import { shared } from "./shared.js"; import { lazy } from "./lazy-only.js"; import "./lazy.css"; export const message = shared + lazy;',
@@ -143,7 +156,10 @@ it("omits already imported JavaScript from lazy preload tables, retaining lazy J
   expect(table).toBeDefined();
   const sharedName = names.find((name) => /^shared-.*\.js$/u.test(name))!;
   const lazyName = names.find((name) => /^lazy-only-.*\.js$/u.test(name))!;
+  const plainName = names.find((name) => /^plain-.*\.js$/u.test(name))!;
   expect(entry).toContain(sharedName);
+  expect(entry).toContain(plainName);
+  expect(table).not.toContain(plainName);
   expect(table).not.toContain(sharedName);
   expect(table).toContain(lazyName);
   expect(table).toMatch(/lazy-[^"/]+\.css/u);

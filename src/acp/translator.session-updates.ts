@@ -1,5 +1,6 @@
 import type { AgentSideConnection, PromptRequest, SessionUpdate } from "@agentclientprotocol/sdk";
 import { enqueueKeyedTask } from "../plugin-sdk/keyed-async-queue.js";
+import { createPendingPromiseTracker } from "../shared/pending-promises.js";
 import { getAvailableCommands } from "./commands.js";
 import type { AcpEventLedger, AcpEventLedgerReplay } from "./event-ledger.js";
 
@@ -26,6 +27,7 @@ function resolveLedgerSessionId(session: { sessionId: string; ledgerSessionId?: 
 export class AcpTranslatorSessionUpdates {
   private stopped = false;
   private readonly pending = new Set<Promise<unknown>>();
+  private readonly track = createPendingPromiseTracker(this.pending);
   // Queue each ledger session at emission time so a detached disconnect notice
   // cannot overtake its older update or block unrelated session settlement.
   private ledgerMutationTails = new Map<string, Promise<void>>();
@@ -37,15 +39,6 @@ export class AcpTranslatorSessionUpdates {
     // Revoking admission cannot retire the database or transport while an
     // already-admitted ledger write, replay read, or delivery still uses it.
     await Promise.allSettled([...this.pending, ...this.ledgerMutationTails.values()]);
-  }
-
-  private track<T>(operation: Promise<T>): Promise<T> {
-    this.pending.add(operation);
-    void operation.then(
-      () => this.pending.delete(operation),
-      () => this.pending.delete(operation),
-    );
-    return operation;
   }
 
   async startLedgerSession(

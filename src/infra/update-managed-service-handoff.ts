@@ -442,7 +442,7 @@ async function restoreGatewayService(reason, decision = params.recovery, childSt
   // the new process to answer; never reuse the pre-activation runtime identity.
   runLedger?.recordUpdateRunVerification(params.runId, {
     serviceRunning, pid: servicePid, runningVersion: undefined, runningBuildId: undefined, versionMatch: undefined,
-    readyz: undefined, settled: undefined, channelsReady: undefined, pluginErrors: undefined,
+    readyz: undefined, coreReady: undefined, settled: undefined, channelsReady: undefined, pluginErrors: undefined,
   });
   if (restored) {
     try {
@@ -922,6 +922,7 @@ async function collectUpdateFailureTriage() {
     const childStatus = !exit.signal && resultRoot === params.updateLeaseKey && ["error", "skipped"].includes(result?.status) ? result.status : undefined;
     if (childStatus) closedUpdateResult = result;
     const recovery = childStatus ? result.recovery : null;
+    if (triageFailure && recovery?.service) triageFailure.restored = recovery.service === "healthy";
     const safe = !exit.signal && recovery?.serviceRestartSafe === true &&
       typeof recovery.version === "string" && recovery.version.trim() &&
       (recovery.buildId === undefined ? result.mode !== "git" :
@@ -962,7 +963,6 @@ async function collectUpdateFailureTriage() {
       if (restorationArmed && safe && recovery.service === undefined) {
         restored = await restoreGatewayService(previousGeneration ? result.reason : "managed-service-handoff-failed", recovery, childStatus, previousGeneration);
       } else {
-        if (restorationArmed && restored && triageFailure) triageFailure.restored = true;
         appendLog("managed update recovery not attempted: " +
           (recovery?.serviceRestartSafe === false ? "updater explicitly rejected activation" :
             recovery?.service === "healthy" ? "updater already verified recovery" :

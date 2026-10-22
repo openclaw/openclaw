@@ -2,7 +2,7 @@ import { createRouter, definePage, type RouteMatch, type Router } from "@opencla
 import type { JSX } from "@solidjs/web";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../../../src/shared/deferred.js";
-import type { SolidRouteProps } from "../app-route-types.ts";
+import type { SolidRouteProps } from "../app-route-types.tsx";
 import { registerMcpAppUnmountTarget } from "../components/mcp-app-unmount.ts";
 import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import { registerControlUiReloadGuard } from "./document-reload-guard.ts";

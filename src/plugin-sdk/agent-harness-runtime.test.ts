@@ -28,13 +28,11 @@ import {
   abortAndDrainAgentHarnessRun as drainRun,
   AgentHarnessPreflightError,
   agentHarnessStructuredInput,
-  attachModelProviderRequestTransport as attachTransport,
   buildAgentHarnessUserInputAnswers as buildAnswers,
   classifyAgentHarnessTerminalOutcome as classifyOutcome,
   clearActiveEmbeddedRun as clear,
   deliverAgentHarnessUserInputPrompt as deliverPrompt,
   formatAgentHarnessUserInputPrompt as formatPrompt,
-  getModelProviderRequestTransport as readTransport,
   queueAgentHarnessMessage as queue,
   setActiveEmbeddedRun as register,
   type AgentHarness,
@@ -56,6 +54,13 @@ type QueueOptions = Parameters<typeof queue>[2];
 type ForkV2 = Parameters<NonNullable<AgentHarnessV2["sessionForkV2"]>["fork"]>[0];
 type WithoutHost<T> = Omit<T, "hostCapabilities">;
 type RequiresHost<T> = WithoutHost<T> extends T ? false : true;
+const cleanupWith = (...actions: Array<() => void>) => ({
+  [Symbol.dispose]() {
+    for (const action of actions) {
+      action();
+    }
+  },
+});
 const nativeHandle = (overrides: Partial<Handle> = {}): Handle => ({
   queueMessage: async () => {},
   isStreaming: () => true,
@@ -278,14 +283,6 @@ describe("agent harness runtime SDK facade", () => {
     expectTypeOf<Protected["assertCurrent"]>().toEqualTypeOf<() => void>();
     expectTypeOf<Omit<Protected, "assertCurrent">>().not.toMatchTypeOf<Protected>();
   });
-
-  it("exposes attached model request transport metadata helpers", () => {
-    const transport = {
-      auth: { mode: "header", headerName: "x-api-key", value: "secret" },
-    } satisfies NonNullable<Parameters<typeof attachTransport>[1]>;
-    const model = attachTransport({ id: "test", provider: "custom" }, transport);
-    expect(readTransport(model)).toEqual(transport);
-  });
 });
 
 describe("agent harness active-run SDK controls", () => {
@@ -298,25 +295,21 @@ describe("agent harness active-run SDK controls", () => {
     const successorCleanup = attach("successor-diagnostic-run");
     const snapshot = () => diagnosticActivity.getDiagnosticSessionActivitySnapshot(ref);
     const active = { activeWorkKind: "embedded_run", hasActiveEmbeddedRun: true };
-    try {
-      expect(priorCleanup).toBeTypeOf("function");
-      expect(successorCleanup).toBeTypeOf("function");
-      expect(snapshot()).toMatchObject(active);
+    using _ = cleanupWith(
+      () => priorCleanup?.(),
+      () => successorCleanup?.(),
+      () => diagnosticActivity.resetDiagnosticRunActivityForTest(),
+    );
+    expect(priorCleanup).toBeTypeOf("function");
+    expect(successorCleanup).toBeTypeOf("function");
+    expect(snapshot()).toMatchObject(active);
 
-      priorCleanup?.();
-      expect(snapshot()).toMatchObject(active);
+    priorCleanup?.();
+    expect(snapshot()).toMatchObject(active);
 
-      successorCleanup?.();
-      const settled = snapshot();
-      expect([settled.activeWorkKind, settled.hasActiveEmbeddedRun]).toEqual([
-        undefined,
-        undefined,
-      ]);
-    } finally {
-      priorCleanup?.();
-      successorCleanup?.();
-      diagnosticActivity.resetDiagnosticRunActivityForTest();
-    }
+    successorCleanup?.();
+    const settled = snapshot();
+    expect([settled.activeWorkKind, settled.hasActiveEmbeddedRun]).toEqual([undefined, undefined]);
   });
 
   it("rejects a session-keyed registration without host admission", () => {
@@ -342,13 +335,10 @@ describe("agent harness active-run SDK controls", () => {
     const waiting = reserveSessionControllerSource("agent:main:sdk-turn", {
       policy: { mode: "followup" },
     });
-    try {
-      expect(abortRun("sdk-turn")).toBe(true);
-      expect(operation.result).toMatchObject({ kind: "aborted", code: "aborted_by_user" });
-      expect(waiting.retirementRequested).toBeUndefined();
-    } finally {
-      retireSessionControllerInput(waiting);
-    }
+    using _ = cleanupWith(() => retireSessionControllerInput(waiting));
+    expect(abortRun("sdk-turn")).toBe(true);
+    expect(operation.result).toMatchObject({ kind: "aborted", code: "aborted_by_user" });
+    expect(waiting.retirementRequested).toBeUndefined();
   });
 
   it("warns when an admitted asynchronous steer has an unconfirmed outcome", async () => {
@@ -361,22 +351,21 @@ describe("agent harness active-run SDK controls", () => {
       });
     });
     const operation = admittedRun("sdk-unconfirmed", { queueMessage, guarded: true });
-    try {
-      expect(queue("sdk-unconfirmed", "synthetic private input")).toBe(true);
-      expect(warn).not.toHaveBeenCalled();
-      finish.resolve();
-      await vi.waitFor(() =>
-        expect(warn).toHaveBeenCalledWith(
-          "queue message outcome unconfirmed: sessionId=sdk-unconfirmed; inspect the conversation before retrying",
-        ),
-      );
-      expect(queueMessage).toHaveBeenCalledOnce();
-      expect(operation.abortSignal.aborted).toBe(false);
-    } finally {
-      finish.resolve();
-      operation.complete();
-      warn.mockRestore();
-    }
+    using _ = cleanupWith(
+      () => finish.resolve(),
+      () => operation.complete(),
+      () => warn.mockRestore(),
+    );
+    expect(queue("sdk-unconfirmed", "synthetic private input")).toBe(true);
+    expect(warn).not.toHaveBeenCalled();
+    finish.resolve();
+    await vi.waitFor(() =>
+      expect(warn).toHaveBeenCalledWith(
+        "queue message outcome unconfirmed: sessionId=sdk-unconfirmed; inspect the conversation before retrying",
+      ),
+    );
+    expect(queueMessage).toHaveBeenCalledOnce();
+    expect(operation.abortSignal.aborted).toBe(false);
   });
 
   it.each(["legacy", "V1", "V2"] as const)("queues detached %s input", async (kind) => {
@@ -384,6 +373,7 @@ describe("agent harness active-run SDK controls", () => {
     const abort = vi.fn();
     const handle = nativeSink(kind, queueMessage, true, { abort });
     const effect = await aliasEffect("sdk-detached");
+    // The alias must be released before checking detached abort, not at test teardown.
     try {
       register("sdk-detached", handle);
       expect(queue("sdk-detached", "steer")).toBe(true);
@@ -449,18 +439,15 @@ describe("agent harness active-run SDK controls", () => {
     const sessionId = "sdk-detached-cancel-controller";
     using run = await cancellingRun(sessionId);
     const operation = replyOperation(sessionId, "agent:main:sdk-cancel-controller");
-    try {
-      const result = cancel(sessionId, mode);
-      expect(run.abort).not.toHaveBeenCalled();
-      expect(operation.abortSignal.aborted).toBe(mode !== "compacting");
-      operation.complete();
-      if (mode === "drain") {
-        await expect(result).resolves.toEqual(drained);
-      } else {
-        expect(result).toBe(mode !== "compacting");
-      }
-    } finally {
-      operation.complete();
+    using _ = cleanupWith(() => operation.complete());
+    const result = cancel(sessionId, mode);
+    expect(run.abort).not.toHaveBeenCalled();
+    expect(operation.abortSignal.aborted).toBe(mode !== "compacting");
+    operation.complete();
+    if (mode === "drain") {
+      await expect(result).resolves.toEqual(drained);
+    } else {
+      expect(result).toBe(mode !== "compacting");
     }
   });
 
@@ -469,19 +456,18 @@ describe("agent harness active-run SDK controls", () => {
     using run = await cancellingRun(sessionId, undefined, { isCompacting: () => false });
     const first = replyOperation(sessionId, "agent:main:sdk-cancel-first");
     const second = replyOperation(sessionId, "agent:main:sdk-cancel-second");
-    try {
-      if (mode === "drain") {
-        await expect(drainRun({ sessionId })).rejects.toThrow();
-      } else {
-        expect(() => abortRun(sessionId)).toThrow();
-      }
-      expect(run.abort).not.toHaveBeenCalled();
-      expect(first.abortSignal.aborted).toBe(false);
-      expect(second.abortSignal.aborted).toBe(false);
-    } finally {
-      first.complete();
-      second.complete();
+    using _ = cleanupWith(
+      () => first.complete(),
+      () => second.complete(),
+    );
+    if (mode === "drain") {
+      await expect(drainRun({ sessionId })).rejects.toThrow();
+    } else {
+      expect(() => abortRun(sessionId)).toThrow();
     }
+    expect(run.abort).not.toHaveBeenCalled();
+    expect(first.abortSignal.aborted).toBe(false);
+    expect(second.abortSignal.aborted).toBe(false);
   });
 
   it.each(["not streaming", "stopped", "V1 unavailable", "V2 unavailable", "stale"] as const)(
@@ -500,14 +486,13 @@ describe("agent harness active-run SDK controls", () => {
               lastProgressAgeMs: 11 * 60_000,
             })
           : undefined;
-      try {
-        register("sdk-unavailable", handle);
-        expect(queue("sdk-unavailable", "steer")).toBe(false);
-        expect(queueMessage).not.toHaveBeenCalled();
-      } finally {
-        activity?.mockRestore();
-        effect.release();
-      }
+      using _ = cleanupWith(
+        () => activity?.mockRestore(),
+        () => effect.release(),
+      );
+      register("sdk-unavailable", handle);
+      expect(queue("sdk-unavailable", "steer")).toBe(false);
+      expect(queueMessage).not.toHaveBeenCalled();
     },
   );
 
@@ -559,13 +544,15 @@ describe("agent harness active-run SDK controls", () => {
       register("sdk-replaced", handle),
       "second native registration",
     );
-    firstCleanup();
+    clear("sdk-replaced", handle, undefined, undefined, "old_cleanup", firstCleanup);
     expect(firstAssertion).toThrow(revoked);
+    expect(isActive("sdk-replaced")).toBe(true);
     expect(queue("sdk-replaced", "second")).toBe(true);
     const secondAssertion = authority();
     expect(secondAssertion).not.toThrow();
     secondCleanup();
     expect(secondAssertion).toThrow(revoked);
+    expect(isActive("sdk-replaced")).toBe(false);
   });
 
   it.each(["human", "runtime"] as const)("preserves a detached %s wait", async (kind) => {
@@ -578,7 +565,7 @@ describe("agent harness active-run SDK controls", () => {
       .mockReturnValue({ lastProgressAgeMs: 11 * 60_000 });
     const queueMessage = vi.fn(async () => {});
     let runtimeWaiting = kind === "runtime";
-    let cleanup: Cleanup;
+    let cleanup: Cleanup = undefined;
     let releaseWait: ((resolved: boolean) => void) | undefined;
     const caller = {
       agentId: "main",
@@ -590,27 +577,26 @@ describe("agent harness active-run SDK controls", () => {
       queueMessage,
       ownsLiveness: () => runtimeWaiting,
     });
-    try {
-      cleanup = await withGatewayToolCallerIdentity(caller, () => register(sessionId, handle));
-      if (kind === "human") {
-        releaseWait = expectDefined(
-          registerActiveEmbeddedRunHumanInputWait(authority, () => true),
-          "exact detached human-input wait",
-        );
-      }
-      expect(queue(sessionId, "answer")).toBe(true);
-      await vi.waitFor(() => expect(queueMessage).toHaveBeenCalledOnce());
-      releaseWait?.(false);
-      runtimeWaiting = false;
-      expect(queue(sessionId, "stale followup")).toBe(false);
-      expect(queueMessage).toHaveBeenCalledOnce();
-    } finally {
-      releaseWait?.(false);
-      cleanup?.();
-      releaseAgentRunDelegatedAuthority(authority);
-      effect.release();
-      activity.mockRestore();
+    using _ = cleanupWith(
+      () => releaseWait?.(false),
+      () => cleanup?.(),
+      () => releaseAgentRunDelegatedAuthority(authority),
+      () => effect.release(),
+      () => activity.mockRestore(),
+    );
+    cleanup = await withGatewayToolCallerIdentity(caller, () => register(sessionId, handle));
+    if (kind === "human") {
+      releaseWait = expectDefined(
+        registerActiveEmbeddedRunHumanInputWait(authority, () => true),
+        "exact detached human-input wait",
+      );
     }
+    expect(queue(sessionId, "answer")).toBe(true);
+    await vi.waitFor(() => expect(queueMessage).toHaveBeenCalledOnce());
+    releaseWait?.(false);
+    runtimeWaiting = false;
+    expect(queue(sessionId, "stale followup")).toBe(false);
+    expect(queueMessage).toHaveBeenCalledOnce();
   });
 
   it("revokes retained detached injection when a controller takes the same ID", () => {
@@ -620,26 +606,8 @@ describe("agent harness active-run SDK controls", () => {
     const assertion = authority();
     expect(assertion).not.toThrow();
     const operation = admittedRun("sdk-controller-takeover");
-    try {
-      expect(assertion).toThrow(revoked);
-    } finally {
-      operation.complete();
-    }
-  });
-
-  it("keeps retained cleanup bound to its exact registration", () => {
-    const handle = makeHandle();
-    const priorCleanup = register("sdk-cleanup", handle);
-    const currentCleanup = expectDefined(
-      register("sdk-cleanup", handle),
-      "current registration cleanup",
-    );
-    assert.isFunction(priorCleanup);
-    assert.isFunction(currentCleanup);
-    clear("sdk-cleanup", handle, undefined, undefined, "old_cleanup", priorCleanup);
-    expect(isActive("sdk-cleanup")).toBe(true);
-    currentCleanup("current_cleanup");
-    expect(isActive("sdk-cleanup")).toBe(false);
+    using _ = cleanupWith(() => operation.complete());
+    expect(assertion).toThrow(revoked);
   });
 });
 
@@ -649,17 +617,20 @@ describe("agent harness user input helpers", () => {
     const questions = [
       question("mode", {
         header: "Mode",
-        question: "Pick a mode",
+        question: "Pick a <mode>",
         isOther: true,
         options: [{ label: "Deep", description: "Use more context" }],
       }),
     ];
-    await deliverPrompt({ onBlockReply }, questions, { intro: "Runtime needs input:" });
+    await deliverPrompt({ onBlockReply }, questions, {
+      intro: "Runtime needs input:",
+      formatText: (text) => text.replaceAll("<", "&lt;"),
+    });
     expect(onBlockReply).toHaveBeenCalledWith({
       text: `Runtime needs input:
 
 Mode
-Pick a mode
+Pick a &lt;mode>
 1. Deep - Use more context
 Other: reply with your own answer.`,
     });
@@ -676,14 +647,6 @@ Other: reply with your own answer.`,
     expect(buildAnswers(questions, "Frankfurt, Germany")).toEqual({
       answers: { region: { answers: ["Frankfurt, Germany"] } },
     });
-  });
-
-  it("supports runtime-specific text formatting", () => {
-    expect(
-      formatPrompt([question("answer", { question: "a < b" })], {
-        formatText: (text) => text.replaceAll("<", "&lt;"),
-      }),
-    ).toContain("a &lt; b");
   });
 
   it("preserves blank fallback lines so skipped answers stay aligned", () => {

@@ -57,11 +57,11 @@ When OpenClaw's built-in MCP client cannot start a server, it retries with expon
 
 ## Add a server from the composer
 
-In a Control UI chat, select **+** → **Connectors** → **Add MCP server…**. The dialog uses the same server fields as Settings and requires administrator access.
+In a Control UI chat, select **+** → **Plugins** → **Add MCP server…**. The dialog uses the same server fields as Settings and requires administrator access.
 
 Choose **This session** for session-only enablement or **Everywhere** for global enablement. Either scope saves a global server definition; session policy is the per-session layer. See [Composer capability menu](/web/control-ui/chat#composer-capability-menu) for the complete scope and tool-access behavior.
 
-From an active conversation, open **+ → Connectors → Tool access** to inspect
+From an active conversation, open **+ → Plugins → Tool access** to inspect
 or deny individual tools for that session. The view follows the session's
 actual runtime owner: built-in OpenClaw sessions read the in-process MCP
 catalog, while native agent harnesses can contribute their thread-owned
@@ -117,6 +117,12 @@ The same `docs` server, written straight into config:
 
 An enabled server needs either a command (stdio) or a URL (SSE or Streamable HTTP). The exact server name `__proto__` is reserved; choose a different name. Setting `enabled: false` keeps the definition around without connecting it. Keep credentials out of config literals — store sensitive headers and environment values through the supported secret mechanisms.
 
+Local `claude-cli` turns receive configured server tools through the Gateway's
+MCP bridge as `<server>__<tool>`, including when `tools.exec.host` is `"node"`.
+The Gateway owns the server connections, so Claude does not start duplicate
+stdio servers. Node execution does not change that mode's native Bash or user
+settings. See [CLI backend MCP overlays](/gateway/cli-backends#bundle-mcp-overlays).
+
 ## Interactive apps and plugin extensions
 
 MCP servers can also supply sandboxed interactive views. Enable the opt-in
@@ -142,6 +148,13 @@ Override a server with `openclaw mcp configure <server> --approval approve|promp
 
 ## Troubleshooting
 
+### A tool returns an error
+
+When an MCP tool returns `isError: true`, OpenClaw passes its error content to
+the agent so it can follow the server's recovery guidance. The tool's
+`outputSchema` validates successful structured results only; structured error
+details do not need to match that schema.
+
 ### The server appears in Settings but exposes no tools
 
 Run `openclaw mcp doctor <name> --probe`. Doctor validates the saved definition first, then opens a live connection and reports the tools and other capabilities the server advertises. If it connects but expected tools are missing, check `toolFilter.include` and `toolFilter.exclude`.
@@ -158,19 +171,22 @@ If a Streamable HTTP server refuses initialization with HTTP 401, its startup lo
 
 Set `auth: "oauth"` plus any required `oauth` metadata. In **Settings → MCP**, an administrator can select **Sign in** for an enabled HTTP server that uses shared native OAuth credentials. Approve access in the browser, then return to Settings. If the browser blocks the new tab, use the sign-in link in the dialog.
 
-**Authentication saved** means credentials were saved on the Gateway selected when sign-in started. It does not prove the server is reachable or its tools work; run a check or use the connector next. Changing the selected Gateway or agent closes the dialog. A Gateway restart ends an unfinished browser sign-in, but does not remove saved credentials.
+**Authentication saved** means credentials were saved on the Gateway selected when sign-in started. It does not prove the server is reachable or its tools work; run a check or use the server next. Changing the selected Gateway or agent closes the dialog. A Gateway restart ends an unfinished browser sign-in, but does not remove saved credentials.
 
 Browser sign-in requires Settings on the Gateway's own HTTPS address (including an operator-managed reverse proxy or Tailscale Serve route), its local loopback address, or its published Tailscale address. A separately hosted UI cannot receive the Gateway's callback. Older Gateways and unsupported addresses keep the terminal instructions. Servers with an existing auth-profile mapping or per-requester identity use that account's sign-in path instead; Settings does not create a second credential for them.
 
 An unfinished CLI attempt can leave a client registration for the CLI callback. When no credentials have been saved, browser sign-in registers its own callback automatically. Registrations associated with saved credentials are retained so refresh tokens remain usable.
 
-If **Sign in** is unavailable, or existing credentials require the CLI callback, run this on the installation that owns the connector:
+If **Sign in** is unavailable, or existing credentials require the CLI callback, sign in from the terminal of the installation that owns the server. `openclaw mcp login` runs offline only, so stop the Gateway first and start it again afterward:
 
 ```bash
+openclaw gateway stop
 openclaw mcp login <name>
 ```
 
 Follow the printed authorization URL. OpenClaw normally captures the loopback redirect and saves the credentials automatically; use the printed `--code` command when the browser cannot reach the callback listener.
+
+The CLI signs in only to servers defined under `mcp.servers`. A server that a plugin declares signs in from the plugin's page (**Accounts** → **Connect**); a failed browser sign-in for it points back to the plugin settings instead of a CLI command.
 
 ### Changes do not reach an active agent
 

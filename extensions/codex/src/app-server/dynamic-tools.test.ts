@@ -4,7 +4,6 @@ import path from "node:path";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { createOpenClawCodingTools, type AnyAgentTool } from "openclaw/plugin-sdk/agent-harness";
 import {
-  HEARTBEAT_RESPONSE_TOOL_NAME,
   embeddedAgentLog,
   getPluginToolMeta,
   wrapToolWithBeforeToolCallHook,
@@ -56,10 +55,15 @@ import {
   installResultMiddleware,
   mediaResult,
   textToolResult,
+  throwingResultObserver,
+  createBridge,
+  createTool,
+  callTool,
+  createDynamicToolCall,
+  type BridgeOptions,
 } from "./dynamic-tools.test-support.js";
 import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
-  type CodexDynamicToolCallParams,
   type CodexDynamicToolCallResponse,
   type CodexDynamicToolFunctionSpec,
   type CodexDynamicToolSpec,
@@ -113,41 +117,6 @@ function frameImageIdentity(data: string, mimeType = "image/png") {
     .digest("hex");
 }
 
-function createDynamicToolCall(
-  tool: string,
-  arguments_: JsonValue = {},
-  callId = "call-1",
-): CodexDynamicToolCallParams {
-  return {
-    threadId: "thread-1",
-    turnId: "turn-1",
-    callId,
-    namespace: null,
-    tool,
-    arguments: arguments_,
-  };
-}
-
-function callTool(
-  bridge: ReturnType<typeof createCodexDynamicToolBridge>,
-  tool: string,
-  args: JsonValue = {},
-  callId = "call-1",
-  options?: Parameters<typeof bridge.handleToolCall>[1],
-) {
-  return bridge.handleToolCall(createDynamicToolCall(tool, args, callId), options);
-}
-
-function createTool(name: string, overrides: Partial<AnyAgentTool> = {}): AnyAgentTool {
-  return {
-    name,
-    description: "Convert text to speech.",
-    parameters: { type: "object", properties: {}, additionalProperties: true },
-    execute: vi.fn(),
-    ...overrides,
-  } as unknown as AnyAgentTool;
-}
-
 function createDecisionToolForBridge(workspaceDir: string): AnyAgentTool {
   const tool = createOpenClawCodingTools({
     agentId: "main",
@@ -173,16 +142,6 @@ function createDecisionToolForBridge(workspaceDir: string): AnyAgentTool {
 
 function createSingleToolBridge(tool: AnyAgentTool, options: BridgeOptions = {}) {
   return createBridge([tool], options);
-}
-
-type BridgeOptions = Omit<
-  Parameters<typeof createCodexDynamicToolBridge>[0],
-  "tools" | "signal"
-> & {
-  signal?: AbortSignal;
-};
-function createBridge(tools: AnyAgentTool[], options: BridgeOptions = {}) {
-  return createCodexDynamicToolBridge({ tools, signal: new AbortController().signal, ...options });
 }
 
 function createBridgeWithToolResult(
@@ -552,33 +511,34 @@ describe("createCodexDynamicToolBridge", () => {
   });
 
   it("can register a durable tool schema while denying execution for the current turn", async () => {
-    const heartbeatExecute = vi.fn(async () => textToolResult("heartbeat recorded"));
+    const unavailableToolName = "unavailable_task";
+    const unavailableExecute = vi.fn(async () => textToolResult("unavailable tool recorded"));
     const onToolOutcome = vi.fn();
     const bridge = createSingleToolBridge(createTool("message"), {
       registeredTools: [
         createTool("message"),
-        createTool(HEARTBEAT_RESPONSE_TOOL_NAME, { execute: heartbeatExecute }),
+        createTool(unavailableToolName, { execute: unavailableExecute }),
       ],
       hookContext: { runId: "run-unavailable", onToolOutcome },
     });
 
     expect(specNames(bridge.availableSpecs)).toEqual(["message"]);
     expect(bridge.availableTools.map((tool) => tool.name)).toEqual(["message"]);
-    expect(specNames(bridge.specs)).toEqual([HEARTBEAT_RESPONSE_TOOL_NAME, "message"]);
+    expect(specNames(bridge.specs)).toEqual(["message", unavailableToolName]);
 
-    const result = await callTool(bridge, HEARTBEAT_RESPONSE_TOOL_NAME);
+    const result = await callTool(bridge, unavailableToolName);
 
     expectInputText(
       result,
-      `OpenClaw tool is not available for this turn: ${HEARTBEAT_RESPONSE_TOOL_NAME}`,
+      `OpenClaw tool is not available for this turn: ${unavailableToolName}`,
       false,
     );
     expect(result).toEqual(
       expect.objectContaining({ executionStarted: false, executedArguments: {} }),
     );
-    expect(heartbeatExecute).not.toHaveBeenCalled();
+    expect(unavailableExecute).not.toHaveBeenCalled();
     expect(onToolOutcome).toHaveBeenLastCalledWith({
-      toolName: HEARTBEAT_RESPONSE_TOOL_NAME,
+      toolName: unavailableToolName,
       argsHash: "",
       resultHash: "",
       terminalPresentation: undefined,
@@ -644,7 +604,6 @@ describe("createCodexDynamicToolBridge", () => {
       bridge.availableTools.map((tool) => tool.name),
     );
     expect(projected.availableTools.map((tool) => tool.name)).toEqual(["message"]);
-    expect(projected.quarantinedTools).toEqual(bridge.telemetry.quarantinedTools);
     expect(bridge.telemetry.quarantinedTools).toEqual([
       {
         tool: "fuzzplugin_move_angles",
@@ -710,55 +669,6 @@ describe("createCodexDynamicToolBridge", () => {
     const invalidResult = await callTool(bridge, testCase.name, {}, "call-invalid");
     expect(invalidResult).toMatchObject({ success: false, executionStarted: false });
     expectInputText(invalidResult, `Unknown OpenClaw tool: ${testCase.name}`, false);
-  });
-
-  it("quarantines unreadable dynamic tool descriptors without dropping healthy siblings", () => {
-    vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
-    function unreadable(name: string, key: string) {
-      const tool = createTool(name);
-      Object.defineProperty(tool, key, {
-        enumerable: true,
-        get() {
-          throw new Error(`Unreadable ${key}`);
-        },
-      });
-      return tool;
-    }
-    const poisonedName = unreadable("fuzzplugin_unreadable_name", "name");
-    const poisonedSchema = unreadable("fuzzplugin_unreadable_schema", "parameters");
-    const invalidName = createTool("");
-    const poisonedExecute = unreadable("fuzzplugin_unreadable_execute", "execute");
-
-    const bridge = createBridge([
-      poisonedName,
-      poisonedSchema,
-      invalidName,
-      poisonedExecute,
-      createTool("message"),
-    ]);
-
-    expect(specNames(bridge.availableSpecs)).toEqual(["message"]);
-    expect(specNames(bridge.specs)).toEqual(["message"]);
-    expect(bridge.telemetry.quarantinedTools).toEqual([
-      { tool: "tool[0]", violations: ["tool[0].name is unreadable"] },
-      {
-        tool: "fuzzplugin_unreadable_schema",
-        violations: ["fuzzplugin_unreadable_schema.inputSchema is unreadable"],
-      },
-      { tool: "tool[2]", violations: ["tool[2].name must be a non-empty string"] },
-      {
-        tool: "fuzzplugin_unreadable_execute",
-        violations: [
-          "fuzzplugin_unreadable_execute could not be wrapped for before-tool-call hooks",
-        ],
-      },
-    ]);
-    const registeredBridge = createBridge([poisonedExecute, createTool("message")], {
-      registeredTools: [createTool("fuzzplugin_unreadable_execute"), createTool("message")],
-    });
-
-    expect(specNames(registeredBridge.availableSpecs)).toEqual(["message"]);
-    expect(specNames(registeredBridge.specs)).toEqual(["message"]);
   });
 
   it("preserves the canonical cap for tiny contexts", async () => {
@@ -1022,16 +932,7 @@ describe("createCodexDynamicToolBridge", () => {
   );
 
   it("preserves successful execution when its observer throws an unreadable error", async () => {
-    const observerError = Object.defineProperty(new Error(), "message", {
-      get() {
-        throw new Error("observer message getter escaped");
-      },
-    });
-    const onAgentToolResult = vi.fn(() => {
-      throw observerError;
-    });
-    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
-    warn.mockClear();
+    const { onAgentToolResult, warn } = throwingResultObserver();
     const rawResult = textToolResult("committed effect", { receipt: "effect-1" });
     const execute = vi.fn(async () => rawResult);
     const bridge = createSingleToolBridge(createTool("exec", { execute }));

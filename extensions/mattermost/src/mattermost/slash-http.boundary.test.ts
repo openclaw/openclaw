@@ -266,7 +266,6 @@ async function withBoundary(runBoundary: (boundary: Boundary) => Promise<void>) 
       currentCommands.set(commandB.id, commandB);
       activateSlashCommands({
         account,
-        commandTokens: [TOKEN, commandB.token],
         registeredCommands: [command, commandB],
         api: { cfg: {}, runtime: { log() {}, error() {}, exit() {} } },
       });

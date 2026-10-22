@@ -216,15 +216,14 @@ suite.define(() => {
     await expectFocused(transcriptTrigger);
 
     await openChatSidePanelType(page, "Files");
-    await page.locator(".chat-workspace-rail__group-summary", { hasText: "Artifacts" }).click();
-    const artifactRow = page.locator(".chat-workspace-rail__file-open", {
-      hasText: "openclaw-banner.png",
-    });
+    const artifactRow = page
+      .locator(".workspace-desktop")
+      .getByRole("button", { name: "openclaw-banner.png", exact: true });
     await artifactRow.waitFor({ state: "visible", timeout: 10_000 });
     await artifactRow.click();
-    const sidebarTrigger = page.getByRole("button", {
-      name: "Open image openclaw-banner.png",
-    });
+    const sidebarTrigger = page
+      .getByRole("button", { name: "Open image openclaw-banner.png", exact: true })
+      .filter({ has: page.getByRole("img", { name: "openclaw-banner.png", exact: true }) });
     await sidebarTrigger.waitFor({ state: "visible", timeout: 10_000 });
 
     await sidebarTrigger.click();

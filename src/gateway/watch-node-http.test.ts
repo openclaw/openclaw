@@ -768,6 +768,7 @@ describe("watch node HTTP transport", () => {
       const approved = await approveBootstrapDevicePairing(
         pairing.request.requestId,
         existingProfile,
+        {},
         baseDir,
       );
       expect(approved?.status).toBe("approved");

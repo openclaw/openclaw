@@ -95,7 +95,6 @@ describe("startup recovery admission", () => {
   ) {
     const recovery = scheduleRestartAbortedMainSessionRecovery({
       getConfig: () => ({}),
-      delayMs: 0,
       stateDir: tmpDir,
       gatewayRuntime,
       ...options,
@@ -706,6 +705,84 @@ describe("startup recovery admission", () => {
       )
       .filter((runId) => runId !== undefined);
     expect(new Set(runIds).size).toBe(1);
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  });
+
+  it("keeps hard-drain refusal quiet and preserves recovery for the next lifecycle", async ({
+    signal,
+  }) => {
+    const target = await finalAttempt("cycle-shutdown");
+    const before = structuredClone(loadSessionEntry(target));
+    const warn = vi.spyOn(mainSessionRecoveryLog, "warn");
+    const prepare = vi.spyOn(gatewayRuntime, "prepareRestartRecovery");
+    vi.useFakeTimers();
+    gatewayWorkAdmission.markGatewayRestartDraining("stop (SIGTERM)");
+    const recovery = schedule({ maxRetries: 1 });
+    // Settle the admission rejection and its diagnostic before stop can cancel the scheduler.
+    await vi.advanceTimersByTimeAsync(0);
+    await recovery.stop();
+    expect(warn).not.toHaveBeenCalled();
+    expect(prepare).not.toHaveBeenCalled();
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(loadSessionEntry(target)).toEqual(before);
+
+    resetGatewayWorkAdmission();
+    rotateAgentEventLifecycleGeneration();
+    const restarted = schedule({ maxRetries: 1 });
+    await withinTest(gatewayRuntime.expectAdmission(1, restarted, target), signal);
+    const resumed = loadSessionEntry(target);
+    expect(resumed).toMatchObject({
+      sessionId: before?.sessionId,
+      abortedLastRun: false,
+      mainRestartRecovery: { cycleId: "cycle-shutdown", chargedAttempts: 3 },
+    });
+    expect(resumed?.mainRestartRecovery?.reservation).toBeUndefined();
+    expect(resumed?.mainRestartRecovery?.tombstone).toBeUndefined();
+    expect(resumed?.pendingFinalDelivery).toEqual(before?.pendingFinalDelivery);
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  });
+
+  it.for([
+    {
+      name: "ordinary failure during drain",
+      draining: true,
+      failure: () => new Error("preparation failed"),
+    },
+    {
+      name: "wrapped drain failure",
+      draining: true,
+      failure: () =>
+        new Error("preparation failed", { cause: new gatewayWorkAdmission.GatewayDrainingError() }),
+    },
+    {
+      name: "aggregate drain failure",
+      draining: true,
+      failure: () =>
+        new AggregateError(
+          [new gatewayWorkAdmission.GatewayDrainingError(), new Error("cleanup failed")],
+          "preparation cleanup failed",
+        ),
+    },
+    {
+      name: "drain error without active drain",
+      draining: false,
+      failure: () => new gatewayWorkAdmission.GatewayDrainingError(),
+    },
+  ])("reports $name from admitted recovery", async ({ draining, failure }) => {
+    vi.useFakeTimers();
+    const error = failure();
+    vi.spyOn(gatewayRuntime, "prepareRestartRecovery").mockImplementation(() => {
+      if (draining) {
+        gatewayWorkAdmission.markGatewayRestartDraining("stop (SIGTERM)");
+      }
+      throw error;
+    });
+    const warn = vi.spyOn(mainSessionRecoveryLog, "warn");
+    const recovery = schedule({ maxRetries: 1 });
+    await vi.advanceTimersByTimeAsync(0);
+    await recovery.stop();
+    expect(warn).toHaveBeenCalledWith(`main-session restart recovery gave up: ${String(error)}`);
+    expect(callGateway).not.toHaveBeenCalled();
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 

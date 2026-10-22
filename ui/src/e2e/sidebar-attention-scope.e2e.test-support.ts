@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { Browser, Page } from "playwright";
+import type { Browser } from "playwright";
 import { expect } from "vitest";
 import type { CronJob } from "../api/types.ts";
 import {
@@ -7,6 +7,7 @@ import {
   installMockGateway,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { expectCount, expectVisible } from "./sidebar-assertions.test-support.ts";
 import { openSidebarPages, sidebarCronJob } from "./sidebar-customization.test-support.ts";
@@ -18,10 +19,6 @@ type SidebarAttentionScopeFlowOptions = {
   browser: Browser;
   captureProof: boolean;
 };
-
-function visibleDrawerButton(page: Page) {
-  return page.locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible").first();
-}
 
 export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScopeFlowOptions) {
   const context = await params.browser.newContext({
@@ -263,7 +260,7 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
       .evaluateAll((elements) =>
         elements.map((element) => element.getAttribute("data-attention-kind")),
       );
-    await visibleDrawerButton(page).click();
+    await navigationDrawerToggle(page).click();
     await expect
       .poll(() => page.locator(".shell").getAttribute("class"))
       .toContain("shell--nav-drawer-open");

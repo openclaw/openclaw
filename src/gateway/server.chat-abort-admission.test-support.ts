@@ -30,6 +30,21 @@ export function registerChatAbortAdmissionRetryTests(harness: {
     { caseName: "retains a restart interruption", retryable: true, stopReason: "restart" },
   ])("chat.send $caseName after SQLite admission commits", async ({ retryable, stopReason }) => {
     const runId = `idem-restart-safe-abort-${stopReason}`;
+    const send = async (context: GatewayRequestContext) => {
+      const responses: Array<{ ok: boolean; payload?: unknown }> = [];
+      await harness.sendControlUiChat({
+        context,
+        idempotencyKey: runId,
+        message: "persist, then stop",
+        respond: captureChatResult(responses),
+      });
+      return responses;
+    };
+    const userInput = (event: unknown) =>
+      isRecord(event) &&
+      event.type === "message" &&
+      isRecord(event.message) &&
+      event.message.idempotencyKey === `${runId}:user`;
     let stopListening: (() => void) | undefined;
     await harness.withCommittedChatSession(async (scope) => {
       try {
@@ -65,13 +80,7 @@ export function registerChatAbortAdmissionRetryTests(harness: {
             abortCommittedTurn();
           }
         });
-        const responses: Array<{ ok: boolean; payload?: unknown }> = [];
-        await harness.sendControlUiChat({
-          context,
-          idempotencyKey: runId,
-          message: "persist, then stop",
-          respond: captureChatResult(responses),
-        });
+        const responses = await send(context);
         stopListening();
         expect(abortCommittedTurn).toHaveBeenCalledOnce();
         expect(responses).toEqual([
@@ -111,13 +120,7 @@ export function registerChatAbortAdmissionRetryTests(harness: {
           expect(stored?.restartRecoveryTerminalRunIds).toEqual([runId]);
           expect(context.chatRunState.hasAbortMarker(runId)).toBe(true);
           expect(context.dedupe.delete(`chat:${runId}`)).toBe(true);
-          const abortedRetryResponses: Array<{ ok: boolean; payload?: unknown }> = [];
-          await harness.sendControlUiChat({
-            context,
-            idempotencyKey: runId,
-            message: "persist, then stop",
-            respond: captureChatResult(abortedRetryResponses),
-          });
+          const abortedRetryResponses = await send(context);
           expect(abortedRetryResponses).toEqual([
             {
               ok: true,
@@ -126,30 +129,22 @@ export function registerChatAbortAdmissionRetryTests(harness: {
           ]);
           expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
         }
-        expect(loadTranscriptEventsSync(scope)).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              type: "message",
-              message: expect.objectContaining({
-                content: "persist, then stop",
-                idempotencyKey: `${runId}:user`,
-                role: "user",
-              }),
+        expect(loadTranscriptEventsSync(scope)).toContainEqual(
+          expect.objectContaining({
+            type: "message",
+            message: expect.objectContaining({
+              content: "persist, then stop",
+              idempotencyKey: `${runId}:user`,
+              role: "user",
             }),
-          ]),
+          }),
         );
 
         const retryContext = createDirectChatContext();
-        const retryResponses: Array<{ ok: boolean; payload?: unknown }> = [];
         if (retryable) {
           dispatchInboundMessageMock.mockResolvedValueOnce(undefined);
         }
-        await harness.sendControlUiChat({
-          context: retryContext,
-          idempotencyKey: runId,
-          message: "persist, then stop",
-          respond: captureChatResult(retryResponses),
-        });
+        const retryResponses = await send(retryContext);
         expect(retryResponses).toEqual([
           {
             ok: true,
@@ -171,26 +166,7 @@ export function registerChatAbortAdmissionRetryTests(harness: {
         } else {
           expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
         }
-        expect(
-          loadTranscriptEventsSync(scope).filter((event) => {
-            if (
-              typeof event !== "object" ||
-              event === null ||
-              !("type" in event) ||
-              event.type !== "message" ||
-              !("message" in event)
-            ) {
-              return false;
-            }
-            const message = event.message;
-            return (
-              typeof message === "object" &&
-              message !== null &&
-              "idempotencyKey" in message &&
-              message.idempotencyKey === `${runId}:user`
-            );
-          }),
-        ).toHaveLength(1);
+        expect(loadTranscriptEventsSync(scope).filter(userInput)).toHaveLength(1);
       } finally {
         stopListening?.();
       }

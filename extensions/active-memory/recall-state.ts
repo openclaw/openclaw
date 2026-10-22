@@ -242,14 +242,3 @@ export function toSingleLineErrorMessage(error: unknown): string {
 export function shouldCacheResult(result: ActiveRecallResult): boolean {
   return result.status === "ok" && result.summary.length > 0;
 }
-
-export function resetActiveRecallStateForTests(): void {
-  activeRecallCache.clear();
-  activeRecallRuns.clear();
-  timeoutCircuitBreaker.clear();
-  lastActiveRecallCacheSweepAt = 0;
-}
-
-export function getCircuitBreakerEntry(key: string): CircuitBreakerEntry | undefined {
-  return timeoutCircuitBreaker.get(key);
-}

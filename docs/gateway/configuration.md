@@ -52,7 +52,7 @@ field map and defaults.
   <Tab title="CLI (one-liners)">
     ```bash
     openclaw config get agents.defaults.workspace
-    openclaw config set agents.defaults.heartbeat.every "2h"
+    openclaw config set agents.defaults.userTimezone "Europe/Vienna"
     openclaw config unset plugins.entries.brave.config.webSearch.apiKey
     ```
   </Tab>
@@ -121,6 +121,12 @@ The Gateway blocks writes that look like accidental clobbers - dropping the effe
 allows destructive changes. Mode checks resolve `$include` and environment references
 first. Missing `meta` is recorded as a write anomaly. Promotion to last-known-good is
 skipped when a candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
+Suspicious external reductions and stub-shaped snapshots also leave the trusted
+recovery copy unchanged during startup and hot reload. An ordinary accepted edit
+to an already-truncated file does not approve that earlier loss for replacing the
+backup, so Doctor can still restore the intact configuration.
+The health owner carries that anomaly across automatic metadata stamping and later
+reads; stamping a missing `meta` section does not restore the lost settings.
 
 ## Configuration pages
 
@@ -150,7 +156,7 @@ the page that now holds the content.
 - <a id="configure-sessions-and-resets" />[Configure sessions and resets](/gateway/configuration/common-tasks#configure-sessions-and-resets)
 - <a id="enable-sandboxing" />[Enable sandboxing](/gateway/configuration/common-tasks#enable-sandboxing)
 - <a id="enable-relay-backed-push-for-official-ios-builds" />[Enable relay-backed push for official iOS builds](/gateway/configuration/common-tasks#enable-relay-backed-push-for-official-ios-builds)
-- <a id="set-up-heartbeat-periodic-check-ins" />[Set up heartbeat (periodic check-ins)](/gateway/configuration/common-tasks#set-up-heartbeat-periodic-check-ins)
+- <a id="set-up-heartbeat-periodic-check-ins" />[Set up periodic check-ins](/gateway/configuration/common-tasks#set-up-heartbeat-periodic-check-ins)
 - <a id="configure-cron-jobs" />[Configure cron jobs](/gateway/configuration/common-tasks#configure-cron-jobs)
 - <a id="set-up-webhooks-hooks" />[Set up webhooks (hooks)](/gateway/configuration/common-tasks#set-up-webhooks-hooks)
 - <a id="configure-multi-agent-routing" />[Configure multi-agent routing](/gateway/configuration/common-tasks#configure-multi-agent-routing)

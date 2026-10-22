@@ -130,7 +130,7 @@ type ApprovalReplayHost = Pick<
   reconcileApprovalTerminals?: ApplicationOverlays["reconcileApprovalTerminals"];
 };
 
-export function currentSessionApprovalReplay(
+function currentSessionApprovalReplay(
   state: ApprovalReplayHost,
   agentId?: string,
 ): SessionApprovalReplayState | undefined {
@@ -141,6 +141,26 @@ export function currentSessionApprovalReplay(
     current?.agentId === (isUiGlobalSessionKey(state.sessionKey) ? agentId : undefined)
     ? current
     : undefined;
+}
+
+/** Complete replay owns absence; terminal events cannot reappear from the global queue. */
+export function currentInlineSessionApproval(
+  state: ApprovalReplayHost & { chatSessionApprovalQueue?: ExecApprovalRequest[] },
+  agentId: string,
+  globalQueue: readonly ExecApprovalRequest[] | undefined,
+  matchesConversation: (request: ExecApprovalRequest["request"]) => boolean,
+): ExecApprovalRequest | null {
+  const pendingReplay = chatHistoryRequests(state).pendingApprovalReplay;
+  const isPending = (id: string) => pendingReplay?.events.get(id)?.phase !== "terminal";
+  return (
+    state.chatSessionApprovalQueue?.find((approval) => isPending(approval.id)) ??
+    (currentSessionApprovalReplay(state, agentId)?.complete
+      ? null
+      : globalQueue?.find(
+          (approval) => isPending(approval.id) && matchesConversation(approval.request),
+        )) ??
+    null
+  );
 }
 
 /** A complete pending snapshot supersedes the global queue only for this pane's owner. */

@@ -71,7 +71,8 @@ export function raceWithAbortSignal<T>(
 function isTurnYieldCall(tool: AnyAgentTool, args: unknown): boolean {
   return (
     tool.name === "sessions_yield" ||
-    (tool.name === "plugins" && asOptionalObjectRecord(args)?.action === "reloadAndResume")
+    (tool.name === "plugins" && asOptionalObjectRecord(args)?.action === "reloadAndResume") ||
+    (tool.name === "github_publish" && asOptionalObjectRecord(args)?.action === "prepare_pr")
   );
 }
 

@@ -1,3 +1,14 @@
+/* Details and the desktop menus share the same block-divider color. Keep the
+   token available before lazy menu/Details styles load, without changing other borders. */
+.chat-details-desktop-body,
+.chat-dashboard-menu__panel,
+.side-panel-position-menu,
+.chat-pr-menu,
+.chat-header-session-menu__panel,
+.session-menu__panel {
+  --details-separator: color-mix(in srgb, var(--border-strong) 70%, var(--border));
+}
+
 :root {
   --bg: #0e1015;
   --bg-accent: #13151b;
@@ -31,6 +42,12 @@
   --muted-foreground: #8b8b94;
   --file-icon-glyph: var(--muted);
 
+  /* Navigation controls use their own resting ink and subdued primary action. */
+  --sidebar-rail-control-color: color-mix(in srgb, var(--text-strong) 46%, transparent);
+  --sidebar-rail-action-bg: oklch(from var(--accent) calc(l * 0.94) calc(c * 0.72) h);
+  --sidebar-rail-action-hover-bg: oklch(from var(--accent-hover) calc(l * 0.94) calc(c * 0.72) h);
+  --sidebar-rail-action-active-bg: oklch(from var(--accent) calc(l * 0.9) calc(c * 0.72) h);
+
   /* GitHub references share an opaque neutral surface; only their ink carries status. */
   --github-item-bg: color-mix(in srgb, var(--text) 6%, var(--bg));
   --github-item-hover-bg: color-mix(in srgb, var(--text) 10%, var(--bg));
@@ -54,6 +71,7 @@
   --rail-header-action-disabled-opacity: 0.4;
   --rail-header-action-gap: 2px;
   --rail-header-background: var(--bg);
+  --session-header-control-surface: var(--bg-elevated);
   --rail-header-title-size: var(--control-ui-text-sm);
   --rail-header-title-weight: 600;
   --rail-divider-color: var(--border);
@@ -201,6 +219,12 @@
   --info: #60a5fa;
   --info-subtle: rgba(96, 165, 250, 0.08);
   --pr-merged: #a78bfa;
+  /* Categorical chart series: distinct hues validated for color-vision separation on this surface. */
+  --chart-series-1: #3987e5;
+  --chart-series-2: #d95926;
+  --chart-series-3: #199e70;
+  --chart-series-4: #c98500;
+  --chart-series-5: #d55181;
 
   --focus: rgba(255, 92, 92, 0.2);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 80%, transparent);
@@ -411,6 +435,7 @@
   .chat-pr.chat-pr,
   .nav-item.nav-item,
   .sidebar-recent-session.sidebar-recent-session,
+  .plugin-catalog-detail__security-score.plugin-catalog-detail__security-score,
   .settings-sidebar__item.settings-sidebar__item,
   .btn.btn,
   .agent-select__trigger.agent-select__trigger,
@@ -505,6 +530,15 @@
   --bg-hover: #efebe4;
   --bg-muted: #efebe4;
   --bg-content: #f4f1ec;
+
+  --session-header-control-surface: color-mix(in srgb, var(--text) 9%, var(--bg-content));
+  --session-header-sharing-hover-bg: color-mix(in srgb, var(--text) 12%, var(--bg-content));
+  --session-header-sharing-active-bg: color-mix(in srgb, var(--text) 15%, var(--bg-content));
+  --session-header-control-hover-bg: color-mix(in srgb, var(--text) 7%, var(--bg-content));
+  --session-header-control-active-color: color-mix(in srgb, var(--accent) 20%, var(--text));
+  --subagent-avatar-ink: 45% 36%;
+  --subagent-avatar-tint: 45% 94%;
+  --subagent-avatar-tint-strength: 100%;
 
   --card: #ffffff;
   --card-foreground: #211e1a;
@@ -603,6 +637,11 @@
   --info: #1d4ed8;
   --info-subtle: rgba(29, 78, 216, 0.08);
   --pr-merged: #7c3aed;
+  --chart-series-1: #2a78d6;
+  --chart-series-2: #eb6834;
+  --chart-series-3: #1baf7a;
+  --chart-series-4: #eda100;
+  --chart-series-5: #e87ba4;
 
   --focus: rgba(189, 69, 49, 0.15);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 70%, transparent);
@@ -639,7 +678,9 @@
   scrollbar-width: thin;
 }
 
-.sr-only {
+.sr-only,
+.settings-control__sr-label,
+.cron-required-sr {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -647,9 +688,13 @@
   padding: 0;
   overflow: hidden;
   clip: rect(0, 0, 0, 0);
-  clip-path: inset(50%);
   white-space: nowrap;
   border: 0;
+}
+
+/* Preserve the additional clipping only for the existing generic utility. */
+.sr-only {
+  clip-path: inset(50%);
 }
 
 html,
@@ -823,7 +868,6 @@ a:where(
     .sidebar-markdown a,
     .markdown a,
     .markdown-body a,
-    .chat-session-rail__answer a,
     .dreams-diary__para a
   ):not(:where(.btn, [role="button"])) {
   text-decoration: underline;

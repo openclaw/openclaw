@@ -4,7 +4,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/users.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { runInteractiveUpdateFailureAction } from "../../cli/update-cli/update-command-report.js";
+import { UpdateCommandFailure } from "../../cli/update-cli/update-command-result.js";
+import { completeUpdateCommandRun } from "../../cli/update-cli/update-command-run.js";
+import { withUpdateFailureTriage } from "../../cli/update-cli/update-command-triage.js";
+import { withTriageTerminal } from "../../commands/triage.test-support.js";
 import type { RunGithubCli } from "../../infra/github-issue.js";
 import {
   readUpdateFailureReportReceipt,
@@ -12,6 +15,7 @@ import {
 } from "../../infra/restart-sentinel.js";
 import { parseUpdateDoctorLintReport } from "../../infra/update-doctor-lint.js";
 import type { UpdateFailureFact } from "../../infra/update-failure-facts.js";
+import { prepareUpdateFailureReport } from "../../infra/update-failure-report.js";
 import {
   createUpdateRun,
   finishUpdateRun,
@@ -22,6 +26,8 @@ import {
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import { runStep } from "../../infra/update-runner-command.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import { defaultRuntime } from "../../runtime.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -145,14 +151,26 @@ function resultStep(name: string, exitCode: number | null = null, durationMs = 0
   return { name, command: "", cwd: "", durationMs, exitCode };
 }
 
-function interactiveReport(
-  result: NonNullable<Parameters<typeof runInteractiveUpdateFailureAction>[0]["result"]>,
-  env = process.env,
-) {
+function interactiveReport(result: UpdateRunResult, env = process.env) {
   const runtime = { log: vi.fn(), error: vi.fn() };
   return {
     runtime,
-    run: () => runInteractiveUpdateFailureAction({ attemptId: runId, env, result, runtime }),
+    run: async () => {
+      const log = vi.spyOn(defaultRuntime, "log").mockImplementation(runtime.log);
+      const error = vi.spyOn(defaultRuntime, "error").mockImplementation(runtime.error);
+      try {
+        await withTriageTerminal(true, async () => {
+          await expect(
+            withUpdateFailureTriage({ run: { runId, env } }, { env }, () =>
+              Promise.reject(new UpdateCommandFailure(result)),
+            ),
+          ).rejects.toMatchObject({ code: 1 });
+        });
+      } finally {
+        log.mockRestore();
+        error.mockRestore();
+      }
+    },
   };
 }
 
@@ -380,26 +398,26 @@ describe("Report action from the authoritative update ledger", () => {
         ],
       });
       finishUpdateRun(runId, { status: "failed", reason: "verification-failed" });
-      mocks.confirm.mockResolvedValue(false);
-      const interactive = interactiveReport(
-        {
-          status: "error",
-          mode: "npm",
-          reason: "verification-failed",
-          durationMs: 1,
-          steps: [resultStep("verifying", mode === "direct-success" ? 0 : 7, 1)],
-        },
+      const env =
         mode === "other-scope"
           ? { ...process.env, OPENCLAW_STATE_DIR: path.join(home.home, "other-scope") }
-          : process.env,
+          : process.env;
+      const { body } = await prepareUpdateFailureReport(
+        {
+          attemptId: runId,
+          action: "cli",
+          recordedRun: getUpdateRun(runId, { env }),
+          result: {
+            status: "error",
+            mode: "npm",
+            reason: "verification-failed",
+            durationMs: 1,
+            steps: [resultStep("verifying", mode === "direct-success" ? 0 : 7, 1)],
+          },
+        },
+        { env },
       );
-      await interactive.run();
-      const { runtime } = interactive;
-      const body =
-        runtime.log.mock.calls
-          .map(([text]) => String(text))
-          .find((text) => text.startsWith("# OpenClaw update failure report")) ?? "";
-      expect(runtime.error).not.toHaveBeenCalled();
+      await expectNoReport();
       if (mode === "other-scope") {
         expectText(body, [], ["Failed phase activating", "Failing check readyz"]);
       } else {
@@ -707,7 +725,17 @@ describe("Report action from the authoritative update ledger", () => {
   ] as const)(
     "reuses CLI $outcome across Gateway reconnect, changed preview: $changedPreview",
     async ({ outcome, changedPreview }) => {
-      recordFailure();
+      createUpdateRun({
+        runId,
+        trigger: "control-ui",
+        before: { version: "2026.9.1" },
+        target: { kind: "git", sha: "f".repeat(40) },
+        origin: {
+          sessionKey: "private-session",
+          doctorHint: "private-command --token private-secret",
+        },
+      });
+      recordUpdateRunPhase(runId, "validating");
       mocks.select.mockResolvedValueOnce("report").mockResolvedValue("dismiss");
       mocks.runGh.mockImplementation(async (args) => {
         if (args[0] === "auth") {
@@ -720,16 +748,22 @@ describe("Report action from the authoritative update ledger", () => {
         expect(args[0]).toBe("api");
         return outcome === "created" ? ghResult(issueUrl) : ghResult("", 1);
       });
-      const interactive = interactiveReport({
-        status: "error",
-        mode: "git",
-        reason: "build-failed",
-        durationMs: 1,
-        before: { version: "2026.9.1" },
-        after: { version: changedPreview ? "2026.9.3" : "2026.9.2", upstreamRef: "f".repeat(40) },
-        steps: [resultStep("validating"), resultStep("build")],
-      });
-      await expect(interactive.run()).resolves.toBe("handled");
+      const result = completeUpdateCommandRun(
+        {
+          status: "error",
+          mode: "git",
+          reason: "build-failed",
+          durationMs: 1,
+          before: { version: "2026.9.1" },
+          after: { version: "2026.9.2", upstreamRef: "f".repeat(40) },
+          steps: [resultStep("validating"), resultStep("build")],
+        },
+        { runId, env: process.env },
+      );
+      const interactive = interactiveReport(
+        changedPreview ? { ...result, after: { ...result.after, version: "2026.9.3" } } : result,
+      );
+      await interactive.run();
       const { runtime } = interactive;
       expect(runtime.error).not.toHaveBeenCalled();
       expect(mocks.select).toHaveBeenCalledTimes(outcome === "pending" ? 2 : 1);

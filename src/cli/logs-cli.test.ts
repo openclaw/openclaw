@@ -20,7 +20,7 @@ vi.mock("../config/gateway-dispatch-config.js", () => ({
 }));
 
 function journalPage(line: string, cursor: string) {
-  return { stdout: `${line}\n-- cursor: s=${cursor}`, stderr: "", code: 0, truncated: false };
+  return { stdout: `${line}\n-- cursor: s=${cursor}`, code: 0, truncated: false };
 }
 
 const logFile = "/tmp/openclaw.log";

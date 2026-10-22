@@ -1,14 +1,17 @@
 import type { EmbeddingProviderAdapter } from "openclaw/plugin-sdk/embedding-providers";
 import {
+  createRemoteEmbeddingProvider,
   embeddingProviderOwnsDestination,
+  resolveRemoteEmbeddingClient,
   sanitizeEmbeddingCacheHeaders,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
-  createDeepInfraEmbeddingProvider,
-  DEFAULT_DEEPINFRA_EMBEDDING_MODEL,
-} from "./embedding-provider.js";
-import { DEEPINFRA_BASE_URL } from "./media-models.js";
+  DEEPINFRA_BASE_URL,
+  DEEPINFRA_EMBED_FALLBACK_MODELS,
+  normalizeDeepInfraModelRef,
+} from "./media-models.js";
 
+const DEFAULT_DEEPINFRA_EMBEDDING_MODEL = DEEPINFRA_EMBED_FALLBACK_MODELS[0];
 const EXCLUDED_EMBEDDING_HEADERS = ["authorization", "content-type", "x-api-key", "api-key"];
 
 export const deepinfraEmbeddingProviderAdapter: EmbeddingProviderAdapter = {
@@ -17,10 +20,23 @@ export const deepinfraEmbeddingProviderAdapter: EmbeddingProviderAdapter = {
   transport: "remote",
   authProviderId: "deepinfra",
   create: async (createOptions) => {
-    const { provider, client } = await createDeepInfraEmbeddingProvider({
-      ...createOptions,
+    const client = await resolveRemoteEmbeddingClient({
       provider: "deepinfra",
-      defaultModel: DEFAULT_DEEPINFRA_EMBEDDING_MODEL,
+      options: {
+        ...createOptions,
+        provider: "deepinfra",
+        model: normalizeDeepInfraModelRef(createOptions.model, DEFAULT_DEEPINFRA_EMBEDDING_MODEL),
+      },
+      defaultBaseUrl: DEEPINFRA_BASE_URL,
+      normalizeModel: (model) =>
+        normalizeDeepInfraModelRef(model, DEFAULT_DEEPINFRA_EMBEDDING_MODEL),
+    });
+    const provider = createRemoteEmbeddingProvider({
+      id: "deepinfra",
+      client,
+      errorPrefix: "DeepInfra embeddings API error",
+      // DeepInfra query and document payloads are identical, so arrays stay one provider batch.
+      batchQueryInputs: true,
     });
     const headers = sanitizeEmbeddingCacheHeaders(client.headers, EXCLUDED_EMBEDDING_HEADERS);
     const usesDefaultIdentity =

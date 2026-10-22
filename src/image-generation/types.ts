@@ -62,6 +62,8 @@ export type ImageGenerationRequest = {
   agentDir?: string;
   authStore?: AuthProfileStore;
   timeoutMs?: number;
+  /** Cancels image generation and any result downloads owned by this request. */
+  signal?: AbortSignal;
   count?: number;
   size?: string;
   aspectRatio?: string;

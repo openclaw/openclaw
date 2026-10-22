@@ -7,7 +7,6 @@ import {
   For,
   getOwner,
   Match,
-  onCleanup,
   onSettled,
   runWithOwner,
   Show,
@@ -76,7 +75,7 @@ function FrameBody(props: {
   const [readParent, setParent] = createSignal<HTMLElement | null>(null, { ownedWrite: true });
   const ranges = new Map<string, PartRange>();
   const retire = (range: PartRange) => {
-    // Lit descendants must park their widgets while the range is still connected.
+    // Native descendants must park their widgets while the range is still connected.
     range.dispose();
     const after = range.end.nextSibling;
     for (let node: Node | null = range.start; node && node !== after;) {
@@ -85,18 +84,18 @@ function FrameBody(props: {
       node = following;
     }
   };
-  onCleanup(() => {
-    for (const range of ranges.values()) {
-      retire(range);
-    }
-    ranges.clear();
-  });
   onSettled(() => {
     const committedParent = anchor.parentElement;
     if (!committedParent) {
       throw new Error("Run frame body anchor was not committed");
     }
     setParent(committedParent);
+    return () => {
+      for (const range of ranges.values()) {
+        retire(range);
+      }
+      ranges.clear();
+    };
   });
   createEffect(
     () => ({

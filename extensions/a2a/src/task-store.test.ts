@@ -19,9 +19,9 @@ describe("A2A task store", () => {
 
   it("correlates concurrent replies by task identity without cross-talk", () => {
     const store = createTaskStore();
-    const aliceFirst = store.create("ctx-alice");
-    const bobOnly = store.create("ctx-bob");
-    const aliceSecond = store.create("ctx-alice");
+    const aliceFirst = store.create("ctx-alice", "alice", "first");
+    const bobOnly = store.create("ctx-bob", "bob", "only");
+    const aliceSecond = store.create("ctx-alice", "alice", "second");
     for (const task of [aliceFirst, bobOnly, aliceSecond]) {
       store.start(task.id);
     }
@@ -35,7 +35,7 @@ describe("A2A task store", () => {
 
   it("completes empty replies without inventing an artifact", () => {
     const store = createTaskStore();
-    const task = store.create("ctx-alice");
+    const task = store.create("ctx-alice", "alice", "empty");
 
     expect(store.complete(task.id, undefined)).toMatchObject({
       status: {
@@ -48,9 +48,9 @@ describe("A2A task store", () => {
 
   it("records bounded failures and policy rejections without consuming sibling replies", () => {
     const store = createTaskStore();
-    const failed = store.create("ctx-alice");
-    const rejected = store.create("ctx-alice");
-    const active = store.create("ctx-alice");
+    const failed = store.create("ctx-alice", "alice", "failed");
+    const rejected = store.create("ctx-alice", "alice", "rejected");
+    const active = store.create("ctx-alice", "alice", "active");
 
     expect(store.fail(failed.id, new Error(`${"x".repeat(511)}😀tail`))).toMatchObject({
       status: { state: "TASK_STATE_FAILED", message: { parts: [{ text: "x".repeat(511) }] } },
@@ -63,7 +63,7 @@ describe("A2A task store", () => {
 
   it("returns working tasks after timeout and accepts the eventual final reply", async () => {
     const store = createTaskStore();
-    const task = store.create("ctx-alice");
+    const task = store.create("ctx-alice", "alice", "late");
     store.start(task.id);
 
     await expect(store.wait(task, 0)).resolves.toMatchObject({
@@ -77,21 +77,21 @@ describe("A2A task store", () => {
 
   it("fails outstanding HTTP waits on shutdown", async () => {
     const store = createTaskStore();
-    const task = store.create("ctx-alice");
+    const task = store.create("ctx-alice", "alice", "shutdown");
     store.start(task.id);
     const waiting = store.wait(task, 120_000);
 
     store.stop();
 
     await expect(waiting).resolves.toMatchObject({ status: { state: "TASK_STATE_FAILED" } });
-    expect(store.get(task.id)).toBeUndefined();
+    expect(store.get(task.id, "alice")).toBeUndefined();
   });
 
   it("keeps a later observer waiting after a sibling times out", async () => {
     vi.useFakeTimers();
     try {
       const store = createTaskStore();
-      const task = store.create("ctx-alice");
+      const task = store.create("ctx-alice", "alice", "observers");
       store.start(task.id);
       const first = store.wait(task, 10);
       await vi.advanceTimersByTimeAsync(5);
@@ -125,9 +125,9 @@ describe("A2A task store", () => {
       store.complete(task.id, "done");
     }
 
-    expect(store.get(completedIds[0]!)).toBeUndefined();
-    expect(store.get(completedIds[1]!)).toBeDefined();
-    expect(store.get(completedIds[500]!)).toBeDefined();
+    expect(store.get(completedIds[0]!, "alice")).toBeUndefined();
+    expect(store.get(completedIds[1]!, "alice")).toBeDefined();
+    expect(store.get(completedIds[500]!, "alice")).toBeDefined();
     expect(store.create("ctx-0", "alice", "message-0").id).not.toBe(completedIds[0]);
   });
 
@@ -137,12 +137,12 @@ describe("A2A task store", () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(currentTime);
     const completed = store.create("ctx-completed", "alice", "expired-message");
     store.complete(completed.id, "done");
-    const active = store.create("ctx-active");
+    const active = store.create("ctx-active", "alice", "active");
 
     clock.mockReturnValue(currentTime + 24 * 60 * 60 * 1000);
 
-    expect(store.get(completed.id)).toBeUndefined();
-    expect(store.get(active.id)).toBe(active);
+    expect(store.get(completed.id, "alice")).toBeUndefined();
+    expect(store.get(active.id, "alice")).toBe(active);
     expect(store.create("ctx-completed", "alice", "expired-message").id).not.toBe(completed.id);
   });
 });

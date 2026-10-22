@@ -8,10 +8,11 @@ import {
   iterateSqliteQuerySync,
 } from "../infra/kysely-sync.js";
 // Approval creation and bounded query transactions, executed in workers.
-import type { EngineConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
 import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
+import { ensureStatePostgresFragment } from "../state/openclaw-state-db-engine.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { matchesOperatorApprovalReviewerBinding } from "./operator-approval-reviewer-binding.js";
@@ -176,7 +177,11 @@ export function insertOperatorApprovalInDatabase(params: {
     }
     if (result.rows.length === 1) {
       if (executionIdentityBinding) {
-        ensureExecutionIdentitySchema(database.db);
+        if (isPostgresSqlConnection(database.db)) {
+          ensureStatePostgresFragment(database.db, "operator_approval_execution_identities");
+        } else {
+          ensureExecutionIdentitySchema(database.db);
+        }
         executeSqliteQuerySync(
           database.db,
           stateDb.insertInto("operator_approval_execution_identities").values({

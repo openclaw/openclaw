@@ -346,8 +346,9 @@ Slack-only:
   `streaming.progress.toolProgress: true` adds the rolling tool log with its icons.
   Telegram retains its current-operation and delegated-task status presentation.
 - `progress` mode deletes the status draft once the final answer is delivered,
-  so busy channels keep no orphaned tool log above the reply. Error finals keep
-  the draft as the record of the failed turn.
+  so busy channels keep no orphaned tool log above the reply. Transient deletion
+  failures are retried with backoff. Error finals keep the draft as the record
+  of the failed turn.
 - Final media, error, and explicit-reply payloads cancel pending previews
   without flushing a new draft, then use normal delivery.
 

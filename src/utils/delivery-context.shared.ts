@@ -90,26 +90,7 @@ export function deliveryContextFromChannelRoute(
   });
 }
 
-function mergeRouteMetadataWithDeliveryContext(
-  route: ChannelRouteRef | undefined,
-  context: DeliveryContext,
-): ChannelRouteRef | undefined {
-  if (!route) {
-    return normalizeChannelRouteTarget(normalizeDeliveryContext(context));
-  }
-  return normalizeChannelRouteRef({
-    channel: route.channel ?? context.channel,
-    to: route.target?.to ?? context.to,
-    rawTo: route.target?.rawTo,
-    chatType: route.target?.chatType,
-    accountId: route.accountId ?? context.accountId,
-    threadId: route.thread?.id ?? context.threadId,
-    threadKind: route.thread?.kind,
-    threadSource: route.thread?.source,
-  });
-}
-
-function isInternalRouteContext(context?: DeliveryContext): boolean {
+export function isInternalRouteContext(context?: DeliveryContext): boolean {
   const channel = context?.channel;
   return Boolean(
     channel && (channel === INTERNAL_MESSAGE_CHANNEL || isInternalNonDeliveryChannel(channel)),
@@ -126,7 +107,7 @@ function hasExternalDeliveryTarget(context?: DeliveryContext): boolean {
   );
 }
 
-function mergeExternalDeliveryContextOverInternalRoute(
+export function mergeExternalDeliveryContextOverInternalRoute(
   deliveryContext?: DeliveryContext,
   internalContext?: DeliveryContext,
 ): DeliveryContext | undefined {
@@ -190,11 +171,11 @@ export function normalizeSessionDeliveryState(params?: {
   const fallbackContext = mergeDeliveryContext(context, originContext);
   const routeIsInternalFallback =
     isInternalRouteContext(routeContext) && hasExternalDeliveryTarget(context);
+  const internalContext = routeIsInternalFallback
+    ? mergeDeliveryContext(routeContext, originContext)
+    : undefined;
   const merged = routeIsInternalFallback
-    ? mergeExternalDeliveryContextOverInternalRoute(
-        context,
-        mergeDeliveryContext(routeContext, originContext),
-      )
+    ? mergeExternalDeliveryContextOverInternalRoute(context, internalContext)
     : mergeDeliveryContext(routeContext, fallbackContext);
 
   if (!merged) {
@@ -203,10 +184,19 @@ export function normalizeSessionDeliveryState(params?: {
   if (isInternalRouteContext(merged)) {
     return { kind: "internal" };
   }
-  const route = mergeRouteMetadataWithDeliveryContext(
-    routeIsInternalFallback ? undefined : normalizedRoute,
-    merged,
-  );
+  const deliveryRoute = routeIsInternalFallback ? undefined : normalizedRoute;
+  const route = deliveryRoute
+    ? normalizeChannelRouteRef({
+        channel: deliveryRoute.channel ?? merged.channel,
+        to: deliveryRoute.target?.to ?? merged.to,
+        rawTo: deliveryRoute.target?.rawTo,
+        chatType: deliveryRoute.target?.chatType,
+        accountId: deliveryRoute.accountId ?? merged.accountId,
+        threadId: deliveryRoute.thread?.id ?? merged.threadId,
+        threadKind: deliveryRoute.thread?.kind,
+        threadSource: deliveryRoute.thread?.source,
+      })
+    : normalizeChannelRouteTarget(normalizeDeliveryContext(merged));
   if (!route) {
     return { kind: "none" };
   }

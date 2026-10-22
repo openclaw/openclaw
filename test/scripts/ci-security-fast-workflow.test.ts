@@ -203,7 +203,6 @@ it.each(["pull_request", "push", "schedule", "workflow_dispatch"] as const)(
   "runs the production audit only for release dispatches: %s",
   (eventName) => {
     const audit = securityStep("Audit production dependencies");
-    expect(audit.if).toBeDefined();
     for (const [dispatchId, release] of [
       ["", false],
       ["manual-ci", false],

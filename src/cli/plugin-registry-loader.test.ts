@@ -101,7 +101,6 @@ it("forwards explicit config snapshots to plugin loading", async () => {
   const params = {
     scope: "configured-channels" as const,
     config: { channels: { quietchat: { enabled: true } } },
-    activationSourceConfig: { channels: { quietchat: { enabled: true } } },
   };
   await ensureCliPluginRegistryLoaded(params);
   expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith(params);

@@ -5,89 +5,88 @@ import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolveControlUiSessionPath } from "./control-ui-session-path-resolve.js";
 import type { GatewayClient } from "./server-methods/types.js";
-import { createSessionRowProjection } from "./session-row-projection.js";
+import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 
 afterEach(() => closeOpenClawAgentDatabasesForTest());
 
+const scope = (sessionKey: string) => ({ agentId: "main", sessionKey });
+const patch = (key: string, changes: Partial<InternalSessionEntry>) =>
+  patchSessionEntryCore(scope(key), () => changes);
+const put = (key: string, sessionId: string, fields: Partial<InternalSessionEntry>) =>
+  upsertSessionEntryCore(scope(key), { sessionId, updatedAt: 1, ...fields });
+const config = (): OpenClawConfig => ({ agents: { entries: { main: {} } } });
+function resolver(projection: SessionRowProjection, publicOnly = false) {
+  return (ref: string, client: GatewayClient | null = null, isCurrent?: () => boolean) => {
+    const target = parseControlUiSessionPath(`/chat/main/${ref}`);
+    if (!target) {
+      throw new Error("Invalid fixture URL");
+    }
+    return resolveControlUiSessionPath({ target, projection, client, publicOnly, isCurrent });
+  };
+}
+
 it("resolves only current public instances before choosing a URL candidate", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+    const cfg = config();
     setRuntimeConfigSnapshot(cfg);
     const key = "agent:main:dashboard:12345678-aaaa-4000-8000-000000000001";
     const privateKey = "agent:main:dashboard:12345678-bbbb-4000-8000-000000000002";
-    const scope = { agentId: "main", sessionKey: key };
     const grant = { id: "a".repeat(48), sessionId: "generation", createdAt: 1 };
-    await upsertSessionEntryCore(scope, {
-      sessionId: "generation",
-      updatedAt: 1,
+    await put(key, "generation", {
       archivedAt: 1,
       displayName: "Public notes",
       publicShare: grant,
     });
-    await upsertSessionEntryCore(
-      { ...scope, sessionKey: privateKey },
-      { sessionId: "private", updatedAt: 2, displayName: "Private title" },
-    );
+    await put(privateKey, "private", { updatedAt: 2, displayName: "Private title" });
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
-    const resolve = async (path: string) => {
-      const target = parseControlUiSessionPath(path);
-      if (!target) {
-        throw new Error("Invalid fixture URL");
-      }
-      return resolveControlUiSessionPath({ target, projection, client: null, publicOnly: true });
-    };
+    const resolve = resolver(projection, true);
     try {
       for (const path of [
-        "/chat/main/12345678",
-        "/chat/main/stale-title-12345678aaaa40008000000000000001",
-        "/chat/main/dashboard/12345678-aaaa-4000-8000-000000000001",
-        "/chat/main/public-notes",
+        "12345678",
+        "stale-title-12345678aaaa40008000000000000001",
+        "dashboard/12345678-aaaa-4000-8000-000000000001",
+        "public-notes",
       ]) {
         expect(await resolve(path)).toMatchObject({ key, agentId: "main" });
       }
       for (const path of [
-        "/chat/main/private-title",
-        "/chat/main/dashboard/12345678-bbbb-4000-8000-000000000002",
-        "/chat/main/absent",
-        "/chat/main/incognito/private",
+        "private-title",
+        "dashboard/12345678-bbbb-4000-8000-000000000002",
+        "absent",
+        "incognito/private",
       ]) {
         expect(await resolve(path)).toBeNull();
       }
-      await patchSessionEntryCore({ ...scope, sessionKey: privateKey }, () => ({
-        displayName: "Public notes",
-      }));
-      expect(await resolve("/chat/main/public-notes")).toMatchObject({ key });
-      const captured = await resolve("/chat/main/12345678");
-      await patchSessionEntryCore({ ...scope, sessionKey: privateKey }, () => ({ updatedAt: 3 }));
+      await patch(privateKey, { displayName: "Public notes" });
+      expect(await resolve("public-notes")).toMatchObject({ key });
+      const captured = await resolve("12345678");
+      await patch(privateKey, { updatedAt: 3 });
       await projection.ensureMaterialized();
       expect(captured?.isCurrent()).toBe(true);
-      await patchSessionEntryCore({ ...scope, sessionKey: privateKey }, () => ({
+      await patch(privateKey, {
         publicShare: { ...grant, id: "c".repeat(48), sessionId: "private" },
-      }));
-      expect(await resolve("/chat/main/12345678")).toBeNull();
-      expect(await resolve("/chat/main/public-notes")).toBeNull();
+      });
+      expect(await resolve("12345678")).toBeNull();
+      expect(await resolve("public-notes")).toBeNull();
       expect(captured?.isCurrent()).toBe(false);
-      expect(
-        await resolve("/chat/main/stale-title-12345678aaaa40008000000000000001"),
-      ).toMatchObject({ key });
-      await patchSessionEntryCore({ ...scope, sessionKey: privateKey }, () => ({
-        publicShare: undefined,
-      }));
-      await patchSessionEntryCore(scope, () => ({ publicShare: undefined }));
+      expect(await resolve("stale-title-12345678aaaa40008000000000000001")).toMatchObject({ key });
+      await patch(privateKey, { publicShare: undefined });
+      await patch(key, { publicShare: undefined });
       expect(captured?.isCurrent()).toBe(false);
-      expect(await resolve("/chat/main/12345678")).toBeNull();
-      await patchSessionEntryCore(scope, () => ({ publicShare: { ...grant, id: "b".repeat(48) } }));
-      const republished = await resolve("/chat/main/12345678");
+      expect(await resolve("12345678")).toBeNull();
+      await patch(key, { publicShare: { ...grant, id: "b".repeat(48) } });
+      const republished = await resolve("12345678");
       expect(republished).toMatchObject({ key });
-      await patchSessionEntryCore(scope, () => ({ sessionId: "replacement" }));
+      await patch(key, { sessionId: "replacement" });
       expect(republished?.isCurrent()).toBe(false);
-      expect(await resolve("/chat/main/12345678")).toBeNull();
+      expect(await resolve("12345678")).toBeNull();
     } finally {
       projection.dispose();
     }
@@ -96,19 +95,13 @@ it("resolves only current public instances before choosing a URL candidate", asy
 
 it("applies current profile access to literal, short, and named session paths", async () => {
   await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
-    const cfg: OpenClawConfig = {
-      agents: { entries: { main: {} } },
-      ...rolePolicyConfig(),
-    };
+    const cfg: OpenClawConfig = { ...config(), ...rolePolicyConfig() };
     setRuntimeConfigSnapshot(cfg);
     const owner = roleClient("none", "path-owner");
     const viewer = roleClient("view", "path-viewer");
     const denied = roleClient("none", "path-denied");
     const key = "agent:main:dashboard:87654321-aaaa-4000-8000-000000000001";
-    const scope = { agentId: "main", sessionKey: key };
-    await upsertSessionEntryCore(scope, {
-      sessionId: "profile-session",
-      updatedAt: 1,
+    await put(key, "profile-session", {
       displayName: "Shared notes",
       visibility: "read-only",
       createdActor: {
@@ -117,19 +110,9 @@ it("applies current profile access to literal, short, and named session paths", 
         id: owner.authenticatedUserProfile!.profileId,
       },
     });
+    const paths = ["dashboard/87654321-aaaa-4000-8000-000000000001", "87654321", "shared-notes"];
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
-    const resolve = (path: string, client: GatewayClient, isCurrent?: () => boolean) => {
-      const target = parseControlUiSessionPath(path);
-      if (!target) {
-        throw new Error("Invalid fixture URL");
-      }
-      return resolveControlUiSessionPath({ target, projection, client, isCurrent });
-    };
-    const paths = [
-      "/chat/main/dashboard/87654321-aaaa-4000-8000-000000000001",
-      "/chat/main/87654321",
-      "/chat/main/shared-notes",
-    ];
+    const resolve = resolver(projection);
     try {
       for (const path of paths) {
         expect(await resolve(path, owner)).toMatchObject({ key, agentId: "main" });
@@ -137,7 +120,7 @@ it("applies current profile access to literal, short, and named session paths", 
         expect(await resolve(path, denied)).toBeNull();
       }
       for (const client of [owner, viewer, denied]) {
-        expect(await resolve("/chat/main/unknown", client)).toBeNull();
+        expect(await resolve("unknown", client)).toBeNull();
       }
       let authorityCurrent = true;
       const captured = await resolve(paths[0]!, viewer, () => authorityCurrent);
@@ -146,7 +129,7 @@ it("applies current profile access to literal, short, and named session paths", 
       expect(captured?.isCurrent()).toBe(false);
 
       const beforeDraft = await resolve(paths[0]!, viewer);
-      await patchSessionEntryCore(scope, () => ({ visibility: "draft" }));
+      await patch(key, { visibility: "draft" });
       expect(beforeDraft?.isCurrent()).toBe(false);
       for (const path of paths) {
         expect(await resolve(path, owner)).toMatchObject({ key });

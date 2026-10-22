@@ -249,9 +249,7 @@ export function createNostrIngress(options: {
   };
 
   return {
-    ready: async () => {
-      await monitorStart;
-    },
+    ready: () => monitorStart,
     receive: (event: Event) => {
       if (stopping) {
         return Promise.reject(createStoppedError());

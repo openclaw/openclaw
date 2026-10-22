@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { AgentsListResult } from "../../../packages/gateway-protocol/src/index.js";
@@ -38,6 +39,7 @@ import { agentsHandlers } from "./agents.js";
 import {
   identifiedClient,
   listSessions,
+  profileSessionEntry,
   requestContext,
 } from "./sessions-read-cache.test-support.js";
 import { soloClient } from "./sessions-sharing.test-support.js";
@@ -138,11 +140,7 @@ async function seedReadableSession(
 }
 
 function requireStateDir(): string {
-  const stateDir = process.env.OPENCLAW_STATE_DIR;
-  if (!stateDir) {
-    throw new Error("OPENCLAW_STATE_DIR is required");
-  }
-  return stateDir;
+  return expectDefined(process.env.OPENCLAW_STATE_DIR, "OPENCLAW_STATE_DIR is required");
 }
 
 async function listAgentsViaRpc(
@@ -244,11 +242,7 @@ function avatarRosterConfig(agents: string[]): OpenClawConfig {
     gateway: {
       roles: {
         definitions: {
-          reader: {
-            agents,
-            scopes: ["operator.read"],
-            sessions: { others: "none" },
-          },
+          reader: { agents, scopes: ["operator.read"], sessions: { others: "none" } },
         },
       },
     },
@@ -353,10 +347,7 @@ test.each([
   "agents.list keeps prepared thinking metadata scoped to each roster agent ($mode, $unavailableAgentId unavailable)",
   async ({ mode, unavailableAgentId }) => {
     testState.agentConfig = { model: { primary: "local/shared-reasoner" } };
-    await setAgentsConfig({
-      ownership: "explicit",
-      entries: { main: {}, work: {} },
-    });
+    await setAgentsConfig({ ownership: "explicit", entries: { main: {}, work: {} } });
     const readPreparedGatewayModelCatalog = vi.fn(async (options?: { agentId?: string }) => {
       if (!options?.agentId || options.agentId === unavailableAgentId) {
         return undefined;
@@ -431,8 +422,7 @@ async function configureFixedSessionStore(label = "default"): Promise<string> {
   fs.mkdirSync(path.dirname(storePath), { recursive: true });
   fs.writeFileSync(storePath, "{}\n", "utf8");
   testState.sessionStorePath = storePath;
-  const cfg = await setAgentsConfig({ entries: { main: {} } });
-  expect(cfg.session?.store).toBe(storePath);
+  await setAgentsConfig({ entries: { main: {} } });
   return storePath;
 }
 
@@ -576,11 +566,7 @@ test("unknown-agent session reads return missing results without provisioning an
 });
 
 test("bare ownerless reads fail closed without blocking scoped preview siblings", async () => {
-  const cfg = await setAgentsConfig({ ownership: "explicit", entries: { ops: {}, research: {} } });
-  expect(cfg.agents).toMatchObject({
-    ownership: "explicit",
-    entries: { ops: {}, research: {} },
-  });
+  await setAgentsConfig({ ownership: "explicit", entries: { ops: {}, research: {} } });
   const sessionKey = "agent:ops:preview-valid";
   await seedReadableSession(sessionScope(sessionKey, "ops"), "scoped preview remains readable");
 
@@ -595,7 +581,6 @@ test("bare ownerless reads fail closed without blocking scoped preview siblings"
 test("sessions.describe retains each global row owner from a qualified main alias", async () => {
   testState.sessionConfig = { scope: "global", mainKey: "workspace" };
   const cfg = await setAgentsConfig({ ownership: "explicit", entries: { main: {}, work: {} } });
-  expect(cfg.session).toMatchObject({ scope: "global", mainKey: "workspace" });
   for (const agentId of ["main", "work"]) {
     await seedEntry(
       "global",
@@ -706,8 +691,7 @@ test("session reads find a retired store only reachable through its deterministi
   );
   const storePath = storeTemplate.replace("{agentId}", agentId);
   testState.sessionStorePath = storeTemplate;
-  const cfg = await setAgentsConfig({ entries: { main: {} } });
-  expect(cfg.session?.store).toBe(storeTemplate);
+  await setAgentsConfig({ entries: { main: {} } });
   await seedReadableSession(
     sessionScope(sessionKey, agentId, storePath),
     "deterministic template search needle",
@@ -759,10 +743,7 @@ test("searches rich displayed fields before selecting a page across visible agen
       await upsertSessionEntryCore(
         { agentId, sessionKey: `agent:${agentId}:${name}` },
         {
-          sessionId: name,
-          updatedAt: 1,
-          visibility: "shared",
-          createdActor: { type: "human", source: "profile", id: "owner@example.com" },
+          ...profileSessionEntry(name, 1, "owner@example.com"),
           ...entry,
         },
       );

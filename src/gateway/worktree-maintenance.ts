@@ -62,7 +62,6 @@ export function startWorktreeMaintenance(params: {
   getRuntimeConfig: () => OpenClawConfig;
   onComplete: (result: ManagedWorktreeGcResult) => void;
   onError: (message: string) => void;
-  runGc?: () => Promise<ManagedWorktreeGcResult | void>;
 }): MaintenanceOwner {
   const previousDrain = owners.get(params.getRuntimeConfig)?.stop();
   const scheduler = params.scheduler.scope();
@@ -136,44 +135,38 @@ export function startWorktreeMaintenance(params: {
               async () => {
                 await previousDrain;
                 assertCurrent();
-                const result = await (params.runGc
-                  ? params.runGc()
-                  : managedWorktrees.gc({
-                      ...createManagedWorktreeOwnerPolicy(config),
-                      retryDeferred,
-                      signal: scheduler.signal,
-                      commitGuard: assertCurrent,
-                      checkpoint: async (progress) => {
-                        Object.assign(current, progress);
-                        assertCurrent();
-                        if (++batchItems < 8 && scheduler.now() - batchStartedAt < 5_000) {
-                          return;
-                        }
-                        await new Promise<void>((resolve, reject) => {
-                          const abort = () =>
-                            reject(
-                              toErrorObject(scheduler.signal.reason, "Worktree cleanup canceled"),
-                            );
-                          scheduler.signal.addEventListener("abort", abort, { once: true });
-                          scheduler.schedule({
-                            id: "maintenance:worktrees:resume",
-                            delayMs: 1_000,
-                            run: () => {
-                              scheduler.signal.removeEventListener("abort", abort);
-                              resolve();
-                            },
-                          });
-                        });
-                        assertCurrent();
-                        batchItems = 0;
-                        batchStartedAt = scheduler.now();
-                      },
-                    }));
+                const result = await managedWorktrees.gc({
+                  ...createManagedWorktreeOwnerPolicy(config),
+                  retryDeferred,
+                  signal: scheduler.signal,
+                  commitGuard: assertCurrent,
+                  checkpoint: async (progress) => {
+                    Object.assign(current, progress);
+                    assertCurrent();
+                    if (++batchItems < 8 && scheduler.now() - batchStartedAt < 5_000) {
+                      return;
+                    }
+                    await new Promise<void>((resolve, reject) => {
+                      const abort = () =>
+                        reject(toErrorObject(scheduler.signal.reason, "Worktree cleanup canceled"));
+                      scheduler.signal.addEventListener("abort", abort, { once: true });
+                      scheduler.schedule({
+                        id: "maintenance:worktrees:resume",
+                        delayMs: 1_000,
+                        run: () => {
+                          scheduler.signal.removeEventListener("abort", abort);
+                          resolve();
+                        },
+                      });
+                    });
+                    assertCurrent();
+                    batchItems = 0;
+                    batchStartedAt = scheduler.now();
+                  },
+                });
                 assertCurrent();
-                if (result) {
-                  Object.assign(current, result);
-                  params.onComplete(result);
-                }
+                Object.assign(current, result);
+                params.onComplete(result);
                 current.state = "completed";
               },
               "runtime:worktree-cleanup",
