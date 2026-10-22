@@ -250,7 +250,13 @@ describe("toSanitizedMarkdownHtml links", () => {
       [`[\`#3434\`](${pullUrl})`, "#3434"],
     ] satisfies Array<[string, string, string?, boolean?, string?]>)(
       "marks %s",
-      (input, expectedText, expectedKind, keepsTitle, expectedHref) => {
+      (
+        input: string,
+        expectedText: string,
+        expectedKind?: string,
+        keepsTitle?: boolean,
+        expectedHref?: string,
+      ) => {
         const fragment = render(input);
         const link = fragment.querySelector<HTMLAnchorElement>("a");
         expect(link?.classList.contains("markdown-github-link")).toBe(true);

@@ -1109,4 +1109,3 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     expect(requestCallsFor(client, "talk.session.submitToolResult")).toHaveLength(0);
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

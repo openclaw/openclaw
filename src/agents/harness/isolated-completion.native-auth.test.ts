@@ -212,7 +212,12 @@ describe("runIsolatedCompletion native authorization", () => {
         authProfileProviderForAuth: "openai",
         modelId: "gpt-test",
         harnessAuthProvider: "openai",
-        modelRoute: { authRequirement: "api-key" as const },
+        modelRoute: {
+          ...nativeAuthPlan.modelRoute,
+          api: "openai-responses" as const,
+          baseUrl: "https://api.openai.com/v1",
+          authRequirement: "api-key" as const,
+        },
       };
       mocks.ensureAuthProfileStore.mockReturnValueOnce({
         version: 1,
