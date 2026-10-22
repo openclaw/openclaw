@@ -4,6 +4,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { ensureModelSelectionRuntimePlugins } from "../commands/runtime-plugin-install.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
@@ -337,7 +338,22 @@ export async function stageSavedAuthCandidate(
           "Choose this provider's endpoint and model again. Your saved sign-in is still available.",
       };
     }
-    const modelRef = saved?.modelRef ?? loaded?.method.starterModel;
+    const currentModelRef = splitTrailingAuthProfile(
+      resolveAgentEffectiveModelPrimary(ctx.cfg, ctx.routeAgentId) ?? "",
+    ).model;
+    const savedModelRef = saved?.modelRef ?? loaded?.method.starterModel;
+    const savedProvider = resolveProviderIdForAuth(credential.provider, {
+      config: ctx.cfg,
+      storedCredential: true,
+    });
+    const modelRef =
+      ctx.params.modelRef?.trim() ||
+      (currentModelRef &&
+      resolveProviderIdForAuth(parseInferenceRef(currentModelRef).provider, {
+        config: ctx.cfg,
+      }) === savedProvider
+        ? currentModelRef
+        : savedModelRef);
     const { validateConfigObjectRaw } = await import("../config/validation-core.js");
     const storedConfig = saved
       ? validateConfigObjectRaw(
@@ -355,7 +371,7 @@ export async function stageSavedAuthCandidate(
       result: { profiles: [{ profileId, credential }] },
     });
     if (saved?.apiKeyHeader && credential.type === "api_key") {
-      const providerConfig = config.models?.providers?.[parseInferenceRef(saved.modelRef).provider];
+      const providerConfig = config.models?.providers?.[parseInferenceRef(modelRef).provider];
       const key = credential.keyRef ?? credential.key;
       if (providerConfig && key) {
         (providerConfig.headers ??= {})["api-key"] = key;
