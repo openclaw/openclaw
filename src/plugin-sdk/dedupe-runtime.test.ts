@@ -35,9 +35,7 @@ function createCache(
   return { cache, logError };
 }
 
-afterEach(() => {
-  vi.useRealTimers();
-});
+afterEach(() => vi.useRealTimers());
 
 it("re-primes memory with the persisted timestamp when provided", async () => {
   vi.useFakeTimers({ now: 1_000_000 });
