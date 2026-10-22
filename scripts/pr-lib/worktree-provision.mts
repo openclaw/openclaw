@@ -236,7 +236,12 @@ async function provisionPrWorktree(params: ProvisionParams): Promise<void> {
     params.signal,
   );
   await withWorktreeAllocationLease(
-    { env: storageEnv, signal: params.signal, commitGuard: assertPrAuthority },
+    {
+      env: storageEnv,
+      signal: params.signal,
+      commitGuard: assertPrAuthority,
+      rollbackGuard: assertPrAuthority,
+    },
     async (guard) => {
       const assertCurrent = () => {
         guard.signal?.throwIfAborted();
