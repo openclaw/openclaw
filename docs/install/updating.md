@@ -100,6 +100,13 @@ it finish before retrying `openclaw update`. An explicit update timeout and
 cancellation still bound these waits; live ownership and recovery checks remain
 required before activation.
 
+The updater retains its admitted SQLite writer wait allowance through finalization,
+including candidate handoff and standalone repair. A writer that outlasts SQLite's
+ordinary wait can finish before required recovery evidence and the final outcome
+are recorded. Optional history bookkeeping still uses its short wait and warns
+without stopping the update. This applies to the installed updater; the candidate
+also preserves the step allowance passed by older installed updaters.
+
 `openclaw update status` reports confirmed driver loss without changing the
 recorded run, and names `openclaw update repair` as the next action. Repair or the
 next update's admission can record the failed outcome without waiting for the

@@ -167,7 +167,6 @@ async function resolvePickerLogicalCatalog(params: {
     defaultModel: params.defaultModel,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     view: "all",
-    routePolicy: openAIModelCatalogRoutePolicy,
     routeVariants: params.routeVariants,
     evaluateEntry: async (entry, routeVariants) => {
       const identity = openAIModelCatalogRoutePolicy.resolveIdentity(entry);
@@ -180,7 +179,6 @@ async function resolvePickerLogicalCatalog(params: {
       });
       return resolveLogicalModelCatalogEntryState({
         evaluation,
-        routePolicy: openAIModelCatalogRoutePolicy,
       });
     },
   });

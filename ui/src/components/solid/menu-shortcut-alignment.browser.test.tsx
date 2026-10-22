@@ -7,7 +7,8 @@ import {
 } from "../../pages/chat/components/chat-header-panel-actions.tsx";
 import { openMenu, surface } from "../../test-helpers/solid-menu.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { KeyboardShortcut } from "./kbd.tsx";
+import { Icon } from "./icon.tsx";
+import { Kbd, KeyboardShortcut } from "./kbd.tsx";
 import { Menu, type MenuItem } from "./menu.tsx";
 import "../../styles/base.css";
 import "../../styles/layout.css";
@@ -61,6 +62,35 @@ it.each(["ltr", "rtl"] as const)("aligns all menu row shortcuts in %s", async (d
   expect(ends).toHaveLength(5);
   expect(Math.max(...ends) - Math.min(...ends)).toBeLessThan(1);
 });
+
+it.each(["ltr", "rtl"] as const)(
+  "insets shortcuts like leading icons without checks or arrows in %s",
+  async (dir) => {
+    await page.viewport(1000, 700);
+    const entries: MenuItem[] = ["s", "b"].map((key) => ({
+      id: key,
+      label: key,
+      icon: <Icon name="copy" />,
+      details: <Kbd class="session-menu__shortcut" keys={key.toUpperCase()} inline />,
+    }));
+    render(() => (
+      <Menu id="mirrored" label="Actions" dir={dir} class="session-menu" items={entries} />
+    ));
+    await openMenu("mirrored");
+    const menu = surface("mirrored");
+    await expect.element(page.elementLocator(menu)).toBeVisible();
+    for (const row of menu.querySelectorAll<HTMLElement>('[role="menuitem"]')) {
+      const bounds = row.getBoundingClientRect();
+      const icon = row.querySelector(".oc-menu-item__icon")!.getBoundingClientRect();
+      const hint = row.querySelector(".shortcut-kbd")!.getBoundingClientRect();
+      const [start, end] =
+        dir === "rtl"
+          ? [bounds.right - icon.right, hint.left - bounds.left]
+          : [icon.left - bounds.left, bounds.right - hint.right];
+      expect(Math.abs(end - start)).toBeLessThan(1);
+    }
+  },
+);
 
 it("keeps Layout shortcuts aligned across style loads and hidden on mobile", async () => {
   await page.viewport(1000, 800);

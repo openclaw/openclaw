@@ -3,7 +3,7 @@ import { createMemo, Errored, For, Loading, Show } from "solid-js";
 // DM sender access request queue shared by the Channels hub and detail panels.
 import type { ChannelsPairingAccount, ChannelsPairingRequest } from "../../api/types.ts";
 import { Picker } from "../../components/select-picker.ts";
-import "../../components/modal-dialog.ts";
+import "../../components/modal-dialog.tsx";
 import { ChannelPicker } from "../../components/solid/channel-picker.tsx";
 import {
   SettingsEmpty,
@@ -405,19 +405,19 @@ function PairingPromptContent(params: {
         <openclaw-modal-actions class="channels-pairing-dialog__actions">
           <button
             type="button"
-            class={["btn", approving() ? "primary" : "danger"]}
-            disabled={!params.props.channels.connected || busy()}
-            onClick={() => params.props.onPairingPromptConfirm()}
-          >
-            {t(`channels.pairing.${params.prompt.kind}`)}
-          </button>
-          <button
-            type="button"
             class="btn"
             disabled={busy()}
             onClick={() => params.props.onPairingPromptCancel()}
           >
             {t("common.cancel")}
+          </button>
+          <button
+            type="button"
+            class={["btn", approving() ? "primary" : "danger"]}
+            disabled={!params.props.channels.connected || busy()}
+            onClick={() => params.props.onPairingPromptConfirm()}
+          >
+            {t(`channels.pairing.${params.prompt.kind}`)}
           </button>
         </openclaw-modal-actions>
       </div>

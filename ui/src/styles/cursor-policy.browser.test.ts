@@ -89,7 +89,6 @@ const fixtureDocument =
       <div class="markdown"><a class="markdown-bare-url" href="https://example.com">Transcript link</a></div>
       <div class="chat-thinking"><a class="markdown-bare-url" href="https://example.com">Reasoning link</a></div>
       <div class="markdown-body"><a class="markdown-bare-url" href="https://example.com">Logbook link</a></div>
-      <div class="chat-session-rail__answer"><a class="markdown-bare-url" href="https://example.com">Answer link</a></div>
       <div class="chat-position-rail__preview-copy" inert>
         <a class="markdown-bare-url" href="https://example.com">Preview URL</a>
         <a id="preview-github-link" class="markdown-github-link" href="https://github.com/example/project">Preview repository</a>

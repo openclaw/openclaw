@@ -35,7 +35,9 @@ async function mount(
   context.agentSelection.state.scopeId = null;
   return createRenderedPage(context, sessionsResult(rows, 1), "archived", deepLink);
 }
-beforeEach(() => vi.mocked(showConfirmDialog).mockReset().mockResolvedValue(true));
+beforeEach(() => {
+  vi.mocked(showConfirmDialog).mockReset().mockResolvedValue(true);
+});
 afterEach(() => {
   document.body.replaceChildren();
   vi.mocked(showConfirmDialog).mockReset();

@@ -466,14 +466,12 @@ export function createConfigPage(
       void runtimeConfig
         .ensureLoaded()
         .then(() =>
-          runtimeConfigSource === runtimeConfig && pageId !== "updates"
+          runtimeConfigSource === runtimeConfig && pageId !== "updates" && !runtimeConfig.schemaRead
             ? runtimeConfig.ensureSchemaLoaded()
             : undefined,
         )
         .catch(() => undefined);
-      return;
-    }
-    if (pageId !== "updates" && !config.configSchema && !config.configSchemaLoading) {
+    } else if (pageId !== "updates" && !config.configSchema && !runtimeConfig.schemaRead) {
       void runtimeConfig.ensureSchemaLoaded().catch(() => undefined);
     }
   }
@@ -634,6 +632,8 @@ export function createConfigPage(
       openFileAllowed: runtimeConfig.canOpenFile,
       schema: configState.configSchema,
       schemaLoading: configState.configSchemaLoading,
+      schemaRead: runtimeConfig.schemaRead,
+      onRetrySchema: () => void runtimeConfig.refreshSchema(),
       uiHints: configState.configUiHints,
       formMode: presentation.formModes[pageId] ?? "form",
       rawDraftPending: configState.configFormMode === "raw" && configState.configFormDirty,

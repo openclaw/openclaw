@@ -128,40 +128,33 @@ describe("getStatusSummary read-only session access", () => {
     );
   });
 
-  it("does not create the automation session database while checking its route", async () => {
-    await withOpenClawTestState({ label: "status-automation-route" }, async (state) => {
-      const databasePath = state.statePath("route", "openclaw-agent.sqlite");
-      const config: OpenClawConfig = {
-        agents: { entries: { main: {} } },
-        session: { store: databasePath },
-      };
-      await saveProactiveJobsForTest(state.statePath("cron", "jobs.json"), [
-        createDefaultProactiveJob(config, "main", 1),
-      ]);
-      const summary = await getStatusSummary({ includeChannelSummary: false, config });
-      expect(summary.heartbeat.agents[0]?.waitingForRoute).toBe(true);
-      expect(fs.existsSync(databasePath)).toBe(false);
-    });
-  });
-
-  it("resolves the automation owner DM without writing session state", async () => {
-    await withOpenClawTestState({ label: "status-automation-owner" }, async (state) => {
-      registerTelegramFixture();
-      const databasePath = state.statePath("route", "openclaw-agent.sqlite");
-      const config: OpenClawConfig = {
-        agents: { entries: { main: {} } },
-        commands: { ownerAllowFrom: ["telegram:123"] },
-        channels: { telegram: { allowFrom: ["123"] } },
-        session: { store: databasePath },
-      };
-      await saveProactiveJobsForTest(state.statePath("cron", "jobs.json"), [
-        createDefaultProactiveJob(config, "main", 1),
-      ]);
-      const summary = await getStatusSummary({ includeChannelSummary: false, config });
-      expect(summary.heartbeat.agents[0]?.waitingForRoute).toBe(false);
-      expect(fs.existsSync(databasePath)).toBe(false);
-    });
-  });
+  it.each([false, true])(
+    "checks the automation route without writing sessions (owner DM: %s)",
+    async (ownerDm) => {
+      await withOpenClawTestState({ label: "status-automation-route" }, async (state) => {
+        if (ownerDm) {
+          registerTelegramFixture();
+        }
+        const databasePath = state.statePath("route", "openclaw-agent.sqlite");
+        const config: OpenClawConfig = {
+          agents: { entries: { main: {} } },
+          ...(ownerDm
+            ? {
+                commands: { ownerAllowFrom: ["telegram:123"] },
+                channels: { telegram: { allowFrom: ["123"] } },
+              }
+            : {}),
+          session: { store: databasePath },
+        };
+        await saveProactiveJobsForTest(state.statePath("cron", "jobs.json"), [
+          createDefaultProactiveJob(config, "main", 1),
+        ]);
+        const summary = await getStatusSummary({ includeChannelSummary: false, config });
+        expect(summary.heartbeat.agents[0]?.waitingForRoute).toBe(!ownerDm);
+        expect(fs.existsSync(databasePath)).toBe(false);
+      });
+    },
+  );
 
   it.each(["sessions.json", "shared.sqlite"])(
     "reports each agent's activity and reads each physical session store once for %s",

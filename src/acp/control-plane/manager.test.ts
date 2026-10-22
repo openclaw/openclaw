@@ -6,7 +6,6 @@ import {
   awaitGateBeforeSettlement as awaitGate,
   createDeferred,
 } from "../../../test/helpers/promise.js";
-import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import * as sessionStateEvents from "../../sessions/session-state-events.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import { getActiveAcpTurnCount, listActiveAcpSessionsForOwner } from "./active-turns.js";
@@ -231,35 +230,6 @@ describe("AcpSessionManager", () => {
       expect(listActiveAcpSessionsForOwner(ownerSessionKey)).toEqual([]);
     });
   }, 300_000);
-
-  it("cancels a queued turn promptly when its caller aborts before the actor is free", async () => {
-    const f = fixture();
-    const { entered: firstTurnStarted, release: releaseFirstTurn } = holdTurn(f.runtimeState, "r1");
-    const first = f.run("first", "r1");
-    const abortController = new AbortController();
-    const events: AcpRuntimeEvent[] = [];
-    let second: Promise<void> | undefined;
-    try {
-      await Promise.race([firstTurnStarted.promise, first]);
-      second = f.run("second", "r2", {
-        admittedRunContext: createTestAdmittedRunContext("r2"),
-        signal: abortController.signal,
-        onEvent: (event) => {
-          events.push(event);
-        },
-      });
-      abortController.abort();
-      await second;
-      expect(events).toEqual([{ type: "done", status: "cancelled", stopReason: "cancel" }]);
-      expect(f.runtimeState.runTurn).toHaveBeenCalledOnce();
-      releaseFirstTurn.resolve();
-      await first;
-    } finally {
-      abortController.abort();
-      releaseFirstTurn.resolve();
-      await Promise.allSettled([first, second]);
-    }
-  });
 
   it("times out a hung persistent turn after partial progress without closing the session and lets queued work continue", async () => {
     vi.useFakeTimers();

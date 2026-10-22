@@ -1,11 +1,13 @@
 /* @vitest-environment jsdom */
 
 import type { SkillsLibraryListResult } from "@openclaw/gateway-protocol";
+import { createRouter } from "@openclaw/uirouter";
 import { createComponent, flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult } from "../api/types.ts";
+import type { RouteId } from "../app-routes.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { createGatewayMetadataObserver } from "../app/gateway-observers.ts";
 import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
@@ -148,6 +150,9 @@ function contextWithClient(
     subscribe,
   });
   return {
+    router: createRouter<RouteId, ApplicationContext>({
+      routes: [{ id: "chat", path: "/chat", component: () => ({}) }],
+    }),
     gateway: gatewayWithClient(client, options.connected ?? false),
     agents: {
       state: { agentsList, agentsLoading: false, agentsError: null },

@@ -24,6 +24,8 @@ type ConfigData = {
 type ConfigViewOptions = Partial<
   Pick<
     ConfigData,
+    | "schemaRead"
+    | "onRetrySchema"
     | "mutationAllowed"
     | "openFileAllowed"
     | "rawDraftPending"

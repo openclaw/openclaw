@@ -1,5 +1,5 @@
 import { dynamic } from "@solidjs/web";
-import { Match, Show, Switch, createMemo, onSettled } from "solid-js";
+import { Match, Show, Switch, createMemo, isPending, onSettled } from "solid-js";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import type { SessionPlacementPresentation } from "../../../components/session-placement-move-dialog.tsx";
 import { StepMarker } from "../../../components/session-progress-card-content.tsx";
@@ -63,7 +63,10 @@ import {
   ChatSessionVersionsMobile,
   type ChatSessionVersionsMobileProps,
 } from "./chat-session-versions-mobile.tsx";
-import type { SessionAutomationInventory } from "./chat-summary-automations.tsx";
+import {
+  SessionAutomationRead,
+  type SessionAutomationInventory,
+} from "./chat-summary-automations.tsx";
 import "../../../styles/chat/details.css";
 import { sessionAutomationSchedule } from "./session-automation-schedule.ts";
 
@@ -195,6 +198,37 @@ function MobileRoot(
       }),
     );
   });
+  const automationNotice = (
+    <Show when={props.content.automations}>
+      {(input) => (
+        <SessionAutomationRead
+          inventory={input().inventory}
+          readDeniedOnly
+          error={
+            input().inventory.connected() && (
+              <div class="chat-details-mobile-root__notice" role="status">
+                <span>
+                  {t(
+                    input().inventory.loaded()
+                      ? "chat.sessionDetails.automationUpdateError"
+                      : "chat.sessionDetails.automationError",
+                  )}
+                </span>
+                <button
+                  type="button"
+                  class="chip"
+                  disabled={!props.presented || isPending(input().inventory.read)}
+                  onClick={() => void input().inventory.refresh()}
+                >
+                  {t("common.retry")}
+                </button>
+              </div>
+            )
+          }
+        />
+      )}
+    </Show>
+  );
   const automations = (): ChatDetailsMobileRootProps["automations"] => {
     const input = props.content.automations;
     if (!input) {
@@ -217,26 +251,7 @@ function MobileRoot(
       })),
       total: inventory.loaded() ? inventory.total() : undefined,
       summary: input.summary,
-      notice:
-        inventory.readDenied() && inventory.connected() ? (
-          <div class="chat-details-mobile-root__notice" role="status">
-            <span>
-              {t(
-                inventory.loaded()
-                  ? "chat.sessionDetails.automationUpdateError"
-                  : "chat.sessionDetails.automationError",
-              )}
-            </span>
-            <button
-              type="button"
-              class="chip"
-              disabled={!props.presented || inventory.loading()}
-              onClick={() => void inventory.refresh()}
-            >
-              {t("common.retry")}
-            </button>
-          </div>
-        ) : undefined,
+      notice: automationNotice,
     };
   };
   return (

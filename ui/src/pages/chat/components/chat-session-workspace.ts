@@ -593,6 +593,8 @@ export function createSessionWorkspaceProps(
       }
     },
     sessionKey: state.sessionKey,
+    readState: workspace,
+    readResult: workspace.readResult,
     list: workspace.list?.sessionKey === state.sessionKey ? workspace.list : null,
     loading: workspace.loading,
     error: workspace.error ?? workspace.artifacts?.error ?? null,
