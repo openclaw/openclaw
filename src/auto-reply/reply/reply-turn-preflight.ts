@@ -4,6 +4,7 @@ import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-even
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { ReplyOperation } from "../../sessions/session-controller.js";
 import { readPendingUserTurnTranscriptAdmission } from "../../sessions/user-turn-transcript-admission.js";
+import type { GetReplyOptions } from "../types.js";
 import { buildPreflightCompactionFailureText } from "./agent-runner-failure-reply.js";
 import { runMemoryFlushIfNeeded, runSessionCompactionIfNeeded } from "./agent-runner-memory.js";
 
@@ -18,7 +19,8 @@ type ReplyTurnPreflightParams = Omit<
   | "onCompactionStart"
   | "onSessionIdChanged"
 > &
-  Pick<MemoryFlushParams, "opts" | "resolvedVerboseLevel"> & {
+  Pick<MemoryFlushParams, "resolvedVerboseLevel"> & {
+    opts?: MemoryFlushParams["opts"] & Pick<GetReplyOptions, "onReplyPreparation">;
     replyOperation: ReplyOperation;
     publishCheckpoint: (entry: SessionEntry | undefined) => void;
     trace?: <T>(phase: string, run: () => Promise<T>) => Promise<T>;
@@ -44,6 +46,14 @@ export async function prepareReplyTurnContext(
         // Compaction decides whether work is needed, then replans from the
         // checkpoint result. A queued source must not bypass this memory write.
         beforeCompaction: async (entry) => {
+          // Memory checkpointing can itself call a model. Tell the source before
+          // that wait, rather than waiting for the later compactor-start callback.
+          try {
+            await preparation.opts?.onReplyPreparation?.("context");
+          } catch (error) {
+            logVerbose(`reply preparation feedback failed: ${formatErrorMessage(error)}`);
+          }
+          replyOperation.abortSignal.throwIfAborted();
           const flushed = await tracePhase("reply.memory_flush", () =>
             runMemoryFlushIfNeeded({
               ...preparation,

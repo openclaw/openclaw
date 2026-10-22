@@ -36,6 +36,76 @@ describe("dispatchReplyFromConfig", () => {
   const createDirectCtx = (overrides: Partial<MsgContext> = {}) =>
     buildTestCtx({ Provider: "telegram", ChatType: "direct", ...overrides });
 
+  it("awaits preparation feedback before entering the reply resolver", async () => {
+    setNoAbort();
+    const events: string[] = [];
+    const dispatcher = createDispatcher();
+    const onReplyPreparation = vi.fn(async (phase: "accepted" | "context") => {
+      await Promise.resolve();
+      events.push(phase);
+      return true;
+    });
+    await dispatchReplyFromConfig({
+      ctx: createDirectCtx(),
+      cfg: emptyConfig,
+      dispatcher,
+      replyOptions: { onReplyPreparation },
+      replyResolver: async () => {
+        events.push("history preparation");
+        return { text: "Done" };
+      },
+    });
+    expect(events).toEqual(["accepted", "history preparation"]);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
+  });
+
+  it("does not enter the resolver after preparation feedback aborts its owner", async () => {
+    setNoAbort();
+    const controller = new AbortController();
+    const replyResolver = vi.fn(async () => ({ text: "Must not run" }));
+    await expect(
+      dispatchReplyFromConfig({
+        ctx: createDirectCtx(),
+        cfg: emptyConfig,
+        dispatcher: createDispatcher(),
+        replyOptions: {
+          abortSignal: controller.signal,
+          onReplyPreparation: async () => {
+            controller.abort();
+            return true;
+          },
+        },
+        replyResolver,
+      }),
+    ).resolves.toBeDefined();
+    expect(replyResolver).not.toHaveBeenCalled();
+  });
+
+  it("keeps denied preparation silent and preserves work when feedback fails", async () => {
+    for (const denied of [true, false]) {
+      setNoAbort();
+      sessionStoreMocks.currentEntry = {
+        sessionId: "session",
+        updatedAt: 0,
+        sendPolicy: denied ? "deny" : "allow",
+      };
+      const onReplyPreparation = vi.fn(async () => {
+        throw new Error("feedback unavailable");
+      });
+      const replyResolver = vi.fn(async () => ({ text: "Done" }));
+      const result = await dispatchReplyFromConfig({
+        ctx: createDirectCtx({ SessionKey: `preparation:${denied}` }),
+        cfg: emptyConfig,
+        dispatcher: createDispatcher(),
+        replyOptions: { onReplyPreparation },
+        replyResolver,
+      });
+      expect(result.sendPolicyDenied).toBe(denied ? true : undefined);
+      expect(onReplyPreparation).toHaveBeenCalledTimes(denied ? 0 : 1);
+      expect(replyResolver).toHaveBeenCalledOnce();
+    }
+  });
+
   it.each([
     { stored: "off", override: "full", expected: ["Tool summary", "Tool failure output"] },
     { stored: "full", override: "off", expected: [] },

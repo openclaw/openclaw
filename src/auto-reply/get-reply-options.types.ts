@@ -244,6 +244,8 @@ export type GetReplyOptions = {
   /** Current user turn is already durable; replay it without appending another copy. */
   suppressNextUserMessagePersistence?: boolean;
   onReplyStart?: () => Promise<void> | void;
+  /** Nonterminal feedback before reply preparation or a required memory checkpoint. */
+  onReplyPreparation?: (phase: "accepted" | "context") => Promise<boolean | void> | boolean | void;
   /** Called when the typing controller cleans up (e.g., run ended with NO_REPLY). */
   onTypingCleanup?: () => void;
   onTypingController?: (typing: TypingController) => void;

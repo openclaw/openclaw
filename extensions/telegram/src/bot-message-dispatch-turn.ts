@@ -31,6 +31,7 @@ import {
   handleCompactionStart,
   handleItemEvent,
   handlePlanUpdate,
+  handleReplyPreparation,
   handleToolStart,
   pushThinkingTokenProgress,
   pushToolProgress,
@@ -152,6 +153,7 @@ export async function runTelegramDispatchTurn(turn: Turn) {
           },
           replyOptions: {
             hasRepliedRef,
+            onReplyPreparation: (phase) => handleReplyPreparation(turn, phase),
             onPreparedAgentRunStart: ({ runId }) => {
               turn.transcriptMirrorRunId = runId;
             },

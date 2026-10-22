@@ -148,6 +148,43 @@ export function createProgressState(
   };
 }
 
+export async function handleReplyPreparation(
+  turn: Turn,
+  phase: "accepted" | "context",
+): Promise<boolean> {
+  const ctx = turn.context.ctxPayload;
+  if (
+    !canPushProgress(turn) ||
+    turn.streamMode !== "progress" ||
+    !turn.commentaryProgressEnabled ||
+    ctx.InboundEventKind === "room_event" ||
+    ctx.SenderIsBot === true ||
+    ctx.InternalTurnSource !== undefined ||
+    (ctx.InputProvenance && ctx.InputProvenance.kind !== "external_user") ||
+    ctx.CommandSource === "native" ||
+    (ctx.RawBody ?? "").trim().startsWith("/")
+  ) {
+    return false;
+  }
+  if (
+    phase === "accepted" &&
+    (await turn.context.ackReactionPromise?.catch(() => false)) === true
+  ) {
+    return false;
+  }
+  if (!canPushProgress(turn)) {
+    return false;
+  }
+  // Use the existing preview owner: preparation is edited into the same card,
+  // and cleanup/final delivery retain their normal custody and suppression rules.
+  const rendered = await turn.progressCompositor.pushCommentaryProgress(
+    phase === "context" ? "Preparing my reply..." : "Message received",
+    { itemId: "reply-preparation", complete: true },
+  );
+  await turn.answerLane.stream?.flush();
+  return rendered;
+}
+
 export async function settleFailedFinalDelivery(turn: Turn): Promise<void> {
   if (
     turn.isSuperseded() ||
