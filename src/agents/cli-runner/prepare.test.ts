@@ -101,6 +101,7 @@ import {
   loadAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
 } from "../auth-profiles/store-runtime.js";
+import * as bootstrapFiles from "../bootstrap-files.js";
 import { CLI_AUTH_EPOCH_VERSION, resolveCliAuthEpoch } from "../cli-auth-epoch.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import {
@@ -2316,6 +2317,34 @@ describe("prepareCliRunContext", () => {
       expect.objectContaining({ chatType: testCase.expectedChatType }),
     );
     expect(context.systemPrompt).toContain(SHARED_CHAT_MESSAGE_TOOL_ETIQUETTE);
+  });
+
+  it("keeps agent bootstrap identity when the run executes in a spawned folder", async () => {
+    const agentWorkspace = path.join(fixture.session.dir, "agent-workspace");
+    const executionFolder = path.join(fixture.session.dir, "project-folder");
+    fs.mkdirSync(agentWorkspace, { recursive: true });
+    fs.mkdirSync(executionFolder, { recursive: true });
+    fs.writeFileSync(path.join(agentWorkspace, "AGENTS.md"), "agent workspace rules canary\n");
+    fs.writeFileSync(path.join(agentWorkspace, "SOUL.md"), "agent soul canary\n");
+    fs.writeFileSync(path.join(executionFolder, "AGENTS.md"), "project folder rules canary\n");
+    fs.writeFileSync(path.join(executionFolder, "SOUL.md"), "project folder soul decoy\n");
+    // Load real bootstrap files instead of the suite's empty context.
+    setCliRunnerPrepareTestDeps({
+      resolveBootstrapContextForRun: bootstrapFiles.resolveBootstrapContextForRun,
+    });
+
+    const context = await fixture.prepare({
+      workspaceDir: executionFolder,
+      config: { agents: { entries: { main: { workspace: agentWorkspace } } } },
+    });
+
+    expect(context.systemPrompt).toContain("agent workspace rules canary");
+    expect(context.systemPrompt).toContain("agent soul canary");
+    expect(context.systemPrompt).toContain("project folder rules canary");
+    expect(context.systemPrompt).not.toContain("project folder soul decoy");
+    expect(context.systemPrompt.indexOf("agent workspace rules canary")).toBeLessThan(
+      context.systemPrompt.indexOf("project folder rules canary"),
+    );
   });
 
   it("invalidates content drift when the backend cannot receive a resumed system prompt", async () => {

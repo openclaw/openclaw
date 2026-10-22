@@ -68,6 +68,7 @@ import {
 import {
   makeBootstrapWarn as makeBootstrapWarnImpl,
   resolveBootstrapContextForRun as resolveBootstrapContextForRunImpl,
+  resolveExecutionProjectBootstrapFiles,
 } from "../bootstrap-files.js";
 import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import { isPrimaryBootstrapRun, resolveWorkspaceBootstrapRouting } from "../bootstrap-routing.js";
@@ -88,6 +89,7 @@ import {
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { resolveContextTokensForModel } from "../context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
+import { buildBootstrapContextForFiles } from "../embedded-agent-helpers/bootstrap.js";
 import {
   resolvePromptBuildHookResult,
   type ResolvedPromptBuildHookResult,
@@ -179,6 +181,27 @@ type RunCliAgentPrepareParams = RunCliAgentParams & {
   /** Ring-zero tool transport supplied only by the OpenClaw orchestrator. */
   systemAgentTool?: import("../tools/system-agent-tool.js").SystemAgentToolOptions;
 };
+
+async function resolveCliBootstrapContext(
+  params: Omit<Parameters<typeof resolveBootstrapContextForRunImpl>[0], "workspaceDir">,
+  bootstrapWorkspaceDir: string,
+  executionWorkspaceDir: string,
+): ReturnType<typeof resolveBootstrapContextForRunImpl> {
+  const agentContext = await resolveBootstrapContextForRunImpl({
+    ...params,
+    workspaceDir: bootstrapWorkspaceDir,
+  });
+  const executionProjectFiles = await resolveExecutionProjectBootstrapFiles({
+    ...params,
+    workspaceDir: executionWorkspaceDir,
+    bootstrapWorkspaceDir,
+  });
+  if (executionProjectFiles.length === 0) {
+    return agentContext;
+  }
+  const bootstrapFiles = [...agentContext.bootstrapFiles, ...executionProjectFiles];
+  return { bootstrapFiles, contextFiles: buildBootstrapContextForFiles(bootstrapFiles, params) };
+}
 
 export async function prepareCliRunContext(
   inputParams: RunCliAgentParams,
@@ -664,24 +687,30 @@ async function prepareCliRunContextWithinReadFence(
     : undefined;
 
   const sessionLabel = params.sessionKey ?? params.sessionId;
+  const canonicalWorkspace = resolveUserPath(
+    resolveAgentWorkspaceDir(params.config ?? {}, workspaceResolution.agentId),
+  );
+  // Agent identity, user, and memory files come from the configured agent workspace, as on the
+  // embedded runner; a spawned execution folder only layers its own AGENTS.md after them.
+  const bootstrapWorkspaceDir = params.bootstrapWorkspaceDir ?? canonicalWorkspace;
+  const bootstrapFileParams = {
+    config: params.config,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    bootstrapUserProfileId: params.bootstrapUserProfileId,
+    chatType: runtimeChatType,
+    agentId: sessionAgentId,
+    contextMode: params.bootstrapContextMode,
+    runKind: params.bootstrapContextRunKind,
+    warn: makeBootstrapWarnImpl({
+      sessionLabel,
+      workspaceDir: bootstrapWorkspaceDir,
+      warn: (message) => cliBackendLog.warn(message),
+    }),
+  };
   const { bootstrapFiles, contextFiles: resolvedContextFiles } = skipsTurnPreparation
     ? { bootstrapFiles: [], contextFiles: [] }
-    : await resolveBootstrapContextForRunImpl({
-        workspaceDir: params.bootstrapWorkspaceDir ?? workspaceDir,
-        config: params.config,
-        sessionKey: params.sessionKey,
-        sessionId: params.sessionId,
-        bootstrapUserProfileId: params.bootstrapUserProfileId,
-        chatType: runtimeChatType,
-        agentId: sessionAgentId,
-        contextMode: params.bootstrapContextMode,
-        runKind: params.bootstrapContextRunKind,
-        warn: makeBootstrapWarnImpl({
-          sessionLabel,
-          workspaceDir,
-          warn: (message) => cliBackendLog.warn(message),
-        }),
-      });
+    : await resolveCliBootstrapContext(bootstrapFileParams, bootstrapWorkspaceDir, workspaceDir);
   // Ring-zero OpenClaw runs replace the bundle MCP surface entirely: no
   // loopback server, no plugin/user servers. A selectable backend also removes
   // its native tools, leaving only this openclaw stdio server.
@@ -843,9 +872,6 @@ async function prepareCliRunContextWithinReadFence(
   );
   // Mirror the embedded runner's bootstrap routing for backends that transport
   // OpenClaw's system prompt, using the final native or mediated file access.
-  const canonicalWorkspace = resolveUserPath(
-    resolveAgentWorkspaceDir(params.config ?? {}, workspaceResolution.agentId),
-  );
   const selectedNativeToolsProvideFileAccess =
     params.cliToolAvailability === undefined || params.cliToolAvailability.native.length > 0;
   const mediatedBootstrapFileAccess =

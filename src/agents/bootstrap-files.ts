@@ -18,6 +18,7 @@ import { getAgentWorkspaceAccess } from "./workspace-access.js";
 import { resolveWorkspaceBootstrapPath } from "./workspace-bootstrap-policy.js";
 import { loadPersonalUserBootstrapFile } from "./workspace-personal-bootstrap.js";
 import {
+  DEFAULT_AGENTS_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
   DEFAULT_MEMORY_FILENAME,
   DEFAULT_USER_FILENAME,
@@ -286,6 +287,31 @@ export async function resolveBootstrapFilesForRun(
   params: BootstrapFileResolutionParams,
 ): Promise<WorkspaceBootstrapFile[]> {
   return resolveBootstrapFiles(params, "registered");
+}
+
+/**
+ * Execution-folder project instructions layered after the agent workspace's bootstrap files.
+ * Only that folder's own AGENTS.md qualifies; its identity, user, and memory files never stand
+ * in for the agent's own.
+ */
+export async function resolveExecutionProjectBootstrapFiles(
+  params: BootstrapFileResolutionParams & { bootstrapWorkspaceDir: string },
+): Promise<WorkspaceBootstrapFile[]> {
+  if (params.bootstrapWorkspaceDir === params.workspaceDir) {
+    return [];
+  }
+  const executionAgentsPath = path.join(path.resolve(params.workspaceDir), DEFAULT_AGENTS_FILENAME);
+  return (await resolveBootstrapFilesForRun(params))
+    .filter(
+      (file) =>
+        file.name === DEFAULT_AGENTS_FILENAME &&
+        !file.missing &&
+        path.resolve(file.path) === executionAgentsPath,
+    )
+    .map((file) => {
+      file.origin = { kind: "execution-project", rootPath: params.workspaceDir };
+      return file;
+    });
 }
 
 async function resolveBootstrapFiles(
