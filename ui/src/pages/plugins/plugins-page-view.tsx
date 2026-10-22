@@ -44,11 +44,6 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
     props.page.read();
     return props.page;
   };
-  const catalogRead = createMemo(() => props.page.catalogRead());
-  const readCatalog = () => {
-    latest(catalogRead);
-    return null;
-  };
   // The owner mutates in place; publish fresh props for each page revision.
   const discovery = createMemo(() => ({
     ...page().discovery.read(),
@@ -160,6 +155,16 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
     onAskPlugin: onAskPlugin(),
     onAskSetting: ask(),
   }));
+
+  function CatalogInventory() {
+    // Own the async read inside Loading so it cannot hold the shell's first settle.
+    const catalogRead = createMemo(() => props.page.catalogRead());
+    const loading = () => {
+      latest(catalogRead);
+      return page().routeLoading() || isPending(catalogRead);
+    };
+    return <Inventory loading={loading()} />;
+  }
 
   function Inventory(inventoryProps: { loading: boolean }) {
     return (
@@ -376,8 +381,7 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
             )}
           >
             <Loading fallback={<Inventory loading={true} />}>
-              {readCatalog()}
-              <Inventory loading={page().routeLoading() || isPending(catalogRead)} />
+              <CatalogInventory />
             </Loading>
           </Errored>
         )}
