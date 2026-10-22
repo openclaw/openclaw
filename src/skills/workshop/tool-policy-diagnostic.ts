@@ -1,9 +1,12 @@
+import { resolveNativeModelPrimary } from "../../agents/agent-scope-config.js";
 import { listAgentEntriesWithSource, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   resolveConversationCapabilityProfile,
   type ResolvedConversationCapabilityProfile,
 } from "../../agents/conversation-capability-profile.js";
 import { applyFinalEffectiveToolPolicy } from "../../agents/embedded-agent-runner/effective-tool-policy.js";
+import { resolveRunEntryCliRuntime } from "../../agents/embedded-agent-runner/run-entry-runtime.js";
+import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
 import { resolveProviderToolPolicyEntry } from "../../agents/provider-tool-policy.js";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
@@ -23,6 +26,7 @@ type SkillWorkshopToolPolicyDiagnostic = {
   detail: string;
   fix: string;
   message: string;
+  requirement?: string;
 };
 
 function findAgent(config: OpenClawConfig, agentId: string) {
@@ -173,6 +177,15 @@ export function resolveSkillWorkshopToolPolicyAvailability(params: {
   };
 }
 
+// A deny is an intentional opt-out, even when a profile excludes the tool first.
+function hasExplicitSkillWorkshopDeny(
+  capabilityProfile: ResolvedConversationCapabilityProfile,
+): boolean {
+  return !isToolAllowedByPolicyName(SKILL_WORKSHOP_TOOL_NAME, {
+    deny: capabilityProfile.policy.explicitToolDenylist,
+  });
+}
+
 export function detectSkillWorkshopToolPolicyDiagnostic(params: {
   config: OpenClawConfig;
   workshopEnabled: boolean;
@@ -189,12 +202,7 @@ export function detectSkillWorkshopToolPolicyDiagnostic(params: {
     modelProvider: model.provider,
     modelId: model.model,
   });
-  // A deny is an intentional opt-out, even when a profile excludes the tool first.
-  if (
-    !isToolAllowedByPolicyName(SKILL_WORKSHOP_TOOL_NAME, {
-      deny: capabilityProfile.policy.explicitToolDenylist,
-    })
-  ) {
+  if (hasExplicitSkillWorkshopDeny(capabilityProfile)) {
     return null;
   }
   const prefix = `Skill Workshop is active, but ${JSON.stringify(SKILL_WORKSHOP_TOOL_NAME)} is hidden for agent ${JSON.stringify(agentId)}:`;
@@ -233,5 +241,51 @@ export function detectSkillWorkshopToolPolicyDiagnostic(params: {
     agentId,
     ...explanation,
     message: `${prefix} ${explanation.detail} ${explanation.fix}`,
+  };
+}
+
+/** Reports the intentional delayed-review exemption without changing tool availability. */
+export function detectSkillWorkshopExperienceReviewRuntimeDiagnostic(
+  params: Parameters<typeof detectSkillWorkshopToolPolicyDiagnostic>[0],
+): SkillWorkshopToolPolicyDiagnostic | null {
+  if (!params.workshopEnabled) {
+    return null;
+  }
+  const agentId = normalizeAgentId(params.agentId ?? resolveDefaultAgentId(params.config));
+  const model = resolveDefaultModelForAgent({ cfg: params.config, agentId });
+  const capabilityProfile = resolveConversationCapabilityProfile({
+    config: params.config,
+    agentId,
+    modelProvider: model.provider,
+    modelId: model.model,
+  });
+  if (hasExplicitSkillWorkshopDeny(capabilityProfile)) {
+    return null;
+  }
+  // Runs select the runtime with the configured primary's auth-profile pin.
+  const { cliExecutionProvider: runtime, useCliExecution } = resolveRunEntryCliRuntime({
+    config: params.config,
+    agentId,
+    provider: model.provider,
+    model: model.model,
+    authProfileId: splitTrailingAuthProfile(resolveNativeModelPrimary(params.config, agentId) ?? "")
+      .profile,
+  });
+  if (!useCliExecution) {
+    return null;
+  }
+  const agent = findAgent(params.config, agentId);
+  const source = agent?.entry.model ? `${agent.path}.model` : "agents.defaults.model";
+  const detail = `${source}: background review is unavailable on CLI runtime ${JSON.stringify(runtime)} because it does not report the resolved model and skill_workshop availability.`;
+  const fix =
+    "Background review needs a runtime that reports them, such as the embedded OpenClaw runtime or the Codex app-server harness.";
+  return {
+    agentId,
+    source,
+    detail,
+    fix,
+    requirement:
+      "Background review requires a runtime that reports its resolved model and skill_workshop availability.",
+    message: `Skill Workshop is active for agent ${JSON.stringify(agentId)}, but ${detail} ${fix}`,
   };
 }

@@ -52,7 +52,8 @@ These turns do not count:
   background Workshop runs themselves.
 - turns on a runtime that does not report its resolved model and whether
   `skill_workshop` was available. The embedded runner and the Codex app-server
-  harness report both.
+  harness report both. Other CLI-backed runtimes, such as `claude-cli`, do
+  not, so agents on them never get a background review.
 - turns where tool policy hides `skill_workshop`.
 
 Compacted sessions are eligible. Counts are kept in memory, so a Gateway restart
@@ -187,7 +188,10 @@ can watch, steer, or stop it. Starting one does not change the learning mode.
    `auto` mode, `openclaw doctor` reports the setting that hides it unless a
    matching deny intentionally opts the agent out. Denying `skill_workshop`
    or `group:agents` opts that agent out without a Doctor warning.
-5. The Gateway stayed up and idle for the 30-second wait.
+5. The agent's model runs on the embedded runner or the Codex app-server
+   harness, not on another CLI-backed runtime such as `claude-cli`. In `auto`
+   mode, `openclaw doctor` warns about each affected agent.
+6. The Gateway stayed up and idle for the 30-second wait.
 
 A review that ran can still decide nothing is worth saving. That is the
 expected result for routine work.
