@@ -454,3 +454,23 @@ copy. They do not add resources to an original capture already created by an
 older installed updater. Keep those retained copies, and do not assume an older
 capture includes newly declared external resources. A recovery copy is evidence
 for manual recovery; its existence alone does not guarantee automatic rollback.
+
+### Older updater recovery copies
+
+During an update, Doctor reuses the installed updater's original recovery copy;
+it does not create another full copy to expand an older inventory. The admitted
+original is verified and kept unchanged. If that verification fails, Doctor
+refuses repair; inspect the named recovery copy with `openclaw update status --json`
+before retrying.
+
+New declarations do not retroactively add plugin files to older recovery copies.
+Do not assume automatic rollback restores external plugin data missing from the
+original manifest. For manual recovery, inspect the manifest and the plugin's
+migration documentation; migrated files or archives may remain in their new
+locations. Undeclared third-party resources remain unknown: ask the plugin
+maintainer to declare them before relying on recovery coverage.
+
+Standalone Doctor keeps its existing best-effort pre-repair capture behavior.
+Candidate validation uses disposable rehearsal state and defers plugins whose
+declared migration data is outside that rehearsal; it does not create a manual
+recovery copy for those disposable checks.

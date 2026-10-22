@@ -17,7 +17,7 @@ it.each([false, true])("only verifies saved policy (configDirty=%s)", (configDir
       tools: { profile: "full" },
       agents: { entries: { main: { tools: { profile } } } },
     },
-    toolsEffectiveResult: {
+    effective: {
       agentId: "main",
       profile,
       groups: [],
@@ -63,12 +63,12 @@ it("keeps session-denied MCP entries out of the tool preview", () => {
   const { container } = mountSolid(
     AgentTools,
     createBaseParams({
-      toolsCatalogResult: {
+      catalog: {
         agentId: "main",
         profiles: [],
         groups: [{ id: "terminal", label: "Terminal", source: "plugin", tools: [tool] }],
       },
-      toolsEffectiveResult: {
+      effective: {
         agentId: "main",
         profile: "full",
         groups: [{ id: "mcp", label: "MCP tools", source: "mcp", tools: [deniedTool] }],

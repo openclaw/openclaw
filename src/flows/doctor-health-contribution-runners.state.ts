@@ -1,7 +1,10 @@
 import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 import { noteDoctorRepairResult } from "./doctor-health-contribution-utils.js";
-import { recordDoctorHealthWarnings } from "./doctor-health-contribution.js";
+import {
+  recordDoctorHealthWarnings,
+  renderStructuredHealthFindings,
+} from "./doctor-health-contribution.js";
 
 export async function runLegacyPluginManifestHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairLegacyPluginManifestContracts } =
@@ -61,6 +64,7 @@ export async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext):
     shouldRepair: ctx.prompter.shouldRepair,
     integrityCheck: ctx.options.fullIntegrityCheck ? "full" : "quick",
     onWarnings: (warnings) => recordDoctorHealthWarnings(ctx, [], warnings),
+    onFindings: (findings) => renderStructuredHealthFindings(ctx, findings),
     ...(ctx.configResult.postSessionPluginMigration
       ? { postSessionPluginMigration: ctx.configResult.postSessionPluginMigration }
       : {}),

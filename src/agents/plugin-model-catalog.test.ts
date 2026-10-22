@@ -57,6 +57,7 @@ function expectMigration(
   expect(migrateLegacyPluginModelCatalogs({ agentDir, ...options })).toEqual({
     migrated,
     warnings: warnings.map((warning) => expect.stringContaining(warning)),
+    issues: expect.any(Array),
   });
 }
 
@@ -534,6 +535,7 @@ describe("SQLite-backed plugin model catalogs", () => {
       expect(migrateLegacyPluginModelCatalogs({ agentDir })).toEqual({
         migrated: 0,
         warnings: [expect.stringContaining("Could not remove migrated legacy provider catalog")],
+        issues: [expect.objectContaining({ kind: "cleanup-failed", pathname: sourcePath })],
       });
       expectCatalogs({ zai: contents });
       expect(existsSync(sourcePath)).toBe(true);

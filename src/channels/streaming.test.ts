@@ -4,6 +4,7 @@ import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createChannelProgressDraftCompositor } from "./progress-draft-compositor.js";
 import {
+  type AgentPlanStep,
   type ChannelProgressDraftLineInput,
   type ChannelStreamingProgressConfig,
   buildChannelProgressDraftLine,
@@ -34,6 +35,10 @@ const inheritedBlock = (mode: string) =>
     { previewAvailable: true, blockStreamingDefault: "on" },
   );
 const rawCommandEntry = { streaming: { progress: { commandText: "raw" } } };
+const step = (text: string, status: AgentPlanStep["status"] = "pending"): AgentPlanStep => ({
+  step: text,
+  status,
+});
 function draftText(
   lines: Parameters<typeof formatText>[0]["lines"],
   progress: ChannelStreamingProgressConfig,
@@ -216,11 +221,7 @@ it.each([
   expect(inheritedBlock(mode)).toBe(expected);
 });
 
-const plan = [
-  { step: "Inspect", status: "completed" },
-  { step: "Patch", status: "in_progress" },
-  { step: "Verify", status: "pending" },
-] as const;
+const plan = [step("Inspect", "completed"), step("Patch", "in_progress"), step("Verify")];
 
 it("preserves SDK summary exit priority over a full plan", () => {
   const text = draftText(
@@ -235,46 +236,35 @@ it("preserves SDK summary exit priority over a full plan", () => {
 });
 
 it("renders plan markers and keeps the checklist under narration", () => {
-  expect(formatChecklist(plan, { maxLines: 5, maxLineChars: 80 })).toEqual([
-    "✅ Inspect",
-    "▸ Patch",
-    "▢ Verify",
-  ]);
   expect(
     draftText(["Exec"], { label: false }, { narration: "Working through the plan.", plan }),
   ).toBe("Working through the plan.\n\n• Exec\n✅ Inspect\n▸ Patch\n▢ Verify");
 });
 
-it("uses only a summary when the checklist has one line available", () => {
-  expect(formatChecklist(plan, { maxLines: 1, maxLineChars: 80 })).toEqual(["✅ 1/3 done"]);
-});
-
-it("keeps the active step when later pending work fills the checklist", () => {
-  expect(
-    formatChecklist(
-      [
-        { step: "Done", status: "completed" },
-        { step: "Active", status: "in_progress" },
-        { step: "Next", status: "pending" },
-        { step: "Later", status: "pending" },
-        { step: "Last", status: "pending" },
-      ],
-      { maxLines: 3, maxLineChars: 80 },
-    ),
-  ).toEqual(["✅ 1/5 done", "▸ Active", "▢ Last"]);
-});
+it.each([
+  { maxLines: 1, steps: plan, expected: ["✅ 1/3 done"] },
+  {
+    maxLines: 3,
+    steps: [
+      step("Done", "completed"),
+      step("Active", "in_progress"),
+      ...["Next", "Later", "Last"].map((name) => step(name)),
+    ],
+    expected: ["✅ 1/5 done", "▸ Active", "▢ Last"],
+  },
+])(
+  "keeps the summary and active step within $maxLines checklist lines",
+  ({ maxLines, steps, expected }) => {
+    expect(formatChecklist(steps, { maxLines, maxLineChars: 80 })).toEqual(expected);
+  },
+);
 
 it("drops every tool line when the checklist consumes the whole budget", () => {
   expect(
     draftText(
       ["tool one", "tool two"],
       { label: false, maxLines: 2 },
-      {
-        plan: [
-          { step: "Active", status: "in_progress" },
-          { step: "Next", status: "pending" },
-        ],
-      },
+      { plan: [step("Active", "in_progress"), step("Next")] },
     ),
   ).toBe("▸ Active\n▢ Next");
 });
