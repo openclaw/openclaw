@@ -163,7 +163,6 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
       keyboardVisible:
         this.mobilePresentation.publishedKeyboard ?? shellViewport.snapshot?.keyboardVisible,
       onComposerEditingChange: this.onMobileComposerEditingChange,
-      onViewportChange: this.onMobileViewportChange,
     };
   }
 
@@ -234,6 +233,12 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
       this.mobilePresentation.publishedKeyboard = viewport?.keyboardVisible;
     }
   };
+
+  observeMobileViewport(): () => void {
+    const update = () => this.onMobileViewportChange(shellViewport.snapshot);
+    update();
+    return shellViewport.subscribe(update);
+  }
 
   protected navigateMobileHost(destination: MobileHostDestination, source?: HTMLElement): void {
     if (!this.usesMobileHost) {

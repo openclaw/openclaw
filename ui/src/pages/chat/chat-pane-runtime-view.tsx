@@ -137,6 +137,8 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       runtime.start();
     }
     const context = runtime.context;
+    // The pane retains mobile presentation while its optional host is absent.
+    onSettled(() => runtime.observeMobileViewport());
     const parentSession = projectOwner(runtime.parentSession, (owner) => owner.read(), Object.is);
     const transcriptPosition = projectOwner(
       runtime.transcript,

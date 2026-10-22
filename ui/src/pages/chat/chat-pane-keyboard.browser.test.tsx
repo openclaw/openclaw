@@ -46,10 +46,17 @@ it("publishes keyboard transitions to the mobile composer without transcript geo
   await expect.poll(() => shell.dataset.composerKeyboard).toBe("true");
   expect(runtime.mobilePresentation.suspended).toBe(true);
 
+  // The retained pane can leave mobile mode while its keyboard closes.
+  runtime.mergedChrome = false;
+  await pane.updateComplete;
+  expect(pane.querySelector(".sidebar-region--mobile-host")).toBeNull();
+
   // Browser chrome still occludes the canvas after keyboard detection clears.
   viewport.height = document.documentElement.clientHeight - 40;
   viewport.dispatchEvent(new Event("resize"));
   await expect.poll(() => shellViewport.snapshot?.keyboardVisible).toBe(false);
+  runtime.mergedChrome = true;
+  await pane.updateComplete;
   await expect.poll(() => shell.dataset.composerKeyboard).toBeUndefined();
   await expect.poll(() => shell.dataset.composerEditing).toBe("false");
   expect(runtime.mobilePresentation.suspended).toBe(true);
