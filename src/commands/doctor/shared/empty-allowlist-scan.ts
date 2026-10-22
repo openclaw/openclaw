@@ -4,7 +4,7 @@ import {
   getDoctorChannelCapabilities,
   resolveDoctorChannelAccountIds,
 } from "../channel-capabilities.js";
-import type { DoctorAccountRecord, DoctorAllowFromList } from "../types.js";
+import type { DoctorAccountRecord } from "../types.js";
 import { hasAllowFromEntries } from "./allowlist.js";
 import type { ChannelDoctorEmptyAllowlistPolicyHooks } from "./channel-doctor.js";
 
@@ -16,18 +16,10 @@ function resolveDoctorAccountDmAccess(account: DoctorAccountRecord, parent?: Doc
   const dm = asNullableRecord(account.dm);
   const parentDm = asNullableRecord(parent?.dm);
   return {
-    dmPolicy:
-      (account.dmPolicy as string | undefined) ??
-      (dm?.policy as string | undefined) ??
-      (parent?.dmPolicy as string | undefined) ??
-      (parentDm?.policy as string | undefined) ??
-      undefined,
+    dmPolicy: account.dmPolicy ?? dm?.policy ?? parent?.dmPolicy ?? parentDm?.policy ?? undefined,
     // Doctor's legacy warnings prefer top-level allowlists, including inherited ones.
     effectiveAllowFrom:
-      (account.allowFrom as DoctorAllowFromList | undefined) ??
-      (parent?.allowFrom as DoctorAllowFromList | undefined) ??
-      (dm?.allowFrom as DoctorAllowFromList | undefined) ??
-      (parentDm?.allowFrom as DoctorAllowFromList | undefined),
+      account.allowFrom ?? parent?.allowFrom ?? dm?.allowFrom ?? parentDm?.allowFrom,
   };
 }
 
@@ -58,8 +50,8 @@ export async function scanEmptyAllowlistPolicyWarnings(
     const context = {
       account,
       channelName,
-      dmPolicy,
-      effectiveAllowFrom: effectiveAllowFrom ?? undefined,
+      dmPolicy: typeof dmPolicy === "string" ? dmPolicy : undefined,
+      effectiveAllowFrom: Array.isArray(effectiveAllowFrom) ? effectiveAllowFrom : undefined,
       parent,
       prefix,
     };
@@ -68,10 +60,7 @@ export async function scanEmptyAllowlistPolicyWarnings(
         `- ${prefix}.dmPolicy is "allowlist" but allowFrom is empty — all DMs will be blocked. Add sender IDs to ${prefix}.allowFrom, or run "${params.doctorFixCommand}" to auto-migrate from pairing store when entries exist.`,
       );
     }
-    const groupPolicy =
-      (account.groupPolicy as string | undefined) ??
-      (parent?.groupPolicy as string | undefined) ??
-      undefined;
+    const groupPolicy = account.groupPolicy ?? parent?.groupPolicy;
     if (
       groupPolicy === "allowlist" &&
       getDoctorChannelCapabilities(channelName).warnOnEmptyGroupSenderAllowlist &&
@@ -81,9 +70,7 @@ export async function scanEmptyAllowlistPolicyWarnings(
           params.shouldSkipDefaultEmptyGroupAllowlistWarning?.({ ...context }))
       )
     ) {
-      const rawGroupAllowFrom =
-        (account.groupAllowFrom as DoctorAllowFromList | undefined) ??
-        (parent?.groupAllowFrom as DoctorAllowFromList | undefined);
+      const rawGroupAllowFrom = account.groupAllowFrom ?? parent?.groupAllowFrom;
       // Match runtime semantics: resolveGroupAllowFromSources treats empty arrays as
       // unset and falls back to allowFrom.
       const groupAllowFrom = hasAllowFromEntries(rawGroupAllowFrom) ? rawGroupAllowFrom : undefined;
@@ -102,9 +89,7 @@ export async function scanEmptyAllowlistPolicyWarnings(
     warnings.push(...(params.extraWarningsForAccount?.(context) ?? []));
   };
 
-  for (const [channelName, channelConfig] of Object.entries(
-    channels as Record<string, DoctorAccountRecord>,
-  )) {
+  for (const [channelName, channelConfig] of Object.entries(channels)) {
     if (!isActiveAccount(channelConfig)) {
       continue;
     }
@@ -124,9 +109,7 @@ export async function scanEmptyAllowlistPolicyWarnings(
       !hasImplicitActiveAccount &&
       channelConfig.groupPolicy === "allowlist" &&
       activeAccounts.every((account) => {
-        const rawGroupAllowFrom =
-          (account.groupAllowFrom as DoctorAllowFromList | undefined) ??
-          (channelConfig.groupAllowFrom as DoctorAllowFromList | undefined);
+        const rawGroupAllowFrom = account.groupAllowFrom ?? channelConfig.groupAllowFrom;
         if (hasAllowFromEntries(rawGroupAllowFrom)) {
           return true;
         }

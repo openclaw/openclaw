@@ -35,6 +35,45 @@ function scan(
 }
 
 describe("doctor empty allowlist policy scan", () => {
+  it("projects malformed selected fields without falling through to inherited hook values", async () => {
+    const contexts: unknown[] = [];
+    const warnings = await scan(
+      {
+        "legacy-channel": {
+          dmPolicy: "allowlist",
+          allowFrom: ["parent"],
+          accounts: {
+            work: {
+              dmPolicy: 42,
+              allowFrom: "not-a-list",
+              dm: { policy: "allowlist", allowFrom: ["nested"] },
+            },
+          },
+        },
+      },
+      {
+        extraWarningsForAccount: ({ prefix, dmPolicy, effectiveAllowFrom }) => {
+          contexts.push({ prefix, dmPolicy, effectiveAllowFrom });
+          return [];
+        },
+      },
+    );
+
+    expect(warnings).toEqual([]);
+    expect(contexts).toEqual([
+      {
+        prefix: "channels.legacy-channel",
+        dmPolicy: "allowlist",
+        effectiveAllowFrom: ["parent"],
+      },
+      {
+        prefix: "channels.legacy-channel.accounts.work",
+        dmPolicy: undefined,
+        effectiveAllowFrom: undefined,
+      },
+    ]);
+  });
+
   it.each([
     {
       channelName: "imessage",
