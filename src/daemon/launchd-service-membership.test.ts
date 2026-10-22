@@ -16,6 +16,8 @@ import {
   launchdRestartHandoffState,
   launchdSystemState,
   cleanStaleGatewayProcessesSync,
+  inspectPortUsage,
+  probePortUsage,
   installLaunchAgent,
   setLegacyGatewayLaunchAgentPlist,
   setLaunchAgentPlist,
@@ -48,6 +50,36 @@ const {
 const install = () => installLaunchAgent(defaultLaunchAgentFixture(ENV));
 const control = (overrides?: Parameters<typeof launchAgentControlFixture>[1]) =>
   launchAgentControlFixture(ENV, overrides);
+
+it("does not mistake a co-located Gateway port for the node-host port during restart", async () => {
+  const env = {
+    ...ENV,
+    OPENCLAW_SERVICE_KIND: "node",
+    OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.node",
+    OPENCLAW_GATEWAY_PORT: "18789",
+  };
+  setLaunchAgentPlist(env, "ai.openclaw.node", [
+    "node",
+    "node",
+    "run",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "18789",
+  ]);
+  const stdout = new PassThrough();
+  inspectPortUsage.mockResolvedValue({
+    port: 18789,
+    status: "busy",
+    listeners: [{ pid: 9999, address: "TCP 127.0.0.1:18789 (LISTEN)" }],
+    hints: [],
+  });
+  probePortUsage.mockResolvedValue("busy");
+  const result = await withEnvAsync(EXTERNAL_PROCESS, () => restartLaunchAgent({ env, stdout }));
+  expect(inspectPortUsage).not.toHaveBeenCalled();
+  expect(cleanStaleGatewayProcessesSync).not.toHaveBeenCalled();
+  expect(result).toEqual({ outcome: "completed" });
+});
 
 describe("launchd runtime parsing", () => {
   it.each([

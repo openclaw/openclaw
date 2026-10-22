@@ -5,6 +5,7 @@ import {
   resolveSlackMessageText,
 } from "./block-text.js";
 
+const plainText = (text: string) => ({ type: "plain_text", text });
 const rawText = (text: string) => ({ type: "raw_text", text });
 const makeTable = (text: string) => ({ type: "table", rows: [[rawText(text)]] });
 const section = (text: string) => ({ type: "section", text: { type: "mrkdwn", text } });
@@ -19,25 +20,47 @@ const latencyChart = (data = [{ label: "Mon", value: 250 }]) => ({
 });
 
 describe("resolveSlackBlocksText data visualizations", () => {
-  it("aggregates rich text with plain sections while preserving native references", () => {
+  it("uses the shared visible-text parser for rich text, fields, and controls", () => {
     const resolved = resolveSlackBlocksText([
       {
         type: "rich_text",
         elements: [
           {
             type: "rich_text_section",
-            elements: [{ type: "user", user_id: "U123" }],
+            elements: [
+              { type: "text", text: "Ask " },
+              { type: "user", user_id: "U123" },
+            ],
           },
         ],
       },
-      section("Deploy"),
+      { type: "section", text: plainText("Deploy"), fields: [plainText("Healthy")] },
+      {
+        type: "actions",
+        block_id: "private-block",
+        elements: [
+          {
+            type: "workflow_button",
+            text: plainText("Run workflow"),
+            action_id: "private-action",
+            workflow: { trigger: { url: "https://example.com/private" } },
+          },
+          {
+            type: "static_select",
+            placeholder: plainText("Choose owner"),
+            action_id: "private-select",
+            options: [{ text: plainText("Hidden option"), value: "private-value" }],
+          },
+        ],
+      },
     ]);
 
     expect(resolved).toEqual({
-      text: "<@U123>\nDeploy",
+      text: "Ask <@U123>\nDeploy\nHealthy\nRun workflow\nChoose owner",
       hasRichText: true,
       hasNativeData: false,
     });
+    expect(resolved?.text).not.toMatch(/private|Hidden option/u);
   });
 
   it.each([
@@ -45,14 +68,20 @@ describe("resolveSlackBlocksText data visualizations", () => {
       name: "native data table",
       type: "data_table",
       caption: "Pipeline report",
-      rows: [[rawText("Value")], [rawText("42")]],
-      text: "Pipeline report (table)\n- Value: 42",
+      rows: [
+        [rawText("Account"), rawText("ARR")],
+        [rawText("Acme"), { type: "raw_number", value: 125000, text: "$125k" }],
+      ],
+      text: "Pipeline report (table)\n- Account: Acme; ARR: $125k",
     },
     {
       name: "Slack pasted table",
       type: "table",
-      rows: [[rawText("Value")], [rawText("42")]],
-      text: "Value\n42",
+      rows: [
+        [rawText("ID"), rawText("Status")],
+        [{ type: "raw_number", value: 12345 }, rawText("enabled")],
+      ],
+      text: "ID\tStatus\n12345\tenabled",
     },
   ])("preserves $name values in conversation context", ({ name: _name, text, ...block }) => {
     expect(resolveSlackBlocksText([block])).toEqual({
