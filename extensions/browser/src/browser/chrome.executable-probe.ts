@@ -33,16 +33,64 @@ export function execBrowserProbe(
 
 export function readBrowserVersion(executablePath: string): string | null {
   if (process.platform === "darwin") {
-    const bundleVersion = readMacBundleBrowserVersion(executablePath);
-    if (bundleVersion) {
-      return bundleVersion;
+    const parts = path.normalize(executablePath).split(path.sep);
+    const appIndex = parts.findIndex((part) => part.endsWith(".app"));
+    if (appIndex >= 0) {
+      const appBundlePath = parts.slice(0, appIndex + 1).join(path.sep) || path.sep;
+      const plistPath = path.join(appBundlePath, "Contents", "Info.plist");
+      const bundleVersion = execBrowserProbe(
+        "/usr/libexec/PlistBuddy",
+        ["-c", "Print :CFBundleShortVersionString", plistPath],
+        MAC_PLISTBUDDY_TIMEOUT_MS,
+      );
+      if (bundleVersion) {
+        return bundleVersion;
+      }
     }
   }
 
   if (process.platform === "win32") {
     // Windows GUI browsers do not report `--version` to inherited stdout.
     // Read PE metadata first, then use the install layout only as a safe fallback.
-    return readWindowsBrowserVersion(executablePath);
+    // Read the inspected executable's authoritative PE metadata. Pass the path as
+    // environment data so a configured path (often containing spaces) can never
+    // become part of the PowerShell program; Windows PowerShell appends any extra
+    // -Command argument to the script text, which fails as a ParserError. The
+    // leaf PowerShell child reuses the documented browser-executable name.
+    const configuredSystemRoot = normalizeOptionalString(process.env.SystemRoot);
+    const systemRoot =
+      configuredSystemRoot && path.win32.isAbsolute(configuredSystemRoot)
+        ? configuredSystemRoot
+        : "C:\\Windows";
+    const powershellPath = path.win32.join(
+      systemRoot,
+      "System32",
+      "WindowsPowerShell",
+      "v1.0",
+      "powershell.exe",
+    );
+    const metadataVersion = execBrowserProbe(
+      powershellPath,
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "[System.Diagnostics.FileVersionInfo]::GetVersionInfo($env:OPENCLAW_BROWSER_EXECUTABLE_PATH).ProductVersion",
+      ],
+      WINDOWS_FILE_METADATA_TIMEOUT_MS,
+      undefined,
+      { OPENCLAW_BROWSER_EXECUTABLE_PATH: executablePath },
+    );
+    if (metadataVersion) {
+      return metadataVersion.replace(/\s+/g, " ");
+    }
+
+    // Standard Chromium installers also keep a versioned child directory. Only
+    // trust that layout when it is unambiguous; updates may leave two builds.
+    const versionDirs = readDirectoryEntriesSync(path.win32.dirname(executablePath)).filter(
+      (entry) => entry.isDirectory() && WINDOWS_VERSION_DIR_RE.test(entry.name),
+    );
+    return versionDirs.length === 1 ? (versionDirs[0]?.name ?? null) : null;
   }
 
   const output = execBrowserProbe(executablePath, ["--version"], BROWSER_VERSION_TIMEOUT_MS);
@@ -52,71 +100,7 @@ export function readBrowserVersion(executablePath: string): string | null {
   return output.replace(/\s+/g, " ");
 }
 
-function readMacBundleBrowserVersion(executablePath: string): string | null {
-  const appBundlePath = resolveMacAppBundlePath(executablePath);
-  if (!appBundlePath) {
-    return null;
-  }
-  const plistPath = path.join(appBundlePath, "Contents", "Info.plist");
-  return execBrowserProbe(
-    "/usr/libexec/PlistBuddy",
-    ["-c", "Print :CFBundleShortVersionString", plistPath],
-    MAC_PLISTBUDDY_TIMEOUT_MS,
-  );
-}
-
 export const WINDOWS_VERSION_DIR_RE = /^\d+(?:\.\d+){1,3}$/;
-
-function readWindowsBrowserVersion(executablePath: string): string | null {
-  // Read the inspected executable's authoritative PE metadata. Pass the path as
-  // environment data so a configured path (often containing spaces) can never
-  // become part of the PowerShell program; Windows PowerShell appends any extra
-  // -Command argument to the script text, which fails as a ParserError. The
-  // leaf PowerShell child reuses the documented browser-executable name.
-  const configuredSystemRoot = normalizeOptionalString(process.env.SystemRoot);
-  const systemRoot =
-    configuredSystemRoot && path.win32.isAbsolute(configuredSystemRoot)
-      ? configuredSystemRoot
-      : "C:\\Windows";
-  const powershellPath = path.win32.join(
-    systemRoot,
-    "System32",
-    "WindowsPowerShell",
-    "v1.0",
-    "powershell.exe",
-  );
-  const metadataVersion = execBrowserProbe(
-    powershellPath,
-    [
-      "-NoProfile",
-      "-NonInteractive",
-      "-Command",
-      "[System.Diagnostics.FileVersionInfo]::GetVersionInfo($env:OPENCLAW_BROWSER_EXECUTABLE_PATH).ProductVersion",
-    ],
-    WINDOWS_FILE_METADATA_TIMEOUT_MS,
-    undefined,
-    { OPENCLAW_BROWSER_EXECUTABLE_PATH: executablePath },
-  );
-  if (metadataVersion) {
-    return metadataVersion.replace(/\s+/g, " ");
-  }
-
-  // Standard Chromium installers also keep a versioned child directory. Only
-  // trust that layout when it is unambiguous; updates may leave two builds.
-  const versionDirs = readDirectoryEntriesSync(path.win32.dirname(executablePath)).filter(
-    (entry) => entry.isDirectory() && WINDOWS_VERSION_DIR_RE.test(entry.name),
-  );
-  return versionDirs.length === 1 ? (versionDirs[0]?.name ?? null) : null;
-}
-
-function resolveMacAppBundlePath(executablePath: string): string | null {
-  const parts = path.normalize(executablePath).split(path.sep);
-  const appIndex = parts.findIndex((part) => part.endsWith(".app"));
-  if (appIndex < 0) {
-    return null;
-  }
-  return parts.slice(0, appIndex + 1).join(path.sep) || path.sep;
-}
 
 export function parseBrowserMajorVersion(rawVersion: string | null | undefined): number | null {
   const matches = [...(rawVersion ?? "").matchAll(CHROME_VERSION_RE)];
