@@ -73,17 +73,7 @@ function createRuntimeConfig(sourceConfig: Record<string, unknown>) {
   };
 }
 
-async function mountPage(
-  sourceConfig: Record<string, unknown>,
-  basePath = "",
-): Promise<{
-  page: LabsPageElement;
-  unmount: () => void;
-  runtimeConfig: ReturnType<typeof createRuntimeConfig>;
-  gateway: ReturnType<typeof createGateway>;
-  context: { navigate: ReturnType<typeof vi.fn> };
-  router: ReturnType<typeof createRouter>;
-}> {
+async function mountPage(sourceConfig: Record<string, unknown>, basePath = "") {
   const runtimeConfig = createRuntimeConfig(sourceConfig);
   const gateway = createGateway();
   const navigate = vi.fn();
