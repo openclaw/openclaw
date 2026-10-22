@@ -12,6 +12,7 @@ vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
   >("openclaw/plugin-sdk/runtime-config-snapshot");
   return { ...actual, captureRuntimeConfigAsyncReader: () => async () => cfg };
 });
+// mock-isolation: runtime refresh reads the operator's on-disk config instead of this fixture.
 vi.mock("./config-refresh-source.js", () => ({ loadBrowserConfigForRuntimeRefresh: () => cfg }));
 // mock-isolation: browser auth bootstrap persists a generated Gateway token to config.
 vi.mock("./control-auth.js", () => ({
