@@ -231,11 +231,13 @@ suite.define(() => {
             await sessions.click();
             await expect.poll(() => sessions.getAttribute("aria-pressed")).toBe(pressed);
             await page.locator(".shell").evaluate(async (shell) => {
-              await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+              await new Promise<void>((resolve) => {
+                requestAnimationFrame(() => resolve());
+              });
               await Promise.all(shell.getAnimations().map((animation) => animation.finished));
-              await new Promise<void>((resolve) =>
-                requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-              );
+              await new Promise<void>((resolve) => {
+                requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+              });
             });
           }
         };
