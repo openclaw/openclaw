@@ -9,7 +9,6 @@ import {
   WORKBOARD_LINK_TYPES,
   WORKBOARD_NOTIFICATION_KINDS,
   WORKBOARD_PRIORITIES,
-  WORKBOARD_PROOF_STATUSES,
   WORKBOARD_STATUSES,
   WORKBOARD_WORKER_STATES,
   WORKBOARD_TEMPLATE_IDS,
@@ -46,15 +45,6 @@ import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-co
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { definedFields } from "../record-fields.js";
 import {
-  normalizeBoundedString,
-  normalizeEnumValue,
-  normalizeTimestamp,
-} from "./store-normalizer-primitives.js";
-import { normalizeProof } from "./store-proof-normalizers.js";
-
-export { normalizeBoundedString, normalizeTimestamp } from "./store-normalizer-primitives.js";
-export { normalizeProofInput } from "./store-proof-normalizers.js";
-import {
   MAX_ATTACHMENT_BYTES,
   MAX_CARD_ARTIFACTS,
   MAX_CARD_ATTACHMENTS,
@@ -71,10 +61,18 @@ import {
 import type {
   WorkboardAttachmentInput,
   WorkboardNotificationSubscribeInput,
-  WorkboardProofInput,
   WorkboardWorkerLogInput,
 } from "./store-inputs.js";
+import {
+  normalizeBoundedString,
+  normalizeEnumValue,
+  normalizeTimestamp,
+} from "./store-normalizer-primitives.js";
+import { normalizeProof } from "./store-proof-normalizers.js";
 import { isAbsoluteWorkspacePath } from "./workspace-path.js";
+
+export { normalizeBoundedString, normalizeTimestamp } from "./store-normalizer-primitives.js";
+export { normalizeProofInput } from "./store-proof-normalizers.js";
 
 export function normalizeBoardId(value: unknown, fallback?: string): string | undefined {
   const raw = normalizeBoundedString(value, fallback, 80, "board id");

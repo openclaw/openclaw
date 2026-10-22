@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import type { WorkboardProof } from "@openclaw/workboard-contract";
 import { describe, expect, it } from "vitest";
 import { createWorkboardSqliteTestHarness } from "./test/sqlite-store.js";
 
@@ -7,7 +8,12 @@ describe("Workboard oversized stored proof notes", () => {
     const { store, stores } = createWorkboardSqliteTestHarness();
     const card = await store.create({ title: "Legacy proof" });
     const note = `  ${"y".repeat(2001)}\n`;
-    const legacyProof = { id: "legacy-proof", status: "unknown", createdAt: 1, note };
+    const legacyProof: WorkboardProof = {
+      id: "legacy-proof",
+      status: "unknown",
+      createdAt: 1,
+      note,
+    };
     // Seed legacy data through the persistence owner, below new-input validation.
     await stores.cards.register(card.id, {
       version: 1,

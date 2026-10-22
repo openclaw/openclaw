@@ -25,8 +25,9 @@ export function normalizeEnumValue<T extends string, TFallback extends T | undef
   fallback: TFallback,
   fieldName?: string,
 ): T | TFallback {
-  if (typeof value === "string" && allowed.includes(value as T)) {
-    return value as T;
+  const match = allowed.find((option) => option === value);
+  if (match !== undefined) {
+    return match;
   }
   if (fieldName && typeof value === "string" && value.trim()) {
     throw new Error(`${fieldName} must be one of: ${allowed.join(", ")}.`);
