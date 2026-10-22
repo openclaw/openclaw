@@ -108,20 +108,6 @@ it("shortenHomePath uses the effective home for OPENCLAW_HOME=undefined", () => 
     );
   });
 });
-
-it.skipIf(process.platform === "win32")("shortenHomePath: POSIX boundaries", () => {
-  withEnv({ OPENCLAW_HOME: "/srv/OpenClaw-Home", HOME: "/home/other" }, () => {
-    expect(shortenHomePath("/srv/openclaw-home/workspace")).toBe("/srv/openclaw-home/workspace");
-    expect(shortenHomePath("/srv/OpenClaw-Home\\workspace")).toBe("/srv/OpenClaw-Home\\workspace");
-    expect(shortenHomePath("/srv/OpenClaw-Home/work\\space")).toBe("$OPENCLAW_HOME/work\\space");
-  });
-});
-
-it.skipIf(process.platform !== "win32")("shortenHomePath: relative Windows paths", () => {
-  withEnv({ OPENCLAW_HOME: process.cwd() }, () => {
-    expect(shortenHomePath(`relative${path.sep}workspace`)).toBe(`relative${path.sep}workspace`);
-  });
-});
 it("shortenHomeInString uses the explicit OPENCLAW_HOME prefix", () => {
   withEnv({ OPENCLAW_HOME: "/srv/openclaw-home", HOME: "/home/other" }, () => {
     expect(
@@ -130,16 +116,26 @@ it("shortenHomeInString uses the explicit OPENCLAW_HOME prefix", () => {
   });
 });
 
-it.skipIf(process.platform === "win32")(
-  "shortenHomeInString keeps POSIX home matching case-sensitive",
-  () => {
-    withEnv({ OPENCLAW_HOME: "/srv/OpenClaw-Home", HOME: "/home/other" }, () => {
-      expect(shortenHomeInString("config: /srv/openclaw-home/openclaw.json")).toBe(
-        "config: /srv/openclaw-home/openclaw.json",
-      );
-    });
-  },
-);
+it.skipIf(process.platform === "win32").each([
+  [shortenHomePath, "/srv/openclaw-home/workspace", "/srv/openclaw-home/workspace"],
+  [shortenHomePath, "/srv/OpenClaw-Home\\workspace", "/srv/OpenClaw-Home\\workspace"],
+  [shortenHomePath, "/srv/OpenClaw-Home/work\\space", "$OPENCLAW_HOME/work\\space"],
+  [
+    shortenHomeInString,
+    "config: /srv/openclaw-home/openclaw.json",
+    "config: /srv/openclaw-home/openclaw.json",
+  ],
+] as const)("%s respects POSIX boundaries: %s", (shorten, input, expected) => {
+  withEnv({ OPENCLAW_HOME: "/srv/OpenClaw-Home", HOME: "/home/other" }, () => {
+    expect(shorten(input)).toBe(expected);
+  });
+});
+
+it.skipIf(process.platform !== "win32")("shortenHomePath: relative Windows paths", () => {
+  withEnv({ OPENCLAW_HOME: process.cwd() }, () => {
+    expect(shortenHomePath(`relative${path.sep}workspace`)).toBe(`relative${path.sep}workspace`);
+  });
+});
 
 it.skipIf(process.platform === "win32")("shortenHomeInString: component boundaries", () => {
   withEnv({ OPENCLAW_HOME: undefined, HOME: "/home/al" }, () => {

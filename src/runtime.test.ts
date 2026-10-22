@@ -28,21 +28,18 @@ it("throws a typed exit error carrying the requested code", () => {
   expect(thrown).toMatchObject({ name: "ExitError", message: "exit 42", code: 42 });
 });
 
-describe("writeRuntimeJson", () => {
-  it("writes JSON using writeJson when available", () => {
-    const runtime = makeOutputRuntime();
-    writeRuntimeJson(runtime, { key: "value" });
-    expect(runtime.writeJson).toHaveBeenCalledWith({ key: "value" }, 2);
-  });
-
-  it.each([
-    [undefined, '{\n  "key": "value"\n}'],
-    [0, '{"key":"value"}'],
-  ] as const)("writes JSON through log with space %s", (space, expected) => {
-    const runtime = makeRuntime();
-    writeRuntimeJson(runtime, { key: "value" }, space);
+it.each([
+  [true, undefined, { key: "value" }],
+  [false, undefined, '{\n  "key": "value"\n}'],
+  [false, 0, '{"key":"value"}'],
+] as const)("writes JSON (direct: %s, space: %s)", (direct, space, expected) => {
+  const runtime = direct ? makeOutputRuntime() : makeRuntime();
+  writeRuntimeJson(runtime, { key: "value" }, space);
+  if ("writeJson" in runtime) {
+    expect(runtime.writeJson).toHaveBeenCalledWith(expected, 2);
+  } else {
     expect(runtime.log).toHaveBeenCalledWith(expected);
-  });
+  }
 });
 
 it.each([false, true])("writes stdout (direct writer: %s)", (direct) => {
@@ -121,7 +118,6 @@ describe("defaultRuntime terminal restoration", () => {
     expect(() => defaultRuntime.exit(1, { resetStream })).toThrow(ExitError);
 
     expect(resetWrite).toHaveBeenCalledWith(expect.stringContaining("\x1b[?25h"));
-    expect(stdout).toEqual([]);
-    expect(stderr).toEqual([]);
+    expect([stdout, stderr]).toEqual([[], []]);
   });
 });

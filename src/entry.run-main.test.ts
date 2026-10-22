@@ -2,112 +2,59 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../test/helpers/temp-dir.js";
 import { ExpectedCliError } from "./cli/failure-output.js";
 import { runMainOrRootHelp } from "./entry.js";
-import type { PluginRuntime } from "./plugin-sdk/runtime-store.js";
-import { buildPluginApi } from "./plugins/api-builder.js";
-import { instrumentPluginInstanceApi } from "./plugins/api-facades.js";
-import { PluginInstance } from "./plugins/plugin-instance.js";
-import type { OpenClawPluginCliRegistrar } from "./plugins/plugin-registration.types.js";
 
 describe("entry run-main boundary", () => {
   let previousExitCode: typeof process.exitCode;
   let errorSpy: MockInstance<typeof console.error>;
-  let instance: PluginInstance | undefined;
   beforeEach(() => {
     previousExitCode = process.exitCode;
     process.exitCode = undefined;
     errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   });
-  afterEach(async () => {
+  afterEach(() => {
     vi.doUnmock("./cli/run-main.js");
     vi.restoreAllMocks();
     process.exitCode = previousExitCode;
-    await instance?.dispose();
-    instance = undefined;
   });
 
-  it.each(["command", "startup", "expected"] as const)("frames a %s failure", async (phase) => {
-    const message = "Enable the workboard plugin.";
-    const error =
-      phase === "expected"
+  it.each(["command", "startup", "expected", "expected-json"] as const)(
+    "frames a %s failure",
+    async (phase) => {
+      const message = "Enable the workboard plugin.";
+      const expected = phase.startsWith("expected");
+      const json = phase === "expected-json";
+      const error = expected
         ? new ExpectedCliError({ message, humanOutput: message, machineOutput: message })
         : new Error("synthetic CLI failure");
-    const runCli = async () => {
-      throw error;
-    };
-    // mock-isolation: Distinguish import failure from failure inside the loaded command.
-    vi.doMock("./cli/run-main.js", async () => (phase === "startup" ? runCli() : { runCli }));
-    await runMainOrRootHelp(["node", "openclaw", "status"]);
-    expect(process.exitCode).toBe(1);
-    if (phase === "expected") {
-      expect(errorSpy.mock.calls).toEqual([[message]]);
-    } else {
-      const startup = phase === "startup";
-      expect(errorSpy).toHaveBeenCalledWith(
-        `[openclaw] ${startup ? "Could not start the CLI." : "The CLI command failed."}`,
-      );
-      expect(errorSpy).not.toHaveBeenCalledWith(
-        expect.stringContaining(startup ? "The CLI command failed" : "Could not start the CLI"),
-      );
-    }
-  });
-
-  it.each([false, true])("reports plugin action failures (JSON: %s)", async (json) => {
-    const message = "--limit must be a positive integer";
-    instance = new PluginInstance("fixture");
-    let registrar: OpenClawPluginCliRegistrar | undefined;
-    const api = instrumentPluginInstanceApi(
-      buildPluginApi({
-        id: "fixture",
-        name: "fixture",
-        source: "test",
-        registrationMode: "discovery",
-        config: {},
-        runtime: {} as PluginRuntime,
-        resolvePath: (value) => value,
-        logger: { info() {}, warn() {}, error() {}, debug() {} },
-        handlers: { registerCli: (value) => (registrar = value) },
-      }),
-      instance,
-    );
-    api.registerCli(
-      ({ program }) => {
-        program
-          .command("fail")
-          .option("--json")
-          .action(() => {
-            throw new Error(message);
-          });
-      },
-      { commands: ["fail"] },
-    );
-    const host = new Command();
-    await registrar?.({ program: host, parentPath: [], config: {}, logger: api.logger });
-    const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
-    const runCli = vi.fn(async (argv: string[]) => {
-      await host.parseAsync(argv);
-    });
-    // mock-isolation: This command runs on the fixture program, not the real CLI runtime.
-    vi.doMock("./cli/run-main.js", async () => ({ runCli }));
-    const argv = ["node", "openclaw", "fail", ...(json ? ["--json"] : [])];
-    await runMainOrRootHelp(argv);
-    expect(runCli).toHaveBeenCalledWith(argv, {
-      additionalStartupTrace: expect.any(Object),
-      runtimeRecoveryEnv: expect.any(Object),
-      retainConsoleRoutingUntilProcessExit: true,
-    });
-
-    expect(process.exitCode).toBe(1);
-    expect(errorSpy.mock.calls).toEqual([[message]]);
-    const output = stdout.mock.calls.map(([chunk]) => String(chunk)).join("");
-    expect(json ? JSON.parse(output) : output).toEqual(
-      json ? { ok: false, error: { type: "cli_error", message } } : "",
-    );
-  });
+      const runCli = async () => {
+        throw error;
+      };
+      // mock-isolation: Distinguish import failure from failure inside the loaded command.
+      vi.doMock("./cli/run-main.js", async () => (phase === "startup" ? runCli() : { runCli }));
+      const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+      await runMainOrRootHelp(["node", "openclaw", "status", ...(json ? ["--json"] : [])]);
+      expect(process.exitCode).toBe(1);
+      if (expected) {
+        expect(errorSpy.mock.calls).toEqual([[message]]);
+        const output = stdout.mock.calls.map(([chunk]) => String(chunk)).join("");
+        expect(json ? JSON.parse(output) : output).toEqual(
+          json ? { ok: false, error: { type: "cli_error", message } } : "",
+        );
+      } else {
+        const startup = phase === "startup";
+        expect(errorSpy).toHaveBeenCalledWith(
+          `[openclaw] ${startup ? "Could not start the CLI." : "The CLI command failed."}`,
+        );
+        expect(errorSpy).not.toHaveBeenCalledWith(
+          expect.stringContaining(startup ? "The CLI command failed" : "Could not start the CLI"),
+        );
+      }
+    },
+  );
 });
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);

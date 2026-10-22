@@ -36,7 +36,6 @@ describe("version resolution", () => {
       "package.json": { name: "openclaw", version: "2026.9.2" },
       "build-info.json": { version: "2026.8.1" },
     });
-    // Reporting source metadata would hide a stale, unrebuilt runtime.
     expect(readVersionFromPackageJsonForModuleUrl(moduleUrl)).toBe("2026.9.2");
     expect(resolveVersionFromModuleUrl(moduleUrl)).toBe("2026.8.1");
   });
@@ -96,29 +95,21 @@ describe("version resolution", () => {
     expect(resolve("not-a-valid-url", "   ")).toBe("0.0.0");
   });
 
-  it("prefers runtime VERSION over stale OPENCLAW_VERSION for compatibility checks", () => {
-    withEnv(
-      {
-        OPENCLAW_COMPATIBILITY_HOST_VERSION: undefined,
-        OPENCLAW_VERSION: "2026.3.25",
-        npm_package_version: "2026.3.25-package",
-      },
-      () => {
-        expect(resolveCompatibilityHostVersion()).toBe(VERSION);
-      },
-    );
-  });
-
-  it.each([undefined, "2026.4.8"])(
-    "resolves explicit compatibility env (override: %s)",
-    (override) => {
-      expect(
-        resolveCompatibilityHostVersion({
-          OPENCLAW_COMPATIBILITY_HOST_VERSION: override,
-          OPENCLAW_VERSION: "2026.3.99",
-          npm_package_version: "2026.3.97",
-        }),
-      ).toBe(override ?? "2026.3.99");
+  it.each([
+    [true, undefined, VERSION],
+    [false, undefined, "2026.3.99"],
+    [false, "2026.4.8", "2026.4.8"],
+  ] as const)(
+    "resolves compatibility env (process: %s, override: %s)",
+    (processEnv, override, expected) => {
+      const env = {
+        OPENCLAW_COMPATIBILITY_HOST_VERSION: override,
+        OPENCLAW_VERSION: "2026.3.99",
+        npm_package_version: "2026.3.97",
+      };
+      withEnv(env, () => {
+        expect(resolveCompatibilityHostVersion(processEnv ? undefined : env)).toBe(expected);
+      });
     },
   );
 
