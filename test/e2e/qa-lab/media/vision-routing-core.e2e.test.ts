@@ -151,17 +151,13 @@ describe("core vision routing product proof", () => {
   it("bypasses summarization and sends the real image to an active vision model", async () => {
     const { ctx, cfg, imageBytes, providerCalls } = await routeImage(true);
     const decision = imageDecision(ctx);
-    expect(decision.outcome).toBe("skipped");
     const skipped = {
       ...providerAttempt(ACTIVE_PROVIDER, ACTIVE_VISION_MODEL, "skipped"),
       reason: "primary model supports vision natively",
     };
+    expect(decision.outcome).toBe("skipped");
     expect(decision.attachments).toEqual([
-      {
-        attachmentIndex: 0,
-        attempts: [skipped],
-        chosen: skipped,
-      },
+      { attachmentIndex: 0, attempts: [skipped], chosen: skipped },
     ]);
     expect(ctx.MediaUnderstanding).toBeUndefined();
     expect(providerCalls).toEqual([]);
@@ -184,17 +180,16 @@ describe("core vision routing product proof", () => {
 
     const decision = imageDecision(ctx);
     expect(providerCalls).toEqual([PRIMARY_PROVIDER, FALLBACK_PROVIDER]);
+    const chosen = providerAttempt(FALLBACK_PROVIDER, FALLBACK_MODEL, "success");
     expect(decision.outcome).toBe("success");
     expect(decision.attachments[0]?.attempts).toEqual([
       expect.objectContaining({
         ...providerAttempt(PRIMARY_PROVIDER, PRIMARY_MODEL, "failed"),
         reason: expect.stringContaining("primary vision unavailable"),
       }),
-      providerAttempt(FALLBACK_PROVIDER, FALLBACK_MODEL, "success"),
+      chosen,
     ]);
-    expect(decision.attachments[0]?.chosen).toEqual(
-      providerAttempt(FALLBACK_PROVIDER, FALLBACK_MODEL, "success"),
-    );
+    expect(decision.attachments[0]?.chosen).toEqual(chosen);
     expect(ctx.MediaUnderstanding).toEqual([
       {
         kind: "image.description",
