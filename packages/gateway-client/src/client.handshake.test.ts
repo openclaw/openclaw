@@ -13,6 +13,7 @@ import {
   GatewayClient,
   GatewayClientRequestTimeoutError,
   type GatewayClientCloseInfo,
+  type GatewayClientOptions,
 } from "./client.js";
 import {
   transportFixture,
@@ -215,7 +216,17 @@ it("does not follow an edge redirect and redacts its Location URL", async () => 
   await client.stopAndWait();
 });
 
-async function connectError(port: number) {
+async function rejectedUpgrade(status: number, body: string, end = true) {
+  const port = await listen(
+    createHttpServer((_req, res) => {
+      res.writeHead(status, { "Content-Type": end ? "application/json" : "text/plain" });
+      if (end) {
+        res.end(body);
+      } else {
+        res.write(body);
+      }
+    }),
+  );
   return startClient({ url: `ws://127.0.0.1:${port}` }).failed;
 }
 
@@ -319,45 +330,28 @@ it("keeps a hello received during WebSocket closing in the pre-hello failure pat
   );
 });
 
-it.each([
-  {
-    name: "a typed Gateway rejection",
-    body: JSON.stringify({
-      error: {
-        type: "proxy_attribution_required",
-        message: "Configure gateway.trustedProxies narrowly",
-      },
-    }),
-    expectedDetails: {
-      gatewayErrorType: "proxy_attribution_required",
-      gatewayErrorMessage: "Configure gateway.trustedProxies narrowly",
-    },
-  },
-  { name: "a non-object JSON body", body: "null", expectedDetails: {} },
-])("preserves structured upgrade details for $name", async ({ body, expectedDetails }) => {
-  const server = createHttpServer((_req, res) => {
-    res.writeHead(403, { "Content-Type": "application/json" });
-    res.end(body);
-  });
-  const port = await listen(server);
-  const error = await connectError(port);
-
+it.each([true, false])("preserves upgrade rejection details (typed=%s)", async (typed) => {
+  const gatewayErrorType = "proxy_attribution_required";
+  const gatewayErrorMessage = "Configure gateway.trustedProxies narrowly";
+  const body = typed
+    ? JSON.stringify({ error: { type: gatewayErrorType, message: gatewayErrorMessage } })
+    : "null";
+  const error = await rejectedUpgrade(403, body);
   expect(error).toMatchObject({
-    details: { reason: "websocket-upgrade-rejected", httpStatus: 403, ...expectedDetails },
+    details: {
+      reason: "websocket-upgrade-rejected",
+      httpStatus: 403,
+      ...(typed ? { gatewayErrorType, gatewayErrorMessage } : {}),
+    },
   });
-  if (!("gatewayErrorType" in expectedDetails)) {
+  if (!typed) {
     expect(error).not.toMatchObject({ details: { gatewayErrorType: expect.anything() } });
   }
 });
 
 it("caps a rejected websocket upgrade body before the peer ends it", async () => {
   const omittedTail = "omitted-tail-marker";
-  const server = createHttpServer((_req, res) => {
-    res.writeHead(503, { "Content-Type": "text/plain" });
-    res.write(`${"x".repeat(3_000)}${omittedTail}`);
-  });
-  const port = await listen(server);
-  const error = await connectError(port);
+  const error = await rejectedUpgrade(503, `${"x".repeat(3_000)}${omittedTail}`, false);
 
   expect(error.message).toHaveLength(
     "gateway rejected websocket upgrade (HTTP 503): ".length + 2 * 1024,
@@ -384,53 +378,36 @@ function protocolHarness(client: GatewayClient): ProtocolHarness {
   return (client as unknown as { protocol: ProtocolHarness }).protocol;
 }
 
-function installSyntheticSocket(
-  client: GatewayClient,
-  send: (data: string) => unknown,
-  close: (code?: number, reason?: string) => unknown,
-): void {
-  const socket: GatewayProtocolSocket = {
-    isOpen: () => true,
+function syntheticClient(options: GatewayClientOptions) {
+  const client = new GatewayClient(options);
+  const send = vi.fn();
+  const close = vi.fn();
+  const protocol = protocolHarness(client);
+  const socket: GatewayProtocolSocket = { isOpen: () => true, send, close };
+  Object.assign(protocol, { socket, stopped: false, generation: 1 });
+  Object.assign(client, { ws: { readyState: WebSocket.OPEN, send, close, terminate: vi.fn() } });
+  return {
+    client,
     send,
     close,
-  };
-  Object.assign(protocolHarness(client), { socket, stopped: false, generation: 1 });
-  (client as unknown as { ws: unknown }).ws = {
-    readyState: WebSocket.OPEN,
-    send,
-    close,
-    terminate: vi.fn(),
+    receive: (frame: unknown) =>
+      protocol.handleMessage(socket, protocol.generation, JSON.stringify(frame)),
+    async stop() {
+      client.stop();
+      await vi.advanceTimersByTimeAsync(250);
+    },
   };
 }
 
 function createWatchedGatewayClient(tickIntervalMs = 5) {
-  const client = new GatewayClient({
+  const harness = syntheticClient({
     requestTimeoutMs: 100,
     tickWatchMinIntervalMs: 5,
     tickWatchTimeoutMs: 10,
   });
-  const close = vi.fn();
-  const send = vi.fn();
-  installSyntheticSocket(client, send, close);
-  Object.assign(client as unknown as { tickIntervalMs: number; lastTick: number }, {
-    tickIntervalMs,
-    lastTick: Date.now(),
-  });
-  (client as unknown as { startTickWatch: () => void }).startTickWatch();
-  return { client, close, send };
-}
-
-function handleGatewayMessage(client: GatewayClient, payload: Record<string, unknown>): void {
-  const protocol = protocolHarness(client);
-  if (!protocol.socket) {
-    throw new Error("synthetic protocol socket missing");
-  }
-  protocol.handleMessage(protocol.socket, protocol.generation, JSON.stringify(payload));
-}
-
-async function stopSyntheticClient(client: GatewayClient): Promise<void> {
-  client.stop();
-  await vi.advanceTimersByTimeAsync(250);
+  Object.assign(harness.client, { tickIntervalMs, lastTick: Date.now() });
+  (harness.client as unknown as { startTickWatch: () => void }).startTickWatch();
+  return harness;
 }
 
 describe("GatewayClient", () => {
@@ -476,9 +453,7 @@ describe("GatewayClient", () => {
   });
 
   test("reconnects with updated node manifest metadata", () => {
-    const client = new GatewayClient({ caps: ["system"], commands: ["system.run"] });
-    const close = vi.fn();
-    installSyntheticSocket(client, vi.fn(), close);
+    const { client, close } = syntheticClient({ caps: ["system"], commands: ["system.run"] });
 
     const manifest = {
       caps: ["canvas", "system"],
@@ -560,7 +535,7 @@ describe("GatewayClient", () => {
 
   test("lets finite pending requests own their timeout when ticks are missing", async () => {
     vi.useFakeTimers();
-    const { client, close } = createWatchedGatewayClient();
+    const { client, close, stop } = createWatchedGatewayClient();
     const request = client.request("status", undefined, { timeoutMs: 100 });
     const outcome = request.catch((error: unknown) => error);
     await vi.advanceTimersByTimeAsync(20);
@@ -581,12 +556,12 @@ describe("GatewayClient", () => {
     await vi.advanceTimersByTimeAsync(5);
 
     expect(close).toHaveBeenCalledWith(4000, "tick timeout");
-    await stopSyntheticClient(client);
+    await stop();
   });
 
   test("keeps the watchdog active for mixed finite and unbounded requests", async () => {
     vi.useFakeTimers();
-    const { client, close } = createWatchedGatewayClient();
+    const { client, close, stop } = createWatchedGatewayClient();
     const requests = [
       client.request("status", undefined, { timeoutMs: 100 }),
       client.request("chat.send", undefined, { expectFinal: true }),
@@ -596,7 +571,7 @@ describe("GatewayClient", () => {
     await vi.advanceTimersByTimeAsync(20);
 
     expect(close).toHaveBeenCalledWith(4000, "tick timeout");
-    await stopSyntheticClient(client);
+    await stop();
     await expect(settlements).resolves.toEqual([
       expect.objectContaining({ status: "rejected" }),
       expect.objectContaining({ status: "rejected" }),
@@ -605,7 +580,7 @@ describe("GatewayClient", () => {
 
   test("keeps an unbounded request alive while inbound ticks continue", async () => {
     vi.useFakeTimers();
-    const { client, close, send } = createWatchedGatewayClient();
+    const { client, close, send, receive, stop } = createWatchedGatewayClient();
     const request = client.request<{ status: string }>("chat.send", undefined, {
       expectFinal: true,
     });
@@ -613,18 +588,18 @@ describe("GatewayClient", () => {
 
     for (let seq = 1; seq <= 4; seq += 1) {
       await vi.advanceTimersByTimeAsync(5);
-      handleGatewayMessage(client, { type: "event", event: "tick", seq, payload: {} });
+      receive({ type: "event", event: "tick", seq, payload: {} });
     }
 
     expect(close).not.toHaveBeenCalled();
-    handleGatewayMessage(client, {
+    receive({
       type: "res",
       id: requestFrame.id,
       ok: true,
       payload: { status: "ok" },
     });
     await expect(request).resolves.toEqual({ status: "ok" });
-    await stopSyntheticClient(client);
+    await stop();
   });
 
   test("clamps oversized tick watchdog intervals before scheduling", () => {

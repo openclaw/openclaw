@@ -70,8 +70,7 @@ it.each([false, true])(
     const controller = new AbortController();
     const slow = write({ agentId: "slow" }, { timeoutMs: 10_000, signal: controller.signal });
     const ready = write({ agentId: "ready" }, { timeoutMs: 10_000 });
-    const slowRaw = frames[0];
-    const readyRaw = frames[1];
+    const [slowRaw, readyRaw] = frames;
     const slowFrame = frame();
     const readyFrame = frame(1);
     refuse(requests, slowFrame, "startup-sidecars", 100);

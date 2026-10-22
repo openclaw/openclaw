@@ -15,7 +15,10 @@ import {
   receive,
   stopProtocolClients,
 } from "./protocol-client.test-support.js";
-import { isGatewayProtocolResponseError } from "./protocol-request.js";
+import {
+  isGatewayProtocolResponseError,
+  type GatewayProtocolRequestOptions,
+} from "./protocol-request.js";
 
 function createRequestHarness(
   options?: Partial<GatewayProtocolClientOptions<Record<string, never>>> & {
@@ -26,6 +29,26 @@ function createRequestHarness(
     { ...options, resolveClose: () => ({ retry: false, notify: false }) },
     { send: options?.send },
   );
+}
+
+function retainedWrite(
+  harness: ReturnType<typeof createRequestHarness>,
+  options: GatewayProtocolRequestOptions = {},
+) {
+  const controller = new AbortController();
+  const result = harness.client
+    .request(
+      "sessions.create",
+      {},
+      {
+        timeoutMs: 1_000,
+        signal: controller.signal,
+        retainSentResultOnAbort: true,
+        ...options,
+      },
+    )
+    .catch((error: unknown) => error);
+  return { controller, result };
 }
 
 function refuse(
@@ -74,22 +97,10 @@ describe("GatewayProtocolClient requests", () => {
   it.each([false, true])(
     "retains a sent write result after owner abort, retry=%s",
     async (retry) => {
-      const { client, connection } = createRequestHarness();
-      const controller = new AbortController();
+      const harness = createRequestHarness();
+      const { connection } = harness;
       const onAccepted = vi.fn();
-      const request = client
-        .request(
-          "sessions.create",
-          {},
-          {
-            timeoutMs: 1_000,
-            signal: controller.signal,
-            retainSentResultOnAbort: true,
-            expectFinal: retry,
-            onAccepted,
-          },
-        )
-        .catch((error: unknown) => error);
+      const { controller, result } = retainedWrite(harness, { expectFinal: retry, onAccepted });
       const frame = latestFrame(connection);
       if (retry) {
         refuse(connection, frame.id, { reason: "startup-sidecars", method: "sessions.create" });
@@ -102,7 +113,7 @@ describe("GatewayProtocolClient requests", () => {
         expect(onAccepted).toHaveBeenCalledExactlyOnceWith({ status: "accepted" });
       }
       respond(connection, frame.id, { sessionKey: "agent:main:created" });
-      await expect(request).resolves.toEqual({ sessionKey: "agent:main:created" });
+      await expect(result).resolves.toEqual({ sessionKey: "agent:main:created" });
       expect(vi.getTimerCount()).toBe(0);
     },
   );
@@ -112,25 +123,15 @@ describe("GatewayProtocolClient requests", () => {
     async (abortAt) => {
       const refuseWrite = (id: string) =>
         refuse(connection, id, { reason: "startup-sidecars", method: "sessions.create" });
-      const { client, connection } = createRequestHarness({
+      const harness = createRequestHarness({
         send: (frame) => {
           if (abortAt === "synchronous refusal") {
             refuseWrite(frame.id);
           }
         },
       });
-      const controller = new AbortController();
-      const request = client
-        .request(
-          "sessions.create",
-          {},
-          {
-            timeoutMs: 1_000,
-            signal: controller.signal,
-            retainSentResultOnAbort: true,
-          },
-        )
-        .catch((error: unknown) => error);
+      const { connection } = harness;
+      const { controller, result } = retainedWrite(harness);
       if (abortAt === "before refusal") {
         controller.abort();
         refuseWrite(latestFrame(connection).id);
@@ -140,7 +141,7 @@ describe("GatewayProtocolClient requests", () => {
         }
         controller.abort();
       }
-      expect(await request).toMatchObject({
+      expect(await result).toMatchObject({
         message: "gateway request aborted for sessions.create",
       });
       await vi.advanceTimersByTimeAsync(1_000);
@@ -150,28 +151,17 @@ describe("GatewayProtocolClient requests", () => {
   );
 
   it("keeps the original deadline while observing an owner-aborted write", async () => {
-    const { client, connection } = createRequestHarness();
-    const controller = new AbortController();
-    const request = client
-      .request(
-        "sessions.create",
-        {},
-        {
-          timeoutMs: 1_000,
-          signal: controller.signal,
-          retainSentResultOnAbort: true,
-        },
-      )
-      .catch((error: unknown) => error);
+    const harness = createRequestHarness();
+    const { controller, result } = retainedWrite(harness);
     await vi.advanceTimersByTimeAsync(250);
     controller.abort();
     await vi.advanceTimersByTimeAsync(750);
-    expect(await request).toMatchObject({
+    expect(await result).toMatchObject({
       code: "CLIENT_TIMEOUT",
       timeoutMs: 1_000,
       requestSent: true,
     });
-    expect(connection.frames).toHaveLength(1);
+    expect(harness.connection.frames).toHaveLength(1);
     expect(vi.getTimerCount()).toBe(0);
   });
 

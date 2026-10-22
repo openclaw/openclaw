@@ -39,6 +39,7 @@ const announce = (message: unknown = selected, state = projection(), cloneLive =
   project(terminal(state, { message }), cloneLive ? structuredClone(message) : message, { runId });
 const expectMessages = (state: SessionProjectionState, messages: unknown[]) =>
   expect(state.messages).toEqual(messages);
+const text = (...parts: string[]) => parts.map((value) => ({ type: "text", text: value }));
 
 describe("terminal receipts and snapshot reconciliation", () => {
   it("recovers an empty terminal only with its matching saved occurrence", () => {
@@ -286,50 +287,39 @@ describe("terminal receipts and snapshot reconciliation", () => {
 /** Run-scoped terminal state: final acceptance, late diagnostics, and retention. */
 describe("session run terminal bookkeeping", () => {
   it.each([
-    { content: [{ type: "input_text", text: "provider rate limit" }] },
-    { content: [{ type: "thinking", thinking: "Internal reasoning" }] },
-    { content: [{ type: "text", text: "[assistant turn failed before producing content]" }] },
-    {
-      content: [
-        { type: "text", text: "⚠️ Error: provider" },
-        { type: "text", text: "rate limit" },
-      ],
-    },
-    {
-      content: [
-        { type: "text", text: "⚠️ Error: The agent run failed" },
-        { type: "text", text: "before producing a reply." },
-      ],
-    },
-  ])("reopens a pure error projection when the same run resumes streaming: %j", ({ content }) => {
-    const failed = terminal(projection(), {
-      status: "error",
-      seq: 10,
-      errorMessage: "provider rate limit",
-      message: { role: "assistant", content, stopReason: "error" },
-    });
-    const resumed = delta(failed, "run-1", reply("I"), 11);
-    expect(resumed.runs["run-1"]).toMatchObject({ status: "streaming" });
-    expect(resumed.runs["run-1"]?.errorMessage).toBeUndefined();
-    expect(resumed.runs["run-1"]?.stopReason).toBeUndefined();
-  });
-
-  it.each([
-    { content: [{ type: "text", text: "Useful partial reply." }] },
-    {
-      content: [
+    ["input text error", [{ type: "input_text", text: "provider rate limit" }], true],
+    ["thinking only", [{ type: "thinking", thinking: "Internal reasoning" }], true],
+    ["empty turn marker", text("[assistant turn failed before producing content]"), true],
+    ["split provider error", text("⚠️ Error: provider", "rate limit"), true],
+    [
+      "split empty turn error",
+      text("⚠️ Error: The agent run failed", "before producing a reply."),
+      true,
+    ],
+    ["useful text", text("Useful partial reply."), false],
+    [
+      "image",
+      [
         { type: "thinking", thinking: "Internal reasoning" },
         { type: "image", source: "synthetic-image" },
       ],
-    },
-  ])("preserves useful failed-run content on a late delta: %j", ({ content }) => {
+      false,
+    ],
+  ] as const)("resumes only diagnostic-only failed content: %s", (_name, content, resumes) => {
     const failed = terminal(projection(), {
       status: "error",
       seq: 10,
       errorMessage: "provider rate limit",
       message: { role: "assistant", content, stopReason: "error" },
     });
-    expect(delta(failed, "run-1", reply("late stream"), 11)).toBe(failed);
+    const next = delta(failed, "run-1", reply(resumes ? "I" : "late stream"), 11);
+    if (resumes) {
+      expect(next.runs["run-1"]).toMatchObject({ status: "streaming" });
+      expect(next.runs["run-1"]?.errorMessage).toBeUndefined();
+      expect(next.runs["run-1"]?.stopReason).toBeUndefined();
+    } else {
+      expect(next).toBe(failed);
+    }
   });
 
   it("upgrades an identified empty completed final exactly once without reopening the run", () => {
