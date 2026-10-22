@@ -335,7 +335,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/session-reset-prompt.test.ts",
   "src/auto-reply/reply/session-updates.exec-preparation.test.ts",
   "src/status/status-plugin-health.runtime.test.ts",
-  "src/status/status-plugin-health.installed.test.ts",
   "src/agents/tool-schema-quarantine.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-bootstrap-prepare.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-bundle-tools.test.ts",
