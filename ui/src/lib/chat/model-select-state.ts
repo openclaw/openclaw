@@ -264,9 +264,8 @@ export function prepareChatModelSelectCatalog(catalog: ModelCatalogEntry[]) {
 
 export function resolveChatModelSelectState(
   state: ChatModelSelectStateInput,
-  prepared = prepareChatModelSelectCatalog(state.chatModelCatalog),
+  { displayLookup, options } = prepareChatModelSelectCatalog(state.chatModelCatalog),
 ) {
-  const { displayLookup, options } = prepared;
   const currentOverride = resolveCatalogChatModelValue(
     resolveChatModelOverrideValue(state),
     options,
