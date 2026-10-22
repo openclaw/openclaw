@@ -255,7 +255,6 @@ export const databaseWorkerCoreTestFiles = [
   "test/openai-model-discovery-auth-order.test.ts",
   "src/channels/inbound-event/envelope.worker.test.ts",
   "src/model-catalog/remote-refresh.test.ts",
-  "src/model-catalog/remote-store.test.ts",
   "src/infra/exec-approval-session-target.incognito.test.ts",
   "src/config/sessions/session-sharing-store.incognito.test.ts",
   "src/gateway/session-incognito-lifetime.actor.test.ts",
