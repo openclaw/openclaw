@@ -3,7 +3,8 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { ChatSessionSharing, type ChatSessionSharingProps } from "./chat-session-sharing.solid.tsx";
+import type { ChatSessionSharingProps } from "./chat-session-sharing-shared.tsx";
+import { ChatSessionSharing } from "./chat-session-sharing.solid.tsx";
 
 function renderSharing(props: Partial<ChatSessionSharingProps>) {
   return {
@@ -100,7 +101,10 @@ async function openMenu(root: HTMLElement) {
   const trigger = root.querySelector<HTMLButtonElement>(".chat-pane__sharing-trigger");
   if (panel && trigger && !trigger.disabled && !panel.matches(":popover-open")) {
     trigger.click();
-    await waitForSolid(() => expect(panel.matches(":popover-open")).toBe(true));
+    await waitForSolid(() => {
+      expect(panel.matches(":popover-open")).toBe(true);
+      expect(panel.querySelector('[data-value="access"]')).not.toBeNull();
+    });
   }
   return panel;
 }

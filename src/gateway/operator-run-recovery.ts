@@ -13,7 +13,10 @@ import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { isPairedDeviceTokenIdentityCurrent } from "../infra/device-pairing-identity.js";
 import { loadPairedDevicePairingStoreRecordReadOnly } from "../infra/device-pairing-store-readonly.js";
-import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
+import {
+  GatewayOperatorRecoveryAuthorizationError,
+  GatewayOperatorRecoveryOwnershipError,
+} from "../infra/restart-recovery-errors.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
@@ -434,7 +437,9 @@ function assertRestartClaim(
       (reservation.runId !== target.recoveryRunId ||
         reservation.lifecycleGeneration !== getAgentEventLifecycleGeneration()))
   ) {
-    throw new Error("Restart recovery source no longer owns this input.");
+    throw new GatewayOperatorRecoveryOwnershipError(
+      "Restart recovery source no longer owns this input.",
+    );
   }
 }
 
@@ -504,7 +509,7 @@ export async function restoreGatewayRunRecovery(params: {
             source.sourceRunId !== target.sourceRunId ||
             !isDeepStrictEqual(value.restartRecoveryOperatorSource, source)
           ) {
-            throw new Error("Restart recovery operator source no longer owns this input.");
+            throw new GatewayOperatorRecoveryOwnershipError();
           }
         };
         assertSource(current);
@@ -532,7 +537,7 @@ export async function restoreGatewayRunRecovery(params: {
               committed.lifecycleRevision !== source.lifecycleRevision ||
               !isDeepStrictEqual(committed.restartRecoveryOperatorSource, next)
             ) {
-              throw new Error("Restart recovery operator source no longer owns this input.");
+              throw new GatewayOperatorRecoveryOwnershipError();
             }
             expectedCompaction = {
               previousSessionId: target.sessionId,
