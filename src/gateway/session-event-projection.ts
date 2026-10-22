@@ -225,7 +225,7 @@ export function prepareSessionEventProjection(
             // Reference the reconstructed JSON row, independent of patch insertion order.
             const fields = Object.entries(row)
               .filter(([, value]) => value !== undefined)
-              .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+              .toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
             for (let index = 0; index < fields.length; index++) {
               const [field, value] = fields[index]!;
               if (
