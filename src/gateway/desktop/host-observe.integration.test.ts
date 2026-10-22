@@ -1,15 +1,15 @@
-import { on, once } from "node:events";
-import http from "node:http";
 import { afterEach, expect, it, vi } from "vitest";
-import { WebSocket, type RawData } from "ws";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { closeServer, createSocketServer, listenLoopback } from "./desktop.test-support.js";
+import { createSocketServer, listenLoopback } from "./desktop.test-support.js";
 import { createHostDesktopService } from "./host-source.js";
-import { handleDesktopObserveUpgrade } from "./observe-bridge.js";
+import {
+  connectRfbObserver,
+  RFB_VERSION as VERSION,
+  startObserveGateway,
+} from "./observe.test-support.js";
 import { createDesktopSessionRegistry } from "./session-registry.js";
 import { SocketReader } from "./socket-reader.test-support.js";
 
-const VERSION = Buffer.from("RFB 003.008\n", "ascii");
 const FRAMEBUFFER_REQUEST = Buffer.from([3, 1, 0, 0, 0, 0, 0, 64, 0, 64]);
 const cleanups: Array<() => Promise<void>> = [];
 
@@ -86,32 +86,11 @@ it.each(["connected", "access denied", "invalid security"] as const)(
     expect(observed.auth).toBe("ard-account");
     expect(observed.vncPassword).toBeUndefined();
 
-    const httpServer = http.createServer();
-    httpServer.on("upgrade", (req, socket, head) => {
-      handleDesktopObserveUpgrade(req, socket, head, { registry });
-    });
-    const httpPort = await listenLoopback(httpServer);
-    cleanups.push(() => closeServer(httpServer));
-
-    const ws = new WebSocket(`ws://127.0.0.1:${httpPort}${observed.wsPath}`);
-    const messages: AsyncIterator<unknown[]> = on(ws, "message", { close: ["close"] });
-    const nextFrame = async () => {
-      const message = await messages.next();
-      if (message.done) {
-        throw new Error("WebSocket closed before the next RFB frame");
-      }
-      const [data] = message.value as [RawData];
-      return Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
-    };
-    const closed = new Promise<{ code: number; reason: string }>((resolve) => {
-      ws.once("close", (code, reason) => resolve({ code, reason: reason.toString() }));
-    });
-    cleanups.push(async () => ws.terminate());
-    await once(ws, "open");
-    expect(await nextFrame()).toEqual(VERSION);
-    // Coalesce the synthetic handshake replies with exclusive ClientInit.
-    ws.send(Buffer.concat([VERSION, Buffer.from([1, 0])]));
-    expect(await nextFrame()).toEqual(Buffer.from([1, 1]));
+    const gateway = await startObserveGateway(cleanups, registry);
+    const { ws, nextFrame, closed } = await connectRfbObserver(
+      cleanups,
+      `${gateway}${observed.wsPath}`,
+    );
     browserReady.resolve();
     if (outcome !== "connected") {
       const result = await closed;

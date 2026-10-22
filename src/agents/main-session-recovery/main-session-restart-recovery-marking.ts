@@ -288,6 +288,7 @@ export async function markRestartAbortedMainSessions(params: {
               captureYieldedMainSessionContinuation({
                 entry,
                 requester,
+                purpose: "recovery",
               })
             ) {
               recordSkip("yielded_continuation", sessionKey);
@@ -471,6 +472,7 @@ async function markOrphanedMainSessionStore(
       const continuation = captureYieldedMainSessionContinuation({
         entry,
         requester: requesters.get(sessionKey),
+        purpose: "recovery",
       });
       if (continuation) {
         // A newer foreground start clears endedAt. Only an unclaimed waiting cycle

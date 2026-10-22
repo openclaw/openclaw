@@ -39,6 +39,16 @@ const DEFAULT_EXEC_APPROVAL_DECISIONS = [
   "allow-always",
   "deny",
 ] as const satisfies readonly ExecApprovalDecision[];
+const MOBILE_DECISION_ORDER = [
+  "allow-always",
+  "deny",
+  "allow-once",
+] as const satisfies readonly ExecApprovalDecision[];
+const MODAL_DECISION_ORDER = [
+  "deny",
+  "allow-always",
+  "allow-once",
+] as const satisfies readonly ExecApprovalDecision[];
 
 export type ExecApprovalCardProps = {
   approval: ExecApprovalRequest;
@@ -505,9 +515,13 @@ function ExecApprovalCardContent(props: ExecApprovalCardProps) {
   );
   const decisions = createMemo(() => {
     const eligible = resolveApprovalDecisions(active());
-    return mobile()
-      ? (["allow-always", "deny", "allow-once"] as const).filter((item) => eligible.includes(item))
-      : eligible;
+    // Right-aligned footers keep the primary decision at the trailing edge.
+    const order = mobile()
+      ? MOBILE_DECISION_ORDER
+      : props.variant === "modal"
+        ? MODAL_DECISION_ORDER
+        : undefined;
+    return order ? order.filter((item) => eligible.includes(item)) : eligible;
   });
   const reviewOnlyMessage = () => t("execApproval.reviewOnly");
   const grantError = () => !props.canGrant && props.error === reviewOnlyMessage();

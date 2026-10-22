@@ -2,10 +2,17 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { AssistantMessage } from "@openclaw/llm-core";
 import type { AgentToolCall } from "./types.js";
 
+/** Observation only: the exact runtime queue retains input and delivery custody. */
+export type AgentToolPendingInput = {
+  hasPending: () => boolean;
+  subscribe: (listener: () => void) => () => void;
+};
+
 /** Internal assistant-turn context for one concrete tool invocation. */
 export interface AgentToolExecutionContext {
   assistantMessage: AssistantMessage;
   toolCall: AgentToolCall;
+  pendingInput?: AgentToolPendingInput;
   /** Earlier async calls in this response have not reached a subsequent model request. */
   hasUnobservedAsyncToolResults?: boolean;
 }

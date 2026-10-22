@@ -27,7 +27,7 @@ import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { admitFollowupRunLifecycle } from "./queue/lifecycle.js";
 import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./reply-agent-turn-preparation.js";
 import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
-import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
+import { prepareReplyRunToolAuthority } from "./reply-tool-authority.js";
 import { resolveFollowupReplyExpectation } from "./source-reply-delivery-mode.js";
 import { resolveReplySourceTurnId, setChannelSourceTurnId } from "./source-turn-id.js";
 import { createTypingSignaler, type TypingSignaler } from "./typing-mode.js";
@@ -382,9 +382,9 @@ export async function executeFollowupTurn(params: {
         ? sessionPersonalProfileId(turn.session.current())
         : undefined;
       await turn.operation.bindToolAuthoritySnapshotAsync(
-        prepareReplyToolAuthority(
+        prepareReplyRunToolAuthority(
           turn.queued,
-          undefined,
+          turn.session.current(),
           captureReplyOperationSessionReader(turn.operation),
         ),
       );

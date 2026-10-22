@@ -700,8 +700,8 @@ suite.define(() => {
           ).toBeVisible();
           if (surface === "header") {
             await openSessionActions(page, surface);
-            const { assignTo, panel } = ownerControls(page);
-            await assignTo.hover();
+            await openSessionMenuSubmenu(page, "Assign to…");
+            const { panel } = ownerControls(page);
             const retainedOwner = assignee(panel, "Bob");
             await expectBrowser(retainedOwner).toHaveAttribute("aria-checked", "true");
             await expectBrowser(retainedOwner).toBeDisabled();

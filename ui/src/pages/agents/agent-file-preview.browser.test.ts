@@ -82,6 +82,7 @@ function renderPreview(
       return { ...createAgentViewTestProps().readData(), ...this };
     },
     agentId: "main",
+    listRead: null,
     agentFilesList: {
       agentId: "main",
       workspace: "/synthetic/workspace",

@@ -10748,7 +10748,7 @@ describe("ci workflow guards", () => {
     expect(uiE2eSetup.uses).toBe("./.ci-harness/.github/actions/setup-node-env");
     const expectedSharedUiE2eSetup = {
       "cache-mode": "${{ needs.preflight.outputs.cache_mode }}",
-      "node-version": "24.x",
+      "node-version": "24.22.1",
       "install-bun": "false",
       "dependency-cache": expect.any(String),
     } as const;

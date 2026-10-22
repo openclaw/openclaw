@@ -83,7 +83,7 @@ async function bindingFixture(
     binding?: Record<string, unknown>;
     legacySharedRoot?: boolean;
     sessionIndex?: Record<string, unknown>;
-    session?: [key: string, fields?: Record<string, unknown>];
+    session?: readonly [key: string, fields?: Record<string, unknown>];
     storeRoot?: "agent" | "fixed";
     threadId?: string;
   } = {},
@@ -383,20 +383,6 @@ describe("codex doctor contract", () => {
     await expect(fixture.migrate()).resolves.toEqual(unchanged);
   });
 
-  it("rejects an explicit session file locator outside the session directory", async () => {
-    const sessionKey = "agent:main:stale-locator";
-    const fixture = await bindingFixture("stale-locator", {
-      session: [sessionKey, { sessionFile: "../outside.jsonl" }],
-    });
-
-    const result = await fixture.migrate();
-
-    expectWarning(result, "invalid locator");
-    await expectRetained(fixture.sidecarPath);
-    expect(fixture.readSession(sessionKey)).toBeUndefined();
-    await expect(openBindingStore(fixture.env).entries()).resolves.toEqual([]);
-  });
-
   it("deduplicates session-store aliases before classifying binding ownership", async () => {
     const fixture = await bindingFixture("aliased-store", {
       session: ["agent:main:aliased-store"],
@@ -550,32 +536,29 @@ describe("codex doctor contract", () => {
     expect(await readJson(fixture.storePath)).not.toHaveProperty(`${sessionKey}.agentHarnessId`);
   });
 
-  it("archives zero-owner sidecars without changing cleared conversation state", async () => {
-    const fixture = await bindingFixture("orphan-cleared");
-    const existing: StoredCodexAppServerBinding = { version: 1, state: "cleared", retired: true };
-    const store = openBindingStore(fixture.env);
-    await store.register(fixture.conversationKey, existing);
-
-    await expect(fixture.migrate()).resolves.toEqual(migrated);
-    await expectArchived(fixture.sidecarPath);
-    await expect(store.lookup(fixture.conversationKey)).resolves.toEqual(existing);
-    await expect(fixture.migration.detectLegacyState(fixture.params)).resolves.toBeNull();
-    await expect(fixture.migrate()).resolves.toEqual(unchanged);
-  });
-
-  it("ignores metadata-only session rows when proving zero ownership", async () => {
-    const fixture = await bindingFixture("orphan-metadata-row", {
-      sessionIndex: {
-        "agent:main:metadata-only": {
-          label: "Waiting for first turn",
-          updatedAt: 1,
+  it.each([false, true])(
+    "archives metadata-only zero-owner sidecars (cleared state: %s)",
+    async (cleared) => {
+      const fixture = await bindingFixture("orphan-cleared", {
+        sessionIndex: {
+          "agent:main:metadata-only": { label: "Waiting for first turn", updatedAt: 1 },
         },
-      },
-    });
+      });
+      const existing: StoredCodexAppServerBinding = { version: 1, state: "cleared", retired: true };
+      const store = openBindingStore(fixture.env);
+      if (cleared) {
+        await store.register(fixture.conversationKey, existing);
+      }
 
-    await expect(fixture.migrate()).resolves.toEqual(migrated);
-    await expectArchived(fixture.sidecarPath);
-  });
+      await expect(fixture.migrate()).resolves.toEqual(migrated);
+      await expectArchived(fixture.sidecarPath);
+      if (cleared) {
+        await expect(store.lookup(fixture.conversationKey)).resolves.toEqual(existing);
+      }
+      await expect(fixture.migration.detectLegacyState(fixture.params)).resolves.toBeNull();
+      await expect(fixture.migrate()).resolves.toEqual(unchanged);
+    },
+  );
 
   it("retains a zero-owner sidecar when canonical plugin state is malformed", async () => {
     const fixture = await bindingFixture("orphan-invalid-state");
@@ -590,39 +573,48 @@ describe("codex doctor contract", () => {
     await expect(store.lookup(fixture.conversationKey)).resolves.toEqual(malformed);
   });
 
-  it("retains mixed Codex and foreign ambiguous binding owners", async () => {
-    const fixture = await bindingFixture("shared", {
-      sessionIndex: {
-        "agent:main:first": legacySession("first", {
-          sessionFile: "shared.jsonl",
-          agentHarnessId: "codex",
-        }),
-        "agent:main:second": legacySession("second", {
-          sessionFile: "shared.jsonl",
-          agentHarnessId: "pi",
-        }),
+  it.each([
+    {
+      name: "stale-locator",
+      options: {
+        session: ["agent:main:stale-locator", { sessionFile: "../outside.jsonl" }] as const,
       },
-    });
-
+      reason: "invalid locator",
+    },
+    {
+      name: "shared",
+      options: {
+        sessionIndex: Object.fromEntries(
+          ["codex", "pi"].map((agentHarnessId, i) => [
+            `agent:main:owner-${i}`,
+            legacySession(`owner-${i}`, { sessionFile: "shared.jsonl", agentHarnessId }),
+          ]),
+        ),
+      },
+      reason: "2 matching session owners make ownership ambiguous",
+    },
+    {
+      name: "foreign",
+      options: { session: ["agent:main:foreign", { agentHarnessId: "pi" }] as const },
+      reason: "owned by agent harness pi",
+    },
+  ])("retains $name sidecars without importing plugin state", async ({ name, options, reason }) => {
+    const fixture = await bindingFixture(name, options);
     const result = await fixture.migrate();
-
-    expectWarning(result, "2 matching session owners make ownership ambiguous");
-    await fs.access(fixture.sidecarPath);
+    if (name === "foreign") {
+      expect(result).toEqual({
+        changes: [],
+        warnings: [],
+        notices: [expect.stringContaining(reason)],
+      });
+    } else {
+      expectWarning(result, reason);
+    }
+    await expectRetained(fixture.sidecarPath);
     await expect(openBindingStore(fixture.env).entries()).resolves.toEqual([]);
-  });
-
-  it("retains a sidecar owned by a foreign harness without importing plugin state", async () => {
-    const fixture = await bindingFixture("foreign", {
-      session: ["agent:main:foreign", { agentHarnessId: "pi" }],
-    });
-
-    const result = await fixture.migrate();
-
-    expect(result.changes).toEqual([]);
-    expect(result.warnings).toEqual([]);
-    expect(result.notices).toEqual([expect.stringContaining("owned by agent harness pi")]);
-    await fs.access(fixture.sidecarPath);
-    await expect(openBindingStore(fixture.env).entries()).resolves.toEqual([]);
+    if (name === "stale-locator") {
+      expect(fixture.readSession("agent:main:stale-locator")).toBeUndefined();
+    }
   });
 
   it.each([

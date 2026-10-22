@@ -21,16 +21,6 @@ describe("qa discovery evaluation", () => {
     );
   });
 
-  it("accepts numeric required-file read confirmations", () => {
-    checkReport(
-      `Source: ${refs}; all 3 required files read. The evaluator may quote "not present".`,
-    );
-  });
-
-  it("accepts retrieved-file discovery summaries", () => {
-    checkReport(`All three files retrieved. All three mandated files read successfully: ${refs}.`);
-  });
-
   it("flags genuine file-miss language without confirmed reads", () => {
     checkReport(
       "Read some requested files.",

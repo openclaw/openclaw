@@ -7,6 +7,7 @@ import type { OpenClawEvent } from "./types.js";
 
 let gateway: Awaited<ReturnType<typeof createSdkWebSocketServer>>;
 let oc: OpenClaw;
+let transport: GatewayClientTransport;
 const scope = { runId: "run", sessionKey: "agent:main:recovery" };
 beforeAll(async () => {
   gateway = await createSdkWebSocketServer();
@@ -40,7 +41,8 @@ function sendChat(state: string, text?: string, extra?: Record<string, unknown>)
 
 type Request = Parameters<NonNullable<Parameters<typeof gateway.setRequestHandler>[0]>>[1];
 type Reply = (payload: unknown, ok?: boolean) => void;
-function respond(handler: (request: Request, reply: Reply) => unknown) {
+type Socket = Parameters<typeof gateway.sendEvent>[0];
+function respond(handler: (request: Request, reply: Reply, socket: Socket) => unknown) {
   gateway.setRequestHandler((socket, request) => {
     const reply: Reply = (payload, ok = true) =>
       socket.send(
@@ -51,7 +53,7 @@ function respond(handler: (request: Request, reply: Reply) => unknown) {
           ...(ok ? { payload } : { error: payload }),
         }),
       );
-    const result = handler(request, reply);
+    const result = handler(request, reply, socket);
     if (result !== undefined) {
       reply(result);
     }
@@ -91,14 +93,22 @@ async function expectNext(events: AsyncIterator<OpenClawEvent>, value: unknown) 
   await expect(events.next()).resolves.toMatchObject({ value });
 }
 
+function createClient(options: ConstructorParameters<typeof GatewayClientTransport>[0] = {}) {
+  transport = new GatewayClientTransport({ url: gateway.url, deviceIdentity: null, ...options });
+  oc = new OpenClaw({ transport });
+}
+
+function createLiveClient(options: ConstructorParameters<typeof GatewayClientTransport>[0] = {}) {
+  vi.useRealTimers();
+  createClient(options);
+}
+
 async function connect() {
   const disconnected = createDeferred();
   const reconnected = createDeferred();
   const aborted = createDeferred();
   let hellos = 0;
-  const transport = new GatewayClientTransport({
-    url: gateway.url,
-    deviceIdentity: null,
+  createClient({
     onClose: () => disconnected.resolve(),
     onHelloOk: () => {
       if (++hellos === 2) {
@@ -111,7 +121,6 @@ async function connect() {
       }
     },
   });
-  oc = new OpenClaw({ transport });
   await oc.connect();
   return {
     aborted: aborted.promise,
@@ -208,6 +217,128 @@ it.each(["agent-lifecycle", "chat-delta", "accepted", "chat-final"])(
   },
 );
 
+function assistant(
+  socket: Socket,
+  target: { runId: string; sessionKey: string; agentId?: string },
+  data: { text?: string; delta: string },
+) {
+  gateway.sendEvent(socket, "agent", { agentId: "main", ...target, stream: "assistant", data });
+}
+
+it("bounds replay after 150 confirmed session unsubscribe cycles", async () => {
+  createLiveClient();
+  const subscriptions = new Map<string, { runId: string; sessionKey: string }>();
+  let runIndex = 0;
+  function sessionDelta(...[socket, target, data]: Parameters<typeof assistant>) {
+    gateway.sendEvent(socket, "chat", {
+      ...target,
+      agentId: "main",
+      state: "delta",
+      deltaText: data.delta,
+      ...(data.text ? { message: { role: "assistant", content: data.text } } : {}),
+    });
+    assistant(socket, target, data);
+  }
+  respond((request, _reply, socket) => {
+    const key = request.params.key;
+    if (typeof key !== "string") {
+      throw new Error("Expected a session key");
+    }
+    const canonicalKey = key === "global" ? key : `agent:main:${key}`;
+    if (request.method === "sessions.messages.subscribe") {
+      const target = { runId: `run-${runIndex++}`, sessionKey: canonicalKey };
+      subscriptions.set(key, target);
+      sessionDelta(socket, target, { text: "prefix", delta: "prefix" });
+      return { subscribed: true, key: canonicalKey };
+    } else if (request.method === "sessions.messages.unsubscribe") {
+      const target = subscriptions.get(key);
+      if (!target) {
+        throw new Error("Expected a live subscription");
+      }
+      sessionDelta(socket, target, { delta: " tail" });
+      gateway.sendEvent(socket, "board.changed", {});
+      subscriptions.delete(key);
+      return { subscribed: false, key: canonicalKey };
+    }
+    return undefined;
+  });
+  await oc.connect();
+  for (let index = 0; index < 150; index += 1) {
+    const key = index % 2 === 0 ? "global" : `session-${index}`;
+    await oc.request("sessions.messages.subscribe", { key, agentId: "main" });
+    await oc.request("sessions.messages.unsubscribe", { key, agentId: "main" });
+  }
+  expect(subscriptions.size).toBe(0);
+  const recent = oc.runEvents("run-50")[Symbol.asyncIterator]();
+  await expectNext(recent, { data: { text: "prefix" } });
+  const expired = oc.runEvents("run-49")[Symbol.asyncIterator]();
+  const next = expired.next();
+  gateway.sendEvent(gateway.socket(), "agent", {
+    runId: "run-49",
+    stream: "lifecycle",
+    data: { phase: "start" },
+  });
+  await expect(next).resolves.toMatchObject({ value: { type: "run.started" } });
+});
+
+it("preserves the current baseline when unsubscribe is rejected", async () => {
+  createLiveClient();
+  const target = { runId: "run", sessionKey: "global" };
+  respond((request, reply, socket) => {
+    if (request.method === "sessions.messages.subscribe") {
+      assistant(socket, target, { text: "old", delta: "" });
+      return { subscribed: true, key: "global" };
+    }
+    reply({ code: "UNAVAILABLE", message: "unsubscribe rejected" }, false);
+    return undefined;
+  });
+  const address = { key: "global", agentId: "main" };
+  await oc.request("sessions.messages.subscribe", address);
+  const iterator = oc.runEvents("run")[Symbol.asyncIterator]();
+  await expectNext(iterator, { data: { text: "old" } });
+  await expect(oc.request("sessions.messages.unsubscribe", address)).rejects.toThrow(
+    "unsubscribe rejected",
+  );
+  assistant(gateway.socket(), target, { delta: " tail" });
+  await expectNext(iterator, { data: { text: "old tail" } });
+});
+
+it("keeps healthy concurrent event readers alive when another subscriber fails", async () => {
+  createLiveClient({ requestTimeoutMs: 2_000 });
+  await oc.connect();
+  const normalized = (await oc.runs.get("stream-1")).events()[Symbol.asyncIterator]();
+  const normalizedFirst = normalized.next();
+  const failedStream = transport.events(() => {
+    throw new Error("subscriber filter failed");
+  });
+  const failed = failedStream[Symbol.asyncIterator]();
+  const healthy = transport.events()[Symbol.asyncIterator]();
+  const failedRead = expect(failed.next()).rejects.toThrow("subscriber filter failed");
+  const first = healthy.next();
+  const second = healthy.next();
+  for (const seq of [1, 2]) {
+    gateway.sendEvent(gateway.socket(), "chat", {
+      runId: "stream-1",
+      state: "delta",
+      deltaText: seq === 1 ? "hello" : " world",
+      ...(seq === 1 ? { message: { role: "assistant", content: "hello" } } : {}),
+    });
+  }
+  await failedRead;
+  await expect(Promise.all([first, second])).resolves.toMatchObject([
+    { done: false, value: { event: "chat", payload: { deltaText: "hello" } } },
+    { done: false, value: { event: "chat", payload: { deltaText: " world" } } },
+  ]);
+  await expect(normalizedFirst).resolves.toMatchObject({
+    value: { type: "assistant.delta", data: { text: "hello", delta: "hello" } },
+  });
+  const normalizedSecond = await normalized.next();
+  expect(normalizedSecond).toMatchObject({
+    value: { type: "assistant.delta", data: { text: "hello world", delta: " world" } },
+  });
+  expect(normalizedSecond.value?.raw?.payload).not.toHaveProperty("message");
+});
+
 it.each(["history", "newer-live-snapshot", "failed-history"])(
   "rearms completion and continues chat suffixes after %s recovery",
   async (mode) => {
@@ -217,11 +348,7 @@ it.each(["history", "newer-live-snapshot", "failed-history"])(
         if (mode === "failed-history") {
           reply({ code: "UNAVAILABLE", message: "history unavailable" }, false);
         } else {
-          reply(
-            historyResult({
-              inFlightRun: { runId: scope.runId, text: "hello recovered" },
-            }),
-          );
+          reply(historyResult({ inFlightRun: { runId: scope.runId, text: "hello recovered" } }));
         }
       });
     });
@@ -296,23 +423,23 @@ it.each(["queued", "pending-error", "unavailable"])(
     const events = await baseline();
     let waits = 0;
     const rearmed = createDeferred();
-    gateway.setRequestHandler((socket, request) => {
+    respond((request, reply, socket) => {
       if (request.method === "agent.wait") {
         if (++waits === 3 && mode === "unavailable") {
           rearmed.resolve();
           return;
         }
-        gateway.reply(socket, request.id, {
-          runId: scope.runId,
-          ...(mode === "queued"
-            ? { status: "pending" }
-            : { status: "timeout", ...(mode === "pending-error" ? { pendingError: true } : {}) }),
-        });
+        reply(
+          runResult(
+            mode === "queued" ? "pending" : "timeout",
+            mode === "pending-error" ? { pendingError: true } : {},
+          ),
+        );
         if (waits > 1 && mode !== "unavailable") {
           gateway.sendEvent(socket, "probe.wait", { ...scope, waits });
         }
       } else {
-        gateway.reply(socket, request.id, { sessionId: "physical-session", messages: [] });
+        reply(historyResult({ messages: [] }));
         if (mode !== "unavailable") {
           gateway.sendEvent(socket, "probe.history", scope);
         }
@@ -347,10 +474,7 @@ it("releases 150 accepted runs before their first output without inferring owner
   const waited: string[] = [];
   respond((request) => {
     if (request.method === "chat.send") {
-      return {
-        runId: request.params.idempotencyKey,
-        status: "started",
-      };
+      return runResult("started", { runId: request.params.idempotencyKey });
     } else if (request.method === "sessions.messages.unsubscribe") {
       const key = request.params.key;
       return {
@@ -362,12 +486,11 @@ it("releases 150 accepted runs before their first output without inferring owner
       };
     } else if (request.method === "agent.wait") {
       waited.push(String(request.params.runId));
-      return {
+      return runResult("ok", {
         runId: request.params.runId,
-        status: "ok",
         endedAt: 123,
         terminalReply: { disposition: "silent" },
-      };
+      });
     }
     return {};
   });
@@ -409,18 +532,10 @@ it.each(["agent:ops:main", "agent:main:main", "global", "unknown"])(
     const events = oc.runEvents("research-run")[Symbol.asyncIterator]();
     const first = events.next();
     const target = { runId: "research-run", sessionKey, agentId: "research" };
-    gateway.sendEvent(gateway.socket(), "agent", {
-      ...target,
-      stream: "assistant",
-      data: { text: "research", delta: "research" },
-    });
+    assistant(gateway.socket(), target, { text: "research", delta: "research" });
     await expect(first).resolves.toMatchObject({ value: { data: { text: "research" } } });
     await oc.request("sessions.messages.unsubscribe", { key });
-    gateway.sendEvent(gateway.socket(), "agent", {
-      ...target,
-      stream: "assistant",
-      data: { delta: " continues" },
-    });
+    assistant(gateway.socket(), target, { delta: " continues" });
     await expectNext(events, { data: { text: "research continues", delta: " continues" } });
     await events.return?.();
   },

@@ -6,10 +6,7 @@ import {
   resolveLogicalVisibleModelCatalog,
 } from "./model-catalog-visibility.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
-import {
-  openAIModelCatalogRoutePolicy,
-  resolveModelCatalogIdentityKey,
-} from "./openai-model-routes.js";
+import { resolveModelCatalogIdentityKey } from "./openai-model-routes.js";
 
 const metadata = { name: "Authored default", contextWindow: 32768, reasoning: false };
 const authored: ModelCatalogEntry = {
@@ -48,11 +45,9 @@ async function project(catalog: ModelCatalogEntry[]) {
     defaultProvider: "arcee",
     defaultModel: "trinity-large-thinking",
     view: "all",
-    routePolicy: openAIModelCatalogRoutePolicy,
     evaluateEntry: async () =>
       resolveLogicalModelCatalogEntryState({
         evaluation: { availability: true, routeResolution: null },
-        routePolicy: openAIModelCatalogRoutePolicy,
       }),
   });
 }

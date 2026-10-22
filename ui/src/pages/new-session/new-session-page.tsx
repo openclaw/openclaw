@@ -306,13 +306,23 @@ function renderPageContent(host: PageHost) {
     (failure) =>
       owner.submission.setError(failure instanceof Error ? failure.message : String(failure)),
   );
-  owner.titlePreparation = createNewSessionTitle(() => ({
-    context: owner.context,
-    data: owner.data,
-    place: owner.place,
-    submission: owner.submission,
-    dictating: owner.dictation.active,
-  }));
+  onSettled(() => {
+    const preparation = createNewSessionTitle(() => ({
+      context: owner.context,
+      data: owner.data,
+      place: owner.place,
+      submission: owner.submission,
+      dictating: owner.dictation.active,
+    }));
+    owner.titlePreparation = preparation;
+    preparation.synchronize();
+    return () => {
+      preparation.dispose();
+      if (owner.titlePreparation === preparation) {
+        owner.titlePreparation = undefined;
+      }
+    };
+  });
   // Both draft presentations share one preparation per revision, not one per binding.
   const options = createMemo(() => page().composerOptions());
   const Draft = () => (
@@ -325,7 +335,7 @@ function renderPageContent(host: PageHost) {
       />
     </NewSessionComposerTextareaContext>
   );
-  // Bind gateway facts before publishing the first reconciled draft snapshot.
+  // Bind gateway facts before the first child read; teardown must also cover pre-settle disposal.
   owner.connect();
   onCleanup(() => owner.disconnect());
   onSettled(() => {
@@ -528,9 +538,14 @@ defineSolidBridge<
   propertyChanged: (host) => {
     const owner = pageOwners.get(host);
     owner?.retireSubmissionPresentation();
+    owner?.browser.close();
     owner?.changed();
   },
-  disconnected: (host) => pageOwners.get(host)?.retireSubmissionPresentation(),
+  disconnected: (host) => {
+    const owner = pageOwners.get(host);
+    owner?.retireSubmissionPresentation();
+    owner?.browser.close();
+  },
   methods: {
     focusComposer: (host) => pageOwners.get(host)?.focusComposer(),
   },

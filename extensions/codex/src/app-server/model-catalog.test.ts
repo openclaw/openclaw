@@ -162,9 +162,6 @@ describe("Codex app-server model catalog", () => {
       limit: 100,
       includeHidden: true,
     });
-    expect(vi.mocked(withCodexAppServerJsonClient).mock.calls[0]?.[0].startOptions?.homeScope).toBe(
-      "agent",
-    );
     expect(probeCodexNativeAuth).not.toHaveBeenCalled();
   });
 

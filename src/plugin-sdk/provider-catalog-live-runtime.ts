@@ -77,6 +77,22 @@ export type {
   UpstreamProviderCatalogModel,
 } from "./provider-catalog-live-normalize.internal.js";
 
+export type {
+  BundledModelIdentityFacts,
+  BundledModelIdentityLookup,
+} from "../agents/bundled-model-identity-facts.js";
+
+/**
+ * Loads the model-identity facts (Code Mode tier, temperature support, media limits)
+ * that bundled first-party catalogs declare, for live rows routed to the same upstream
+ * model over the same API. Manifest planning loads only when a routing catalog asks.
+ */
+export async function loadBundledModelIdentityFactsResolver() {
+  const { createBundledModelIdentityFactsResolver } =
+    await import("../agents/bundled-model-identity-facts.js");
+  return createBundledModelIdentityFactsResolver();
+}
+
 export type BuildLiveModelProviderConfigParams<T extends ModelDefinitionConfig> =
   FetchLiveProviderModelIdsParams & {
     discoveryMode?: "strict";

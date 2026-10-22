@@ -78,12 +78,7 @@ export function SkillWorkshopView(props: { view: WorkshopView }) {
         onSelect={(tab) => props.view().context.navigate(tab)}
       />
       <SettingsWorkspace>
-        <div
-          id={PLUGINS_HUB_PANEL_ID}
-          role="tabpanel"
-          tabindex="0"
-          aria-labelledby="plugins-tab-skill-workshop"
-        >
+        <div id={PLUGINS_HUB_PANEL_ID} role="tabpanel" aria-labelledby="plugins-tab-skill-workshop">
           <SettingsPage wide carapace>
             <Toolbar view={props.view} />
             <For

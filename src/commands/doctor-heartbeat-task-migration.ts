@@ -6,7 +6,6 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { tryResolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
-import { isHeartbeatTaskCronJob } from "../cron/heartbeat-task.js";
 import {
   readDefaultProactiveJobReceiptInDatabase,
   recordConvertedProactiveJobInDatabase,
@@ -34,6 +33,7 @@ import { shortenHomePath } from "../utils.js";
 import { ensureHeartbeatMonitorJobs } from "./doctor-heartbeat-cadence-migration.js";
 import { resolveLegacyHeartbeatConfig } from "./doctor-heartbeat-legacy.js";
 import { resolveLegacyHeartbeatSession } from "./doctor-heartbeat-session.js";
+import { isHeartbeatTaskCronJob } from "./doctor-heartbeat-task-identity.js";
 import {
   commitHeartbeatTaskMigrationInDatabase,
   convertStoredHeartbeatTask,
