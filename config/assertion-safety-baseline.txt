@@ -415,7 +415,7 @@ extensions/matrix/src/matrix/monitor/verification-events.ts	5
 extensions/matrix/src/matrix/poll-summary.ts	1
 extensions/matrix/src/matrix/poll-types.ts	7
 extensions/matrix/src/matrix/probe.ts	1
-extensions/matrix/src/matrix/sdk.ts	8
+extensions/matrix/src/matrix/sdk.ts	6
 extensions/matrix/src/matrix/sdk/client-base.ts	1
 extensions/matrix/src/matrix/sdk/client-core.ts	14
 extensions/matrix/src/matrix/sdk/client-event-bridge.ts	1
