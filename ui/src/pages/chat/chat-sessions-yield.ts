@@ -1,5 +1,6 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNodePermissionRequest } from "../../../../packages/gateway-protocol/src/node-permissions.js";
 import {
   isToolCallContentType,
   isToolResultContentType,
@@ -149,25 +150,44 @@ function scanSessionsYieldItems(
     let remaining: ChatItem[] = [item];
     // Public handoff details follow the display preference after recognition.
     // Private continuation filtering below still uses only sessions_yield IDs.
-    const filterTools =
-      yieldCards.length > 0 ||
-      (!showToolCalls && cards.some((card) => card.name === "github_publish"));
-    if (message && filterTools && !showToolCalls && isStandaloneToolMessageForDisplay(message)) {
+    const hiddenGithubCards = showToolCalls
+      ? []
+      : cards.filter(
+          (card) =>
+            card.name === "github_publish" &&
+            !readNodePermissionRequest(asRecord(card.details)?.permissionMissing),
+        );
+    const filterTools = yieldCards.length > 0 || hiddenGithubCards.length > 0;
+    if (
+      message &&
+      filterTools &&
+      !showToolCalls &&
+      isStandaloneToolMessageForDisplay(message) &&
+      (yieldCards.length > 0 || hiddenGithubCards.length === cards.length)
+    ) {
       remaining = [];
     } else if (message && filterTools && Array.isArray(message.content)) {
       const yieldIds = new Set(yieldCards.map((card) => card.callId));
       const ids = new Set(yields.map((card) => card.callId));
+      const hiddenGithubIds = new Set(hiddenGithubCards.map((card) => card.callId));
       const content = message.content.filter((block: unknown) => {
         const raw = asRecord(block);
         if (!raw || (!isToolCallContentType(raw.type) && !isToolResultContentType(raw.type))) {
           return true;
         }
         const id = resolveToolBlockId(raw, message);
+        // A retained mixed row can also own an actionable permission request.
+        // Hide only GitHub's cards; its siblings keep their original projection.
+        if (!showToolCalls) {
+          return (
+            yieldCards.length === 0 &&
+            (id ? !hiddenGithubIds.has(id) : raw.name !== "github_publish")
+          );
+        }
         // Live inputs can precede the sanitized history row. Yield context is never a tool detail.
         if (
-          !showToolCalls ||
-          (isToolCallContentType(raw.type) &&
-            (id ? yieldIds.has(id) : raw.name === "sessions_yield"))
+          isToolCallContentType(raw.type) &&
+          (id ? yieldIds.has(id) : raw.name === "sessions_yield")
         ) {
           return false;
         }
@@ -181,9 +201,11 @@ function scanSessionsYieldItems(
               message: {
                 ...message,
                 content,
-                activity: readPreparedActivity(message).filter(
-                  (activity) =>
-                    showToolCalls && !yieldIds.has(activity.toolCallId ?? activity.itemId),
+                activity: readPreparedActivity(message).filter((activity) =>
+                  showToolCalls
+                    ? !yieldIds.has(activity.toolCallId ?? activity.itemId)
+                    : yieldCards.length === 0 &&
+                      !hiddenGithubIds.has(activity.toolCallId ?? activity.itemId),
                 ),
               },
             },
