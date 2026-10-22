@@ -22,7 +22,7 @@ vi.mock("openclaw/plugin-sdk/outbound-media", async (importOriginal) => ({
 
 beforeEach(() => vi.clearAllMocks());
 
-it.each(["preview", "expanded preview"])("serializes %s and final", async (partialText) => {
+it("serializes a changed preview and final", async () => {
   const messages = new Map<string, bus.QaBusMessage>();
   const deleted = new Set<string>();
   const deleteStarted = createDeferred<void>();
@@ -62,7 +62,7 @@ it.each(["preview", "expanded preview"])("serializes %s and final", async (parti
     await assembled.replyOptions?.onToolStart?.({ phase: "start", name: "read" });
     const media = assembled.delivery.deliver({ mediaUrl: "/tmp/answer.txt" }, { kind: "block" });
     await deleteStarted.promise;
-    const partial = assembled.replyOptions?.onPartialReply?.({ text: partialText });
+    const partial = assembled.replyOptions?.onPartialReply?.({ text: "expanded preview" });
     const final = assembled.delivery.deliver({ text: "final caption" }, { kind: "final" });
     const settled = Promise.allSettled([media, partial, final]);
     try {

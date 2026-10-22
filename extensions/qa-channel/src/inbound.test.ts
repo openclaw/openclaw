@@ -32,25 +32,19 @@ function generatedImage(fileName?: string) {
   };
 }
 
-vi.mock("./bus-client.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./bus-client.js")>();
-  return {
-    ...actual,
-    deleteQaBusMessage: vi.fn(async () => ({ message: {} })),
-    editQaBusMessage: vi.fn(async () => ({ message: {} })),
-    sendQaBusMessage: vi.fn(async () => ({ message: { id: "preview-1" } })),
-  };
-});
+vi.mock("./bus-client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./bus-client.js")>()),
+  deleteQaBusMessage: vi.fn(async () => ({ message: {} })),
+  editQaBusMessage: vi.fn(async () => ({ message: {} })),
+  sendQaBusMessage: vi.fn(async () => ({ message: { id: "preview-1" } })),
+}));
 
-vi.mock("openclaw/plugin-sdk/outbound-media", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/outbound-media")>();
-  return {
-    ...actual,
-    loadOutboundMediaFromUrl: vi.fn(async (mediaUrl: string) =>
-      generatedImage(path.basename(mediaUrl)),
-    ),
-  };
-});
+vi.mock("openclaw/plugin-sdk/outbound-media", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/outbound-media")>()),
+  loadOutboundMediaFromUrl: vi.fn(async (mediaUrl: string) =>
+    generatedImage(path.basename(mediaUrl)),
+  ),
+}));
 
 vi.mock("openclaw/plugin-sdk/media-store", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-store")>()),
@@ -112,9 +106,7 @@ describe("handleQaInbound", () => {
   });
 
   it("keeps block deliveries separate and retains tool calls discovered after a preview", async () => {
-    await startQaInbound(runtime, createQaInboundParams());
-
-    const assembled = firstRunAssembledParams(runtime);
+    const assembled = await assembledTurn(runtime);
     await assembled.replyOptions?.onPartialReply?.({ text: "preview" });
     await assembled.replyOptions?.onToolStart?.({
       phase: "start",
@@ -126,20 +118,12 @@ describe("handleQaInbound", () => {
 
     expect(deleteQaBusMessage).toHaveBeenCalledOnce();
     expect(sendQaBusMessage).toHaveBeenCalledTimes(3);
-    expect(sendQaBusMessage).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        text: "tool result",
-        toolCalls: [{ name: "search", arguments: { query: "qa" } }],
-      }),
-    );
-    expect(sendQaBusMessage).toHaveBeenNthCalledWith(
-      3,
-      expect.objectContaining({
-        text: "final answer",
-        toolCalls: [{ name: "search", arguments: { query: "qa" } }],
-      }),
-    );
+    for (const [nth, text] of [
+      [2, "tool result"],
+      [3, "final answer"],
+    ] as const) {
+      expectSend(nth, { text, toolCalls: [{ name: "search", arguments: { query: "qa" } }] });
+    }
   });
 
   it("does not suppress the final caption after a failed media delivery", async () => {
@@ -223,13 +207,7 @@ describe("handleQaInbound", () => {
   });
 
   it("allows direct messages from configured senders", async () => {
-    await handleQaInbound(
-      createQaInboundParams({
-        accountConfig: {
-          allowFrom: ["alice"],
-        },
-      }),
-    );
+    await receive({ accountConfig: { allowFrom: ["alice"] } });
 
     expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(1);
     const ctxPayload = firstRunAssembledParams(runtime).ctxPayload;
@@ -299,21 +277,10 @@ describe("handleQaInbound", () => {
   });
 
   it("uses allowFrom as the group sender fallback for allowlist policy", async () => {
-    await handleQaInbound(
-      createQaInboundParams({
-        accountConfig: {
-          allowFrom: ["alice"],
-          groupPolicy: "allowlist",
-        },
-        message: {
-          conversation: {
-            kind: "group",
-            id: "qa-room",
-            title: "QA Room",
-          },
-        },
-      }),
-    );
+    await receive({
+      accountConfig: { allowFrom: ["alice"], groupPolicy: "allowlist" },
+      message: { conversation: { kind: "group", id: "qa-room", title: "QA Room" } },
+    });
 
     expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(1);
   });
