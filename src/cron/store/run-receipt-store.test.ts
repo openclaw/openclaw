@@ -1,13 +1,17 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { loseFirstCronMutationReply } from "../../../test/helpers/cron/runtime-mutation.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
+import * as sqliteQuery from "../../infra/kysely-sync.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -17,15 +21,20 @@ import {
   captureCronJobMessageSourceAuthority,
   resetCronActiveJobs,
 } from "../active-jobs.js";
+import { CronService } from "../service.js";
 import { setupCronServiceSuite } from "../service.test-harness.js";
+import { start, stop } from "../service/ops-lifecycle.js";
 import { update } from "../service/ops-mutations.js";
 import { markServiceCronJobActive } from "../service/run-receipts.js";
+import { makeCronRecoveryState } from "../service/run-recovery.test-support.js";
+import { runCronRuntimeMutation } from "../service/runtime-mutation.js";
 import { createCronServiceState } from "../service/state.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import type { CronJob, CronJobPatch, CronStoredJob, CronToolsAllowProvenance } from "../types.js";
 import { cronStoreKey } from "./key.js";
 import {
   findActiveCronRunReceiptInDatabase,
+  finishCronRunReceiptInDatabase,
   listActiveCronRunReceiptJobIdsInDatabase,
 } from "./run-receipt-store.js";
 import {
@@ -34,18 +43,19 @@ import {
   prepareCronRunReceiptClaim,
   makeCronReceiptJob,
   finishCronRunReceiptAsync,
+  makeCronRecoveryJob,
+  inspectActiveCronRunReceipt,
 } from "./run-receipt-store.test-support.js";
 import {
   isCronRunTriggerStateRetiredInDatabase,
   retireCronRunTriggerStateInDatabase,
 } from "./run-receipt-trigger-state.js";
+import { prepareCronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
 import type { CronRunReceiptHandle } from "./run-receipt.types.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-run-receipt-" });
 
-afterEach(() => {
-  vi.restoreAllMocks();
-});
+afterEach(() => vi.restoreAllMocks());
 
 async function storeJob(job: CronJob) {
   const { storePath } = await makeStorePath();
@@ -485,4 +495,234 @@ it("records completion by run ID after an owner edit and ignores duplicate outco
       error: null,
     },
   ]);
+});
+
+it.each([
+  ["commit", "started", 1, "committed"],
+  ["retired", "not-started", 0, "not-committed"],
+  ["reply-lost", "started", 0, "unknown"],
+] as const)(
+  "publishes delivery admission only after a successful worker reply: %s",
+  async (outcome, phase, publications, settlement) => {
+    const { storePath, job } = await storeJob(makeCronReceiptJob("delivery-commit"));
+    const receipt = claimCronRunReceiptForTest(storePath, job, Date.now());
+    const readPhase = () =>
+      openOpenClawStateDatabase()
+        .db.prepare("SELECT delivery_attempt_state FROM cron_run_receipts WHERE receipt_id = ?")
+        .get(receipt.receiptId)?.delivery_attempt_state;
+    expect(readPhase()).toBe("not-started");
+    const reply =
+      outcome === "reply-lost" ? loseFirstCronMutationReply("cron.markDeliveryStarted") : undefined;
+    const published = vi.fn();
+    const settled = vi.fn();
+    try {
+      const attempt = runCronRuntimeMutation({
+        context: captureOpenClawStateWorkerContext(),
+        type: "cron.markDeliveryStarted",
+        input: { storeKey: receipt.storeKey, handle: receipt },
+        assertCurrent: () => {
+          if (outcome === "retired") {
+            throw new Error("delivery owner retired before dispatch");
+          }
+        },
+        snapshot: {},
+        publish: published,
+        onSettled: settled,
+      });
+      if (outcome === "commit") {
+        await attempt;
+      } else {
+        await expect(attempt).rejects.toBeInstanceOf(Error);
+      }
+      await reply?.waitForExit();
+      expect(readPhase()).toBe(phase);
+      expect(published).toHaveBeenCalledTimes(publications);
+      expect(settled).toHaveBeenCalledWith(settlement);
+      if (reply) {
+        expect(reply.wasDropped()).toBe(true);
+        expect(reply.attempts).toEqual(["cron.markDeliveryStarted"]);
+      }
+    } finally {
+      await reply?.close();
+      await finishCronRunReceiptAsync({
+        handle: receipt,
+        status: "interrupted",
+        finishedAtMs: Date.now(),
+      });
+    }
+  },
+);
+
+it.each(["legacy-running", "legacy-terminal", "started-terminal", "receiptless"] as const)(
+  "holds an interrupted ambiguous one-shot disabled across repeated startup: %s",
+  async (kind) => {
+    const { storePath } = await makeStorePath();
+    const now = Date.now();
+    const job = makeCronRecoveryJob("ambiguous-one-shot", now);
+    job.schedule = { kind: "at", at: new Date(now).toISOString() };
+    job.deleteAfterRun = true;
+    await saveCronStore(storePath, { version: 1, jobs: [job] });
+    if (kind !== "receiptless") {
+      const receipt = claimCronRunReceiptForTest(storePath, job, now);
+      job.state.runningReceiptId = receipt.receiptId;
+      await saveCronStore(storePath, { version: 1, jobs: [job] });
+      openOpenClawStateDatabase()
+        .db.prepare("UPDATE cron_run_receipts SET delivery_attempt_state = ? WHERE receipt_id = ?")
+        .run(kind === "started-terminal" ? "started" : "unknown", receipt.receiptId);
+      if (kind !== "legacy-running") {
+        await finishCronRunReceiptAsync({
+          handle: receipt,
+          status: "interrupted",
+          finishedAtMs: now + 1,
+        });
+      }
+    }
+    for (let restart = 0; restart < 2; restart += 1) {
+      const state = makeCronRecoveryState(logger, storePath, now + 2);
+      state.deps.runCommandJob = vi.fn(async () => ({ status: "ok" as const }));
+      try {
+        await start(state);
+        const recovered = (await loadCronStore(storePath)).jobs[0];
+        expect(recovered).toMatchObject({
+          enabled: false,
+          state: { lastRunStatus: "error", lastDeliveryStatus: "unknown" },
+        });
+        expect(recovered?.state.consecutiveErrors).toBeUndefined();
+        expect(recovered?.state.autoDisabled).toBeUndefined();
+        expect(recovered?.state.runningAtMs).toBeUndefined();
+        expect(recovered?.state.nextRunAtMs).toBeUndefined();
+        expect(recovered?.state.startupCatchupAtMs).toBeUndefined();
+        expect(state.deps.runCommandJob).not.toHaveBeenCalled();
+      } finally {
+        stop(state);
+      }
+    }
+  },
+);
+
+it("keeps the pending terminal receipt within 64 rows until reconciliation releases it", async () => {
+  const { storePath } = await makeStorePath();
+  const now = Date.now();
+  const started = createDeferred();
+  const completion = createDeferred<{ status: "ok" }>();
+  const runCommandJob = vi.fn(async () => {
+    started.resolve();
+    return completion.promise;
+  });
+  const makeService = (cronEnabled = true) =>
+    new CronService({
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => Date.now(),
+      storePath,
+      cronEnabled,
+      log: logger,
+      enqueueSystemEvent() {},
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      runCommandJob,
+    });
+  const owner = makeService();
+  const editor = makeService(false);
+  const reconciler = makeService();
+  const job = await editor.add({
+    name: "pending receipt retention",
+    agentId: "alpha",
+    enabled: true,
+    schedule: { kind: "every", everyMs: 60_000, anchorMs: now + 60_000 },
+    sessionTarget: "isolated",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "command", argv: ["true"] },
+  });
+  const history: string[] = [];
+  // Clock-skewed history must not evict the pending receipt.
+  for (let index = 0; index < 64; index += 1) {
+    const receipt = claimCronRunReceiptForTest(storePath, job, now + 100 + index * 2);
+    history.push(receipt.receiptId);
+    await finishCronRunReceiptAsync({
+      handle: receipt,
+      status: "ok",
+      finishedAtMs: now + 101 + index * 2,
+    });
+  }
+  const database = openOpenClawStateDatabase().db;
+  const terminalIds = () =>
+    database
+      .prepare(
+        `SELECT receipt_id AS receiptId FROM cron_run_receipts
+           WHERE store_key = ? AND job_id = ? AND status != 'running'
+           ORDER BY finished_at_ms DESC, started_at_ms DESC, receipt_id DESC`,
+      )
+      .all(cronStoreKey(storePath), job.id)
+      .map((row) => row.receiptId);
+  const running = owner.run(job.id, "force");
+  try {
+    await started.promise;
+    const pending = inspectActiveCronRunReceipt({ storePath, jobId: job.id });
+    expect(pending).toBeDefined();
+    await editor.update(job.id, { state: { triggerState: { owner: "saved edit" } } });
+    const retirement = () =>
+      database
+        .prepare("SELECT receipt_id FROM cron_run_trigger_state_retirements WHERE receipt_id = ?")
+        .get(pending!.receiptId);
+    expect(retirement()).toEqual({ receipt_id: pending!.receiptId });
+
+    database.exec(`
+        CREATE TRIGGER reject_pending_receipt_completion BEFORE UPDATE ON cron_jobs
+        WHEN NEW.job_id = '${job.id}' AND json_extract(NEW.state_json, '$.runningAtMs') IS NULL
+        BEGIN SELECT RAISE(ABORT, 'pending receipt completion unavailable'); END;
+      `);
+    completion.resolve({ status: "ok" });
+    await expect(running).rejects.toThrow("pending receipt completion unavailable");
+    database.exec("DROP TRIGGER reject_pending_receipt_completion");
+    owner.stop();
+    await editor.update(job.id, { agentId: "beta" });
+
+    expect(inspectActiveCronRunReceipt({ storePath, jobId: job.id })).toMatchObject({
+      receiptId: pending!.receiptId,
+    });
+    // A late result prunes while preserving the unreconciled run marker after an owner edit.
+    const queries = vi.spyOn(sqliteQuery, "executeSqliteQuerySync");
+    runOpenClawStateWriteTransaction(({ db }) =>
+      finishCronRunReceiptInDatabase({
+        database: db,
+        receiptSchema: prepareCronRunReceiptWriteSchema(db),
+        handle: pending!,
+        pendingReceiptId: pending!.receiptId,
+        status: "ok",
+        finishedAtMs: now,
+      }),
+    );
+    const fetchedRows = queries.mock.results.flatMap((result) =>
+      result.type === "return" ? result.value.rows : [],
+    ).length;
+    queries.mockRestore();
+    expect(terminalIds()).toEqual([...history.slice(1).toReversed(), pending!.receiptId]);
+    expect(retirement()).toEqual({ receipt_id: pending!.receiptId });
+    expect((await loadCronStore(storePath)).jobs[0]?.state.runningReceiptId).toBe(
+      pending!.receiptId,
+    );
+    expect(fetchedRows).toBeLessThanOrEqual(8);
+
+    await reconciler.start();
+    expect(runCommandJob).toHaveBeenCalledOnce();
+    const recovered = (await loadCronStore(storePath)).jobs[0]!;
+    expect(recovered.state.runningAtMs).toBeUndefined();
+    expect(recovered.state.runningReceiptId).toBeUndefined();
+    expect(recovered.state.triggerState).toEqual({ owner: "saved edit" });
+    expect(retirement()).toEqual({ receipt_id: pending!.receiptId });
+
+    vi.setSystemTime(now + 1_000);
+    await expect(reconciler.run(job.id, "force")).resolves.toEqual({ ok: true, ran: true });
+    expect(runCommandJob).toHaveBeenCalledTimes(2);
+    expect(terminalIds()).toHaveLength(64);
+    expect(terminalIds()).not.toContain(pending!.receiptId);
+    // Query directly: a receipt join would hide a dangling retirement after pruning.
+    expect(retirement()).toBeUndefined();
+  } finally {
+    database.exec("DROP TRIGGER IF EXISTS reject_pending_receipt_completion");
+    completion.resolve({ status: "ok" });
+    await running.catch(() => undefined);
+    owner.stop();
+    editor.stop();
+    reconciler.stop();
+  }
 });
