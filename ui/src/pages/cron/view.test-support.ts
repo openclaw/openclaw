@@ -1,10 +1,18 @@
 import { expect } from "vitest";
-import type { CronJob } from "../../api/types.ts";
+import type { CronJob, CronRunLogEntry } from "../../api/types.ts";
 import { DEFAULT_CRON_FORM } from "../../test-helpers/cron.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { CronProps } from "./view-types.ts";
 import { CronView } from "./view.tsx";
+
+export function createCronViewRun(overrides: Partial<CronRunLogEntry> = {}): CronRunLogEntry {
+  return { ts: 1, jobId: "job-1", action: "finished", status: "ok", ...overrides };
+}
+
+export function cronRunsResponse(entries: CronRunLogEntry[] = []) {
+  return { entries, total: entries.length, offset: 0, hasMore: false };
+}
 
 export function createCronViewJob(id: string, overrides: Partial<CronJob> = {}): CronJob {
   return {
