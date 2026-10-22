@@ -27,19 +27,11 @@ import * as selectionReads from "./selection-read.js";
 import * as selection from "./selection.js";
 import { loadSkillLibrarySelection as loadSelection } from "./selection.js";
 import { saveSkillLibrary } from "./service.js";
-import { draft } from "./service.test-support.js";
+import { draft, expectCode, libraryPin as pinOf } from "./service.test-support.js";
 
 const dirs = useStateDatabaseTempDirs();
 const content =
   "---\nname: guide\ndescription: Saved procedure\n---\n# Guide\nRead references/data.bin.\n";
-type Pin = NonNullable<SkillSnapshot["librarySelections"]>[number];
-const pinOf = ({ skillId, revision, name, ownerProfileId }: Pin): Pin => ({
-  skillId,
-  revision,
-  name,
-  ownerProfileId,
-});
-
 function snapshotFor(...pins: NonNullable<SkillSnapshot["librarySelections"]>): SkillSnapshot {
   return { prompt: "", skills: pins.map(({ name }) => ({ name })), librarySelections: pins };
 }
@@ -287,9 +279,10 @@ it.each(["file", "table"] as const)(
       ownerProfileId: null,
     });
     await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
-      await expect(deliver(snapshot, () => {})).rejects.toMatchObject({
-        code: "NOT_FOUND",
-      });
+      await expectCode(
+        deliver(snapshot, () => {}),
+        "NOT_FOUND",
+      );
     });
     if (missing === "file") {
       expect(fs.existsSync(path.join(root, "state", "openclaw.sqlite"))).toBe(false);

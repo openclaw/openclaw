@@ -10,11 +10,7 @@ import {
 import { enableNodeSqliteKyselyStatementCache } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
-import {
-  SqliteWorkerError,
-  type SqliteWorkerOperations,
-  type SqliteWorkerStore,
-} from "../../infra/sqlite-worker-contract.js";
+import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
@@ -40,7 +36,14 @@ import {
   seedSkillLibrarySelection as seed,
 } from "./selection.js";
 import { resolveSkillLibraryPresentation as presentation } from "./service.js";
-import { content, draft, useSkillLibraryFixture, zipBytes } from "./service.test-support.js";
+import {
+  content,
+  draft,
+  expectSingleWinner,
+  libraryPin,
+  useSkillLibraryFixture,
+  zipBytes,
+} from "./service.test-support.js";
 import { projectSkillLibraryList, type SkillLibraryAuthority } from "./store.js";
 
 const { fixture, tempDirs } = useSkillLibraryFixture();
@@ -79,14 +82,7 @@ it("reuses library facts until a library or profile writer changes their inputs"
   expect(first).toHaveLength(1);
   const count = reads.mock.calls.length;
   first[0]!.name = "caller mutation";
-  expect(await lib.seed()).toEqual([
-    {
-      skillId: saved.entry.skillId,
-      revision: saved.entry.revision,
-      name: saved.entry.name,
-      ownerProfileId: saved.entry.ownerProfileId,
-    },
-  ]);
+  expect(await lib.seed()).toEqual([libraryPin(saved.entry)]);
   expect(reads.mock.calls).toHaveLength(count);
 
   await lib.change(saved.entry, "disable");
@@ -439,52 +435,45 @@ it("revokes a prepared seed after a lost worker receipt without replaying the mu
   let receiptFault: { mockRestore(): void } | undefined;
   const delivery = vi
     .spyOn(workerStore, "runSqliteWorkerStoreOperation")
-    .mockImplementation(
-      <Operations extends SqliteWorkerOperations, T>(
-        target: SqliteWorkerStore<Operations>,
-        operation: (scope: Pick<SqliteWorkerStore<Operations>, "execute">) => T | Promise<T>,
-        stateContext?: Parameters<typeof original>[2],
-        assertCurrent?: Parameters<typeof original>[3],
-        createAdmission?: Parameters<typeof original>[4],
-      ) =>
-        original(
-          target,
-          (worker) =>
-            operation({
-              execute: async (command, operationOptions) => {
-                if (command.type !== "skillLibrary.mutate") {
-                  return worker.execute(command, operationOptions);
+    .mockImplementation((target, operation, stateContext, assertCurrent, createAdmission) =>
+      original(
+        target,
+        (worker) =>
+          operation({
+            execute: async (command, operationOptions) => {
+              if (command.type !== "skillLibrary.mutate") {
+                return worker.execute(command, operationOptions);
+              }
+              try {
+                await worker.execute(command, operationOptions);
+                executed++;
+                expect(admission?.committed).toMatchObject({
+                  facts: { entry: { enabled: false } },
+                });
+                if (!admission) {
+                  throw new Error("Expected worker mutation admission");
                 }
-                try {
-                  await worker.execute(command, operationOptions);
-                  executed++;
-                  expect(admission?.committed).toMatchObject({
-                    facts: { entry: { enabled: false } },
-                  });
-                  if (!admission) {
-                    throw new Error("Expected worker mutation admission");
-                  }
-                  receiptFault = vi.spyOn(admission, "committed", "get").mockReturnValue(undefined);
-                  throw failed;
-                } finally {
-                  lostReceipt.resolve();
-                }
-              },
-            }),
-          stateContext,
-          assertCurrent,
-          createAdmission &&
-            ((retained) => {
-              const admitted = createAdmission({
-                settled: retained.settled.then(async () => {
-                  await lostReceipt.promise;
-                  return { kind: "unknown" as const, error: failed };
-                }),
-              });
-              admission = admitted.admission;
-              return admitted;
-            }),
-        ),
+                receiptFault = vi.spyOn(admission, "committed", "get").mockReturnValue(undefined);
+                throw failed;
+              } finally {
+                lostReceipt.resolve();
+              }
+            },
+          }),
+        stateContext,
+        assertCurrent,
+        createAdmission &&
+          ((retained) => {
+            const admitted = createAdmission({
+              settled: retained.settled.then(async () => {
+                await lostReceipt.promise;
+                return { kind: "unknown" as const, error: failed };
+              }),
+            });
+            admission = admitted.admission;
+            return admitted;
+          }),
+      ),
     );
   try {
     await expect(lib.change(saved.entry, "disable")).rejects.toThrow(failed);
@@ -539,10 +528,9 @@ it("saves, mutates, and settles an upload without caller-thread SQL", async () =
     const chunk = () => lib.chunk(upload.uploadId, bytes);
     const commit = () => lib.commit(upload.uploadId);
     const chunks = await Promise.allSettled([chunk(), chunk()]);
-    expect(chunks.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expectSingleWinner(chunks, "CONFLICT");
     const rejected = chunks.find((result) => result.status === "rejected");
     expect(rejected).toMatchObject({ reason: expect.any(SkillLibraryError) });
-    expect(rejected).toMatchObject({ reason: { code: "CONFLICT" } });
     const receipt = await commit();
     expect(receipt).toMatchObject({ state: "published", entry: { slug: "uploaded" } });
     await expect(commit()).resolves.toMatchObject({ ...receipt, state: "unchanged" });
@@ -595,7 +583,7 @@ it.each(["role", "alias", "upload expiry"])(
     }
     const rename = asyncFs.rename;
     let changed = false;
-    const barrier = vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
+    const barrier = vi.spyOn(asyncFs, "rename").mockImplementation(async (source, destination) => {
       await rename(source, destination);
       if (String(source).includes(".staging-") && !changed) {
         changed = true;
