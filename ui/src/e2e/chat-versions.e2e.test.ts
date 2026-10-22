@@ -84,20 +84,21 @@ suite.define(() => {
             return { x, y, width, height };
           };
           const infoBox = measure(".chat-pane__versions-info svg");
+          const heading = measure(".chat-pane__versions-heading > span");
           const text = measure(`${active} .chat-pane__branch-copy`);
           const badge = measure(`${active} .chat-pane__branch-active`);
-          const check = measure(`${active} .chat-pane__branch-active svg`);
-          const centerX = (box: typeof infoBox) => box.x + box.width / 2;
+          measure(`${active} .chat-pane__branch-active svg`);
           const centerY = (box: typeof infoBox) => box.y + box.height / 2;
           return {
             headline: surface.querySelector(`${active} .chat-pane__branch-headline`)?.textContent,
-            iconOffset: Math.abs(centerX(infoBox) - centerX(check)),
+            headingGap: infoBox.x - heading.x - heading.width,
             textGap: badge.x - text.x - text.width,
             verticalOffset: Math.abs(centerY(badge) - centerY(text)),
           };
         });
         expect(geometry.headline).toBe("A simpler way to stay organized");
-        expect(geometry.iconOffset).toBeLessThanOrEqual(1);
+        expect(geometry.headingGap).toBeGreaterThanOrEqual(0);
+        expect(geometry.headingGap).toBeLessThanOrEqual(8);
         expect(geometry.textGap).toBeGreaterThanOrEqual(0);
         expect(geometry.verticalOffset).toBeLessThanOrEqual(1);
 

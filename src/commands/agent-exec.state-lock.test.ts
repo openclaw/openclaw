@@ -13,6 +13,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import * as embeddedStateLock from "../infra/embedded-state-lock.js";
 import { captureNativeSignalBridge } from "../infra/embedded-state-lock.test-support.js";
+import * as gatewayLockProcessModule from "../infra/gateway-lock-process.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { registerSqliteAuditRecordAsync } from "../infra/sqlite-audit-record-store.async.js";
@@ -47,6 +48,9 @@ const success = () => ({ payloads: [{ text: "done" }], meta: { durationMs: 1 } }
 function stateFixture() {
   const stateDir = tempDirs.make("openclaw-agent-exec-lock-");
   const lockDir = path.join(stateDir, "gateway-locks");
+  vi.spyOn(gatewayLockProcessModule, "readGatewayLockProcessStartTime").mockImplementation(
+    () => 123_456,
+  );
   const lockOptions = {
     allowInTests: true,
     env: {
@@ -56,7 +60,6 @@ function stateFixture() {
     },
     lockDir,
     timeoutMs: 100,
-    readProcessStartTime: () => 123_456,
   };
   vi.spyOn(embeddedStateLock, "acquireEmbeddedStateLock").mockImplementation((params) =>
     acquireStateLock({ ...params, options: lockOptions }),

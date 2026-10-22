@@ -47,6 +47,30 @@ function expectNote(title: string, ...fragments: string[]) {
     expect(noteFn.mock.calls[0]?.[0]).toContain(fragment);
   }
 }
+
+it.each([
+  ["secureConnect", "timeout", "succeeded"],
+  ["timeout", "secureConnect", "failed"],
+  ["error", "secureConnect", "failed"],
+] as const)("reports the first TLS outcome (%s before %s)", async (first, second, outcome) => {
+  const socket = new tls.TLSSocket(new Socket());
+  const connect = vi.spyOn(tls, "connect").mockImplementation(() => {
+    queueMicrotask(() => {
+      socket.emit(first, new Error("synthetic TLS failure"));
+      socket.emit(second);
+    });
+    return socket;
+  });
+  try {
+    await diagnose({ env: proxyEnv });
+    expectNote("Web fetch proxy", `Direct TLS connectivity to docs.openclaw.ai:443 ${outcome}.`);
+    expect(socket.destroyed).toBe(true);
+  } finally {
+    socket.destroy();
+    connect.mockRestore();
+  }
+});
+
 it.each([
   ["service", {}, proxyEnv, "unreachable", ["installed Gateway service: HTTPS_PROXY"]],
   ["process", { http_proxy: proxyUrl }, undefined, "reachable", ["doctor process: http_proxy"]],

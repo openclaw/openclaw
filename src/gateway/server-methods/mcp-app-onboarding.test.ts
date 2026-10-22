@@ -21,6 +21,7 @@ import { handleChatSend } from "./chat-send-handler.js";
 import { useBrowserFollowupFixture } from "./chat-send-pending-inputs.test-support.js";
 import * as chatSession from "./chat-send-session.js";
 import { mcpAppOnboardingHandlers } from "./mcp-app-onboarding.js";
+import { expectRpcError, expectRpcResult } from "./rpc-response.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 installGatewayTestHooks();
@@ -113,18 +114,10 @@ it.each(["success", "caller-revoked", "session-replaced", "native-denied"] as co
       expect(chat?.client?.internal?.syntheticClient).not.toBe(true);
       expect(chat?.params.suppressCommandInterpretation).toBe(true);
       if (scenario === "native-denied") {
-        expect(respond).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({ message: "Native runtime admission refused" }),
-        );
+        expectRpcError(respond, { message: "Native runtime admission refused" });
         expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       } else {
-        expect(respond).toHaveBeenCalledWith(
-          true,
-          expect.objectContaining({ status: "started" }),
-          undefined,
-        );
+        expectRpcResult(respond, expect.objectContaining({ status: "started" }));
         // Chat retains its own exact target and source after the onboarding router releases.
         expect(() => chat!.sessionMutationAuthorization!.assertCurrent()).not.toThrow();
         if (scenario === "caller-revoked") {

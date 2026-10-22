@@ -37,7 +37,7 @@ function createHandoffFixture(label: string) {
       clientId: successor.client.getInstanceId(),
       ownerClientId: old.client.getInstanceId(),
       threadId,
-      lifecycleTiming: createCodexThreadLifecycleTimingTracker(),
+      lifecycleTiming: createCodexThreadLifecycleTimingTracker(false),
       signal,
     });
   return {
@@ -197,3 +197,34 @@ it.each(["before", "during"] as const)(
     }
   },
 );
+
+it("admits a retired-owner handoff after exact thread closure while a sibling keeps its client alive", async () => {
+  const fixture = createHandoffFixture("closed-thread-live-sibling");
+  retireSharedCodexAppServerClientIfCurrent(fixture.old.client);
+  let resumed = false;
+  const handoff = fixture.handoff().then(async () => {
+    await fixture.successor.client.request("thread/resume", { threadId: fixture.threadId });
+    resumed = true;
+  });
+  try {
+    await setImmediate();
+    expect(resumed).toBe(false);
+    fixture.successor.send({ method: "thread/closed", params: { threadId: fixture.threadId } });
+    fixture.old.send({ method: "thread/closed", params: { threadId: "unrelated-thread" } });
+    await setImmediate();
+    expect(resumed).toBe(false);
+    fixture.old.send({ method: "thread/closed", params: { threadId: fixture.threadId } });
+    await setImmediate();
+    expect(resumed).toBe(true);
+    expect(fixture.entry.activeLeases).toBe(1);
+    expect(fixture.old.client.getCloseError()).toBeUndefined();
+    expect(fixture.old.process.exitCode).toBeNull();
+    expect(fixture.successor.writes.map((line) => JSON.parse(line))).toEqual([
+      expect.objectContaining({ method: "thread/resume", params: { threadId: fixture.threadId } }),
+    ]);
+  } finally {
+    fixture.old.emitExit();
+    await handoff;
+    fixture.cleanup();
+  }
+});

@@ -9,6 +9,7 @@ import type { LoginGateProps } from "../components/login-gate.ts";
 import "../components/login-gate.ts";
 import { i18n } from "../i18n/index.ts";
 import { storeDeviceAuthToken } from "../lib/nodes/index.ts";
+import { loadChatRoute, type ChatRouteData } from "../pages/chat/route-loader.ts";
 import { requestApplicationContext } from "../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
@@ -17,12 +18,17 @@ import { createLegacyFocusEscape } from "./app-root-lit.ts";
 import { mountOpenClawApp } from "./app-root.tsx";
 import type { BootRecord } from "./boot-record.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
-import { TERMINAL_PANEL_ELEMENT } from "./lazy-custom-element.ts";
+import { DASHBOARD_DOCUMENT_ELEMENT, TERMINAL_PANEL_ELEMENT } from "./lazy-custom-element.ts";
 import { loadSettings, persistSessionToken } from "./settings.ts";
 
 // mock-isolation: root admission tests isolate shell rendering while exercising the real bootstrap owner.
 vi.mock("./app-host.tsx", () => ({
   OpenClawShell: () => document.createElement("openclaw-app-shell"),
+}));
+
+vi.mock("../pages/chat/route-loader.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../pages/chat/route-loader.ts")>()),
+  loadChatRoute: vi.fn(),
 }));
 
 const BOOT_RECORD_PREFIX = "openclaw.control.bootRecord.v1:";
@@ -131,6 +137,70 @@ async function createOfflineSurface(warm = false) {
 }
 
 describe("warm boot app root", () => {
+  it("loads a focused dashboard after startup and reports its committed result to automation", async () => {
+    window.history.replaceState({}, "", "/focus/dashboard/main/12345678");
+    vi.spyOn(DASHBOARD_DOCUMENT_ELEMENT, "loadModule").mockRejectedValue(
+      new Error("Dashboard implementation isolated from root input test"),
+    );
+    const starting = Promise.withResolvers<void>();
+    const loading = Promise.withResolvers<ChatRouteData>();
+    vi.mocked(loadChatRoute).mockReturnValue(loading.promise);
+    const { container, start } = await createWarmSurface(false, starting.promise);
+    expect(container.querySelector(".connect-splash")).not.toBeNull();
+    expect(loadChatRoute).not.toHaveBeenCalled();
+
+    expect(window.openclawControlUi).toBeUndefined();
+    await settleImports();
+    const readiness = expectDefined(window.openclawControlUi, "focus readiness");
+    starting.resolve();
+    await settleImports();
+    expect(start).toHaveBeenCalledOnce();
+    expect(loadChatRoute).toHaveBeenCalledOnce();
+    expect(container.querySelector(".connect-splash")).not.toBeNull();
+    expect(container.querySelector("openclaw-board-document")).toBeNull();
+    const generation = readiness.snapshot().generation;
+
+    loading.resolve({
+      kind: "session",
+      face: "dashboard",
+      sessionKey: "agent:main:12345678-0000-4000-8000-000000000000",
+      agentId: "main",
+      canonicalLocationSource: { pathname: "/dashboard/main/12345678", search: "", hash: "" },
+      canonicalLocation: { pathname: "/dashboard/main/deploy-12345678", search: "", hash: "" },
+    });
+    await settleImports();
+    const board = expectDefined(container.querySelector("openclaw-board-document"), "dashboard");
+    expect(board.sessionKey).toBe("agent:main:12345678-0000-4000-8000-000000000000");
+    expect(window.location.pathname).toBe("/focus/dashboard/main/deploy-12345678");
+    expect(readiness.snapshot().generation).toBeGreaterThan(generation);
+    expect(readiness.snapshot()).toMatchObject({ booted: true, ready: true });
+  });
+
+  it("retires a pending focus dashboard read before it can render or canonicalize", async () => {
+    window.history.replaceState({}, "", "/focus/dashboard/main/12345678");
+    vi.spyOn(DASHBOARD_DOCUMENT_ELEMENT, "loadModule").mockRejectedValue(
+      new Error("Dashboard implementation isolated from root input test"),
+    );
+    const loading = Promise.withResolvers<ChatRouteData>();
+    vi.mocked(loadChatRoute).mockClear().mockReturnValue(loading.promise);
+    const { container } = await createWarmSurface(false);
+    await settleImports();
+    const signal = expectDefined(vi.mocked(loadChatRoute).mock.calls[0]?.[3], "focus abort signal");
+    disposeApp();
+    expect(signal.aborted).toBe(true);
+    loading.resolve({
+      kind: "session",
+      face: "dashboard",
+      sessionKey: "agent:main:12345678-0000-4000-8000-000000000000",
+      canonicalLocationSource: { pathname: "/dashboard/main/12345678", search: "", hash: "" },
+      canonicalLocation: { pathname: "/dashboard/main/deploy-12345678", search: "", hash: "" },
+    });
+    await settleImports();
+    expect(container.querySelector("openclaw-board-document")).toBeNull();
+    expect(window.location.pathname).toBe("/focus/dashboard/main/12345678");
+    expect(window.openclawControlUi).toBeUndefined();
+  });
+
   it("retains the focused Terminal client across transport loss while disabling live actions", async () => {
     window.history.replaceState({}, "", "/focus/terminal");
     document.documentElement.setAttribute(
@@ -158,32 +228,29 @@ describe("warm boot app root", () => {
       container.querySelector("openclaw-terminal-panel"),
       "focused Terminal panel",
     );
-    expect(panel.client).toBe(client);
-    expect(panel.gatewayConnected).toBe(true);
-    expect(panel.available).toBe(true);
+    const expectPanel = (
+      owner: GatewayBrowserClient | null,
+      connected: boolean,
+      available = true,
+    ) => {
+      expect(panel.client).toBe(owner);
+      expect(panel).toMatchObject({ gatewayConnected: connected, available });
+    };
+    expectPanel(client, true);
 
-    Object.assign(snapshot, { phase: "reconnecting", hello: null });
-    await draw();
+    await draw({ phase: "reconnecting", hello: null });
     expect(container.querySelector("openclaw-terminal-panel")).toBe(panel);
-    expect(panel.client).toBe(client);
-    expect(panel.gatewayConnected).toBe(false);
-    expect(panel.available).toBe(true);
+    expectPanel(client, false);
 
-    Object.assign(snapshot, { phase: "connected", hello });
-    await draw();
-    expect(panel.client).toBe(client);
-    expect(panel.gatewayConnected).toBe(true);
+    await draw({ phase: "connected", hello });
+    expectPanel(client, true);
 
     const replacement = createTestGatewayClient(vi.fn());
-    snapshot.client = replacement;
-    await draw();
-    expect(panel.client).toBe(replacement);
+    await draw({ client: replacement });
+    expectPanel(replacement, true);
 
-    Object.assign(snapshot, { phase: "stopped", client: null, hello: null });
-    await draw();
-    expect(panel.client).toBeNull();
-    expect(panel.gatewayConnected).toBe(false);
-    expect(panel.available).toBe(false);
+    await draw({ phase: "stopped", client: null, hello: null });
+    expectPanel(null, false, false);
   });
 
   it("pins embedded ingress to its serving Gateway and never offers a shared-credential login", async () => {
@@ -426,6 +493,15 @@ describe("warm boot app root", () => {
     });
 
     disposeApp();
+    expect(Object.getOwnPropertyDescriptor(window, "openclawControlUi")).toBeUndefined();
+  });
+
+  it("does not install requested readiness after the application is disposed", async () => {
+    const { rosterSubscriptions } = await createOfflineSurface();
+    expect(window.openclawControlUi).toBeUndefined();
+    disposeApp();
+    await settleImports();
+    expect(rosterSubscriptions).not.toHaveBeenCalled();
     expect(Object.getOwnPropertyDescriptor(window, "openclawControlUi")).toBeUndefined();
   });
 

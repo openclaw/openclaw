@@ -30,9 +30,9 @@ export function registerMatrix(outbound: ChannelOutboundAdapter = matrixOutbound
 
 export function installRecoveryHooks(register = true, stubState = true) {
   const fixtures = installDeliveryQueueTmpDirHooks();
-  let deliver: typeof import("./deliver.js").deliverOutboundPayloads;
+  let send: typeof import("../../plugin-sdk/channel-outbound.js").sendDurableMessageBatch;
   beforeAll(async () => {
-    ({ deliverOutboundPayloads: deliver } = await import("./deliver.js"));
+    ({ sendDurableMessageBatch: send } = await import("../../plugin-sdk/channel-outbound.js"));
   });
   beforeEach(() => {
     if (stubState) {
@@ -51,7 +51,16 @@ export function installRecoveryHooks(register = true, stubState = true) {
   });
   return {
     ...fixtures,
-    deliver: (...args: Parameters<typeof deliver>) => deliver(...args),
+    deliver: async ({
+      queuePolicy,
+      ...params
+    }: Omit<Parameters<DeliverFn>[0], "bestEffort" | "onDeliveryIntent">) => {
+      const result = await send({ ...params, durability: queuePolicy ?? "best_effort" });
+      if (result.status === "failed" || result.status === "partial_failed") {
+        throw result.error;
+      }
+      return result.results;
+    },
     recover: (run: DeliverFn) =>
       recoverPendingDeliveries({
         cfg: {},

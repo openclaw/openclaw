@@ -50,7 +50,11 @@ import {
   gatewayProbeResultSawGateway,
   gatewayProbeResultWasRateLimited,
 } from "./gateway-health-auth-diagnostic.js";
-import { formatGatewayClosedDiagnostic, formatHealthCheckFailure } from "./health-format.js";
+import {
+  formatGatewayClosedDiagnostic,
+  formatHealthCheckFailure,
+  formatHealthDiagnosticNote,
+} from "./health-format.js";
 import { formatSqliteWalHealthWarning } from "./sqlite-wal-health.js";
 import { formatTelemetryExporterSummary } from "./telemetry-exporter-summary.js";
 
@@ -347,7 +351,6 @@ async function noteInstalledGatewayStateDirectory(cfg: OpenClawConfig, timeoutMs
 export async function checkGatewayHealth(params: {
   runtime: RuntimeEnv;
   cfg: OpenClawConfig;
-  timeoutMs?: number;
 }): Promise<{ healthOk: boolean; authenticated: boolean; status?: StatusSummary }> {
   const replacement = await readLocalInstallationReplacement(params.cfg);
   if (replacement) {
@@ -355,10 +358,7 @@ export async function checkGatewayHealth(params: {
   }
   const { bindAgentToolGatewayRequest } = await import("../agents/tools/in-process-gateway.js");
   const requestGateway = bindAgentToolGatewayRequest({ hostedOnly: true });
-  const timeoutMs =
-    typeof params.timeoutMs === "number" && params.timeoutMs > 0
-      ? params.timeoutMs
-      : DEFAULT_RESTART_HEALTH_TIMEOUT_MS;
+  const timeoutMs = DEFAULT_RESTART_HEALTH_TIMEOUT_MS;
   let healthOk = false;
   let status: StatusSummary | undefined;
   let gatewaySnapshot: GatewayHello["snapshot"] | undefined;
@@ -527,7 +527,7 @@ export async function checkGatewayHealth(params: {
     if (closedDiagnostic) {
       const gatewayDetails = buildGatewayConnectionDetails({ config: params.cfg });
       note(closedDiagnostic, "Gateway");
-      note(gatewayDetails.message, "Gateway connection");
+      note(formatHealthDiagnosticNote(gatewayDetails.message), "Gateway connection");
     } else {
       params.runtime.error(formatHealthCheckFailure(err));
     }
@@ -548,17 +548,14 @@ type GatewayMemoryProbe = {
 /** Probes gateway memory readiness without forcing deep embedding checks. */
 export async function probeGatewayMemoryStatus(params: {
   cfg: OpenClawConfig;
-  timeoutMs?: number;
 }): Promise<GatewayMemoryProbe> {
   const { bindAgentToolGatewayRequest } = await import("../agents/tools/in-process-gateway.js");
   const requestGateway = bindAgentToolGatewayRequest({ hostedOnly: true });
-  const timeoutMs =
-    typeof params.timeoutMs === "number" && params.timeoutMs > 0 ? params.timeoutMs : 8_000;
   try {
     const payload = await requestGateway<DoctorMemoryStatusPayload>({
       method: "doctor.memory.status",
       params: { probe: false },
-      timeoutMs,
+      timeoutMs: 8_000,
       sharedStateMode: "read-only",
       config: params.cfg,
     });

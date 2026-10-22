@@ -26,19 +26,23 @@ import { hasConfiguredWebSearchCredential } from "../plugins/web-search-credenti
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
 import { listPotentialMultiUserSignals } from "./audit-extra.sync.js";
 import { collectAuditModelRefs } from "./audit-model-refs.js";
+import { listConfiguredOpenInboundPolicyPaths } from "./audit-open-inbound.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
 
 const SMALL_MODEL_PARAM_B_MAX = 300;
 
-function summarizeGroupPolicy(cfg: OpenClawConfig): {
+function summarizeGroupPolicy(
+  cfg: OpenClawConfig,
+  openInboundPolicies: string[],
+): {
   open: number;
   allowlist: number;
+  openDm: number;
 } {
   const channels = cfg.channels as Record<string, unknown> | undefined;
   if (!channels || typeof channels !== "object") {
-    return { open: 0, allowlist: 0 };
+    return { open: 0, allowlist: 0, openDm: 0 };
   }
-  let open = 0;
   let allowlist = 0;
   for (const value of Object.values(channels)) {
     if (!value || typeof value !== "object") {
@@ -46,13 +50,15 @@ function summarizeGroupPolicy(cfg: OpenClawConfig): {
     }
     const section = value as Record<string, unknown>;
     const policy = section.groupPolicy;
-    if (policy === "open") {
-      open += 1;
-    } else if (policy === "allowlist") {
+    if (policy === "allowlist") {
       allowlist += 1;
     }
   }
-  return { open, allowlist };
+  return {
+    open: openInboundPolicies.filter((path) => path.endsWith(".groupPolicy")).length,
+    allowlist,
+    openDm: openInboundPolicies.filter((path) => !path.endsWith(".groupPolicy")).length,
+  };
 }
 
 function extractAgentIdFromSource(source: string): string | null {
@@ -114,8 +120,9 @@ function isBrowserEnabled(cfg: OpenClawConfig): boolean {
 
 export async function collectAttackSurfaceSummaryFindings(
   cfg: OpenClawConfig,
+  openInboundPolicies = listConfiguredOpenInboundPolicyPaths(cfg),
 ): Promise<SecurityAuditFinding[]> {
-  const group = summarizeGroupPolicy(cfg);
+  const group = summarizeGroupPolicy(cfg, openInboundPolicies);
   const elevated = cfg.tools?.elevated?.enabled !== false;
   const webhooksEnabled = cfg.hooks?.enabled === true;
   const internalHooksEnabled = (await resolveInternalHookSelection(cfg)).configured;
@@ -123,6 +130,8 @@ export async function collectAttackSurfaceSummaryFindings(
 
   const detail =
     `groups: open=${group.open}, allowlist=${group.allowlist}` +
+    `\n` +
+    `direct messages: open=${group.openDm}` +
     `\n` +
     `tools.elevated: ${elevated ? "enabled" : "disabled"}` +
     `\n` +
@@ -163,6 +172,7 @@ export async function collectAttackSurfaceSummaryFindings(
 /** Surface default cross-agent session access, escalating when trust boundaries may differ. */
 export function collectCrossAgentSessionAccessFindings(
   cfg: OpenClawConfig,
+  openInboundPolicies = listConfiguredOpenInboundPolicyPaths(cfg),
 ): SecurityAuditFinding[] {
   const agentIds = listAgentIds(cfg);
   if (agentIds.length < 2 || resolveSessionToolsVisibility(cfg) !== "all") {
@@ -220,7 +230,7 @@ export function collectCrossAgentSessionAccessFindings(
   if (reachers.length === 0) {
     return [];
   }
-  signals.push(...listPotentialMultiUserSignals(cfg));
+  signals.push(...listPotentialMultiUserSignals(cfg, openInboundPolicies));
   const trustDetail =
     signals.length > 0
       ? "\nTrust-boundary signals:\n" +

@@ -1,5 +1,3 @@
-/* @vitest-environment jsdom */
-
 import { afterEach, expect, it, vi } from "vitest";
 import {
   applicationContext,
@@ -8,6 +6,8 @@ import {
 } from "../../../app/context.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
+/* @vitest-environment jsdom */
+import panelLoadingStyles from "../../../styles/panel-loading-skeleton.css?inline";
 import "./chat-detail-panel.tsx";
 
 async function mountAttachment(
@@ -412,7 +412,10 @@ it.each([
     );
     await waitForSolid(() => expect(panel.querySelector("iframe")).not.toBeNull());
     const frame = panel.querySelector("iframe");
-    expect(panel.querySelector("h1, script, style")).toBeNull();
+    expect(panel.querySelector("h1, script")).toBeNull();
+    expect(Array.from(panel.querySelectorAll("style"), (style) => style.textContent)).toEqual([
+      panelLoadingStyles,
+    ]);
     expect(panel.querySelector("pre")?.hidden).toBe(true);
     expect(panel.querySelector("pre")?.textContent).toBe(text);
     const toggle = panel.querySelector<HTMLButtonElement>(

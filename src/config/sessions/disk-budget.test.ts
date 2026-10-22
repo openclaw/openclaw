@@ -81,6 +81,14 @@ async function writeArtifact(filePath: string, content: string, stale = false) {
   }
   return filePath;
 }
+async function writeArtifacts(dir: string, files: Record<string, number>) {
+  for (const [name, bytes] of Object.entries(files)) {
+    await writeArtifact(path.join(dir, name), "x".repeat(bytes));
+  }
+}
+const activeStore = (sessionId = "keep", extra: Partial<SessionEntry> = {}) => ({
+  "agent:main:main": { ...makeEntry(sessionId), ...extra },
+});
 async function evictionFixture(dir: string) {
   const storePath = path.join(dir, "sessions.json");
   const oldKey = "agent:main:subagent:old-worker";
@@ -128,24 +136,16 @@ function refreshPathBeforeSecondStat(targetPath: string): ReturnType<typeof vi.s
 describe("enforceSessionDiskBudget", () => {
   it("excludes migration archives from usage (#106875)", async ({ dir, storePath }) => {
     const databasePath = resolveSqliteTargetFromSessionStorePath(storePath).path;
-    if (!databasePath) {
-      throw new Error("expected a SQLite database path");
-    }
-    await fs.writeFile(databasePath, Buffer.alloc(100));
     // Rollback archives are recovery artifacts outside the session budget;
     // counting them would evict live history to pay for unreclaimable bytes.
-    await fs.writeFile(path.join(dir, "legacy.jsonl.migrated"), Buffer.alloc(4096));
-    await fs.writeFile(path.join(dir, "legacy.jsonl.migrated.2"), Buffer.alloc(4096));
-    for (const kind of ["branch", "openai-codex"]) {
-      await fs.writeFile(
-        path.join(dir, `legacy.jsonl.pre-doctor-${kind}-repair-2026-08-30T10-20-30-000Z.bak`),
-        Buffer.alloc(4096),
-      );
-    }
-
-    const usage = await measureSessionPhysicalDiskUsage(storePath);
-
-    expect(usage).toMatchObject({ totalBytes: 100 });
+    await writeArtifacts(dir, {
+      [path.basename(databasePath)]: 100,
+      "legacy.jsonl.migrated": 4096,
+      "legacy.jsonl.migrated.2": 4096,
+      "legacy.jsonl.pre-doctor-branch-repair-2026-08-30T10-20-30-000Z.bak": 4096,
+      "legacy.jsonl.pre-doctor-openai-codex-repair-2026-08-30T10-20-30-000Z.bak": 4096,
+    });
+    expect(await measureSessionPhysicalDiskUsage(storePath)).toMatchObject({ totalBytes: 100 });
   });
 
   it("counts durable fixed-store agent partitions and their WAL files", async ({ dir }) => {
@@ -178,12 +178,12 @@ describe("enforceSessionDiskBudget", () => {
       dir,
       `old-session.jsonl.deleted.${formatSessionArchiveTimestamp(Date.now() - 24 * 60 * 60 * 1000)}`,
     );
-    const store: Record<string, SessionEntry> = {
-      "agent:main:main": makeEntry(sessionId),
-    };
+    const store = activeStore(sessionId);
     await writeStore(storePath, store);
-    await fs.writeFile(transcriptPath, "k".repeat(80), "utf-8");
-    await fs.writeFile(archivePath, "a".repeat(260), "utf-8");
+    await writeArtifacts(dir, {
+      [path.basename(transcriptPath)]: 80,
+      [path.basename(archivePath)]: 260,
+    });
 
     const result = await enforceBudget(storePath, store, 300, 220);
 
@@ -197,13 +197,13 @@ describe("enforceSessionDiskBudget", () => {
     const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
     const staleTemp = path.join(dir, "sessions.json.111.0f9c1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b.tmp");
     const freshTemp = path.join(dir, "sessions.json.222.1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d.tmp");
-    const store: Record<string, SessionEntry> = {
-      "agent:main:main": makeEntry(sessionId),
-    };
+    const store = activeStore(sessionId);
     await writeStore(storePath, store);
-    await fs.writeFile(transcriptPath, "k".repeat(80), "utf-8");
-    await fs.writeFile(staleTemp, "s".repeat(300), "utf-8");
-    await fs.writeFile(freshTemp, "f".repeat(300), "utf-8");
+    await writeArtifacts(dir, {
+      [path.basename(transcriptPath)]: 80,
+      [path.basename(staleTemp)]: 300,
+      [path.basename(freshTemp)]: 300,
+    });
     await ageFile(staleTemp);
 
     const result = await enforceBudget(storePath, store, 750, 600);
@@ -295,9 +295,7 @@ describe("enforceSessionDiskBudget", () => {
   });
 
   it("revalidates prompt blob age before removal", async ({ dir, storePath }) => {
-    const store: Record<string, SessionEntry> = {
-      "agent:main:active": makeEntry("active"),
-    };
+    const store = { "agent:main:active": makeEntry("active") };
     const hash = "d".repeat(64);
     const blobPath = promptBlob(dir, hash);
     await writeStore(storePath, store);
@@ -314,9 +312,7 @@ describe("enforceSessionDiskBudget", () => {
   });
 
   it("reclaims stale skills prompt blob temps under pressure", async ({ dir, storePath }) => {
-    const store: Record<string, SessionEntry> = {
-      "agent:main:main": makeEntry("keep"),
-    };
+    const store = activeStore();
     const hash = "a".repeat(64);
     const tempPath = `${promptBlob(dir, hash)}.123.11111111-1111-4111-8111-111111111111.tmp`;
     await writeStore(storePath, store);
@@ -374,15 +370,15 @@ describe("enforceSessionDiskBudget", () => {
     const referencedPointer = path.join(dir, "keep.log.trajectory-path.json");
     const orphanRuntime = path.join(dir, "old.trajectory.jsonl");
     const orphanPointer = path.join(dir, "old.trajectory-path.json");
-    const store: Record<string, SessionEntry> = {
-      "agent:main:main": Object.assign(makeEntry(sessionId), { sessionFile: transcriptPath }),
-    };
+    const store = activeStore(sessionId, { sessionFile: transcriptPath });
     await writeStore(storePath, store);
-    await fs.writeFile(transcriptPath, "k".repeat(80), "utf-8");
-    await fs.writeFile(referencedRuntime, "r".repeat(80), "utf-8");
-    await fs.writeFile(referencedPointer, "p".repeat(80), "utf-8");
-    await fs.writeFile(orphanRuntime, "o".repeat(5000), "utf-8");
-    await fs.writeFile(orphanPointer, "q".repeat(5000), "utf-8");
+    await writeArtifacts(dir, {
+      "keep.log": 80,
+      "keep.log.trajectory.jsonl": 80,
+      "keep.log.trajectory-path.json": 80,
+      "old.trajectory.jsonl": 5000,
+      "old.trajectory-path.json": 5000,
+    });
 
     const result = await enforceBudget(storePath, store, 7000, 2000);
 

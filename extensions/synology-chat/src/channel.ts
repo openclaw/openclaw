@@ -9,6 +9,7 @@ import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
   waitUntilAbort,
   createMessageReceiptFromOutboundResults,
+  createChannelDeliveryAccumulator,
   defineChannelMessageAdapter,
   type ChannelMessageSendTextContext,
   type ChannelMessageSendMediaContext,
@@ -183,15 +184,22 @@ function normalizeSynologyChatTarget(target: string): string | undefined {
   return chatUserId === undefined ? undefined : String(chatUserId);
 }
 
-function createSynologyChatSendResult(params: { chatId: string; kind: MessageReceiptPartKind }) {
+function createSynologyChatSendResult(params: {
+  chatId: string;
+  kind: MessageReceiptPartKind;
+  messageIds: string[];
+}) {
   return {
     channel: CHANNEL_ID,
-    // The webhook acknowledges delivery without returning a platform message id.
-    // Keep the empty receipt so a chat id cannot become a fabricated message id.
-    messageId: "",
+    // A bare acknowledgment stays identityless; only recipient-matched post IDs confirm a send.
+    messageId: params.messageIds[0] ?? "",
     target: { kind: "chat" as const, id: params.chatId },
     receipt: createMessageReceiptFromOutboundResults({
-      results: [],
+      results: params.messageIds.map((messageId) => ({
+        channel: CHANNEL_ID,
+        messageId,
+        target: { kind: "chat" as const, id: params.chatId },
+      })),
       threadId: params.chatId,
       kind: params.kind,
     }),
@@ -210,19 +218,20 @@ async function sendSynologyChatText(ctx: Omit<ChannelMessageSendTextContext, "on
     return `<${url.replace(/\\([()])/g, "$1")}|${label.replace(/\\([[\]])/g, "$1")}>`;
   });
   const dispatch = ctx.onPlatformSendDispatch;
-  const ok = await sendMessage(
+  const result = await sendMessage(
     incomingUrl,
     text,
     ctx.to,
     account.allowInsecureSsl,
     ...(dispatch ? [dispatch] : []),
   );
-  if (!ok) {
+  if (!result) {
     throw new Error("Failed to send message to Synology Chat");
   }
   return createSynologyChatSendResult({
     chatId: ctx.to,
     kind: "text",
+    messageIds: result.messageIds,
   });
 }
 
@@ -236,13 +245,18 @@ async function sendSynologyChatMedia(ctx: SynologyMediaContext & { mediaUrl: str
     mediaLocalRoots: ctx.mediaLocalRoots,
     mediaReadFile: ctx.mediaReadFile,
   });
+  const [caption, ...overflow] = chunkTextForOutbound(
+    ctx.text ?? "",
+    SYNOLOGY_CHAT_TEXT_CHUNK_LIMIT,
+  );
   const dispatch = ctx.onPlatformSendDispatch;
   const sendResult = await sendHostedFileUrl(
     incomingUrl,
     prepared.url,
     ctx.to,
     account.allowInsecureSsl,
-    ...(dispatch ? [dispatch] : []),
+    dispatch,
+    caption,
   ).catch(async (error: unknown) => {
     await Promise.allSettled([prepared.cleanup()]);
     throw error;
@@ -262,10 +276,21 @@ async function sendSynologyChatMedia(ctx: SynologyMediaContext & { mediaUrl: str
     // queued this capability. Retain it until bounded expiry for delayed fetches.
     throw new Error("Synology Chat attachment request acceptance could not be confirmed");
   }
-  return createSynologyChatSendResult({
+  const result = createSynologyChatSendResult({
     chatId: ctx.to,
     kind: "media",
+    messageIds: sendResult.messageId ? [sendResult.messageId] : [],
   });
+  const accepted = createChannelDeliveryAccumulator({ kind: "media" });
+  accepted.add(result, caption);
+  try {
+    for (const text of overflow) {
+      accepted.add(await sendSynologyChatText({ ...ctx, text }), text);
+    }
+  } catch (error) {
+    throw accepted.partialError(error);
+  }
+  return result;
 }
 
 const synologyChatMessageAdapter = defineChannelMessageAdapter({
@@ -442,6 +467,17 @@ export const synologyChatPlugin = {
     collectAuditFindings: collectSynologyChatSecurityAuditFindings,
   },
   outbound: {
+    resolveTarget: ({ to }) => {
+      const target = normalizeSynologyChatTarget(to ?? "");
+      return target !== undefined
+        ? { ok: true, to: target }
+        : {
+            ok: false,
+            error: new Error(
+              "Synology Chat requires a numeric user ID (for example, synology-chat:123).",
+            ),
+          };
+    },
     deliveryMode: "gateway" as const,
     chunker: chunkTextForOutbound,
     chunkerMode: "markdown" as const,

@@ -8,9 +8,8 @@ import {
 } from "openclaw/plugin-sdk/native-command-registry";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateCodePoints } from "openclaw/plugin-sdk/text-utility-runtime";
+import { safeParseJson, truncateCodePoints } from "openclaw/plugin-sdk/text-utility-runtime";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
-import type { RawData } from "ws";
 import { resolveClickClackInboundAccess } from "./access.js";
 import { resolveClickClackAccount } from "./accounts.js";
 import {
@@ -43,14 +42,6 @@ function commandArgsHint(spec: NativeCommandSpec): string {
     );
   }
   return spec.acceptsArgs ? "[args]" : "";
-}
-
-function errorStatus(error: unknown): number | undefined {
-  if (!error || typeof error !== "object" || !("status" in error)) {
-    return undefined;
-  }
-  const status = error.status;
-  return typeof status === "number" ? status : undefined;
 }
 
 function mapNativeCommandSpecsToClickClackMenu(
@@ -113,14 +104,6 @@ async function resolveEventMessage(params: {
       return null;
     }
     throw error;
-  }
-}
-
-function parseSocketEvent(data: RawData): ClickClackEvent | null {
-  try {
-    return JSON.parse(rawDataToString(data)) as ClickClackEvent;
-  } catch {
-    return null;
   }
 }
 
@@ -213,7 +196,7 @@ export async function startClickClackGatewayAccount(
       const commands = mapNativeCommandSpecsToClickClackMenu(specs, ctx.log);
       await client.setBotCommands(commands);
     } catch (error) {
-      const status = errorStatus(error);
+      const status = error instanceof ClickClackHttpError ? error.status : undefined;
       const messagePrefix = `[${account.accountId}] ClickClack command menu sync`;
       if (status === 403) {
         ctx.log?.warn?.(
@@ -340,7 +323,7 @@ export async function startClickClackGatewayAccount(
             if (ctx.abortSignal.aborted) {
               return;
             }
-            const event = parseSocketEvent(data);
+            const event = safeParseJson<ClickClackEvent>(rawDataToString(data));
             if (!event) {
               ctx.log?.warn?.(
                 `[${account.accountId}] skipped malformed ClickClack websocket event`,

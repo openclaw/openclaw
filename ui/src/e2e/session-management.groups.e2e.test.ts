@@ -113,6 +113,8 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
+      await chooseSidebarMenuOption(page, "Status", "All");
+      await closeSidebarMenu(page);
       await gateway.waitForRequest("sessions.groups.list");
       await gateway.rejectDeferred("sessions.groups.list", {
         code: "UNAVAILABLE",
@@ -320,7 +322,7 @@ suite.define(() => {
       // matches compact automation names without involving FTS.
       const cronRequestsBeforePalette = (await gateway.getRequests("cron.list")).length;
       const transcriptRequestsBeforePalette = (await gateway.getRequests("sessions.search")).length;
-      await page.getByRole("button", { name: "Open command palette" }).click();
+      await page.getByRole("button", { name: "Command palette" }).click();
       const paletteInput = page.locator(".cmd-palette__input");
       await paletteInput.waitFor({ state: "visible", timeout: 10_000 });
       await paletteInput.fill("nightly invoices");
@@ -332,7 +334,7 @@ suite.define(() => {
 
       // Command palette is the single search surface: metadata and indexed
       // conversation text share one field, and selecting either navigates.
-      await page.getByRole("button", { name: "Open command palette" }).click();
+      await page.getByRole("button", { name: "Command palette" }).click();
       await paletteInput.waitFor({ state: "visible", timeout: 10_000 });
       await paletteInput.fill("view-only handshake");
       await page.clock.runFor(50);
@@ -527,6 +529,9 @@ suite.define(() => {
       const groupMenuButton = researchGroup.getByRole("button", {
         name: "Group options for Research",
       });
+      // The hint skips the group name its header already shows; the accessible
+      // name keeps it so repeated group buttons stay distinguishable.
+      expect(await groupMenuButton.getAttribute("title")).toBe("Group options");
       await researchGroup.locator(".sidebar-recent-sessions__head").hover();
       await groupMenuButton.click();
       await page.getByRole("menuitem", { name: "Rename group" }).waitFor({ state: "visible" });
@@ -738,6 +743,8 @@ suite.define(() => {
 
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-0"));
+      await chooseSidebarMenuOption(page, "Status", "All");
+      await closeSidebarMenu(page);
       const sidebarRows = page.locator(".sidebar-recent-session");
       // Category sections page independently: Alpha and Beta stay visible
       // alongside the first ten rows in the ungrouped section.
@@ -814,9 +821,8 @@ suite.define(() => {
       await alphaToggle.click();
       await expect.poll(() => alpha.locator(".sidebar-recent-session").count()).toBe(0);
 
-      // Header buttons intentionally keep their click behavior; reorder from
-      // the dedicated grip beside them.
-      await gamma.locator(".sidebar-session-group-drag-handle").dragTo(alpha, {
+      // The header label is the drag source; a plain click still toggles it above.
+      await gamma.locator(".sidebar-session-group-toggle").dragTo(alpha, {
         targetPosition: { x: 4, y: 2 },
       });
       const customGroupOrder = () =>
@@ -878,6 +884,8 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
+      await chooseSidebarMenuOption(page, "Status", "All");
+      await closeSidebarMenu(page);
       const firstGroup = page.locator('[data-session-section="category:First group"]');
       await firstGroup.waitFor({ state: "visible" });
 
@@ -932,6 +940,8 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
+      await chooseSidebarMenuOption(page, "Status", "All");
+      await closeSidebarMenu(page);
       await expect
         .poll(async () =>
           (await gateway.getRequests("sessions.list")).some(

@@ -1,6 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
-import { projectPublicSessionEntry } from "../../config/sessions/session-entry-projection.js";
+import { projectExecutionSessionEntry } from "../../config/sessions/session-entry-projection.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
@@ -211,7 +211,7 @@ export async function compactEmbeddedAgentSession(
             abortSignal: params.abortSignal
               ? AbortSignal.any([operationSignal, params.abortSignal])
               : operationSignal,
-            sessionEntry: entry ? projectPublicSessionEntry(entry) : undefined,
+            sessionEntry: entry ? projectExecutionSessionEntry(entry) : undefined,
             agentHarnessId: resolveSessionPinnedHarnessId(entry) ?? params.agentHarnessId,
             modelSelectionLocked: entry?.modelSelectionLocked ?? params.modelSelectionLocked,
             agentId: runtimeTarget.agentId,

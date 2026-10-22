@@ -444,7 +444,7 @@ function CloudConfiguration(props: {
   );
 }
 
-export function CloudChoiceMenuItems(props: { params: CloudChoiceMenuItemsOptions }) {
+function CloudChoiceMenuItems(props: { params: CloudChoiceMenuItemsOptions }) {
   return (
     <For each={props.params.choices} keyed={(choice) => choice.id}>
       {(choice) => (

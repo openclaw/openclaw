@@ -44,7 +44,7 @@ export type ContextEngineProjection = {
 
 export type ContextEngineOperation = "agent-run" | "manual-compact" | "subagent-spawn";
 
-export type ContextEngineRuntimeMode = "normal" | "fallback" | "degraded";
+type ContextEngineRuntimeMode = "normal" | "fallback" | "degraded";
 
 export type ContextEngineSelectionSource = "configured" | "default" | "unknown";
 

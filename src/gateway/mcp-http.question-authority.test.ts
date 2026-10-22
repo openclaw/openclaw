@@ -20,7 +20,6 @@ import {
 import { claimPendingAgentQuestionAnswerFromCaller } from "../agents/harness/gateway-question.js";
 import { withQuestionGateway } from "../agents/harness/gateway-question.test-support.js";
 import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
-import { resetPendingAskUserQuestionsForTest } from "../agents/tools/ask-user-tool.test-support.js";
 import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -35,6 +34,7 @@ import {
   transferMcpLoopbackClientGrant,
 } from "./mcp-grant-store.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
+import { setMinimalCliPrepareDeps } from "./mcp-http.test-support.js";
 import * as toolResolution from "./tool-resolution.js";
 
 vi.mock("../plugins/hook-runner-global.js", () => ({ getGlobalHookRunner: () => null }));
@@ -99,20 +99,12 @@ beforeEach(({ signal }) => {
       },
     ],
   });
-  setCliRunnerPrepareTestDeps({
-    isWorkspaceBootstrapPending: async () => false,
-    makeBootstrapWarn: () => () => {},
-    resolveBootstrapContextForRun: async () => ({ bootstrapFiles: [], contextFiles: [] }),
-    resolveOpenClawReferencePaths: async () => ({ docsPath: null, sourcePath: null }),
-    prepareClaudeCliSkillsPlugin: async () => ({ args: [], cleanup: async () => {} }),
-    loadManifestModelCatalog: () => [],
-  });
+  setMinimalCliPrepareDeps(setCliRunnerPrepareTestDeps);
 });
 
 afterEach(async () => {
   // A timed-out fixture must finish before shared state belongs to the next test.
   await Promise.allSettled(fixtureRuns);
-  resetPendingAskUserQuestionsForTest();
   resetCliRunnerPrepareTestDeps();
   cliBackendsTesting.resetDepsForTest();
   vi.restoreAllMocks();

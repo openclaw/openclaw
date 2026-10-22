@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { racePromiseWithAbortSignal } from "@openclaw/retry";
 import type { invokeNodeClaudeCliRun } from "../../gateway/node-agent-cli-runtime.js";
 import { prepareNodeClaudeSkillRuntime } from "../../gateway/node-claude-skill-runtime.js";
@@ -65,10 +66,7 @@ function parseNodeClaudePayload(result: {
   payload?: unknown;
   payloadJSON?: string | null;
 }): Record<string, unknown> | null {
-  const value = result.payloadJSON ? (JSON.parse(result.payloadJSON) as unknown) : result.payload;
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
+  return asNullableRecord(result.payloadJSON ? JSON.parse(result.payloadJSON) : result.payload);
 }
 
 function parseNodeClaudeResultPayload(record: Record<string, unknown> | null): {

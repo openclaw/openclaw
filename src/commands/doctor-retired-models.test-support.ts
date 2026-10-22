@@ -1,6 +1,8 @@
 import path from "node:path";
 import { afterEach, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -157,11 +159,11 @@ export async function createNativeXaiRetirementFixture() {
   cfg.plugins = { allow: ["xai"], entries: { xai: { enabled: true } } };
   const { repairStaleAgentModelRefs } =
     await import("./doctor/shared/stale-agent-model-ref-repair.js");
-  const repair = (config: OpenClawConfig) =>
-    repairStaleAgentModelRefs(config, {
-      env: state.env,
-      pluginProviderIds: new Set(["xai"]),
-      persistedProviderIdsByAgentId: new Map(),
-    });
+  const repair = (config: OpenClawConfig) => {
+    vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshot").mockReturnValueOnce(
+      createPluginMetadataSnapshotFixture({ plugins: [{ id: "xai", providers: ["xai"] }] }),
+    );
+    return repairStaleAgentModelRefs(config, { env: state.env });
+  };
   return { cfg, state, repair };
 }

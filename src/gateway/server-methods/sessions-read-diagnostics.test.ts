@@ -132,20 +132,24 @@ function controlProjectionClock(afterRow?: () => void) {
     try {
       const recipient = prepare(...args);
       return (...viewer) => {
-        const presentation = recipient(...viewer);
+        const prepared = recipient(...viewer);
+        const presentation = prepared.getPresentation();
         return {
-          ...presentation,
-          snapshot(...rowArgs: Parameters<typeof presentation.snapshot>) {
-            try {
-              return presentation.snapshot(...rowArgs);
-            } finally {
-              presented();
-              clock += 20;
-              cpu.user += 750;
-              cpu.system += 250;
-              afterRow?.();
-            }
-          },
+          ...prepared,
+          getPresentation: () => ({
+            ...presentation,
+            snapshot(...rowArgs: Parameters<typeof presentation.snapshot>) {
+              try {
+                return presentation.snapshot(...rowArgs);
+              } finally {
+                presented();
+                clock += 20;
+                cpu.user += 750;
+                cpu.system += 250;
+                afterRow?.();
+              }
+            },
+          }),
         };
       };
     } finally {

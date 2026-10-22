@@ -350,49 +350,6 @@ function resolveChatAbortDeliverySessionKeys(
   );
 }
 
-function broadcastChatAborted(
-  ops: ChatAbortOps,
-  params: {
-    runId: string;
-    sessionKey: string;
-    agentId?: string;
-    stopReason?: string;
-    message?: Record<string, unknown>;
-    errorMessage?: string;
-    localModelMayStillBeFinishing?: boolean;
-    liveTextGroup?: AbortSignal;
-  },
-) {
-  const { runId, sessionKey, stopReason } = params;
-  const errorMessage = readToolValidationErrorSummary(params.errorMessage);
-  const explicitAgentId = normalizeOptionalLowercaseString(params.agentId);
-  const defaultGlobalAgentId =
-    sessionKey === "global" && !explicitAgentId
-      ? normalizeOptionalLowercaseString(resolveDefaultGlobalAgentId(ops))
-      : undefined;
-  const payloadAgentId =
-    sessionKey === "global" ? (explicitAgentId ?? defaultGlobalAgentId) : explicitAgentId;
-  const payload = {
-    runId,
-    sessionKey,
-    ...(payloadAgentId ? { agentId: payloadAgentId } : {}),
-    seq: (ops.agentRunSeq.get(runId) ?? 0) + 1,
-    state: "aborted" as const,
-    stopReason,
-    ...(params.localModelMayStillBeFinishing ? { localModelMayStillBeFinishing: true } : {}),
-    ...(errorMessage ? { errorMessage } : {}),
-    message: params.message ? { ...params.message, timestamp: Date.now() } : undefined,
-  };
-  const deliverySessionKeys = resolveChatAbortDeliverySessionKeys(ops, sessionKey, payloadAgentId);
-  ops.broadcast("chat", payload, {
-    sessionKeys: deliverySessionKeys,
-    ...(params.liveTextGroup ? { liveText: { group: params.liveTextGroup } } : {}),
-  });
-  for (const deliverySessionKey of deliverySessionKeys) {
-    ops.nodeSendToSession(deliverySessionKey, "chat", payload);
-  }
-}
-
 function resolveDefaultGlobalAgentId(ops: ChatAbortOps): string | undefined {
   const cfg = ops.getRuntimeConfig?.();
   if (!cfg) {
@@ -557,16 +514,37 @@ export function abortChatRunById(
   }
   const removed = ops.removeChatRun(runId, runId, sessionKey);
   if (!params.preserveTerminal && active.adapter.controlUiVisible !== false) {
-    broadcastChatAborted(ops, {
+    const errorMessage = readToolValidationErrorSummary(active.adapter.toolErrorSummary);
+    const explicitAgentId = normalizeOptionalLowercaseString(identity.agentId);
+    const defaultGlobalAgentId =
+      sessionKey === "global" && !explicitAgentId
+        ? normalizeOptionalLowercaseString(resolveDefaultGlobalAgentId(ops))
+        : undefined;
+    const payloadAgentId =
+      sessionKey === "global" ? (explicitAgentId ?? defaultGlobalAgentId) : explicitAgentId;
+    const payload = {
       runId,
       sessionKey,
-      agentId: identity.agentId,
+      ...(payloadAgentId ? { agentId: payloadAgentId } : {}),
+      seq: (ops.agentRunSeq.get(runId) ?? 0) + 1,
+      state: "aborted" as const,
       stopReason,
-      message,
-      errorMessage: active.adapter.toolErrorSummary,
-      localModelMayStillBeFinishing,
-      liveTextGroup,
+      ...(localModelMayStillBeFinishing ? { localModelMayStillBeFinishing: true } : {}),
+      ...(errorMessage ? { errorMessage } : {}),
+      message: message ? { ...message, timestamp: Date.now() } : undefined,
+    };
+    const deliverySessionKeys = resolveChatAbortDeliverySessionKeys(
+      ops,
+      sessionKey,
+      payloadAgentId,
+    );
+    ops.broadcast("chat", payload, {
+      sessionKeys: deliverySessionKeys,
+      ...(liveTextGroup ? { liveText: { group: liveTextGroup } } : {}),
     });
+    for (const deliverySessionKey of deliverySessionKeys) {
+      ops.nodeSendToSession(deliverySessionKey, "chat", payload);
+    }
   }
   if (!params.preserveTerminal) {
     terminal?.publish({

@@ -48,7 +48,7 @@ function createModelsRouter(selectedId: string | null = "main") {
   const request = vi
     .spyOn(store.gateway.snapshot.client!, "request")
     .mockImplementation(responseFor);
-  store.current().opts.onHello?.({ ...modelsHello });
+  store.current().testOptions.onHello?.({ ...modelsHello });
   // Match bootstrap's subscription order; the roster publishes before selection reconciles.
   const agents = createAgentCapability(store.gateway);
   const chatSelection = createAgentSelectionCapability(store.gateway, agents);
@@ -91,9 +91,9 @@ function createModelsRouter(selectedId: string | null = "main") {
     data: () => router.getState().matches[0]?.data,
     catalog: () =>
       peekModelCatalog(store.gateway.snapshot.client!, { agentId: selection.state.selectedId! }),
-    hello: () => store.current().opts.onHello?.({ ...modelsHello }),
+    hello: () => store.current().testOptions.onHello?.({ ...modelsHello }),
     disconnect: () =>
-      store.current().opts.onClose?.({ code: 1012, reason: "restart", willRetry: true }),
+      store.current().testOptions.onClose?.({ code: 1012, reason: "restart", willRetry: true }),
   };
 }
 
@@ -225,7 +225,7 @@ it.each(["import", "roster"] as const)(
   async (boundary) => {
     const { h, admitted } = await atBoundary(boundary, (current) => {
       const original = current.gateway.snapshot;
-      current.current().opts.onRecoveryScopeChange?.();
+      current.current().testOptions.onRecoveryScopeChange?.();
       current.chatSelection.setScope(boundary === "import" ? null : "research");
       expect(current.gateway.snapshot).not.toBe(original);
       expect(current.gateway.snapshot.hello).toBe(original.hello);

@@ -21,12 +21,8 @@ import { getRetryAttemptErrors } from "../infra/retry-attempt-errors.js";
 import { retryAsync } from "../infra/retry.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import {
-  AgentDatabaseAdmissionError,
-  listAgentDatabaseAdmissionRefusals,
-  readAgentDatabaseAdmissionRefusal,
-} from "../state/agent-database-admission.js";
-import { waitForAgentDatabasePreparation } from "../state/agent-database-preparation-context.js";
+import { AgentDatabaseAdmissionError } from "../state/agent-database-admission.js";
+import { recoverAfterAgentDatabasePreparation } from "../state/agent-database-preparation-recovery.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { CHAT_INPUT_RECOVERY_MAX_AGE_MS } from "./chat-input-recovery-source.js";
 import type { RestoredGatewayOperatorAuthority } from "./operator-run-recovery.js";
@@ -54,33 +50,17 @@ export async function recoverSessionSendDeliveries(
     return;
   }
   const config = context.getRuntimeConfig();
-  const pendingAgents = listAgentDatabaseAdmissionRefusals()
-    .filter((refusal) => refusal.code === "agent-database-inspection-pending")
-    .map((refusal) => refusal.agentId);
   const replaySession = pLimit(4);
-  await recoverSessionSendDeliveriesForAgents(context, config, signal, replaySession, startupTrace);
-  // Discovery skips pending stores. Join their existing admission owner before rescanning.
-  const rescans = await Promise.allSettled(
-    pendingAgents.map(async (agentId) => {
-      await waitForAgentDatabasePreparation(agentId, { signal });
-      signal.throwIfAborted();
-      if (!readAgentDatabaseAdmissionRefusal(agentId)) {
-        await recoverSessionSendDeliveriesForAgents(
-          context,
-          context.getRuntimeConfig(),
-          signal,
-          replaySession,
-          startupTrace,
-          new Set([agentId]),
-        );
-      }
-    }),
+  await recoverAfterAgentDatabasePreparation(signal, (agentIds) =>
+    recoverSessionSendDeliveriesForAgents(
+      context,
+      agentIds ? context.getRuntimeConfig() : config,
+      signal,
+      replaySession,
+      startupTrace,
+      agentIds,
+    ),
   );
-  for (const result of rescans) {
-    if (result.status === "rejected") {
-      throw result.reason;
-    }
-  }
 }
 
 async function recoverSessionSendDeliveriesForAgents(
@@ -95,6 +75,24 @@ async function recoverSessionSendDeliveriesForAgents(
   if (!runtime) {
     return;
   }
+  const logSkippedInput = (
+    input: SessionPendingInput,
+    skipReason:
+      | "predecessor-not-ready"
+      | "state-not-interrupted"
+      | "missing-recovery-metadata"
+      | "expired",
+  ) => {
+    context.logGateway.debug(
+      `Pending input replay: ${JSON.stringify({
+        inputHash: sha256HexPrefixCore(input.id, 16),
+        kind: readSessionSendDelivery(input.message) ? "peer" : "chat",
+        outcome: "skipped",
+        state: input.state,
+        skipReason,
+      })}`,
+    );
+  };
   const assertCurrent = () => {
     signal.throwIfAborted();
     if (context.getRuntimeConfig() !== config) {
@@ -207,6 +205,9 @@ async function recoverSessionSendDeliveriesForAgents(
               });
               assertCurrent();
               if (recovery.started === 0 && recovery.settled === 0) {
+                for (const input of pending) {
+                  logSkippedInput(input, "predecessor-not-ready");
+                }
                 return;
               }
             }
@@ -227,19 +228,28 @@ async function recoverSessionSendDeliveriesForAgents(
               assertCurrent();
               const delivery = readSessionSendDelivery(input.message);
               if (input.state !== "interrupted") {
+                logSkippedInput(input, "state-not-interrupted");
                 continue;
               }
-              if (
-                !delivery &&
-                (!input.message["__openclaw"]?.chatInputRecovery ||
-                  Date.now() - input.acceptedAt > CHAT_INPUT_RECOVERY_MAX_AGE_MS)
-              ) {
+              if (!delivery && !input.message["__openclaw"]?.chatInputRecovery) {
+                logSkippedInput(input, "missing-recovery-metadata");
+                continue;
+              }
+              if (!delivery && Date.now() - input.acceptedAt > CHAT_INPUT_RECOVERY_MAX_AGE_MS) {
+                logSkippedInput(input, "expired");
                 continue;
               }
               let attempts = 0;
               const trace = createPendingInputRecoveryTrace();
               let outcome: "accepted" | "stale" | "cancelled" | "blocked" | "aborted" = "stale";
               let reason: ReturnType<typeof waitReason> | "none" = "none";
+              let staleReason:
+                | "session-changed"
+                | "input-missing"
+                | "input-changed"
+                | "state-not-interrupted"
+                | "consumed"
+                | undefined;
               try {
                 await retry(
                   async () => {
@@ -267,6 +277,15 @@ async function recoverSessionSendDeliveriesForAgents(
                         row.consumed_event_id != null ||
                         row.message_json !== JSON.stringify(input.message)
                       ) {
+                        staleReason = !retained?.snapshot.current
+                          ? "session-changed"
+                          : !row
+                            ? "input-missing"
+                            : row.state !== "interrupted"
+                              ? "state-not-interrupted"
+                              : row.consumed_event_id != null
+                                ? "consumed"
+                                : "input-changed";
                         return;
                       }
                       const assertInputCurrent = () => {
@@ -443,7 +462,9 @@ async function recoverSessionSendDeliveriesForAgents(
                 const timings = trace.finish();
                 context.logGateway.info(
                   `Pending input replay: ${JSON.stringify({
+                    inputHash: sha256HexPrefixCore(input.id, 16),
                     kind: delivery ? "peer" : "chat",
+                    ...(staleReason ? { staleReason } : {}),
                     outcome,
                     waitReason:
                       reason === "none" && timings.retryWaitMs > 0 ? "transient-admission" : reason,

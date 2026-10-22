@@ -67,9 +67,6 @@ function createDatabaseOptions() {
 }
 
 type Database = ReturnType<typeof createDatabaseOptions>;
-function readSource(database: Database) {
-  return captureSessionUpstreamLinkReadSource(captureOpenClawStateWorkerContext(database));
-}
 function readLink(database: Database, key: string) {
   return readInDatabase(openOpenClawStateDatabase(database).db, key, "main");
 }
@@ -220,7 +217,7 @@ describe("session upstream links", () => {
       });
       const second = upsertAsync({ ...input, threadId: "loser" }, { ...database, ifAbsent: true });
       expect(await Promise.all([first, second])).toEqual([true, false]);
-      const source = readSource(database);
+      const source = captureSessionUpstreamLinkReadSource();
       const remove = (expectedLink = expected) =>
         deleteAsync(input.sessionKey, input.agentId, {
           ...database,
@@ -293,7 +290,7 @@ describe("session upstream links", () => {
           expect(notices[0]?.[0]).toContain("first January 2027 stable release");
           sql.clear();
         }
-        const source = readSource(database);
+        const source = captureSessionUpstreamLinkReadSource();
         const read = () => prepareLink(source, input.sessionKey, input.agentId);
         expect(await read()).toMatchObject(input);
         if (replaced) {
@@ -336,7 +333,7 @@ describe("session upstream links", () => {
     const database = createDatabaseOptions();
     const sourceKey = "agent:main:adopted:source";
     upsertLink(sourceKey, "claude", database);
-    const reader = readSource(database);
+    const reader = captureSessionUpstreamLinkReadSource();
     const source = (await prepareLink(reader, sourceKey, "main"))!;
     const child = { ...source, sessionKey: "agent:main:adopted:child" };
     const sourceCurrent = {

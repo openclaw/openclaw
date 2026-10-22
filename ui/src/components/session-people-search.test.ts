@@ -63,7 +63,9 @@ describe("searchable session people", () => {
     await waitForSolid(() =>
       expect(root.querySelector(".chat-pane__sharing-panel")?.matches(":popover-open")).toBe(true),
     );
-    const search = root.querySelector<HTMLInputElement>('input[type="search"]');
+    root.querySelector<HTMLButtonElement>('[aria-label="Search people…"]')!.click();
+    flush();
+    const search = root.querySelector<HTMLInputElement>("input[data-search]");
     expect(search).not.toBeNull();
     search!.focus();
     search!.value = "Person 0100";
@@ -73,9 +75,16 @@ describe("searchable session people", () => {
     );
     expect(root.querySelector("input[type='search']")).toBe(search);
     expect(document.activeElement).toBe(search);
-    const member = root.querySelector<HTMLButtonElement>('[data-value="member:person-100"]')!;
-    expect(member.querySelector(".session-menu__check")).not.toBeNull();
-    member.click();
-    await waitForFast(() => expect(onMemberChange).toHaveBeenCalledWith("person-100", false));
+    expect(
+      root.querySelector('[data-value="member:person-100"]')?.getAttribute("aria-checked"),
+    ).toBe("true");
+    const selectedMember = root.querySelector<HTMLButtonElement>(
+      '[data-value="member:person-100"]',
+    )!;
+    selectedMember.focus();
+    selectedMember.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+    );
+    await waitForSolid(() => expect(onMemberChange).toHaveBeenCalledWith("person-100", false));
   });
 });

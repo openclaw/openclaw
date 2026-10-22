@@ -155,12 +155,6 @@ describe("connectApnsHttp2Session", () => {
     expect(connectSpy).not.toHaveBeenCalled();
   });
 
-  it("normalizes the default APNs HTTPS port", async () => {
-    await connect({ authority: "https://api.push.apple.com:443" });
-
-    expect(connectSpy).toHaveBeenCalledWith("https://api.push.apple.com");
-  });
-
   it("rejects APNs authorities with non-origin URL components", async () => {
     await expect(connect({ authority: "https://token@api.push.apple.com" })).rejects.toThrow(
       "Unsupported APNs authority",
@@ -266,8 +260,9 @@ describe("connectApnsHttp2Session", () => {
 
   it("ignores ambient proxy env when managed proxy is inactive", async () => {
     vi.stubEnv("HTTPS_PROXY", "http://ambient.example:8080");
-    const session = await connect();
+    const session = await connect({ authority: "https://api.push.apple.com:443" });
     expect(session).toBe(fakeSession);
+    expect(connectSpy).toHaveBeenCalledWith("https://api.push.apple.com");
     expect(tunnelSpy).not.toHaveBeenCalled();
   });
 

@@ -5,7 +5,7 @@ import {
   restoreBridgedRouteLocation,
   routePageSpec,
 } from "../../app-route-paths.ts";
-import type { SolidRouteProps } from "../../app-route-types.ts";
+import type { SolidRouteProps } from "../../app-route-types.tsx";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 
 function sessionActivityRouteLocation(location: RouteLocation): RouteLocation {
@@ -21,10 +21,9 @@ export const page = definePage({
   loader: (_context, { location }) => sessionActivityRouteLocation(location),
   component: () =>
     import("./activity-page.ts").then((module) => ({
-      header: true,
       renderSolid: (props: SolidRouteProps<RouteLocation>) =>
         createComponent(ShellLayoutBoundary, {
-          traits: { activityPage: true, toolbarHeader: true, settingsWorkspace: true },
+          traits: { activityPage: true, settingsWorkspace: true },
           get children() {
             return createComponent(module.ActivityPage, {
               get routeLocation() {

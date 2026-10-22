@@ -18,54 +18,29 @@ const preparedBilling: PreparedDecisionBillingFacts = {
   model: "native",
   billing: { unit: "tokens", source: "provider-docs", usdPerMillion: { input: 2, output: 0 } },
 };
+const requestBilling: PreparedDecisionBillingFacts = {
+  ...preparedBilling,
+  billing: { unit: "requests", source: "provider-docs" },
+};
+const finalize = (rawUsage: unknown, facts: PreparedDecisionBillingFacts | undefined) =>
+  finalizePluginModelUsage({ cfg: {}, estimate: "none", target, preparedBilling: facts, rawUsage });
 
 it.each([
-  { name: "known route", facts: preparedBilling, usage: { inputTokens: 100 }, cost: 0.0002 },
-  {
-    name: "provider billed zero",
-    facts: preparedBilling,
-    usage: { inputTokens: 100, costUsd: 0 },
-    cost: 0,
+  ["known route", preparedBilling, {}, 0.0002],
+  ["provider billed zero", preparedBilling, { costUsd: 0 }, 0],
+  ["rewritten provider", { ...preparedBilling, provider: "other" }, {}, undefined],
+  ["rewritten model", { ...preparedBilling, model: "other" }, {}, undefined],
+  ["unknown route", undefined, {}, undefined],
+  ["native units", preparedBilling, { units: { unit: "decision-units", amount: 5 } }, undefined],
+  ["request billing", requestBilling, {}, undefined],
+] as const)(
+  "records accepted usage without inventing token prices: %s",
+  (_name, facts, usage, cost) => {
+    const result = finalize({ inputTokens: 100, ...usage }, facts);
+    expect(result.inputTokens).toBe(100);
+    expect(result.costUsd).toBe(cost);
   },
-  {
-    name: "rewritten provider",
-    facts: { ...preparedBilling, provider: "other" },
-    usage: { inputTokens: 100 },
-    cost: undefined,
-  },
-  {
-    name: "rewritten model",
-    facts: { ...preparedBilling, model: "other" },
-    usage: { inputTokens: 100 },
-    cost: undefined,
-  },
-  { name: "unknown route", facts: undefined, usage: { inputTokens: 100 }, cost: undefined },
-  {
-    name: "native units",
-    facts: preparedBilling,
-    usage: { inputTokens: 100, units: { unit: "decision-units", amount: 5 } },
-    cost: undefined,
-  },
-  {
-    name: "request billing",
-    facts: {
-      ...preparedBilling,
-      billing: { unit: "requests", source: "provider-docs" },
-    } satisfies PreparedDecisionBillingFacts,
-    usage: { inputTokens: 100 },
-    cost: undefined,
-  },
-])("records accepted usage without inventing token prices: $name", ({ facts, usage, cost }) => {
-  const result = finalizePluginModelUsage({
-    cfg: {},
-    estimate: "none",
-    target,
-    preparedBilling: facts,
-    rawUsage: usage,
-  });
-  expect(result.inputTokens).toBe(100);
-  expect(result.costUsd).toBe(cost);
-});
+);
 
 it("emits one sparse trusted observation for explicit zero without fabricating token counts", () => {
   const events: DiagnosticEventPayload[] = [];
@@ -77,15 +52,7 @@ it("emits one sparse trusted observation for explicit zero without fabricating t
     }),
   );
   try {
-    expect(
-      finalizePluginModelUsage({
-        cfg: {},
-        estimate: "none",
-        target,
-        rawUsage: { costUsd: 0 },
-        preparedBilling,
-      }),
-    ).toEqual({ costUsd: 0 });
+    expect(finalize({ costUsd: 0 }, preparedBilling)).toEqual({ costUsd: 0 });
     expect(events).toEqual([
       expect.objectContaining({
         type: "model.usage",

@@ -300,7 +300,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
           );
         }
         if (options.streamingBehavior === "followUp") {
-          await this.queueFollowUp(expandedText, currentImages);
+          this.queueFollowUp(expandedText, currentImages);
         } else {
           const notify = this.queueSteer(
             this.createSteeringMessage(expandedText, currentImages),
@@ -570,7 +570,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       this.throwIfExtensionCommand(text);
     }
 
-    await this.queueFollowUp(this.expandPrompt(text), images);
+    this.queueFollowUp(this.expandPrompt(text), images);
   }
 
   private createSteeringMessage(
@@ -610,7 +610,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
   }
 
   /** Queue pre-expanded follow-up input without an extension-command check. */
-  private async queueFollowUp(text: string, images?: ImageContent[]): Promise<void> {
+  private queueFollowUp(text: string, images?: ImageContent[]): void {
     const message = this.createUserMessage(text, images);
     this.trackQueuedUserMessage(message, "followUp", text);
     this.emitQueueUpdate();

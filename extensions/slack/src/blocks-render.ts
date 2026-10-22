@@ -62,18 +62,6 @@ export type SlackBlockRenderOptions = {
   selectIndexOffset?: number;
 };
 
-function resolveSlackButtonStyle(
-  style: "primary" | "secondary" | "success" | "danger" | undefined,
-) {
-  if (style === "primary" || style === "danger") {
-    return style;
-  }
-  if (style === "success") {
-    return "primary";
-  }
-  return undefined;
-}
-
 type SlackActionTarget =
   | { kind: "approval"; value: string }
   | { kind: "callback"; value: string }
@@ -294,17 +282,87 @@ function compileSlackPresentationBlocks(
     }
     if (block.type === "buttons" || block.type === "select") {
       const index = controlIndices[block.type] + 1;
-      const elements =
-        block.type === "buttons"
-          ? buildSlackPresentationButtonElements(
-              block,
-              index,
-              options.questionOptionIndices,
-              requireComplete,
-            )
-          : buildSlackPresentationSelectElements(block, index, requireComplete);
-      if (!elements) {
-        return undefined;
+      let elements: ActionsBlock["elements"];
+      if (block.type === "buttons") {
+        let complete = true;
+        const buttons = block.buttons.flatMap((button, choiceIndex) => {
+          const target = resolveSlackButtonTarget(button, options.questionOptionIndices);
+          if (
+            !target ||
+            (target.kind === "link"
+              ? target.url.length > SLACK_BUTTON_URL_MAX
+              : target.value.length > SLACK_BUTTON_VALUE_MAX)
+          ) {
+            if (requireComplete && !isSlackTextFallbackButton(button)) {
+              complete = false;
+            }
+            return [];
+          }
+          if (button.label.length > SLACK_ACTION_LABEL_MAX) {
+            complete = false;
+          }
+          const style =
+            button.style === "success"
+              ? "primary"
+              : button.style === "primary" || button.style === "danger"
+                ? button.style
+                : undefined;
+          return [
+            {
+              type: "button" as const,
+              // Slack emits block_actions even for URL buttons; link-only actions must be ignored.
+              action_id: `${SLACK_BUTTON_ACTION_IDS[target.kind]}:${index}:${choiceIndex + 1}`,
+              text: buildSlackPlainText(button.label, SLACK_ACTION_LABEL_MAX),
+              ...(target.kind === "link" ? { url: target.url } : { value: target.value }),
+              ...(style ? { style } : {}),
+            },
+          ];
+        });
+        if (requireComplete && (!complete || buttons.length > SLACK_ACTION_BLOCK_ELEMENTS_MAX)) {
+          return undefined;
+        }
+        elements = buttons.slice(0, SLACK_ACTION_BLOCK_ELEMENTS_MAX);
+      } else {
+        const placeholder = normalizeOptionalString(block.placeholder) ?? "Choose an option";
+        const candidates = block.options.map((option) => {
+          const target = resolveSlackOptionTarget(option);
+          return target ? { label: option.label, ...target } : undefined;
+        });
+        if (
+          requireComplete &&
+          (placeholder.length > SLACK_ACTION_LABEL_MAX ||
+            block.options.length > SLACK_STATIC_SELECT_OPTIONS_MAX ||
+            (block.placeholder && block.placeholder.length > SLACK_ACTION_LABEL_MAX) ||
+            !candidates.every(
+              (option) =>
+                option &&
+                option.label.length <= SLACK_ACTION_LABEL_MAX &&
+                option.value.length <= SLACK_OPTION_VALUE_MAX,
+            ) ||
+            new Set(candidates.map((option) => option?.kind)).size !== 1)
+        ) {
+          return undefined;
+        }
+        const selectOptions = candidates
+          .flatMap((option) =>
+            option && option.value.length <= SLACK_OPTION_VALUE_MAX ? [option] : [],
+          )
+          .slice(0, SLACK_STATIC_SELECT_OPTIONS_MAX);
+        const optionKinds = new Set(selectOptions.map((option) => option.kind));
+        elements =
+          selectOptions.length > 0 && optionKinds.size === 1
+            ? [
+                {
+                  type: "static_select",
+                  action_id: `${SLACK_SELECT_ACTION_IDS[selectOptions[0]!.kind]}:${index}`,
+                  placeholder: buildSlackPlainText(placeholder, SLACK_ACTION_LABEL_MAX),
+                  options: selectOptions.map((option) => ({
+                    text: buildSlackPlainText(option.label, SLACK_ACTION_LABEL_MAX),
+                    value: option.value,
+                  })),
+                },
+              ]
+            : [];
       }
       if (elements.length > 0) {
         controlIndices[block.type] = index;
@@ -346,47 +404,6 @@ function compileSlackPresentationBlocks(
   return blocks;
 }
 
-function buildSlackPresentationButtonElements(
-  block: MessagePresentationButtonsBlock,
-  buttonIndex: number,
-  questionOptionIndices: AskUserQuestionOptionIndices | undefined,
-  requireComplete: boolean,
-): ActionsBlock["elements"] | undefined {
-  let complete = true;
-  const elements = block.buttons.flatMap((button, choiceIndex) => {
-    const target = resolveSlackButtonTarget(button, questionOptionIndices);
-    if (
-      !target ||
-      (target.kind === "link"
-        ? target.url.length > SLACK_BUTTON_URL_MAX
-        : target.value.length > SLACK_BUTTON_VALUE_MAX)
-    ) {
-      if (requireComplete && !isSlackTextFallbackButton(button)) {
-        complete = false;
-      }
-      return [];
-    }
-    if (button.label.length > SLACK_ACTION_LABEL_MAX) {
-      complete = false;
-    }
-    const style = resolveSlackButtonStyle(button.style);
-    return [
-      {
-        type: "button" as const,
-        // Slack emits block_actions even for URL buttons; link-only actions must be ignored.
-        action_id: `${SLACK_BUTTON_ACTION_IDS[target.kind]}:${buttonIndex}:${choiceIndex + 1}`,
-        text: buildSlackPlainText(button.label, SLACK_ACTION_LABEL_MAX),
-        ...(target.kind === "link" ? { url: target.url } : { value: target.value }),
-        ...(style ? { style } : {}),
-      },
-    ];
-  });
-  if (requireComplete && (!complete || elements.length > SLACK_ACTION_BLOCK_ELEMENTS_MAX)) {
-    return undefined;
-  }
-  return elements.slice(0, SLACK_ACTION_BLOCK_ELEMENTS_MAX);
-}
-
 /** Admit tables together: one invalid or over-budget table keeps every table on the text path. */
 function buildSlackPresentationTables(
   presentation: MessagePresentation,
@@ -408,48 +425,4 @@ function buildSlackPresentationTables(
     tables.push(table);
   }
   return tables;
-}
-
-function buildSlackPresentationSelectElements(
-  block: MessagePresentationSelectBlock,
-  selectIndex: number,
-  requireComplete: boolean,
-): ActionsBlock["elements"] | undefined {
-  const placeholder = normalizeOptionalString(block.placeholder) ?? "Choose an option";
-  const candidates = block.options.map((option) => {
-    const target = resolveSlackOptionTarget(option);
-    return target ? { label: option.label, ...target } : undefined;
-  });
-  if (
-    requireComplete &&
-    (placeholder.length > SLACK_ACTION_LABEL_MAX ||
-      block.options.length > SLACK_STATIC_SELECT_OPTIONS_MAX ||
-      (block.placeholder && block.placeholder.length > SLACK_ACTION_LABEL_MAX) ||
-      !candidates.every(
-        (option) =>
-          option &&
-          option.label.length <= SLACK_ACTION_LABEL_MAX &&
-          option.value.length <= SLACK_OPTION_VALUE_MAX,
-      ) ||
-      new Set(candidates.map((option) => option?.kind)).size !== 1)
-  ) {
-    return undefined;
-  }
-  const options = candidates
-    .flatMap((option) => (option && option.value.length <= SLACK_OPTION_VALUE_MAX ? [option] : []))
-    .slice(0, SLACK_STATIC_SELECT_OPTIONS_MAX);
-  const optionKinds = new Set(options.map((option) => option.kind));
-  return options.length > 0 && optionKinds.size === 1
-    ? [
-        {
-          type: "static_select",
-          action_id: `${SLACK_SELECT_ACTION_IDS[options[0]!.kind]}:${selectIndex}`,
-          placeholder: buildSlackPlainText(placeholder, SLACK_ACTION_LABEL_MAX),
-          options: options.map((option) => ({
-            text: buildSlackPlainText(option.label, SLACK_ACTION_LABEL_MAX),
-            value: option.value,
-          })),
-        },
-      ]
-    : [];
 }

@@ -43,7 +43,7 @@ function projectionInput(
     knownGroups: [],
     collapsedSections: new Set(),
     emptyGroupsMode: "filtering",
-    ownerFiltered: false,
+    ownerFilter: null,
     visibleSessionLimits: new Map(),
     sortMode: "created",
     statusFilter: "active",
@@ -74,6 +74,69 @@ function subtitle(
     ...overrides,
   });
 }
+
+it.each(["active", "archived", "snoozed"] as const)(
+  "hides empty native groups with the %s status filter and preserves other section owners",
+  (statusFilter) => {
+    const rows = [sessionRow("matching", { category: "Matching" })];
+    const input = {
+      statusFilter,
+      knownGroups: ["Matching", "Empty"],
+      catalogIds: ["external"],
+      collapsedSections: new Set(["category:Matching"]),
+    };
+    const filtered = project(rows, input);
+    expect(filtered.sections.map(({ id }) => id)).toEqual([
+      "category:Matching",
+      "catalog:external",
+    ]);
+    expect(filtered.sections[0]).toMatchObject({ totalRowCount: 1, visibleRowCount: 0 });
+
+    const unfiltered = project(rows, { ...input, statusFilter: "all" });
+    expect(unfiltered.sections.map(({ id }) => id)).toContain("category:Empty");
+    expect(unfiltered.sections[0]).toMatchObject({ totalRowCount: 1, visibleRowCount: 0 });
+    expect(
+      project(rows, { ...input, emptyGroupsMode: "never" }).sections.map(({ id }) => id),
+    ).toContain("category:Empty");
+  },
+);
+
+it("retains unloaded group destinations until the session list establishes their contents", () => {
+  const input = { knownGroups: ["Awaiting sessions"], statusFilter: "active" as const };
+  expect(project([], { ...input, listLoaded: false }).sections.map(({ id }) => id)).toContain(
+    "category:Awaiting sessions",
+  );
+  expect(project([], input).sections.map(({ id }) => id)).not.toContain(
+    "category:Awaiting sessions",
+  );
+});
+
+it("renders a single selected owner's sessions inline instead of under a person header", () => {
+  const owned = (key: string, id: string) =>
+    sessionRow(key, {
+      owner: { actor: { type: "human", id, identity: { type: "profile", id } } },
+    });
+  const headers = (rows: SidebarRecentSession[], overrides: Partial<ProjectionInput>) =>
+    project(rows, { grouping: "person", selfOwnerId: "patrick", ...overrides })
+      .sections.filter((section) => section.id.startsWith("person:"))
+      .map((section) => [section.id, section.renderHeader, section.visibleRowCount]);
+
+  expect(
+    headers([owned("mine", "patrick")], {
+      ownerFilter: "owner",
+      collapsedSections: new Set(["person:profile:patrick"]),
+    }),
+  ).toEqual([["person:profile:patrick", false, 1]]);
+  expect(
+    headers([owned("mine", "patrick"), owned("theirs", "ada")], { ownerFilter: "involvingMe" }),
+  ).toEqual([
+    ["person:profile:patrick", true, 1],
+    ["person:profile:ada", true, 1],
+  ]);
+  expect(headers([owned("mine", "patrick")], { ownerFilter: null })).toEqual([
+    ["person:profile:patrick", true, 1],
+  ]);
+});
 
 it("prunes only absent rows when the bounded registry exceeds its cap", () => {
   const original = Array.from({ length: 1_000 }, (_, index) => ({ key: `original-${index}` }));
@@ -115,25 +178,20 @@ it("reveals newly added children while preserving a manual collapse through ordi
   expect(projection.children.isFullyShown(parent.key)).toBe(true);
 });
 
-it("keeps existing children collapsed when the list replaces a route placeholder", () => {
-  project([sessionRow("parent")], { listLoaded: false });
-  const parent = parentRow("first", "second");
-  project([parent]);
-  expect(projection.children.isExpanded(parent.key)).toBe(false);
-
-  project([parentRow("first", "second", "third")]);
-  expect(projection.children.isExpanded(parent.key)).toBe(true);
-});
-
-it("baselines restored collapsed children before revealing later additions", () => {
-  const parent = parentRow("first");
-  projection.children.restore([{ key: parent.key, childrenDisplayMode: "collapsed-by-user" }]);
-  project([parent]);
-  expect(projection.children.isExpanded(parent.key)).toBe(false);
-
-  project([parentRow("first", "second")]);
-  expect(projection.children.isExpanded(parent.key)).toBe(true);
-});
+it.each(["route placeholder", "restored collapse"])(
+  "baselines children from a %s before revealing additions",
+  (origin) => {
+    if (origin === "route placeholder") {
+      project([sessionRow("parent")], { listLoaded: false });
+    } else {
+      projection.children.restore([{ key: "parent", childrenDisplayMode: "collapsed-by-user" }]);
+    }
+    project([parentRow("first")]);
+    expect(projection.children.isExpanded("parent")).toBe(false);
+    project([parentRow("first", "second")]);
+    expect(projection.children.isExpanded("parent")).toBe(true);
+  },
+);
 
 it("preserves restored expansion through the live handoff but clears it on a later connection", () => {
   const rows = [
@@ -181,39 +239,30 @@ it("forgets expansion when a session disappears before returning", () => {
   expect(projection.children.isExpanded(parent.key)).toBe(false);
 });
 
-it("holds the subtitle across a run-id rotation while the session stays running", () => {
-  // Live repro: queued->running rotates activeRunIds; the row must not blank.
-  const running = runningRow();
-  narrate(running, "Pre-rotation activity");
-  const rotated = runningRow({ activeRunIds: ["run-two"] });
-  project([rotated]);
-  expect(subtitle(rotated).subtitle).toBe("Pre-rotation activity");
-});
-
-it("floors ambient subtitle replacement at the minimum display time", () => {
-  const clock = vi.spyOn(Date, "now").mockReturnValue(0);
-  const running = runningRow();
-  narrate(running, "First activity");
-
-  clock.mockReturnValue(500);
-  narrate(running, "Second activity");
-  expect(subtitle(running).subtitle).toBe("First activity");
-
-  clock.mockReturnValue(2_500);
-  narrate(running, "Second activity");
-  expect(subtitle(running).subtitle).toBe("Second activity");
-});
-
-it("lets operator-critical text replace a held subtitle immediately", () => {
-  const clock = vi.spyOn(Date, "now").mockReturnValue(0);
-  const running = runningRow();
-  narrate(running, "Ambient activity");
-
-  clock.mockReturnValue(200);
-  const needsInput = runningRow({ agentStatusNote: "Blocked on operator input" });
-  project([needsInput]);
-  expect(subtitle(needsInput).subtitle).toBe("Blocked on operator input");
-});
+it.each([
+  ["run-id rotation", { activeRunIds: ["run-two"] }, undefined, "First activity"],
+  ["ambient replacement", {}, "Second activity", "First activity"],
+  ["operator-critical replacement", { agentStatusNote: "Blocked" }, undefined, "Blocked"],
+] satisfies [string, Partial<SidebarRecentSession>, string | undefined, string][])(
+  "holds subtitles through %s according to urgency",
+  (_name, fields, nextLine, expected) => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(0);
+    narrate(runningRow(), "First activity");
+    const next = runningRow(fields);
+    clock.mockReturnValue(200);
+    if (nextLine) {
+      narrate(next, nextLine);
+    } else {
+      project([next]);
+    }
+    expect(subtitle(next).subtitle).toBe(expected);
+    if (nextLine) {
+      clock.mockReturnValue(2_500);
+      narrate(next, nextLine);
+      expect(subtitle(next).subtitle).toBe(nextLine);
+    }
+  },
+);
 
 it("clears held narration when the user disables live activity", () => {
   const running = runningRow();

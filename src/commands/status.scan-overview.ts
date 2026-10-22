@@ -184,15 +184,6 @@ export async function collectStatusScanOverview(params: {
           }
         }
       : undefined,
-    getTailnetHostname: async (runner) => {
-      return await import("./status.scan.deps.runtime.js").then(({ getTailnetHostname }) =>
-        getTailnetHostname(runner),
-      );
-    },
-    getUpdateCheckResult: async (updateParams) =>
-      await import("./status.update.js").then(({ getUpdateCheckResult }) =>
-        getUpdateCheckResult(updateParams),
-      ),
     getAgentLocalStatuses: async (bootstrapCfg) =>
       await measureCliCommandStartup(
         "status.local-agents",

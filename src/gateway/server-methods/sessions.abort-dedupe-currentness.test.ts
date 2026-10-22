@@ -74,6 +74,29 @@ async function abortTarget(id = "abort-receipt") {
   return { scope, runId, key: `agent:${runId}`, context, register };
 }
 
+async function startExecution(
+  registration: ReturnType<typeof registerChatAbortController>,
+  releaseOnAbort = false,
+) {
+  const entry = expectDefined(registration.entry, "registered RPC source");
+  const release = await claimRpcSourceForTest(entry);
+  if (releaseOnAbort) {
+    registration.controller.signal.addEventListener("abort", release, { once: true });
+  }
+  registration.initializeTiming();
+  expect(registration.markExecutionStarted()).toBe(true);
+  return release;
+}
+
+function expectStopped(respond: RespondFn, runId: string) {
+  expect(respond).toHaveBeenCalledExactlyOnceWith(
+    true,
+    { ok: true, abortedRunId: runId, status: "aborted" },
+    undefined,
+    undefined,
+  );
+}
+
 it.each([
   { method: "sessions.abort", hidden: false },
   { method: "chat.abort", hidden: false },
@@ -84,11 +107,7 @@ it.each([
     const { scope, runId, key, context, register } = await abortTarget(`${method}-${hidden}`);
     const ownerDeviceId = "completed-exec-owner";
     const registration = register({ ownerDeviceId, controlUiVisible: !hidden });
-    const releaseExecution = await claimRpcSourceForTest(
-      expectDefined(registration.entry, "registered direct-agent source"),
-    );
-    registration.initializeTiming();
-    expect(registration.markExecutionStarted()).toBe(true);
+    const releaseExecution = await startExecution(registration);
     let processSession: ProcessSession | undefined;
     const terminalReply = { disposition: "visible" as const, text: "Still running." };
     const emitFinal = vi.fn();
@@ -245,12 +264,7 @@ it.each(["unchanged", "absent", "successor", "successor from absent"] as const)(
     const removed = createDeferred();
     const registration = register({ kind: "agent", onRemoved: () => removed.resolve() });
     expect(registration.registered).toBe(true);
-    const releaseExecution = await claimRpcSourceForTest(
-      expectDefined(registration.entry, "registered RPC source"),
-    );
-    registration.controller.signal.addEventListener("abort", releaseExecution, { once: true });
-    registration.initializeTiming();
-    expect(registration.markExecutionStarted()).toBe(true);
+    const releaseExecution = await startExecution(registration, true);
     context.chatRunState.getOrCreate(runId).buffer = "Predecessor partial";
     const committed = createDeferred();
     const release = createDeferred();
@@ -308,12 +322,7 @@ it.each(["unchanged", "absent", "successor", "successor from absent"] as const)(
       }
       release.resolve();
       await request;
-      expect(respond).toHaveBeenCalledExactlyOnceWith(
-        true,
-        { ok: true, abortedRunId: runId, status: "aborted" },
-        undefined,
-        undefined,
-      );
+      expectStopped(respond, runId);
       expect(persistence).toHaveBeenCalledOnce();
       expect(await loadTranscriptEvents(scope)).toEqual(committedTranscript);
       if (replacesReceipt) {
@@ -343,37 +352,12 @@ it.each(["unchanged", "absent", "successor", "successor from absent"] as const)(
 );
 
 it("sessions.abort records the rotated RPC source identity on its terminal receipt", async () => {
-  const scope = { agentId: "main", sessionKey: "agent:main:rotated-abort-receipt" };
-  const initialSessionId = "initial-abort-receipt-session";
+  const { scope, runId, context, register } = await abortTarget("rotated-abort-receipt");
   const rotatedSessionId = "rotated-abort-receipt-session";
-  const runId = "rotated-abort-receipt-run";
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
-  const context = createDirectChatContext({ getRuntimeConfig });
-  await replaceSessionEntry(scope, { sessionId: initialSessionId, updatedAt: 1 });
-  const sourceTarget = await withGatewaySessionEntry(
-    scope.sessionKey,
-    { agentId: scope.agentId },
-    (session) =>
-      captureRpcTargetForTest({
-        ...scope,
-        sessionId: initialSessionId,
-        storeScope: session.storePath,
-      }),
-  );
-  const registration = registerChatAbortController({
-    ...scope,
-    target: sourceTarget,
-    sessionId: initialSessionId,
-    runId,
-    lifecycleGeneration,
-    kind: "chat-send",
-    timeoutMs: 60_000,
-  });
+  const registration = register({ lifecycleGeneration, kind: "chat-send" });
   const entry = expectDefined(registration.entry, "registered RPC source");
-  const releaseExecution = await claimRpcSourceForTest(entry);
-  registration.controller.signal.addEventListener("abort", releaseExecution, { once: true });
-  registration.initializeTiming();
-  expect(registration.markExecutionStarted()).toBe(true);
+  const releaseExecution = await startExecution(registration, true);
   await replaceSessionEntry(scope, { sessionId: rotatedSessionId, updatedAt: 2 });
   updateRpcSourceSessionId(entry, rotatedSessionId);
   context.chatRunState.getOrCreate(runId).buffer = "Rotated abort partial";
@@ -381,21 +365,8 @@ it("sessions.abort records the rotated RPC source identity on its terminal recei
   const setDedupeEntry = vi.spyOn(agentJob, "setGatewayDedupeEntry");
 
   try {
-    await sessionAbortHandlers["sessions.abort"]!({
-      req: { type: "req", id: "rotated-abort-receipt", method: "sessions.abort" },
-      params: { key: scope.sessionKey, runId },
-      context,
-      client: null,
-      respond,
-      isWebchatConnect: () => false,
-    });
-
-    expect(respond).toHaveBeenCalledExactlyOnceWith(
-      true,
-      { ok: true, abortedRunId: runId, status: "aborted" },
-      undefined,
-      undefined,
-    );
+    await stopSession(scope.sessionKey, respond, context, { runId }, null);
+    expectStopped(respond, runId);
     const expectedSession = {
       ...scope,
       sessionId: rotatedSessionId,

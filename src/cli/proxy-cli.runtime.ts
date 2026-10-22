@@ -5,10 +5,7 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { throwCollectedErrors } from "../infra/error-graph-internal.js";
-import {
-  runProxyValidation,
-  type ProxyValidationResult,
-} from "../infra/net/proxy/proxy-validation.js";
+import { runProxyValidation } from "../infra/net/proxy/proxy-validation.js";
 import { spawnCommand } from "../process/exec-spawn.js";
 import { ensureDebugProxyCa } from "../proxy-capture/ca.js";
 import { buildDebugProxyCoverageReport } from "../proxy-capture/coverage.js";
@@ -202,69 +199,6 @@ function redactProxyUrl(value: string | undefined): string | undefined {
   }
 }
 
-function formatProxyCheckLine(check: ProxyValidationResult["checks"][number]): string {
-  const icon = check.ok ? theme.success("✓") : theme.error("✗");
-  const paddedKind = theme.muted(check.kind.padEnd(7, " "));
-  const status =
-    check.status === undefined
-      ? ""
-      : ` ${check.ok ? theme.success(`HTTP ${check.status}`) : theme.error(`HTTP ${check.status}`)}`;
-  const detail = check.error
-    ? ` — ${check.ok ? theme.muted(check.error) : theme.error(check.error)}`
-    : "";
-  return `  ${icon} ${paddedKind} ${check.url}${status}${detail}`;
-}
-
-function formatProxyValidationNextStep(result: ProxyValidationResult): string | undefined {
-  if (result.ok) {
-    return undefined;
-  }
-  if (result.config.errors.some((error) => error.includes("proxy CA file could not be read"))) {
-    return "Confirm proxy.tls.caFile or --proxy-ca-file points to a readable PEM CA file for the HTTPS proxy endpoint.";
-  }
-  if (result.config.errors.length > 0) {
-    return "Fix proxy.proxyUrl, OPENCLAW_PROXY_URL, or --proxy-url so it uses a reachable http:// or https:// proxy.";
-  }
-  if (result.checks.some((check) => !check.ok && check.kind === "allowed")) {
-    return "Confirm the proxy is reachable from this deployment context and permits the allowed destinations.";
-  }
-  if (result.checks.some((check) => !check.ok && check.kind === "denied")) {
-    return "Update the proxy ACL so denied destinations are blocked, or pass the expected --denied-url values.";
-  }
-  return "Review the failed checks above and update proxy configuration or validation destinations.";
-}
-
-function formatProxyValidationText(result: ProxyValidationResult): string {
-  const lines = [
-    result.ok ? theme.success("Proxy validation passed") : theme.error("Proxy validation failed"),
-    "",
-    theme.heading("Proxy"),
-    `  Source: ${theme.muted(result.config.source)}`,
-    `  URL:    ${result.config.proxyUrl ?? theme.muted("not configured")}`,
-  ];
-
-  if (result.config.errors.length > 0) {
-    lines.push("", theme.heading("Problems"));
-    for (const error of result.config.errors) {
-      lines.push(`  - ${theme.error(error)}`);
-    }
-  }
-
-  if (result.checks.length > 0) {
-    lines.push("", theme.heading("Checks"));
-    for (const check of result.checks) {
-      lines.push(formatProxyCheckLine(check));
-    }
-  }
-
-  const nextStep = formatProxyValidationNextStep(result);
-  if (nextStep) {
-    lines.push("", theme.heading("Next steps"), `  ${theme.warn(nextStep)}`);
-  }
-
-  return `${lines.join("\n")}\n`;
-}
-
 export async function runProxyValidateCommand(opts: {
   json?: boolean;
   proxyUrl?: string;
@@ -291,11 +225,59 @@ export async function runProxyValidateCommand(opts: {
     ...result,
     config: { ...result.config, proxyUrl: redactProxyUrl(result.config.proxyUrl) },
   };
-  process.stdout.write(
-    opts.json === true
-      ? `${JSON.stringify(outputResult, null, 2)}\n`
-      : formatProxyValidationText(outputResult),
-  );
+  if (opts.json === true) {
+    process.stdout.write(`${JSON.stringify(outputResult, null, 2)}\n`);
+  } else {
+    const lines = [
+      result.ok ? theme.success("Proxy validation passed") : theme.error("Proxy validation failed"),
+      "",
+      theme.heading("Proxy"),
+      `  Source: ${theme.muted(outputResult.config.source)}`,
+      `  URL:    ${outputResult.config.proxyUrl ?? theme.muted("not configured")}`,
+    ];
+    if (result.config.errors.length > 0) {
+      lines.push("", theme.heading("Problems"));
+      for (const error of result.config.errors) {
+        lines.push(`  - ${theme.error(error)}`);
+      }
+    }
+    if (result.checks.length > 0) {
+      lines.push("", theme.heading("Checks"));
+      for (const check of result.checks) {
+        const icon = check.ok ? theme.success("✓") : theme.error("✗");
+        const paddedKind = theme.muted(check.kind.padEnd(7, " "));
+        const status =
+          check.status === undefined
+            ? ""
+            : ` ${check.ok ? theme.success(`HTTP ${check.status}`) : theme.error(`HTTP ${check.status}`)}`;
+        const detail = check.error
+          ? ` — ${check.ok ? theme.muted(check.error) : theme.error(check.error)}`
+          : "";
+        lines.push(`  ${icon} ${paddedKind} ${check.url}${status}${detail}`);
+      }
+    }
+    if (!result.ok) {
+      let nextStep: string;
+      if (result.config.errors.some((error) => error.includes("proxy CA file could not be read"))) {
+        nextStep =
+          "Confirm proxy.tls.caFile or --proxy-ca-file points to a readable PEM CA file for the HTTPS proxy endpoint.";
+      } else if (result.config.errors.length > 0) {
+        nextStep =
+          "Fix proxy.proxyUrl, OPENCLAW_PROXY_URL, or --proxy-url so it uses a reachable http:// or https:// proxy.";
+      } else if (result.checks.some((check) => !check.ok && check.kind === "allowed")) {
+        nextStep =
+          "Confirm the proxy is reachable from this deployment context and permits the allowed destinations.";
+      } else if (result.checks.some((check) => !check.ok && check.kind === "denied")) {
+        nextStep =
+          "Update the proxy ACL so denied destinations are blocked, or pass the expected --denied-url values.";
+      } else {
+        nextStep =
+          "Review the failed checks above and update proxy configuration or validation destinations.";
+      }
+      lines.push("", theme.heading("Next steps"), `  ${theme.warn(nextStep)}`);
+    }
+    process.stdout.write(`${lines.join("\n")}\n`);
+  }
   if (!result.ok) {
     process.exitCode = 1;
   }

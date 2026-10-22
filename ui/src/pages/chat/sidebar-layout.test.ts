@@ -52,18 +52,63 @@ function openAll(): SidebarLayout {
   return openSlot(openSlot(openSlot({ columns: [] }, "discussion"), "dashboard"), "detail");
 }
 
-it("restores the original right split after focusing the side in place", () => {
-  const split = normalize(
-    withConversation(setSidebarDock(activatePanel(openAll(), "dashboard"), "right")),
-  );
-  const focused = toggleExpanded(split, "dashboard");
-  expect(mainPanel(focused)).toEqual(mainPanel(split));
-  expect(focused.columns).toEqual(split.columns);
-  expectVisible(focused, "dashboard", "conversation");
-  expect(toggleExpanded(normalize(focused), "dashboard")).toEqual(split);
-  const closed = setSidebarOpen(focused, false);
-  expectVisible(closed, "conversation", "dashboard");
-  expect(setSidebarOpen(closed, true)).toEqual(split);
+it.each(["dashboard", undefined])(
+  "restores the original right split after focusing the side with panelId=%s",
+  (panelId) => {
+    const split = normalize(
+      withConversation(setSidebarDock(activatePanel(openAll(), "dashboard"), "right")),
+    );
+    const focused = toggleExpanded(split, panelId);
+    expect(mainPanel(focused)).toEqual(mainPanel(split));
+    expect(focused.columns).toEqual(split.columns);
+    expectVisible(focused, "dashboard", "conversation");
+    expect(toggleExpanded(normalize(focused), panelId)).toEqual(split);
+    const closed = setSidebarOpen(focused, false);
+    expectVisible(closed, "conversation", "dashboard");
+    expect(setSidebarOpen(closed, true)).toEqual(split);
+  },
+);
+
+it.each(["left", "right", "bottom"] as const)(
+  "expands and restores an empty %s container without adding a tool or losing geometry",
+  (dock) => {
+    const opened = setSidebarOpen({ columns: [] }, true);
+    const columnId = opened.columns[0]!.id;
+    const sized = resizePanel(
+      setSidebarDock(resizePanel(opened, columnId, 620), "bottom"),
+      columnId,
+      410,
+    );
+    const split = normalize(withConversation(setSidebarDock(sized, dock)));
+    const before = structuredClone(split);
+    const focused = toggleExpanded(split);
+    expect(focused).toMatchObject({ open: true, expanded: true, expandedSide: true, dock });
+    expect(sidePanels(focused)).toEqual([]);
+    expect(activePanel(focused)).toBeUndefined();
+    expect(mainPanel(focused)).toEqual({ id: "conversation", slot: "conversation" });
+    expect(focused.columns).toEqual(before.columns);
+    expect(split).toEqual(before);
+    const restored = toggleExpanded(normalize(focused));
+    expect(restored).toEqual(before);
+    expect(isSidebarSlotVisible(restored, "conversation")).toBe(true);
+  },
+);
+
+it("retains stored expansion of an empty container and restores the chat", () => {
+  const layout = normalize({
+    columns: [{ id: "side", side: "right", panels: [], width: 620, height: 410 }],
+    expanded: true,
+    expandedSide: true,
+    open: true,
+  });
+  expect(layout.expandedSide).toBe(true);
+  expect(sidePanels(layout)).toEqual([]);
+  expect(isSidebarSlotVisible(layout, "conversation")).toBe(false);
+  expect(normalize(layout)).toEqual(layout);
+  const restored = setSidebarExpanded(layout, false);
+  expect(isSidebarSlotVisible(restored, "conversation")).toBe(true);
+  expect(restored.columns[0]).toMatchObject({ width: 620, height: 410 });
+  expect(normalize({ ...layout, open: false }).expandedSide).toBeUndefined();
 });
 
 it("expands inactive tabs and exits side focus on normal activation or closing its tab", () => {

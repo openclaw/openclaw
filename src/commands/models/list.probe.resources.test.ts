@@ -18,6 +18,7 @@ import { ZERO_USAGE_FIXTURE } from "../../agents/test-helpers/usage-fixtures.js"
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as embeddedStateLock from "../../infra/embedded-state-lock.js";
 import { captureNativeSignalBridge } from "../../infra/embedded-state-lock.test-support.js";
+import * as gatewayLockProcessModule from "../../infra/gateway-lock-process.js";
 import { getPluginInstance } from "../../plugins/plugin-instance-scope.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { PluginRegistryInspectionResources } from "../../plugins/registry-inspection-resources.js";
@@ -303,11 +304,13 @@ it("releases direct state ownership before propagating a rejected no-tail operat
     signals.create,
   );
   const lockDir = state.path("locks");
+  vi.spyOn(gatewayLockProcessModule, "readGatewayLockProcessStartTime").mockImplementation(
+    () => 123456,
+  );
   const options = {
     allowInTests: true,
     env: state.env,
     lockDir,
-    readProcessStartTime: () => 123456,
     timeoutMs: 100,
   };
   vi.spyOn(embeddedStateLock, "acquireEmbeddedStateLock").mockImplementation((params) =>

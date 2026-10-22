@@ -58,6 +58,10 @@ the retired acquisition does not stop the Gateway; genuine replacement failures
 still propagate.
 
 Transcript projection repair runs after readiness in yielding worker-backed work.
+Pending GitHub publication recovery runs in the background and does not delay
+readiness or agent dispatch while Git or GitHub responds. Placement authority
+recovery still completes before dispatch opens; shutdown joins publication work
+already in progress, and failures retain their recorded effects for retry.
 An agent deferred by database inspection becomes usable after its session,
 credentials, and model preparation finish; rebuilding its transcript projections
 does not hold agent admission or another agent's preparation. Shutdown still joins
@@ -160,6 +164,12 @@ Gateway completes shutdown instead of attempting an in-process restart; inspect
 the logs and restart through the service owner.
 
 A broken Telegram or other channel account can also make `/readyz` return `503` while `/startupz` remains started. Neither check replaces the other: startup completion alone does not certify agent or channel availability.
+
+Detailed readiness responses also include `coreReady`, which excludes channel
+availability while retaining startup, drain, database admission, child-runtime,
+and plugin-replacement checks. Updates can complete with channel warnings when
+the core is ready. HTTP status and `ready` still include channel health, including
+for ordinary service start and traffic admission.
 
 Disabled, unconfigured, and ordinarily unlinked accounts do not fail channel readiness. An enabled, configured account with a recorded terminal disconnect, blocked lifecycle, or unavailable ingress still fails its health check even if it becomes unlinked. For example, a terminal WhatsApp logout makes `/readyz` return `503` with `failing: ["whatsapp"]` in detailed responses. Terminal disconnects and blocked accounts require operator action; the health monitor does not restart them.
 

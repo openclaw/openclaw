@@ -110,11 +110,10 @@ suite.define(() => {
     await expect.poll(async () => (await linkMessages(page))?.length ?? 0).toBe(messageCount);
 
     const bubble = page.locator(".chat-bubble");
-    const bubbleBox = await bubble.boundingBox();
-    expect(bubbleBox).not.toBeNull();
+    // Keep the menu clear of the report link as the Browser panel resizes the bubble.
     await bubble.click({
       button: "right",
-      position: { x: bubbleBox!.width - 8, y: bubbleBox!.height - 2 },
+      position: { x: 128, y: 2 },
     });
     const replyMenu = page.getByRole("menu", { name: "Message actions" });
     await expect.poll(() => replyMenu.isVisible()).toBe(true);

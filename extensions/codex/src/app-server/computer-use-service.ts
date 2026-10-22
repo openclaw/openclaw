@@ -47,7 +47,6 @@ type CodexComputerUseServiceIdentity = {
 /** Finds the first signed native service from one ordered desktop owner set. */
 export async function resolveCodexComputerUseServiceAppSourcePath(params: {
   platform?: NodeJS.Platform;
-  appServerCommand?: string;
   sourceAppCandidates?: readonly string[];
   inspectServiceApp?: InspectServiceApp;
 }): Promise<string | undefined> {
@@ -56,8 +55,7 @@ export async function resolveCodexComputerUseServiceAppSourcePath(params: {
     return undefined;
   }
   const candidates =
-    params.sourceAppCandidates ??
-    resolveMacOSDesktopCodexComputerUseServiceAppCandidates(platform, params.appServerCommand);
+    params.sourceAppCandidates ?? resolveMacOSDesktopCodexComputerUseServiceAppCandidates(platform);
   return (
     await findUsableServiceApp(candidates, params.inspectServiceApp ?? inspectTrustedServiceApp)
   )?.path;

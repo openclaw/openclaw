@@ -3,25 +3,25 @@ import { afterEach, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { withAdminIngress } from "../../channels/message-access/operator-authority.test-support.js";
-import { createMessageReceiptFromOutboundResults } from "../../channels/message/receipt.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
-import { drainPendingDeliveriesCore } from "../../infra/outbound/delivery-queue-recovery.js";
 import { loadUnfinishedDeliveries } from "../../infra/outbound/delivery-queue-storage.js";
-import { createRecoveryLog } from "../../infra/outbound/delivery-queue.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   beginSessionEffect,
   interruptSessionControllerEffects,
 } from "../../sessions/session-controller.lifecycle.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { persistPendingFinalDeliveryMarker } from "../pending-final-delivery-marker.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
   createAgentRunRestartAbortError,
   isAgentRunDirectAbortReason,
 } from "../run-termination.js";
-import { deliverAgentCommandResult } from "./delivery.js";
+import {
+  deliverFinal,
+  matrixPlugin,
+  persistMarker,
+  recoveryFor,
+  textReceipt,
+} from "./delivery.test-support.js";
 
 afterEach(resetPluginRuntimeStateForTest);
 
@@ -51,16 +51,8 @@ it.each([false, true])("yielded settle final after requester reset=%s", async (r
         },
       ),
     ];
-    const marker = await persistPendingFinalDeliveryMarker({
-      ...target,
-      deliver: true,
-      sessionStore: { [key]: entry },
-      sessionEntry: entry,
-      suppressVisibleSessionEffects: false,
-      sessionReboundDuringRun: false,
-      payloads,
-      deliveryContext: { channel: "matrix", to: "!owner:example", accountId: "default" },
-      runOwnedSessionId: entry.sessionId,
+    const marker = await persistMarker(target, entry, payloads, {
+      admittedRecoverySource: undefined,
     });
     expect(marker.pendingFinalDeliveryMarkerPersisted).toBe(true);
 
@@ -68,39 +60,18 @@ it.each([false, true])("yielded settle final after requester reset=%s", async (r
     const release = createDeferred();
     const writes: string[] = [];
     let hold = true;
-    const plugin: ChannelPlugin = {
-      ...createOutboundTestPlugin({
-        id: "matrix",
-        outbound: {
-          deliveryMode: "direct",
-          sendText: async () => {
-            throw new Error("message adapter must own the send");
-          },
-        },
-      }),
-      message: {
-        id: "matrix",
-        durableFinal: { capabilities: { text: true } },
-        send: {
-          text: async ({ text, onPlatformSendDispatch, assertDirectAdapterHandoff }) => {
-            if (hold) {
-              entered.resolve();
-              await release.promise;
-            }
-            await onPlatformSendDispatch?.();
-            assertDirectAdapterHandoff?.();
-            writes.push(text);
-            return {
-              messageId: "recorded-final",
-              receipt: createMessageReceiptFromOutboundResults({
-                results: [{ channel: "matrix", messageId: "recorded-final" }],
-                kind: "text",
-              }),
-            };
-          },
-        },
+    const plugin = matrixPlugin(
+      async ({ text, onPlatformSendDispatch, assertDirectAdapterHandoff }) => {
+        if (hold) {
+          entered.resolve();
+          await release.promise;
+        }
+        await onPlatformSendDispatch?.();
+        assertDirectAdapterHandoff?.();
+        writes.push(text);
+        return textReceipt("recorded-final");
       },
-    };
+    );
     setActivePluginRegistry(createTestRegistry([{ pluginId: "matrix", source: "test", plugin }]));
 
     const controller = new AbortController();
@@ -115,10 +86,8 @@ it.each([false, true])("yielded settle final after requester reset=%s", async (r
     });
     const delivery = admission
       .run(() =>
-        deliverAgentCommandResult({
+        deliverFinal(target, {
           cfg,
-          deps: {},
-          runtime: { log: () => {}, error: () => {}, exit: () => {} },
           opts: {
             message: "settled children",
             abortSignal: controller.signal,
@@ -129,7 +98,6 @@ it.each([false, true])("yielded settle final after requester reset=%s", async (r
             sessionKey: key,
             runId: "announce:requester-settle:owner:yield-1",
           },
-          outboundSession: { agentId: "main", key },
           sessionEntry: marker.sessionEntry,
           result: { meta: { durationMs: 1 } },
           payloads,
@@ -159,15 +127,7 @@ it.each([false, true])("yielded settle final after requester reset=%s", async (r
 
     // A later queue drain must not resend the old final into the reset session.
     hold = false;
-    await drainPendingDeliveriesCore({
-      drainKey: "matrix:settle-reset",
-      logLabel: "Settle reset",
-      cfg,
-      log: createRecoveryLog(),
-      stateDir: state.stateDir,
-      deliver: deliverOutboundPayloads,
-      selectEntry: () => ({ match: true, bypassBackoff: true }),
-    });
+    await recoveryFor(cfg, state.stateDir, "matrix:settle-reset")();
     expect(writes).toEqual(reset ? [] : ["Uptime: 14 days"]);
     expect(await loadUnfinishedDeliveries(state.stateDir)).toEqual([]);
   });

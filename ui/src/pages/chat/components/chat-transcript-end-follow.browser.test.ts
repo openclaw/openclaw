@@ -120,6 +120,26 @@ async function settleFrames() {
   });
 }
 
+it.each([true, false])(
+  "preserves footer-only resize intent while following: %s",
+  async (following) => {
+    const { host, thread } = following
+      ? await mountFollowingFixture()
+      : await mountEndFollowFixture(200);
+    host.followEnabled = following;
+    if (!following) {
+      await expect.poll(() => thread.scrollTop).toBe(200);
+    }
+    const before = thread.scrollTop;
+    // An asynchronously resized footer changes padding without rendering transcript rows.
+    host.viewportPadding = 69;
+    thread.parentElement!.style.paddingBottom = "69px";
+    await expect.poll(() => thread.style.paddingBottom).toBe("69px");
+    await settleFrames();
+    expect(thread.scrollTop).toBe(following ? before + 9 : before);
+  },
+);
+
 async function resizeViewport(host: EndFollowFixture, thread: HTMLElement, height: number) {
   host.viewportHeight = height;
   host.requestRender();
@@ -358,13 +378,14 @@ it("does not turn a resize-clamped reader into permission to follow", async () =
 it("preserves compensation provenance for later native scroll listeners", async () => {
   const { host, thread, extent, distance } = await mountFollowingFixture();
   const readerIdle = new Promise<void>((resolve) => {
-    let moved = false;
+    let sawScrolling = false;
     const unsubscribe = subscribeTranscriptScroll(thread, (observation) => {
       if (observation.type !== "offset") {
         return;
       }
-      moved ||= observation.scrolling && observation.delta !== 0;
-      if (moved && !observation.scrolling) {
+      // The clamp receipt can consume the delta before the native observation.
+      sawScrolling ||= observation.scrolling;
+      if (sawScrolling && !observation.scrolling) {
         unsubscribe();
         resolve();
       }

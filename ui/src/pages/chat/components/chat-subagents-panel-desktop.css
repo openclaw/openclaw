@@ -1,0 +1,295 @@
+.subagents-desktop {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  color: var(--text);
+  font-size: calc(13px * var(--control-ui-text-scale));
+}
+
+.subagents-desktop[hidden] {
+  display: none;
+}
+
+.subagents-desktop__content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 20px 20px 32px;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.subagents-desktop__group + .subagents-desktop__group {
+  margin-top: 28px;
+}
+
+.subagents-desktop__heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 20px;
+  margin: 0 0 9px;
+  padding: 0;
+  color: var(--text);
+  font-size: calc(12px * var(--control-ui-text-scale));
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  line-height: 20px;
+}
+
+.subagents-desktop__count {
+  color: var(--muted);
+}
+
+.subagents-desktop__disclosure {
+  border: 0;
+  background: transparent;
+}
+
+.subagents-desktop__disclosure svg {
+  width: 12px;
+  height: 12px;
+}
+
+.subagents-desktop__row {
+  --subagent-divider: var(--border);
+  position: relative;
+  display: grid;
+  grid-template-columns: 25px minmax(0, 1fr) auto auto 24px;
+  align-items: center;
+  min-width: 0;
+  margin: 0 -8px;
+  padding: 0 8px;
+  border-radius: 8px;
+}
+
+.subagents-desktop__row:not(:last-child)::after {
+  position: absolute;
+  right: 8px;
+  bottom: 0;
+  left: 45px;
+  height: 1px;
+  background: var(--subagent-divider);
+  content: "";
+  pointer-events: none;
+}
+
+.subagents-desktop__row:hover,
+.subagents-desktop__row:focus-within {
+  --subagent-divider: transparent;
+  background: var(--bg-accent);
+}
+
+.subagents-desktop__row:has(+ .subagents-desktop__row:hover),
+.subagents-desktop__row:has(+ .subagents-desktop__row:focus-within) {
+  --subagent-divider: transparent;
+}
+
+.subagents-desktop__open {
+  display: grid;
+  grid-template-columns: subgrid;
+  grid-column: 1 / -1;
+  grid-row: 1;
+  align-items: center;
+  min-width: 0;
+  min-height: 69px;
+  padding: 12px 0;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.subagents-desktop__avatar {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: 0 0 25px;
+  width: 25px;
+  height: 25px;
+  border-radius: 7px;
+  background: hsl(var(--subagent-hue) 22% 30% / 0.35);
+  color: hsl(var(--subagent-hue) 32% 65%);
+}
+
+.subagents-desktop__open > .subagents-desktop__avatar {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.subagents-desktop__avatar > svg {
+  width: 17px;
+  height: 17px;
+}
+
+.subagents-desktop__spinner {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 11px;
+  height: 11px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  background: var(--bg);
+  box-shadow: 0 0 0 2px var(--bg);
+  animation: subagents-desktop-spin 1.5s linear infinite;
+}
+
+.subagents-desktop__identity {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  grid-column: 2;
+  grid-row: 1;
+  margin-left: 12px;
+}
+
+.subagents-desktop__name {
+  overflow: hidden;
+  font-weight: 500;
+  line-height: 18px;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+.subagents-desktop__status,
+.subagents-desktop__elapsed {
+  color: var(--muted);
+  font-size: calc(12px * var(--control-ui-text-scale));
+  font-variant-numeric: tabular-nums;
+  line-height: 18px;
+}
+
+.subagents-desktop__elapsed {
+  flex: none;
+  grid-column: 3;
+  grid-row: 1;
+  margin-left: 12px;
+  white-space: nowrap;
+}
+
+.subagents-desktop__chevron {
+  flex: 0 0 12px;
+  width: 12px;
+  height: 12px;
+  margin-right: 2px;
+  color: var(--muted);
+  opacity: 0;
+  grid-column: 5;
+  grid-row: 1;
+  justify-self: end;
+}
+
+.subagents-desktop__stop {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 60px;
+  min-height: 27px;
+  margin: 0 0 0 12px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--danger) 9%, transparent);
+  color: var(--danger);
+  font: inherit;
+  font-size: calc(12px * var(--control-ui-text-scale));
+  opacity: 0;
+}
+
+.subagents-desktop__row > .subagents-desktop__stop {
+  z-index: 1;
+  grid-column: 4;
+  grid-row: 1;
+}
+
+.subagents-desktop__stop svg {
+  width: 10px;
+  height: 10px;
+  fill: currentColor;
+  stroke: none;
+}
+
+.subagents-desktop__row:hover .subagents-desktop__stop,
+.subagents-desktop__row:focus-within .subagents-desktop__stop,
+.subagents-desktop__row:hover .subagents-desktop__chevron,
+.subagents-desktop__row:focus-within .subagents-desktop__chevron {
+  opacity: 1;
+}
+
+.subagents-desktop__row:hover .subagents-desktop__stop:disabled,
+.subagents-desktop__row:focus-within .subagents-desktop__stop:disabled {
+  opacity: 0.45;
+}
+
+.subagents-desktop__row[data-group="done"] .subagents-desktop__open {
+  min-height: 43px;
+  padding: 9px 0;
+}
+
+.subagents-desktop__more {
+  min-height: 32px;
+  margin: 10px 0 0 37px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: calc(12px * var(--control-ui-text-scale));
+}
+
+.subagents-desktop__child-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: calc(13px * var(--control-ui-text-scale));
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.subagents-desktop__child-name[data-scrollable="true"] {
+  mask-image: linear-gradient(to right, black calc(100% - 16px), transparent);
+}
+
+.subagents-desktop__child-rail .subagents-desktop__stop {
+  background: transparent;
+  color: var(--danger);
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .subagents-desktop__row .subagents-desktop__stop,
+  .subagents-desktop__row .subagents-desktop__chevron {
+    opacity: 1;
+  }
+
+  .subagents-desktop__row .subagents-desktop__stop:disabled {
+    opacity: 0.45;
+  }
+}
+
+@keyframes subagents-desktop-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .subagents-desktop__spinner {
+    animation: none;
+  }
+}
+
+.subagents-desktop[hidden] .subagents-desktop__spinner,
+.subagents-desktop[hidden] .subagents-desktop__working {
+  animation-play-state: paused;
+}

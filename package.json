@@ -15,7 +15,7 @@
       "team-reports"
     ],
     "schemaVersions": {
-      "state": 29,
+      "state": 30,
       "agent": 31
     }
   },
@@ -140,7 +140,6 @@
     "!dist/plugin-sdk/gateway-config-runtime.d.ts",
     "!dist/plugin-sdk/global-singleton.d.ts",
     "!dist/plugin-sdk/group-activation.d.ts",
-    "!dist/plugin-sdk/heartbeat-runtime.d.ts",
     "!dist/plugin-sdk/host-runtime.d.ts",
     "!dist/plugin-sdk/html-entity-runtime.d.ts",
     "!dist/plugin-sdk/image-generation.d.ts",
@@ -742,9 +741,6 @@
     },
     "./plugin-sdk/node-selection-runtime": {
       "default": "./dist/plugin-sdk/node-selection-runtime.js"
-    },
-    "./plugin-sdk/heartbeat-runtime": {
-      "default": "./dist/plugin-sdk/heartbeat-runtime.js"
     },
     "./plugin-sdk/http-response-runtime": {
       "default": "./dist/plugin-sdk/http-response-runtime.js"
@@ -1631,6 +1627,10 @@
       "types": "./dist/plugin-sdk/decisions.d.ts",
       "default": "./dist/plugin-sdk/decisions.js"
     },
+    "./plugin-sdk/decisions-openai-runtime": {
+      "types": "./dist/plugin-sdk/decisions-openai-runtime.d.ts",
+      "default": "./dist/plugin-sdk/decisions-openai-runtime.js"
+    },
     "./plugin-sdk/secret-ref-readonly": {
       "types": "./dist/plugin-sdk/secret-ref-readonly.d.ts",
       "default": "./dist/plugin-sdk/secret-ref-readonly.js"
@@ -1773,6 +1773,7 @@
     "check:agents-md-size": "node --import ./scripts/tsx.mjs scripts/check-agents-md-size.mts",
     "check:architecture": "pnpm check:import-cycles && pnpm check:madge-import-cycles && pnpm check:deprecated-api-usage && pnpm check:wrapper-shadowing && pnpm check:deprecated-jsdoc && pnpm db:kysely:check && pnpm db:postgres:check && pnpm lint:kysely && pnpm check:database-first-legacy-stores",
     "check:assertion-safety": "node --import ./scripts/tsx.mjs scripts/check-assertion-safety-ratchet.mts",
+    "check:baseline-ratchets": "node --import ./scripts/tsx.mjs scripts/ci-baseline-ratchets.mts",
     "check:base-config-schema": "node --import ./scripts/tsx.mjs scripts/generate-base-config-schema.ts --check",
     "check:bundled-channel-config-metadata": "node --import ./scripts/tsx.mjs scripts/generate-bundled-channel-config-metadata.ts --check",
     "check:changed": "node scripts/check-changed.mjs",
@@ -2035,6 +2036,7 @@
     "release:beta": "node --import ./scripts/tsx.mjs scripts/release-candidate-checklist.mts",
     "release:beta-smoke": "node --import ./scripts/tsx.mjs scripts/release-beta-smoke.ts",
     "release:backport-companions": "node scripts/release-backport-companions.mjs",
+    "release:backport-probe": "node scripts/release-backport-probe.mjs",
     "release:candidate": "node --import ./scripts/tsx.mjs scripts/release-candidate-checklist.mts",
     "release:clawhub-recovery": "node scripts/plugin-clawhub-recovery.mjs",
     "release:check": "pnpm build:package && pnpm release:generated:check && node --import ./scripts/tsx.mjs scripts/release-check.ts",
@@ -2474,7 +2476,7 @@
     "sqlite-vec": "0.1.9"
   },
   "engines": {
-    "node": ">=24.16.0 <25 || >=26.1.0"
+    "node": ">=24.22.1 <25 || >=26.12.1"
   },
-  "packageManager": "pnpm@12.12.1+sha512.b7f98934c0b1f29a65f5da52f2d7f994e7faad573ffdddea1497fb4dcb5aec051590ee7c7d95a38172b4bfae103a5b83edf2ee866e11731c2cafa96063610ac5"
+  "packageManager": "pnpm@12.15.0+sha512.b3951d6d6ff4a9f13dc7cf56cd28d2b8eb37dbcc9c68e52e1e1191873ea9f82a017287ab50baadc5ccc494f036c67c0e47eb13608c2fa36f47711b61ea128e61"
 }

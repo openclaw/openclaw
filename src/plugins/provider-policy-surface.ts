@@ -28,6 +28,7 @@ const PROVIDER_POLICY_HOOK_KEYS = [
   "resolveServiceTiers",
   "normalizeConfig",
   "applyConfigDefaults",
+  "resolveProactiveCadenceMs",
   "resolveConfigApiKey",
   "resolveThinkingProfile",
   "resolveToolSearchMode",

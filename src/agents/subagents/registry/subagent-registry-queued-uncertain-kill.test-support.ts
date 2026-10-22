@@ -59,7 +59,6 @@ export function registerQueuedUnknownKillAuthorityTest() {
 
   it("restores an uncertain accepted address with its original runtime and completion custody", async () => {
     await withQueuedRegistrationFixture(async (f) => {
-      expect(f.runs.size).toBe(0);
       const context = createContext();
       const resolveGatewayContext = () => context;
       context.resolveGatewayContext = resolveGatewayContext;

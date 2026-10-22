@@ -36,6 +36,7 @@ import {
 } from "./dispatch-from-config.payloads.js";
 import type { PrepareDispatchExecutionReadyState } from "./dispatch-from-config.prepare-execution.js";
 import { requireQueuedReplyDelivery } from "./dispatch-from-config.turn-ledger.js";
+import { runWithCommandNativeSubagents } from "./dispatch-native-subagent.js";
 import type { PendingContinuationSettlement } from "./get-reply.types.js";
 import { bindPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
@@ -191,6 +192,8 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                 }
               }),
               preparedTtsPreferences: state.preparedTtsPreferences,
+              withCommandNativeSubagents: (binding, run) =>
+                runWithCommandNativeSubagents(state, binding, run),
               [REPLY_OPERATION_RUN_STATE]: state.replyOperationRunState,
               sourceReplyDeliveryMode: state.sourceReplyDeliveryMode,
               sessionPromptSourceReplyDeliveryMode: state.sessionStableSourceReplyDeliveryMode,
@@ -242,6 +245,9 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     },
                   }),
               onReasoningStream,
+              onReasoningProgress: wrapProgressCallback(params.replyOptions?.onReasoningProgress, {
+                forwardWhenSourceDeliverySuppressed: true,
+              }),
               streamReasoningInNonStreamModes: params.replyOptions?.streamReasoningInNonStreamModes,
               onReasoningEnd: wrapProgressCallback(params.replyOptions?.onReasoningEnd),
               onAssistantMessageStart: wrapProgressCallback(

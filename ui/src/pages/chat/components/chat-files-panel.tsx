@@ -1,5 +1,15 @@
 import { dynamic, type JSX } from "@solidjs/web";
-import { For, Show, createMemo, onCleanup, onSettled, refresh, untrack } from "solid-js";
+import {
+  Errored,
+  For,
+  Loading,
+  Show,
+  createMemo,
+  createSignal,
+  onSettled,
+  refresh,
+  untrack,
+} from "solid-js";
 import { createMcpAppUnmountGate } from "../../../components/mcp-app-unmount.ts";
 import {
   notifyPanelHostedTabsChanged,
@@ -7,24 +17,37 @@ import {
 } from "../../../components/panel-hosted-tabs.ts";
 import { PanelTabStrip } from "../../../components/panel-tab-strip-solid.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
+import "../../../components/resizable-divider.ts";
+import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
+import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import { i18n } from "../../../i18n/index.ts";
+import { formatUiError } from "../../../lib/format-error.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { projectI18n, t } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { nativeListener } from "../../../lib/solid-native-listener.ts";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { createTabFocus } from "../../../lib/tabs.ts";
 import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
-import type { SessionWorkspacePreview } from "./chat-session-workspace-types.ts";
-import type { SidebarContent } from "./chat-sidebar-content-types.ts";
+import { SessionWorkspaceRail } from "./chat-session-workspace-rail-solid.tsx";
+import type { SessionWorkspacePreview, SidebarContent } from "./chat-sidebar-content-types.ts";
+import { SidebarFileMobileRail } from "./chat-sidebar-file-mobile.tsx";
+import type { SessionWorkspaceProps } from "./chat-sidebar-view-types.ts";
 
 type Props = {
+  sessionKey: string;
   previews: SessionWorkspacePreview[];
   activeId: string | null;
   tabsInHeader: boolean;
-  browser: JSX.Element;
-  renderDetail: ((props: { content: SidebarContent }) => JSX.Element) | null;
+  presentation: SessionWorkspaceProps["presentation"];
+  treeVisible: boolean;
+  folderView: boolean;
+  workspace?: SessionWorkspaceProps;
+  browserPresented: () => boolean;
+  renderDetail: ((props: { content: SidebarContent; previewId: string }) => JSX.Element) | null;
   onSelect: (id: string | null) => void;
-  onClose: (id: string) => void;
+  onClose: (id: string) => void | boolean | Promise<boolean>;
 };
 type Methods = { selectHostedTab(id: string): void; closeHostedTab(id: string): Promise<void> };
 type ChatFilesPanel = SolidBridgeElement<Props, Methods> & {
@@ -34,6 +57,7 @@ type ChatFilesPanel = SolidBridgeElement<Props, Methods> & {
 };
 let filesPanelSequence = 0;
 const hostedTabNotifiers = new WeakMap<HTMLElement, () => void>();
+const FILE_COLUMN_MIN_WIDTH = 176;
 
 /** The workspace owns tab order and selection; this view retains retiring app DOM. */
 defineSolidBridge<Props, Methods>(
@@ -42,13 +66,37 @@ defineSolidBridge<Props, Methods>(
     const contentId = `chat-files-content-${++filesPanelSequence}`;
     const tabFocus = createTabFocus();
     const pages = new Map<string, HTMLElement>();
-    const appUnmount = createMcpAppUnmountGate<Props>(() => void refresh(rendered));
+    let contentElement!: HTMLDivElement;
+    let catalog!: HTMLDivElement;
+    // Local geometry survives file navigation, but not a change of session.
+    const [treeWidth, setTreeWidth] = createSignal(() => {
+      void props.sessionKey;
+      return 240;
+    });
+    const [contentWidth, setContentWidth] = createSignal(0);
+    onSettled(() => {
+      const observer = new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          setContentWidth(entry.contentRect.width);
+        }
+      });
+      observer.observe(contentElement);
+      return () => observer.disconnect();
+    });
+    const physicalRatio = (width: number, total: number) =>
+      getComputedStyle(contentElement).direction === "rtl" ? 1 - width / total : width / total;
+    const appUnmount = createMcpAppUnmountGate<Omit<Props, "workspace" | "browserPresented">>(
+      () => void refresh(rendered),
+    );
     const rendered = createMemo(() => {
       const snapshot = {
+        sessionKey: props.sessionKey,
         previews: props.previews,
         activeId: props.activeId,
         tabsInHeader: props.tabsInHeader,
-        browser: props.browser,
+        presentation: props.presentation,
+        treeVisible: props.treeVisible,
+        folderView: props.folderView,
         renderDetail: props.renderDetail,
         onSelect: props.onSelect,
         onClose: props.onClose,
@@ -67,9 +115,25 @@ defineSolidBridge<Props, Methods>(
           ),
       );
     });
+    const reading = createMemo(() => {
+      const snapshot = rendered();
+      const preview = snapshot.previews.find((entry) => entry.id === snapshot.activeId);
+      return (
+        snapshot.presentation === "desktop" &&
+        snapshot.activeId !== null &&
+        !snapshot.folderView &&
+        (preview?.content.kind === "file" ||
+          preview?.content.kind === "loading" ||
+          preview?.content.kind === "unavailable" ||
+          ((preview?.content.kind === "image" ||
+            preview?.content.kind === "attachment" ||
+            preview?.content.kind === "markdown") &&
+            preview.content.file !== undefined))
+      );
+    });
     const Detail = dynamic(() => rendered().renderDetail ?? (() => null));
     const hostedTabs = (): PanelHostedTab[] => {
-      const tabs = props.previews.map(({ id, label, content }) => ({
+      const tabs = props.previews.map(({ id, label, content, pinned }) => ({
         id,
         label,
         title: content.kind === "file" ? content.path : label,
@@ -80,7 +144,10 @@ defineSolidBridge<Props, Methods>(
             <AttachmentFileIcon filename={label} mode="preview-with-favicon" />
           );
         },
-        className: content.kind === "loading" ? "is-connecting" : undefined,
+        className:
+          [content.kind === "loading" ? "is-connecting" : "", pinned === false ? "is-preview" : ""]
+            .filter(Boolean)
+            .join(" ") || undefined,
       }));
       return props.activeId === null && tabs.length
         ? [
@@ -131,7 +198,7 @@ defineSolidBridge<Props, Methods>(
       if (id === "browse") {
         props.onSelect(props.previews.at(-1)?.id ?? null);
       } else {
-        props.onClose(id);
+        await props.onClose(id);
       }
     };
     const translation = projectI18n(i18n);
@@ -182,44 +249,167 @@ defineSolidBridge<Props, Methods>(
             </div>
           </header>
         </Show>
-        <div id={contentId} class="chat-files-panel__content">
-          <div class="chat-files-panel__page" hidden={rendered().activeId !== null}>
-            {rendered().browser}
+        <div
+          ref={(element) => (contentElement = element)}
+          id={contentId}
+          class={["chat-files-panel__content", { "chat-files-panel__content--reading": reading() }]}
+          data-tree-open={rendered().treeVisible ? "true" : "false"}
+          style={{
+            "--file-tree-preferred-width": `${treeWidth()}px`,
+            "--file-column-min-width": `${FILE_COLUMN_MIN_WIDTH}px`,
+          }}
+        >
+          <div
+            ref={(element) => (catalog = element)}
+            class="chat-files-panel__page chat-files-panel__catalog"
+            inert={reading() && !rendered().treeVisible}
+            hidden={
+              !reading() &&
+              rendered().activeId !== null &&
+              !rendered().previews.find((entry) => entry.id === rendered().activeId)?.catalogVisible
+            }
+          >
+            <ContentPresentation value={() => props.browserPresented()}>
+              <SessionWorkspaceRail workspace={props.workspace} />
+            </ContentPresentation>
           </div>
+          <Show
+            when={reading() && rendered().treeVisible && contentWidth() > FILE_COLUMN_MIN_WIDTH * 2}
+          >
+            <resizable-divider
+              class="chat-files-panel__tree-divider"
+              prop:label={`${t("nav.resize")}: ${t("chat.sidePanel.files")}`}
+              prop:orientation="vertical"
+              prop:splitRatio={physicalRatio(
+                Math.min(treeWidth(), contentWidth() - FILE_COLUMN_MIN_WIDTH),
+                contentWidth(),
+              )}
+              prop:minRatio={FILE_COLUMN_MIN_WIDTH / contentWidth()}
+              prop:maxRatio={1 - FILE_COLUMN_MIN_WIDTH / contentWidth()}
+              prop:measureRatio={() =>
+                physicalRatio(catalog.getBoundingClientRect().width, contentElement.clientWidth)
+              }
+              prop:measureSize={() => contentElement.clientWidth}
+              onResize={(event: CustomEvent<{ splitRatio: number }>) => {
+                // Resize is direct manipulation; the existing tree toggle restores its own motion.
+                contentElement.dataset.treeMotion = "instant";
+                const ratio =
+                  getComputedStyle(contentElement).direction === "rtl"
+                    ? 1 - event.detail.splitRatio
+                    : event.detail.splitRatio;
+                setTreeWidth(ratio * contentElement.clientWidth);
+              }}
+            />
+          </Show>
           <For each={rendered().previews} keyed={(preview) => preview.id}>
             {(preview) => {
               // Registration and cleanup follow the keyed row's lifetime, not its current data.
               const initialPreviewId = untrack(() => preview().id);
-              onCleanup(() => pages.delete(initialPreviewId));
               const entry = () => {
                 rendered();
                 return preview();
               };
-              const detail = () => {
-                const content = entry().content;
-                return content.kind === "loading" || content.kind === "unavailable"
-                  ? undefined
-                  : content;
-              };
+              const readResult = createMemo(() => ({ pending: entry().readResult }), {
+                equals: (previous, next) => previous.pending === next.pending,
+              });
+              const source = createMemo(() => entry());
+              const currentContent = createMemo(() => entry().content);
+              const detail = createMemo(() => {
+                const current = source();
+                const pending = readResult().pending;
+                currentContent();
+                const resolved = () => {
+                  const value = current.content;
+                  if (value.kind === "unavailable") {
+                    throw new Error(value.message);
+                  }
+                  return value.kind === "loading" ? undefined : value;
+                };
+                // App views and other tabs without an admitted read mount synchronously.
+                return pending ? pending.then(resolved) : resolved();
+              });
               return (
                 <div
-                  ref={(element) => pages.set(initialPreviewId, element)}
+                  ref={[
+                    elementRef((element) => {
+                      pages.set(initialPreviewId, element);
+                      return () => pages.delete(initialPreviewId);
+                    }),
+                  ]}
                   class="chat-files-panel__page"
                   data-app-tab-id={entry().content.kind === "mcp-app" ? entry().id : undefined}
-                  hidden={rendered().activeId !== entry().id}
+                  hidden={rendered().activeId !== entry().id || entry().catalogVisible === true}
                 >
-                  {entry().content.kind === "loading" ? (
-                    <PanelLoadingSkeleton variant="files" label={t("common.loading")} />
-                  ) : entry().content.kind === "unavailable" ? (
-                    <div class="callout danger" role="alert">
-                      {(() => {
-                        const content = entry().content;
-                        return content.kind === "unavailable" ? content.message : "";
-                      })()}
+                  <Show when={rendered().presentation === "desktop"}>
+                    <div
+                      class="chat-files-panel__fallback-rail sidebar-file-view__path-bar session-panel-rail"
+                      data-presentation="desktop"
+                    >
+                      <span
+                        ref={createTextOverflow(() => entry().label)}
+                        class="sidebar-file-view__path"
+                        title={entry().label}
+                      >
+                        {entry().label}
+                      </span>
                     </div>
-                  ) : (
-                    <Show when={detail()}>{(content) => <Detail content={content()} />}</Show>
-                  )}
+                  </Show>
+                  <Show when={rendered().presentation === "mobile"}>
+                    <div class="chat-files-panel__mobile-fallback-rail">
+                      <SidebarFileMobileRail
+                        name={entry().label}
+                        identity={entry().label}
+                        back={{ label: t("chat.sidePanel.files"), onBack: showBrowser }}
+                      />
+                    </div>
+                  </Show>
+                  <div class="chat-files-panel__reader">
+                    <Errored
+                      fallback={(error) => (
+                        <Show
+                          when={rendered().presentation === "desktop"}
+                          fallback={
+                            <div class="callout danger" role="alert">
+                              {formatUiError(error())}
+                            </div>
+                          }
+                        >
+                          <section class="sidebar-file-view sidebar-file-view--desktop">
+                            <div
+                              class="sidebar-file-view__path-bar session-panel-rail"
+                              data-presentation="desktop"
+                            >
+                              <span
+                                ref={createTextOverflow(() => entry().label)}
+                                class="sidebar-file-view__path"
+                                title={entry().label}
+                              >
+                                {entry().label}
+                              </span>
+                            </div>
+                            <div class="sidebar-file-view__workspace-body">
+                              <PanelEmptyState
+                                presentation="desktop"
+                                icon={<Icon name="fileText" />}
+                                heading={t("chat.detailPanel.unavailable")}
+                                description={formatUiError(error())}
+                              />
+                            </div>
+                          </section>
+                        </Show>
+                      )}
+                    >
+                      <Loading
+                        fallback={
+                          <PanelLoadingSkeleton variant="files" label={t("common.loading")} />
+                        }
+                      >
+                        <Show when={detail()}>
+                          {(content) => <Detail content={content()} previewId={entry().id} />}
+                        </Show>
+                      </Loading>
+                    </Errored>
+                  </div>
                 </div>
               );
             }}
@@ -230,10 +420,15 @@ defineSolidBridge<Props, Methods>(
   },
   {
     properties: {
+      sessionKey: { default: "" },
       previews: { default: [], attribute: false },
       activeId: { default: null, attribute: false },
       tabsInHeader: { default: true, type: Boolean },
-      browser: { default: undefined, attribute: false },
+      presentation: { default: undefined, attribute: false },
+      treeVisible: { default: true, type: Boolean },
+      folderView: { default: false, type: Boolean },
+      workspace: { default: undefined, attribute: false },
+      browserPresented: { default: () => true, attribute: false },
       renderDetail: { default: null, attribute: false },
       onSelect: { default: () => {}, attribute: false },
       onClose: { default: () => {}, attribute: false },

@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, For, onCleanup, onSettled, Show } from "solid-js";
+import { createEffect, createMemo, For, onSettled, Show } from "solid-js";
 import { SYSTEM_AGENT_ID } from "../../../../src/system-agent/agent-id.js";
 import { MarkdownBlocks } from "../../components/markdown-blocks-owner.ts";
 import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blocks.ts";
@@ -212,6 +212,10 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
     return () => {
       inputChanges.delete(host);
       queued = false;
+      if (textarea) {
+        disconnectTextareaOverflowObserver(textarea);
+      }
+      markdown?.dispose();
     };
   });
   const plugin = () => {
@@ -302,12 +306,6 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
         },
       },
     };
-  });
-  onCleanup(() => {
-    if (textarea) {
-      disconnectTextareaOverflowObserver(textarea);
-    }
-    markdown?.dispose();
   });
   const handleKeydown = (event: KeyboardEvent) => {
     if (event.key !== "Enter" || event.shiftKey || event.isComposing) {

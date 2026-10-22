@@ -1,4 +1,4 @@
-import { createMemo, createStore } from "solid-js";
+import { createMemo, createStore, merge } from "solid-js";
 import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
 import { projectPresentation } from "../../../lib/reactive/presentation.ts";
 import { projectSource } from "../../../lib/reactive/projection.ts";
@@ -55,15 +55,17 @@ export function createComposerQuestions(paneId: string, readProps: () => Questio
     if (!props) {
       return null;
     }
-    const asyncQuestions = createAsyncQuestionPresentation(transcript, {
-      ...props,
-      queue: props.getQueue?.() ?? props.queue,
-      onReopen: (itemId, scope) => {
-        state.restoreComposerFocus ||= state.questionTakeoverActive;
-        state.questionTakeoverActive = false;
-        select(JSON.stringify([scope, itemId]));
-      },
-    });
+    const asyncQuestions = createAsyncQuestionPresentation(
+      transcript,
+      merge(props, {
+        queue: props.getQueue?.() ?? props.queue,
+        onReopen: (itemId, scope) => {
+          state.restoreComposerFocus ||= state.questionTakeoverActive;
+          state.questionTakeoverActive = false;
+          select(JSON.stringify([scope, itemId]));
+        },
+      } satisfies Partial<Parameters<typeof createAsyncQuestionPresentation>[1]>),
+    );
     const gatewayQuestions =
       props.gatewayQuestionPrompts?.filter((prompt) => prompt.status === "pending") ?? [];
     const asyncIdentity = (itemId: string) =>

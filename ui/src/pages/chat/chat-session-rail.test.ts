@@ -417,9 +417,12 @@ describe("ChatSessionRailElement", () => {
 
     element.querySelector("form")?.dispatchEvent(new SubmitEvent("submit", { bubbles: true }));
     expect(onSubmit).toHaveBeenCalledWith("What should I verify?");
-    expect(element.querySelector(".chat-session-rail__answer strong")?.textContent).toBe("Only");
+    const answer = element.querySelector(".chat-group.assistant");
+    expect(answer?.querySelector(".chat-group-messages strong")?.textContent).toBe("Only");
     expect(element.querySelector("script")).toBeNull();
-    expect(element.querySelector(".chat-session-rail__timestamp")?.textContent).toContain("as of");
+    // The main transcript's footer replaces the bespoke "as of" line.
+    expect(answer?.querySelector(".chat-group-footer time.chat-group-timestamp")).not.toBeNull();
+    expect(element.textContent).not.toContain("as of");
   });
 
   it("returns focus to the rail composer after deleting its last comment", async () => {
@@ -472,7 +475,9 @@ describe("ChatSessionRailElement", () => {
         draft: "",
       },
     });
-    const text = element.querySelector(".chat-session-rail__answer strong")!.firstChild!;
+    const text = element.querySelector(
+      ".chat-group.assistant .chat-group-messages strong",
+    )!.firstChild!;
     const range = document.createRange();
     range.selectNodeContents(text);
     const selection = document.getSelection()!;
@@ -765,5 +770,17 @@ describe("ChatSessionRailElement", () => {
     const skeleton = element.querySelector("openclaw-panel-loading-skeleton");
     expect(skeleton?.getAttribute("data-panel-skeleton")).toBe("chat");
     expect(element.querySelector("openclaw-panel-empty-state")).toBeNull();
+  });
+
+  it("opens with the native empty state and one composer without suggested questions", async () => {
+    const onSubmit = vi.fn();
+    const element = await mount({ onSubmit });
+    const empty = element.querySelector("openclaw-panel-empty-state");
+
+    expect(empty?.querySelector(".empty-state__title")?.textContent).toBe("Side chat");
+    expect(element.textContent).not.toMatch(/What changed\?|Why did it stop\?|What's left\?/);
+    expect(element.querySelectorAll("form")).toHaveLength(1);
+    expect(element.querySelectorAll('textarea[aria-label="Ask in side chat"]')).toHaveLength(1);
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 });

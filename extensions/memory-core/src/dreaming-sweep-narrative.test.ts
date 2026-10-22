@@ -10,7 +10,12 @@ import {
   createTestPluginApi,
   createTestPluginServiceScheduler,
 } from "openclaw/plugin-sdk/plugin-test-api";
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createPluginRecord,
+  createPluginRegistry,
+  createPluginRuntimeMock,
+  disposePluginRegistryInstances,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -32,6 +37,7 @@ import {
 vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", { spy: true });
 
 const { createTempWorkspace } = createMemoryCoreTestHarness();
+const backgroundOwners = new Set<ReturnType<typeof createPluginRegistry>>();
 const NOW_MS = Date.parse("2026-04-05T10:00:00.000Z");
 const DAY = "2026-04-05";
 const FRAGMENT = "Move archive backups to encrypted cold storage.";
@@ -47,7 +53,14 @@ const logText = (mock: ReturnType<typeof vi.fn>) => mock.mock.calls.flat().join(
 const expectHandled = (result: unknown, status = "processed") =>
   expect(result).toEqual({ handled: true, reason: `memory-core: short-term dreaming ${status}` });
 
-afterEach(() => {
+afterEach(async () => {
+  await Promise.all(
+    [...backgroundOwners].map(async (owner) => {
+      const result = await disposePluginRegistryInstances(owner.registry);
+      expect(result.failures).toEqual([]);
+    }),
+  );
+  backgroundOwners.clear();
   resetSystemEventsForTest();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
@@ -62,6 +75,7 @@ async function createSweep(
     failDeepReport?: boolean;
     failRemReport?: boolean;
     narrativeGate?: Promise<void>;
+    managedBackground?: boolean;
   } = {},
 ) {
   const workspaceDir = await createTempWorkspace("sweep-narrative-");
@@ -144,6 +158,20 @@ async function createSweep(
   const registerService =
     vi.fn<Parameters<typeof registerShortTermPromotionDreaming>[0]["registerService"]>();
   const baseApi = createTestPluginApi({ config, logger, pluginConfig: {} });
+  if (options.managedBackground) {
+    const owner = createPluginRegistry({
+      logger,
+      runtime: createPluginRuntimeMock(),
+      activateGlobalSideEffects: false,
+    });
+    const record = createPluginRecord({ id: "memory-core" });
+    owner.registry.plugins.push(record);
+    baseApi.lifecycle = owner.createApi(record, { config }).lifecycle;
+    backgroundOwners.add(owner);
+    await baseApi.lifecycle.runInBackgroundContext!(() =>
+      configureMemoryCoreDreamingStateForTests(),
+    );
+  }
   const agent = createPluginRuntimeMock().agent;
   const resolveTimeout = vi.mocked(agent.resolveAgentTimeoutMs).mockReturnValue(180_000);
   registerShortTermPromotionDreaming({
@@ -316,13 +344,14 @@ describe("dreaming sweep diary publication", () => {
 
   it.each([false, true])("settles the detached diary with Forget=%s", async (forget) => {
     const publish = createDeferred<void>();
-    const sweep = await createSweep({ narrativeGate: publish.promise });
+    const sweep = await createSweep({ narrativeGate: publish.promise, managedBackground: true });
     // Cron management is optional; starting without it admits no timers or fake scheduler work.
     await sweep.service.start(sweep.serviceContext);
     let stopped = false;
     let stopping: Promise<void> | undefined;
     try {
       expectHandled(await sweep.run("cron"));
+      expect(logText(sweep.logger.info)).toContain("narrativesPending=1");
       expectNarrative(sweep);
       stopping = Promise.resolve(sweep.service.stop?.(sweep.serviceContext)).then(() => {
         stopped = true;

@@ -1,11 +1,10 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-
-const writeJson = (file: string, value: unknown) => writeFileSync(file, JSON.stringify(value));
+import { readJson, runProcess, writeJson } from "./upgrade-survivor-shard.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const selectedSha = "a".repeat(40);
@@ -112,10 +111,10 @@ phase() {
 }
 ${flow}
 `;
-  const result = spawnSync("/bin/bash", ["-c", script], {
-    encoding: "utf8",
-    timeout: 10_000,
-    env: {
+  const result = runProcess(
+    "/bin/bash",
+    ["-c", script],
+    {
       ...process.env,
       UNIT_ROOT: root,
       UNIT_NODE: resolveTestNodeExecPath(),
@@ -123,7 +122,8 @@ ${flow}
       UNIT_CHANGE: change,
       OPENCLAW_DOCKER_E2E_SELECTED_SHA: change === "wrong-source" ? "b".repeat(40) : selectedSha,
     },
-  });
+    10_000,
+  );
   return {
     result,
     artifacts,
@@ -161,7 +161,7 @@ it.skipIf(process.platform === "win32").each<IdentityCase>([
     expect(observed.result.status, observed.result.stdout + observed.result.stderr).toBe(0);
     expect(existsSync(identity)).toBe(true);
     if (kind === "installed") {
-      expect(JSON.parse(readFileSync(identity, "utf8"))).toMatchObject({
+      expect(readJson(identity)).toMatchObject({
         version,
         buildInfo: { commit: selectedSha },
       });

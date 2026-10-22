@@ -41,6 +41,7 @@ describe("session discussion panel", () => {
       loadInfo: vi.fn().mockResolvedValue({ state: "available" }),
       openDiscussion,
       canOpen: false,
+      presentation: "desktop",
     });
     await vi.waitFor(async () => {
       expect(emptyStateText(panel)).toContain("Operator write access is required");
@@ -51,6 +52,43 @@ describe("session discussion panel", () => {
     panel.canOpen = true;
 
     await vi.waitFor(() => expect(openDiscussion).toHaveBeenCalledTimes(1));
+  });
+
+  it("preserves a held discussion read and frame theme updates across same-turn moves", async () => {
+    const result = Promise.withResolvers<{
+      state: "open";
+      embedUrl: string;
+    }>();
+    const loadInfo = vi.fn<SessionDiscussionInfoLoader>().mockReturnValue(result.promise);
+    const panel = mount({ loadInfo, openDiscussion: vi.fn() });
+    await vi.waitFor(() => expect(loadInfo).toHaveBeenCalledTimes(1));
+
+    panel.remove();
+    document.body.append(panel);
+    await Promise.resolve();
+    result.resolve({ state: "open", embedUrl: "https://discussion.example/retained" });
+
+    await vi.waitFor(() => {
+      expect(panel.querySelector("iframe")?.getAttribute("src")).toBe(
+        "https://discussion.example/retained",
+      );
+    });
+    const frame = panel.querySelector<HTMLIFrameElement>("iframe")!;
+    panel.remove();
+    document.body.append(panel);
+    await Promise.resolve();
+    const postMessage = vi.spyOn(frame.contentWindow!, "postMessage");
+
+    document.documentElement.dataset.themeMode = "light";
+
+    await vi.waitFor(() => {
+      expect(postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "openclaw:widget-theme", mode: "light" }),
+        "https://discussion.example",
+      );
+    });
+    expect(panel.querySelector("iframe")).toBe(frame);
+    expect(loadInfo).toHaveBeenCalledTimes(1);
   });
 
   it("refetches on session switch and reports a hidden discussion", async () => {
@@ -188,5 +226,31 @@ describe("session discussion panel", () => {
     });
     expect(panel.querySelector("iframe")).toBeNull();
     expect(panel.querySelector("a")).toBeNull();
+  });
+
+  it("recovers a failed discussion read when its source is replaced", async () => {
+    const loadInfo = vi
+      .fn<SessionDiscussionInfoLoader>()
+      .mockRejectedValueOnce(new Error("Discussion provider unavailable"))
+      .mockResolvedValueOnce({
+        state: "open",
+        embedUrl: "https://discussion.example/recovered",
+      });
+    const panel = mount({ loadInfo, openDiscussion: vi.fn() });
+    await vi.waitFor(() => {
+      expect(panel.querySelector(".callout.danger")?.textContent).toContain(
+        "Discussion provider unavailable",
+      );
+    });
+
+    panel.sourceGeneration += 1;
+
+    await vi.waitFor(() => {
+      expect(panel.querySelector("iframe")?.getAttribute("src")).toBe(
+        "https://discussion.example/recovered",
+      );
+    });
+    expect(panel.querySelector(".callout.danger")).toBeNull();
+    expect(loadInfo).toHaveBeenCalledTimes(2);
   });
 });

@@ -26,7 +26,6 @@ it.skipIf(!isLiveTestEnabled() || process.env.OPENCLAW_LIVE_OWNER_ASSIGNMENT !==
           defaults: {
             model: { primary: "openai/gpt-6.1-sol" },
             models: { "openai/gpt-6.1-sol": { agentRuntime: { id: "openclaw" } } },
-            heartbeat: { every: "0m" },
             thinkingDefault: "low",
             skills: [],
           },

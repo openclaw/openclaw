@@ -64,10 +64,7 @@ const phases = new Set([
       "delete",
       "status-bar",
       "watch-capture",
-      "capture-01-control-connected",
-      "capture-02-chat-connected",
-      "capture-03-agent-connected",
-      "capture-04-settings-connected",
+      "capture",
     ].map((operation) => `screenshot-${device}-${operation}`),
   ),
 ]);

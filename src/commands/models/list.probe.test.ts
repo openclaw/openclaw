@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as embeddedStateLock from "../../infra/embedded-state-lock.js";
+import * as gatewayLockProcessModule from "../../infra/gateway-lock-process.js";
 import { acquireGatewayLock, type GatewayLockOptions } from "../../infra/gateway-lock.js";
 
 const acquireNativeStateLock = embeddedStateLock.acquireEmbeddedStateLock;
@@ -136,6 +137,9 @@ it("maps failover reasons to probe statuses", () => {
 
 it("refuses CLI probes while a live Gateway owns canonical state", async () => {
   const stateDir = tempDirs.make("openclaw-model-probe-lock-");
+  vi.spyOn(gatewayLockProcessModule, "readGatewayLockProcessStartTime").mockImplementation(
+    () => 123_456,
+  );
   const lockOptions: GatewayLockOptions = {
     allowInTests: true,
     env: {
@@ -144,7 +148,6 @@ it("refuses CLI probes while a live Gateway owns canonical state", async () => {
       OPENCLAW_STATE_DIR: stateDir,
     },
     lockDir: path.join(stateDir, "gateway-locks"),
-    readProcessStartTime: () => 123_456,
     timeoutMs: 100,
   };
   vi.spyOn(embeddedStateLock, "acquireEmbeddedStateLock").mockImplementation((params) =>

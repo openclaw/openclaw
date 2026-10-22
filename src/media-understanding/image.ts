@@ -248,30 +248,6 @@ function resolveMinimaxVlmAuthProvider(
   return normalizeMediaProviderId(provider);
 }
 
-async function resolveMinimaxVlmFallbackRuntime(params: {
-  cfg: ImageDescriptionRequest["cfg"];
-  agentDir: string;
-  workspaceDir?: string;
-  provider: string;
-  profile?: string;
-  preferredProfile?: string;
-}): Promise<{ runtimeValue: string; modelBaseUrl?: string }> {
-  const authProvider = resolveMinimaxVlmAuthProvider(params.cfg, params.provider);
-  const auth = await resolveApiKeyForProviderCore({
-    provider: authProvider,
-    cfg: params.cfg,
-    secretSentinels: true,
-    profileId: params.profile,
-    preferredProfile: params.preferredProfile,
-    agentDir: params.agentDir,
-    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-  });
-  return {
-    runtimeValue: requireApiKey(auth, authProvider),
-    modelBaseUrl: resolveConfiguredProviderBaseUrl(params.cfg, params.provider),
-  };
-}
-
 function buildImageDescriptionTimeoutError(params: {
   phase: "setup" | "request";
   timeoutMs: number;
@@ -371,7 +347,22 @@ export async function describeImagesWithModelPayloadTransformCore(
         timeoutMs: configuredTimeoutMs,
         createTimeoutError: (timeoutMs) =>
           buildImageDescriptionTimeoutError({ phase: "setup", timeoutMs }),
-        task: trackAsyncWork(() => resolveMinimaxVlmFallbackRuntime(params)),
+        task: trackAsyncWork(async () => {
+          const authProvider = resolveMinimaxVlmAuthProvider(params.cfg, params.provider);
+          const auth = await resolveApiKeyForProviderCore({
+            provider: authProvider,
+            cfg: params.cfg,
+            secretSentinels: true,
+            profileId: params.profile,
+            preferredProfile: params.preferredProfile,
+            agentDir: params.agentDir,
+            ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+          });
+          return {
+            runtimeValue: requireApiKey(auth, authProvider),
+            modelBaseUrl: resolveConfiguredProviderBaseUrl(params.cfg, params.provider),
+          };
+        }),
       });
       return await describeImagesWithMinimax({
         assertResourcesOpen,

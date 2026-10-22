@@ -20,6 +20,8 @@ import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/sess
 import { spyOnSessionStoreSummaries } from "../config/sessions/session-store-summary.test-support.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createDefaultProactiveJob } from "../cron/default-proactive-job.js";
+import { saveProactiveJobsForTest } from "../cron/proactive-job.test-support.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -126,38 +128,31 @@ describe("getStatusSummary read-only session access", () => {
     );
   });
 
-  it("does not create the heartbeat session database while checking its route", async () => {
-    const tempDir = tempDirs.make();
-    const databasePath = path.join(tempDir, "openclaw-agent.sqlite");
-
-    const summary = await getStatusSummary({
-      includeChannelSummary: false,
-      config: { session: { store: databasePath } },
-    });
-
-    expect(summary.heartbeat.agents[0]?.waitingForRoute).toBe(true);
-    expect(fs.existsSync(databasePath)).toBe(false);
-  });
-
-  it.each([undefined, "owner"])(
-    "resolves the configured owner DM without writing session state for target %s",
-    async (target) => {
-      registerTelegramFixture();
-      const tempDir = tempDirs.make();
-      const databasePath = path.join(tempDir, "openclaw-agent.sqlite");
-
-      const summary = await getStatusSummary({
-        includeChannelSummary: false,
-        config: {
-          ...(target ? { agents: { defaults: { heartbeat: { target } } } } : {}),
-          commands: { ownerAllowFrom: ["telegram:123"] },
-          channels: { telegram: { allowFrom: ["123"] } },
+  it.each([false, true])(
+    "checks the automation route without writing sessions (owner DM: %s)",
+    async (ownerDm) => {
+      await withOpenClawTestState({ label: "status-automation-route" }, async (state) => {
+        if (ownerDm) {
+          registerTelegramFixture();
+        }
+        const databasePath = state.statePath("route", "openclaw-agent.sqlite");
+        const config: OpenClawConfig = {
+          agents: { entries: { main: {} } },
+          ...(ownerDm
+            ? {
+                commands: { ownerAllowFrom: ["telegram:123"] },
+                channels: { telegram: { allowFrom: ["123"] } },
+              }
+            : {}),
           session: { store: databasePath },
-        },
+        };
+        await saveProactiveJobsForTest(state.statePath("cron", "jobs.json"), [
+          createDefaultProactiveJob(config, "main", 1),
+        ]);
+        const summary = await getStatusSummary({ includeChannelSummary: false, config });
+        expect(summary.heartbeat.agents[0]?.waitingForRoute).toBe(!ownerDm);
+        expect(fs.existsSync(databasePath)).toBe(false);
       });
-
-      expect(summary.heartbeat.agents[0]?.waitingForRoute).toBe(false);
-      expect(fs.existsSync(databasePath)).toBe(false);
     },
   );
 
@@ -268,7 +263,7 @@ describe("getStatusSummary read-only session access", () => {
   it("shares one local session snapshot across the complete status scan", async () => {
     await withOpenClawTestState({ prefix: "openclaw-status-scan-snapshot-" }, async (state) => {
       const config = {
-        agents: { defaults: { heartbeat: { every: "0m" } }, entries: { main: {} } },
+        agents: { entries: { main: {} } },
         gateway: { mode: "remote" as const, remote: { url: "ws://127.0.0.1:1", token: "fixture" } },
         plugins: { enabled: false },
       };
@@ -397,7 +392,6 @@ describe("getStatusSummary read-only session access", () => {
         const storePath = state.path("shared.sqlite");
         const config = {
           agents: {
-            defaults: { heartbeat: { every: "0m" } },
             entries: { main: {}, ops: {} },
           },
           session: { store: storePath },
@@ -449,7 +443,7 @@ describe("getStatusSummary read-only session access", () => {
   it("keeps session payload hydration off the status caller", async () => {
     await withOpenClawTestState({ prefix: "openclaw-status-recent-window-" }, async (state) => {
       const config = {
-        agents: { defaults: { heartbeat: { every: "0m" } }, entries: { main: {} } },
+        agents: { entries: { main: {} } },
       };
       const storePath = resolveSessionStorePathCore(undefined, {
         agentId: "main",

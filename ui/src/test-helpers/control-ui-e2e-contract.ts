@@ -1,5 +1,8 @@
 import type { AuthenticatedUser } from "../app/user-profile.ts";
-import type { ControlUiSessionFixture } from "./control-ui-session-fixtures.ts";
+import type {
+  createControlUiSessionFixtures,
+  ControlUiSessionFixture,
+} from "./control-ui-session-fixtures.ts";
 
 export type ControlUiMockPresenceUser = AuthenticatedUser & {
   self?: boolean;
@@ -90,6 +93,8 @@ type GatewayMethods = {
 };
 
 export type ControlUiMockGateway = GatewayMethods & {
+  /** Commit one fixture-owned visibility change without replacing the canonical roster. */
+  setSessionVisibility: ReturnType<typeof createControlUiSessionFixtures>["setVisibility"];
   readonly online: boolean;
   requests: MockGatewayRequest[];
   emit: (event: string, payload?: unknown) => void;

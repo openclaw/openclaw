@@ -111,13 +111,17 @@ export function readSessionMaintenanceAgeCandidates(params: {
   pruneAfterMs: number;
   archiveDashboardAfterMs: number | null;
   modelRunPruneAfterMs: number | null;
-}): Record<string, SessionEntry> {
+  limit?: number;
+  nowMs?: number;
+  after?: { updatedAt: number; sessionKey: string };
+}): { store: Record<string, SessionEntry>; last?: { updatedAt: number; sessionKey: string } } {
   if (params.minimumAgeMs == null || params.minimumAgeMs <= 0) {
-    return {};
+    return { store: {} };
   }
   const db = getSessionKysely(params.database.db);
   const store: Record<string, SessionEntry> = {};
-  const now = Date.now();
+  const now = params.nowMs ?? Date.now();
+  let last: { updatedAt: number; sessionKey: string } | undefined;
   for (const row of iterateSqliteQuerySync(
     params.database.db,
     db
@@ -146,14 +150,28 @@ export function readSessionMaintenanceAgeCandidates(params: {
             : []),
         ]),
       )
-      .orderBy("updated_at", "asc"),
+      .$if(params.after !== undefined, (query) =>
+        query.where((eb) =>
+          eb.or([
+            eb("updated_at", ">", params.after!.updatedAt),
+            eb.and([
+              eb("updated_at", "=", params.after!.updatedAt),
+              eb("session_key", ">", params.after!.sessionKey),
+            ]),
+          ]),
+        ),
+      )
+      .orderBy("updated_at", "asc")
+      .orderBy("session_key", "asc")
+      .$if(params.limit !== undefined, (query) => query.limit(params.limit!)),
   )) {
+    last = { updatedAt: row.updated_at, sessionKey: row.session_key };
     const entry = parseSessionEntryJson(row);
     if (entry) {
       store[row.session_key] = entry;
     }
   }
-  return store;
+  return { store, last };
 }
 
 export function readSessionMaintenanceCapCandidates(params: {
@@ -163,6 +181,7 @@ export function readSessionMaintenanceCapCandidates(params: {
   overflow: number;
   readPreserveKeys: () => ReadonlySet<string> | undefined;
   preserveRecentMs?: number | null;
+  nowMs?: number;
 }): { store: Record<string, SessionEntry>; durableNoCandidates: boolean } {
   if (params.overflow <= 0) {
     return { store: {}, durableNoCandidates: false };
@@ -231,6 +250,7 @@ export function readSessionMaintenanceCapCandidates(params: {
         entry,
         preserveKeys: params.readPreserveKeys(),
         preserveRecentMs: params.preserveRecentMs,
+        nowMs: params.nowMs,
       })
     ) {
       continue;

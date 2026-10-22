@@ -23,21 +23,19 @@ import {
 } from "./sqlite-snapshot-source.js";
 
 function createDatabase(location: string, sql: string): Buffer {
-  const database = new (requireNodeSqlite().DatabaseSync)(location);
-  try {
+  {
+    using database = new (requireNodeSqlite().DatabaseSync)(location);
     database.exec(sql);
-  } finally {
-    database.close();
   }
   return fs.readFileSync(location);
 }
 
-function createSnapshot(name: string) {
-  const ownedRoot = path.join(root, name);
-  const location = path.join(ownedRoot, "database.sqlite");
-  fs.mkdirSync(ownedRoot, { recursive: true, mode: 0o700 });
-  fs.writeFileSync(location, "snapshot bytes");
-  return { ownedRoot, location };
+function expectSnapshot(location: string, present: boolean) {
+  expect([
+    fs.existsSync(location),
+    hasSqliteDatabaseSchemaAdmissionForPath(location),
+    captureSqliteDatabaseAdmissions().some((entry) => entry.location === location),
+  ]).toEqual([present, present, present]);
 }
 
 it("keeps synchronous and asynchronous token cleanup in separate snapshot flights", async () => {
@@ -67,45 +65,34 @@ it("keeps synchronous and asynchronous token cleanup in separate snapshot flight
       admitSqliteSchema(nested);
     }
     for (const snapshot of [syncSnapshot, asyncSnapshot]) {
-      const reader = openNodeSqliteDatabase(snapshot.location, { readOnly: true });
-      try {
-        admitSqliteSchema(reader);
-        expect(reader.prepare("SELECT value FROM probe").get()).toEqual({ value: "preserved" });
-      } finally {
-        reader.close();
-      }
+      using reader = openNodeSqliteDatabase(snapshot.location, { readOnly: true });
+      admitSqliteSchema(reader);
+      expect(reader.prepare("SELECT value FROM probe").get()).toEqual({ value: "preserved" });
     }
     for (const location of [syncSnapshot.location, asyncSnapshot.location, nestedLocation]) {
-      expect(hasSqliteDatabaseSchemaAdmissionForPath(location)).toBe(true);
+      expectSnapshot(location, true);
     }
-    const admittedPaths = () => captureSqliteDatabaseAdmissions().map((entry) => entry.location);
-    expect(admittedPaths()).toEqual(
-      expect.arrayContaining([syncSnapshot.location, asyncSnapshot.location, nestedLocation]),
-    );
     expect(syncSnapshot.cleanup()).toBe(true);
-    expect(fs.existsSync(syncSnapshot.location)).toBe(false);
-    expect(admittedPaths()).not.toContain(syncSnapshot.location);
-    expect(admittedPaths()).toContain(asyncSnapshot.location);
-    expect(fs.existsSync(asyncSnapshot.location)).toBe(true);
+    expectSnapshot(syncSnapshot.location, false);
+    expectSnapshot(asyncSnapshot.location, true);
     const failures: unknown[] = [];
     expect(removeTempDirectory(asyncSnapshot.cleanupRoot!, (error) => failures.push(error))).toBe(
       false,
     );
-    expect(failures).toHaveLength(1);
-    expect(failures[0]).toBeInstanceOf(SqliteSnapshotCleanupError);
-    expect(fs.existsSync(asyncSnapshot.location)).toBe(true);
+    expect(failures).toEqual([expect.any(SqliteSnapshotCleanupError)]);
+    expectSnapshot(asyncSnapshot.location, true);
     const releaseReader = retainSnapshotTempDirectory(path.dirname(asyncSnapshot.location));
     try {
       expect(await removeTempDirectoryAsync(asyncSnapshot.cleanupRoot!)).toBe(false);
-      expect(admittedPaths()).toContain(asyncSnapshot.location);
-      expect(admittedPaths()).toContain(nestedLocation);
+      expectSnapshot(asyncSnapshot.location, true);
+      expectSnapshot(nestedLocation, true);
     } finally {
       releaseReader();
     }
     expect(await asyncSnapshot.cleanupAsync()).toBe(true);
     expect(fs.existsSync(asyncSnapshot.cleanupRoot!)).toBe(false);
-    expect(admittedPaths()).not.toContain(asyncSnapshot.location);
-    expect(admittedPaths()).not.toContain(nestedLocation);
+    expectSnapshot(asyncSnapshot.location, false);
+    expectSnapshot(nestedLocation, false);
     expect(fs.readFileSync(source)).toEqual(original);
   } finally {
     try {
@@ -138,21 +125,15 @@ afterEach(async () => {
   await fs.promises.rm(root, { recursive: true, force: true });
 });
 
-async function readCleanupLog(): Promise<unknown[]> {
-  await testApi.flushFileLogQueueForTests();
-  return (await fs.promises.readFile(path.join(root, "cleanup.log"), "utf8"))
-    .trim()
-    .split("\n")
-    .map((line): unknown => JSON.parse(line));
-}
-
 it("does not throw when the onCleanupFailure callback itself throws", async () => {
   const processWarning = vi.spyOn(process, "emitWarning");
   const consoleWarning = vi.spyOn(console, "warn");
-  const { ownedRoot, location } = createSnapshot("throwing-callback");
+  const ownedRoot = path.join(root, "throwing-callback");
+  const location = path.join(ownedRoot, "database.sqlite");
+  fs.mkdirSync(ownedRoot, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(location, "snapshot bytes");
 
-  // Force removal failure via fs.rmSync mock so the callback is exercised on
-  // every platform, including root POSIX and Windows (where chmod can't deny).
+  // Mock removal rather than relying on platform-dependent chmod denial.
   vi.spyOn(fs, "rmSync").mockImplementation(() => {
     throw Object.assign(new Error("mock removal failure"), { code: "EBUSY" });
   });
@@ -161,21 +142,20 @@ it("does not throw when the onCleanupFailure callback itself throws", async () =
     throw new Error("callback exploded");
   });
 
-  try {
-    // cleanup() must not throw even though the callback throws — the
-    // non-throwing contract (requireCleanup=false) must hold.
-    expect(prepared.cleanup()).toBe(false);
-    expect(processWarning).not.toHaveBeenCalled();
-    expect(consoleWarning).not.toHaveBeenCalled();
-  } finally {
-    vi.restoreAllMocks();
-  }
+  expect(prepared.cleanup()).toBe(false);
+  expect([processWarning.mock.calls, consoleWarning.mock.calls]).toEqual([[], []]);
+  vi.restoreAllMocks();
 
-  const records = await readCleanupLog();
-  expect(records).toHaveLength(1);
-  expect(records[0]).toMatchObject({
-    "1": { path: ownedRoot, operation: "rm", errorCode: "EBUSY" },
-    message: expect.stringContaining("SQLite read-only snapshot cleanup failed"),
-  });
+  await testApi.flushFileLogQueueForTests();
+  const records = (await fs.promises.readFile(path.join(root, "cleanup.log"), "utf8"))
+    .trim()
+    .split("\n")
+    .map((line): unknown => JSON.parse(line));
+  expect(records).toMatchObject([
+    {
+      "1": { path: ownedRoot, operation: "rm", errorCode: "EBUSY" },
+      message: expect.stringContaining("SQLite read-only snapshot cleanup failed"),
+    },
+  ]);
   expect(JSON.stringify(records)).not.toContain("callback exploded");
 });

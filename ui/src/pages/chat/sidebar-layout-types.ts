@@ -32,6 +32,8 @@ export type SidebarColumn = {
 };
 export type SidebarLayout = {
   columns: SidebarColumn[];
+  /** Launcher tab, retained in memory only; never a resource slot. */
+  newTab?: { id: string; index: number; returnPanelId?: string };
   mainPanelId?: string;
   dock?: SidebarDock;
   open?: boolean;

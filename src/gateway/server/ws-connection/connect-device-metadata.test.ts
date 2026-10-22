@@ -104,6 +104,10 @@ describe("resolvePinnedClientMetadata", () => {
 
   it.each([
     ["node-host", "node", "macos", "macOS 26.5.2", undefined],
+    ["cli", "cli", "macos", "macOS 26.5.2", undefined],
+    ["cli", "cli", "darwin", "macOS 26.5.2", undefined],
+    ["cli", "probe", "macos", "macOS 26.5.2", undefined],
+    ["cli", "probe", "darwin", "macOS 26.5.2", undefined],
     ["openclaw-macos", "ui", "macOS 26.5.2", "macos", "macOS 26.5.2"],
   ] as const)("shares the macOS pin with %s", (clientId, clientMode, claimed, paired, refresh) => {
     expectPinned(
@@ -112,6 +116,31 @@ describe("resolvePinnedClientMetadata", () => {
       "Mac",
       refresh,
     );
+  });
+
+  it.each([
+    { clientId: "cli", clientMode: "backend" },
+    { clientId: "openclaw-tui", clientMode: "cli" },
+    { clientId: "cli", clientMode: "probe", claimedPlatform: "linux" },
+  ])("keeps non-CLI Mac aliases approval-bound: %j", (overrides) => {
+    expect(resolvePlatforms("macos", "macOS 26.5.2", "Mac", overrides)).toMatchObject({
+      platformMismatch: true,
+      deviceFamilyMismatch: false,
+      pinnedPlatform: undefined,
+    });
+  });
+
+  it.each([undefined, "Windows"])("keeps the CLI device-family pin for %s", (family) => {
+    expect(
+      resolvePlatforms("macos", "macOS 26.5.2", "Mac", {
+        clientId: "cli",
+        clientMode: "probe",
+        claimedDeviceFamily: family,
+      }),
+    ).toMatchObject({
+      deviceFamilyMismatch: true,
+      pinnedDeviceFamily: "Mac",
+    });
   });
 
   it("still requires approval when an iOS device family changes", () => {

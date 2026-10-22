@@ -93,7 +93,6 @@ export interface SessionListHost {
     | "archiveSessionWithUndo"
     | "patchSession"
     | "isPersonalSessionPin"
-    | "reorderSidebarSection"
     | "sectionHeaders"
   >;
   readonly sidebarMenus: Pick<
@@ -143,7 +142,11 @@ export interface SessionListHost {
   expandedAgentId(): string;
   /** Unadmitted New session handoff; presentation only, never a saved selection. */
   pendingSessionCreate():
-    | Readonly<{ creation: Readonly<{ sessionKey: string }>; displayName?: string }>
+    | Readonly<{
+        creation: Readonly<{ sessionKey: string }>;
+        displayName?: string;
+        category?: string;
+      }>
     | undefined;
   readNewSessionAccess(): SessionMethodAccess;
   readSessionMutationAccess(request: SessionMethodAccessRequest): SessionMethodAccess;

@@ -4,6 +4,7 @@ import type { SystemAgentSetupDetectResult, WizardStep } from "../api/types.ts";
 import type { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { pickerValue } from "../test-helpers/select-picker-e2e.ts";
 import type { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { installSetupGateway } from "./model-setup.test-support.ts";
 
 type SetupSuite = ReturnType<typeof createControlUiE2eSuite>;
 type SetupPage = Parameters<Parameters<SetupSuite["withPage"]>[1]>[0];
@@ -144,8 +145,53 @@ export function configSnapshot(config: object, hash: string) {
   };
 }
 
+export function installLocalSetupGateway(
+  page: Page,
+  detection: ReturnType<typeof makeDetection>,
+  provider: string,
+  sequence: unknown[],
+) {
+  const model = "openai/gpt-5";
+  return installSetupGateway(page, {
+    agentModel: model,
+    models: [{ id: "gpt-5", name: "GPT-5", provider: "openai", available: true }],
+    featureMethods: localSetupFeatures,
+    methodResponses: {
+      "config.get": configSnapshot({ agents: { defaults: { model } } }, "before-local-activation"),
+      [setupRpc.detect]: detection,
+      [setupRpc.prepare]: runningWizard(`${provider}-prepare-session`),
+      [setupRpc.activate]: runningWizard("activation-session"),
+      [setupRpc.next]: { sequence },
+    },
+  });
+}
+
+export async function expectLocalActivation(
+  page: Page,
+  gateway: Awaited<ReturnType<typeof installSetupGateway>>,
+  provider: string,
+  modelRef: string,
+  icon = provider,
+) {
+  await page.getByRole("heading", { name: "Connection verified" }).waitFor();
+  const success = page.locator(".model-setup-success");
+  await expectText(success, modelRef);
+  await expectText(success, "Verified in", true);
+  await expectCount(success.locator(`[data-provider-icon="${icon}"]`), 1);
+  expect((await gateway.waitForRequest(setupRpc.activate)).params).toEqual({
+    sessionId: expect.any(String),
+    kind: `provider-auto:${provider}`,
+    agentId: "main",
+    modelRef,
+  });
+}
+
 export function button(target: Page | Locator, name: string) {
   return target.getByRole("button", { name, exact: true });
+}
+
+export function waitText(target: Page | Locator, text: string | RegExp, exact = true) {
+  return target.getByText(text, { exact }).waitFor();
 }
 
 export function candidate(

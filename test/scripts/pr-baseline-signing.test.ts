@@ -1,4 +1,4 @@
-import { spawnSync, type SpawnSyncOptionsWithBufferEncoding } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
   existsSync,
@@ -8,9 +8,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { createBaselineFixture } from "./pr-baseline-native.test-support.js";
+import {
+  createBaselineFixture,
+  failRestore,
+  signBaselineRequest,
+} from "./pr-baseline-native.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterAll);
 const describePosix = process.platform === "win32" ? describe.skip : describe;
@@ -41,148 +45,77 @@ function createSigningContext() {
 function createSignedContext() {
   const context = createSigningContext();
   const { f, credit, requestArgs } = context;
-  const gitBytes = (
-    cwd: string,
-    args: string[],
-    options: SpawnSyncOptionsWithBufferEncoding = {},
-  ) => {
-    const result = spawnSync("git", args, { cwd, env: f.env, ...options });
-    expect(result.status, result.stderr.toString()).toBe(0);
-    return result.stdout;
-  };
-  const pending = f.pass("prepare-baseline-signing-request", requestArgs);
-  const oid = /Awaiting signature: request=([a-f0-9]{40})/u.exec(pending.stdout)![1]!;
-  const requestPath = f.local(`prepare-baseline-signing.${oid}.json`);
-  const requestBytes = readFileSync(requestPath);
-  const request = JSON.parse(requestBytes.toString());
-  // A separate bare object store performs ordinary git commit-tree -S with
-  // the exact identities/dates/message from the request, not signature splicing.
-  const spool = join(f.root, "signer.git");
-  mkdirSync(spool);
-  f.git(spool, "init", "-q", "--bare");
-  const unsigned = Buffer.from(request.unsignedCommit, "base64");
-  const split = unsigned.indexOf("\n\n");
-  const headers = unsigned.subarray(0, split).toString();
-  const bindingOid = gitBytes(f.worktree, ["hash-object", "--no-filters", "--stdin"], {
-    input: Buffer.from(request.binding, "base64"),
-  })
-    .toString()
-    .trim();
-  expect(unsigned.subarray(split + 2).toString()).toBe(
-    `fix: refresh the reviewed correction baseline\n\nBaseline-Refresh: ${bindingOid}\n${credit}\n`,
+  const signed = signBaselineRequest(f, requestArgs);
+  expect(signed.message).toBe(
+    `fix: refresh the reviewed correction baseline\n\nBaseline-Refresh: ${signed.bindingOid}\n${credit}\n`,
   );
-  const tree = /^tree ([a-f0-9]{40})$/mu.exec(headers)![1]!;
-  const parents = [...headers.matchAll(/^parent ([a-f0-9]{40})$/gmu)].map((m) => m[1]!);
-  const pack = gitBytes(f.worktree, ["pack-objects", "--stdout", "--revs"], {
-    maxBuffer: 16 * 1024 * 1024,
-    input: [tree, ...parents].join("\n") + "\n",
-  });
-  gitBytes(spool, ["index-pack", "--stdin"], { input: pack });
-  const identity: NodeJS.ProcessEnv = {};
-  for (const role of ["author", "committer"]) {
-    const [, name, email, date] = new RegExp(`^${role} (.*) <([^>]*)> (.*)$`, "mu").exec(headers)!;
-    identity[`GIT_${role.toUpperCase()}_NAME`] = name;
-    identity[`GIT_${role.toUpperCase()}_EMAIL`] = email;
-    identity[`GIT_${role.toUpperCase()}_DATE`] = date;
-  }
-  const signingCommand = ["-c", "gpg.format=ssh", "commit-tree"];
-  const parentArgs = parents.flatMap((parent) => ["-p", parent]);
-  const sign = (key: string) => {
-    const result = gitBytes(spool, [...signingCommand, `-S${key}`, tree, ...parentArgs], {
-      env: { ...f.env, ...identity },
-      input: unsigned.subarray(split + 2),
-    });
-    const target = result.toString().trim();
-    return { target, bytes: gitBytes(spool, ["cat-file", "commit", target]) };
-  };
-  const signed = sign(f.key);
-  const response = f.local("signed-commit");
-  writeFileSync(response, signed.bytes);
-  const args = ["--request", oid, "--signed-commit", response];
-  return {
-    ...context,
-    oid,
-    requestPath,
-    requestBytes,
-    request,
-    signed,
-    response,
-    args,
-    identity,
-    sign,
-  };
+  return { ...context, ...signed };
 }
 
 describePosix("native baseline signing handoff", () => {
-  describe("request admission", () => {
-    let context: ReturnType<typeof createSigningContext>;
-    beforeAll(() => {
-      context = createSigningContext();
-    });
-
-    it("seals a published successor request and rejects changed inputs", () => {
-      const { f, source, before, requestArgs } = context;
-      const refuseRequest = (message: string, extra: NodeJS.ProcessEnv = {}) => {
-        const result = f.run("prepare-baseline-signing-request", requestArgs, extra);
-        expect(result.status, result.stdout + result.stderr).not.toBe(0);
-        expect(result.stdout + result.stderr).toContain(message);
-        expect(f.prepGit("rev-parse", "HEAD")).toBe(source);
-        expect(existsSync(f.local("review-transition.json"))).toBe(false);
-      };
-      for (const name of ["prep.env", "prepare-push-result.env"]) {
-        rmSync(f.local(name));
-      }
-      refuseRequest("PR head changed before publication");
-      for (const name of ["prep.env", "prepare-push-result.env"]) {
-        f.writeLocal(name, before[name]!);
-      }
-      const receipt = before["prepare-push-result.env"]!;
-      rmSync(f.local("prepare-push-result.env"));
-      refuseRequest("Baseline admission requires the native publication result");
-      writeFileSync(
-        f.local("prepare-push-result.env"),
-        receipt.toString().replaceAll(source, f.incoming),
-      );
-      refuseRequest("Baseline admission requires the native publication result");
-      const alias = f.prepGit(
-        "commit-tree",
-        `${source}^{tree}`,
-        "-p",
-        f.incoming,
-        "-m",
-        "test: hosted publication alias",
-      );
-      writeFileSync(
-        f.local("prep.env"),
-        before["prep.env"]!.toString().replace(`PREP_HEAD_SHA=${source}`, `PREP_HEAD_SHA=${alias}`),
-      );
-      writeFileSync(
-        f.local("prepare-push-result.env"),
-        receipt
-          .toString()
-          .replace(`PUSH_PREP_HEAD_SHA=${source}`, `PUSH_PREP_HEAD_SHA=${alias}`)
-          .replace(`PR_HEAD_SHA_AFTER_PUSH=${source}`, `PR_HEAD_SHA_AFTER_PUSH=${alias}`),
-      );
-      f.git(f.repo, "update-ref", "refs/heads/topic", alias, source);
-      refuseRequest("Prep sync refused rewritten history");
-      f.git(f.repo, "update-ref", "refs/heads/topic", source, alias);
-      f.writeLocal("prep.env", before["prep.env"]!);
-      for (const replacement of [
-        receipt
-          .toString()
-          .replace("PUSH_REPLACED_HOSTED_ANCESTRY=false", "PUSH_REPLACED_HOSTED_ANCESTRY=true"),
-        receipt
-          .toString()
-          .replace(`PUSH_LOCAL_PREP_HEAD_SHA=${source}`, `PUSH_LOCAL_PREP_HEAD_SHA=${f.incoming}`),
-      ]) {
-        f.writeLocal("prepare-push-result.env", replacement);
-        refuseRequest("does not match this preparation");
-      }
-      f.writeLocal("prepare-push-result.env", receipt);
-      const changePublication = f.local("change-publication.mjs");
-      writeFileSync(
-        changePublication,
-        `import fs from 'node:fs';
+  it("seals a published successor request and rejects changed inputs", () => {
+    const { f, source, before, requestArgs } = createSigningContext();
+    const refuseRequest = (message: string, extra: NodeJS.ProcessEnv = {}) => {
+      const result = f.run("prepare-baseline-signing-request", requestArgs, extra);
+      expect(result.status, result.stdout + result.stderr).not.toBe(0);
+      expect(result.stdout + result.stderr).toContain(message);
+      expect(f.prepGit("rev-parse", "HEAD")).toBe(source);
+      expect(existsSync(f.local("review-transition.json"))).toBe(false);
+    };
+    for (const name of ["prep.env", "prepare-push-result.env"]) {
+      rmSync(f.local(name));
+    }
+    refuseRequest("PR head changed before publication");
+    for (const name of ["prep.env", "prepare-push-result.env"]) {
+      f.writeLocal(name, before[name]!);
+    }
+    const receipt = before["prepare-push-result.env"]!;
+    rmSync(f.local("prepare-push-result.env"));
+    refuseRequest("Baseline admission requires the native publication result");
+    writeFileSync(
+      f.local("prepare-push-result.env"),
+      receipt.toString().replaceAll(source, f.incoming),
+    );
+    refuseRequest("Baseline admission requires the native publication result");
+    const alias = f.prepGit(
+      "commit-tree",
+      `${source}^{tree}`,
+      "-p",
+      f.incoming,
+      "-m",
+      "test: hosted publication alias",
+    );
+    writeFileSync(
+      f.local("prep.env"),
+      before["prep.env"]!.toString().replace(`PREP_HEAD_SHA=${source}`, `PREP_HEAD_SHA=${alias}`),
+    );
+    writeFileSync(
+      f.local("prepare-push-result.env"),
+      receipt
+        .toString()
+        .replace(`PUSH_PREP_HEAD_SHA=${source}`, `PUSH_PREP_HEAD_SHA=${alias}`)
+        .replace(`PR_HEAD_SHA_AFTER_PUSH=${source}`, `PR_HEAD_SHA_AFTER_PUSH=${alias}`),
+    );
+    f.git(f.repo, "update-ref", "refs/heads/topic", alias, source);
+    refuseRequest("Prep sync refused rewritten history");
+    f.git(f.repo, "update-ref", "refs/heads/topic", source, alias);
+    f.writeLocal("prep.env", before["prep.env"]!);
+    for (const replacement of [
+      receipt
+        .toString()
+        .replace("PUSH_REPLACED_HOSTED_ANCESTRY=false", "PUSH_REPLACED_HOSTED_ANCESTRY=true"),
+      receipt
+        .toString()
+        .replace(`PUSH_LOCAL_PREP_HEAD_SHA=${source}`, `PUSH_LOCAL_PREP_HEAD_SHA=${f.incoming}`),
+    ]) {
+      f.writeLocal("prepare-push-result.env", replacement);
+      refuseRequest("does not match this preparation");
+    }
+    f.writeLocal("prepare-push-result.env", receipt);
+    const changePublication = f.local("change-publication.mjs");
+    writeFileSync(
+      changePublication,
+      `import fs from 'node:fs';
 if (process.argv[1]?.endsWith('/gh')) {
   const write = process.stdout.write;
   process.stdout.write = function(chunk, ...rest) {
@@ -196,16 +129,16 @@ if (process.argv[1]?.endsWith('/gh')) {
   };
 }
 `,
-      );
-      refuseRequest("Correction review authority changed during admission", {
-        NODE_OPTIONS: `--import=${changePublication}`,
-        FIXTURE_WORKTREE: f.worktree,
-      });
-      f.writeLocal("prepare-push-result.env", receipt);
-      const changeArchive = f.local("change-archive.mjs");
-      writeFileSync(
-        changeArchive,
-        `import fs from 'node:fs';
+    );
+    refuseRequest("Correction review authority changed during admission", {
+      NODE_OPTIONS: `--import=${changePublication}`,
+      FIXTURE_WORKTREE: f.worktree,
+    });
+    f.writeLocal("prepare-push-result.env", receipt);
+    const changeArchive = f.local("change-archive.mjs");
+    writeFileSync(
+      changeArchive,
+      `import fs from 'node:fs';
 if (process.argv[1]?.endsWith('/baseline-refresh.mjs') && process.argv[2] === 'create-signing-request') {
   const write = process.stdout.write;
   process.stdout.write = function(chunk, ...rest) {
@@ -217,99 +150,91 @@ if (process.argv[1]?.endsWith('/baseline-refresh.mjs') && process.argv[2] === 'c
   };
 }
 `,
-      );
-      const changed = f.run("prepare-baseline-signing-request", requestArgs, {
-        NODE_OPTIONS: `--import=${changeArchive}`,
-      });
-      expect(changed.status, changed.stdout + changed.stderr).not.toBe(0);
-      expect(changed.stderr).toContain("Retained proof changed before sealing");
-      expect(f.prepGit("rev-parse", "HEAD")).toBe(source);
-      const pending = f.pass("prepare-baseline-signing-request", requestArgs);
-      const oid = /Awaiting signature: request=([a-f0-9]{40})/u.exec(pending.stdout)![1]!;
-      const requestPath = f.local(`prepare-baseline-signing.${oid}.json`);
-      const requestBytes = readFileSync(requestPath);
-      expect(f.prepGit("rev-parse", "HEAD")).toBe(source);
-      f.expectSnapshot(before);
-      expect(existsSync(f.local("review-transition.json"))).toBe(false);
-      const duplicate = f.run("prepare-baseline-signing-request", requestArgs);
-      expect(duplicate.status).not.toBe(0);
-      expect(duplicate.stderr).toContain("Retained signing request exists");
-      expect(readFileSync(requestPath)).toEqual(requestBytes);
+    );
+    const changed = f.run("prepare-baseline-signing-request", requestArgs, {
+      NODE_OPTIONS: `--import=${changeArchive}`,
     });
+    expect(changed.status, changed.stdout + changed.stderr).not.toBe(0);
+    expect(changed.stderr).toContain("Retained proof changed before sealing");
+    expect(f.prepGit("rev-parse", "HEAD")).toBe(source);
+    const pending = f.pass("prepare-baseline-signing-request", requestArgs);
+    const oid = /Awaiting signature: request=([a-f0-9]{40})/u.exec(pending.stdout)![1]!;
+    const requestPath = f.local(`prepare-baseline-signing.${oid}.json`);
+    const requestBytes = readFileSync(requestPath);
+    expect(f.prepGit("rev-parse", "HEAD")).toBe(source);
+    f.expectSnapshot(before);
+    expect(existsSync(f.local("review-transition.json"))).toBe(false);
+    const duplicate = f.run("prepare-baseline-signing-request", requestArgs);
+    expect(duplicate.status).not.toBe(0);
+    expect(duplicate.stderr).toContain("Retained signing request exists");
+    expect(readFileSync(requestPath)).toEqual(requestBytes);
   });
+  it("rejects changed signatures, retained proof and current ownership", () => {
+    const {
+      f,
+      source,
+      baseline,
+      credit,
+      before,
+      identity,
+      request,
+      signed,
+      response,
+      args,
+      sign,
+      requestPath,
+      requestBytes,
+    } = createSignedContext();
+    const refuse = (message: string) => {
+      const result = f.run("prepare-baseline-signing-continue", args);
+      expect(result.status, result.stdout + result.stderr).not.toBe(0);
+      expect(result.stdout + result.stderr).toContain(message);
+      expect(f.prepGit("rev-parse", "refs/heads/pr-42-prep")).toBe(source);
+      expect(existsSync(f.local("review-transition.json"))).toBe(false);
+      return result;
+    };
+    for (const [from, to] of [
+      [source, baseline],
+      ["fix: refresh", "fix: changed"],
+      [credit, "Co-authored-by: Changed Example <changed@example.invalid>"],
+      [identity.GIT_AUTHOR_EMAIL!, "changed@example.invalid"],
+    ]) {
+      writeFileSync(response, signed.bytes.toString().replace(from!, to!));
+      refuse("Signed commit payload differs");
+    }
+    writeFileSync(response, signed.bytes);
+    appendFileSync(requestPath, "\n");
+    refuse("Signing request changed");
+    writeFileSync(requestPath, requestBytes);
 
-  describe("returned signature admission", () => {
-    let context: ReturnType<typeof createSignedContext>;
-    beforeAll(() => {
-      context = createSignedContext();
-    });
+    const otherKey = join(f.root, "other-key");
+    expect(
+      spawnSync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-f", otherKey], { env: f.env })
+        .status,
+    ).toBe(0);
+    appendFileSync(f.signers, `other@example.invalid ${readFileSync(`${otherKey}.pub`, "utf8")}`);
+    writeFileSync(response, sign(otherKey).bytes);
+    refuse("does not match the requested signing key");
+    writeFileSync(response, signed.bytes);
 
-    it("rejects changed signatures, retained proof and current ownership", () => {
-      const {
-        f,
-        source,
-        baseline,
-        credit,
-        before,
-        identity,
-        request,
-        signed,
-        response,
-        args,
-        sign,
-        requestPath,
-        requestBytes,
-      } = context;
-      const refuse = (message: string) => {
-        const result = f.run("prepare-baseline-signing-continue", args);
-        expect(result.status, result.stdout + result.stderr).not.toBe(0);
-        expect(result.stdout + result.stderr).toContain(message);
-        expect(f.prepGit("rev-parse", "refs/heads/pr-42-prep")).toBe(source);
-        expect(existsSync(f.local("review-transition.json"))).toBe(false);
-        return result;
-      };
-      for (const [from, to] of [
-        [source, baseline],
-        ["fix: refresh", "fix: changed"],
-        [credit, "Co-authored-by: Changed Example <changed@example.invalid>"],
-        [identity.GIT_AUTHOR_EMAIL!, "changed@example.invalid"],
-      ]) {
-        writeFileSync(response, signed.bytes.toString().replace(from!, to!));
-        refuse("Signed commit payload differs");
+    appendFileSync(f.local("correction-review.json"), "\n");
+    refuse("Correction review authority changed");
+    f.writeLocal("correction-review.json", before["correction-review.json"]!);
+    const archive = JSON.parse(Buffer.from(request.binding, "base64").toString()).archive;
+    for (const [name, bytes] of Object.entries(before)) {
+      if (name !== "review.json") {
+        expect(readFileSync(join(f.worktree, archive, name))).toEqual(bytes);
       }
-      writeFileSync(response, signed.bytes);
-      appendFileSync(requestPath, "\n");
-      refuse("Signing request changed");
-      writeFileSync(requestPath, requestBytes);
-
-      const otherKey = join(f.root, "other-key");
-      expect(
-        spawnSync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-f", otherKey], { env: f.env })
-          .status,
-      ).toBe(0);
-      appendFileSync(f.signers, `other@example.invalid ${readFileSync(`${otherKey}.pub`, "utf8")}`);
-      writeFileSync(response, sign(otherKey).bytes);
-      refuse("does not match the requested signing key");
-      writeFileSync(response, signed.bytes);
-
-      appendFileSync(f.local("correction-review.json"), "\n");
-      refuse("Correction review authority changed");
-      f.writeLocal("correction-review.json", before["correction-review.json"]!);
-      const archive = JSON.parse(Buffer.from(request.binding, "base64").toString()).archive;
-      for (const [name, bytes] of Object.entries(before)) {
-        if (name !== "review.json") {
-          expect(readFileSync(join(f.worktree, archive, name))).toEqual(bytes);
-        }
-      }
-      const proof = join(f.worktree, archive, "correction-review.json");
-      const proofBytes = readFileSync(proof);
-      appendFileSync(proof, "\n");
-      refuse("Retained successor proof changed");
-      writeFileSync(proof, proofBytes);
-      const addAbsentReceipt = f.local("add-absent-receipt.mjs");
-      writeFileSync(
-        addAbsentReceipt,
-        `import fs from 'node:fs';
+    }
+    const proof = join(f.worktree, archive, "correction-review.json");
+    const proofBytes = readFileSync(proof);
+    appendFileSync(proof, "\n");
+    refuse("Retained successor proof changed");
+    writeFileSync(proof, proofBytes);
+    const addAbsentReceipt = f.local("add-absent-receipt.mjs");
+    writeFileSync(
+      addAbsentReceipt,
+      `import fs from 'node:fs';
 if (process.argv[1]?.endsWith('/baseline-refresh.mjs') && process.argv[2] === 'continue-signing') {
   const write = process.stdout.write;
   process.stdout.write = function(chunk, ...rest) {
@@ -322,94 +247,74 @@ if (process.argv[1]?.endsWith('/baseline-refresh.mjs') && process.argv[2] === 'c
   };
 }
 `,
-      );
-      const appeared = f.run("prepare-baseline-signing-continue", args, {
-        NODE_OPTIONS: `--import=${addAbsentReceipt}`,
-        FIXTURE_ARCHIVE: join(f.worktree, archive),
-      });
-      expect(appeared.status, appeared.stdout + appeared.stderr).not.toBe(0);
-      expect(appeared.stdout + appeared.stderr).toContain("Signing evidence changed after replay");
-      expect(f.prepGit("rev-parse", "HEAD")).toBe(source);
-      expect(existsSync(f.local("review-transition.json"))).toBe(false);
-      rmSync(join(f.worktree, archive, "prepare-sync-result.env"));
-      f.prepGit("switch", "-qc", "foreign-preparation");
-      refuse("preparation branch changed");
-      f.prepGit("switch", "-q", "pr-42-prep");
-      mkdirSync(join(f.repo, ".local"), { recursive: true });
-      writeFileSync(join(f.repo, ".local/live.json"), '{"state":"closed"}');
-      refuse("PR identity changed");
-      rmSync(join(f.repo, ".local/live.json"));
-      f.git(f.repo, "update-ref", "refs/heads/topic", f.incoming, source);
-      refuse("PR head changed before publication");
-      f.git(f.repo, "update-ref", "refs/heads/topic", source, f.incoming);
+    );
+    const appeared = f.run("prepare-baseline-signing-continue", args, {
+      NODE_OPTIONS: `--import=${addAbsentReceipt}`,
+      FIXTURE_ARCHIVE: join(f.worktree, archive),
+    });
+    expect(appeared.status, appeared.stdout + appeared.stderr).not.toBe(0);
+    expect(appeared.stdout + appeared.stderr).toContain("Signing evidence changed after replay");
+    expect(f.prepGit("rev-parse", "HEAD")).toBe(source);
+    expect(existsSync(f.local("review-transition.json"))).toBe(false);
+    rmSync(join(f.worktree, archive, "prepare-sync-result.env"));
+    f.prepGit("switch", "-qc", "foreign-preparation");
+    refuse("preparation branch changed");
+    f.prepGit("switch", "-q", "pr-42-prep");
+    mkdirSync(join(f.repo, ".local"), { recursive: true });
+    writeFileSync(join(f.repo, ".local/live.json"), '{"state":"closed"}');
+    refuse("PR identity changed");
+    rmSync(join(f.repo, ".local/live.json"));
+    f.git(f.repo, "update-ref", "refs/heads/topic", f.incoming, source);
+    refuse("PR head changed before publication");
+    f.git(f.repo, "update-ref", "refs/heads/topic", source, f.incoming);
 
-      const loseLock = f.local("lose-lock.mjs");
-      writeFileSync(
-        loseLock,
-        `import { execFileSync } from 'node:child_process';
+    const loseLock = f.local("lose-lock.mjs");
+    writeFileSync(
+      loseLock,
+      `import { execFileSync } from 'node:child_process';
 if (process.argv[1]?.endsWith('/baseline-refresh.mjs') && process.argv[2] === 'check-signing') {
   execFileSync('git', ['update-ref', 'refs/openclaw/pr-operation-locks/42', '${baseline}']);
 }
 `,
-      );
-      const lockDrift = f.run("prepare-baseline-signing-continue", args, {
-        NODE_OPTIONS: `--import=${loseLock}`,
-      });
-      expect(lockDrift.status, lockDrift.stdout + lockDrift.stderr).not.toBe(0);
-      expect(f.prepGit("rev-parse", "HEAD")).toBe(source);
-      expect(existsSync(f.local("review-transition.json"))).toBe(false);
-      // This fixture owns the deliberately corrupted ref; the real supervisor
-      // must preserve it, and no fixture child remains after its joined return.
-      expect(f.git(f.repo, "rev-parse", "refs/openclaw/pr-operation-locks/42")).toBe(baseline);
-      f.git(f.repo, "update-ref", "-d", "refs/openclaw/pr-operation-locks/42", baseline);
+    );
+    const lockDrift = f.run("prepare-baseline-signing-continue", args, {
+      NODE_OPTIONS: `--import=${loseLock}`,
     });
+    expect(lockDrift.status, lockDrift.stdout + lockDrift.stderr).not.toBe(0);
+    expect(f.prepGit("rev-parse", "HEAD")).toBe(source);
+    expect(existsSync(f.local("review-transition.json"))).toBe(false);
+    // This fixture owns the deliberately corrupted ref; the real supervisor
+    // must preserve it, and no fixture child remains after its joined return.
+    expect(f.git(f.repo, "rev-parse", "refs/openclaw/pr-operation-locks/42")).toBe(baseline);
+    f.git(f.repo, "update-ref", "-d", "refs/openclaw/pr-operation-locks/42", baseline);
   });
-
-  describe("interrupted continuation", () => {
-    let context: ReturnType<typeof createSignedContext>;
-    beforeAll(() => {
-      context = createSignedContext();
-    });
-
-    it("recovers and republishes the same signed candidate", () => {
-      const { f, source, baseline, before, signed, args, requestPath, requestBytes } = context;
-      const receipt = before["prepare-push-result.env"]!;
-      const failRestore = join(f.root, "fail-restore");
-      const realGit = spawnSync("sh", ["-c", "command -v git"], {
-        env: f.env,
-        encoding: "utf8",
-      }).stdout.trim();
-      writeFileSync(
-        failRestore,
-        `#!/bin/bash
-if [ "$1" = --literal-pathspecs ] && [ "$2" = restore ]; then exit 72; fi
-exec '${realGit}' "$@"
-`,
-        { mode: 0o755 },
-      );
-      const interrupted = f.run("prepare-baseline-signing-continue", args, {
-        OPENCLAW_PR_GIT: failRestore,
-      });
-      expect(interrupted.status, interrupted.stdout + interrupted.stderr).not.toBe(0);
-      const journalBytes = f.readLocal("review-transition.json");
-      expect(JSON.parse(journalBytes.toString()).target).toBe(signed.target);
-      expect(f.prepGit("rev-parse", "HEAD")).toBe(source);
-      expect(readFileSync(requestPath)).toEqual(requestBytes);
-      // Older interrupted installations retired this still-current hosted receipt.
-      rmSync(f.local("prepare-push-result.env"));
-      f.pass("prepare-baseline-signing-continue", args);
-      expect(f.readLocal("prepare-push-result.env")).toEqual(receipt);
-      expect(f.prepGit("rev-parse", "HEAD")).toBe(signed.target);
-      expect(f.prepGit("show", "-s", "--format=%P", "HEAD")).toBe(`${source} ${baseline}`);
-      f.prepGit("verify-commit", "HEAD");
-      expect(f.readLocal("review.json")).toEqual(before["review.json"]);
-      expect(existsSync(f.local("review-transition.json"))).toBe(false);
-      expect(existsSync(f.local("correction-review.json"))).toBe(false);
-      f.pass("prepare-baseline-signing-continue", args);
-      expect(f.prepGit("rev-parse", "HEAD")).toBe(signed.target);
-      f.git(f.repo, "config", "user.signingKey", f.key);
-      f.approve();
-      f.publish();
-    });
+  it("recovers and republishes the same signed candidate", () => {
+    const { f, source, baseline, before, signed, args, requestPath, requestBytes } =
+      createSignedContext();
+    const receipt = before["prepare-push-result.env"]!;
+    const interrupted = f.run(
+      "prepare-baseline-signing-continue",
+      args,
+      failRestore(f.root, f.env),
+    );
+    expect(interrupted.status, interrupted.stdout + interrupted.stderr).not.toBe(0);
+    const journalBytes = f.readLocal("review-transition.json");
+    expect(JSON.parse(journalBytes.toString()).target).toBe(signed.target);
+    expect(f.prepGit("rev-parse", "HEAD")).toBe(source);
+    expect(readFileSync(requestPath)).toEqual(requestBytes);
+    // Older interrupted installations retired this still-current hosted receipt.
+    rmSync(f.local("prepare-push-result.env"));
+    f.pass("prepare-baseline-signing-continue", args);
+    expect(f.readLocal("prepare-push-result.env")).toEqual(receipt);
+    expect(f.prepGit("rev-parse", "HEAD")).toBe(signed.target);
+    expect(f.prepGit("show", "-s", "--format=%P", "HEAD")).toBe(`${source} ${baseline}`);
+    f.prepGit("verify-commit", "HEAD");
+    expect(f.readLocal("review.json")).toEqual(before["review.json"]);
+    f.expectAbsent("review-transition.json", "correction-review.json");
+    f.pass("prepare-baseline-signing-continue", args);
+    expect(f.prepGit("rev-parse", "HEAD")).toBe(signed.target);
+    f.git(f.repo, "config", "user.signingKey", f.key);
+    f.approve();
+    f.publish();
   });
 });

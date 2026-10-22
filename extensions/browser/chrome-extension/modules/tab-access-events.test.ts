@@ -1,7 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { chromeEvent, deferred } from "./browser.test-support.js";
 import { registerTabAccessEvents } from "./tab-access-events.js";
 import type { BrowserTabSnapshot } from "./tab-eligibility.js";
+
+afterEach(() => vi.unstubAllGlobals());
 
 const makeEpoch = (revision = 0) => ({ revision, groupRevision: 0, tabRevision: 0 });
 
@@ -69,8 +71,8 @@ function createHarness(
     },
   };
 
+  vi.stubGlobal("chrome", chromeApi);
   registerTabAccessEvents({
-    chromeApi,
     accessReady,
     policy,
     attachments,

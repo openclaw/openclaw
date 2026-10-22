@@ -1,5 +1,6 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
+  createWebSearchProviderContractFields,
   mergeScopedSearchConfig,
   resolveProviderWebSearchPluginConfig,
   WEB_SEARCH_QUERY_COUNT_PROPERTIES,
@@ -7,11 +8,12 @@ import {
   type WebSearchProviderToolDefinition,
 } from "openclaw/plugin-sdk/provider-web-search-config-contract";
 import {
-  createPerplexityWebSearchProviderBase,
   hasPerplexityLegacyOverride,
   resolvePerplexityConfig,
   resolvePerplexityWebSearchRuntimeMetadata,
 } from "./perplexity-web-search-provider.shared.js";
+
+const PERPLEXITY_CREDENTIAL_PATH = "plugins.entries.perplexity.config.webSearch.apiKey";
 
 const loadPerplexityWebSearchRuntime = createLazyRuntimeModule(
   () => import("./perplexity-web-search-provider.runtime.js"),
@@ -96,7 +98,22 @@ function createPerplexityToolDefinition(
 
 export function createPerplexityWebSearchProvider(): WebSearchProviderPlugin {
   return {
-    ...createPerplexityWebSearchProviderBase(),
+    id: "perplexity",
+    label: "Perplexity Search",
+    hint: "Requires Perplexity API key or OpenRouter API key · structured results",
+    onboardingScopes: ["text-inference"],
+    credentialLabel: "Perplexity API key",
+    envVars: ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"],
+    placeholder: "pplx-...",
+    signupUrl: "https://www.perplexity.ai/settings/api",
+    docsUrl: "https://docs.openclaw.ai/perplexity",
+    autoDetectOrder: 50,
+    credentialPath: PERPLEXITY_CREDENTIAL_PATH,
+    ...createWebSearchProviderContractFields({
+      credentialPath: PERPLEXITY_CREDENTIAL_PATH,
+      searchCredential: { type: "scoped", scopeId: "perplexity" },
+      configuredCredential: { pluginId: "perplexity" },
+    }),
     resolveRuntimeMetadata: resolvePerplexityWebSearchRuntimeMetadata,
     createTool: (ctx) =>
       createPerplexityToolDefinition(

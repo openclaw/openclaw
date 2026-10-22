@@ -22,6 +22,7 @@ import {
   type OpenClawTestState,
   withOpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import * as sleepModule from "../utils/sleep.js";
 import {
   createOwnedSqliteDatabase,
   declarePluginSqliteResources,
@@ -186,13 +187,12 @@ describe("writeTarArchiveWithRetry", () => {
     }
     runTar.mockResolvedValue("complete");
     const log = vi.fn();
-    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+    using sleep = vi.spyOn(sleepModule, "sleep").mockResolvedValue(undefined);
     const rmSpy = vi.spyOn(fs, "rm");
     try {
       const result = writeTarArchiveWithRetry({
         tempArchivePath,
         runTar,
-        sleepMs: sleep,
         log: failure ? undefined : log,
       });
       if (failure) {
@@ -209,7 +209,7 @@ describe("writeTarArchiveWithRetry", () => {
       if (attempts > 2) {
         expect(runTar).toHaveBeenNthCalledWith(3, `${tempArchivePath}.retry-3`);
       }
-      expect(sleep.mock.calls).toEqual(backoffs.map((ms) => [ms]));
+      expect(sleep.mock.calls).toEqual(backoffs.map((ms) => [ms, undefined]));
       expect(log).toHaveBeenCalledTimes(failure ? 0 : backoffs.length);
       expect(rmSpy).not.toHaveBeenCalled();
     } finally {

@@ -5,6 +5,7 @@ import {
   defaultControlUiFeatureMethods,
   controlUiBundledSettingsStorageKey,
 } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
   installPreferenceServer,
@@ -168,15 +169,11 @@ suite.define(() => {
         }
         expect(await gateway.getRequests("sessions.describe", { key: row.key })).toHaveLength(1);
       }
-      expect(await pins.locator(".sidebar-reorder-trigger").count()).toBe(0);
       if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
         const dir = createControlUiE2eArtifactDir("rail", process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR);
         await captureFrame(dir, "after-desktop.png", page.locator(".shell"), [rail, pins.first()]);
         await page.setViewportSize({ width: 390, height: 844 });
-        await page
-          .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
-          .first()
-          .click();
+        await navigationDrawerToggle(page).click();
         await page.locator(".shell--nav-drawer-open").waitFor();
         await captureFrame(dir, "after-mobile.png", page.locator(".shell"), [rail]);
         await page.setViewportSize({ width: 1280, height: 800 });

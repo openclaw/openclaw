@@ -33,10 +33,6 @@ type StaleAgentModelRefRepair = {
 type RepairOptions = {
   env?: NodeJS.ProcessEnv;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
-  /** Test seam for the provider ids supplied by bundled or installed plugins. */
-  pluginProviderIds?: ReadonlySet<string>;
-  /** Test seam for provider ids already present in each agent's models.json. */
-  persistedProviderIdsByAgentId?: ReadonlyMap<string, ReadonlySet<string>>;
 };
 
 const DEFAULT_MODEL_REF = `${DEFAULT_PROVIDER}/${DEFAULT_MODEL}`;
@@ -54,37 +50,32 @@ function collectPluginProviderIds(
   cfg: OpenClawConfig,
   options: RepairOptions,
 ): { providerIds?: Set<string>; warnings: string[] } {
-  let providerIds: Set<string>;
-  if (options.pluginProviderIds) {
-    providerIds = new Set([...options.pluginProviderIds].map(normalizeProviderId).filter(Boolean));
-  } else {
-    const defaultAgentId = tryResolveDefaultAgentId(cfg);
-    const workspaceDir = defaultAgentId ? resolveAgentWorkspaceDir(cfg, defaultAgentId) : undefined;
-    const snapshot =
-      options.pluginMetadataSnapshot ??
-      resolvePluginMetadataSnapshot({
-        config: cfg,
-        workspaceDir: workspaceDir ?? undefined,
-        env: options.env ?? process.env,
-        allowWorkspaceScopedCurrent: true,
-      });
-    if (hasIncompletePluginDiscovery(snapshot.diagnostics)) {
-      return {
-        warnings: [
-          "Skipped stale agent model reference repair because plugin discovery is incomplete; uninspected configuration is preserved.",
-        ],
-      };
-    }
-
-    providerIds = new Set(
-      [
-        snapshot.owners.providers,
-        snapshot.owners.modelCatalogProviders,
-        snapshot.owners.setupProviders,
-        snapshot.owners.cliBackends,
-      ].flatMap((owners) => [...owners.keys()].map(normalizeProviderId).filter(Boolean)),
-    );
+  const defaultAgentId = tryResolveDefaultAgentId(cfg);
+  const workspaceDir = defaultAgentId ? resolveAgentWorkspaceDir(cfg, defaultAgentId) : undefined;
+  const snapshot =
+    options.pluginMetadataSnapshot ??
+    resolvePluginMetadataSnapshot({
+      config: cfg,
+      workspaceDir: workspaceDir ?? undefined,
+      env: options.env ?? process.env,
+      allowWorkspaceScopedCurrent: true,
+    });
+  if (hasIncompletePluginDiscovery(snapshot.diagnostics)) {
+    return {
+      warnings: [
+        "Skipped stale agent model reference repair because plugin discovery is incomplete; uninspected configuration is preserved.",
+      ],
+    };
   }
+
+  const providerIds = new Set(
+    [
+      snapshot.owners.providers,
+      snapshot.owners.modelCatalogProviders,
+      snapshot.owners.setupProviders,
+      snapshot.owners.cliBackends,
+    ].flatMap((owners) => [...owners.keys()].map(normalizeProviderId).filter(Boolean)),
+  );
   const selectedProviderIds = collectConfiguredProviderSelectionIds(cfg);
   for (const entry of resolveProviderInstallCatalogEntries({
     config: cfg,
@@ -106,15 +97,7 @@ function collectPersistedProviderIds(params: {
   cfg: OpenClawConfig;
   agentId: string;
   env: NodeJS.ProcessEnv;
-  injected?: ReadonlyMap<string, ReadonlySet<string>>;
 }): { providerIds?: Set<string>; warning?: string } {
-  if (params.injected) {
-    const injected = params.injected.get(params.agentId) ?? [];
-    return {
-      providerIds: new Set([...injected].map(normalizeProviderId).filter(Boolean)),
-    };
-  }
-
   const modelsPath = path.join(
     resolveAgentDir(params.cfg, params.agentId, params.env),
     "models.json",
@@ -260,7 +243,6 @@ export function repairStaleAgentModelRefs(
         cfg,
         agentId,
         env,
-        injected: options.persistedProviderIdsByAgentId,
       });
       if (!providerIds) {
         if (warning) {

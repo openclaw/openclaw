@@ -84,6 +84,30 @@ describe("cron source delivery policy", () => {
     });
   });
 
+  it("executes a DM-blocked automation and records intentional nondelivery without sending", async () => {
+    const { dispatchCronDelivery } =
+      await vi.importActual<typeof import("./delivery-dispatch.js")>("./delivery-dispatch.js");
+    harness.dispatchCronDeliveryMock.mockImplementationOnce(dispatchCronDelivery);
+    harness.resolveDeliveryTargetMock.mockResolvedValue({
+      ok: false,
+      channel: "none",
+      mode: "explicit",
+      error: new Error("Owner delivery unavailable (dm-blocked)"),
+      deliverySuppressionReason: "channel_transform",
+    });
+    const result = await runTurn({
+      job: { delivery: { mode: "announce", target: "owner", directPolicy: "block" } },
+    });
+    expect(harness.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    expect(harness.runEmbeddedAgentMock.mock.calls[0]?.[0].disableMessageTool).toBe(true);
+    expect(result).toMatchObject({
+      status: "ok",
+      delivered: false,
+      deliverySuppressionReason: "channel_transform",
+    });
+    expect(result.deliveryError).toBeUndefined();
+  });
+
   it("rejects required message-tool delivery when the runtime cannot expose the tool", () => {
     const sourceDelivery = resolveCronSourceDeliveryPlan({
       deliveryPlan: { source: "delivery", mode: "announce", requested: true },

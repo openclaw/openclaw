@@ -349,38 +349,56 @@ suite.define(() => {
       const details = alert.locator("details");
       const summary = alert.locator("summary");
       const copy = alert.getByRole("button", { name: "Copy error", exact: true });
-      expect(await copy.count()).toBe(1);
-      expect(await copy.isVisible()).toBe(true);
       expect(await details.getAttribute("open")).toBeNull();
-      if (label === "mobile") {
-        await copy.tap();
-      } else {
+      if (label === "desktop") {
+        expect(await copy.count()).toBe(1);
+        expect(await copy.isVisible()).toBe(true);
         await copy.click();
+        await expect
+          .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+          .toBe(errorText);
+        expect(await details.getAttribute("open")).toBeNull();
+      } else {
+        expect(await copy.isVisible()).toBe(false);
       }
-      await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(errorText);
-      expect(await details.getAttribute("open")).toBeNull();
       await summary.focus();
       await page.keyboard.press("Enter");
       await alert.locator("pre").waitFor({ timeout: 10_000 });
       const diagnostic = alert.getByLabel("Error details", { exact: true });
       expect(await diagnostic.count()).toBe(1);
       expect(await diagnostic.textContent()).toBe(errorText);
-      expect(await summary.getByText("Details", { exact: true }).count()).toBe(1);
+      if (label === "desktop") {
+        expect(await summary.getByText("Details", { exact: true }).count()).toBe(1);
+      } else {
+        await copy.tap();
+        await expect
+          .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+          .toBe(errorText);
+        expect(await details.getAttribute("open")).not.toBeNull();
+      }
       if (artifactDir) {
         await page.screenshot({ path: path.join(artifactDir, `terminal-details-${label}.png`) });
       }
-      const headerCopy = summary.getByRole("button");
+      const expandedCopy = alert.getByRole("button", { name: /^(Copy error|Copied!)$/u });
       await page.evaluate(() => navigator.clipboard.writeText("Before expanded copy."));
-      await headerCopy.press("Enter");
+      await expandedCopy.press("Enter");
       await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(errorText);
       expect(await details.getAttribute("open")).not.toBeNull();
       expect(await alert.getByRole("button", { name: /^(Copy error|Copied!)$/u }).count()).toBe(1);
+      const copyBox = await expandedCopy.boundingBox();
+      const expandedAlertBox = await alert.boundingBox();
+      expect(copyBox).not.toBeNull();
+      expect(expandedAlertBox).not.toBeNull();
+      expect(copyBox!.x).toBeGreaterThan(expandedAlertBox!.x);
+      expect(copyBox!.x + copyBox!.width).toBeLessThanOrEqual(
+        expandedAlertBox!.x + expandedAlertBox!.width,
+      );
       await summary.press("Space");
       await alert.locator("pre").waitFor({ state: "hidden" });
       if (label === "mobile") {
-        await summary.getByText("Details", { exact: true }).tap();
+        await summary.locator(".chat-error__mobile-title").tap();
         await alert.locator("pre").waitFor();
-        await summary.getByText("Details", { exact: true }).tap();
+        await summary.locator(".chat-error__mobile-title").tap();
         await alert.locator("pre").waitFor({ state: "hidden" });
       }
       await expectRequestCountStable(gateway, "chat.send", 1);
@@ -401,10 +419,6 @@ suite.define(() => {
         ),
       ).toBeLessThan(1);
       expect(alertBox?.width ?? 0).toBeLessThanOrEqual(composerBox?.width ?? 0);
-      const copyBox = await headerCopy.boundingBox();
-      expect(copyBox).not.toBeNull();
-      expect(copyBox!.x).toBeGreaterThan(alertBox!.x);
-      expect(copyBox!.x + copyBox!.width).toBeLessThanOrEqual(alertBox!.x + alertBox!.width);
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
         viewport.width,
       );

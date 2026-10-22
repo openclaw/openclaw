@@ -21,9 +21,7 @@ import {
 } from "./subagent-registry.test-helpers.js";
 
 const fixture = useSubagentControlFixture();
-beforeEach(async () => {
-  await captureRuntimeConfigAsyncReader()();
-});
+beforeEach(() => captureRuntimeConfigAsyncReader()());
 
 it.each(["completed", "failed"] as const)(
   "retains replacement transcript cleanup through restart until it has %s",

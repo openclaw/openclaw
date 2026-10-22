@@ -8,18 +8,9 @@ const [resource] = process.argv.slice(2);
 assert.ok(resource === "sweeper" || resource === "scheduler");
 const context = new AsyncLocalStorage<object>();
 
-class LifecycleTimerCaller {
-  readonly prompt = Buffer.alloc(1024 * 1024, 1);
-}
-
-function invokeCaller(run: () => void) {
-  const caller = new LifecycleTimerCaller();
+function observeCallerTimer(run: () => void) {
+  const caller = { prompt: Buffer.alloc(1024 * 1024, 1) };
   const references = [new WeakRef(caller), new WeakRef(caller.prompt)];
-  context.run(caller, run);
-  return references;
-}
-
-function observeTimer(run: () => void) {
   let timer: WeakRef<object> | undefined;
   const hook = createHook({
     init(_id, type, _trigger, value) {
@@ -27,29 +18,21 @@ function observeTimer(run: () => void) {
         timer = new WeakRef(value);
       }
     },
-  });
-  hook.enable();
+  }).enable();
   try {
-    run();
+    context.run(caller, run);
   } finally {
     hook.disable();
   }
   assert.ok(timer, "The owner must create a real native timeout");
-  return timer;
+  return { references, timer };
 }
 
 function unexpected(): never {
   throw new Error("The distant retained deadline must not execute during collection");
 }
 
-type TimerFixture = {
-  references: WeakRef<object>[];
-  timer: WeakRef<object>;
-  owner?: WeakRef<object>;
-  close: () => void | Promise<void>;
-};
-
-function sweeperFixture(): TimerFixture {
+function sweeperFixture() {
   const sweeper = createSubagentRegistrySweeper({
     runs: new Map(),
     resumedRuns: new Set(),
@@ -80,14 +63,10 @@ function sweeperFixture(): TimerFixture {
     getRunsForCollectorGroup: unexpected,
     warn: unexpected,
   });
-  let references: WeakRef<object>[] = [];
-  const timer = observeTimer(() => {
-    references = invokeCaller(sweeper.start);
-  });
-  return { references, timer, close: () => sweeper.reset() };
+  return { ...observeCallerTimer(sweeper.start), owner: undefined, close: () => sweeper.reset() };
 }
 
-function schedulerFixture(): TimerFixture {
+function schedulerFixture() {
   const scheduler = new GatewayScheduler();
   // Scheduled work owns this context intentionally, independently of the host wake.
   const owner = context.run({ authority: "pending-job" }, () => {
@@ -96,29 +75,21 @@ function schedulerFixture(): TimerFixture {
     scheduler.schedule({ id: "owned", delayMs: 60_000, run: unexpected });
     return new WeakRef(retained);
   });
-  let references: WeakRef<object>[] = [];
-  const timer = observeTimer(() => {
-    references = invokeCaller(() => {
-      const canceled = scheduler.schedule({ id: "canceled", delayMs: 120_000, run: unexpected });
-      canceled.cancel();
-    });
-  });
-  return { references, timer, owner, close: () => scheduler.stop() };
+  const observed = observeCallerTimer(() =>
+    scheduler.schedule({ id: "canceled", delayMs: 120_000, run: unexpected }).cancel(),
+  );
+  return { ...observed, owner, close: () => scheduler.stop() };
 }
 
-const fixture = resource === "sweeper" ? sweeperFixture() : schedulerFixture();
+const { timer, owner, references, close } =
+  resource === "sweeper" ? sweeperFixture() : schedulerFixture();
 try {
   await collectForRetentionCheck(`${resource}-timer`);
-  assert.ok(fixture.timer.deref(), "Collection must happen while the native timer is alive");
-  if (fixture.owner) {
-    assert.ok(fixture.owner.deref(), "Pending authority stays owned");
-  }
-  assert.equal(
-    fixture.references.filter((reference) => reference.deref()).length,
-    0,
-    `The live ${resource} timer retained an unrelated completed caller`,
-  );
-  process.stdout.write(JSON.stringify({ resource, collected: fixture.references.length }));
+  assert.ok(timer.deref(), "Collection must happen while the native timer is alive");
+  assert.ok(!owner || owner.deref(), "Pending authority stays owned");
+  const retained = references.map((ref) => Boolean(ref.deref()));
+  assert.deepEqual(retained, [false, false]);
+  process.stdout.write(JSON.stringify({ resource, collected: references.length }));
 } finally {
-  await fixture.close();
+  await close();
 }

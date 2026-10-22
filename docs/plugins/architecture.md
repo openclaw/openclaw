@@ -212,6 +212,8 @@ A provider or harness plugin load failure remains recorded in its runtime genera
 
 Read-only model validation, effective tool inventory, and isolated model checks acquire their own registrations when they need executable provider or harness hooks. Concurrent callers share the prepared generation, and its lifecycle disposers run after the final borrower and any unfinished preparation or catalog work settle. Cancellation does not close a registration while its callback is still running. Process shutdown revokes these registry views before joining their remaining work and disposal. Catalog reads that need only metadata do not acquire these executable registrations. Effective tool inventory prepares only configured and session-selected model facts, including captured catalogs from enabled providers; it does not refresh the full model catalog. Session selections do not change the configured model picker.
 
+Cold inspections within a Gateway inventory reuse native ESM code from unchanged npm installations across their separate registrations. Reuse is bounded by that inventory's installed execution entries, configured workspaces, and SDK selection. Inventory retirement releases retained source captures and preparation workers after the final inspection borrower finishes. Editable installations and inspections outside the prepared inventory keep independent captures. Node retains already evaluated ESM modules until process exit; this reuse prevents another graph from being evaluated on every cold inspection, rather than unloading old graphs after a plugin replacement.
+
 Each plugin service startup attempt owns one cleanup operation, including failed starts. Hot replacement observes candidate startup and service cleanup with five-second deadlines. Candidate startup failure rejects the replacement. Replacing a loaded plugin requires successful cleanup before another registration can acquire its resources; pending cleanup or a cleanup error can therefore reject replacement and prevent automatic recovery. A pending startup retains its resources until it finishes and its one stop operation settles. Plugin removal can report deferred cleanup; Gateway shutdown joins that work before releasing the plugin's resources. Disposal stops new registered calls while physical cleanup finishes. Service cleanup is not invoked a second time merely because an observer timed out. If a command catalog refresh also stopped unchanged channels, failed replacement resumes those healthy registrations while the failed plugin remains fenced.
 
 A replacement that fails before publication automatically tries to restore the previous code and configuration. If its channels have already stopped, recovery observes pending service cleanup and admitted work once, for up to 60 seconds. Its observation has an independent Gateway-owned cancellation signal, so a disconnected reload requester cannot interrupt recovery. Only service-stop observer timeouts qualify for this wait; channel-stop failures, rejected service cleanup, and failed candidate cleanup still prevent recovery. The wait joins the original service stop promises, including services whose shared stop deadline was already exhausted. After cleanup and work settle successfully, recovery disposes the old registration, registers its captured code with fresh resource ownership, and restarts its channels. Manually stopped accounts stay stopped. A timeout never grants another registration ownership of an unfinished write's resources, and retries do not repeat service stop or resource disposal. Uncommitted failures also attempt to republish the prepared model runtime against the previous config, even when plugin recovery fails or cannot safely run, unless the Gateway is shutting down.
@@ -283,8 +285,9 @@ root and its build assets.
 Native artifacts are admitted with their owning package directory, preserving
 the binary's package-relative path and declared companion library dependencies.
 Artifacts without an admitted package root retain their containing directory.
-Installer-owned directories use
-hardlinks or an existing retained-directory reference; files inspected by plugin
+Installer-owned directories use same-filesystem hardlinks or an existing
+retained-directory reference; capture onto another filesystem copies the native
+package and its companions. Files inspected by plugin
 safety checks keep independent copies. Mutable source trees retain one private
 directory snapshot per admitted identity, preserving old binary and companion
 bytes through in-place edits. Files in this namespace are prepared at admission;
@@ -327,7 +330,10 @@ missing, fresh admission reads the installed package without promoting the missi
 capture's identities. This also applies to post-update Doctor with older updaters.
 Ctime-only uncertainty is resolved
 with a bounded rehash, including ordinary companion files whose inodes another
-capture retains or releases. Legacy reload receipts keep their framed raw-byte value,
+capture retains or releases. First-read metadata stamps from Windows security
+software do not invalidate otherwise unchanged native companions. Mutable source
+copies are compared with their source bytes before accepting ctime-only drift,
+and completed companion digests retain the observed file identity. Legacy reload receipts keep their framed raw-byte value,
 so a changed receipt still requires streaming its native payloads.
 Read-only inspection never publishes its native admissions during later settlement.
 Deferred publication retains the original database authority and state directory.

@@ -5,7 +5,7 @@ import { waitForSolid as waitForFast } from "../test-helpers/solid-settle.ts";
 import * as h from "./link-reader-panel.test-support.ts";
 
 describe("Link reader publication lifecycle", () => {
-  h.installPanelFixture();
+  h.setupLinkReaderPanelTests();
 
   it("coalesces replacement inputs and ignores old navigation and client responses", async () => {
     const first = h.deferredDetail();

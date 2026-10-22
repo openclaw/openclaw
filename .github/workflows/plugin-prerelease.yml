@@ -188,7 +188,7 @@ jobs:
       - name: Setup supported Node runtime
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           package-manager-cache: false
 
       - name: Checkout target
@@ -251,13 +251,13 @@ jobs:
       - name: Setup manifest TypeScript runtime
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.x"
+          node-version: "24.22.1"
 
       - name: Setup manifest pnpm
         uses: ./.github/actions/setup-pnpm-store-cache
         with:
           cache-mode: restore
-          node-version: "24.x"
+          node-version: "24.22.1"
 
       - name: Install manifest dependencies
         run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts

@@ -106,20 +106,6 @@ export function captureSessionWorkRunInterruptions(params: {
   });
 }
 
-/** @internal Exposed for unit tests only. */
-export function getSessionWorkAdmissionOwnerRelease(params: {
-  scope: string;
-  identities: Iterable<string | undefined>;
-  owner: symbol;
-  phase?: "acquired";
-}) {
-  return releaseEffects(
-    [...selectedEffects([targetFrom(params)])].filter(
-      (effect) => effect.owner === params.owner && (!params.phase || effect.phase === params.phase),
-    ),
-  );
-}
-
 export function getCompetingSessionWorkAdmissionRelease(params: {
   scope: string;
   identities: Iterable<string | undefined>;
