@@ -4,6 +4,7 @@ import {
   SIDEBAR_SNAPSHOT_STORE_NAME,
 } from "../pages/chat/session-snapshot-database.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   createSessionManagementE2eSuite,
@@ -17,36 +18,53 @@ const suite = createSessionManagementE2eSuite(true);
 const key = "agent:main:reliability";
 
 suite.define(() => {
-  it.for(["operator.admin", "operator.sessions.read"])(
-    "reorders personal pins without changing rail shortcuts or shared groups (%s)",
-    async (scope) => {
+  it.for([
+    { scope: "operator.admin", offPage: false },
+    { scope: "operator.sessions.read", offPage: false },
+    { scope: "operator.sessions.read", offPage: true },
+  ])(
+    "reorders personal pins without changing rail shortcuts or shared groups ($scope; off-page: $offPage)",
+    async ({ scope, offPage }) => {
       await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
         const keys = [key, "agent:main:release", "agent:main:research"];
+        const pins = keys.map((sessionKey, index) =>
+          createControlUiSessionRow(
+            sessionKey,
+            ["Reliability Tracker", "Release checklist", "Research notes"][index]!,
+            Date.now() - index * 1000,
+          ),
+        );
+        const selected = offPage
+          ? createControlUiSessionRow("agent:main:selected", "Selected chat", Date.now())
+          : pins[0]!;
         const gateway = await installMockGateway(page, {
-          sessionKey: key,
+          sessionKey: selected.key,
           operatorScopes: [scope],
+          sessions: offPage ? [selected, ...pins] : pins,
           methodResponses: {
-            "sessions.list": sessionsListResponse(
-              keys.map((sessionKey, index) =>
-                createControlUiSessionRow(
-                  sessionKey,
-                  ["Reliability Tracker", "Release checklist", "Research notes"][index]!,
-                  Date.now() - index * 1000,
-                ),
-              ),
-            ),
+            "sessions.list": sessionsListResponse(offPage ? [selected] : pins),
           },
         });
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, selected.key));
+        if (offPage) {
+          // Seed saved references through their owner; their rows are absent from sessions.list.
+          await evaluateControlUiContext(
+            page,
+            ({ navigation }, entries) => navigation.update({ sidebarEntries: entries }),
+            keys.map((sessionKey) => `session:${sessionKey}`),
+          );
+        }
         const sidebar = page.locator("openclaw-app-sidebar");
         const row = (sessionKey: string) =>
           sidebar.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
-        for (const sessionKey of keys) {
-          await row(sessionKey).hover();
-          await row(sessionKey).getByRole("button", { name: "Pin session", exact: true }).click();
-          await row(sessionKey)
-            .getByRole("button", { name: "Unpin session", exact: true })
-            .waitFor();
+        if (!offPage) {
+          for (const sessionKey of keys) {
+            await row(sessionKey).hover();
+            await row(sessionKey).getByRole("button", { name: "Pin session", exact: true }).click();
+            await row(sessionKey)
+              .getByRole("button", { name: "Unpin session", exact: true })
+              .waitFor();
+          }
         }
         const pinned = sidebar.locator('[data-session-section="pinned"]');
         const pinOrder = () =>

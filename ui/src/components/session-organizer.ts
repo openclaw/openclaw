@@ -662,8 +662,13 @@ export class SessionOrganizer {
     if ((!sourceSectionId && !sessionKey) || (sourceSectionId && sectionId === "pinned")) {
       return;
     }
-    // Rows can be dragged from a browsed agent section, so search all caches.
-    const session = sessionKey ? this.deps.findSidebarMenuSessionByKey(sessionKey) : undefined;
+    // Shared moves use loaded rows; personal pins can also resolve outside the roster.
+    const session = sessionKey
+      ? (this.deps.findSidebarMenuSessionByKey(sessionKey) ??
+        (sectionId === "pinned"
+          ? this.deps.reconciledSidebarZone().sessionRows.get(sessionKey)
+          : undefined))
+      : undefined;
     if (!sourceSectionId && !this.sectionAcceptsSession(sectionId, category, session)) {
       event.stopPropagation();
       return;
