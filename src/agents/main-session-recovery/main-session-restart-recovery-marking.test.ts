@@ -218,10 +218,7 @@ it.for(["before capture", "after capture"] as const)(
       expect(read(sessionKey)?.status).toBe("killed");
       await mark({ activeAdmissions: captured });
       const persisted = read(sessionKey);
-      expect(persisted).toMatchObject({
-        status: "killed",
-        abortedLastRun: true,
-      });
+      expect(persisted).toMatchObject({ status: "killed", abortedLastRun: true });
       expect(persisted?.mainRestartRecovery).toBeUndefined();
     } finally {
       finish.resolve();
@@ -536,9 +533,7 @@ it("marks only the closing Gateway's exact durable admissions and leaves host in
       incognito: true,
     });
     admissions.push(
-      await admit(incognitoTarget.sessionKey, "volatile", {
-        scope: incognitoTarget.storePath,
-      }),
+      await admit(incognitoTarget.sessionKey, "volatile", { scope: incognitoTarget.storePath }),
     );
     await mark();
     expect(read("agent:main:closing")?.abortedLastRun).toBe(true);
@@ -546,10 +541,7 @@ it("marks only the closing Gateway's exact durable admissions and leaves host in
     const incognito = memorySessionActorOwners
       .read(memoryLocation)
       ?.readSession(incognitoTarget.sessionKey, { assertCurrent() {}, authorize() {} });
-    expect(incognito?.entry).toMatchObject({
-      sessionId: "volatile",
-      incognito: true,
-    });
+    expect(incognito?.entry).toMatchObject({ sessionId: "volatile", incognito: true });
     expect(incognito?.entry?.abortedLastRun).toBeUndefined();
     expect(getOpenClawAgentDatabaseIfOpen(memoryLocation)).toBeUndefined();
   } finally {
@@ -601,10 +593,7 @@ it.each([
       }
       expect(read(sessionKey)?.abortedLastRun).toBeUndefined();
       if (terminalStatus) {
-        expect(read(sessionKey)).toMatchObject({
-          status: terminalStatus,
-          endedAt: 123,
-        });
+        expect(read(sessionKey)).toMatchObject({ status: terminalStatus, endedAt: 123 });
       }
     } finally {
       admission?.release();
