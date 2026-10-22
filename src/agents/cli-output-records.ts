@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { CliBackendConfig } from "../plugins/cli-backend.types.js";
+import { readTrimmedStringAlias } from "../utils/string-readers.js";
 import type {
   CliOutput,
   CliTerminalFailure,
@@ -362,13 +363,7 @@ export function pickCliSessionId(
     "conversation_id",
     "conversationId",
   ];
-  for (const field of fields) {
-    const value = parsed[field];
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-  return undefined;
+  return readTrimmedStringAlias(parsed, fields);
 }
 
 // Claude Code forwards subagent (Agent tool) traffic with `parent_tool_use_id`

@@ -259,16 +259,16 @@ describe("agent file lifecycle", () => {
       expect(page.read().readData().agentFileEditors["AGENTS.md"]?.content).toBe("original"),
     );
     page.read().agentFiles.onFileDraftChange("AGENTS.md", "updated");
-    page.read().agentFiles.onFileSave("AGENTS.md");
+    void page.read().agentFiles.onFileSave("AGENTS.md");
 
     await vi.waitFor(() =>
       expect(request.mock.calls.filter(([method]) => method === "agents.files.set")).toHaveLength(
         1,
       ),
     );
-    await vi.waitFor(() =>
-      expect(page.read().agentFiles.agentFilesError).toBe("workspace write failed"),
-    );
+    expect(await page.read().readData().agentFileOutcome).toEqual({
+      error: "workspace write failed",
+    });
     expect(refreshFiles).not.toHaveBeenCalled();
   });
 
@@ -339,7 +339,7 @@ describe("agent file lifecycle", () => {
         if (pendingRequest === "invalidated cache") {
           agents.invalidateFiles(["main"]);
         }
-        page.read().agentFiles.onFileSave(missingFile.name);
+        void page.read().agentFiles.onFileSave(missingFile.name);
         await vi.waitFor(() => {
           expect(page.read().readData().agentFileSaving).toBe(false);
           expect(page.read().readData().agentFileEditors[missingFile.name]?.content).toBe(
@@ -369,7 +369,7 @@ describe("agent file lifecycle", () => {
         expect(page.read().readData().agentFileEditors[missingFile.name]?.draft).toBe(
           savedFile.content,
         );
-        expect(page.read().agentFiles.agentFilesError).toBeNull();
+        expect((await page.read().readData().agentFileOutcome)?.error).toBeUndefined();
       } finally {
         page.dispose();
         contentRead.resolve(savedResult);
@@ -450,7 +450,7 @@ describe("agent file lifecycle", () => {
         if (newerSaveFails) {
           page.read().agentFiles.onFileDraftChange("AGENTS.md", "newer draft");
           saveDraft();
-          await vi.waitFor(() => expect(page.read().agentFiles.agentFilesError).toBe(writeError));
+          expect(await page.read().readData().agentFileOutcome).toEqual({ error: writeError });
         }
         rebuild.reject(new Error(rebuildError));
         await expect(agents.files("main").read).resolves.toEqual({ error: rebuildError });

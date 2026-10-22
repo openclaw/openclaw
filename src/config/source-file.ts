@@ -35,7 +35,6 @@ type Source = {
 export function createConfigFileAdapter(opts: {
   path: string;
   includedPaths?: readonly string[];
-  includeRoots?: readonly string[];
   onChange: () => void;
   onReady?: (isCurrent: () => boolean) => void;
   log: { warn: (message: string) => void; error: (message: string) => void };
@@ -93,7 +92,7 @@ export function createConfigFileAdapter(opts: {
     if (!roots) {
       roots = admitConfigObservationRoots(
         opts.path,
-        opts.includeRoots ?? resolveIncludeRoots(),
+        resolveIncludeRoots(),
         admittedRoots,
         primaryTarget,
         desiredPaths,

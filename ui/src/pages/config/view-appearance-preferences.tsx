@@ -1,4 +1,4 @@
-import { createMemo, Errored, Loading, Show, For } from "solid-js";
+import { action, createMemo, createOptimistic, Errored, Loading, Show, For } from "solid-js";
 import type { ServerUiPrefProvenance } from "../../app/server-prefs.ts";
 import {
   normalizeCatalogOpenTarget,
@@ -94,7 +94,16 @@ function MediaDeviceField(props: { config: ConfigProps; kind: "microphone" | "ca
   const title = createMemo(() => t(`chat.composer.${props.kind}Input`));
   const onSelect = () =>
     props.kind === "microphone" ? props.config.onMicrophoneSelect : props.config.onCameraSelect;
-  const selectedDeviceId = createMemo(() => state()?.selectedDeviceId.trim() ?? "");
+  const [selectedDeviceId, setSelectedDeviceId] = createOptimistic(
+    () => state()?.selectedDeviceId.trim() ?? "",
+  );
+  const [selectingCamera, setSelectingCamera] = createOptimistic(false);
+  const selectCamera = action(function* (deviceId: string, completion: Promise<void> | undefined) {
+    setSelectedDeviceId(deviceId);
+    setSelectingCamera(true);
+    // The retained owner receipt reports errors through the status boundary.
+    yield completion?.catch(() => {});
+  });
   const selectOptions = createMemo(() => {
     const devices = state()?.devices ?? [];
     return [
@@ -134,51 +143,56 @@ function MediaDeviceField(props: { config: ConfigProps; kind: "microphone" | "ca
       ? props.config.onMicrophoneRefresh
       : props.config.onCameraRefresh)?.();
   };
-  const discovery = createMemo(() => ({ promise: state()?.discovery }), {
-    equals: (previous, next) => previous.promise === next.promise,
-  });
-  const discoveryReady = createMemo(async () => {
-    const issue = await discovery().promise;
-    if (issue) {
-      throw new Error(issue);
-    }
-    return true;
-  });
-
+  const discovery = createMemo(
+    () => ({ promise: state()?.discovery, selection: state()?.selection }),
+    {
+      equals: (previous, next) =>
+        previous.promise === next.promise && previous.selection === next.selection,
+    },
+  );
   return (
     <Show when={state() && onSelect()}>
       <SettingsRow
         title={title()}
         description={
           <>
-            {state()?.error ? (
-              <>
-                <span role="alert">{state()?.error}</span>
-                <br />
-              </>
-            ) : (
-              <Errored
-                fallback={(error) => (
-                  <>
-                    <span role="alert">{formatUiError(error())}</span>
-                    <br />
-                  </>
-                )}
-              >
-                <Loading on={discovery().promise} fallback={null}>
-                  {discoveryReady() && state()?.devices.length === 0 && (
-                    <>
-                      {t(
-                        props.kind === "microphone"
-                          ? "chat.composer.noMicrophones"
-                          : "chat.composer.noCameras",
+            <Show when={!selectingCamera()}>
+              <Show when={discovery()} keyed>
+                {(request) => {
+                  const ready = createMemo(async () => {
+                    await request.selection;
+                    const issue = await request.promise;
+                    if (issue) {
+                      throw new Error(issue);
+                    }
+                    return true;
+                  });
+                  return (
+                    <Errored
+                      fallback={(error) => (
+                        <>
+                          <span role="alert">{formatUiError(error())}</span>
+                          <br />
+                        </>
                       )}
-                      <br />
-                    </>
-                  )}
-                </Loading>
-              </Errored>
-            )}
+                    >
+                      <Loading fallback={null}>
+                        {ready() && state()?.devices.length === 0 && (
+                          <>
+                            {t(
+                              props.kind === "microphone"
+                                ? "chat.composer.noMicrophones"
+                                : "chat.composer.noCameras",
+                            )}
+                            <br />
+                          </>
+                        )}
+                      </Loading>
+                    </Errored>
+                  );
+                }}
+              </Show>
+            </Show>
             {t("quickSettings.personal.browserOnly")}
           </>
         }
@@ -199,7 +213,14 @@ function MediaDeviceField(props: { config: ConfigProps; kind: "microphone" | "ca
                 requestAccess();
               }
             }}
-            onChange={(event) => onSelect()?.(event.currentTarget.value)}
+            onChange={(event) => {
+              const deviceId = event.currentTarget.value;
+              if (props.kind === "camera") {
+                void selectCamera(deviceId, props.config.onCameraSelect?.(deviceId));
+              } else {
+                props.config.onMicrophoneSelect?.(deviceId);
+              }
+            }}
           >
             <For each={selectOptions()} keyed={(option) => option.value}>
               {(option) => (

@@ -149,7 +149,9 @@ function PluginPageContent(props: PluginPageProps, host: HTMLElement) {
                 context.gateway.snapshot.phase === "connected"
                   ? context.gateway.snapshot.client
                   : null;
-              return <Logbook initialClient={initialClient} />;
+              return (
+                <Logbook initialClient={initialClient} getRetired={() => lifecycle.actionRetired} />
+              );
             }}
           </Show>
         </Loading>

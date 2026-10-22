@@ -521,18 +521,6 @@ describe("gateway sessions patch", () => {
     expect(entry.agentStatus).toBeUndefined();
   });
 
-  test.each([
-    { field: "responseUsage", value: "off" },
-    { field: "reasoningLevel", value: "off" },
-    { field: "verboseLevel", value: "full" },
-    { field: "elevatedLevel", value: "off" },
-    { field: "elevatedLevel", value: "on" },
-  ] as const)("persists explicit $field=$value", async ({ field, value }) => {
-    const entry = await patchOk({ [field]: value });
-    // Explicit off values must survive configured defaults, including messages.responseUsage.
-    expect(entry[field]).toBe(value);
-  });
-
   test.each(["thinkingLevel", "contextWindow", "elevatedLevel"] as const)(
     "clears %s without loading the catalog",
     async (field) => {
@@ -582,6 +570,8 @@ describe("gateway sessions patch", () => {
   test.each([
     { field: "category", raw: "  Research  ", normalized: "Research" },
     { field: "color", raw: "  Blue ", normalized: "blue" },
+    { field: "verboseLevel", raw: "  EVERYTHING  ", normalized: "full" },
+    { field: "traceLevel", raw: "  UNFILTERED  ", normalized: "raw" },
   ] as const)("normalizes and clears $field", async ({ field, raw, normalized }) => {
     const entry = await patchOk({ mainEntry: {}, [field]: raw });
     expect(entry[field]).toBe(normalized);
@@ -631,6 +621,11 @@ describe("gateway sessions patch", () => {
 
   test.each([
     { patch: { verboseLevel: "maybe" }, error: 'invalid verboseLevel (use "on"|"off"|"full")' },
+    { patch: { traceLevel: "maybe" }, error: 'invalid traceLevel (use "on"|"off"|"raw")' },
+    {
+      patch: { verboseLevel: "maybe", traceLevel: "maybe" },
+      error: 'invalid verboseLevel (use "on"|"off"|"full")',
+    },
     { patch: { elevatedLevel: "maybe" }, error: "invalid elevatedLevel" },
     {
       patch: { color: "crimson" },

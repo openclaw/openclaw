@@ -11,6 +11,15 @@ const POLLUTION_PROBE = "openclawPathPollutionProbe";
 const createArrayConfig = () => ({ accounts: [{ id: "a" }] });
 
 describe("secrets path utils", () => {
+  it.each([
+    [{ value: "root" }, [], undefined],
+    [{ value: null }, ["value", "child"], undefined],
+    [{ values: [{ "0": "literal" }] }, ["values", "0", "0"], "literal"],
+    [{ values: [] }, ["values", "0"], undefined],
+  ] as const)("reads %j at %j without changing path semantics", (root, segments, expected) => {
+    expect(getPath(root, [...segments])).toBe(expected);
+  });
+
   it("deletePathStrict compacts arrays via splice", () => {
     const config = {};
     setPathCreateStrict(config, ["accounts"], [{ id: "a" }, { id: "b" }, { id: "c" }]);

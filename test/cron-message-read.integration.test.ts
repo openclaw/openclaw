@@ -571,7 +571,7 @@ describe("scheduled message actions", () => {
         }
 
         vi.stubEnv("DISCORD_API_URL", `${providerOrigin}/api/v10`);
-        await ensureMcpLoopbackServer(0);
+        await ensureMcpLoopbackServer();
         cleanup.push(() => closeMcpLoopbackServer());
         const mcpRuntime = expectDefined(getActiveMcpLoopbackRuntime(), "task-owned MCP runtime");
         const mcpOrigin = `http://127.0.0.1:${mcpRuntime.port}`;

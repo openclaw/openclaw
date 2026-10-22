@@ -151,7 +151,8 @@ export function assertSafeSqliteRuntime(
         "(SELECT group_concat(compile_options, ',') FROM (SELECT compile_options FROM pragma_compile_options ORDER BY compile_options)) AS compileOptions, " +
         "sqlite_compileoption_used('OMIT_LOAD_EXTENSION') AS omitted",
     );
-    const row = statement.get();
+    const probe = probeSqliteIteratorBehavior(statement);
+    const row = probe.row;
     version = typeof row?.version === "string" ? row.version : "unknown";
     assertSqliteWalResetSafeVersion(version, process.versions.node);
     // Bind restart proof to the library actually loaded, including custom builds.
@@ -164,7 +165,7 @@ export function assertSafeSqliteRuntime(
       storageIdentity = { sourceId: row.sourceId, compileOptions: row.compileOptions };
     }
     extensions = row?.omitted === 0;
-    iteratorBehavior = probeSqliteIteratorBehavior(statement);
+    iteratorBehavior = probe.iteratorBehavior;
   } finally {
     database.close();
   }

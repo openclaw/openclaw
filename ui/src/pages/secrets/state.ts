@@ -20,6 +20,8 @@ const MAX_VALUE_BYTES = 64 * 1024;
 
 export class SecretsPageState {
   store = createInitialSecretsStoreState();
+  readReceipt: { store: SecretsStoreState; result: Promise<void> } | null = null;
+  presentationLifetime = Promise.withResolvers<void>();
   dialogMode: "add" | "edit" | null = null;
   draft: SecretsStoreDraft = {
     name: "",
@@ -75,7 +77,14 @@ export class SecretsPageState {
     this.resetGatewayState();
   }
 
+  retirePresentation() {
+    this.presentationLifetime.resolve();
+    this.presentationLifetime = Promise.withResolvers<void>();
+  }
+
   resetGatewayState(snapshot?: ApplicationContext["gateway"]["snapshot"]) {
+    this.retirePresentation();
+    this.readReceipt = null;
     this.store = createInitialSecretsStoreState({
       client: snapshot?.client ?? null,
       connected: snapshot?.phase === "connected",
@@ -92,8 +101,16 @@ export class SecretsPageState {
 
   ensureInitialData() {
     if (this.canCall("secrets.store.list") && !this.store.loaded && !this.store.loading) {
-      void this.runStoreTask(loadSecretsStore);
+      this.reload();
     }
+  }
+
+  reload() {
+    if (!this.canCall("secrets.store.list") || this.store.loading) {
+      return;
+    }
+    this.readReceipt = { store: this.store, result: this.runStoreTask(loadSecretsStore) };
+    this.notify();
   }
 
   async runStoreTask(task: (store: SecretsStoreState) => Promise<unknown>): Promise<void> {
@@ -166,7 +183,7 @@ export class SecretsPageState {
     save: (store: SecretsStoreState) => Promise<Result | null>,
     finish: (result: Result) => string,
   ) {
-    void this.runStoreTask(async (store) => {
+    return this.runStoreTask(async (store) => {
       const result = await save(store);
       if (this.store !== store) {
         return;
@@ -185,17 +202,17 @@ export class SecretsPageState {
 
   submitDraft() {
     if (!this.canCall("secrets.store.set") || !this.dialogMode) {
-      return;
+      return undefined;
     }
     const error = ENV_SECRET_REF_ID_RE.test(this.draft.name)
       ? this.validateValue(this.draft.value, this.draft.kind)
       : t("secretsStore.badName");
     if (error) {
       this.formError = error;
-      return;
+      return undefined;
     }
     const draft = { ...this.draft };
-    this.saveEntryTask(
+    return this.saveEntryTask(
       (store) => setSecretsStoreEntry(store, draft),
       () => {
         this.dialogMode = null;
@@ -224,25 +241,25 @@ export class SecretsPageState {
 
   submitBulk() {
     if (!this.canCall("secrets.store.set") || !this.bulkOpen) {
-      return;
+      return undefined;
     }
     const parsed = this.bulkParsed;
     if (parsed.invalidNames.length > 0) {
       this.formError = `${t("secretsStore.badName")} ${parsed.invalidNames.join(", ")}`;
-      return;
+      return undefined;
     }
     if (parsed.entries.length === 0) {
       this.formError = t("secretsStore.required");
-      return;
+      return undefined;
     }
     for (const entry of parsed.entries) {
       const error = this.validateValue(entry.value, entry.kind);
       if (error) {
         this.formError = `${entry.name}: ${error}`;
-        return;
+        return undefined;
       }
     }
-    this.saveEntryTask(
+    return this.saveEntryTask(
       (store) => bulkSetSecretsStoreEntries(store, parsed.entries),
       (result) => {
         this.bulkOpen = false;
