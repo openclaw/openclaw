@@ -268,6 +268,22 @@ describe("formatMessageCliText send results", () => {
       result: undefined,
       expected: "✅ Sent via gateway. Message ID: unknown",
     },
+    {
+      via: "direct",
+      channel: "alpha",
+      result: {
+        channel: "alpha",
+        messageId: "m\u001b[2J1",
+        target: { kind: "chat", id: "c\u001b[31m1\u001b[0m" },
+      },
+      expected: "✅ Sent via Alpha. Message ID: m1 (chat c1)",
+    },
+    {
+      via: "gateway",
+      channel: "directchat",
+      result: { messageId: "\u001b]8;;https://example.invalid\u0007m1\u001b]8;;\u0007" },
+      expected: "✅ Sent via gateway (directchat). Message ID: m1",
+    },
   ] as const)(
     "formats core $via send results for '$channel'",
     ({ via, channel, result, expected }) => {
@@ -557,20 +573,22 @@ describe("formatMessageCliText delivery and action terminal safety", () => {
     expect(removedOutput).toContain("PWNED");
   });
 
-  it("strips control sequences from the fallback object summary", () => {
-    const result = {
-      kind: "action",
-      action: "thread-create",
-      channel: "matrix",
-      handledBy: "plugin",
-      payload: { threadId: hostile, ok: true },
-      dryRun: false,
-    } satisfies MessageActionResult;
+  it.each([{ threadId: hostile, ok: true }, hostile])(
+    "strips controls from fallback payload %j",
+    (payload) => {
+      const result = {
+        kind: "action",
+        action: "thread-create",
+        channel: "matrix",
+        handledBy: "plugin",
+        payload,
+        dryRun: false,
+      } satisfies MessageActionResult;
 
-    const output = textJoined(formatMessageCliText(result));
+      const output = textJoined(formatMessageCliText(result));
 
-    expect(output).not.toContain("\u001b");
-    expect(output).toContain("threadId");
-    expect(output).toContain("PWNED");
-  });
+      expect(output).not.toContain("\u001b");
+      expect(output).toContain("PWNED");
+    },
+  );
 });

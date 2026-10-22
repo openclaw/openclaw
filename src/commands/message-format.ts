@@ -58,7 +58,7 @@ function renderSummaryValue(value: unknown): string {
 
 function renderObjectSummary(payload: unknown, opts: FormatOpts): string {
   if (!payload || typeof payload !== "object") {
-    return String(payload);
+    return sanitizeTerminalText(String(payload));
   }
   const obj = payload as Record<string, unknown>;
   const keys = Object.keys(obj);
@@ -154,8 +154,14 @@ export function formatMessageCliText(
   opts?: { displayLimit?: number },
 ): string[] {
   const rich = isRich();
-  const ok = (text: string) => (rich ? theme.success(text) : text);
-  const fail = (text: string) => (rich ? theme.error(text) : text);
+  const ok = (text: string) => {
+    const safeText = sanitizeTerminalText(text);
+    return rich ? theme.success(safeText) : safeText;
+  };
+  const fail = (text: string) => {
+    const safeText = sanitizeTerminalText(text);
+    return rich ? theme.error(safeText) : safeText;
+  };
   const muted = (text: string) => (rich ? theme.muted(text) : text);
   const heading = (text: string) => (rich ? theme.heading(text) : text);
 
@@ -201,10 +207,7 @@ export function formatMessageCliText(
 
   if (!outcome.ok) {
     const messageId = result.kind === "send" ? result.sendResult?.result?.messageId : undefined;
-    const detail = sanitizeTerminalText(outcome.error);
-    return [
-      fail(`❌ ${detail}${messageId ? ` Message ID: ${sanitizeTerminalText(messageId)}` : ""}`),
-    ];
+    return [fail(`❌ ${outcome.error}${messageId ? ` Message ID: ${messageId}` : ""}`)];
   }
 
   if (result.kind === "send" || result.kind === "poll") {
@@ -239,15 +242,14 @@ export function formatMessageCliText(
       }
       const lines = [ok(summary)];
       if (pollId) {
-        lines.push(ok(`Poll id: ${sanitizeTerminalText(pollId)}`));
+        lines.push(ok(`Poll id: ${pollId}`));
       }
       return lines;
     }
 
     const label = resolveChannelLabel(result.channel);
     const msgId = resolveMessageActionMessageId(result.payload);
-    const safeMsgId = msgId ? sanitizeTerminalText(msgId) : "";
-    return [ok(`✅ ${action} via ${label}.${safeMsgId ? ` Message ID: ${safeMsgId}` : ""}`)];
+    return [ok(`✅ ${action} via ${label}.${msgId ? ` Message ID: ${msgId}` : ""}`)];
   }
 
   // Channel actions share the generic plugin-action payload shape, so format
@@ -257,13 +259,13 @@ export function formatMessageCliText(
     const added = (payload as { added?: unknown }).added;
     const removed = (payload as { removed?: unknown }).removed;
     if (typeof added === "string" && added.trim()) {
-      return [ok(`✅ Reaction added: ${sanitizeTerminalText(added.trim())}`)];
+      return [ok(`✅ Reaction added: ${added.trim()}`)];
     }
     if (typeof removed === "string" && removed.trim()) {
-      return [ok(`✅ Reaction removed: ${sanitizeTerminalText(removed.trim())}`)];
+      return [ok(`✅ Reaction removed: ${removed.trim()}`)];
     }
     if (Array.isArray(removed)) {
-      const list = normalizeStringEntries(removed).map(sanitizeTerminalText).join(", ");
+      const list = normalizeStringEntries(removed).join(", ");
       return [ok(`✅ Reactions removed${list ? `: ${list}` : ""}`)];
     }
     return [ok("✅ Reaction updated.")];
