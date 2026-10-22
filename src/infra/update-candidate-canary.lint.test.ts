@@ -362,8 +362,10 @@ it.each([false, true])(
         kind: "plugin",
         description: "Attest the deployment Gateway settings.",
         async detect({ cfg }) {
-          const hash = createHash("sha256").update(JSON.stringify(cfg.gateway)).digest("hex");
-          return hash === "f3bc45b8486e61c4f59c84aff204f14b5f9ba203de8f23e428860b2193d5061e"
+          const hash = createHash("sha256")
+            .update(JSON.stringify({ ...cfg.gateway, auth: { mode: cfg.gateway?.auth?.mode } }))
+            .digest("hex");
+          return hash === "96145a3f866d78a4ff00e0b188cd75d89ec6b2ecd59555e8475811b4f2257af6"
             ? []
             : [
                 {
@@ -430,5 +432,65 @@ it.each([false, true])(
       expect((await check(config, configPath)).findings).toEqual([]);
     }
     expect(await fs.readFile(configPath, "utf8")).toBe(authored);
+  },
+);
+
+it.each([false, true])(
+  "does not persist resolved credentials when lint fails=%s",
+  async (fails) => {
+    const secrets = ["synthetic-token", "synthetic-password", "Bearer synthetic-otel"];
+    const config: OpenClawConfig = {
+      gateway: { auth: { mode: "password", token: secrets[0], password: secrets[1] } },
+      diagnostics: {
+        enabled: true,
+        otel: { enabled: true, captureContent: true, headers: { Authorization: secrets[2]! } },
+      },
+    };
+    lintReport = report(
+      fails ? [{ checkId: "fixture/refused", severity: "error", message: "Refused" }] : [],
+    );
+    let serialized = "";
+    let retainedState: string | undefined;
+    const remove = fs.rm.bind(fs);
+    const cleanup = vi
+      .spyOn(fs, "rm")
+      .mockImplementation((target, options) =>
+        target === retainedState ? Promise.resolve() : remove(target, options),
+      );
+    harness.overrideSpawn("--lint", (_args, options) => {
+      serialized = readFileSync(options.env.OPENCLAW_CONFIG_PATH!, "utf8");
+      retainedState = options.env.OPENCLAW_STATE_DIR;
+      const child = harness.child(true);
+      queueMicrotask(() => {
+        child.stdout.write(JSON.stringify(lintReport));
+        child.emit("close", fails ? 1 : 0);
+      });
+      return child;
+    });
+    stubHealthyGateway();
+    try {
+      const result = await validateUpdateCandidateCanary({ ...canaryStateOptions(), config });
+      expect(result.status).toBe(fails ? "error" : "ok");
+      if (fails) {
+        expect(result.phase).toBe("lint");
+      }
+      expect(serialized).not.toBe("");
+      const retained = await fs.readFile(path.join(retainedState!, "openclaw.json"), "utf8");
+      for (const value of secrets) {
+        expect(serialized).not.toContain(value);
+        expect(retained).not.toContain(value);
+      }
+      expect(JSON.parse(serialized)).toMatchObject({
+        gateway: { auth: { mode: "password" } },
+        diagnostics: { enabled: true, otel: { enabled: true, captureContent: true } },
+      });
+      expect(config.gateway?.auth?.password).toBe(secrets[1]);
+      expect(config.diagnostics?.otel?.headers?.Authorization).toBe(secrets[2]);
+    } finally {
+      cleanup.mockRestore();
+      if (retainedState) {
+        await remove(retainedState, { recursive: true, force: true });
+      }
+    }
   },
 );

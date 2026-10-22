@@ -5,6 +5,7 @@ import JSON5 from "json5";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import type { AgentEntryConfig } from "../config/types.agents.js";
+import { coerceSecretRef } from "../config/types.secrets.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
 import { resolveUserPath } from "./home-dir.js";
@@ -132,6 +133,19 @@ function isolatedConfig(
   // Copy effective config, never its include graph or ambient shell overrides.
   delete copied.env;
   delete copied.session?.store;
+  // Attest deployment posture and SecretRef provenance without persisting resolved credentials.
+  const auth = copied.gateway?.auth;
+  for (const key of ["token", "password"] as const) {
+    if (auth?.[key] !== undefined && !coerceSecretRef(auth[key], copied.secrets?.defaults)) {
+      auth[key] = randomUUID();
+    }
+  }
+  const headers = copied.diagnostics?.otel?.headers;
+  for (const [key, value] of Object.entries(headers ?? {})) {
+    if (!coerceSecretRef(value, copied.secrets?.defaults)) {
+      headers![key] = randomUUID();
+    }
+  }
   copied.logging = { ...copied.logging, file: path.join(stateDir, "canary.log") };
   return copied;
 }
