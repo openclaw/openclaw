@@ -112,6 +112,17 @@ function expectAgentTab(container: Element, text: string): HTMLElement & { disab
 }
 
 describe("renderAgents", () => {
+  it("announces an agent list failure as an alert", () => {
+    const container = document.createElement("div");
+    renderView({ error: "Agent list unavailable" }, container);
+
+    expect(
+      Array.from(container.querySelectorAll('[role="alert"]'), (alert) =>
+        alert.textContent?.trim(),
+      ),
+    ).toEqual(["Agent list unavailable"]);
+  });
+
   it("renders the selected agent's tool catalog loading state", () => {
     const container = document.createElement("div");
     const props = createProps();

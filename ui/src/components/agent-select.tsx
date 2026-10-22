@@ -1,4 +1,4 @@
-import { createMemo, onCleanup, Show } from "solid-js";
+import { createMemo, onSettled, Show } from "solid-js";
 import type { AgentIdentityResult } from "../api/types.ts";
 import { resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
@@ -40,7 +40,7 @@ defineSolidBridge<AgentSelectProps>(
     const label = () => triggerOption()?.label ?? (props.placeholder || t("agents.noAgents"));
     const accessibleLabel = () => [label(), selected()?.badge].filter(Boolean).join(", ");
     const loader = createIdentityAvatars();
-    onCleanup(loader.connect());
+    onSettled(() => loader.connect());
     const avatarSource = projectOwner(loader, (owner) => owner);
     const avatars = createMemo(() => {
       const current = triggerOption();

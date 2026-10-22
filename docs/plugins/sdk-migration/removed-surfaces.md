@@ -61,6 +61,34 @@ calls this helper. Explicit factory arrays retain their ordered initialization;
 omitting factories returns tool output unchanged. No removal date is set for
 these exports; their published consumers must migrate first.
 
+### Heartbeat executor and wake helpers
+
+Periodic heartbeat monitoring now runs as ordinary Automations jobs. The
+Gateway no longer schedules the legacy executor. Its SDK surfaces were removed
+with maintainer approval on October 3 and 12, 2026, without another compatibility
+window. Upgrade plugins
+that use these surfaces before upgrading the host.
+
+| Removed surface                                                                                                                                                                    | Replacement                                                                                                                                                                                               |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `api.runtime.system.requestHeartbeat`, `requestHeartbeatNow`, and `runHeartbeatOnce`                                                                                               | For immediate work, use `captureSessionEventTarget` and `enqueueSessionEvent` on the same runtime namespace. For periodic work, create an ordinary automation job.                                        |
+| `openclaw/plugin-sdk/heartbeat-runtime`                                                                                                                                            | No replacement subpath. Use the runtime session-event methods for waking work; use `system-event-runtime` for passive event inspection and consumption. This subpath was private-local after July 2026.   |
+| `reply-runtime`: `HEARTBEAT_PROMPT`, `DEFAULT_HEARTBEAT_ACK_MAX_CHARS`, `resolveHeartbeatPromptCore`, `stripHeartbeatToken`, `resolveHeartbeatReplyPayload`, and `HEARTBEAT_TOKEN` | Remove executor-specific prompt and acknowledgment handling. Ordinary jobs use their own prompt, delivery policy, and terminal reply. `SILENT_REPLY_TOKEN` and ordinary silence parsing remain supported. |
+| `agent-harness-runtime`: `HeartbeatToolResponse`, `HEARTBEAT_RESPONSE_TOOL_NAME`, and `normalizeHeartbeatToolResponse`                                                             | Remove the `heartbeat_respond` tool and fallback. Publish the ordinary terminal reply through the harness completion contract.                                                                            |
+| Private `provider-model-shared`: `GPT5_HEARTBEAT_PROMPT_OVERLAY` and `GPT5_FRIENDLY_PROMPT_OVERLAY`                                                                                | Remove heartbeat overlays. `GPT5_FRIENDLY_CHAT_PROMPT_OVERLAY` remains available to its existing consumers.                                                                                               |
+
+For asynchronous plugin work, capture the original destination before awaiting
+that work, then pass the opaque target to `enqueueSessionEvent`. Check the
+receipt's `accepted` result before committing producer bookkeeping and its
+`settled` result before reporting completion. See
+[runtime session events](/plugins/sdk-runtime/state-and-system#api-runtime-system).
+Passive `enqueueSystemEvent` remains available when no immediate turn is wanted.
+
+Doctor retains legacy configuration and task migration, including its once-only
+delivery notice. Historical transcript recognition, public hook trigger values,
+and v4 compatibility RPCs/events also remain. See
+[Heartbeat migration](/gateway/heartbeat).
+
 ### Hosted media, global transforms, and executor controllers
 
 The following registration methods were removed with explicit maintainer approval

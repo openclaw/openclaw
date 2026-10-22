@@ -6,6 +6,7 @@ import {
   Errored,
   latest,
   Loading,
+  refresh,
   Show,
 } from "solid-js";
 import { deviceSettingsGroupLabelKey } from "../../app-navigation.ts";
@@ -19,8 +20,12 @@ import {
 import { formatUiError } from "../../lib/format-error.ts";
 import { projectNativeDeviceSettings } from "../../lib/reactive/application-native.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import type { UpdatesCommandPresentation } from "./updates-types.ts";
 
-export function DeviceUpdates(props: { capability: NativeDeviceSettingsCapability }) {
+export function DeviceUpdates(props: {
+  capability: NativeDeviceSettingsCapability;
+  captureCommandPresentation: () => UpdatesCommandPresentation;
+}) {
   const native = createMemo(() => projectNativeDeviceSettings(props.capability));
   const snapshot = () => native().read();
   const updates = () => snapshot()?.updates;
@@ -35,21 +40,32 @@ export function DeviceUpdates(props: { capability: NativeDeviceSettingsCapabilit
     return automatic();
   });
   let requestedValue = false;
-  const presentChange = action(function* (value: boolean, completion: Promise<void>) {
-    setAutomatic(value);
-    setSaving(true);
+  const presentChange = action(function* (
+    view: UpdatesCommandPresentation,
+    value: boolean,
+    completion: Promise<void>,
+  ) {
+    if (view.isCurrent()) {
+      setAutomatic(value);
+      setSaving(true);
+    }
     // The async receipt owns errors; this action owns only the saving affordance.
     yield completion.catch(() => {});
+    if (view.isCurrent()) {
+      yield refresh(automatic);
+    }
   });
-  const changeAutomatic = (value: boolean) => {
+  const changeAutomatic = async (value: boolean) => {
+    const view = props.captureCommandPresentation();
     requestedValue = value;
-    const completion = new Promise<void>((resolve, reject) => {
-      props.capability.set("updates.automatic", value, (error) =>
-        error ? reject(error) : resolve(),
-      );
+    const capability = props.capability;
+    const pending = new Promise<void>((resolve, reject) => {
+      capability.set("updates.automatic", value, (error) => (error ? reject(error) : resolve()));
     });
+    const completion = Promise.race([pending, view.retired]);
     void setCompleted(() => completion);
-    void presentChange(value, completion);
+    await Promise.resolve();
+    return presentChange(view, value, completion);
   };
   return (
     <Show when={snapshot() && updates()}>
@@ -85,7 +101,7 @@ export function DeviceUpdates(props: { capability: NativeDeviceSettingsCapabilit
                     type="button"
                     onClick={() => {
                       reset();
-                      changeAutomatic(requestedValue);
+                      void changeAutomatic(requestedValue);
                     }}
                   >
                     {t("common.retry")}
@@ -100,7 +116,7 @@ export function DeviceUpdates(props: { capability: NativeDeviceSettingsCapabilit
                 checked={checked()}
                 disabled={saving()}
                 description={saving() ? t("common.saving") : undefined}
-                onChange={changeAutomatic}
+                onChange={(value) => void changeAutomatic(value)}
               />
             </Loading>
           </Errored>

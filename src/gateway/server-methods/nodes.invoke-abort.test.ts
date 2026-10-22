@@ -15,7 +15,11 @@ import type { NodeRegistry } from "../node-registry.js";
 import { isNodeWakeLifecycleCurrent } from "../node-wake-state.js";
 import { resetNodeWakeStateForTest } from "../node-wake-state.test-support.js";
 import { nodeInvokeHandlers } from "./nodes.invoke.js";
-import { createNodeInvokeTestHarness } from "./nodes.invoke.test-support.js";
+import {
+  createNodeInvokeTestHarness,
+  expectNodeFailure as expectFailure,
+  expectNodeReply,
+} from "./nodes.invoke.test-support.js";
 import type { GatewayNodeInvokeStream, GatewayRequestHandlerOptions } from "./shared-types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -93,10 +97,6 @@ function streamingInvoke(
     return { ok: true, payload };
   });
 }
-function expectFailure(respond: ReturnType<typeof vi.fn>, error: Record<string, unknown>) {
-  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(error));
-}
-
 beforeEach(() => {
   resetNodeWakeStateForTest();
   vi.clearAllMocks();
@@ -275,10 +275,9 @@ describe("node.invoke caller cancellation", () => {
         idleTimeoutMs: 5_000,
       }),
     );
-    expect(respond).toHaveBeenCalledWith(
-      true,
+    expectNodeReply(
+      respond,
       expect.objectContaining({ nodeId: "paired-node", command: "ollama.chat" }),
-      undefined,
     );
 
     runtimeCurrent = false;

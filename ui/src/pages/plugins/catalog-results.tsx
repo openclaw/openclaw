@@ -12,7 +12,11 @@ import { PanelEmptyState } from "../../components/solid/panel-empty-state.tsx";
 import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
-import type { PluginDiscoveryEntry, PluginInstallRequest } from "../../lib/plugins/index.ts";
+import type {
+  PluginCatalogItem,
+  PluginDiscoveryEntry,
+  PluginInstallRequest,
+} from "../../lib/plugins/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { PluginCatalogSkeleton, renderCatalogGridSkeleton } from "./catalog-skeleton.tsx";
 import { PluginArtTile } from "./consent-dialog.tsx";
@@ -41,6 +45,8 @@ export type PluginCatalogResultsProps = PluginDiscoveryState & {
   canInstall: boolean;
   busy?: Readonly<Record<string, PluginMutationAction>>;
   installProgress?: ReadonlyMap<string, PluginInstallProgress>;
+  /** Installed inventory; publishes local state before catalog pages are read again. */
+  inventory?: readonly PluginCatalogItem[];
   messages?: Readonly<Record<string, PluginRowMessage>>;
   onContinueInstall?: (id: string, request: PluginInstallRequest) => void;
   entryHref: (id: string) => string;
@@ -214,12 +220,21 @@ function CatalogCard(props: {
   plugin: PluginDiscoveryEntry;
   state: PluginCatalogResultsProps;
 }): JSX.Element {
-  const installedState = () =>
-    props.plugin.local.state === "not-installed" ? null : props.plugin.local.state;
+  const inventoryEntry = createMemo(() =>
+    props.state.inventory?.find(
+      (plugin) => plugin.installed && plugin.catalogId === props.plugin.id,
+    ),
+  );
+  const installedState = () => {
+    const state = inventoryEntry()?.state ?? props.plugin.local.state;
+    return state === "not-installed" ? null : state;
+  };
   const progress = () => props.state.installProgress?.get(`install:${props.plugin.id}`);
   const installing = () => Boolean(progress() && progress()?.finishedAt === undefined);
   const installed = () =>
-    props.plugin.local.installed && installedState() !== null && !installing();
+    (inventoryEntry() !== undefined || props.plugin.local.installed) &&
+    installedState() !== null &&
+    !installing();
   const busy = () => Boolean(props.state.busy?.[`install:${props.plugin.id}`]);
   const canInstall = () =>
     props.state.canInstall &&

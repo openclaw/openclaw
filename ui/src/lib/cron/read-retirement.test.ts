@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createRequireRecord } from "../../../../test/helpers/record.js";
@@ -49,6 +50,31 @@ function createCronJobsReloadHarness(stateOverrides: Partial<CronState> = {}) {
 }
 
 describe("cron controller", () => {
+  it("retires protected inventory and queued page reloads after a forbidden read", async () => {
+    const pending = createDeferred<CronJobsListResult>();
+    const request = vi.fn(() => pending.promise);
+    const state = createStateWithRequest(request, {
+      cronJobs: [createCronJob("private-job", "Private job")],
+      cronJobsSnapshotRevision: "private-snapshot",
+      cronJobsTotal: 2,
+      cronJobsHasMore: true,
+      cronJobsNextOffset: 1,
+    });
+    const read = loadCronJobsPage(state, { append: true });
+    await loadCronJobsPage(state);
+    pending.reject(
+      new GatewayProtocolRequestError({ code: "FORBIDDEN", message: "Read authority revoked" }),
+    );
+    await read;
+    expect(state.cronJobs).toEqual([]);
+    expect(state.cronJobsSnapshotRevision).toBeNull();
+    expect(state.cronJobsTotal).toBe(0);
+    expect(state.cronJobsHasMore).toBe(false);
+    expect(state.cronJobsNextOffset).toBeNull();
+    expect(state.cronJobsReloadPending).toBe(false);
+    expect(request).toHaveBeenCalledOnce();
+  });
+
   it("appends jobs only from the accepted snapshot revision", async () => {
     const firstJob = createCronJob("job-1", "First");
     const secondJob = createCronJob("job-2", "Second");

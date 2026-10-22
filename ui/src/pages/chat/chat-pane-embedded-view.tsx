@@ -110,6 +110,7 @@ function CompanionPanel(props: Props) {
       prop:onSubmit={props.onCompanionSubmit}
       prop:onDraftChange={props.onCompanionDraftChange}
       prop:onAttachmentsChange={props.onCompanionAttachmentsChange}
+      prop:onOpenImage={props.state.handleOpenImage}
       prop:uploadConfig={props.state.uploadConfig}
       prop:attachmentLimits={resolveChatAttachmentLimits(props.state.hello?.policy)}
     />
@@ -465,6 +466,7 @@ declare module "@solidjs/web" {
         "prop:onSubmit"?: SidebarPanelDefinitionParams["onCompanionSubmit"];
         "prop:onDraftChange"?: SidebarPanelDefinitionParams["onCompanionDraftChange"];
         "prop:onAttachmentsChange"?: SidebarPanelDefinitionParams["onCompanionAttachmentsChange"];
+        "prop:onOpenImage"?: SidebarPanelDefinitionParams["state"]["handleOpenImage"];
         "prop:uploadConfig"?: SidebarPanelDefinitionParams["state"]["uploadConfig"];
         "prop:attachmentLimits"?: ReturnType<typeof resolveChatAttachmentLimits>;
         "prop:presented"?: boolean;

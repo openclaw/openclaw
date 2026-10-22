@@ -38,7 +38,6 @@ export async function withCronMessageRun<T>(
     defaultAgentId: "main",
     log: { debug() {}, info() {}, warn() {}, error() {} },
     enqueueSystemEvent() {},
-    requestHeartbeat() {},
     runIsolatedAgentJob: async (execution) => {
       const { preparedRunAdmission, messageActionTurnCapability, close } = prepareCronRunAdmission({
         ...scope,

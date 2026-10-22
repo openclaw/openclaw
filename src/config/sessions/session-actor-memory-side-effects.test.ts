@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import assert from "node:assert/strict";
+import { describe, expect, it, vi } from "vitest";
 import { openContextEngineTurnOutboxWorkerStore } from "../../agents/harness/context-engine-turn-outbox-store.js";
 import { drainContextEngineTurnOutbox } from "../../agents/harness/context-engine-turn-outbox.js";
 import type { ContextEngine } from "../../context-engine/types.js";
@@ -15,16 +16,23 @@ import {
 } from "../../trajectory/runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "../../trajectory/types.js";
 import { appendTranscriptMessage, upsertSessionEntryCore } from "./session-accessor.js";
-import type { SessionActorAuthority } from "./session-actor-contract.js";
 import { createSessionActorMemoryConversations } from "./session-actor-memory-conversation-contract.js";
+import {
+  actorLifetime as actorAuthority,
+  authority,
+  memoryOwnerFixture,
+  type MemoryOwner,
+} from "./session-actor-memory-family.test-support.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { failSessionActorMemoryPublication } from "./session-actor-memory-publication.test-support.js";
 import { mutateSessionActorMemorySideEffects } from "./session-actor-memory-side-effects.js";
 import { createSessionActorMemoryState } from "./session-actor-memory-state.js";
 import type { SessionActorMemoryStorageContext } from "./session-actor-memory-storage-context.js";
-import { createMemorySessionActorOwner } from "./session-actor-memory.js";
 import { runWithSessionActorStorage } from "./session-actor-storage-binding.js";
-import type { SessionActorStorageOutcome } from "./session-actor-storage-contract.js";
+import type {
+  SessionActorStorageOutcome,
+  SessionActorStorageWrites,
+} from "./session-actor-storage-contract.js";
 import type { TranscriptTurnBoundary } from "./transcript-entry-anchor.js";
 
 vi.mock("node:sqlite", async (original) => ({
@@ -40,8 +48,6 @@ vi.mock("node:worker_threads", async (original) => ({
   }),
 }));
 
-const authority: SessionActorAuthority = { assertCurrent() {}, authorize() {} };
-const owners: ReturnType<typeof createMemorySessionActorOwner>[] = [];
 const env = { OPENCLAW_STATE_DIR: "/synthetic/side-data" };
 const location = {
   agentId: "main",
@@ -49,29 +55,17 @@ const location = {
 };
 const filter = { engineId: "test", isHeartbeat: false };
 const publishLimits = { maxEvents: 10, maxBytes: 10_000 };
-const actorAuthority = { assertCurrent() {}, assertReadable() {} };
-afterEach(() => {
-  for (const owner of owners.splice(0)) {
-    owner.close();
-  }
-  memorySessionActorOwners.reset();
-});
+const openFixture = memoryOwnerFixture(location, () => memorySessionActorOwners.reset());
 
 function committed<T>(outcome: SessionActorStorageOutcome<T>): T {
-  if (outcome.kind !== "committed") {
-    throw new Error(outcome.error.message);
-  }
+  assert(outcome.kind === "committed", "Expected a committed storage command");
   return outcome.value;
 }
 
-async function fixture(suffix = "one", owner = createMemorySessionActorOwner(location)) {
-  if (!owners.includes(owner)) {
-    owners.push(owner);
-  }
+async function fixture(suffix = "one", existingOwner?: MemoryOwner) {
   const sessionKey = `agent:main:dashboard:incognito-side-${suffix}`;
   const sessionId = `session-${suffix}`;
-  const actor = await owner.acquire({ database: owner.identity, sessionKey }, actorAuthority);
-  const storage = actor.storage!;
+  const { owner, actor, store: storage } = await openFixture(sessionKey, existingOwner);
   const binding = { ...location, actor, authority };
   const storageScope = {
     agentId: location.agentId,
@@ -81,50 +75,39 @@ async function fixture(suffix = "one", owner = createMemorySessionActorOwner(loc
     sessionId,
   };
   const scope = { ...storageScope, sessionActor: binding };
-  committed(
-    await storage.mutate(
-      {
-        type: "session.metadata.initialize",
-        input: { scope: storageScope, entry: { sessionId, updatedAt: 1, incognito: true } },
-      },
-      authority,
-    ),
-  );
+  const mutate = async <K extends keyof SessionActorStorageWrites>(
+    type: K,
+    input: SessionActorStorageWrites[K]["input"],
+  ) => committed(await storage.mutate({ type, input }, authority));
+  await mutate("session.metadata.initialize", {
+    scope: storageScope,
+    entry: { sessionId, updatedAt: 1, incognito: true },
+  });
   const message = async (id: string, role: "user" | "assistant", text: string) => {
-    committed(
-      await storage.mutate(
-        {
-          type: "session.metadata.append",
-          input: {
-            scope: storageScope,
-            event: {
-              type: "message",
-              id,
-              parentId: null,
-              timestamp: "2026-10-11T00:00:00.000Z",
-            },
-            message: {
-              messageJson: JSON.stringify({ role, content: text, timestamp: 1 }),
-              cwd: "/synthetic",
-              validateTurn: false,
-            },
-            options: { appendIntent: "active-branch" },
-          },
-        },
-        authority,
-      ),
-    );
+    await mutate("session.metadata.append", {
+      scope: storageScope,
+      event: {
+        type: "message",
+        id,
+        parentId: null,
+        timestamp: "2026-10-11T00:00:00.000Z",
+      },
+      message: {
+        messageJson: JSON.stringify({ role, content: text, timestamp: 1 }),
+        cwd: "/synthetic",
+        validateTurn: false,
+      },
+      options: { appendIntent: "active-branch" },
+    });
     const anchor = actor.snapshot(authority)!.transcript.anchors.find((row) => row.entryId === id);
-    if (!anchor) {
-      throw new Error("Missing appended anchor");
-    }
+    assert(anchor, "Missing appended anchor");
     return anchor;
   };
   const turn = async (id: string): Promise<TranscriptTurnBoundary> => ({
     admission: { ...(await message(`${id}-user`, "user", id)), logicalTurnId: id, role: "user" },
     terminal: await message(`${id}-assistant`, "assistant", `${id} reply`),
   });
-  return { owner, actor, storage, binding, scope, message, turn };
+  return { owner, actor, storage, binding, scope, message, turn, mutate };
 }
 
 type Scope = Omit<Awaited<ReturnType<typeof fixture>>["scope"], "sessionActor">;
@@ -149,9 +132,7 @@ async function trajectorySink(scope: Scope, sessionActor?: Binding) {
     sessionActor,
     maxRuntimeFileBytes: 1000,
   });
-  if (!sink) {
-    throw new Error("Expected memory trajectory sink");
-  }
+  assert(sink, "Expected memory trajectory sink");
   return sink;
 }
 
@@ -170,6 +151,18 @@ function heartbeat(
     taskNames,
   });
 }
+
+const claim = (scope: Scope, runId: string) => claimHeartbeatOutcomeForRun({ ...scope, runId });
+const recordOutcome = (scope: Scope, runId: string, occurredAt = 1) =>
+  recordMessageToolRunOutcome({
+    ...scope,
+    runId,
+    provider: "test",
+    model: "test",
+    outcome: "mute",
+    runStatus: "completed",
+    occurredAt,
+  });
 
 async function publicationFails(scope: Scope, operation: () => Promise<unknown>) {
   const stop = failSessionActorMemoryPublication(scope.sessionKey);
@@ -209,9 +202,9 @@ describe("memory session side-data consumers", () => {
   it("reports committed heartbeat publication failures without releasing the claim", async () => {
     const { scope } = await fixture();
     await publicationFails(scope, () => heartbeat(scope, "saved"));
-    await publicationFails(scope, () => claimHeartbeatOutcomeForRun({ ...scope, runId: "first" }));
-    expect(await claimHeartbeatOutcomeForRun({ ...scope, runId: "other" })).toBeUndefined();
-    expect(await claimHeartbeatOutcomeForRun({ ...scope, runId: "first" })).toMatchObject({
+    await publicationFails(scope, () => claim(scope, "first"));
+    expect(await claim(scope, "other")).toBeUndefined();
+    expect(await claim(scope, "first")).toMatchObject({
       summary: "saved",
     });
   });
@@ -274,26 +267,13 @@ describe("memory session side-data consumers", () => {
       incognito: true,
     });
     await heartbeat(scope, "unbound");
-    expect((await claimHeartbeatOutcomeForRun({ ...scope, runId: "user" }))?.summary).toBe(
-      "unbound",
-    );
-    const outcome = {
-      ...scope,
-      runId: "user",
-      provider: "test",
-      model: "test",
-      outcome: "mute" as const,
-      runStatus: "completed" as const,
-      occurredAt: 1,
-    };
-    await recordMessageToolRunOutcome(outcome);
+    expect((await claim(scope, "user"))?.summary).toBe("unbound");
+    await recordOutcome(scope, "user");
     const appended = await appendTranscriptMessage(scope, {
       message: { role: "user", content: "unbound turn" },
       now: 1,
     });
-    if (!appended?.anchor) {
-      throw new Error("Expected production transcript anchor");
-    }
+    assert(appended?.anchor, "Expected production transcript anchor");
     const boundary: TranscriptTurnBoundary = {
       admission: { ...appended.anchor, logicalTurnId: "unbound-turn", role: "user" },
       terminal: appended.anchor,
@@ -315,8 +295,8 @@ describe("memory session side-data consumers", () => {
       { agentId: scope.agentId, path: scope.storePath },
       scope.sessionKey,
     );
-    await expect(recordMessageToolRunOutcome(outcome)).rejects.toThrow("incognito");
-    expect(await claimHeartbeatOutcomeForRun({ ...scope, runId: "late" })).toBeUndefined();
+    await expect(recordOutcome(scope, "user")).rejects.toThrow("incognito");
+    expect(await claim(scope, "late")).toBeUndefined();
     expect(await loadSqliteTrajectoryRuntimeEvents(scope)).toEqual([]);
     expect(loadSqliteTrajectoryRuntimeEventRowsSync(scope)).toEqual([]);
     expect(
@@ -329,29 +309,14 @@ describe("memory session side-data consumers", () => {
   it("claims heartbeat context once per run, sees replacements, and keeps returned data detached", async () => {
     const { scope, binding } = await fixture();
     await runWithSessionActorStorage(binding, () => heartbeat(scope, "first", 1, ["task"]));
-    const [winner, other] = await Promise.all([
-      claimHeartbeatOutcomeForRun({ ...scope, runId: "run-one" }),
-      claimHeartbeatOutcomeForRun({ ...scope, runId: "run-two" }),
-    ]);
+    const [winner, other] = await Promise.all([claim(scope, "run-one"), claim(scope, "run-two")]);
     expect(winner?.summary).toBe("first");
     expect(other).toBeUndefined();
     winner!.taskNames.push("mutated");
-    expect((await claimHeartbeatOutcomeForRun({ ...scope, runId: "run-one" }))?.taskNames).toEqual([
-      "task",
-    ]);
+    expect((await claim(scope, "run-one"))?.taskNames).toEqual(["task"]);
     await heartbeat(scope, "replacement", 2, undefined, "done");
-    expect((await claimHeartbeatOutcomeForRun({ ...scope, runId: "run-two" }))?.summary).toBe(
-      "replacement",
-    );
-    await recordMessageToolRunOutcome({
-      ...scope,
-      runId: "run-two",
-      provider: "test",
-      model: "test",
-      outcome: "mute",
-      runStatus: "completed",
-      occurredAt: 2,
-    });
+    expect((await claim(scope, "run-two"))?.summary).toBe("replacement");
+    await recordOutcome(scope, "run-two", 2);
   });
 
   it("recovers ordered accepted turns and allows plugin callbacks to await the same actor", async () => {
@@ -440,20 +405,12 @@ describe("memory session side-data consumers", () => {
       }),
     ).toEqual([{ event: newer, seq: 1 }]);
     const retained = trajectory(second.scope.sessionId, "new", 2);
-    committed(
-      await second.storage.mutate(
-        {
-          type: "session.trajectory.append",
-          input: {
-            sessionId: second.scope.sessionId,
-            events: [{ runId: retained.runId, ts: retained.ts, line: JSON.stringify(retained) }],
-            maxRuntimeBytes: 1000,
-            maxGlobalRuntimeBytes: 1,
-          },
-        },
-        authority,
-      ),
-    );
+    await second.mutate("session.trajectory.append", {
+      sessionId: second.scope.sessionId,
+      events: [{ runId: retained.runId, ts: retained.ts, line: JSON.stringify(retained) }],
+      maxRuntimeBytes: 1000,
+      maxGlobalRuntimeBytes: 1,
+    });
     expect(await loadSqliteTrajectoryRuntimeEvents(first.scope)).toEqual([]);
     expect(await loadSqliteTrajectoryRuntimeEvents(second.scope)).toHaveLength(1);
     const oversized = trajectory(first.scope.sessionId, "x".repeat(2000), 3);

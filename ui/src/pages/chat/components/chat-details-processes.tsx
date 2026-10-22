@@ -121,7 +121,7 @@ export function ChatDetailsProcesses(props: Props) {
   };
   const hasRunning = () => rows().some((row) => row.status === "running");
   const ProcessError = () => (
-    <Show when={snapshot()?.error}>
+    <Show when={snapshot()?.errorKind !== "read" && snapshot()?.error}>
       {(error) => (
         <div class="chat-details-processes__error" role="alert">
           <span>{error()}</span>

@@ -50,8 +50,6 @@ it.skipIf(process.platform === "win32").each([false, true])(
           workspaceDir: state.root,
         }),
         stateDir: state.root,
-        resolveInstalledCodexAcpBinPath: async () => script,
-        resolveInstalledClaudeAcpBinPath: async () => script,
       });
       const store = createFileSessionStore({ stateDir: config.stateDir });
       const leases = createAcpxProcessLeaseStore({

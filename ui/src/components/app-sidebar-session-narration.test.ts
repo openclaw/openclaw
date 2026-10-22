@@ -487,6 +487,14 @@ describe("createSidebarNarration", () => {
   const internal = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>";
   const internalEnd = "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
   const preamble = `Preamble ${"x".repeat(20_000)}`;
+  const privateBlock = `${internal}\nprivate runtime text`;
+  const longBlock = `Visible setup.\n${internal}\n${"private runtime detail ".repeat(1_000)}`;
+  const nestedBlock =
+    `Visible setup.\n${internal}\n${"private outer runtime detail ".repeat(1_000)}\n` +
+    `${internal}\n${"private nested runtime detail ".repeat(1_000)}\n${internalEnd}`;
+  const normalized =
+    `Visible work is complete.\n<think>private reasoning</think>\n${internal}\n` +
+    `private runtime details\n${internalEnd}\n[[audio_as_voice]]\nREPLY_SKIP`;
   it.each([
     scenario("last prose paragraph", [
       chatDelta(
@@ -512,22 +520,11 @@ describe("createSidebarNarration", () => {
     ]),
     scenario(
       "overlapping agent and chat deltas",
-      [chatDelta("Reading"), undefined],
-      [
-        runEvent("agent", {
-          stream: "assistant",
-          data: { delta: " files" },
-        }),
-        undefined,
-      ],
+      [chatDelta("Reading")],
+      [runEvent("agent", { stream: "assistant", data: { delta: " files" } })],
       [chatDelta(undefined, " files"), "Reading files", true],
     ),
-    scenario("snapshot display normalization", [
-      chatDelta(
-        `Visible work is complete.\n<think>private reasoning</think>\n${internal}\nprivate runtime details\n${internalEnd}\n[[audio_as_voice]]\nREPLY_SKIP`,
-      ),
-      "REPLY_SKIP",
-    ]),
+    scenario("snapshot display normalization", [chatDelta(normalized), "REPLY_SKIP"]),
     scenario("trailing heartbeat token", [
       chatDelta(`${"Visible progress continues. ".repeat(16)}Final visible status. HEARTBEAT_OK`),
       (line: string) => {
@@ -537,10 +534,7 @@ describe("createSidebarNarration", () => {
     ]),
     scenario(
       "truncated internal block",
-      [
-        chatDelta(`Visible setup.\n${internal}\n${"private runtime detail ".repeat(1_000)}`),
-        "Visible setup.",
-      ],
+      [chatDelta(longBlock), "Visible setup."],
       [chatDelta(undefined, `\n${internalEnd}\nFinal bounded line.`), "Final bounded line.", true],
     ),
     scenario(
@@ -550,27 +544,19 @@ describe("createSidebarNarration", () => {
     ),
     scenario(
       "replacement resets internal streaming state",
-      [
-        chatDelta(`${internal}\nprivate runtime text`, `${internal}\nprivate runtime text`),
-        undefined,
-      ],
-      [chatDelta(undefined, "Replacement", true), undefined],
+      [chatDelta(privateBlock, privateBlock)],
+      [chatDelta(undefined, "Replacement", true)],
       [chatDelta(undefined, " now."), "Replacement now.", true],
     ),
     scenario(
       "nested internal block outlives the raw buffer",
-      [
-        chatDelta(
-          `Visible setup.\n${internal}\n${"private outer runtime detail ".repeat(1_000)}\n${internal}\n${"private nested runtime detail ".repeat(1_000)}\n${internalEnd}`,
-        ),
-        "Visible setup.",
-      ],
+      [chatDelta(nestedBlock), "Visible setup."],
       [chatDelta(undefined, "\nStill private after the nested block."), "Visible setup.", true],
       [chatDelta(undefined, `\n${internalEnd}\nFinal public line.`), "Final public line.", true],
     ),
     scenario(
       "corrected replacement",
-      [chatDelta("Draft answer."), undefined],
+      [chatDelta("Draft answer.")],
       [chatDelta("Corrected answer.", "Corrected answer.", true), "Corrected answer.", true],
     ),
     scenario(
@@ -590,12 +576,12 @@ describe("createSidebarNarration", () => {
     scenario(
       "suppressed replacement retracts shown text",
       [chatDelta("Draft that gets withdrawn."), "Draft that gets withdrawn.", true],
-      [chatDelta("HEARTBEAT_OK", "HEARTBEAT_OK", true), undefined],
+      [chatDelta("HEARTBEAT_OK", "HEARTBEAT_OK", true)],
       [chatDelta("", "", true), false, true],
     ),
     scenario(
       "new run discards accumulated deltas",
-      [chatSnapshot("Unfinished old work", { state: "delta", runId: "first" }), undefined],
+      [chatSnapshot("Unfinished old work", { state: "delta", runId: "first" })],
       [chatSnapshot("New run work.", { state: "delta", runId: "second" }), "New run work."],
     ),
     scenario(
