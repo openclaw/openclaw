@@ -1,7 +1,7 @@
 /** Strict dotted-path get/set/delete helpers for secrets migration targets. */
 import { isDeepStrictEqual } from "node:util";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import { readConfigPathValue, type ConcreteConfigPathSegment } from "../shared/dot-path.js";
+import { readObjectPath, type ConcreteConfigPathSegment } from "../shared/dot-path.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { isRecord } from "./shared.js";
 
@@ -90,7 +90,7 @@ function traverseToLeafParent(params: {
  * Missing containers, invalid array indexes, and scalar parents resolve to undefined.
  */
 export function getPath(root: unknown, segments: string[]): unknown {
-  return segments.length === 0 ? undefined : readConfigPathValue(root, segments, false);
+  return segments.length === 0 ? undefined : readObjectPath(root, segments, "canonical");
 }
 
 /**

@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { parseConfigPathArrayIndex } from "./path-array-index.js";
 
@@ -259,38 +258,24 @@ export function formatConcreteConfigPath(
   }, "");
 }
 
-/** Reads raw object paths without applying config mutation key restrictions. */
-export function readObjectPath(root: unknown, path: readonly string[]): unknown {
+/** Reads object paths, optionally restricting array keys to canonical config indexes. */
+export function readObjectPath(
+  root: unknown,
+  path: readonly string[],
+  arrayMode: "raw" | "canonical" | "bounded" = "raw",
+): unknown {
   let current: unknown = root;
   for (const key of path) {
     if (!current || typeof current !== "object") {
       return undefined;
     }
-    current = (current as Record<string, unknown>)[key];
-  }
-  return current;
-}
-
-/** Reads record/array config values; callers retain their empty-path policy. */
-export function readConfigPathValue(
-  root: unknown,
-  path: readonly string[],
-  boundArrayIndexes = true,
-): unknown {
-  let current = root;
-  for (const segment of path) {
-    if (Array.isArray(current)) {
-      const index = parseConfigPathArrayIndex(segment);
-      if (index === undefined || (boundArrayIndexes && index >= current.length)) {
+    if (arrayMode !== "raw" && Array.isArray(current)) {
+      const index = parseConfigPathArrayIndex(key);
+      if (index === undefined || (arrayMode === "bounded" && index >= current.length)) {
         return undefined;
       }
-      current = current[index];
-      continue;
     }
-    if (!isRecord(current)) {
-      return undefined;
-    }
-    current = current[segment];
+    current = (current as Record<string, unknown>)[key];
   }
   return current;
 }

@@ -10,10 +10,7 @@ import {
 } from "../agents/agent-scope-config.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import {
-  appendConfigPathSegment,
-  readConfigPathValue as getPathValue,
-} from "../shared/dot-path.js";
+import { appendConfigPathSegment, readObjectPath } from "../shared/dot-path.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { isRecord } from "../utils.js";
 import { configIncludeOwnsAgentRosterValues } from "./agent-roster-provenance.js";
@@ -35,6 +32,9 @@ import {
 } from "./resolution-facts.js";
 import { projectRuntimeChangesOntoSource } from "./source-value-projection.js";
 import type { OpenClawConfig } from "./types.js";
+
+const getPathValue = (root: unknown, path: readonly string[]) =>
+  readObjectPath(root, path, "bounded");
 
 export function prepareConfigWriteValues(
   params: Parameters<typeof prepareProjectedConfigWriteValues>[0],

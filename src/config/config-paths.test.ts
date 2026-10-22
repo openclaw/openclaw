@@ -171,6 +171,21 @@ describe("config path own-property traversal", () => {
 
 describe("raw diagnostic path traversal", () => {
   it.each([
+    ["raw", ["first", "named", 1, "inherited"]],
+    ["canonical", ["first", undefined, undefined, "inherited"]],
+    ["bounded", ["first", undefined, undefined, undefined]],
+  ] as const)("retains the %s array-key policy", (mode, expected) => {
+    const values = Object.assign(["first"], { named: "named" });
+    Object.setPrototypeOf(
+      values,
+      Object.assign(Object.create(Array.prototype), { 2: "inherited" }),
+    );
+    expect(["0", "named", "length", "2"].map((key) => readObjectPath(values, [key], mode))).toEqual(
+      expected,
+    );
+  });
+
+  it.each([
     [{ values: [{ leaf: "array" }] }, ["values", "0", "leaf"], "array"],
     [Object.create({ inherited: { leaf: "prototype" } }), ["inherited", "leaf"], "prototype"],
     [{ missing: null }, ["missing", "leaf"], undefined],
