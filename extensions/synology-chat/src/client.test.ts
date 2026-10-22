@@ -165,12 +165,11 @@ describe("Synology outbound channel boundary", () => {
     },
   };
   const cfg = { channels: { "synology-chat": channel } };
-  const notify = () =>
-    settleTimers(plugin.pairing.notifyApproval!({ cfg, id: "USER2", accountId: "beta" }));
+  const notify = () => plugin.pairing.notifyApproval!({ cfg, id: "USER2", accountId: "beta" });
 
   it("notifies through the approved account", async () => {
     mockSuccessResponse();
-    await notify();
+    await settleTimers(notify());
     expect(requestCall()[0]).toBe("https://nas-beta/incoming");
     expect(requestCall()[1].rejectUnauthorized).toBe(false);
     expect(payload()).toEqual({
@@ -181,7 +180,7 @@ describe("Synology outbound channel boundary", () => {
 
   it("rejects a notification when the selected account's send fails", async () => {
     mockResponse(403, '{"success":false}');
-    await expect(notify()).rejects.toThrow("Failed to send message to Synology Chat");
+    await settleTimers(expect(notify()).rejects.toThrow("Failed to send message to Synology Chat"));
     expect(https.request).toHaveBeenCalledOnce();
   });
 
