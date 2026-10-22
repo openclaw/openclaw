@@ -497,21 +497,18 @@ describe("gateway sessions patch", () => {
     const iconed = expectPatchOk(
       await runPatch({
         store,
-        patch: { key: MAIN_SESSION_KEY, icon: "✅", expectedSessionId: "sess-icon" },
+        icon: "✅",
+        expectedSessionId: "sess-icon",
       }),
     );
     expect(iconed.icon).toBe("✅");
     expect(iconed.updatedAt).toBe(1);
 
-    const cleared = expectPatchOk(
-      await runPatch({ store, patch: { key: MAIN_SESSION_KEY, icon: null, color: null } }),
-    );
+    const cleared = expectPatchOk(await runPatch({ store, icon: null, color: null }));
     expect(cleared.icon).toBeUndefined();
     expect(cleared.updatedAt).toBe(1);
 
-    const renamed = expectPatchOk(
-      await runPatch({ store, patch: { key: MAIN_SESSION_KEY, icon: "🐛", label: "Waiting" } }),
-    );
+    const renamed = expectPatchOk(await runPatch({ store, icon: "🐛", label: "Waiting" }));
     expect(renamed.icon).toBe("🐛");
     expect(renamed.updatedAt).toBeGreaterThan(1);
   });
