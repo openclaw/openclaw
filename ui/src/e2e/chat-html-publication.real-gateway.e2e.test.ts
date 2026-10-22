@@ -18,6 +18,7 @@ import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts
 import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { pairControlUiPage } from "../test-helpers/control-ui-browser-pairing.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { clickBoardWidgetControl } from "../test-helpers/control-ui-e2e-widget.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -263,7 +264,10 @@ suite.define(() => {
           .locator('[data-region="side"]')
           .filter({ has: panel })
           .evaluate(finishElementAnimations);
-        await document.getByRole("button", { name: "Count", exact: true }).click();
+        await clickBoardWidgetControl(
+          page,
+          document.getByRole("button", { name: "Count", exact: true }),
+        );
         await expect.poll(() => document.locator("output").textContent()).toBe("1");
         expect(
           await document.locator("body").evaluate(() => {
