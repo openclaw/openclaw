@@ -100,6 +100,7 @@ const webkitTestFiles = [
   "src/components/confirm-dialog.browser.test.ts",
   "src/pages/channels/view.detail.browser.test.tsx",
   "src/pages/plugins/settings-lifecycle.browser.test.tsx",
+  "src/pages/new-session/project-chip.registration.browser.test.tsx",
   "src/pages/agents/agent-file-preview.browser.test.ts",
   "src/pages/skills/reader-shell.browser.test.tsx",
   "src/lib/toast.browser.test.ts",
