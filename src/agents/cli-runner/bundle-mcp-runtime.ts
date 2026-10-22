@@ -24,10 +24,18 @@ export async function writeTemporaryBundleMcpJson(
 ): Promise<{ filePath: string; cleanup: () => Promise<void> }> {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
   const filePath = path.join(tempDir, fileName);
-  if (atomic) {
-    await writeJson(filePath, value, { trailingNewline: true });
-  } else {
-    await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
+  try {
+    if (atomic) {
+      await writeJson(filePath, value, { trailingNewline: true });
+    } else {
+      await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
+    }
+  } catch (error) {
+    // The caller only receives the cleanup handle on success, so a failed
+    // write must dispose of the directory itself or the resolved credentials
+    // written into it would stay in the OS temp directory with no TTL sweep.
+    await fs.rm(tempDir, { recursive: true, force: true });
+    throw error;
   }
   return {
     filePath,
