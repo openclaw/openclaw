@@ -133,16 +133,14 @@ function resolveTrustedSafeBinTargetDirs(
 
 export function getTrustedSafeBinDirs(
   params: {
-    baseDirs?: readonly string[];
     extraDirs?: readonly string[];
     safeBins?: readonly string[];
   } = {},
 ): Set<string> {
-  const baseDirs = params.baseDirs ?? DEFAULT_SAFE_BIN_TRUSTED_DIRS;
   const extraDirs = params.extraDirs ?? [];
   const safeBins = params.safeBins ?? [];
   const entries = [
-    ...normalizeTrustedSafeBinDirs(baseDirs),
+    ...normalizeTrustedSafeBinDirs(DEFAULT_SAFE_BIN_TRUSTED_DIRS),
     ...normalizeTrustedSafeBinDirs(extraDirs),
   ];
   const targetDirs = resolveTrustedSafeBinTargetDirs(entries, safeBins);

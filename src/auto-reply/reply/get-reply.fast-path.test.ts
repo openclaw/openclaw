@@ -200,6 +200,26 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(vi.mocked(loadConfigMock)).not.toHaveBeenCalled();
   });
 
+  it("keeps ordinary model-looking messages unchanged", async () => {
+    const body = "openai/gpt-5.5 summarize";
+    const resetModule = await import("./session-reset-model.js");
+    const actualReset = await vi.importActual<typeof resetModule>("./session-reset-model.js");
+    const applyReset = vi.mocked(resetModule.applyResetModelOverride);
+    applyReset.mockImplementation(actualReset.applyResetModelOverride);
+    try {
+      await expect(
+        getReplyFromConfig(commandCtx(body, { BodyForAgent: body }), undefined, config()),
+      ).resolves.toEqual({ text: "ok" });
+      expect(mocks.resolveReplyDirectives).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionCtx: expect.objectContaining({ BodyStripped: body, agentText: body }),
+        }),
+      );
+    } finally {
+      applyReset.mockReset();
+    }
+  });
+
   it("returns a clean rejection when session bootstrap rejects a locked reset", async () => {
     vi.stubEnv("OPENCLAW_ALLOW_SLOW_REPLY_TESTS", "1");
     mocks.initSessionState.mockRejectedValueOnce(

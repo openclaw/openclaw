@@ -171,7 +171,7 @@ export function clearSessionResetRuntimeState(
     clearEmbeddedSessionForkSnapshot(opts.activeReplySessionId);
   }
   const cleared = clearSessionQueues(keys, opts.controllerTarget, undefined, opts.assertCurrent);
-  for (const key of cleared.keys) {
+  for (const key of cleared) {
     opts.assertCurrent();
     const owner = parseAgentSessionKey(key)?.agentId;
     if (owner && owner !== normalizeAgentId(opts.agentId)) {
@@ -190,7 +190,7 @@ export function clearSessionResetRuntimeState(
       operation &&
       ownerAgentId === normalizeAgentId(opts.agentId) &&
       operation.sessionId === opts.activeReplySessionId &&
-      cleared.keys.some(
+      cleared.some(
         (key) =>
           key !== opts.activeReplySessionId &&
           agentSessionKeysMatchByRequestKey(operation.key, key),

@@ -342,7 +342,6 @@ export async function lookupDirectoryDisplay(params: {
   channel: ChannelId;
   targetId: string;
   accountId?: string | null;
-  runtime?: RuntimeEnv;
 }): Promise<string | undefined> {
   const normalized = normalizeTargetForProvider(params.channel, params.targetId) ?? params.targetId;
 
@@ -354,7 +353,6 @@ export async function lookupDirectoryDisplay(params: {
         channel: params.channel,
         accountId: params.accountId,
         kind,
-        runtime: params.runtime,
         preferLiveOnMiss: false,
       }),
     ),

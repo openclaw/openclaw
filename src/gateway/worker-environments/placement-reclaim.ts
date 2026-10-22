@@ -333,7 +333,7 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                       current,
                     );
                     reauthorize?.();
-                    const finalized = await finalizeWorkspaceResultConflicts({
+                    const conflictRetained = await finalizeWorkspaceResultConflicts({
                       assertCurrent: recovery.assertCurrent,
                       placements,
                       turnClaim: reclaimClaim,
@@ -352,7 +352,7 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                       turnClaim: reclaimClaim,
                       workspace,
                       stagedResultRef: recordedStagedResultRef,
-                      conflictRetained: finalized.conflictRetained,
+                      conflictRetained,
                       beforeComplete: async () => {
                         assertCurrent();
                         if (
