@@ -55,9 +55,10 @@ export const PLAYBACK_TRANSCODE_POLICY = {
     target: { contentType: "audio/mp4", extension: ".m4a" },
   },
   video: {
-    nativeMimeTypes: ["video/mp4"],
+    nativeMimeTypes: ["video/mp4", "video/x-m4v"],
     codecProbeInputFormats: {
       "video/mp4": "mov",
+      "video/x-m4v": "mov",
     },
     transcodeInputFormats: {
       "video/avi": "avi",
