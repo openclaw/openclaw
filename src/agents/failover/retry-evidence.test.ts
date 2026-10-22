@@ -51,10 +51,47 @@ describe("resolveRetryAfterMs", () => {
           ],
         },
       })}`;
-    expect(resolveRetryAfterMs(body("32s"), NOW_MS)).toBe(32_000);
-    expect(resolveRetryAfterMs(body("1.5s"), NOW_MS)).toBe(1_500);
+    // Prose and RetryInfo are both explicit; the later deadline wins.
+    expect(resolveRetryAfterMs(body("32s"), NOW_MS)).toBe(32_579);
+    expect(resolveRetryAfterMs(body("40.5s"), NOW_MS)).toBe(40_500);
     expect(classifyRateLimitWindow(body("3600s"), NOW_MS)).toEqual({ kind: "long" });
-    expect(resolveRetryAfterMs(body("soon"), NOW_MS)).toBeUndefined();
+    // Without a valid RetryInfo, Gemini's "Please retry in" prose is still provider timing.
+    expect(resolveRetryAfterMs(body("soon"), NOW_MS)).toBe(32_579);
+    expect(resolveRetryAfterMs("429 RESOURCE_EXHAUSTED: retry in 4.5s", NOW_MS)).toBe(4_500);
+    expect(resolveRetryAfterMs("429 RESOURCE_EXHAUSTED: please retry soon", NOW_MS)).toBe(
+      undefined,
+    );
+  });
+
+  it("reads RetryInfo in any key order from a structured error body", () => {
+    const errorBody = {
+      error: {
+        details: [{ retryDelay: "12s", "@type": "type.googleapis.com/google.rpc.RetryInfo" }],
+      },
+    };
+    expect(resolveRetryAfterMs("429 RESOURCE_EXHAUSTED", NOW_MS, errorBody)).toBe(12_000);
+    expect(
+      resolveRetryAfterMs("429 RESOURCE_EXHAUSTED", NOW_MS, {
+        error: { details: [{ "@type": "type.googleapis.com/google.rpc.Help", retryDelay: "12s" }] },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("applies an exhausted-bucket reset only when the provider gave no explicit time", () => {
+    const exhausted = {
+      status: 429,
+      headers: { "x-ratelimit-remaining-tokens": "0", "x-ratelimit-reset-tokens": "5m" },
+    };
+    const tpm =
+      "429 Rate limit reached for gpt in organization org-synthetic on tokens per min (TPM)";
+    expect(resolveRetryAfterMs(`${tpm}. Please try again in 6s.`, NOW_MS, exhausted)).toBe(6_000);
+    expect(resolveRetryAfterMs(tpm, NOW_MS, exhausted)).toBe(300_000);
+    expect(
+      resolveRetryAfterMs(`${tpm}. Please try again in 6s.`, NOW_MS, {
+        ...exhausted,
+        headers: { ...exhausted.headers, "retry-after": "9" },
+      }),
+    ).toBe(9_000);
   });
 });
 

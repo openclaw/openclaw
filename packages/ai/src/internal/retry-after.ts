@@ -55,12 +55,38 @@ const TIMING_HEADER_NAMES = new Set([
   ...QUOTA_RESET_HEADERS.flatMap(({ remaining, reset }) => [remaining, reset]),
 ]);
 
+/**
+ * Provider retry timing split by authority: an explicit instruction for this request
+ * (Retry-After, retry-after-ms) versus an exhausted bucket's full-refill time.
+ */
+export type RetryAfterTiming = { explicitSeconds?: number; resetSeconds?: number };
+
+function maxDefined(...values: Array<number | undefined>): number | undefined {
+  let floor: number | undefined;
+  for (const value of values) {
+    if (value !== undefined) {
+      floor = Math.max(floor ?? 0, value);
+    }
+  }
+  return floor;
+}
+
 /** Reads only retry timing metadata, without invoking provider getters or serialization hooks. */
 export function parseRetryAfterHeadersSeconds(
   headers: unknown,
   nowMs = Date.now(),
   status?: number,
 ): number | undefined {
+  const timing = parseRetryAfterHeadersTiming(headers, nowMs, status);
+  return timing?.explicitSeconds ?? timing?.resetSeconds;
+}
+
+/** Header timing with explicit retry instructions kept apart from bucket refills. */
+export function parseRetryAfterHeadersTiming(
+  headers: unknown,
+  nowMs = Date.now(),
+  status?: number,
+): RetryAfterTiming | undefined {
   if (!headers || typeof headers !== "object") {
     return undefined;
   }
@@ -103,10 +129,10 @@ export function parseRetryAfterHeadersSeconds(
         floor = Math.max(floor ?? 0, seconds);
       }
     }
-    // An explicit retry instruction is the provider's answer for this request.
-    // Reset headers describe a full quota refill, so they apply only without one,
-    // and only for a rejected request whose matching bucket is exhausted.
-    if (floor === undefined && status === 429) {
+    // Reset headers describe a full quota refill. Callers apply them only without an
+    // explicit instruction, and only for a rejected request whose bucket is exhausted.
+    let resetFloor: number | undefined;
+    if (status === 429) {
       const values = new Map(entries);
       for (const {
         remaining: remainingKey,
@@ -125,12 +151,15 @@ export function parseRetryAfterHeadersSeconds(
         }
         const reset = values.get(resetKey);
         const seconds = typeof reset === "string" ? parseResetSeconds(reset, nowMs) : undefined;
-        if (seconds !== undefined) {
-          floor = Math.max(floor ?? 0, seconds);
-        }
+        resetFloor = maxDefined(resetFloor, seconds);
       }
     }
-    return floor;
+    return floor === undefined && resetFloor === undefined
+      ? undefined
+      : {
+          ...(floor === undefined ? {} : { explicitSeconds: floor }),
+          ...(resetFloor === undefined ? {} : { resetSeconds: resetFloor }),
+        };
   } catch {
     return undefined;
   }
@@ -166,16 +195,25 @@ export function parseRetryAfterErrorSeconds(
   error: unknown,
   nowMs = Date.now(),
 ): number | undefined {
+  const timing = parseRetryAfterErrorTiming(error, nowMs);
+  return timing?.explicitSeconds ?? timing?.resetSeconds;
+}
+
+/** Header timing from an SDK error and its response, merged per authority. */
+export function parseRetryAfterErrorTiming(
+  error: unknown,
+  nowMs = Date.now(),
+): RetryAfterTiming | undefined {
   try {
     const status = ownDataValue(error, "status") ?? ownDataValue(error, "statusCode");
     const response = ownDataValue(error, "response");
     const responseStatus = ownDataValue(response, "status") ?? ownDataValue(response, "statusCode");
-    const direct = parseRetryAfterHeadersSeconds(
+    const direct = parseRetryAfterHeadersTiming(
       ownDataValue(error, "headers"),
       nowMs,
       typeof status === "number" ? status : undefined,
     );
-    const responseSeconds = parseRetryAfterHeadersSeconds(
+    const responseTiming = parseRetryAfterHeadersTiming(
       ownDataValue(response, "headers"),
       nowMs,
       typeof responseStatus === "number"
@@ -184,9 +222,137 @@ export function parseRetryAfterErrorSeconds(
           ? status
           : undefined,
     );
-    return direct === undefined && responseSeconds === undefined
+    const explicitSeconds = maxDefined(direct?.explicitSeconds, responseTiming?.explicitSeconds);
+    const resetSeconds = maxDefined(direct?.resetSeconds, responseTiming?.resetSeconds);
+    return explicitSeconds === undefined && resetSeconds === undefined
       ? undefined
-      : Math.max(direct ?? 0, responseSeconds ?? 0);
+      : {
+          ...(explicitSeconds === undefined ? {} : { explicitSeconds }),
+          ...(resetSeconds === undefined ? {} : { resetSeconds }),
+        };
+  } catch {
+    return undefined;
+  }
+}
+
+/** Provider prose such as "Please try again in 6s", "retry in 32s" or "Retry-After: 7". */
+export const RETRY_AFTER_TEXT_RE =
+  /\b(?:retry[- ]after\b\s*:?\s*(?:in\b\s*)?|(?:please\s+)?(?:try again|retry) in\s+)([^\r\n;]+)/i;
+
+/** Whether text carries a parseable explicit retry instruction (number or HTTP-date). */
+export function hasExplicitRetryText(text: unknown, nowMs = Date.now()): boolean {
+  if (typeof text !== "string" || !text) {
+    return false;
+  }
+  for (const match of text.matchAll(new RegExp(RETRY_AFTER_TEXT_RE, "gi"))) {
+    const value = match[1]?.trim() ?? "";
+    if (/^\d/.test(value) || parseRetryAfterHttpDateMs(value, nowMs) !== undefined) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Only google.rpc.RetryInfo defines retryDelay; protobuf Duration JSON is decimal seconds.
+const GOOGLE_RETRY_DELAY_TEXT_RE = /"retryDelay"\s*:\s*"(\d+(?:\.\d{1,9})?)s"/g;
+const GOOGLE_RETRY_DELAY_VALUE_RE = /^(\d+(?:\.\d{1,9})?)s$/;
+const GOOGLE_RETRY_INFO_TYPE = "type.googleapis.com/google.rpc.RetryInfo";
+const MAX_GOOGLE_ERROR_DETAILS = 16;
+
+function googleRetryDelayTextSeconds(text: string): number | undefined {
+  let floor: number | undefined;
+  for (const match of text.matchAll(GOOGLE_RETRY_DELAY_TEXT_RE)) {
+    floor = maxDefined(floor, Number(match[1]));
+  }
+  return floor;
+}
+
+function googleStatusRetryDelaySeconds(status: unknown): number | undefined {
+  if (typeof status === "string") {
+    return googleRetryDelayTextSeconds(status);
+  }
+  const details = ownDataValue(status, "details");
+  if (!Array.isArray(details)) {
+    return undefined;
+  }
+  let floor: number | undefined;
+  for (let index = 0; index < Math.min(details.length, MAX_GOOGLE_ERROR_DETAILS); index += 1) {
+    const detail = ownDataValue(details, String(index));
+    if (ownDataValue(detail, "@type") !== GOOGLE_RETRY_INFO_TYPE) {
+      continue;
+    }
+    const delay = ownDataValue(detail, "retryDelay");
+    const match = typeof delay === "string" ? GOOGLE_RETRY_DELAY_VALUE_RE.exec(delay) : null;
+    floor = maxDefined(floor, match?.[1] ? Number(match[1]) : undefined);
+  }
+  return floor;
+}
+
+/**
+ * Reads google.rpc.RetryInfo delays from raw error text or a google.rpc.Status-shaped body
+ * in any key order, with a fixed number of descriptor reads and no getters. Pass the
+ * untruncated body: Gemini puts RetryInfo after its QuotaFailure details.
+ */
+export function parseGoogleRetryDelaySeconds(value: unknown): number | undefined {
+  try {
+    if (typeof value === "string") {
+      return googleRetryDelayTextSeconds(value);
+    }
+    const response = ownDataValue(value, "response");
+    const candidates = [
+      value,
+      ownDataValue(value, "error"),
+      ownDataValue(value, "message"),
+      ownDataValue(value, "errorBody"),
+      ownDataValue(value, "body"),
+      ownDataValue(response, "body"),
+      ownDataValue(response, "data"),
+    ];
+    return maxDefined(
+      ...candidates.flatMap((candidate) => [
+        googleStatusRetryDelaySeconds(candidate),
+        // google.rpc.Status is usually wrapped as { error: Status }.
+        typeof candidate === "string"
+          ? undefined
+          : googleStatusRetryDelaySeconds(ownDataValue(candidate, "error")),
+      ]),
+    );
+  } catch {
+    // Hostile proxies and exotic objects carry no trusted timing.
+    return undefined;
+  }
+}
+
+/**
+ * Retry time for one thrown provider error, before any lossy projection.
+ * Explicit instructions (Retry-After headers, Google RetryInfo) win; prose timing is left
+ * for text consumers; an exhausted-bucket refill applies only when neither is present.
+ */
+export function resolveProviderErrorRetrySeconds(
+  error: unknown,
+  nowMs = Date.now(),
+): number | undefined {
+  try {
+    const timing = parseRetryAfterErrorTiming(error, nowMs);
+    const explicitSeconds = maxDefined(
+      timing?.explicitSeconds,
+      parseGoogleRetryDelaySeconds(error),
+    );
+    if (explicitSeconds !== undefined || timing?.resetSeconds === undefined) {
+      return explicitSeconds;
+    }
+    const response = ownDataValue(error, "response");
+    const textSources = [
+      ownDataValue(error, "message"),
+      ownDataValue(error, "errorBody"),
+      ownDataValue(error, "body"),
+      ownDataValue(response, "body"),
+      ownDataValue(response, "data"),
+      ownDataValue(ownDataValue(error, "error"), "message"),
+    ];
+    return textSources.some((source) => hasExplicitRetryText(source, nowMs))
+      ? undefined
+      : timing.resetSeconds;
   } catch {
     return undefined;
   }

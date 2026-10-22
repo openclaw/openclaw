@@ -1,6 +1,8 @@
 import {
+  RETRY_AFTER_TEXT_RE,
+  parseGoogleRetryDelaySeconds,
+  parseRetryAfterErrorTiming,
   parseRetryAfterHttpDateMs,
-  parseRetryAfterErrorSeconds,
 } from "@openclaw/ai/internal/retry-after";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { durationUnitMs } from "../../infra/format-time/duration-units.js";
@@ -35,12 +37,8 @@ const SHORT_RATE_LIMIT_UNIT_RE =
   /\b(?:requests per minute|tokens per minute|per-minute|rpm|tpm)\b/i;
 const SHORT_WINDOW_RATE_LIMIT_RE =
   /\b(?:requests per minute|tokens per minute|per-minute|rpm|tpm|model_cooldown)\b|请求过于频繁|调用频率|频率限制/i;
-const RETRY_AFTER_VALUE_RE =
-  /\b(?:retry[- ]after\b\s*:?\s*(?:in\b\s*)?|(?:please\s+)?try again in\s+)([^\r\n;]+)/i;
+const RETRY_AFTER_VALUE_RE = RETRY_AFTER_TEXT_RE;
 const RETRY_AFTER_NUMBER_RE = /^(\d+(?:\.\d+)?|Infinity)\s*([a-z]+)?\b/i;
-// google.rpc.RetryInfo serializes its protobuf Duration as decimal seconds.
-const GOOGLE_RETRY_INFO_DELAY_RE =
-  /"@type"\s*:\s*"type\.googleapis\.com\/google\.rpc\.RetryInfo"\s*,\s*"retryDelay"\s*:\s*"(\d+(?:\.\d{1,9})?)s"/g;
 const RETRY_AFTER_UNIT_MS = new Map<string, number>(
   (
     [
@@ -121,7 +119,7 @@ function parseRetryAfterSeconds(valueText: string, nowMs: number): number | unde
   return retryAtMs === undefined ? undefined : Math.max(0, (retryAtMs - nowMs) / 1000);
 }
 
-function retryTextSeconds(message: string | undefined, nowMs: number): number | undefined {
+function proseRetrySeconds(message: string | undefined, nowMs: number): number | undefined {
   let floor: number | undefined;
   for (const match of message?.matchAll(new RegExp(RETRY_AFTER_VALUE_RE, "gi")) ?? []) {
     const seconds = parseRetryAfterSeconds(match[1]?.trim() ?? "", nowMs);
@@ -129,24 +127,38 @@ function retryTextSeconds(message: string | undefined, nowMs: number): number | 
       floor = Math.max(floor ?? 0, seconds);
     }
   }
-  for (const match of message?.matchAll(GOOGLE_RETRY_INFO_DELAY_RE) ?? []) {
-    floor = Math.max(floor ?? 0, Number(match[1]));
-  }
   return floor;
 }
 
-/** Extracts the provider retry floor from error text and response headers. */
+function maxDefined(...values: Array<number | undefined>): number | undefined {
+  const defined = values.filter((value): value is number => value !== undefined);
+  return defined.length > 0 ? Math.max(...defined) : undefined;
+}
+
+/** Explicit retry time in error text: prose hints and serialized google.rpc.RetryInfo. */
+function retryTextSeconds(message: string | undefined, nowMs: number): number | undefined {
+  return maxDefined(parseGoogleRetryDelaySeconds(message), proseRetrySeconds(message, nowMs));
+}
+
+/**
+ * Extracts the provider retry floor from error text and response headers. The greatest
+ * explicit instruction (Retry-After headers, RetryInfo, retry prose) wins; an exhausted
+ * bucket's full-refill reset applies only when the provider gave no explicit time.
+ */
 export function resolveRetryAfterMs(
   message: string | undefined,
   nowMs = Date.now(),
   errorBody?: unknown,
 ): number | undefined {
   const body = typeof errorBody === "string" ? safeParseJsonRecord(errorBody) : errorBody;
-  const headerSeconds = parseRetryAfterErrorSeconds(body, nowMs);
-  const seconds = retryTextSeconds(message, nowMs);
-  return headerSeconds === undefined && seconds === undefined
-    ? undefined
-    : Math.ceil(Math.max(headerSeconds ?? 0, seconds ?? 0) * 1000);
+  const headers = parseRetryAfterErrorTiming(body, nowMs);
+  const seconds =
+    maxDefined(
+      headers?.explicitSeconds,
+      retryTextSeconds(message, nowMs),
+      parseGoogleRetryDelaySeconds(errorBody),
+    ) ?? headers?.resetSeconds;
+  return seconds === undefined ? undefined : Math.ceil(seconds * 1000);
 }
 
 /** Usage-window evidence is distinct from a temporary throttle's retry floor. */

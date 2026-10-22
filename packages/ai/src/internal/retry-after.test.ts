@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  hasExplicitRetryText,
+  parseGoogleRetryDelaySeconds,
   parseRetryAfterErrorSeconds,
+  parseRetryAfterErrorTiming,
   parseRetryAfterHeadersSeconds,
+  resolveProviderErrorRetrySeconds,
   parseRetryAfterHttpDateMs as parseDate,
 } from "./retry-after.js";
 
@@ -103,6 +107,67 @@ describe("retry header floors", () => {
       expect(parseRetryAfterErrorSeconds({ headers })).toBeUndefined();
     }
     expect(parseRetryAfterErrorSeconds(proxy)).toBeUndefined();
+  });
+});
+
+describe("provider error retry authority", () => {
+  const exhausted = { status: 429, headers: quotaHeaders("tokens", "0", "5m") };
+
+  it("separates explicit instructions from bucket refills", () => {
+    expect(parseRetryAfterErrorTiming(exhausted)).toEqual({ resetSeconds: 300 });
+    expect(
+      parseRetryAfterErrorTiming({
+        ...exhausted,
+        response: { headers: { "retry-after": "4" } },
+      }),
+    ).toEqual({ explicitSeconds: 4, resetSeconds: 300 });
+    expect(
+      parseRetryAfterErrorSeconds({ ...exhausted, response: { headers: { "retry-after": "4" } } }),
+    ).toBe(4);
+  });
+
+  it("drops a refill reset when the provider wrote an explicit retry time", () => {
+    expect(resolveProviderErrorRetrySeconds(exhausted)).toBe(300);
+    for (const message of ["Please try again in 6s.", "Please retry in 32.5s.", "Retry-After: 2"]) {
+      expect(resolveProviderErrorRetrySeconds({ ...exhausted, message })).toBeUndefined();
+    }
+    expect(
+      resolveProviderErrorRetrySeconds({ ...exhausted, message: "Please try again later." }),
+    ).toBe(300);
+    expect(
+      resolveProviderErrorRetrySeconds({
+        ...exhausted,
+        message: "Please try again in 6s.",
+        body: '{"details":[{"retryDelay":"8s"}]}',
+      }),
+    ).toBe(8);
+  });
+
+  it("recognizes explicit retry prose only with a parseable time", () => {
+    expect(hasExplicitRetryText("try again in 6s")).toBe(true);
+    expect(hasExplicitRetryText("Retry-After: Sun, 06 Nov 1994 08:49:37 GMT")).toBe(true);
+    expect(hasExplicitRetryText("please try again in a moment")).toBe(false);
+    expect(hasExplicitRetryText(undefined)).toBe(false);
+  });
+
+  it("reads RetryInfo in any key order without invoking getters", () => {
+    const retryInfo = (retryDelay: unknown) => ({
+      error: { details: [{ retryDelay, "@type": "type.googleapis.com/google.rpc.RetryInfo" }] },
+    });
+    expect(parseGoogleRetryDelaySeconds(retryInfo("1.25s"))).toBe(1.25);
+    expect(parseGoogleRetryDelaySeconds(JSON.stringify(retryInfo("7s")))).toBe(7);
+    for (const invalid of ["soon", "7", 7, "-1s"]) {
+      expect(parseGoogleRetryDelaySeconds(retryInfo(invalid))).toBeUndefined();
+    }
+    let invoked = false;
+    const hostile = Object.defineProperty({}, "details", {
+      get: () => {
+        invoked = true;
+        return [{ "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: "9s" }];
+      },
+    });
+    expect(parseGoogleRetryDelaySeconds(hostile)).toBeUndefined();
+    expect(invoked).toBe(false);
   });
 });
 

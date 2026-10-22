@@ -300,8 +300,9 @@ describe("projectProviderError", () => {
     );
 
     expect(projectProviderError(error).stopReason).toBe("error");
-    // Three fixed timing-metadata probes precede the bounded diagnostic walk.
-    expect(descriptorReads).toBe(64 + 3);
+    // Fixed timing-metadata probes (headers plus the RetryInfo body shape) precede the
+    // bounded diagnostic walk.
+    expect(descriptorReads).toBe(64 + 10);
   });
 
   it("caps descriptor reads across a branching hostile graph", () => {
@@ -320,8 +321,8 @@ describe("projectProviderError", () => {
       );
 
     expect(projectProviderError(createNode()).stopReason).toBe("error");
-    // Missing status and response fields cost five fixed probes, not another graph walk.
-    expect(descriptorReads).toBe(64 * 64 + 5);
+    // Status, response and RetryInfo shape probes are a fixed cost, not another graph walk.
+    expect(descriptorReads).toBe(64 * 64 + 33);
   });
 
   it("redacts value fields when their discriminator falls beyond the field cap", () => {
