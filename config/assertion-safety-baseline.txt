@@ -1528,7 +1528,7 @@ src/cli/program/register.configure.ts	1
 src/cli/program/register.migrate.ts	7
 src/cli/program/register.onboard.ts	26
 src/cli/program/register.setup.ts	2
-src/cli/program/register.status-health-sessions.ts	9
+src/cli/program/register.status-health-sessions.ts	7
 src/cli/run-main.ts	1
 src/cli/secrets-cli.ts	2
 src/cli/secrets-store-cli.ts	1
