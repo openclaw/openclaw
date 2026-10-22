@@ -142,7 +142,9 @@ it("hides the curated locale search leaf without mutating the source schema or s
     search("interface language", params).some((block) => block.hash === "#config-section-ui"),
   ).toBe(false);
   for (const query of ["chat show tool calls", "seam color"]) {
-    expect(search(query, params)).toContainEqual(expect.objectContaining({ hash: "#config-section-ui" }));
+    expect(search(query, params)).toContainEqual(
+      expect.objectContaining({ hash: "#config-section-ui" }),
+    );
   }
   expect(JSON.stringify(schema)).toBe(original);
 });
