@@ -90,7 +90,6 @@ export const forcedUnitFastTestFiles = [
   "src/flows/channel-setup.status.test.ts",
   "src/flows/provider-flow.test.ts",
   "src/entry.compile-cache.test.ts",
-  "src/entry.respawn.test.ts",
   "src/entry.version-fast-path.test.ts",
   "src/entry.test.ts",
   "src/flows/doctor-startup-channel-maintenance.test.ts",
