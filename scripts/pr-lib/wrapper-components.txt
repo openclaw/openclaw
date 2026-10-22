@@ -2612,7 +2612,6 @@ src/shared/channel-read-authority.ts
 src/shared/tool-approval-reviews.ts
 src/agents/agent-lifecycle-parent-state.ts
 src/agents/agent-run-terminal-error.ts
-src/agents/agent-run-terminal-outcome-merge.ts
 src/agents/agent-run-terminal-outcome.ts
 src/agents/main-session-recovery/main-session-recovery-lifecycle.ts
 src/agents/run-termination.ts
