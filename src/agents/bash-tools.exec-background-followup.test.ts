@@ -379,6 +379,33 @@ test.for(["ordinary", "live cron", "queued cron", "ended cron", "cron ended duri
   },
 );
 
+test.for([
+  { label: "starting run", runId: "origin-run", expected: { runId: "origin-run" } },
+  { label: "no run", runId: undefined, expected: {} },
+])(
+  "names the $label in the completion wake provenance",
+  async ({ runId, expected }, { signal }) => {
+    const sessionKey = `agent:main:dashboard:wake-provenance-${runId ?? "none"}`;
+    await seedOrigin(sessionKey);
+    const started = await backgroundExec(sessionKey, { agentId: "main", runId })(
+      "wake-provenance",
+      'process.stdout.write("WAKE_PROVENANCE_DONE")',
+    );
+    runningSession(started.details);
+    await withinTest(waitForExecScope(sessionKey), signal);
+    await completion(signal);
+    const [params] = expectDefined(model.mock.calls[0], "completion turn");
+    expect(params.prompt).toContain("WAKE_PROVENANCE_DONE");
+    // The wake stays a non-owner internal turn; only the origin fact is added.
+    expect(params.senderIsOwner).not.toBe(true);
+    expect(params.inputProvenance).toStrictEqual({
+      kind: "internal_system",
+      sourceTool: "exec",
+      ...expected,
+    });
+  },
+);
+
 test("starts and notifies when identity enrichment fails, then resolves child identity again", async ({
   signal,
 }) => {

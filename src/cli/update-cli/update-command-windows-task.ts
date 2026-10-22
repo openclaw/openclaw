@@ -155,7 +155,7 @@ export function createWindowsTaskAutoStartRecovery(params: {
                   ? "update-failed"
                   : "cancelled",
             },
-            { env: params.updateRun.env },
+            params.updateRun,
           );
         }
       } catch (cause) {

@@ -68,11 +68,10 @@ afterEach(() => {
   }
 });
 
-it("resolveFinalAssistantText formats malformed fragments when final and streamed text are empty", () => {
+it("resolveFinalAssistantText formats malformed fragments when final text is empty", () => {
   expect(
     resolveFinalAssistantText({
       finalText: "",
-      streamedText: "",
       errorMessage: MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
     }),
   ).toBe("LLM streaming response contained a malformed fragment. Please try again.");

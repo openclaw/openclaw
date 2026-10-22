@@ -107,6 +107,8 @@ export type CronServiceDeps = {
   cronConfig?: CronConfig;
   /** Host-owned, read-only diagnostics before startup recovery can dispatch loaded jobs. */
   describeJobLoadWarning?: (job: CronStoredJob) => string | undefined;
+  /** Disallow automation jobs that run commands or scripts on the host. */
+  hostExecutionDisabled?: boolean;
   resolveUserTimezone?: () => string | undefined;
   /** Resident admission facts; normal reply admission owns recovery barriers. */
   isExecutionIdle?: (
@@ -394,6 +396,34 @@ export type CronServiceState = {
   lastQuarantineFailureWarnKey: string | null;
   storeLoadedAtMs: number | null;
 };
+
+export const CRON_HOST_EXECUTION_DISABLED_MESSAGE =
+  "Automation jobs that execute on the Gateway host are disabled by OPENCLAW_DISABLE_CRON_HOST_EXECUTION; contact the Gateway deployment administrator to enable them.";
+
+/** Triggers and process-backed schedules can start host work independently of the job payload. */
+export function describeCronHostExecutionRestriction(
+  job: CronStoredJob,
+  hostExecutionDisabled: boolean | undefined,
+): string | undefined {
+  if (
+    hostExecutionDisabled &&
+    (job.payload.kind === "command" ||
+      job.payload.kind === "script" ||
+      job.schedule.kind === "on-exit" ||
+      (job.schedule.kind === "stream" && !job.streamSandbox) ||
+      job.trigger)
+  ) {
+    return CRON_HOST_EXECUTION_DISABLED_MESSAGE;
+  }
+  return undefined;
+}
+
+export function assertCronHostExecutionAllowed(state: CronServiceState, job: CronStoredJob): void {
+  const reason = describeCronHostExecutionRestriction(job, state.deps.hostExecutionDisabled);
+  if (reason) {
+    throw new TypeError(reason);
+  }
+}
 
 export function createCronServiceState(deps: CronServiceDeps): CronServiceState {
   // The public CronService constructor shipped before roster-aware callers.

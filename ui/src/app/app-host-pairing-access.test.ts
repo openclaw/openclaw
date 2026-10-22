@@ -522,7 +522,7 @@ describe("application shell pairing access", () => {
         ) ?? []),
       ];
       if (!settings) {
-        expect(actions.map((button) => button.textContent?.trim())).toEqual(["Retry", "Close"]);
+        expect(actions.map((button) => button.textContent?.trim())).toEqual(["Close", "Retry"]);
       }
       actions.find((button) => button.textContent?.trim() === "Retry")?.click();
       await waitForSolid(() => expect(target()?.getAttribute("aria-busy")).toBe("true"));

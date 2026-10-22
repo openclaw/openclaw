@@ -218,6 +218,7 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_memory_rss_bytes`                               | histogram | none                                                                                      |
 | `openclaw_memory_pressure_total`                          | counter   | `level`, `reason`                                                                         |
 | `openclaw_telemetry_exporter_total`                       | counter   | `exporter`, `reason`, `signal`, `status`                                                  |
+| `openclaw_prometheus_family_series_dropped_total`         | counter   | `family` (fixed metric-name catalog)                                                      |
 | `openclaw_prometheus_series_dropped_total`                | counter   | none                                                                                      |
 | `openclaw_diagnostic_async_queue_dropped_total`           | counter   | `drop_class`                                                                              |
 | `openclaw_diagnostic_async_queue_length`                  | gauge     | none                                                                                      |
@@ -465,9 +466,10 @@ byte histograms gives 236 series per fully observed method (23,600 for 100
 methods), plus shared outcome totals. The response-size
 and signed heap-delta histograms expand into 20 and 38 series respectively; see
 [RPC response size and heap changes](/gateway/diagnostics#rpc-response-size-and-heap-changes). Existing samples keep
-updating when the cap fills; unseen RPC or other operational samples are refused
-and increment `openclaw_prometheus_series_dropped_total`. Monitor that counter:
-coverage of every core method can fill the cap, so a zero value matters when
+updating when a budget fills; unseen label sets for that family are refused
+and increment both `openclaw_prometheus_series_dropped_total` and
+`openclaw_prometheus_family_series_dropped_total{family="..."}`. Other families keep
+their reserved capacity. Check the affected family's drop counter when
 interpreting totals or latency percentiles. Async diagnostic queue saturation can
 also drop observations, reported by `openclaw_diagnostic_async_queue_dropped_total`.
 
@@ -1138,7 +1140,10 @@ telemetry ports. A busy worker processes the request when its event loop resumes
 exports are suppressed in the meantime.
 
 The histogram is absent until the first observation, so absence does not prove
-zero GC. Queue drops, the series cap, observation gaps and process restarts limit
+zero GC. At startup, the exporter reserves four slots within the GC family's
+32-entry reserve for native main-thread GC (`reason="other"`), so startup traffic cannot prevent
+these histograms from appearing later. Reservation does not add observations.
+Queue drops, the series cap for other GC labels, observation gaps and process restarts limit
 coverage. Diagnostics disable/re-enable preserves the exporter's existing
 counters; restarting the exporter resets them as usual. One shared native profiler
 per isolate drains on an unreferenced one-second timer instead of scheduling
@@ -1196,9 +1201,22 @@ attributes.
 
   </Accordion>
   <Accordion title="Series cap and overflow accounting">
-    The exporter caps retained time series in memory at **2048** series across counters, gauges, and histograms combined. New series beyond that cap are dropped, and `openclaw_prometheus_series_dropped_total` increments by one each time.
+    The exporter retains at most **2,048 aggregate label sets** across counters, gauges, and histograms. Each histogram consumes one entry, regardless of its bucket count; the rendered scrape has more time series.
 
-    Watch this counter as a hard signal that an attribute upstream is leaking high-cardinality values. The exporter never lifts the cap automatically; if it climbs, fix the source rather than disabling the cap.
+    A fixed catalog of 134 metric families reserves **1,204 entries**, leaving **844 shared entries**. Each family can retain at most **128 entries**, including its reserve. Unused reserves are not borrowed: worker/RPC startup traffic cannot consume space reserved for later run, model, tool, GC, or memory samples. Existing entries continue updating after admission fills. Gauge replacement releases its entries and preserves its family's reserve.
+
+    The following reserves apply per family (all names have the `openclaw_` prefix):
+
+    | Reserve | Families |
+    | --- | --- |
+    | 64 | `heap_space_bytes` |
+    | 32 | `run_completed_total`, `run_duration_seconds`, `harness_run_total`, `harness_run_duration_seconds`, `model_call_total`, `model_call_duration_seconds`, `model_cost_usd_total`, `model_tokens_total`, `model_usage_duration_seconds`, `gen_ai_client_token_usage`, `tool_execution_total`, `tool_execution_duration_seconds`, `gc_duration_seconds`, `worktree_preparation_seconds`, `chat_send_phase_seconds`, `code_mode_worker_heap_bytes`, `code_mode_worker_memory_bytes` |
+    | 16 | `heap_old_generation_after_gc_bytes`, `heap_old_generation_after_gc_ratio`, `heap_size_limit_bytes`, `heap_used_ratio`, `memory_bytes`, `worker_count`, `worker_heap_sampled_count`, `worker_heap_space_used_bytes`, `worker_heap_used_bytes`, `worker_external_bytes`, `worker_array_buffers_bytes` |
+    | 4 | Every other cataloged family |
+
+    Rejected new-series observations increment `openclaw_prometheus_series_dropped_total` and `openclaw_prometheus_family_series_dropped_total{family="..."}`. Repeated observations of the same rejected label set increment again; these counters do not count unique rejected sets. Both counters bypass admission, so saturation cannot hide drops. The family label comes only from the fixed catalog, never from diagnostic label values. The exporter also logs one warning per affected family per process, including across exporter restarts.
+
+    Drop counters reset when the exporter stops. Drops can reflect legitimate combinations of bounded labels as well as an upstream cardinality leak. Inspect the named family before changing its labels or budget. The exporter never raises its cap automatically; the family reserve is a guarantee of capacity, not complete coverage for arbitrarily many label combinations.
 
   </Accordion>
   <Accordion title="What never appears in Prometheus output">
@@ -1276,6 +1294,9 @@ sum by (skill, source) (increase(openclaw_skill_used_total[24h]))
 # Dropped Prometheus series (cardinality alarm)
 increase(openclaw_prometheus_series_dropped_total[15m]) > 0
 
+# Families losing new label sets (do not sum this with the aggregate counter)
+sum by (family) (increase(openclaw_prometheus_family_series_dropped_total[15m])) > 0
+
 # Completed windows whose maximum delay exceeded one second
 increase(openclaw_gateway_event_loop_delay_max_seconds_count[5m])
   - increase(openclaw_gateway_event_loop_delay_max_seconds_bucket{le="1"}[5m])
@@ -1341,7 +1362,7 @@ OpenClaw supports both surfaces independently. You can run either, both, or neit
     The caller authenticated, but its effective operator scopes do not include `operator.read`. This happens when an identity-bearing auth mode such as `trusted-proxy` maps the scraper to a [named role](/gateway/operator-scopes) whose scope ceiling excludes reads. Grant the scraper role `operator.read` (or `operator.write` / `operator.admin`, which imply it).
   </Accordion>
   <Accordion title="`openclaw_prometheus_series_dropped_total` is climbing">
-    A new attribute is exceeding the **2048**-series cap. Inspect recent metrics for an unexpectedly high-cardinality label and fix it at the source. The exporter intentionally drops new series instead of silently rewriting labels.
+    A family ceiling or the shared overflow budget is full. Inspect `openclaw_prometheus_family_series_dropped_total` and the once-per-family warning to identify affected metrics. Check label combinations and the family's reserved capacity. The exporter drops new label sets without rewriting them, while protecting other families' reserves.
   </Accordion>
   <Accordion title="Prometheus shows stale series after a restart">
     The plugin keeps state in memory only. After a Gateway restart, counters reset to zero and gauges restart at their next reported value. Use PromQL `rate()` and `increase()` to handle resets cleanly.

@@ -333,6 +333,17 @@ are treated as text-only. When `input` is absent, OpenClaw retains its existing
 family inference and recognizes exact known native OpenAI image-capable models;
 unknown model names do not inherit image support from a new GPT generation prefix.
 
+OpenAI Responses and Anthropic Messages rows also receive the model facts that
+the bundled OpenAI and Anthropic catalogs declare for the same upstream model id
+and API: the Code Mode tier (so the default `tools.codeMode: "auto"` engages for
+the same models), whether the model accepts `temperature` (GPT-6 and GPT-5.6
+requests drop it instead of failing upstream), and image size limits (for
+example 2576 px for current Claude models). This works without enabling those
+plugins. Matching is exact; unknown, renamed, or future models inherit nothing.
+Reasoning efforts still come from the ClawRouter catalog. Requests to Claude with
+extended thinking drop a trailing assistant prefill, as the native Anthropic
+provider does.
+
 Adding a model to a supported ClawRouter provider needs no OpenClaw release.
 Successful catalog responses, including an empty granted-model list, are reused
 for one hour per endpoint and resolved credential. Ordinary model-list reads
@@ -372,6 +383,35 @@ schemas without them. A catalog provider exposing only an
 unsupported request format is intentionally not advertised as an OpenClaw
 text model. Normalize those providers to one of the supported contracts in
 ClawRouter rather than sending an incompatible payload.
+
+## Hosted web search
+
+OpenClaw can use OpenAI's hosted `web_search` on a ClawRouter Responses route
+only when the credential-scoped catalog explicitly advertises both support
+and admission for that offer. Model names never enable hosted search.
+
+The versioned catalog contract is:
+
+- The OpenAI model has `nativeCapabilities.version` equal to
+  `clawrouter.native-capabilities.v1`, with `web_search` in
+  `nativeCapabilities.endpoints.responses.hostedTools`.
+- Its eligible HTTP unified `/v1/responses` offer has
+  `hostedToolAdmission.version` equal to `clawrouter.hosted-tool-admission.v1`
+  and `hostedToolAdmission.web_search` equal to `admitted`.
+
+Missing, unknown-version, or unadmitted facts keep managed search unchanged.
+Disabling web search, denying `web_search` in tool policy, or selecting another
+search provider also prevents hosted replacement. An admitted route declares
+`{ type: "web_search" }` instead of the managed search function; returned URL
+citations are visible as clickable source links.
+
+Admission is not a guarantee that every future request fits a budget. ClawRouter
+still validates current grants and pricing at dispatch. In particular, this
+contract does not qualify arbitrary reasoning requests under hard-reserve
+budgets, and OpenClaw does not invent a hosted-tool call cap. A deployment that
+does not yet produce the versioned facts remains on managed search. If a route
+rejects hosted search, OpenClaw surfaces that error rather than retrying with a
+different key or silently replacing the configured search provider.
 
 ## Image generation
 

@@ -1,6 +1,7 @@
 import type { BrowserContext, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
@@ -200,15 +201,17 @@ export function defineGitHubPublicationAccountTests({
       });
       expect(await shared.isVisible()).toBe(false);
       expect(await menu.locator("select").count()).toBe(0);
-      const row = page.locator(
-        width === 390 ? ".github-publication-mobile" : '.chat-pr[data-state="branch"]',
-      );
+      const rowSelector =
+        width === 390 ? ".github-publication-mobile" : '.chat-pr[data-state="branch"]';
+      const row = page.locator(rowSelector);
+      await waitForLayoutSettled(page, rowSelector);
       const closedBounds = await row.boundingBox();
       expect(closedBounds).not.toBeNull();
       await arrow.focus();
       await page.keyboard.press("Enter");
       await expect.poll(() => arrow.getAttribute("aria-expanded")).toBe("true");
       await shared.waitFor();
+      await waitForLayoutSettled(page, rowSelector);
       expect(await shared.getAttribute("aria-checked")).toBe("true");
       expect(await personal.getAttribute("aria-checked")).toBe("false");
       expect((await row.boundingBox())?.height).toBeCloseTo(closedBounds!.height, 1);

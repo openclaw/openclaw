@@ -596,7 +596,7 @@ export function createChatComposerContext(
     clearSkillMenu,
     props,
     state,
-    attachmentReadRevision: props.attachmentReads?.revision,
+    attachmentReadRevision: props.attachmentReadRevision ?? props.attachmentReads?.revision,
     canCompose,
     showAbortableUi,
     visibleDraft,
