@@ -37,7 +37,9 @@ it.each([
       method === "logbook.status" ? status : timeline,
     );
     const client = logbookClient(request);
-    const { container } = mountSolid(() => <Logbook initialClient={client} getRetired={() => neverRetired} />);
+    const { container } = mountSolid(() => (
+      <Logbook initialClient={client} getRetired={() => neverRetired} />
+    ));
     await waitForSolid(() =>
       expect(container.querySelector(".logbook-card__header")).not.toBeNull(),
     );

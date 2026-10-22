@@ -33,7 +33,9 @@ describe("Logbook view", () => {
     );
     const client = logbookClient(request);
 
-    const { container } = mountSolid(() => <Logbook initialClient={client} getRetired={() => neverRetired} />);
+    const { container } = mountSolid(() => (
+      <Logbook initialClient={client} getRetired={() => neverRetired} />
+    ));
     await waitForSolid(() =>
       expect(container.querySelector(".logbook-card__header")).not.toBeNull(),
     );
@@ -82,7 +84,9 @@ describe("Logbook view", () => {
       throw new Error(`Unexpected Logbook request: ${method}`);
     });
     const client = logbookClient(request);
-    const view = mountSolid(() => <Logbook initialClient={client} getRetired={() => neverRetired} />);
+    const view = mountSolid(() => (
+      <Logbook initialClient={client} getRetired={() => neverRetired} />
+    ));
     await waitForSolid(() => expect(view.queryByRole("button", { name: "Pause" })).not.toBeNull());
     const toggle = view.getByRole("button", { name: "Pause" }) as HTMLButtonElement;
     expect(toggle.disabled).toBe(true);

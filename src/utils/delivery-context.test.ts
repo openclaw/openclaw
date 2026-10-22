@@ -10,12 +10,6 @@ import {
   projectSessionDeliveryFields,
 } from "./delivery-context.shared.js";
 
-const slackContext = {
-  channel: "slack",
-  to: "channel:C123",
-  accountId: "work",
-  threadId: "177000.123",
-};
 const slackRoute = {
   channel: "slack",
   accountId: "work",
