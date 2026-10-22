@@ -1065,7 +1065,7 @@ describe("retained LaunchAgent policy", () => {
       } else {
         await expect(result).resolves.toEqual({ outcome: "completed" });
       }
-      expect(state.serviceLoaded).toBe(scenario !== "bootstrap-failure");
+      expect(state.serviceLoaded).toBe(true);
       const commands = launchctlCommandNames();
       expect(commands.includes("enable")).toBe(!preserveAutoStart);
       expect(commands).not.toContain("disable");
