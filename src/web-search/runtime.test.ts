@@ -347,6 +347,40 @@ describe("web search runtime", () => {
     expect(execute).toHaveBeenCalledWith({ query: "hello" }, { signal: controller.signal });
   });
 
+  it("does not fall back to another provider after parent cancellation", async () => {
+    const controller = new AbortController();
+    const abortReason = new Error("parent run cancelled");
+    abortReason.name = "AbortError";
+    const firstExecute = vi.fn(
+      async (_args: Record<string, unknown>, context?: { signal?: AbortSignal }) => {
+        expect(context?.signal).toBe(controller.signal);
+        controller.abort(abortReason);
+        throw new Error("provider cleanup failed after cancellation");
+      },
+    );
+    const fallbackExecute = vi.fn(async () => ({ ok: true }));
+    runtimeProvidersMock.mockReturnValue([
+      customProvider({
+        credentialPath: "",
+        createTool: () => tool(firstExecute),
+      }),
+      customProvider({
+        pluginId: "fallback-search",
+        id: "fallback",
+        credentialPath: "",
+        autoDetectOrder: 2,
+        getConfiguredCredentialValue: () => "configured",
+        createTool: () => tool(fallbackExecute),
+      }),
+    ]);
+
+    await expect(
+      search({ config: customConfig("custom-config-key"), signal: controller.signal }),
+    ).rejects.toBe(abortReason);
+    expect(firstExecute).toHaveBeenCalledOnce();
+    expect(fallbackExecute).not.toHaveBeenCalled();
+  });
+
   it("rejects a provider result that completes after parent cancellation", async () => {
     const controller = new AbortController();
     const abortReason = new Error("parent run cancelled");
