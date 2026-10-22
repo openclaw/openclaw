@@ -9,6 +9,7 @@ import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { formatGatewayPendingCloseSteps } from "../restart-trace.js";
 import * as support from "./service.test-support.js";
 import { WorkerEnvironmentInventoryClosedError } from "./store-errors.js";
 import { createWorkerEnvironmentStore } from "./store.js";
@@ -49,6 +50,17 @@ describe("worker inventory read-admission recovery", () => {
       await vi.advanceTimersByTimeAsync(1_000);
       expect(reconciled).toBe(true);
       expect(stopped).toBe(false);
+      const inventoryRead = vi.spyOn(support.testState.store, "get").mockImplementation(() => {
+        throw new WorkerEnvironmentInventoryClosedError();
+      });
+      try {
+        const pending = formatGatewayPendingCloseSteps();
+        expect(pending).toContain("environment=shutdown-queued-reconcile");
+        expect(pending).toContain("provider=fake");
+        expect(pending).toContain("step=destroy");
+      } finally {
+        inventoryRead.mockRestore();
+      }
     } finally {
       vi.useRealTimers();
       remote.resolve();

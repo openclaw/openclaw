@@ -29,6 +29,8 @@ export function createWorkerProviderCaller(options: {
     timeoutMs?: number,
     observationSignal?: AbortSignal,
   ): Promise<T> => {
+    // Shutdown diagnostics must survive retirement of the inventory reader.
+    const providerId = options.store.get(environmentId)?.providerId;
     const { promise: started, resolve: signalStarted } = createDeferredCore();
     const operation = options.trackOperation(
       measureGatewayRestartTrace(
@@ -42,7 +44,7 @@ export function createWorkerProviderCaller(options: {
           }),
         () => ({
           environment: environmentId,
-          provider: options.store.get(environmentId)?.providerId,
+          provider: providerId,
           step: operationName,
         }),
         true,
