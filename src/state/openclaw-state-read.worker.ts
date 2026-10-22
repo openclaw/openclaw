@@ -45,10 +45,15 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
       input.command.type === "agentDatabaseRegistry.read"
         ? await import("./openclaw-agent-db-registry.read.js")
         : undefined;
+    const manifestReader =
+      input.command.type === "localWorkspace.manifest"
+        ? await import("../gateway/worker-environments/local-workspace-manifest-scan.js")
+        : undefined;
     const dedicatedRead =
       input.command.type === "admit" ||
       input.command.type === "plugins.metadata.read" ||
       input.command.type === "gatewayOwnerLease.read" ||
+      input.command.type === "localWorkspace.manifest" ||
       input.command.type === "agentDatabaseRegistry.read";
     const prepared = dedicatedRead ? undefined : stateReadRegistry.prepare(input.command.type);
     if (prepared) {
@@ -115,6 +120,23 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
         input.snapshotRoot,
         true,
       ] as const;
+      if (command.type === "localWorkspace.manifest") {
+        if (!manifestReader) {
+          throw new Error("Local workspace manifest reader is unavailable");
+        }
+        const snapshot = withOpenClawStateReadOnlyLocation(
+          ({ db }) => {
+            sourceAdmitted = true;
+            return manifestReader.readLocalWorkspaceManifestRows(db, command.input);
+          },
+          ...locationArgs,
+        );
+        const value = await manifestReader.executeLocalWorkspaceManifestRead(
+          snapshot,
+          command.input.action,
+        );
+        return { ok: true, type: command.type, sourceAdmitted: true, value };
+      }
       if (command.type === "plugins.metadata.read") {
         const result = withOpenClawStateReadOnlyLocation(
           ({ db }) => {

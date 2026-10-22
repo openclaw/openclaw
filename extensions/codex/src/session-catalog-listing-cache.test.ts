@@ -5,21 +5,13 @@ import type { CodexThread } from "./app-server/protocol.js";
 import { catalogFactory, catalogProvider } from "./session-catalog-resident.test-support.js";
 import {
   commandRpcMocks,
-  createCodexSessionCatalogControl,
+  createCodexSessionCatalogControl as makeControl,
   config,
   idleThread,
   type OpenClawConfig,
 } from "./session-catalog.test-helpers.js";
 
 afterEach(() => vi.restoreAllMocks());
-const makeControl = (
-  options: Partial<Parameters<typeof createCodexSessionCatalogControl>[0]> = {},
-) =>
-  createCodexSessionCatalogControl({
-    getPluginConfig: () => ({ supervision: { enabled: true } }),
-    getRuntimeConfig: () => config,
-    ...options,
-  });
 
 it("discovers visible entries after hidden native pages without rereading the resident head", async () => {
   const rows = Array.from({ length: 35 }, (_, i) =>

@@ -68,11 +68,10 @@ afterEach(() => {
   }
 });
 
-it("resolveFinalAssistantText formats malformed fragments when final and streamed text are empty", () => {
+it("resolveFinalAssistantText formats malformed fragments when final text is empty", () => {
   expect(
     resolveFinalAssistantText({
       finalText: "",
-      streamedText: "",
       errorMessage: MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
     }),
   ).toBe("LLM streaming response contained a malformed fragment. Please try again.");
@@ -424,13 +423,22 @@ describe("TUI shutdown safety", () => {
     const stdout = new EventEmitter();
     const requestExit = vi.fn();
 
-    const cleanup = installTuiTerminalLossExitHandler(requestExit, { stdin, stdout });
-    stdin.emit("end");
-    stdout.emit("close");
-    cleanup();
-    stdin.emit("close");
+    const stdinDescriptor = Object.getOwnPropertyDescriptor(process, "stdin")!;
+    const stdoutDescriptor = Object.getOwnPropertyDescriptor(process, "stdout")!;
+    Object.defineProperty(process, "stdin", { configurable: true, value: stdin });
+    Object.defineProperty(process, "stdout", { configurable: true, value: stdout });
+    try {
+      const cleanup = installTuiTerminalLossExitHandler(requestExit);
+      stdin.emit("end");
+      stdout.emit("close");
+      cleanup();
+      stdin.emit("close");
 
-    expect(requestExit).toHaveBeenCalledTimes(1);
+      expect(requestExit).toHaveBeenCalledTimes(1);
+    } finally {
+      Object.defineProperty(process, "stdin", stdinDescriptor);
+      Object.defineProperty(process, "stdout", stdoutDescriptor);
+    }
   });
 
   it("resolves terminal-loss exits requested before the TUI finish handler is installed", () => {

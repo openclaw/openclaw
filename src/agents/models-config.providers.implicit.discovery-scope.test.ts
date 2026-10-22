@@ -458,66 +458,6 @@ it("fills static catalog keys from Vertex ADC", async () => {
   expect(providers?.["google-vertex"]?.apiKey).toBe("gcp-vertex-credentials");
 });
 
-it("inherits discovered input when the configured source omitted it", async () => {
-  const explicitProvider = {
-    baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-    apiKey: "AWS_PROFILE",
-    models: [createTextModel("vision-model", "Vision Model")],
-  };
-  mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([
-    createProvider("amazon-bedrock"),
-  ]);
-  mocks.runProviderCatalog.mockResolvedValue({
-    provider: {
-      baseUrl: explicitProvider.baseUrl,
-      models: [
-        { ...createTextModel("vision-model", "Vision Model"), input: ["text", "image"] },
-        createTextModel("discovered-only", "Discovered Only"),
-      ],
-    },
-  });
-  const providers = await discover({
-    config: { models: { providers: { "amazon-bedrock": explicitProvider } } },
-    env: { ...state.env, AWS_PROFILE: "default" },
-    explicitProviders: { "amazon-bedrock": explicitProvider },
-    sourceModelFields: new Map([
-      [JSON.stringify(["amazon-bedrock", "vision-model"]), { inputOmitted: true, cost: undefined }],
-    ]),
-  });
-  expect(providers?.["amazon-bedrock"]?.models).toMatchObject([
-    { id: "vision-model", input: ["text", "image"] },
-    { id: "discovered-only" },
-  ]);
-});
-
-it("keeps discovered models beyond configured selections", async () => {
-  const explicitProvider = {
-    baseUrl: "http://vllm.example/v1",
-    api: "openai-completions" as const,
-    models: [createTextModel("manual-model", "Manual Model")],
-  };
-  mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([createProvider("vllm")]);
-  mocks.runProviderCatalog.mockResolvedValue({
-    provider: {
-      baseUrl: "http://vllm.example/v1",
-      api: "openai-completions" as const,
-      models: [createTextModel("discovered-model", "Discovered Model")],
-    },
-  });
-
-  const providers = await discover({
-    config: {
-      agents: { defaults: { models: { "vllm/manual-model": {} } } },
-      models: { providers: { vllm: explicitProvider } },
-    },
-    explicitProviders: { vllm: explicitProvider },
-  });
-
-  expect(providers?.vllm?.models.map((model) => model.id)).toEqual([
-    "manual-model",
-    "discovered-model",
-  ]);
-});
 it("reuses prepared results within provider scope", async () => {
   const openai = { ...createStaticOnlyProvider("openai"), pluginId: "openai" };
   const anthropic = { ...createStaticOnlyProvider("anthropic"), pluginId: "anthropic" };

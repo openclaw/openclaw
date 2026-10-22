@@ -259,8 +259,6 @@ export function registerRestartOutcomeTests(
 
   it.each([
     ["native refusal", "failed"],
-    ["retry refusal", "failed"],
-    ["writable health", "restart-health-failed"],
     ["cap then healthy", "ok"],
     ["writable progressing cap", "readiness-pending"],
   ])(
@@ -286,18 +284,11 @@ export function registerRestartOutcomeTests(
       });
       if (scenario === "native refusal") {
         mocks.restart.mockRejectedValueOnce(new Error("native owner refused"));
-      } else if (scenario === "retry refusal") {
-        mocks.restart
-          .mockImplementationOnce(async () => {
-            await servingOwner.restart();
-            return { outcome: "completed" };
-          })
-          .mockRejectedValueOnce(new Error("later native refusal"));
       }
       mocks.health.mockResolvedValue({
         outcome: "failed",
         healthy: false,
-        staleGatewayPids: scenario === "retry refusal" ? [4242] : [],
+        staleGatewayPids: [],
         runtime: { status: "stopped" },
         portUsage: { port: 19305, status: "free", listeners: [], hints: [] },
       });

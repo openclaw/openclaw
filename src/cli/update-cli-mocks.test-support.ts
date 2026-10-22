@@ -399,7 +399,7 @@ vi.mock("node:child_process", async () => {
   };
   return {
     ...actual,
-    // SQLite snapshots and their native broker need real IPC; updater/service children stay simulated.
+    // SQLite and directory-watch helpers need real IPC; updater/service children stay simulated.
     spawnSync: (...args: Parameters<typeof actual.spawnSync>) => {
       remapSqliteChild(args);
       return actual.spawnSync(...args);
@@ -412,21 +412,25 @@ vi.mock("node:child_process", async () => {
     },
     spawn: (...args: Parameters<typeof actual.spawn>) => {
       const brokerArgv = resolveRuntimeWorkerArgv(brokerUrl);
-      const childArgs = args[1];
+      const childArgs = Array.isArray(args[1]) ? args[1] : [];
       if (
         args[0] === process.execPath &&
-        Array.isArray(childArgs) &&
         childArgs.length === brokerArgv.length &&
         childArgs.every((arg, index) => arg === brokerArgv[index])
       ) {
         // Simulated Node selection must not mix runtimes on the real broker's advanced IPC.
         return actual.spawn(hostExecPath, hostBrokerArgv, args[2]);
       }
-      if (remapSqliteChild(args)) {
+      if (
+        remapSqliteChild(args) ||
+        (args[0] === process.execPath &&
+          childArgs.length === 3 &&
+          childArgs[0] === "-e" &&
+          childArgs[2] === String(process.pid))
+      ) {
         return actual.spawn(...args);
       }
-      return Array.isArray(childArgs) &&
-        (isMacosAclInspection(args[0], childArgs) || isPlistStdinConversion(args[0], childArgs))
+      return isMacosAclInspection(args[0], childArgs) || isPlistStdinConversion(args[0], childArgs)
         ? actual.spawn(...args)
         : spawn(...args);
     },

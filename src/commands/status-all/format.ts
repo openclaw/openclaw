@@ -88,10 +88,8 @@ export function buildStatusUpdateSurface(params: {
   updateConfigChannel?: string | null;
   update: UpdateCheckResult;
 }) {
-  const channelInfo = resolveStatusUpdateChannelInfo(params);
   return {
-    channelInfo,
-    channelLabel: channelInfo.label,
+    channelLabel: resolveStatusUpdateChannelInfo(params).label,
     gitLabel: formatGitInstallLabel(params.update),
     updateLine: formatUpdateOneLiner(params.update).replace(/^Update:\s*/i, ""),
     updateAvailable: resolveUpdateAvailability(params.update).available,

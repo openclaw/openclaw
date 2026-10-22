@@ -40,7 +40,7 @@ import { collectConfiguredStorageProviderIds } from "./storage-provider-manifest
 import { collectConfiguredWorkerProviderIds } from "./worker-provider-config.js";
 import { normalizeWorkerProviderIds } from "./worker-provider-id.js";
 
-export function resolveChannelPluginIdsFromRegistry(params: {
+function resolveChannelPluginIdsFromRegistry(params: {
   manifestRegistry: PluginManifestRegistry;
 }): string[] {
   const { manifestRegistry } = params;

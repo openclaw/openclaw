@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import type { AgentHarnessCompletionCustody as CompletionCustody } from "../agents/agent-harness-completion-custody.js";
 import type { AgentHarnessCompletionScope as CompletionScope } from "../agents/agent-harness-completion-scope.js";
 import {
@@ -107,74 +107,33 @@ function retireDuringOriginResolution(retire: () => void) {
   });
 }
 
-describe("SDK harness completion delivery contract", () => {
-  it.each<{ name: string; delivery: AgentHarnessCompletionDelivery; durable: boolean }>([
-    {
-      name: "direct result without phases",
-      delivery: { delivered: true, path: "direct" },
-      durable: true,
-    },
-    {
-      name: "direct result with no executed phase",
-      delivery: { delivered: true, path: "direct", phases: [] },
-      durable: false,
-    },
-    {
-      name: "completed direct phase",
-      delivery: {
-        delivered: true,
-        path: "direct",
-        phases: [
-          {
-            phase: "direct-primary",
-            delivered: true,
-            path: "direct",
-            deliveredAt: 123,
-            enqueuedAt: 100,
-          },
-        ],
-      },
-      durable: true,
-    },
-    {
-      name: "unsuccessful direct phase",
-      delivery: {
-        delivered: true,
-        path: "direct",
-        phases: [
-          {
-            phase: "direct-primary",
-            delivered: false,
-            path: "none",
-            reason: "requester_turn_pending",
-            error: "requester is pending",
-          },
-        ],
-      },
-      durable: false,
-    },
-    {
-      name: "steer evidence does not prove direct delivery",
-      delivery: {
-        delivered: true,
-        path: "direct",
-        phases: [
-          { phase: "steer-primary", delivered: true, path: "steered" },
-          { phase: "steer-fallback", delivered: false, path: "none", reason: "steer_dropped" },
-        ],
-      },
-      durable: false,
-    },
-    {
-      name: "successful steer",
-      delivery: { delivered: true, path: "steered", phases: [] },
-      durable: true,
-    },
-    { name: "queued result", delivery: { delivered: true, path: "queued" }, durable: false },
-    { name: "failed result", delivery: { delivered: false, path: "direct" }, durable: false },
-  ])("preserves $name", ({ delivery, durable }) => {
-    expect(isDurableAgentHarnessCompletionDelivery(delivery)).toBe(durable);
-  });
+type Phases = NonNullable<AgentHarnessCompletionDelivery["phases"]>;
+const direct = (phases?: Phases): AgentHarnessCompletionDelivery => ({
+  delivered: true,
+  path: "direct",
+  ...(phases ? { phases } : {}),
+});
+const directPhase = (delivered: boolean): Phases => [
+  { phase: "direct-primary", delivered, path: delivered ? "direct" : "none" },
+];
+it.each<[string, AgentHarnessCompletionDelivery, boolean]>([
+  ["direct result without phases", direct(), true],
+  ["direct result with no executed phase", direct([]), false],
+  ["completed direct phase", direct(directPhase(true)), true],
+  ["unsuccessful direct phase", direct(directPhase(false)), false],
+  [
+    "steer evidence does not prove direct delivery",
+    direct([
+      { phase: "steer-primary", delivered: true, path: "steered" },
+      { phase: "steer-fallback", delivered: false, path: "none", reason: "steer_dropped" },
+    ]),
+    false,
+  ],
+  ["successful steer", { delivered: true, path: "steered", phases: [] }, true],
+  ["queued result", { delivered: true, path: "queued" }, false],
+  ["failed result", { delivered: false, path: "direct" }, false],
+])("preserves %s", (_name, delivery, durable) => {
+  expect(isDurableAgentHarnessCompletionDelivery(delivery)).toBe(durable);
 });
 
 beforeEach(() => {

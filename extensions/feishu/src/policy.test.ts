@@ -20,7 +20,6 @@ function createCfg(feishu: Record<string, unknown>): OpenClawConfig {
 
 function replyPolicy(feishu: Record<string, unknown>) {
   return resolveFeishuReplyPolicy({
-    isDirectMessage: false,
     cfg: createCfg({ groupPolicy: "open", ...feishu }),
     groupPolicy: "open",
     groupId: "oc_1",

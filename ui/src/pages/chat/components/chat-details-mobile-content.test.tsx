@@ -103,7 +103,6 @@ it("retains Outputs demand across publications and returns navigation origins wi
   const retain = vi.fn(() => release);
   const output = {
     artifacts: [],
-    artifactsLoading: false,
     artifactsError: null,
     dashboard: null,
     dashboardError: null,
@@ -131,7 +130,7 @@ it("retains Outputs demand across publications and returns navigation origins wi
     { kind: "versions" },
     expect.objectContaining({ kind: "details-root" }),
   );
-  setValue((current) => ({ ...current, outputs: { ...output, artifactsLoading: true } }));
+  setValue((current) => ({ ...current, outputs: { ...output, artifacts: null } }));
   flush();
   expect(retain).toHaveBeenCalledOnce();
   expect(release).not.toHaveBeenCalled();

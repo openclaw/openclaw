@@ -1,6 +1,6 @@
 import type { AgentSession, AgentSessionMessage } from "openai/resources/beta/agents/agents";
 import type { Turn } from "openai/resources/beta/agents/sessions/turns";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { AgentsApiClient, type AgentsApiEvent, type AgentsApiItem } from "./agentsapi-client.js";
 import { createAgentsApiSession } from "./agentsapi-session.js";
@@ -69,45 +69,44 @@ beforeEach(() => {
   });
 });
 
+afterEach(() => vi.useRealTimers());
+
 describe("Agents API native session receipts", () => {
   it.each(["idle", "disconnect"] as const)(
     "reconciles late terminal records after %s without another native event or input",
     async (boundary) => {
-      const refresh = deferred<void>();
-      const waitForRecovery = vi.fn(async (ms: number) => {
-        if (ms === 1_000) {
-          await refresh.promise;
-        }
-      });
-      const session = createSession({ waitForRecovery });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const session = createSession();
       const result = runSession(session);
       void result.catch(() => {});
       try {
         await submitted.promise;
         await stream.send({ type: "agent.session.in_progress" });
-        expect(waitForRecovery).not.toHaveBeenCalled();
+        const healthyRequests = fetchWithSsrFGuardMock.mock.calls.length;
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(healthyRequests);
         if (boundary === "idle") {
           await stream.send({ type: "agent.session.idle" });
         } else {
           const reconnected = stream.nextSubscription();
           stream.disconnect();
+          await vi.advanceTimersByTimeAsync(500);
           await reconnected;
         }
         // A later consumed event fences the preceding saved-state read. It is
         // not a terminal signal and cannot repair late REST records on its own.
         await stream.send({ type: "fixture.recovery_barrier" });
-        expect(waitForRecovery).toHaveBeenCalledWith(1_000, expect.any(AbortSignal));
+        await vi.advanceTimersByTimeAsync(999);
         expect(session.isSettled()).toBe(false);
         savedSession = createHostedSession("idle");
         savedTurns = [createTurn()];
         savedItems = [createSavedMessage("input-fixture", "user", "Fixture prompt")];
-        refresh.resolve();
+        await vi.advanceTimersByTimeAsync(1);
         await expect(result).resolves.toMatchObject({ turn: { id: "turn-fixture" } });
         expect(inputTypes).toEqual(["agent.session.input.message"]);
       } finally {
         savedSession = createHostedSession("idle");
         controller.abort();
-        refresh.resolve();
         await result.catch(() => {});
         await session.close();
       }

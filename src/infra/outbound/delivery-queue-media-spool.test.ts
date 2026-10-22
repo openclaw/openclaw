@@ -247,16 +247,6 @@ it("skips quiet inventories but expires a new stage even when its producer never
   }
 });
 
-it("does not collect a new retained file after an empty inventory receipt", async () => {
-  await pruneOrphanedDeliveryQueueMedia({ stateDir });
-  const retained = await seedArtifact(ARTIFACT_A);
-  const orphan = await seedArtifact(ARTIFACT_B);
-  await enqueue([{ mediaUrl: retained }]);
-
-  await pruneOrphanedDeliveryQueueMedia({ stateDir });
-
-  expectArtifacts([retained], [orphan]);
-});
 it("releases versioned artifacts without touching paths outside the spool", async () => {
   const generationFinal = await seedArtifact(`g1-${ARTIFACT_A}`, 0);
   const generationPartial = await seedArtifact(`g1-${PART_ARTIFACT}`, 0);

@@ -242,6 +242,24 @@ it.each(["base", "drop-in"])("recognizes standard systemd directives in %s", asy
   expect(unknown?.map((fact) => fact.key)).toEqual(["Service.RestartStpes", "Service.OnFailure"]);
 });
 
+it.each(["base", "drop-in"])("preserves ignored systemd metadata in %s", async (location) => {
+  const metadata =
+    "[Unit]\nX-Fleet=managed\n[X-Fleet]\nOwner=operations\nRestartSec=20\nKillMode=process\n";
+  const fixture = await systemdFixture(
+    (unit) => (location === "base" ? `${unit}\n${metadata}` : unit),
+    location === "drop-in" ? metadata : undefined,
+  );
+  const result = await auditGatewayServiceConfig(fixture);
+  expect(result.issues).toEqual([]);
+  expect(result.definitionDrift).toHaveLength(4);
+  for (const fact of result.definitionDrift ?? []) {
+    expect(fact).toMatchObject({
+      kind: "unknown-edit",
+      message: expect.stringContaining("not changed"),
+    });
+  }
+});
+
 it.each([
   { seconds: undefined, kind: "outdated" },
   { seconds: 20, kind: "outdated" },

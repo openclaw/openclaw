@@ -50,6 +50,7 @@ function mockDecoder(decode = async () => {}) {
   );
 }
 function interceptDownload() {
+  vi.useFakeTimers();
   const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
   onTestFinished(() => click.mockRestore());
   return click;
@@ -108,6 +109,11 @@ beforeEach(() => {
 afterEach(async () => {
   container.remove();
   await Promise.resolve();
+  if (vi.isFakeTimers()) {
+    // Finish delayed download revocation while this test still owns the URL stub.
+    await vi.runOnlyPendingTimersAsync();
+    vi.useRealTimers();
+  }
   restoreDialogPolyfill();
   vi.unstubAllGlobals();
 });
@@ -137,6 +143,86 @@ it("renders video playback, footer actions and live labels", async () => {
   expect(video.getAttribute("aria-label")).toBe("Renamed video");
   expect(modal.querySelector("openclaw-modal-dialog")?.label).toBe("Video preview: Renamed video");
 });
+
+it.each([false, true])(
+  "keeps video usable while its original link loads (gallery: %s)",
+  async (gallery) => {
+    const original = createDeferred<Blob>();
+    fetchImage.mockResolvedValue({ ok: true, blob: () => original.promise });
+    const { modal } = await renderLightbox({
+      mediaKind: "video",
+      src: "https://example.com/demo.mp4",
+      originalSrc: "data:image/png;base64,cG5n",
+      gallery: gallery ? { index: 0, items: [async () => null, async () => null] } : undefined,
+    });
+    const video = modal.querySelector("video")!;
+    const pendingLink = modal.querySelector<HTMLAnchorElement>(".open-original");
+    if (gallery) {
+      expect(pendingLink?.getAttribute("aria-disabled")).toBe("true");
+      expect(pendingLink?.hasAttribute("href")).toBe(false);
+    } else {
+      expect(pendingLink).toBeNull();
+    }
+    modal.imageTitle = "Renamed while loading";
+    await modal.updateComplete;
+    expect(modal.querySelector("video")).toBe(video);
+    expect(video.getAttribute("aria-label")).toBe(
+      gallery ? "Generated lobster" : "Renamed while loading",
+    );
+    expect(button(modal, ".close").isConnected).toBe(true);
+    expect(fetchImage).toHaveBeenCalledOnce();
+
+    original.resolve(new Blob(["png"], { type: "image/png" }));
+    await waitForSolid(() => {
+      const link = modal.querySelector<HTMLAnchorElement>(".open-original");
+      expect(link?.getAttribute("href")).toBe("blob:lightbox-original");
+      expect(link?.getAttribute("aria-disabled")).toBe("false");
+    });
+    modal.remove();
+    await Promise.resolve();
+    expect(revokeObjectUrl).toHaveBeenCalledExactlyOnceWith("blob:lightbox-original");
+  },
+);
+
+it.each(["failed", "replaced", "closed"] as const)(
+  "retires original-link work without hiding video: %s",
+  async (outcome) => {
+    const original = createDeferred<Blob>();
+    fetchImage.mockResolvedValue({ ok: true, blob: () => original.promise });
+    const { modal } = await renderLightbox({
+      mediaKind: "video",
+      src: "https://example.com/demo.mp4",
+      originalSrc: "data:image/png;base64,cG5n",
+      gallery: { index: 0, items: [async () => null, async () => null] },
+    });
+    expect(modal.querySelector(".open-original")?.getAttribute("aria-disabled")).toBe("true");
+    const replacement = "https://example.com/replacement.mp4";
+    if (outcome === "closed") {
+      modal.remove();
+      await Promise.resolve();
+    } else if (outcome === "replaced") {
+      modal.originalSrc = replacement;
+      await modal.updateComplete;
+    }
+    if (outcome === "failed") {
+      original.reject(new Error("Original unavailable"));
+      await waitForSolid(() => expect(modal.querySelector(".open-original")).toBeNull());
+      expect(modal.querySelector("video")?.isConnected).toBe(true);
+      expect(button(modal, ".close").isConnected).toBe(true);
+      modal.originalSrc = replacement;
+    } else {
+      original.resolve(new Blob(["png"], { type: "image/png" }));
+      await original.promise;
+    }
+    if (outcome !== "closed") {
+      await waitForSolid(() =>
+        expect(modal.querySelector<HTMLAnchorElement>(".open-original")?.href).toBe(replacement),
+      );
+    }
+    await modal.updateComplete;
+    expect(createObjectUrl).not.toHaveBeenCalled();
+  },
+);
 
 it.each([false, true])(
   "preserves preview/zoom during display upgrade (retry: %s)",
@@ -355,10 +441,10 @@ it.each([
     ok: true,
     blob: async () => new Blob(["image"], { type }),
   });
-  const click = interceptDownload();
   const { modal } = await renderLightbox({ src });
   expect(fetchImage).not.toHaveBeenCalled();
   expect(modal.querySelector(".open-original")).toBeNull();
+  const click = interceptDownload();
   button(modal, ".download-image").click();
   await waitForSolid(() =>
     expect(modal.querySelector(".download-image")?.hasAttribute("disabled")).toBe(false),
@@ -377,7 +463,6 @@ it.each(["url", "blob", "gallery-url", "gallery-blob"] as const)(
     const readOriginalBlob = vi.fn(() =>
       blob ? original.promise : Promise.resolve(new Blob(["first"], { type: "image/png" })),
     );
-    const click = interceptDownload();
     const first = "https://example.com/first.png",
       next = "https://example.com/next.png";
     const { modal } = await renderLightbox({
@@ -400,6 +485,7 @@ it.each(["url", "blob", "gallery-url", "gallery-blob"] as const)(
       expect(fetchImage).not.toHaveBeenCalled();
     }
     const download = button(modal, ".download-image");
+    const click = interceptDownload();
     download.click();
     if (blob) {
       flush();

@@ -34,11 +34,8 @@ export {
 } from "./src/auth-store.js";
 export {
   DEFAULT_WEB_MEDIA_BYTES,
-  HEARTBEAT_PROMPT,
-  HEARTBEAT_TOKEN,
   monitorWebChannel,
   SILENT_REPLY_TOKEN,
-  stripHeartbeatToken,
   type WebChannelStatus,
   type WebMonitorTuning,
 } from "./src/auto-reply.js";

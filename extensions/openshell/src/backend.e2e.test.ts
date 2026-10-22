@@ -155,6 +155,11 @@ const writeFile = (root: string, file: string, data: string) =>
   fs.writeFile(path.join(root, file), data, "utf8");
 const expectFile = (root: string, file: string, data: string) =>
   expect(readFile(root, file)).resolves.toBe(data);
+const exec = (
+  backend: SandboxBackendHandle,
+  command: string,
+  options: Omit<Parameters<typeof runBackendExec>[0], "backend" | "command"> = {},
+) => runBackendExec({ backend, command, timeoutMs: 60_000, ...options });
 async function expectExec(
   backend: SandboxBackendHandle,
   command: string,
@@ -452,11 +457,11 @@ it
         );
       await writePolicy(denyPolicyPath, "/usr/bin/false");
       await writePolicy(allowPolicyPath, "/usr/bin/curl");
-      const execResult = await runBackendExec({
+      const execResult = await exec(
         backend,
-        command: "pwd && cat /opt/openshell-e2e-marker.txt && cat seed.txt",
-        timeoutMs: 2 * 60_000,
-      });
+        "pwd && cat /opt/openshell-e2e-marker.txt && cat seed.txt",
+        { timeoutMs: 2 * 60_000 },
+      );
 
       expect(execResult.code).toBe(0);
       const stdout = execResult.stdout.trim();
@@ -495,21 +500,16 @@ it
       expect(verifyResult.code).toBe(0);
       expect(verifyResult.stdout.replace(/\r?\n$/, "")).toContain("Host ");
 
-      const blockedGetResult = await runBackendExec({
-        backend,
-        command: `curl --fail --silent --show-error --max-time 15 "http://host.openshell.internal:${hostPolicyServer.port}/policy-test"`,
-        allowFailure: true,
-        timeoutMs: 60_000,
-      });
+      const policyRequest = `curl --fail --silent --show-error --max-time 15 "http://host.openshell.internal:${hostPolicyServer.port}/policy-test"`;
+      const blockedGetResult = await exec(backend, policyRequest, { allowFailure: true });
       expect(blockedGetResult.code).not.toBe(0);
       expect(`${blockedGetResult.stdout}\n${blockedGetResult.stderr}`).toMatch(/403|deny/i);
 
-      const mirrorExecResult = await runBackendExec({
-        backend: mirrorBackend,
-        command:
-          "pwd && cat mirror-seed.txt && test ! -e .git && test ! -e hooks && test ! -e git-hooks",
-        timeoutMs: 2 * 60_000,
-      });
+      const mirrorExecResult = await exec(
+        mirrorBackend,
+        "pwd && cat mirror-seed.txt && test ! -e .git && test ! -e hooks && test ! -e git-hooks",
+        { timeoutMs: 2 * 60_000 },
+      );
       expect(mirrorExecResult.stdout).toContain("/sandbox/project");
       expect(mirrorExecResult.stdout).toContain("mirror-from-local");
       expect((await fs.lstat(mirrorFifoPath)).isFIFO()).toBe(true);
@@ -523,22 +523,19 @@ it
         );
         await expectFile(overlapAgentWorkspaceDir, "agent-only.txt", "agent-preserved\n");
       }
-      for (const relativePath of hostLinks) {
-        await expect(fs.readlink(path.join(mirrorWorkspaceDir, relativePath))).resolves.toBe(
-          hostLinkTarget,
-        );
-      }
-      await runBackendExec({
-        backend: mirrorBackend,
-        command:
-          "test ! -e host-link && test ! -L host-link && test ! -e links/nested/link && test ! -L links/nested/link && rm -rf links/removed links/conflict && printf remote-file > links/conflict && printf remote-write > links/hardlinked.txt && ln -s /etc/passwd links/remote-link",
-        timeoutMs: 60_000,
-      });
-      for (const relativePath of hostLinks) {
-        await expect(fs.readlink(path.join(mirrorWorkspaceDir, relativePath))).resolves.toBe(
-          hostLinkTarget,
-        );
-      }
+      const expectHostLinks = async () => {
+        for (const relativePath of hostLinks) {
+          await expect(fs.readlink(path.join(mirrorWorkspaceDir, relativePath))).resolves.toBe(
+            hostLinkTarget,
+          );
+        }
+      };
+      await expectHostLinks();
+      await exec(
+        mirrorBackend,
+        "test ! -e host-link && test ! -L host-link && test ! -e links/nested/link && test ! -L links/nested/link && rm -rf links/removed links/conflict && printf remote-file > links/conflict && printf remote-write > links/hardlinked.txt && ln -s /etc/passwd links/remote-link",
+      );
+      await expectHostLinks();
       await expect(fs.readFile(hostLinkTarget, "utf8")).resolves.toBe("host-only-link-target\n");
       await expectFile(mirrorWorkspaceDir, "links/hardlinked.txt", "remote-write");
       await expect(
@@ -559,11 +556,7 @@ it
       await expectFile(mirrorWorkspaceDir, "nested/mirror-note.txt", "mirror-write\n");
       await expectExec(mirrorBackend, "cat nested/mirror-note.txt", "mirror-write\n");
 
-      const allowedGetResult = await runBackendExec({
-        backend: allowBackend,
-        command: `curl --fail --silent --show-error --max-time 15 "http://host.openshell.internal:${hostPolicyServer.port}/policy-test"`,
-        timeoutMs: 60_000,
-      });
+      const allowedGetResult = await exec(allowBackend, policyRequest);
       expect(allowedGetResult.code).toBe(0);
       expect(allowedGetResult.stdout).toContain('"message":"hello-from-host"');
 
@@ -604,9 +597,7 @@ it
         [mirrorBackend, mirrorBridge],
         [backend, bridge],
       ] as const) {
-        await expect(
-          runBackendExec({ backend: candidate, command: "exit 23", timeoutMs: 60_000 }),
-        ).rejects.toThrow("exit: 23");
+        await expect(exec(candidate, "exit 23")).rejects.toThrow("exit: 23");
         await candidateBridge.writeFile({ filePath: "after-failed-exec.txt", data: "recovered" });
         await expectExec(candidate, "cat after-failed-exec.txt", "recovered");
         await expect(prepareExec(candidate, "true", { "INVALID-NAME": "fixture" })).rejects.toThrow(

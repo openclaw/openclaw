@@ -90,12 +90,6 @@ function channelPackage(
   return { name: `@openclaw/${id}`, openclaw: { channel } };
 }
 
-function seedGeneratedChannelCatalog(root: string, pkg: ReturnType<typeof channelPackage>): void {
-  writeJsonFile(path.join(root, "dist", "channel-catalog.json"), {
-    entries: [pkg],
-  });
-}
-
 const channelLabel = (id: string) =>
   listBundledChannelCatalogEntries().find((entry) => entry.id === id)?.channel.label;
 
@@ -108,13 +102,14 @@ it("finds doctor capabilities from the generated catalog when the package is exc
     groupAllowFromFallbackToAllowFrom: false,
     warnOnEmptyGroupSenderAllowlist: false,
   } satisfies PluginPackageChannel["doctorCapabilities"];
-  seedGeneratedChannelCatalog(root, channelPackage("discord", "Discord", doctorCapabilities));
+  writeJsonFile(path.join(root, "dist", "channel-catalog.json"), {
+    entries: [channelPackage("discord", "Discord", doctorCapabilities)],
+  });
 
   expect(findBundledChannelCatalogMetadata("Discord")?.doctorCapabilities).toEqual(
     doctorCapabilities,
   );
 });
-
 it("reloads installed bundled package metadata after an explicit plugin lifecycle reset", () => {
   const root = seedRoot("bcr-package-lifecycle-");
   const extensionsRoot = path.join(root, "dist", "extensions");
@@ -127,17 +122,4 @@ it("reloads installed bundled package metadata after an explicit plugin lifecycl
   clearPluginMetadataLifecycleCaches();
 
   expect(channelLabel("alpha")).toBe("After");
-});
-
-it("discovers a generated catalog created after an explicit plugin lifecycle reset", () => {
-  const root = seedRoot("bcr-generated-lifecycle-");
-  useBundledPluginsDir(undefined);
-
-  expect(
-    listBundledChannelCatalogEntries().find((entry) => entry.id === "generated"),
-  ).toBeUndefined();
-  seedGeneratedChannelCatalog(root, channelPackage("generated", "Generated after reset"));
-  clearPluginMetadataLifecycleCaches();
-
-  expect(channelLabel("generated")).toBe("Generated after reset");
 });

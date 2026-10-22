@@ -104,6 +104,53 @@ function heapBytesUnder(
   );
 }
 
+it("attributes broadcast allocations through deep stacks without double counting", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "gateway-broadcast-profile-"));
+  onTestFinished(() => rm(directory, { recursive: true, force: true }));
+  const frame = (
+    functionName: string,
+    file: string,
+    selfSize: number,
+    children: HeapProfiler.SamplingHeapProfileNode[] = [],
+  ): HeapProfiler.SamplingHeapProfileNode => ({
+    callFrame: { functionName, scriptId: "1", url: file, lineNumber: 0, columnNumber: 0 },
+    selfSize,
+    children,
+  });
+  let projection = frame("", "session-event-projection.ts", 20, [
+    frame("prepareSessionRowRecipient", "session-row-presentation.ts", 30, [
+      frame("prepareSessionSharing", "session-sharing-read.ts", 40),
+    ]),
+    frame("present", "session-row-presentation.ts", 50),
+    frame("serializeSession", "session-event-projection.ts", 60, [frame("", "", 70)]),
+  ]);
+  for (let depth = 0; depth < 9; depth++) {
+    projection = frame("wrapper", "", 0, [projection]);
+  }
+  const profile: HeapProfiler.SamplingHeapProfile = {
+    head: frame("root", "", 0, [
+      frame("unrelated", "", 1000),
+      frame("broadcastInternal", "server-broadcast.ts", 100, [projection]),
+    ]),
+  };
+  const file = path.join(directory, "allocation.heapprofile");
+  await writeFile(file, JSON.stringify(profile));
+  const result = readGatewayHeapProfile(file);
+  expect(result.sampledAllocatedBytes).toBe(1370);
+  expect(result.broadcastAllocation).toMatchObject({
+    sourceProjectionObserved: true,
+    sampledBytes: 370,
+    projectionSelfSampledBytes: 80,
+    families: {
+      otherBroadcast: { sampledBytes: 100 },
+      eventProjection: { sampledBytes: 20 },
+      recipientSetup: { sampledBytes: 70 },
+      rowPresentation: { sampledBytes: 50 },
+      encoding: { sampledBytes: 130 },
+    },
+  });
+});
+
 it("measures fixed CPU work including a retired Worker without starting the inspector", async () => {
   const { child, stderr } = spawnFixture([fixturePath("gateway-bench-cpu-usage")]);
   await waitMessage(child, "ready");

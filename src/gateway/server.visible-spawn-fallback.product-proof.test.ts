@@ -25,7 +25,6 @@ import {
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as backoff from "../infra/backoff.js";
-import { requestHeartbeatAndWait } from "../infra/heartbeat-wake.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -319,17 +318,8 @@ async function withProofGateway(
         },
       });
     },
-    // Cleanup wakes may call the provider too; release response holds before joining them.
+    // Release held provider responses before Gateway shutdown joins accepted work.
     () => provider?.releaseHeldResponses(),
-    // Flush older delayed notices before this Gateway closes.
-    () =>
-      gateway &&
-      requestHeartbeatAndWait({
-        source: "manual",
-        intent: "immediate",
-        reason: "wake",
-        coalesceMs: 0,
-      }),
     () => gateway && disconnectGatewayClient(gateway.client),
     () => gateway?.server.close({ reason: `${prefix} complete` }),
     () => provider?.stop(),

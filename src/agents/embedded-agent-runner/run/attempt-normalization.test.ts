@@ -307,6 +307,8 @@ function adopt(state: ReturnType<typeof promptState>, sessionFileUsed?: string) 
 }
 
 describe("applyEmbeddedAttemptSessionIdentity", () => {
+  const bindingChanged = "successor target changed the active session binding";
+  const inconsistent = /successor (identity is inconsistent|files are unsupported)/u;
   it.each(["marker", "key"] as const)(
     "waits for a %s lookup and preserves caller authority and the active binding",
     async (kind) => {
@@ -428,37 +430,21 @@ describe("applyEmbeddedAttemptSessionIdentity", () => {
     });
   });
 
-  it("rejects a legacy marker successor already mapped to another key", async () => {
-    sessionReaderMocks.readSessionEntrySummariesInWorker.mockResolvedValue([
-      { sessionKey: "agent:main:main", entry: { sessionId: "session-before", updatedAt: 1 } },
-      {
-        sessionKey: "agent:main:other",
-        entry: { sessionId: "session-after", updatedAt: 2 },
-      },
-    ]);
-    const state = promptState();
-
-    await expect(adopt(state, "sqlite:main:session-after:/tmp/sessions.json")).rejects.toThrow(
-      "successor target changed the active session binding",
-    );
-  });
-
-  it("rejects a legacy SQLite marker outside the active store", async () => {
-    const state = promptState();
-
-    await expect(
-      adopt(state, "sqlite:main:session-after:/tmp/other-sessions.json"),
-    ).rejects.toThrow("successor target changed the active session binding");
-  });
-
-  it.each(["sqlite:other:session-after:/tmp/sessions.json", "agent:other:main"])(
-    "rejects a cross-agent legacy successor identity: %s",
-    async (sessionFileUsed) => {
-      const state = promptState();
-
-      await expect(adopt(state, sessionFileUsed)).rejects.toThrow(
-        /successor (identity is inconsistent|files are unsupported)/u,
-      );
+  it.each([
+    ["sqlite:main:session-after:/tmp/sessions.json", true, bindingChanged],
+    ["sqlite:main:session-after:/tmp/other-sessions.json", false, bindingChanged],
+    ["sqlite:other:session-after:/tmp/sessions.json", false, inconsistent],
+    ["agent:other:main", false, inconsistent],
+  ] as const)(
+    "rejects an incompatible successor %s (mapped=%s)",
+    async (sessionFileUsed, mapped, error) => {
+      if (mapped) {
+        sessionReaderMocks.readSessionEntrySummariesInWorker.mockResolvedValue([
+          { sessionKey: "agent:main:main", entry: { sessionId: "session-before", updatedAt: 1 } },
+          { sessionKey: "agent:main:other", entry: { sessionId: "session-after", updatedAt: 2 } },
+        ]);
+      }
+      await expect(adopt(promptState(), sessionFileUsed)).rejects.toThrow(error);
     },
   );
 

@@ -57,6 +57,13 @@ async function openSlowViewers() {
 }
 
 describe("TerminalSessionManager", () => {
+  it("denies Gateway-local terminals before spawning a shell", async () => {
+    const spawn = vi.fn(async () => makeFakePty());
+    const { manager } = fixture({ disableGatewayLocalTerminals: true, spawn });
+    await expect(start(manager)).resolves.toMatchObject({ ok: false, code: "disabled" });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
   it.each(["resize", "relay"] as const)(
     "finalizes and reports a %s backend error",
     async (source) => {

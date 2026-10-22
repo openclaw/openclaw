@@ -1,23 +1,28 @@
-import { setImmediate as nextTurn } from "node:timers/promises";
+import { createServer, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
+import { setImmediate as nextTurn, setTimeout as sleep } from "node:timers/promises";
 import { context, propagation, ROOT_CONTEXT, trace } from "@opentelemetry/api";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
 import { W3CTraceContextPropagator } from "@opentelemetry/core";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import {
+  type DiagnosticEventPayload,
+  emitTrustedDiagnosticEventWithPrivateData,
+  onInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
+import { expect, test, vi } from "vitest";
 import { startLocalOtlpReceiver } from "../../../test/e2e/qa-lab/runtime/otel-test-support.js";
 import { installRealOtelSdkTestHarness } from "./service.real-sdk.test-support.js";
 import {
-  clearOtelGlobals,
-  snapshotOtelEnv,
   emitRealSdkSignals,
   getReportedExporterHealth,
+  type ReportedExporterHealth,
   startOtelService,
   TRACE_ID,
   SPAN_ID,
 } from "./service.test-helpers.js";
 
-installRealOtelSdkTestHarness();
-
-const ENV_KEYS = ["OTEL_PROPAGATORS"] as const;
+installRealOtelSdkTestHarness({ owned: true, env: ["OTEL_PROPAGATORS"] });
 const JAEGER_DEPRECATION_WARNING =
   'The Jaeger propagator is deprecated and will be removed in a future release. Use the W3C TraceContext propagator ("tracecontext") instead.';
 const PROPAGATED_SPAN_CONTEXT = {
@@ -32,11 +37,7 @@ function roundtrip(value: string, incoming: Record<string, string>, outgoing = {
 }
 const PROPAGATION_ROUNDTRIP_CASES = [
   roundtrip("B3", { b3: `${TRACE_ID}-${SPAN_ID}-1` }),
-  roundtrip("B3MULTI", {
-    "x-b3-traceid": TRACE_ID,
-    "x-b3-spanid": SPAN_ID,
-    "x-b3-sampled": "1",
-  }),
+  roundtrip("B3MULTI", { "x-b3-traceid": TRACE_ID, "x-b3-spanid": SPAN_ID, "x-b3-sampled": "1" }),
   roundtrip(
     "JaEgEr",
     { "uber-trace-id": `${TRACE_ID}:${SPAN_ID}:0:1` },
@@ -45,17 +46,6 @@ const PROPAGATION_ROUNDTRIP_CASES = [
     },
   ),
 ] as const;
-
-let restoreEnv: () => void;
-beforeEach(() => {
-  restoreEnv = snapshotOtelEnv(ENV_KEYS);
-  clearOtelGlobals();
-  for (const key of ENV_KEYS) {
-    delete process.env[key];
-  }
-  process.env.OPENCLAW_OTEL_PRELOADED = "0";
-});
-afterEach(() => restoreEnv());
 
 test("disables every OpenClaw route while preserving W3C propagation", async () => {
   const receiver = startLocalOtlpReceiver();
@@ -76,10 +66,7 @@ test("disables every OpenClaw route while preserving W3C propagation", async () 
 
   try {
     await emitRealSdkSignals();
-    const incoming = {
-      baggage: "tenant=example",
-      ...W3C_CARRIER,
-    };
+    const incoming = { baggage: "tenant=example", ...W3C_CARRIER };
     const extracted = propagation.extract(ROOT_CONTEXT, incoming);
     expect(trace.getSpanContext(extracted)).toMatchObject({
       traceId: TRACE_ID,
@@ -132,10 +119,7 @@ test("preserves externally owned context and propagation globals while disabled"
 });
 
 test.each([
-  {
-    value: "NoNe",
-    fields: [],
-  },
+  { value: "NoNe", fields: [] },
   {
     value: "unavailable",
     fields: [],
@@ -226,3 +210,179 @@ test("cleans disabled ownership before a fresh enabled private-provider generati
     await receiver.close();
   }
 }, 30_000);
+
+const IMMEDIATE_RETRY_AFTER = "Thu, 01 Jan 1970 00:00:00 GMT";
+
+type ExporterEvent = Extract<DiagnosticEventPayload, { type: "telemetry.exporter" }>;
+
+async function startExporterHealthReceiver(
+  handleRequest: (response: ServerResponse, requestCount: number) => void,
+) {
+  let requestCount = 0;
+  const server = createServer((request, response) => {
+    requestCount += 1;
+    request.resume();
+    handleRequest(response, requestCount);
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const { port } = server.address() as AddressInfo;
+  return {
+    endpoint: `http://127.0.0.1:${port}`,
+    get requestCount() {
+      return requestCount;
+    },
+    async close() {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+        server.closeAllConnections();
+      });
+    },
+  };
+}
+
+function captureExporterEvents() {
+  const events: ExporterEvent[] = [];
+  const unsubscribe = onInternalDiagnosticEvent((event, metadata) => {
+    if (metadata.trusted && event.type === "telemetry.exporter") {
+      events.push(event);
+    }
+  });
+  return { events, unsubscribe };
+}
+
+const emit = (event: Parameters<typeof emitTrustedDiagnosticEventWithPrivateData>[0]) =>
+  emitTrustedDiagnosticEventWithPrivateData(event, {});
+
+async function waitForExporterStatus(
+  events: Array<Pick<ReportedExporterHealth, "status">>,
+  status: ReportedExporterHealth["status"],
+) {
+  const deadline = Date.now() + 4_000;
+  while (Date.now() < deadline) {
+    if (events.some((event) => event.status === status)) {
+      return;
+    }
+    await sleep(20);
+  }
+  throw new Error(`timed out waiting for exporter status ${status}`);
+}
+
+function emitExporterHealthSpan(name: string) {
+  // The global trace API cannot reach the owned private provider.
+  emit({
+    type: "model.call.completed",
+    runId: `run-${name}`,
+    callId: `call-${name}`,
+    provider: "openai",
+    model: "gpt-5.4",
+    durationMs: 10,
+    usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
+  });
+}
+
+async function withExporterHealth(
+  handleRequest: Parameters<typeof startExporterHealthReceiver>[0],
+  run: (fixture: {
+    receiver: Awaited<ReturnType<typeof startExporterHealthReceiver>>;
+    events: ExporterEvent[];
+    service: Awaited<ReturnType<typeof startOtelService>>["service"];
+    ctx: Awaited<ReturnType<typeof startOtelService>>["ctx"];
+  }) => Promise<void>,
+  flushIntervalMs?: number,
+) {
+  const receiver = await startExporterHealthReceiver(handleRequest);
+  const capture = captureExporterEvents();
+  process.env.OTEL_EXPORTER_OTLP_TRACES_TIMEOUT = "1000";
+  const started = await startOtelService({
+    endpoint: receiver.endpoint,
+    traces: true,
+    flushIntervalMs,
+  });
+  try {
+    await run({ receiver, events: capture.events, ...started });
+  } finally {
+    capture.unsubscribe();
+    await started.service.stop?.(started.ctx);
+    await receiver.close();
+  }
+}
+
+test("retries a real OTLP 503 then succeeds without an intermediate failure fact", async () => {
+  await withExporterHealth(
+    (response, requestCount) => {
+      response.writeHead(requestCount === 1 ? 503 : 200, {
+        ...(requestCount === 1 ? { "retry-after": IMMEDIATE_RETRY_AFTER } : {}),
+        "content-type": "application/x-protobuf",
+      });
+      response.end();
+    },
+    async ({ receiver, events, service, ctx }) => {
+      emitExporterHealthSpan("retry-then-success");
+      await waitForDiagnosticEventsDrained();
+      await service.stop?.(ctx);
+      await waitForDiagnosticEventsDrained();
+      expect(receiver.requestCount).toBe(2);
+      expect(events.some((event) => event.status === "failure")).toBe(false);
+      expect(
+        getReportedExporterHealth(ctx).some(
+          (event) => event.status === "failure" || event.status === "recovered",
+        ),
+      ).toBe(false);
+    },
+  );
+}, 15_000);
+
+test("records one final failure for a non-retryable real OTLP HTTP 400 response", async () => {
+  await withExporterHealth(
+    (response) => {
+      response.writeHead(400);
+      response.end();
+    },
+    async ({ receiver, events, service, ctx }) => {
+      emitExporterHealthSpan("http-400");
+      await waitForDiagnosticEventsDrained();
+      await Promise.resolve(service.stop?.(ctx)).catch(() => {});
+      await waitForDiagnosticEventsDrained();
+      expect(receiver.requestCount).toBe(1);
+      expect(
+        events.filter((event) => event.status === "failure" && event.reason === "emit_failed"),
+      ).toHaveLength(1);
+      expect(
+        getReportedExporterHealth(ctx).filter(
+          (event) => event.status === "failure" && event.reason === "export_failed",
+        ),
+      ).toHaveLength(1);
+    },
+  );
+}, 15_000);
+
+test("records recovery after a later real OTLP export succeeds", async () => {
+  let failExports = true;
+  await withExporterHealth(
+    (response) => {
+      response.writeHead(failExports ? 503 : 200, {
+        "content-type": "application/x-protobuf",
+        ...(failExports ? { "retry-after": IMMEDIATE_RETRY_AFTER } : {}),
+      });
+      response.end();
+    },
+    async ({ events, ctx }) => {
+      const health = getReportedExporterHealth(ctx);
+      emitExporterHealthSpan("failure-before-recovery");
+      await waitForDiagnosticEventsDrained();
+      await waitForExporterStatus(health, "failure");
+      failExports = false;
+      emitExporterHealthSpan("successful-recovery");
+      await waitForDiagnosticEventsDrained();
+      await waitForExporterStatus(health, "recovered");
+      expect(
+        health.filter((event) => event.reason === "export_failed").map((event) => event.status),
+      ).toEqual(["failure", "recovered"]);
+      expect(events.map((event) => event.status)).not.toContain("recovered");
+    },
+    1000,
+  );
+}, 15_000);

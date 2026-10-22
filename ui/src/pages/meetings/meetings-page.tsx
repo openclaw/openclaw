@@ -5,7 +5,17 @@ import type {
   TranscriptsGetResult,
   TranscriptsListResult,
 } from "@openclaw/gateway-protocol";
-import { createEffect, createSignal, onCleanup, onSettled } from "solid-js";
+import { createLoadingBoundary } from "@solidjs/signals";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  createStore,
+  isPending,
+  latest,
+  onCleanup,
+  onSettled,
+} from "solid-js";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { hasOperatorReadAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -32,47 +42,51 @@ type ArchiveReadResults = {
   "transcripts.export": TranscriptsExportResult;
 };
 type OperationState = { kind: "idle" | "loading" | "done" | "error"; message?: string };
-// Requests stay synchronous; the revision only publishes their presentation state.
+// Requests stay synchronous; Solid observes the already-admitted completion.
 function createArchiveRead(run: (signal: AbortSignal, search?: string) => Promise<void>) {
-  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-  let error: unknown = null;
-  const publish = () => setRevision((value) => value + 1);
-  const request = createPageRequest(publish, {
+  const [receipt, setReceipt] = createSignal<Promise<void> | null>(null, { ownedWrite: true });
+  const read = createMemo(() => receipt());
+  // Attribute consumers need a local fallback too, without suspending the page chrome.
+  const loading = createLoadingBoundary(
+    () => isPending(read),
+    () => true,
+  );
+  const request = createPageRequest(() => {}, {
     task: (search: string | undefined, { signal }) => run(signal, search),
     onComplete: () => {},
     onError: (cause) => {
-      error = cause;
+      throw cause;
     },
   });
   const cancel = () => {
-    error = null;
     request.reset();
+    setReceipt(null);
   };
-  onCleanup(cancel);
+  onCleanup(request.cancel);
   return {
     get pending() {
-      revision();
       return request.pending;
     },
-    get error() {
-      revision();
-      return error;
-    },
+    read,
+    loading,
     abort: cancel,
     run(search?: string) {
-      error = null;
-      return request.run(search);
+      const completion = request.run(search);
+      // Inactive tabs may not consume their read until later; the memo owns visible errors.
+      void completion.catch(() => {});
+      void setReceipt(completion);
+      return completion;
     },
   };
 }
 
 export function MeetingsPage(props: { routeSearch?: string }) {
-  const routeSearch = () => props.routeSearch ?? "";
+  const routeSearch = () => latest(() => props.routeSearch ?? "");
   const context = useApplication();
   const projection = projectGateway(context.gateway);
   const gateway = createGatewayConnectionLifecycle(context.gateway.snapshot);
   let active = true;
-  const [drafts, setDrafts] = createSignal<Record<string, string>>({}, { ownedWrite: true });
+  const [drafts, setDrafts] = createStore<Record<string, string>>({});
   const [list, setList] = createSignal<TranscriptsListResult | null>(null, { ownedWrite: true });
   const [listDenial, setListDenial] = createSignal<unknown>(null, { ownedWrite: true });
   const [readerDenial, setReaderDenial] = createSignal<unknown>(null, { ownedWrite: true });
@@ -89,9 +103,7 @@ export function MeetingsPage(props: { routeSearch?: string }) {
     { ownedWrite: true },
   );
   let summaryAbort: AbortController | null = null;
-  const [readerPages, setReaderPages] = createSignal<TranscriptsGetResult[]>([], {
-    ownedWrite: true,
-  });
+  const [readerPages, setReaderPages] = createStore<TranscriptsGetResult[]>([]);
   const [exportState, setExportState] = createSignal<OperationState>(
     { kind: "idle" },
     { ownedWrite: true },
@@ -182,11 +194,14 @@ export function MeetingsPage(props: { routeSearch?: string }) {
       accept: (result, current) => {
         setReaderDenial(null);
         // A background read replaces the current page; only forward paging appends.
-        setReaderPages((pages) =>
-          cursor
-            ? [...(cursor === loadedReaderCursor ? pages.slice(0, -1) : pages), result]
-            : [result],
-        );
+        setReaderPages((pages) => {
+          if (!cursor) {
+            pages.length = 0;
+          } else if (cursor === loadedReaderCursor) {
+            pages.pop();
+          }
+          pages.push(result);
+        });
         loadedReaderCursor = cursor;
         onSettled(focusCurrentTarget);
         if (
@@ -285,7 +300,9 @@ export function MeetingsPage(props: { routeSearch?: string }) {
         setReaderDenial(error);
         setList(null);
         setSummary(null);
-        setReaderPages([]);
+        setReaderPages((pages) => {
+          pages.length = 0;
+        });
         cancelExport();
         onSettled(focusCurrentTarget);
       }
@@ -310,7 +327,9 @@ export function MeetingsPage(props: { routeSearch?: string }) {
   function resetReader() {
     readerCursor = null;
     loadedReaderCursor = null;
-    setReaderPages([]);
+    setReaderPages((pages) => {
+      pages.length = 0;
+    });
   }
 
   function cancelExport() {
@@ -380,10 +399,11 @@ export function MeetingsPage(props: { routeSearch?: string }) {
 
   function navigate(patch: Record<string, string | null>) {
     // Clear/submit must also synchronize when the URL value was already equal.
-    setDrafts((current) => ({
-      ...current,
-      ...Object.fromEntries(Object.entries(patch).map(([key, value]) => [key, value ?? ""])),
-    }));
+    setDrafts((draft) => {
+      for (const [key, value] of Object.entries(patch)) {
+        draft[key] = value ?? "";
+      }
+    });
     context.navigate("meetings", {
       search: transcriptRouteSearch(routeSearch(), patch),
     });
@@ -420,7 +440,7 @@ export function MeetingsPage(props: { routeSearch?: string }) {
     if (!selection().selector) {
       return;
     }
-    const session = summary()?.session ?? readerPages().at(-1)?.session;
+    const session = summary()?.session ?? readerPages.at(-1)?.session;
     const storedSummary = summary()?.summary;
     const interimSummary =
       session?.stoppedAt &&
@@ -514,18 +534,16 @@ export function MeetingsPage(props: { routeSearch?: string }) {
         setList(null);
       }
       if (previousSearch !== search) {
-        setDrafts((current) => {
-          const nextDrafts = { ...current };
+        setDrafts((draft) => {
           for (const key of [...TRANSCRIPT_FILTER_KEYS, "find"]) {
             if (
               previous.get(key) !== next.get(key) ||
               previousSearch === undefined ||
               (key === "find" && selectorChanged)
             ) {
-              nextDrafts[key] = next.get(key) ?? "";
+              draft[key] = next.get(key) ?? "";
             }
           }
-          return nextDrafts;
         });
       }
       if (selectorChanged || queryChanged) {
@@ -547,16 +565,20 @@ export function MeetingsPage(props: { routeSearch?: string }) {
       onSettled(focusCurrentTarget);
     },
   );
-  const timer = globalThis.setInterval(() => refreshLive(), 3_000);
-  const activate = () => refreshLive(true);
-  onCleanup(listen(document, "visibilitychange", activate));
-  onCleanup(listen(globalThis, "focus", activate));
-  onCleanup(() => {
-    active = false;
-    gateway.dispose();
-    cancelSummaryGeneration();
-    cancelExport();
-    globalThis.clearInterval(timer);
+  onSettled(() => {
+    const timer = globalThis.setInterval(() => refreshLive(), 3_000);
+    const activate = () => refreshLive(true);
+    const stopVisibility = listen(document, "visibilitychange", activate);
+    const stopFocus = listen(globalThis, "focus", activate);
+    return () => {
+      stopVisibility();
+      stopFocus();
+      active = false;
+      gateway.dispose();
+      cancelSummaryGeneration();
+      cancelExport();
+      globalThis.clearInterval(timer);
+    };
   });
 
   const activeReaderTask = () => (readerTab() === "summary" ? summaryTask : readerTask);
@@ -575,18 +597,32 @@ export function MeetingsPage(props: { routeSearch?: string }) {
         basePath={context.basePath}
         now={now()}
         search={routeSearch()}
-        drafts={drafts()}
-        onDraft={(key, value) => setDrafts((current) => ({ ...current, [key]: value }))}
+        drafts={drafts}
+        onDraft={(key, value) =>
+          setDrafts((draft) => {
+            draft[key] = value;
+          })
+        }
         connected={projection.read().snapshot.phase === "connected"}
         allowed={hasOperatorReadAccess(projection.read().snapshot.hello?.auth ?? null)}
         list={requestClient() ? list() : null}
-        listLoading={!listDenial() && listTask.pending}
-        listError={listDenial() ?? listTask.error}
+        listRead={listTask.read}
+        listLoading={!listDenial() && listTask.loading()}
+        listError={listDenial()}
         reader={{
-          summary: summary(),
-          pages: readerPages(),
-          loading: activeReaderTask().pending,
-          error: readerDenial() ?? activeReaderTask().error,
+          get summary() {
+            return summary();
+          },
+          get pages() {
+            return readerPages;
+          },
+          read: () => activeReaderTask().read(),
+          get loading() {
+            return activeReaderTask().loading();
+          },
+          get error() {
+            return readerDenial();
+          },
         }}
         readerTab={readerTab()}
         summaryGeneration={summaryGeneration()}
@@ -599,7 +635,7 @@ export function MeetingsPage(props: { routeSearch?: string }) {
         }}
         onRefresh={refresh}
         onReaderRetry={() => {
-          if (!readerPages().length) {
+          if (!readerPages.length) {
             resetReader();
           }
           if (readerTab() === "summary") {

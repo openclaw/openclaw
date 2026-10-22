@@ -1,5 +1,4 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { onCleanup } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
@@ -46,13 +45,12 @@ export function createNewSessionTitle(
   let composing = false;
   let submitted: DraftTitleInput | null = null;
 
-  onCleanup(() => {
-    disposed = true;
-    sync(null);
-    submitted = null;
-  });
-
   return {
+    dispose() {
+      disposed = true;
+      sync(null);
+      submitted = null;
+    },
     synchronize: () => sync(readInput()),
     setComposing(value: boolean) {
       composing = value;

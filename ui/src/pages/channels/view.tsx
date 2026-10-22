@@ -22,7 +22,7 @@ import {
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import "../../components/modal-dialog.ts";
+import "../../components/modal-dialog.tsx";
 import { channelDocsUrl } from "./hub-meta.ts";
 import { renderChannelDetail as ChannelDetail } from "./view.detail.tsx";
 import { renderChannelPairingPrompt, renderChannelPairingQueue } from "./view.pairing.tsx";
@@ -75,7 +75,11 @@ function ChannelStatusNotices(props: { channels: ChannelsState; error: string | 
           {partialWarnings()}
         </div>
       ) : undefined}
-      {props.error ? <div class="callout danger">{props.error}</div> : undefined}
+      {props.error ? (
+        <div class="callout danger" role="alert">
+          {props.error}
+        </div>
+      ) : undefined}
     </>
   );
 }
@@ -477,6 +481,7 @@ function renderWhatsAppLinking(props: ChannelsProps) {
           renderCloseButton(props, "channels.setup.finish", true)
         ) : (
           <>
+            {renderCloseButton(props, "channels.setup.linkLater")}
             {props.channels.whatsappBusy ? (
               <WizardBusyButton statusLabel={t("channels.setup.whatsappQrLoading")} />
             ) : (
@@ -493,7 +498,6 @@ function renderWhatsAppLinking(props: ChannelsProps) {
                 ) : undefined}
               </>
             )}
-            {renderCloseButton(props, "channels.setup.linkLater")}
           </>
         )}
       </openclaw-modal-actions>

@@ -8,6 +8,7 @@ import {
 } from "@modelcontextprotocol/client";
 import { ElicitResultSchema } from "@modelcontextprotocol/core";
 import { z } from "zod";
+import { assertionSucceeds } from "../shared/assertion.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
 
@@ -194,14 +195,7 @@ export function createMcpClientElicitationHandler(params: {
         delivery: {},
         gatewayCall: params.gatewayCall,
         signal: request.signal,
-        isActive: () => {
-          try {
-            params.assertCurrent();
-            return true;
-          } catch {
-            return false;
-          }
-        },
+        isActive: () => assertionSucceeds(() => params.assertCurrent()),
       });
       params.assertCurrent();
       return result.status === "answered"

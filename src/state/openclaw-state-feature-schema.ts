@@ -9,6 +9,10 @@ type SchemaOptions = Parameters<typeof extractSqliteTableSchema>[2];
 
 // Feature-local DDL is relocated verbatim; callers retain their first-use timing.
 const featureLocalSql: Record<string, string> = {
+  local_workspace_projections: [
+    extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "local_workspace_projections"),
+    extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "local_workspace_manifest_nodes"),
+  ].join("\n"),
   user_profiles: `
 CREATE TABLE IF NOT EXISTS user_profiles (
   id TEXT NOT NULL PRIMARY KEY,
@@ -135,6 +139,7 @@ export function listOpenClawStateFeatureSchemas(): readonly OpenClawStateFeature
     return declarations;
   }
   const groups: Record<string, string[]> = {
+    local_workspace_projections: ["local_workspace_projections", "local_workspace_manifest_nodes"],
     user_profiles: ["user_profiles", "user_profile_emails", "user_profile_identities"],
     skill_library_entries: [
       "skill_library_entries",

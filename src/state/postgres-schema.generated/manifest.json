@@ -2,6 +2,17 @@
   "minimumPostgresVersion": 16,
   "fragments": [
     {
+      "id": "local_workspace_projections",
+      "tables": [
+        "local_workspace_projections",
+        "local_workspace_manifest_nodes"
+      ],
+      "indexes": [],
+      "dependencies": [],
+      "activation": "first-use",
+      "file": "fragment-local_workspace_projections.postgres.sql"
+    },
+    {
       "id": "user_profiles",
       "tables": [
         "user_profiles",
@@ -80,16 +91,6 @@
       ],
       "activation": "first-use",
       "file": "fragment-user_background_images.postgres.sql"
-    },
-    {
-      "id": "local_workspace_projections",
-      "tables": [
-        "local_workspace_projections"
-      ],
-      "indexes": [],
-      "dependencies": [],
-      "activation": "first-use",
-      "file": "fragment-local_workspace_projections.postgres.sql"
     },
     {
       "id": "update_runs",

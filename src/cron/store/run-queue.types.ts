@@ -52,6 +52,11 @@ export type CronRunQueueOperations = {
       requests: CronRunRequestContext[];
       schedulingPaused?: boolean;
       preparingAgentIds?: string[];
+      /**
+       * The draining Gateway process. Private command schedules from another process, or a
+       * drain without this identity, retire before spending an attempt.
+       */
+      hostProcessId?: string;
     };
     output: {
       launches: CronQueuedRun[];
