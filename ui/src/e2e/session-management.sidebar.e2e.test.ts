@@ -75,12 +75,14 @@ suite.define(() => {
     const page = await context.newPage();
     const children = [
       sessionRow(childOneKey, "Research sources", baseTime - 1_000, {
+        createdAt: baseTime - 104_000,
         hasActiveRun: true,
         spawnedBy: parentKey,
         startedAt: baseTime - 61_000,
         status: "running",
       }),
       sessionRow(childTwoKey, "Verify tests", baseTime - 2_000, {
+        createdAt: baseTime - 103_000,
         endedAt: baseTime - 2_000,
         spawnedBy: parentKey,
         startedAt: baseTime - 62_000,
@@ -88,6 +90,7 @@ suite.define(() => {
       }),
       {
         ...sessionRow(staleRunningChildKey, "Stale activity", baseTime - 3_000, {
+          createdAt: baseTime - 102_000,
           hasActiveRun: false,
           spawnedBy: parentKey,
           startedAt: baseTime - 64_000,
@@ -98,6 +101,7 @@ suite.define(() => {
       },
       {
         ...sessionRow(failedChildKey, "Failed checks", baseTime - 4_000, {
+          createdAt: baseTime - 101_000,
           endedAt: baseTime - 4_000,
           hasActiveRun: true,
           spawnedBy: parentKey,
@@ -171,8 +175,15 @@ suite.define(() => {
       const childRows = page.locator(".sidebar-recent-session--child");
       await expect.poll(() => childRows.count()).toBe(4);
       expect(await childRows.locator("[data-sidebar-session-archive]").count()).toBe(4);
-      await childRows.nth(0).getByRole("img", { name: "Active run" }).waitFor();
-      await childRows.nth(1).getByRole("img", { name: "Done" }).waitFor();
+      expect(
+        await childRows.evaluateAll((rows) =>
+          rows.map((row) => row.getAttribute("data-session-key")),
+        ),
+      ).toEqual([failedChildKey, staleRunningChildKey, childTwoKey, childOneKey]);
+      const runningChild = page.locator(`[data-session-key="${childOneKey}"]`);
+      const completedChild = page.locator(`[data-session-key="${childTwoKey}"]`);
+      await runningChild.getByRole("img", { name: "Active run" }).waitFor();
+      await completedChild.getByRole("img", { name: "Done" }).waitFor();
 
       const staleRunningChild = page.locator(`[data-session-key="${staleRunningChildKey}"]`);
       const failedChild = page.locator(`[data-session-key="${failedChildKey}"]`);
@@ -223,7 +234,6 @@ suite.define(() => {
       expect(nesting.childLeft - nesting.parentLeft).toBeGreaterThan(8);
       expect(nesting.guide).toBe("none");
 
-      const completedChild = childRows.nth(1);
       const childArchiveButton = completedChild.getByRole("button", {
         name: "Archive session: Verify tests",
         exact: true,
@@ -253,7 +263,7 @@ suite.define(() => {
       await page.keyboard.press("Escape");
       await childMenu.waitFor({ state: "detached" });
 
-      await childRows.nth(1).getByRole("link").click();
+      await completedChild.getByRole("link").click();
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(childTwoKey));
     } finally {
       await context.close();
