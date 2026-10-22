@@ -24,7 +24,7 @@ export type McpToolResultPayload = {
   result?: {
     instructions?: string;
     tools?: Array<{ name: string; inputSchema?: Record<string, unknown> }>;
-    content?: Array<Record<string, unknown>>;
+    content?: Array<{ text?: string; [key: string]: unknown }>;
     isError?: boolean;
   };
 };
