@@ -60,9 +60,9 @@ function parseContextEngineTurnOutboxPayload(
 }
 
 function outboxPayloadRequiresAdvancement() {
-  // Blocked rows are terminal audit evidence, not retryable work. Keep them
-  // inspectable without letting them hold later same-session turns behind them.
-  return /* kysely-allow-raw: NULL and unknown payload states retain their existing retry eligibility. */ sql<boolean>`context_engine_turn_outbox.payload_state IS DISTINCT FROM 'blocked'`;
+  // Blocked and corrupt rows are terminal audit evidence, not retryable work.
+  // Keep them inspectable without letting them hold later same-session turns.
+  return /* kysely-allow-raw: NULL and unknown payload states retain their existing retry eligibility. */ sql<boolean>`context_engine_turn_outbox.payload_state IS DISTINCT FROM 'blocked' AND context_engine_turn_outbox.payload_state IS DISTINCT FROM 'corrupt'`;
 }
 
 function outboxDb(database: ContextEngineTurnOutboxConnection) {
@@ -299,6 +299,7 @@ export function recoverContextEngineTurnOutbox(params: {
   for (const row of rows) {
     const payload = parseContextEngineTurnOutboxPayload(row.payload_json);
     if (!payload) {
+      terminalizeCorruptContextEngineTurn(params.database, row.advancement_key);
       params.warn(
         `[context-engine] skipped corrupt turn advancement: ${row.advancement_key}: payload could not be decoded`,
       );
@@ -397,6 +398,22 @@ function recordContextEngineTurnFailure(
         last_attempt_at: attemptedAt,
         last_error: message,
       }))
+      .where("advancement_key", "=", advancementKey),
+  );
+}
+
+function terminalizeCorruptContextEngineTurn(
+  database: ContextEngineTurnOutboxConnection,
+  advancementKey: string,
+): void {
+  executeSqliteQuerySync(
+    database.db,
+    outboxDb(database)
+      .updateTable("context_engine_turn_outbox")
+      .set({
+        payload_state: "corrupt",
+        last_error: "payload could not be decoded",
+      })
       .where("advancement_key", "=", advancementKey),
   );
 }

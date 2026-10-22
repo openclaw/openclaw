@@ -109,6 +109,7 @@ function outboxFixture(commitTurn: NonNullable<ContextEngine["commitTurn"]>, dur
     lease,
     warn,
     enqueue,
+    store,
     drain: (options: Partial<Parameters<typeof drainContextEngineTurnOutbox>[0]> = {}) =>
       drainContextEngineTurnOutbox({ store, engine, engineId: "test", warn, ...options }),
   };
@@ -497,45 +498,59 @@ describe("context-engine turn outbox", () => {
     });
   });
 
-  it("isolates a corrupt row and continues recovering later admitted turns", () => {
-    const { database, warn } = outboxFixture(createCommitTurn());
+  it("terminalizes a corrupt row and continues a later ready turn before the next run", async () => {
+    const commitTurn = createCommitTurn();
+    const { database, lease, warn, enqueue, store } = outboxFixture(commitTurn);
     const corruptKey = "session-a:corrupt";
+    const corruptPayload = '{"state":"admitted",';
     database.db
       .prepare(
         `INSERT INTO context_engine_turn_outbox
           (advancement_key, engine_id, session_id, payload_json, payload_state, created_at)
          VALUES (?, 'test', 'session-a', ?, 'admitted', 1)`,
       )
-      .run(corruptKey, '{"state":"admitted",');
+      .run(corruptKey, corruptPayload);
 
-    const valid = createPayload(database.path, "session-a:valid", "session-a", 1);
-    enqueueContextEngineTurnIntent({
-      admission: valid.boundary.admission,
-      database,
-      engineId: "test",
-      isHeartbeat: false,
-    });
+    const later = enqueue("session-a:later-ready", "session-a", 3);
 
     expect(
-      recoverContextEngineTurnOutbox({
-        database,
-        engineId: "test",
-        sessionId: "session-a",
-        warn,
-      }),
-    ).toBe(false);
-    expect(warn).toHaveBeenCalledTimes(2);
-    expect(warn).toHaveBeenCalledWith(
+      recoverContextEngineTurnOutbox({ database, engineId: "test", sessionId: "session-a", warn }),
+    ).toBe(true);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
       `[context-engine] skipped corrupt turn advancement: ${corruptKey}: payload could not be decoded`,
     );
-    expect(warn).toHaveBeenCalledWith(
-      `[context-engine] discarded unaccepted turn advancement: ${valid.boundary.admission.logicalTurnId}: recovery found no host acceptance`,
+    expect(readRow(database, corruptKey, "payload_state, last_error, payload_json")).toEqual({
+      payload_state: "corrupt",
+      last_error: "payload could not be decoded",
+      payload_json: corruptPayload,
+    });
+    expect(await store.readNextPending({ engineId: "test", sessionId: "session-a" })).toMatchObject(
+      {
+        advancement_key: "session-a:later-ready",
+      },
     );
-    expect(
-      database.db
-        .prepare("SELECT advancement_key FROM context_engine_turn_outbox ORDER BY enqueue_sequence")
-        .all(),
-    ).toEqual([{ advancement_key: corruptKey }]);
+
+    const currentAdmission = {
+      ...later.boundary.admission,
+      logicalTurnId: "session-a:current",
+    };
+    const runWarn = vi.fn();
+    await drainPendingContextEngineTurnsBeforeRun({
+      admission: currentAdmission,
+      lease,
+      warn: runWarn,
+    });
+
+    expect(commitTurn).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ advancementKey: "session-a:later-ready" }),
+    );
+    expect(lease.degradeBeforeStart).not.toHaveBeenCalled();
+    expect(runWarn).not.toHaveBeenCalled();
+    expect(readRow(database, corruptKey, "payload_json")).toEqual({ payload_json: corruptPayload });
+    expect(readRow(database, "session-a:later-ready", "1")).toBeUndefined();
+    expect(readPayload(database, currentAdmission.logicalTurnId)).toMatchObject({
+      state: "admitted",
+    });
   });
 
   it("does not let later same-session turns overtake a failed commit", async () => {
