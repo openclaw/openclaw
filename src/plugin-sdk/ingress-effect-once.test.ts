@@ -39,19 +39,6 @@ async function breakStateDirectory() {
   await fs.writeFile(stateDir, "not a directory");
 }
 
-it("executes an effect once and reports its replay", async () => {
-  const effectOnce = createIngressEffectOnce(EFFECT_ONCE_PARAMS);
-  const run = vi.fn(async () => "written");
-  const params = { eventId: "event-1", effect: "config-write", run };
-
-  await expect(effectOnce.runOnce(params)).resolves.toEqual({
-    kind: "executed",
-    value: "written",
-  });
-  await expect(effectOnce.runOnce(params)).resolves.toEqual({ kind: "replayed" });
-  expect(run).toHaveBeenCalledOnce();
-});
-
 it("releases a failed claim so an in-flight sibling executes on retry", async () => {
   const effectOnce = createIngressEffectOnce(EFFECT_ONCE_PARAMS);
   const failure = new Error("write failed");
@@ -70,7 +57,7 @@ it("releases a failed claim so an in-flight sibling executes on retry", async ()
   expect(retryRun).toHaveBeenCalledOnce();
 });
 
-it("settles concurrent same-key claims with one execution", async () => {
+it("settles concurrent same-key claims once and replays later calls", async () => {
   const effectOnce = createIngressEffectOnce(EFFECT_ONCE_PARAMS);
   const gate = createDeferred();
   const run = vi.fn(async () => {
@@ -78,13 +65,15 @@ it("settles concurrent same-key claims with one execution", async () => {
     return "cleared";
   });
 
-  const first = effectOnce.runOnce({ eventId: "event-3", effect: "storage-clear", run });
+  const params = { eventId: "event-3", effect: "storage-clear", run };
+  const first = effectOnce.runOnce(params);
   await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
-  const second = effectOnce.runOnce({ eventId: "event-3", effect: "storage-clear", run });
+  const second = effectOnce.runOnce(params);
   gate.resolve();
 
   await expect(first).resolves.toEqual({ kind: "executed", value: "cleared" });
   await expect(second).resolves.toEqual({ kind: "replayed" });
+  await expect(effectOnce.runOnce(params)).resolves.toEqual({ kind: "replayed" });
   expect(run).toHaveBeenCalledOnce();
 });
 
