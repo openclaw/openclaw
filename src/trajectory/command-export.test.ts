@@ -6,48 +6,60 @@ import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
 import { loadTranscriptEvents, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
+import { messageEntry, sessionHeader, userMessage } from "./export.test-helpers.js";
 import { loadSqliteTrajectoryRuntimeEvents } from "./runtime-store.sqlite.js";
 import { createTrajectoryRuntimeRecorder } from "./runtime.js";
 import type { TrajectoryBundleManifest } from "./types.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-trajectory-command-");
 
+async function seedSession(
+  root: string,
+  id: string,
+  sessionKey: string,
+  workspace = root,
+  withMessage = false,
+) {
+  const target = {
+    agentId: "main",
+    sessionId: id,
+    sessionKey,
+    storePath: path.join(root, "sessions.json"),
+  };
+  await replaceSessionEntry(target, { sessionId: id, updatedAt: 1 });
+  await replaceTranscriptEvents(target, [
+    sessionHeader(workspace, id),
+    ...(withMessage
+      ? [messageEntry("user-1", null, userMessage("Synthetic inventory request."))]
+      : []),
+  ]);
+  return target;
+}
+
 const tool = { name: "synthetic_read", description: "Read a synthetic document." };
 const complete = { systemPrompt: "Synthetic system prompt.", tools: [tool] };
 const oversized = { systemPrompt: "x".repeat(32_769), tools: [tool] };
-const cases: Array<{
-  name: string;
-  contexts: Record<string, unknown>[];
-  contextFiles: string[];
-  outputPath?: string;
-  json?: boolean;
-}> = [
-  {
-    name: "complete context",
-    contexts: [complete],
-    contextFiles: ["system-prompt.txt", "tools.json"],
-    outputPath: "prefix/../~/inventory",
-  },
-  {
-    name: "double-dot-prefixed output directory",
-    contexts: [complete],
-    contextFiles: ["system-prompt.txt", "tools.json"],
-    outputPath: "..diagnostics",
-  },
-  {
-    name: "empty prompt",
-    contexts: [{ systemPrompt: "", tools: [] }],
-    contextFiles: ["tools.json"],
-  },
-  {
-    name: "latest truncated context",
-    contexts: [complete, oversized],
-    contextFiles: ["tools.json"],
-    json: true,
-  },
-  {
-    name: "oversized event",
-    contexts: [
+const cases: Array<
+  [
+    name: string,
+    contexts: Record<string, unknown>[],
+    contextFiles: string[],
+    outputPath?: string,
+    json?: boolean,
+  ]
+> = [
+  ["complete context", [complete], ["system-prompt.txt", "tools.json"], "prefix/../~/inventory"],
+  [
+    "double-dot-prefixed output directory",
+    [complete],
+    ["system-prompt.txt", "tools.json"],
+    "..diagnostics",
+  ],
+  ["empty prompt", [{ systemPrompt: "", tools: [] }], ["tools.json"]],
+  ["latest truncated context", [complete, oversized], ["tools.json"], undefined, true],
+  [
+    "oversized event",
+    [
       {
         systemPrompt: "Synthetic system prompt.",
         prompt: "Synthetic request.",
@@ -57,42 +69,26 @@ const cases: Array<{
         })),
       },
     ],
-    contextFiles: [],
-    json: true,
-  },
+    [],
+    undefined,
+    true,
+  ],
 ];
 
 describe("trajectory command export inventory", () => {
   it.each(cases)(
-    "reports only written files in existing order for $name",
-    async ({ contexts, contextFiles, outputPath = "inventory", json }) => {
+    "reports only written files in existing order for %s",
+    async (_name, contexts, contextFiles, requestedPath, json) => {
+      const outputPath = requestedPath ?? "inventory";
       const root = sessionDirs.make();
-      const sessionId = "inventory-session";
-      const sessionKey = "agent:main:qa-inventory";
-      const sessionTarget = {
-        agentId: "main",
-        sessionId,
-        sessionKey,
-        storePath: path.join(root, "sessions.json"),
-      };
-      const entries = [
-        {
-          type: "session",
-          version: 3,
-          id: sessionId,
-          timestamp: "2026-09-01T00:00:00.000Z",
-          cwd: root,
-        },
-        {
-          type: "message",
-          id: "user-1",
-          parentId: null,
-          timestamp: "2026-09-01T00:00:01.000Z",
-          message: { role: "user", content: "Synthetic inventory request.", timestamp: 1 },
-        },
-      ];
-      await replaceSessionEntry(sessionTarget, { sessionId, updatedAt: 1 });
-      await replaceTranscriptEvents(sessionTarget, entries);
+      const sessionTarget = await seedSession(
+        root,
+        "inventory-session",
+        "agent:main:qa-inventory",
+        root,
+        true,
+      );
+      const { sessionId, sessionKey } = sessionTarget;
       const transcriptBefore = await loadTranscriptEvents(sessionTarget);
       const recorder = await createTrajectoryRuntimeRecorder({
         sessionId,
@@ -142,10 +138,13 @@ describe("trajectory command export inventory", () => {
       expect(
         ["manifest.json", ...(manifest.contents ?? []).map((file) => file.path)].toSorted(),
       ).toEqual(written.toSorted());
-      expect(manifest.sessionId).toBe(sessionId);
-      expect(manifest.eventCount).toBe(contexts.length + 4);
-      expect(manifest.runtimeEventCount).toBe(contexts.length + 3);
-      expect(manifest.transcriptEventCount).toBe(1);
+      const counts = {
+        sessionId,
+        eventCount: contexts.length + 4,
+        runtimeEventCount: contexts.length + 3,
+        transcriptEventCount: 1,
+      };
+      expect(manifest).toMatchObject(counts);
       expect(await loadTranscriptEvents(sessionTarget)).toEqual(transcriptBefore);
       expect(await loadSqliteTrajectoryRuntimeEvents(sessionTarget)).toEqual(runtimeBefore);
       expect(runtime.log).toHaveBeenCalledExactlyOnceWith(
@@ -158,10 +157,7 @@ describe("trajectory command export inventory", () => {
                   "trajectory-exports",
                   path.normalize(outputPath),
                 ),
-                sessionId,
-                eventCount: contexts.length + 4,
-                runtimeEventCount: contexts.length + 3,
-                transcriptEventCount: 1,
+                ...counts,
                 files: expected,
               },
               null,
@@ -191,25 +187,12 @@ describe("trajectory command export inventory", () => {
       await fs.mkdir(path.dirname(link), { recursive: true });
       await fs.mkdir(outside);
       await fs.symlink(outside, link, "junction");
-      const sessionTarget = {
-        agentId: "main",
-        sessionId: "boundary-session",
-        sessionKey: "agent:main:boundary",
-        storePath: path.join(root, "sessions.json"),
-      };
-      await replaceSessionEntry(sessionTarget, {
-        sessionId: sessionTarget.sessionId,
-        updatedAt: 1,
-      });
-      await replaceTranscriptEvents(sessionTarget, [
-        {
-          type: "session",
-          version: 3,
-          id: sessionTarget.sessionId,
-          timestamp: "2026-09-01T00:00:00.000Z",
-          cwd: workspaceDir,
-        },
-      ]);
+      const sessionTarget = await seedSession(
+        root,
+        "boundary-session",
+        "agent:main:boundary",
+        workspaceDir,
+      );
       await expect(
         exportTrajectoryCommand(
           {

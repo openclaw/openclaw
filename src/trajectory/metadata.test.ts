@@ -164,13 +164,7 @@ describe("trajectory metadata", () => {
     setActivePluginRegistry(registry, "trajectory-metadata-test");
 
     const captured = metadata({
-      config: {
-        providers: {
-          openai: {
-            apiKey: "super-secret",
-          },
-        },
-      } as never,
+      config: { providers: { openai: { apiKey: "super-secret" } } } as never,
       sessionFile: "/tmp/workspace/session.jsonl",
       sessionKey: "agent:main:test",
       agentId: "main",
@@ -195,32 +189,31 @@ describe("trajectory metadata", () => {
     });
   });
 
-  it("tolerates skill snapshot entries with missing name/paths (symlink-escape rejects)", () => {
+  it.each([
+    {
+      name: "retains valid resolved skills beside partial entries",
+      resolved: [skill("alpha", "valid entry"), partialSkill],
+      fallback: [],
+      expected: "alpha",
+    },
+    {
+      name: "falls back when every resolved skill is partial",
+      resolved: [partialSkill],
+      fallback: [{ name: "fallback-skill" }],
+      expected: "fallback-skill",
+    },
+  ])("$name", ({ resolved, fallback, expected }) => {
     const captured = metadata({
       sessionFile: "/tmp/workspace/session.jsonl",
       skillsSnapshot: {
         prompt: "skill prompt",
         version: 1,
-        skills: [],
-        resolvedSkills: [skill("alpha", "valid entry"), partialSkill],
+        skills: fallback,
+        resolvedSkills: resolved,
       },
     });
 
-    expect(captured.skills).toMatchObject({ entries: [{ name: "alpha" }] });
-  });
-
-  it("falls back to skills list when every resolvedSkills entry is partial", () => {
-    const captured = metadata({
-      sessionFile: "/tmp/workspace/session.jsonl",
-      skillsSnapshot: {
-        prompt: "skill prompt",
-        version: 1,
-        skills: [{ name: "fallback-skill" }],
-        resolvedSkills: [partialSkill],
-      },
-    });
-
-    expect(captured.skills).toMatchObject({ entries: [{ name: "fallback-skill" }] });
+    expect(captured.skills).toMatchObject({ entries: [{ name: expected }] });
   });
 
   it("captures final artifact summaries for export sidecars", () => {

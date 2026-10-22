@@ -121,6 +121,12 @@ function exportFrom(
   });
 }
 
+async function exportBranch(entries: readonly unknown[], sessionId = "session-1") {
+  const { tmpDir, sessionFile } = exportPaths();
+  writeEntries(sessionFile, [sessionHeader(tmpDir, sessionId), ...entries]);
+  return exportFrom(tmpDir, { sessionFile, sessionId });
+}
+
 async function exportRuntimeArtifacts(
   runtimeEvents: readonly TrajectoryEvent[],
 ): Promise<Record<string, unknown> | undefined> {
@@ -222,45 +228,6 @@ describe("exportTrajectoryBundle", () => {
     } catch (error) {
       expect((error as NodeJS.ErrnoException).code).toBe("EEXIST");
     }
-  });
-
-  it("exports SQLite-backed transcript rows without a session JSONL file", async () => {
-    const tmpDir = makeTempDir();
-    const storePath = path.join(tmpDir, "sessions.json");
-    const sessionId = "session-1";
-    const sessionKey = "agent:main:session-1";
-    await replaceTranscriptEvents(
-      {
-        agentId: "main",
-        sessionId,
-        sessionKey,
-        storePath,
-      },
-      [
-        sessionHeader(tmpDir, sessionId),
-        messageEntry("entry-user", null, userMessage("hello from sqlite"), 40),
-        messageEntry("entry-assistant", "entry-user", assistantText("done from sqlite"), 41),
-      ],
-    );
-
-    const bundle = await exportFrom(tmpDir, {
-      sessionFile: path.join(tmpDir, "stale-session.jsonl"),
-      sessionTarget: {
-        agentId: "main",
-        sessionId,
-        sessionKey,
-        storePath,
-      },
-      sessionId,
-      sessionKey,
-    });
-
-    expect(bundle.header?.id).toBe(sessionId);
-    expect(bundle.manifest.transcriptEventCount).toBe(2);
-    expect(bundle.manifest.sourceFiles.session).toMatch(/^agent:/u);
-    expect(bundle.manifest.sourceFiles.session).not.toContain("stale-session");
-    expect(eventTypes(bundle.events)).toEqual(["user.message", "assistant.message"]);
-    expect(fs.existsSync(path.join(tmpDir, "session-1.jsonl"))).toBe(false);
   });
 
   it("exports SQLite-backed runtime rows without a runtime JSONL sidecar", async () => {
@@ -868,16 +835,12 @@ describe("exportTrajectoryBundle", () => {
   });
 
   it("reports incomplete transcript branches while exporting the reachable suffix", async () => {
-    const { tmpDir, sessionFile } = exportPaths();
-    writeEntries(sessionFile, [
-      sessionHeader(tmpDir),
+    const bundle = await exportBranch([
       {
         ...messageEntry("orphan-tail", "missing-imported-parent", assistantText("reachable tail")),
         timestamp: "2026-04-01T05:46:40.000Z",
       },
     ]);
-
-    const bundle = await exportFrom(tmpDir, { sessionFile });
 
     expect(eventTypes(bundle.events)).toEqual(["assistant.message"]);
     expect(bundle.manifest.warnings).toEqual([
@@ -892,28 +855,27 @@ describe("exportTrajectoryBundle", () => {
   });
 
   it("exports supported current-version linear transcripts in file order", async () => {
-    const { tmpDir, sessionFile } = exportPaths();
-    writeEntries(sessionFile, [
-      sessionHeader(tmpDir, "session-linear"),
-      messageEntry("linear-user", undefined, userMessage("hello"), 40),
-      messageEntry("linear-assistant", undefined, assistantText("done"), 41),
-      {
-        type: "metadata",
-        id: "linear-metadata",
-        parentId: "linear-assistant",
-        payload: { source: "plugin" },
-      },
-      messageEntry("side-assistant", "linear-assistant", assistantText("side"), 42),
-      {
-        type: "leaf",
-        id: "active-leaf",
-        parentId: "side-assistant",
-        targetId: "linear-assistant",
-        appendParentId: "linear-metadata",
-      },
-    ]);
-
-    const bundle = await exportFrom(tmpDir, { sessionFile, sessionId: "session-linear" });
+    const bundle = await exportBranch(
+      [
+        messageEntry("linear-user", undefined, userMessage("hello"), 40),
+        messageEntry("linear-assistant", undefined, assistantText("done"), 41),
+        {
+          type: "metadata",
+          id: "linear-metadata",
+          parentId: "linear-assistant",
+          payload: { source: "plugin" },
+        },
+        messageEntry("side-assistant", "linear-assistant", assistantText("side"), 42),
+        {
+          type: "leaf",
+          id: "active-leaf",
+          parentId: "side-assistant",
+          targetId: "linear-assistant",
+          appendParentId: "linear-metadata",
+        },
+      ],
+      "session-linear",
+    );
 
     expect(eventTypes(bundle.events)).toEqual(["user.message", "assistant.message"]);
     expect(bundle.manifest.leafId).toBe("linear-assistant");
@@ -921,9 +883,7 @@ describe("exportTrajectoryBundle", () => {
   });
 
   it("exports the branch selected by a terminal leaf control", async () => {
-    const { tmpDir, sessionFile } = exportPaths();
-    writeEntries(sessionFile, [
-      sessionHeader(tmpDir),
+    const bundle = await exportBranch([
       messageEntry("active-tail", null, userMessage("active"), 40),
       messageEntry("inactive-tail", "active-tail", assistantText("side delivery"), 41),
       {
@@ -936,17 +896,13 @@ describe("exportTrajectoryBundle", () => {
       },
     ]);
 
-    const bundle = await exportFrom(tmpDir, { sessionFile });
-
     expect(eventTypes(bundle.events)).toEqual(["user.message"]);
     expect(bundle.manifest.leafId).toBe("active-tail");
     expect(JSON.stringify(bundle.events)).not.toContain("side delivery");
   });
 
   it("normalizes an active descendant whose source parent is a leaf control", async () => {
-    const { tmpDir, sessionFile } = exportPaths();
-    writeEntries(sessionFile, [
-      sessionHeader(tmpDir),
+    const bundle = await exportBranch([
       messageEntry("active-tail", null, userMessage("active"), 40),
       messageEntry("inactive-tail", "active-tail", assistantText("side delivery"), 41),
       {
@@ -959,8 +915,6 @@ describe("exportTrajectoryBundle", () => {
       messageEntry("replacement", "active-leaf", assistantText("replacement"), 43),
     ]);
 
-    const bundle = await exportFrom(tmpDir, { sessionFile });
-
     expect(eventTypes(bundle.events)).toEqual(["user.message", "assistant.message"]);
     expect(bundle.events.find((event) => event.entryId === "replacement")?.parentEntryId).toBe(
       "active-tail",
@@ -970,35 +924,32 @@ describe("exportTrajectoryBundle", () => {
   });
 
   it("does not export append-parent history from an explicitly empty branch", async () => {
-    const { tmpDir, sessionFile } = exportPaths();
-    writeEntries(sessionFile, [
-      sessionHeader(tmpDir, "session-empty"),
-      messageEntry("inactive-root", null, userMessage("inactive"), 40),
-      {
-        type: "leaf",
-        id: "empty-leaf",
-        parentId: "inactive-root",
-        timestamp: "2026-04-01T05:46:41.000Z",
-        targetId: null,
-        appendParentId: null,
-      },
-      {
-        type: "metadata",
-        id: "plugin-metadata",
-        parentId: "inactive-root",
-      },
-    ]);
-
-    const bundle = await exportFrom(tmpDir, { sessionFile, sessionId: "session-empty" });
+    const bundle = await exportBranch(
+      [
+        messageEntry("inactive-root", null, userMessage("inactive"), 40),
+        {
+          type: "leaf",
+          id: "empty-leaf",
+          parentId: "inactive-root",
+          timestamp: "2026-04-01T05:46:41.000Z",
+          targetId: null,
+          appendParentId: null,
+        },
+        {
+          type: "metadata",
+          id: "plugin-metadata",
+          parentId: "inactive-root",
+        },
+      ],
+      "session-empty",
+    );
 
     expect(bundle.events).toEqual([]);
     expect(bundle.manifest.transcriptEventCount).toBe(0);
   });
 
   it("traverses opaque append parents while exporting the active branch", async () => {
-    const { tmpDir, sessionFile } = exportPaths();
-    writeEntries(sessionFile, [
-      sessionHeader(tmpDir),
+    const bundle = await exportBranch([
       messageEntry("active-root", null, userMessage("active"), 40),
       {
         type: "metadata",
@@ -1017,8 +968,6 @@ describe("exportTrajectoryBundle", () => {
       messageEntry("active-tail", "plugin-metadata", assistantText("active tail"), 43),
     ]);
 
-    const bundle = await exportFrom(tmpDir, { sessionFile });
-
     expect(eventTypes(bundle.events)).toEqual(["user.message", "assistant.message"]);
     expect(bundle.manifest.leafId).toBe("active-tail");
     expect(JSON.stringify(bundle.events)).toContain("active tail");
@@ -1029,14 +978,10 @@ describe("exportTrajectoryBundle", () => {
   });
 
   it("stops cyclic transcript branch export instead of hanging", async () => {
-    const { tmpDir, sessionFile } = exportPaths();
-    writeEntries(sessionFile, [
-      sessionHeader(tmpDir),
+    const bundle = await exportBranch([
       messageEntry("entry-a", "entry-b", userMessage("cycle a"), 40),
       messageEntry("entry-b", "entry-a", assistantText("cycle b"), 41),
     ]);
-
-    const bundle = await exportFrom(tmpDir, { sessionFile });
 
     expect(eventTypes(bundle.events)).toEqual(["user.message", "assistant.message"]);
     expect(bundle.manifest.warnings).toEqual([
@@ -1232,6 +1177,7 @@ describe("exportTrajectoryBundle", () => {
         return await exportFrom(tmpDir, {
           outputDir: directory,
           sessionTarget,
+          sessionFile: path.join(tmpDir, "stale-session.jsonl"),
           sessionKey: "agent:main:session-1",
           systemPrompt: "fallback prompt",
           tools: [{ name: "fallback" }],
@@ -1242,6 +1188,18 @@ describe("exportTrajectoryBundle", () => {
     };
     const bundle = await exportAtFixedTime(outputDir);
 
+    expect(bundle.header?.id).toBe("session-1");
+    expect(bundle.manifest.transcriptEventCount).toBe(5);
+    expect(eventTypes(bundle.events.filter((event) => event.source === "transcript"))).toEqual([
+      "user.message",
+      "assistant.message",
+      "tool.call",
+      "tool.result",
+      "assistant.message",
+    ]);
+    expect(bundle.manifest.sourceFiles.session).toMatch(/^agent:/u);
+    expect(bundle.manifest.sourceFiles.session).not.toContain("stale-session");
+    expect(fs.existsSync(path.join(tmpDir, "session-1.jsonl"))).toBe(false);
     expect(bundle.manifest.eventCount).toBeGreaterThanOrEqual(5);
     expect(bundle.manifest.runtimeEventCount).toBe(runtimeEvents.length);
     expect(fs.readdirSync(outputDir).toSorted()).toEqual([
