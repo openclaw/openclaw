@@ -1,22 +1,27 @@
-import { createSolidPngBuffer } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
-import { createTestProvider, driver, result } from "./commands.test-helpers.js";
+import { act, driver, execution, pngImage, result, snapshot } from "./commands.test-helpers.js";
+
+function recordingResult(enabled: boolean, outputDir: unknown) {
+  return result({
+    recording: enabled,
+    enabled,
+    output_dir: outputDir ?? null,
+    next_turn: 0,
+    last_error: null,
+    video_active: false,
+    last_video_path: null,
+    owner: null,
+  });
+}
 
 describe("execution authority preflight", () => {
   it("revokes stale input refs on renewal and accepts a fresh screenshot", async () => {
     const { session, click, getDesktopState, setGeneration } = driver();
     const desktop = await getDesktopState();
-    desktop.images = [
-      {
-        mimeType: "image/png",
-        dataBase64: createSolidPngBuffer(100, 50, { r: 70, g: 125, b: 180 }).toString("base64"),
-      },
-    ];
+    desktop.images = [pngImage(100, 50)];
     getDesktopState.mockResolvedValue(desktop);
-    const computer = await createTestProvider(session).openExecution({
-      executionId: "123e4567-e89b-42d3-a456-426614174000",
-    });
-    const before = JSON.parse(await computer.snapshot('{"format":"png","maxWidth":100}'));
+    const computer = await execution(session);
+    const before = await snapshot(computer);
     session.prepareExecution = vi.fn(async () => setGeneration("renewed-session"));
     const action = {
       action: "left_click",
@@ -25,12 +30,12 @@ describe("execution authority preflight", () => {
       x: 10,
       y: 20,
     };
-    await expect(computer.act(JSON.stringify(action))).rejects.toThrow("COMPUTER_STALE_FRAME");
+    await expect(act(computer, action)).rejects.toThrow("COMPUTER_STALE_FRAME");
     expect(click).not.toHaveBeenCalled();
     session.prepareExecution = vi.fn(async () => {});
-    const fresh = JSON.parse(await computer.snapshot('{"format":"png","maxWidth":100}'));
+    const fresh = await snapshot(computer);
     expect(fresh.displayFrameId).not.toBe(before.displayFrameId);
-    await computer.act(JSON.stringify({ ...action, displayFrameId: fresh.displayFrameId }));
+    await act(computer, { ...action, displayFrameId: fresh.displayFrameId });
     expect(click).toHaveBeenCalledTimes(1);
     await computer.close("completion");
   });
@@ -40,21 +45,11 @@ describe("execution authority preflight", () => {
     session.prepareExecution = vi.fn(async () => {
       throw new Error("Desktop scope denied");
     });
-    const computer = await createTestProvider(session).openExecution({
-      executionId: "123e4567-e89b-42d3-a456-426614174000",
-    });
+    const computer = await execution(session);
     await expect(computer.snapshot('{"format":"png"}')).rejects.toThrow("Desktop scope denied");
     expect(getDesktopState).not.toHaveBeenCalled();
     await expect(
-      computer.act(
-        JSON.stringify({
-          action: "left_click",
-          displayFrameId: "old",
-          refWidth: 100,
-          x: 1,
-          y: 1,
-        }),
-      ),
+      act(computer, "left_click", { displayFrameId: "old", refWidth: 100, x: 1, y: 1 }),
     ).rejects.toThrow("Desktop scope denied");
     expect(click).not.toHaveBeenCalled();
     await computer.close("completion");
@@ -69,21 +64,10 @@ describe("execution authority preflight", () => {
       if (name === "stop_recording") {
         enabled = false;
       }
-      return result({
-        recording: enabled,
-        enabled,
-        output_dir: args.output_dir ?? null,
-        next_turn: 0,
-        last_error: null,
-        video_active: false,
-        last_video_path: null,
-        owner: null,
-      });
+      return recordingResult(enabled, args.output_dir);
     });
-    const computer = await createTestProvider(session).openExecution({
-      executionId: "123e4567-e89b-42d3-a456-426614174000",
-    });
-    const first = JSON.parse(await computer.act('{"action":"start_recording"}'));
+    const computer = await execution(session);
+    const first = JSON.parse(await act(computer, "start_recording"));
     expect(first.details.recording).toBe(true);
     expect(first.details.resourceHandle).toBeDefined();
     let renewed = false;
@@ -94,14 +78,14 @@ describe("execution authority preflight", () => {
         renewed = true;
       }
     });
-    const after = JSON.parse(await computer.act('{"action":"get_recording_state"}'));
+    const after = JSON.parse(await act(computer, "get_recording_state"));
     expect(after.details).toEqual({ recording: false });
     expect(callTool.mock.calls.filter(([name]) => name === "start_recording")).toHaveLength(1);
     expect(callTool.mock.calls.filter(([name]) => name === "stop_recording")).toHaveLength(0);
-    const fresh = JSON.parse(await computer.act('{"action":"start_recording"}'));
+    const fresh = JSON.parse(await act(computer, "start_recording"));
     expect(fresh.details.recording).toBe(true);
     expect(fresh.details.resourceHandle).not.toBe(first.details.resourceHandle);
-    await computer.act('{"action":"stop_recording"}');
+    await act(computer, "stop_recording");
     await computer.close("completion");
   });
   it("rejects input when close revokes ownership during preparation", async () => {
@@ -112,10 +96,8 @@ describe("execution authority preflight", () => {
       entered.resolve();
       await release.promise;
     };
-    const computer = await createTestProvider(session).openExecution({
-      executionId: "123e4567-e89b-42d3-a456-426614174000",
-    });
-    const acting = computer.act('{"action":"type","text":"MUST_NOT_TYPE"}');
+    const computer = await execution(session);
+    const acting = act(computer, "type", { text: "MUST_NOT_TYPE" });
     const rejected = expect(acting).rejects.toThrow(/closing|closed/);
     await entered.promise;
     const closing = computer.close("cancelled");
@@ -127,22 +109,11 @@ describe("execution authority preflight", () => {
   it("does not recreate recording ownership when close interrupts a released runtime", async () => {
     const { session, setGeneration } = driver();
     const callTool = vi.fn(async (name: string, args: Record<string, unknown>) =>
-      result({
-        recording: name !== "stop_recording",
-        enabled: name !== "stop_recording",
-        output_dir: args.output_dir ?? null,
-        next_turn: 0,
-        last_error: null,
-        video_active: false,
-        last_video_path: null,
-        owner: null,
-      }),
+      recordingResult(name !== "stop_recording", args.output_dir),
     );
     session.callTool = callTool;
-    const computer = await createTestProvider(session).openExecution({
-      executionId: "123e4567-e89b-42d3-a456-426614174099",
-    });
-    await computer.act('{"action":"start_recording"}');
+    const computer = await execution(session);
+    await act(computer, "start_recording");
     const entered = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
     session.prepareExecution = async (_signal, assertAuthority) => {
@@ -151,7 +122,7 @@ describe("execution authority preflight", () => {
       setGeneration("released-recording-runtime");
       assertAuthority?.();
     };
-    const acting = computer.act('{"action":"type","text":"must not type"}');
+    const acting = act(computer, "type", { text: "must not type" });
     const rejected = expect(acting).rejects.toThrow(/closing|closed/);
     await entered.promise;
     const closing = computer.close("cancelled");

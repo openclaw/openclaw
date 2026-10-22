@@ -7,7 +7,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { execution } from "./commands.test-helpers.js";
+import { act, execution, listWindow } from "./commands.test-helpers.js";
 import { CUA_DRIVER_CONTRACT_FIXTURES } from "./cua-driver-contract.test-fixtures.js";
 import { ClickButton } from "./driver-client.js";
 import { projectedToolDetails } from "./driver-result.js";
@@ -193,15 +193,8 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
     );
     const driver = managedDriver({ ...endpoint, env: process.env });
     const computer = await execution(driver, "darwin");
-    const listed = JSON.parse(await computer.act('{"action":"list_windows"}')) as {
-      details: { windows: Array<{ windowRef: string }> };
-    };
-    const result = computer.act(
-      JSON.stringify({
-        action: "bring_to_front",
-        windowRef: listed.details.windows[0]!.windowRef,
-      }),
-    );
+    const windowRef = await listWindow(computer);
+    const result = act(computer, "bring_to_front", { windowRef });
     if (error) {
       await expect(result).rejects.toThrow(error);
     } else {

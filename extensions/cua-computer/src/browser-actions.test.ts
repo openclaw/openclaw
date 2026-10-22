@@ -1,27 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { driver, execution } from "./commands.test-helpers.js";
+import { act, driver, execution, listWindow } from "./commands.test-helpers.js";
 import {
   CUA_DRIVER_CONTRACT_FIXTURES as fixtures,
   cuaToolResult,
 } from "./cua-driver-contract.test-fixtures.js";
 import type { CuaToolResult } from "./driver-client.js";
 
-function act(computer: Awaited<ReturnType<typeof execution>>, input: Record<string, unknown>) {
-  return computer.act(JSON.stringify(input));
-}
-
-async function listWindow(computer: Awaited<ReturnType<typeof execution>>) {
-  const listed = JSON.parse(await computer.act('{"action":"list_windows"}')) as {
-    details: { windows: Array<{ windowRef: string }> };
-  };
-  return listed.details.windows[0]!.windowRef;
-}
-
 async function bindBrowser(computer: Awaited<ReturnType<typeof execution>>) {
   return JSON.parse(
-    await act(computer, { action: "get_browser_state", windowRef: await listWindow(computer) }),
+    await act(computer, "get_browser_state", { windowRef: await listWindow(computer) }),
   ) as { details: { browserRef: string; pages: Array<{ pageRef: string }> } };
 }
 
@@ -99,13 +88,12 @@ describe("cua-computer browser actions", () => {
     const computer = await execution(session);
     const windowRef = await listWindow(computer);
 
-    await act(computer, {
-      action: "browser_prepare",
+    await act(computer, "browser_prepare", {
       windowRef,
       profile: "isolated_named",
       profileName: "openclaw-test",
     });
-    const boundJson = await act(computer, { action: "get_browser_state", windowRef });
+    const boundJson = await act(computer, "get_browser_state", { windowRef });
     expect(boundJson).not.toContain("native-browser-target-1");
     expect(boundJson).not.toContain("native-page-1");
     expect(boundJson).not.toContain("private-native-browser-session");
@@ -121,7 +109,7 @@ describe("cua-computer browser actions", () => {
     const pageRef = bound.details.pages[0]!.pageRef;
     const target = { browserRef, pageRef };
 
-    const observedJson = await act(computer, { action: "get_browser_state", browserRef, pageRef });
+    const observedJson = await act(computer, "get_browser_state", { browserRef, pageRef });
     expect(observedJson).not.toContain("p7:0");
     expect(observedJson).not.toContain("private-native-browser-session");
     const observed = JSON.parse(observedJson) as {
@@ -147,14 +135,12 @@ describe("cua-computer browser actions", () => {
     );
     expect(firstElement).toMatch(/^cua:v2:element:/);
 
-    await act(computer, {
-      action: "browser_click",
+    await act(computer, "browser_click", {
       ...observedTarget,
       elementRef: firstElement,
       inputRoute: "dom_event",
     });
-    await act(computer, {
-      action: "browser_type",
+    await act(computer, "browser_type", {
       ...observedTarget,
       elementRef: secondElement,
       text: "hello",
@@ -162,11 +148,10 @@ describe("cua-computer browser actions", () => {
       replace: true,
     });
     const dialog = JSON.parse(
-      await act(computer, { action: "browser_dialog", ...target, dialogAction: "inspect" }),
+      await act(computer, "browser_dialog", { ...target, dialogAction: "inspect" }),
     ) as { details: { dialogRef: string } };
     expect(dialog.details.dialogRef).toMatch(/^cua:v2:dialog:/);
-    const downloadJson = await act(computer, {
-      action: "browser_download",
+    const downloadJson = await act(computer, "browser_download", {
       ...observedTarget,
       elementRef: firstElement,
     });
@@ -176,25 +161,19 @@ describe("cua-computer browser actions", () => {
     };
     expect(download.details.resourceHandle).toMatch(/^openclaw:computer-resource:v1:/u);
     expect(download.details.fileResourceHandles[0]).toMatch(/^openclaw:computer-resource:v1:/u);
-    await act(computer, {
-      action: "browser_set_input_files",
+    await act(computer, "browser_set_input_files", {
       ...observedTarget,
       elementRef: secondElement,
       resourceHandles: download.details.fileResourceHandles,
     });
-    await act(computer, {
-      action: "browser_pointer",
+    await act(computer, "browser_pointer", {
       ...observedTarget,
       pointerAction: "drag",
       inputRoute: "dom_event",
       elementRef: firstElement,
       destinationElementRef: secondElement,
     });
-    await act(computer, {
-      action: "browser_navigate",
-      ...target,
-      url: "https://example.com/next",
-    });
+    await act(computer, "browser_navigate", { ...target, url: "https://example.com/next" });
 
     const nativeTarget = { target_id: "native-browser-target-1", tab_id: "native-page-1" };
     const call = (tool: string, args: Record<string, unknown>) => [tool, args, undefined];
@@ -247,7 +226,7 @@ describe("cua-computer browser actions", () => {
     const browserRef = bound.details.browserRef;
     const pageRef = bound.details.pages[0]!.pageRef;
     const observed = JSON.parse(
-      await act(computer, { action: "get_browser_state", browserRef, pageRef }),
+      await act(computer, "get_browser_state", { browserRef, pageRef }),
     ) as {
       observation: { observationId: string };
       details: { elements: Array<{ elementRef: string }> };
@@ -271,16 +250,16 @@ describe("cua-computer browser actions", () => {
     }
     expect(first.callTool).toHaveBeenCalledTimes(callsBeforeForgedRefs);
 
-    await act(computer, { action: "browser_navigate", browserRef, pageRef, url: "about:blank" });
+    await act(computer, "browser_navigate", { browserRef, pageRef, url: "about:blank" });
     await expect(act(computer, staleAction)).rejects.toThrow("COMPUTER_STALE_OBSERVATION");
 
     first.setGeneration("execution-2");
-    await expect(
-      act(computer, { action: "get_browser_state", browserRef, pageRef }),
-    ).rejects.toThrow("COMPUTER_STALE_OBSERVATION");
+    await expect(act(computer, "get_browser_state", { browserRef, pageRef })).rejects.toThrow(
+      "COMPUTER_STALE_OBSERVATION",
+    );
 
     const second = await execution(first.session);
-    await expect(act(second, { action: "get_browser_state", browserRef, pageRef })).rejects.toThrow(
+    await expect(act(second, "get_browser_state", { browserRef, pageRef })).rejects.toThrow(
       "COMPUTER_STALE_OBSERVATION",
     );
   });
@@ -292,14 +271,10 @@ describe("cua-computer browser actions", () => {
     const windowRef = await listWindow(computer);
 
     await expect(
-      act(computer, { action: "browser_prepare", windowRef, profile: "existing_profile" }),
+      act(computer, "browser_prepare", { windowRef, profile: "existing_profile" }),
     ).rejects.toThrow("COMPUTER_INVALID_REQUEST");
     await expect(
-      act(computer, {
-        action: "browser_prepare",
-        windowRef,
-        strategy: { kind: "existing_profile" },
-      }),
+      act(computer, "browser_prepare", { windowRef, strategy: { kind: "existing_profile" } }),
     ).rejects.toThrow("COMPUTER_INVALID_REQUEST");
     expect(callTool).toHaveBeenCalledTimes(1);
   });
@@ -322,8 +297,7 @@ describe("cua-computer browser actions", () => {
     const computer = await execution(active.session);
     const firstBinding = await bindBrowser(computer);
     await expect(
-      act(computer, {
-        action: "get_browser_state",
+      act(computer, "get_browser_state", {
         browserRef: firstBinding.details.browserRef,
         pageRef: firstBinding.details.pages[0]!.pageRef,
       }),
@@ -334,14 +308,13 @@ describe("cua-computer browser actions", () => {
     const browserRef = secondBinding.details.browserRef;
     const pageRef = secondBinding.details.pages[0]!.pageRef;
     const observed = JSON.parse(
-      await act(computer, { action: "get_browser_state", browserRef, pageRef }),
+      await act(computer, "get_browser_state", { browserRef, pageRef }),
     ) as {
       observation: { observationId: string };
       details: { elements: Array<{ elementRef: string }> };
     };
     await expect(
-      act(computer, {
-        action: "browser_click",
+      act(computer, "browser_click", {
         browserRef,
         pageRef,
         observationId: observed.observation.observationId,

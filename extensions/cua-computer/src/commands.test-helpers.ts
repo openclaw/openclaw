@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { createSolidPngBuffer } from "openclaw/plugin-sdk/test-fixtures";
 import { onTestFinished, vi } from "vitest";
 import { createCuaComputerProvider } from "./commands.js";
 import { createCuaDriver, type CuaDriverSession, type CuaToolResult } from "./driver-client.js";
@@ -169,4 +170,56 @@ export async function execution(session: CuaDriverSession, platform: NodeJS.Plat
   } finally {
     vi.mocked(platform === "darwin" ? createCuaMcpDriver : createCuaDriver).mockRestore();
   }
+}
+
+export type ComputerExecution = Awaited<ReturnType<typeof execution>>;
+
+export function act(
+  computer: ComputerExecution,
+  action: string | Record<string, unknown>,
+  params: Record<string, unknown> = {},
+) {
+  return computer.act(JSON.stringify(typeof action === "string" ? { action, ...params } : action));
+}
+
+export async function actJson<T>(
+  computer: ComputerExecution,
+  action: string,
+  params: Record<string, unknown> = {},
+): Promise<T> {
+  return JSON.parse(await act(computer, action, params)) as T;
+}
+
+export async function snapshot(
+  computer: ComputerExecution,
+  input: Record<string, unknown> = { format: "png", maxWidth: 100 },
+): Promise<{ base64: string; displayFrameId: string; width: number; height: number }> {
+  return JSON.parse(await computer.snapshot(JSON.stringify(input)));
+}
+
+export async function listWindow(computer: ComputerExecution) {
+  const listed = await actJson<{ details: { windows: Array<{ windowRef: string }> } }>(
+    computer,
+    "list_windows",
+  );
+  return listed.details.windows[0]!.windowRef;
+}
+
+export type WindowObservation = {
+  observation: { observationId: string; elements: Array<{ elementRef: string }> };
+};
+
+export function observeWindow(computer: ComputerExecution, windowRef: string) {
+  return actJson<WindowObservation>(computer, "get_window_state", { windowRef });
+}
+
+export function pngImage(width: number, height: number) {
+  return {
+    mimeType: "image/png",
+    dataBase64: createSolidPngBuffer(width, height, { r: 70, g: 125, b: 180 }).toString("base64"),
+  };
+}
+
+export function frameTarget(screen: Awaited<ReturnType<typeof snapshot>>) {
+  return { displayFrameId: screen.displayFrameId, refWidth: screen.width };
 }

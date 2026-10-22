@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { execution } from "./commands.test-helpers.js";
+import { act, execution } from "./commands.test-helpers.js";
 import {
   CUA_DRIVER_CONTRACT_FIXTURES,
   cuaToolResult,
@@ -151,7 +151,7 @@ describe("CUA Driver direct session", () => {
     const computer = await execution(driver);
     mocks.callTool.mockResolvedValueOnce(cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.listWindows));
 
-    const listed = JSON.parse(await computer.act('{"action":"list_windows"}'));
+    const listed = JSON.parse(await act(computer, "list_windows"));
     expect(listed).toMatchObject({
       ok: true,
       details: {
@@ -334,14 +334,14 @@ describe("CUA Driver direct session", () => {
     const driver = makeDriver();
     const computer = await execution(driver);
     mocks.getCursorPosition.mockResolvedValueOnce(cuaToolResult({ x: 10, y: 20 }));
-    await computer.act('{"action":"get_cursor_position"}');
+    await act(computer, "get_cursor_position");
     const generation = driver.generation;
     mocks.isToolError.mockReturnValue(true);
     mocks.getSessionState.mockRejectedValueOnce(expired());
     mocks.endSession.mockRejectedValueOnce(expired());
 
     mocks.typeText.mockResolvedValueOnce(cuaToolResult({}));
-    expect(JSON.parse(await computer.act('{"action":"type","text":"hello"}'))).toMatchObject({
+    expect(JSON.parse(await act(computer, "type", { text: "hello" }))).toMatchObject({
       ok: true,
     });
     expect(driver.generation).not.toBe(generation);
@@ -368,7 +368,7 @@ describe("CUA Driver direct session", () => {
     denied.inner.message = "Desktop scope denied";
     mocks.isToolError.mockReturnValue(true);
     mocks.getSessionState.mockRejectedValueOnce(denied);
-    await expect(computer.act('{"action":"type","text":"must not type"}')).rejects.toMatchObject({
+    await expect(act(computer, "type", { text: "must not type" })).rejects.toMatchObject({
       message: "CUA_DRIVER_TOOL_ERROR: get_session_state: Desktop scope denied (permission_denied)",
       cause: denied,
     });
@@ -492,7 +492,7 @@ describe("CUA Driver direct session", () => {
       },
     });
     const computer = await execution(driver);
-    const acting = computer.act('{"action":"type","text":"must not type"}');
+    const acting = act(computer, "type", { text: "must not type" });
     const rejected = expect(acting).rejects.toThrow("provider execution is closing");
     await entered.promise;
     const closing = computer.close("cancelled");
