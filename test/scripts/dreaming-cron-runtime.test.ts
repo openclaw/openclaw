@@ -23,7 +23,16 @@ function fixture() {
     wakeMode: "now",
   };
   const dreaming = { ...heartbeat, id: "dreaming", enabled: false };
-  const row = (definition: typeof heartbeat, ordinal: number, timestamp: number) => {
+  const scheduled = {
+    ...dreaming,
+    enabled: true,
+    schedule: { expr: "17 12 20 10 *", kind: "cron", tz: "UTC" },
+  };
+  const row = (
+    definition: typeof heartbeat | typeof scheduled,
+    ordinal: number,
+    timestamp: number,
+  ) => {
     const { enabled: _enabled, state: _state, ...grant } = definition;
     return {
       store_key: "active",
@@ -49,37 +58,22 @@ function fixture() {
     { ...row({ ...heartbeat, id: "inactive" }, 19, 1000), store_key: "inactive" },
   ];
   const after = structuredClone(before);
-  for (const entry of after.slice(1, 2)) {
-    const definition = {
-      ...dreaming,
-      enabled: true,
-      schedule: { expr: "17 12 20 10 *", kind: "cron", tz: "UTC" },
-      wakeMode: "now",
-    };
-    const { enabled: _enabled, state: _state, ...grant } = definition;
-    const timestamp = Math.max(entry.runtime_updated_at_ms, 2000);
-    Object.assign(entry, {
-      enabled: definition.enabled ? 1 : 0,
-      job_json: JSON.stringify(definition),
-      state_json: JSON.stringify({
-        consecutiveErrors: 0,
-        scheduleErrorCount: 0,
-        nextRunAtMs: 3000,
-        scheduleActivatedAtMs: 2000,
-      }),
-      schedule_identity: JSON.stringify({
-        version: 2,
-        enabled: definition.enabled,
-        schedule: definition.schedule,
-        hasTrigger: false,
-      }),
-      updated_at: timestamp,
-      runtime_updated_at_ms: timestamp,
-      grant_definition_updated_at: timestamp,
-      grant_definition_generation: 4,
-      grant_definition_revision: grantRevision(grant),
-    });
-  }
+  Object.assign(after[1], {
+    ...row(scheduled, after[1].sort_order, Math.max(after[1].runtime_updated_at_ms, 2000)),
+    state_json: JSON.stringify({
+      consecutiveErrors: 0,
+      scheduleErrorCount: 0,
+      nextRunAtMs: 3000,
+      scheduleActivatedAtMs: 2000,
+    }),
+    schedule_identity: JSON.stringify({
+      version: 2,
+      enabled: scheduled.enabled,
+      schedule: scheduled.schedule,
+      hasTrigger: false,
+    }),
+    grant_definition_generation: 4,
+  });
   return {
     runtime: {
       before: { rows: before },
