@@ -465,7 +465,8 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
               />
             )}
           </For>
-          <Show when={sending()}>
+          {/* Mount the canvas from owner admission, outside the pending action. */}
+          <Show when={ownerSending()}>
             <div class="chat-group assistant custodian__thinking-row" role="status">
               <div class="chat-avatar assistant custodian__mascot-avatar" aria-hidden="true">
                 <openclaw-mascot mood="thinking" prop:size={26} />

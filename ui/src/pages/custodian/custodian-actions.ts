@@ -82,8 +82,13 @@ export function createCustodianActions(getStore: () => CustodianSessionStore) {
     lifetimes.add(lifetime.resolve);
     const stop = source.subscribe(release);
     release();
-    // Publish the plain owner's admission before joining its presentation transition.
-    await Promise.resolve();
+    // Session children finish mounting before the action can hold their effects.
+    // Setup cancellation must remain able to interrupt an already pending answer.
+    await (kind === "session"
+      ? new Promise<void>((resolve) => {
+          onSettled(resolve);
+        })
+      : Promise.resolve());
     try {
       if (isCurrent() && isWorking()) {
         await present(kind, pending, lifetime.promise);
