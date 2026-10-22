@@ -16,6 +16,7 @@ import type { SandboxWorkspaceAccess } from "./types.js";
 import {
   normalizeMountContainerPath,
   resolveMaterializedSandboxSkillsWorkspaceDir,
+  resolveProtectedMountAncestors,
   resolveSandboxMountSelection,
   resolveSandboxTmpfsMounts,
 } from "./workspace-mounts.js";
@@ -61,6 +62,28 @@ export async function prepareSandboxMountPlan(params: {
     });
     await workspace.mkdir(relativeSkillMount);
   }
+  const ancestors = resolveProtectedMountAncestors(selection.mounts);
+  for (const ancestor of ancestors) {
+    // Bind sources must exist before create; engines would otherwise create them
+    // root-owned (Docker) or refuse the bind (Podman). Symlinked ancestors fail closed.
+    const owner = await openFsSafeRoot(ancestor.ownerHostPath, {
+      mode: 0o755,
+      mutationSymlinks: "reject",
+      assertBeforeMutation: params.assertCurrent,
+    });
+    await owner.mkdir(ancestor.relativePath);
+  }
+  const ancestorsByProtectedTarget = new Map(
+    selection.mounts
+      .filter((mount) => mount.source === "protectedSkill")
+      .map((mount) => {
+        const target = normalizeMountContainerPath(mount.containerPath);
+        return [
+          target,
+          ancestors.filter((ancestor) => isPathInsideContainerRoot(ancestor.containerPath, target)),
+        ] as const;
+      }),
+  );
   const allowedRoots = [
     params.workspaceDir,
     params.agentWorkspaceDir,
@@ -68,10 +91,25 @@ export async function prepareSandboxMountPlan(params: {
       resolveMaterializedSandboxSkillsWorkspaceDir(params.agentWorkspaceDir),
     ...(params.readOnlyResourceMounts ?? []).map((mount) => mount.hostPath),
   ];
-  const targets = selection.mounts.map((mount) => mount.containerPath);
+  const targets = [
+    ...selection.mounts.map((mount) => mount.containerPath),
+    ...ancestors.map((ancestor) => ancestor.containerPath),
+  ];
   const binds = new Map<string, string>();
+  const planned: Array<(typeof selection.mounts)[number]> = [];
   const protectedTargets = new Set<string>();
   for (const mount of selection.mounts) {
+    // Keep each self-bind ancestor directly before the first protected mount it pins.
+    for (const ancestor of ancestorsByProtectedTarget.get(
+      normalizeMountContainerPath(mount.containerPath),
+    ) ?? []) {
+      if (!planned.includes(ancestor)) {
+        planned.push(ancestor);
+      }
+    }
+    planned.push(mount);
+  }
+  for (const mount of planned) {
     const target = normalizeMountContainerPath(mount.containerPath);
     if (mount.source === "bind") {
       continue;

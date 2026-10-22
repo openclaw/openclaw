@@ -133,6 +133,65 @@ describe("managed mount plan", () => {
     expect(fs.readdirSync(outside)).toEqual([]);
   });
 
+  it("pins writable ancestors of nested protected skill mounts so they cannot be renamed", async () => {
+    const workspace = path.join(root, "agent");
+    const plan = await prepare("rw", { workdir: "/srv/work/" });
+    // Ancestors exist on the host before create, owned by the workspace owner.
+    for (const ancestor of [".agents", ".openclaw", ".openclaw/sandbox-skills"]) {
+      const stat = fs.lstatSync(path.join(workspace, ancestor));
+      expect(stat.isDirectory()).toBe(true);
+      expect(stat.uid).toBe(fs.statSync(workspace).uid);
+    }
+    // Each ancestor is a writable self-bind ordered before the protected mount it pins.
+    const index = (spec: string) => plan.binds.indexOf(spec);
+    expect(index("/host/agent/.agents:/srv/work/.agents:z")).toBeGreaterThan(-1);
+    expect(index("/host/agent/.agents:/srv/work/.agents:z")).toBeLessThan(
+      index("/host/agent/.agents/skills:/srv/work/.agents/skills:ro,z"),
+    );
+    expect(index("/host/agent/.openclaw:/srv/work/.openclaw:z")).toBeLessThan(
+      index("/host/agent/.openclaw/sandbox-skills:/srv/work/.openclaw/sandbox-skills:z"),
+    );
+    expect(
+      index("/host/agent/.openclaw/sandbox-skills:/srv/work/.openclaw/sandbox-skills:z"),
+    ).toBeLessThan(
+      index("/host/materialized skills/skills:/srv/work/.openclaw/sandbox-skills/skills:ro,z"),
+    );
+    // Direct children of the workdir are already mountpoints; no extra bind.
+    expect(plan.binds.filter((spec) => spec.endsWith(":/srv/work:z"))).toHaveLength(1);
+  });
+
+  it("detects a retained container created before ancestor pinning as a mount change", async () => {
+    const plan = await prepare("rw");
+    await expectMounts(
+      plan,
+      [
+        bind("/host/agent", "/workspace"),
+        bind("/host/agent/skills", "/workspace/skills", false),
+        bind("/host/agent/.agents/skills", "/workspace/.agents/skills", false),
+        bind("/host/materialized skills/skills", skillsTarget, false),
+      ],
+      null,
+      false,
+    );
+  });
+
+  it("refuses a symlinked protected-mount ancestor without creating outside the workspace", async () => {
+    const outside = path.join(root, "outside-ancestor");
+    fs.mkdirSync(outside);
+    fs.symlinkSync(
+      outside,
+      path.join(root, "agent/.openclaw"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    await expect(prepare("rw")).rejects.toThrow();
+    expect(fs.readdirSync(outside)).toEqual([]);
+  });
+
+  it("does not pin ancestors below a read-only workspace", async () => {
+    const plan = await prepare("ro", { workspaceDir: path.join(root, "agent") });
+    expect(plan.binds.some((spec) => spec.includes(":/workspace/.agents:"))).toBe(false);
+  });
+
   it("keeps meaningful source and target whitespace through create and retained comparison", async () => {
     const plan = await prepare("rw", {
       workspaceDir: path.join(root, "empty"),
@@ -141,12 +200,16 @@ describe("managed mount plan", () => {
     });
     expect(plan.binds).toEqual([
       "/host/state/empty:/workspace:z",
+      "/host/state/empty/.openclaw:/workspace/.openclaw:z",
+      "/host/state/empty/.openclaw/sandbox-skills:/workspace/.openclaw/sandbox-skills:z",
       skillsBind,
       "/daemon/A:/data:ro",
       "/daemon/B :/data :rw",
     ]);
     await expectMounts(plan, [
       bind("/host/state/empty", "/workspace"),
+      bind("/host/state/empty/.openclaw", "/workspace/.openclaw"),
+      bind("/host/state/empty/.openclaw/sandbox-skills", "/workspace/.openclaw/sandbox-skills"),
       bind("/host/materialized skills/skills", skillsTarget, false),
       bind("/daemon/A", "/data", false),
       bind("/daemon/B ", "/data "),
