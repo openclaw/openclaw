@@ -5,6 +5,7 @@ import {
   createSignal,
   Errored,
   isPending,
+  latest,
   Loading,
   onCleanup,
   Show,
@@ -297,7 +298,7 @@ export function NativeModelSetupView(props: { owner: NativeModelSetup }) {
         <Loading on={props.owner.request()}>
           <NativeCatalogError
             owner={props.owner}
-            message={modelCatalogRefreshError(props.owner.result())}
+            message={modelCatalogRefreshError(latest(() => props.owner.result()))}
           />
         </Loading>
       </Errored>

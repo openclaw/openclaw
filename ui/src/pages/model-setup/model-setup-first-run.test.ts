@@ -318,6 +318,7 @@ describe("ModelSetupPage first-run inference", () => {
   );
 
   it("does not continue a stale first-run activation after leaving the onboarding route", async () => {
+    const warnings = vi.spyOn(console, "warn");
     const { context, client, request } = createFirstRunContext();
     const activation = createDeferred<WizardNextResult>();
     mockRequests(request, {
@@ -349,9 +350,11 @@ describe("ModelSetupPage first-run inference", () => {
       "openclaw.setup.detect",
     ]);
     expect(context.navigate).not.toHaveBeenCalled();
+    expect(warnings.mock.calls.flat().join("\n")).not.toContain("[STRICT_READ_UNTRACKED]");
   });
 
   it("redetects before activating when a first-run visit replaces ordinary settings", async () => {
+    const warnings = vi.spyOn(console, "warn");
     const { context, client, request } = createFirstRunContext();
     mockRequests(request, {
       "openclaw.setup.detect": () => ({
@@ -394,6 +397,7 @@ describe("ModelSetupPage first-run inference", () => {
       ]);
     });
     await waitForOnboarding(context);
+    expect(warnings.mock.calls.flat().join("\n")).not.toContain("[STRICT_READ_UNTRACKED]");
   });
 });
 

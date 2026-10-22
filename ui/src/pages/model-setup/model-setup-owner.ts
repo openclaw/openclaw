@@ -69,8 +69,8 @@ export function createModelSetup(
       state.wizardState.phase !== "error" &&
       state.wizardState.phase !== "cancelled");
 
-  function agentSelection() {
-    return modelSetupAgentSelection(context, routeData()?.firstRun === true);
+  function agentSelection(currentRoute = routeData()) {
+    return modelSetupAgentSelection(context, currentRoute?.firstRun === true);
   }
 
   let observedConnection: ReturnType<typeof captureModelSetupConnection> | null = null;
@@ -137,7 +137,7 @@ export function createModelSetup(
     canStart: () =>
       canUseSetup(context.gateway.snapshot.client) && !firstRun.unresolved && !actionsDisabled(),
     canContinue: () => canUseSetup(context.gateway.snapshot.client) && !firstRun.unresolved,
-    refresh: detect,
+    refresh: () => detect(),
   });
   const wizard = new ModelSetupWizardRunner({
     getClient: () => context.gateway.snapshot.client,
@@ -289,7 +289,7 @@ export function createModelSetup(
     // The router refreshes cached loader objects during the same visit. Only
     // a mode change or mounted/connection lifecycle can retire setup ownership.
     if (connection.firstRun !== previous?.firstRun) {
-      firstRun.routeChanged();
+      firstRun.routeChanged(currentRoute.firstRun);
     } else {
       firstRun.connectionChanged(connection);
     }
@@ -305,25 +305,28 @@ export function createModelSetup(
     pendingPrepareOption = null;
     void wizard.cancel();
     state.pageState = { phase: "loading" };
-    if (canUseSetup(connection.client)) {
-      void detect();
+    if (canUseSetup(connection.client, currentRoute)) {
+      void detect(currentRoute);
     }
   }
 
-  function canUseSetup(client: GatewayBrowserClient | null): client is GatewayBrowserClient {
+  function canUseSetup(
+    client: GatewayBrowserClient | null,
+    currentRoute = routeData(),
+  ): client is GatewayBrowserClient {
     const snapshot = context.gateway.snapshot;
     return Boolean(
       client &&
-      (routeData()?.firstRun === true || agentSelection().state.selectedId !== null) &&
+      (currentRoute?.firstRun === true || agentSelection(currentRoute).state.selectedId !== null) &&
       snapshot.phase === "connected" &&
       hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
       isGatewayMethodAdvertised(snapshot, "openclaw.setup.detect") === true,
     );
   }
 
-  async function detect(): Promise<SystemAgentSetupDetectResult | null> {
+  async function detect(currentRoute = routeData()): Promise<SystemAgentSetupDetectResult | null> {
     const client = context.gateway.snapshot.client;
-    if (!canUseSetup(client) || state.detectionRequest) {
+    if (!canUseSetup(client, currentRoute) || state.detectionRequest) {
       return null;
     }
     resetVerify();
@@ -334,7 +337,7 @@ export function createModelSetup(
     }
     const token = {};
     state.detectionRequest = token;
-    const completion = runDetection([client, agentSelection().state.selectedId, token]);
+    const completion = runDetection([client, agentSelection(currentRoute).state.selectedId, token]);
     setDetectionRequest({ completion });
     const outcome = await completion;
     return outcome?.token === token && "value" in outcome ? outcome.value : null;
@@ -665,7 +668,13 @@ export function createModelSetup(
     notify();
   };
   createEffect(
-    () => [routeData(), agentSelection()],
+    () => {
+      const currentRoute = routeData();
+      return [
+        currentRoute ? { firstRun: currentRoute.firstRun } : undefined,
+        agentSelection(currentRoute),
+      ] as const;
+    },
     ([currentRoute, selection]) => {
       // Selection receipts retire wizard ownership before another setup action can run.
       const stop = selection.subscribe(synchronizeCurrentGateway);
