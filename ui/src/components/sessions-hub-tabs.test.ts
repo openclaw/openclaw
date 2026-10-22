@@ -6,20 +6,19 @@ import { i18n } from "../i18n/index.ts";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { HubTabs } from "./solid/hub-tabs.tsx";
 
-type SessionsHubTabsProps = {
-  active: "sessions" | "worktrees";
-  onSelect: (tab: "sessions" | "worktrees") => void;
-};
-
+type Tab = "sessions" | "worktrees";
+type SessionsHubTabsProps = { active: Tab; onSelect: (tab: Tab) => void };
 const mounts = new WeakMap<
   HTMLDivElement,
   { update: (props: SessionsHubTabsProps) => void; unmount: () => void }
 >();
 
 async function mount(
-  props: SessionsHubTabsProps,
+  active: Tab = "sessions",
+  onSelect: SessionsHubTabsProps["onSelect"] = vi.fn(),
   container = document.createElement("div"),
 ): Promise<HTMLDivElement> {
+  const props = { active, onSelect };
   if (!container.isConnected) {
     document.body.append(container);
   }
@@ -76,7 +75,7 @@ describe("Sessions hub navigation", () => {
   });
 
   it("renders the route hub with manual activation and a shared panel target", async () => {
-    const container = await mount({ active: "worktrees", onSelect: () => undefined });
+    const container = await mount("worktrees");
     const group = container.querySelector('[role="tablist"]');
     const tabs = [...container.querySelectorAll<HTMLElement>('[role="tab"]')];
 
@@ -91,7 +90,7 @@ describe("Sessions hub navigation", () => {
 
   it("delegates cross-route selection", async () => {
     const onSelect = vi.fn();
-    const container = await mount({ active: "sessions", onSelect });
+    const container = await mount("sessions", onSelect);
 
     container
       .querySelector("#sessions-tab-worktrees")
@@ -102,17 +101,17 @@ describe("Sessions hub navigation", () => {
 
   it("does not echo controlled selection changes as navigation", async () => {
     const onSelect = vi.fn();
-    const container = await mount({ active: "sessions", onSelect });
-    await mount({ active: "worktrees", onSelect }, container);
+    const container = await mount("sessions", onSelect);
+    await mount("worktrees", onSelect, container);
     expect(container.querySelector('[role="tab"][active]')?.id).toBe("sessions-tab-worktrees");
     expect(onSelect).not.toHaveBeenCalled();
   });
 
   it("hands focus to the destination strip after keyboard navigation", async () => {
-    const source = await mount({ active: "sessions", onSelect: () => undefined });
+    const source = await mount();
     activate(source);
 
-    const destination = await mount({ active: "worktrees", onSelect: () => undefined });
+    const destination = await mount("worktrees");
     await vi.waitFor(() => {
       expect(document.activeElement).toBe(findTab(destination));
     });
@@ -121,19 +120,19 @@ describe("Sessions hub navigation", () => {
   it.each(["queued", "before mount"] as const)(
     "does not steal deliberate focus established %s",
     async (stage) => {
-      const source = await mount({ active: "sessions", onSelect: () => undefined });
+      const source = await mount();
       if (stage === "before mount") {
         findTab(source)?.focus();
       }
       activate(source);
       if (stage === "queued") {
-        await mount({ active: "worktrees", onSelect: () => undefined });
+        await mount("worktrees");
       }
       const outside = document.createElement("button");
       document.body.append(outside);
       outside.focus();
       if (stage === "before mount") {
-        await mount({ active: "worktrees", onSelect: () => undefined });
+        await mount("worktrees");
       }
       await new Promise<void>((resolve) => {
         window.setTimeout(resolve, 0);
@@ -143,20 +142,20 @@ describe("Sessions hub navigation", () => {
   );
 
   it("keeps only the latest cross-route keyboard focus handoff", async () => {
-    const first = await mount({ active: "sessions", onSelect: () => undefined });
+    const first = await mount();
     activate(first);
-    const intermediate = await mount({ active: "worktrees", onSelect: () => undefined });
+    const intermediate = await mount("worktrees");
     activate(intermediate, "sessions");
-    const destination = await mount({ active: "sessions", onSelect: () => undefined });
+    const destination = await mount();
 
     await vi.waitFor(() => expect(document.activeElement).toBe(findTab(destination, "sessions")));
   });
   it("hands keyboard focus from a retiring route to the Solid destination", async () => {
-    const source = await mount({ active: "sessions", onSelect: () => undefined });
+    const source = await mount();
     findTab(source)!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     mounts.get(source)!.unmount();
     source.remove();
-    const destination = await mount({ active: "worktrees", onSelect: () => undefined });
+    const destination = await mount("worktrees");
     expect(document.activeElement).toBe(findTab(destination));
   });
 });

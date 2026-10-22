@@ -19,12 +19,12 @@ function findButton(label: string): HTMLButtonElement {
   return button;
 }
 
-function dialogInput(): HTMLInputElement {
-  const input = document.body.querySelector('openclaw-modal-dialog input[name="value"]');
-  if (!(input instanceof HTMLInputElement)) {
-    throw new Error("Expected text input");
-  }
-  return input;
+const dialogInput = () =>
+  document.body.querySelector<HTMLInputElement>('openclaw-modal-dialog input[name="value"]')!;
+const dialog = () => document.body.querySelector("openclaw-modal-dialog");
+async function open(options: Parameters<typeof showInputDialog>[0]) {
+  const closed = showInputDialog(options);
+  return { closed, ...(await getRenderedModalDialog(document.body)) };
 }
 
 async function type(value: string) {
@@ -58,35 +58,32 @@ describe("showInputDialog", () => {
   });
 
   it("treats modal dismissal as cancellation", async () => {
-    const result = showInputDialog({ title: "Rename session" });
-    const { modal } = await getRenderedModalDialog(document.body);
+    const { closed, modal } = await open({ title: "Rename session" });
 
     modal.dispatchEvent(new CustomEvent("modal-cancel"));
 
-    await expect(result).resolves.toBeNull();
+    await expect(closed).resolves.toBeNull();
   });
 
   it("removes the dialog and cancels when its owner aborts", async () => {
     const controller = new AbortController();
-    const result = showInputDialog({ title: "Rename session", signal: controller.signal });
-    await getRenderedModalDialog(document.body);
+    const { closed } = await open({ title: "Rename session", signal: controller.signal });
 
     controller.abort();
 
-    await expect(result).resolves.toBeNull();
-    expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+    await expect(closed).resolves.toBeNull();
+    expect(dialog()).toBeNull();
   });
 
   it("allows an explicitly admitted offline submit and updates admission with the Gateway", async () => {
     const harness = createGatewayHarness(null, false);
     const submit = vi.fn().mockResolvedValue(null);
-    const closed = showInputDialog({
+    const { closed } = await open({
       title: "Rename session",
       gateway: harness.gateway,
       canSubmit: () => harness.gateway.snapshot.phase === "offline",
       submit,
     });
-    await getRenderedModalDialog(document.body);
     await type("Notes");
     expect(findButton("Save").disabled).toBe(true);
     harness.update({ phase: "offline" });
@@ -111,8 +108,7 @@ describe("showInputDialog", () => {
 
   it("holds a required field closed until it has a non-blank value, then trims it", async () => {
     const submit = vi.fn().mockResolvedValue(null);
-    const closed = showInputDialog({ ...REQUIRED, submit });
-    await getRenderedModalDialog(document.body);
+    const { closed } = await open({ ...REQUIRED, submit });
 
     expect(findButton("Create group").disabled).toBe(true);
     await type("   ");
@@ -127,26 +123,22 @@ describe("showInputDialog", () => {
 
     await closed;
     expect(submit).toHaveBeenCalledExactlyOnceWith("Client work");
-    expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+    expect(dialog()).toBeNull();
   });
 
   it("holds a rename closed on the name it started from", async () => {
-    const closed = showInputDialog({
+    const { closed } = await open({
       title: 'Rename group "Research"',
       label: "Group name",
       defaultValue: "Research",
       requireValue: true,
       requireChange: true,
     });
-    await getRenderedModalDialog(document.body);
-
-    // The starting name is a no-op rename, so it never reaches the Gateway;
-    // whitespace around it is the same name once trimmed.
     expect(findButton("Save").disabled).toBe(true);
     await type("  Research  ");
     expect(findButton("Save").disabled).toBe(true);
     submitForm();
-    expect(document.body.querySelector("openclaw-modal-dialog")).not.toBeNull();
+    expect(dialog()).not.toBeNull();
 
     await type("Projects");
     expect(findButton("Save").disabled).toBe(false);
@@ -162,8 +154,7 @@ describe("showInputDialog", () => {
         settle = resolve;
       }),
     );
-    const closed = showInputDialog({ ...REQUIRED, submit });
-    const { modal } = await getRenderedModalDialog(document.body);
+    const { closed, modal } = await open({ ...REQUIRED, submit });
 
     await type("Client work");
     submitForm();
@@ -175,11 +166,11 @@ describe("showInputDialog", () => {
     const cancelEvent = new CustomEvent("modal-cancel", { cancelable: true });
     modal.dispatchEvent(cancelEvent);
     expect(cancelEvent.defaultPrevented).toBe(true);
-    expect(document.body.querySelector("openclaw-modal-dialog")).not.toBeNull();
+    expect(dialog()).not.toBeNull();
 
     settle(null);
     await closed;
-    expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+    expect(dialog()).toBeNull();
   });
 
   it("keeps the successor editable after an aborted submission fails late", async () => {
@@ -225,8 +216,7 @@ describe("showInputDialog", () => {
           }
           return Promise.reject(error);
         });
-      const closed = showInputDialog({ ...REQUIRED, submit });
-      await getRenderedModalDialog(document.body);
+      const { closed } = await open({ ...REQUIRED, submit });
 
       await type("Client work");
       submitForm();
@@ -240,7 +230,7 @@ describe("showInputDialog", () => {
 
       submitForm();
       await closed;
-      expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+      expect(dialog()).toBeNull();
     },
   );
 });
