@@ -21,6 +21,10 @@ import { getRetryAttemptErrors } from "../infra/retry-attempt-errors.js";
 import { retryAsync } from "../infra/retry.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import {
+  captureSessionTarget,
+  runSessionMutation,
+} from "../sessions/session-controller.lifecycle.js";
 import { AgentDatabaseAdmissionError } from "../state/agent-database-admission.js";
 import { recoverAfterAgentDatabasePreparation } from "../state/agent-database-preparation-recovery.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
@@ -505,23 +509,38 @@ async function recoverSessionSendDeliveriesForAgents(
                   : "");
               const result = await measureStartup(startupTrace, "sidecars.delivery-notices", () =>
                 retry(() =>
-                  withSessionTranscriptWriteAssertion(scope, assertCurrent, () =>
-                    appendSessionTranscriptReport(scope, {
-                      kind: "custom",
-                      customTypes: [customType],
-                      selectReport: (latest) =>
-                        latest?.content === content &&
-                        JSON.stringify(latest.details) === JSON.stringify(details)
-                          ? undefined
-                          : {
-                              customType,
-                              content,
-                              details,
-                              display: true,
-                              excludeFromContext: true,
-                            },
+                  // A display-only report still advances transcript ancestry. Wait for the
+                  // selected turn before it can close an admitted keyed user during preparation.
+                  runSessionMutation({
+                    target: captureSessionTarget({
+                      storeScope: scope.storePath,
+                      sessionKey,
+                      agentId: scope.agentId,
+                      incarnation: scope.sessionId,
                     }),
-                  ),
+                    requiredSessionId: scope.sessionId,
+                    policy: "wait",
+                    signal,
+                    assertCurrent,
+                    run: () =>
+                      withSessionTranscriptWriteAssertion(scope, assertCurrent, () =>
+                        appendSessionTranscriptReport(scope, {
+                          kind: "custom",
+                          customTypes: [customType],
+                          selectReport: (latest) =>
+                            latest?.content === content &&
+                            JSON.stringify(latest.details) === JSON.stringify(details)
+                              ? undefined
+                              : {
+                                  customType,
+                                  content,
+                                  details,
+                                  display: true,
+                                  excludeFromContext: true,
+                                },
+                        }),
+                      ),
+                  }),
                 ),
               );
               if (!result.ok) {
