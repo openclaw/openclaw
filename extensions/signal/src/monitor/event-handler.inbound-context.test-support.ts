@@ -1,11 +1,7 @@
 import type { ChannelInboundTurnPlan } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type {
-  GetReplyOptions,
-  MsgContext,
-  ReplyDispatcher,
-} from "openclaw/plugin-sdk/reply-runtime";
+import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { vi, type Mock } from "vitest";
 import type {
   createSignalPreparedDispatchRunner,
@@ -56,7 +52,11 @@ export function signalConversationTestModule(
 export type DispatchInboundMessageMockParams = {
   ctx: MsgContext;
   cfg?: OpenClawConfig;
-  dispatcher?: Pick<ReplyDispatcher, "sendFinalReply" | "markComplete" | "waitForIdle">;
+  dispatcher?: {
+    sendFinalReply: (payload: { text: string; isError?: boolean }) => void;
+    markComplete: () => void;
+    waitForIdle: () => Promise<void>;
+  };
   replyOptions?: Pick<
     GetReplyOptions,
     | "allowProgressCallbacksWhenSourceDeliverySuppressed"

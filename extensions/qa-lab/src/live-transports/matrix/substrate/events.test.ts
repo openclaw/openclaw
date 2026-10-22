@@ -31,7 +31,7 @@ type Case = [
 ];
 
 describe("matrix observed event normalization", () => {
-  it.each([
+  it.each<Case>([
     [
       "threaded message",
       {
