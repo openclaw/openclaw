@@ -24,6 +24,53 @@ function mountHeader(patch: Partial<ChatPaneHeaderProps> = {}) {
   return mountChatPaneHeader(containers, patch);
 }
 
+it("retains the focused mobile Actions trigger while session commands become available", async () => {
+  const mobileHost: ChatMobileHost = {
+    scopeKey: "menu-retention",
+    open: false,
+    suspended: false,
+    mode: "dock",
+    height: undefined,
+    reservedHeight: 0,
+    destination: { area: "panels" },
+    detailsMount: null,
+    setDetailsMount: vi.fn(),
+    navigate: vi.fn(),
+    reveal: vi.fn(),
+    close: vi.fn(),
+    back: vi.fn(),
+    toggleExpanded: vi.fn(),
+    resize: vi.fn(),
+    keyboardVisible: false,
+    onComposerEditingChange: vi.fn(),
+  };
+  const mounted = mountHeader({
+    mergedChrome: true,
+    detailsControl: {
+      chat: undefined,
+      elements: {},
+      mobile: true,
+      mobileHost,
+      presentation: true,
+      setRef: vi.fn(),
+    },
+  });
+  const trigger = mounted.container.querySelector<HTMLButtonElement>(
+    ".chat-header-session-menu__trigger",
+  )!;
+  trigger.focus();
+  mounted.update({ sessionMenuAction: chatPaneHeaderSessionMenu() });
+  await waitForSolid(() => {
+    expect(mounted.container.querySelector(".chat-header-session-menu__trigger")).toBe(trigger);
+    expect(document.activeElement).toBe(trigger);
+  });
+  mounted.update({ gatewayStatus: { kind: "offline", onRetry: vi.fn() } });
+  await waitForSolid(() => {
+    expect(mounted.container.querySelector(".chat-header-session-menu__trigger")).toBe(trigger);
+    expect(document.activeElement).toBe(trigger);
+  });
+});
+
 it("clears the device name while replacing its request and ignores retired results", async () => {
   const first = createDeferred<string | undefined>();
   const obsolete = createDeferred<string | undefined>();

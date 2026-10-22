@@ -526,6 +526,9 @@ export function ChatPaneMobileComposition(props: {
       ? !props.header.gatewayStatus?.kind || props.header.gatewayStatus.kind === "connected"
       : props.header.gatewayStatus?.kind !== "offline" &&
         props.header.gatewayStatus?.kind !== "reconnecting";
+  // Keep the trigger mounted as metadata arrives or the connection changes so keyboard focus survives.
+  const sessionMenuAction = () =>
+    sessionCommandsAvailable() ? props.header.sessionMenuAction : undefined;
   const sessionMenu = (
     <Show
       when={
@@ -537,61 +540,43 @@ export function ChatPaneMobileComposition(props: {
       }
     >
       <span>
-        <Show
-          when={sessionCommandsAvailable() ? props.header.sessionMenuAction : undefined}
-          fallback={
-            <ChatHeaderSessionMenu
-              ref={elementRef(registerActionsMenu)}
-              paneTitle={props.header.title}
-              mobile={false}
-              sessionActions={
-                mobile()
-                  ? sessionCommandsAvailable()
-                    ? nativeActions()
-                    : localActions()
-                  : desktopSessionActions()
-              }
-              viewActions={mobile() ? layoutActions() : desktopViewActions()}
-            />
+        <ChatHeaderSessionMenu
+          ref={elementRef(registerActionsMenu)}
+          {...sessionMenuAction()}
+          paneTitle={sessionMenuAction() ? undefined : props.header.title}
+          sessionActions={
+            mobile()
+              ? sessionCommandsAvailable()
+                ? nativeActions()
+                : localActions()
+              : desktopSessionActions()
           }
-        >
-          {(menu) => (
-            <ChatHeaderSessionMenu
-              ref={elementRef(registerActionsMenu)}
-              {...menu()}
-              sessionActions={mobile() ? nativeActions() : desktopSessionActions()}
-              viewActions={mobile() ? layoutActions() : desktopViewActions()}
-              viewContent={
-                mobile() ? (
-                  <ChatPaneLayoutHeaderActions
-                    model={layoutModel()}
-                    omitMain={props.header.panelActionDestinations?.main}
-                    omitSide={props.header.panelActionDestinations?.side}
-                  />
-                ) : undefined
-              }
-              onAction={(action) => {
-                // Session keys can repeat across panes; retain the originating pane identity.
-                if (mobile() && action.kind === "move-session") {
-                  openMove();
-                } else if (
-                  !mobile() &&
-                  action.kind === "split-right" &&
-                  props.header.onSplitRight
-                ) {
-                  props.header.onSplitRight(props.header.paneId);
-                } else if (!mobile() && action.kind === "split-below" && props.header.onSplitDown) {
-                  props.header.onSplitDown(props.header.paneId);
-                } else {
-                  menu().onAction(action);
-                }
-              }}
-              mobile={mobile() || menu().mobile}
-              mobileHost={mobile() ? menuHost : undefined}
-              mobilePageOpen={actionsPageOpen()}
-            />
-          )}
-        </Show>
+          viewActions={mobile() ? layoutActions() : desktopViewActions()}
+          viewContent={
+            mobile() ? (
+              <ChatPaneLayoutHeaderActions
+                model={layoutModel()}
+                omitMain={props.header.panelActionDestinations?.main}
+                omitSide={props.header.panelActionDestinations?.side}
+              />
+            ) : undefined
+          }
+          onAction={(action) => {
+            // Session keys can repeat across panes; retain the originating pane identity.
+            if (mobile() && action.kind === "move-session") {
+              openMove();
+            } else if (!mobile() && action.kind === "split-right" && props.header.onSplitRight) {
+              props.header.onSplitRight(props.header.paneId);
+            } else if (!mobile() && action.kind === "split-below" && props.header.onSplitDown) {
+              props.header.onSplitDown(props.header.paneId);
+            } else {
+              sessionMenuAction()?.onAction(action);
+            }
+          }}
+          mobile={mobile() || sessionMenuAction()?.mobile}
+          mobileHost={mobile() ? menuHost : undefined}
+          mobilePageOpen={actionsPageOpen()}
+        />
       </span>
     </Show>
   );
