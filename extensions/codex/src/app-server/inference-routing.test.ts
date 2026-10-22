@@ -605,6 +605,14 @@ it.each([
     env: { ...bothProxies, NO_PROXY: LOOPBACK_NO_PROXY, no_proxy: LOOPBACK_NO_PROXY },
     supported: true,
   },
+  {
+    env: {
+      ...bothProxies,
+      NO_PROXY: `${LOOPBACK_NO_PROXY},corp.example.com`,
+      no_proxy: `${LOOPBACK_NO_PROXY},corp.example.com`,
+    },
+    supported: false,
+  },
   { env: { HTTPS_PROXY: proxyUrl }, supported: true },
   { env: { HTTPS_PROXY: " " + proxyUrl + " " }, supported: false },
   { env: { HTTPS_PROXY: proxyUrl, REQUEST_METHOD: "GET" }, supported: false },
